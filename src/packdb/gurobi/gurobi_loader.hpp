@@ -30,8 +30,11 @@ static constexpr int GRB_OPTIMAL = 2;
 static constexpr int GRB_INFEASIBLE = 3;
 static constexpr int GRB_INF_OR_UNBD = 4;
 static constexpr int GRB_UNBOUNDED = 5;
-static constexpr int GRB_TIME_LIMIT = 7;
-static constexpr int GRB_ITERATION_LIMIT = 8;
+// Values must mirror Gurobi's gurobi_c.h. Drift here is silent: a wrong
+// integer here makes the branch in gurobi_solver.cpp unreachable while a
+// different real status falls through to the generic error message.
+static constexpr int GRB_ITERATION_LIMIT = 7;
+static constexpr int GRB_TIME_LIMIT = 9;
 
 // Attribute name strings
 static constexpr const char *GRB_INT_ATTR_MODELSENSE = "ModelSense";
