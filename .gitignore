@@ -401,3 +401,6 @@ CITATION.cff
 
 # notes
 context/descriptions/todo.md
+
+# Claude Code session/lock files
+.claude/scheduled_tasks.lock

@@ -54,11 +54,10 @@ MAXIMIZE SUM(level);
 
 -- --- C6: MIN(expr) <= K (hard, Big-M indicators) ----------------------
 -- Branch: MIN aggregate, hard direction, binary indicator per row.
--- BUG: Using MIN with a mixed expression `expr * pick + const * (1 - pick)`
---      crashes with a DuckDB internal assertion (when constructed standalone)
---      or surfaces as "INTERNAL Error: Failed to add constraint to Gurobi".
---      A plain MIN(s_acctbal * pick) <= 500 works — the trigger is the
---      (1 - pick) term. 
+-- Inner expression `s_acctbal * pick + 1000 * (1 - pick)` is linear in
+-- pick after distribution: `(s_acctbal - 1000) * pick + 1000`. The
+-- multiply-over-add distributor + per-row LHS-constant-to-RHS handling
+-- now make this work end-to-end.
 SELECT s_suppkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
@@ -84,10 +83,9 @@ SUCH THAT SUM(flag) = 7
 MAXIMIZE SUM(n_nationkey * flag);
 
 -- --- C9: Composed MIN with SUM inside ---------------------------------
--- Branch: composed aggregate — MIN of per-row expression + SUM constraint.
--- BUG: Same class as C6 — the `+ const * (1 - pick)` term in MIN triggers
---      "Failed to add constraint to Gurobi". Even though MIN(..) >= K is the
---      easy direction, the rewrite seems to misbehave on this expression shape.
+-- Branch: composed aggregate — MIN(linear-in-pick) >= K (easy direction,
+-- strips to per-row) + SUM constraint. Same shape as C6 inside the MIN;
+-- works after distribution of `100000 * (1 - pick)`.
 SELECT s_suppkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
@@ -135,10 +133,10 @@ SUCH THAT SUM(s_acctbal * pick) <= (SELECT AVG(s_acctbal) * 20 FROM supplier)
 MAXIMIZE SUM(pick);
 
 -- --- C14: Correlated scalar subquery in constraint --------------------
--- Branch: per-row correlated subquery RHS.
--- BUG: "Failed to add constraint to Gurobi" when the correlated subquery
---      result is multiplied by a decision variable on both sides.
---      Needs a minimal repro; simpler correlated-subquery shapes may work.
+-- Branch: per-row correlated subquery RHS, decision variable on both
+-- sides. Rearranges to `(s_acctbal - subq) * pick >= 0` per row. Two
+-- terms reference the same `pick` variable; the per-row LHS coefficient
+-- aggregator merges them into a single Gurobi column entry.
 SELECT s_suppkey, s_nationkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
@@ -209,23 +207,27 @@ SUCH THAT qty <= 20
   AND ABS(qty - 5) <= 3
 MAXIMIZE SUM(s_acctbal * qty);
 
--- --- C22: MIN(ABS(expr)) constraint (lower-envelope, easy direction) --
--- Branch: ABS inside MIN aggregate, MIN(...) >= K stripped to per-row.
+-- --- C22: MAX(ABS(expr)) <= K constraint (Path A: lower-envelope only) -
+-- Branch: ABS inside MAX aggregate, easy direction MAX(...) <= K stripped
+-- to per-row ABS(...) <= K. The constraint upper-bounds the ABS auxiliary
+-- directly, so no Big-M sign-indicator is allocated — Path A. The hard-
+-- direction MIN(ABS) >= K shape is exercised separately in C35 via Path B.
 SELECT s_suppkey, s_acctbal, qty
 FROM supplier
 DECIDE qty IS INTEGER
 SUCH THAT qty <= 10
-  AND MIN(ABS(qty - 4)) >= 1
+  AND MAX(ABS(qty - 4)) <= 3
 MAXIMIZE SUM(s_acctbal * qty);
 
--- --- C23: MAX(ABS(expr)) constraint (Big-M) ---------------------------
--- Branch: ABS inside MAX aggregate, hard direction MAX(...) >= K.
+-- --- C23: SUM(ABS(expr)) <= K aggregate (Path A: lower-envelope only) --
+-- Branch: SUM of ABS — solver naturally picks aux_i = |e_i| because each
+-- aux is lower-bounded individually and the SUM is upper-bounded. Path A,
+-- no Big-M. The hard-direction SUM(ABS) >= K shape is in C36 via Path B.
 SELECT s_suppkey, s_acctbal, qty
 FROM supplier
 DECIDE qty IS INTEGER
 SUCH THAT qty <= 10
-  AND MAX(ABS(qty - 5)) >= 4
-  AND SUM(qty) >= 50
+  AND SUM(ABS(qty - 5)) <= 50
 MAXIMIZE SUM(s_acctbal * qty);
 
 -- --- C24: Bool × Bool bilinear constraint (AND-linearization) ---------
@@ -277,4 +279,89 @@ FROM supplier
 DECIDE qty IS INTEGER
 SUCH THAT qty <= 10
   AND qty = 7 WHEN (s_nationkey <= 5)
+MAXIMIZE SUM(qty);
+
+-- --- C30: Per-row quadratic constraint POWER(linear, 2) <= K ----------
+-- Branch: per-row QCQP — distinct from C10's aggregate SUM(POWER(...)).
+-- The per-row form emits one quadratic constraint per data row.
+SELECT p_partkey, p_retailprice, qty
+FROM part
+WHERE p_size < 5
+DECIDE qty IS REAL
+SUCH THAT qty <= 10
+  AND POWER(qty - 5, 2) <= 9
+MAXIMIZE SUM(p_retailprice * qty);
+
+-- --- C31: Hard MAX(...) constraint with WHEN --------------------------
+-- Branch: hard-direction MAX (Big-M indicators) composed with WHEN row
+-- filter. M10 covers MIN-easy + WHEN; C7 covers hard MAX without WHEN.
+-- The combination affects which rows participate in the indicator pool.
+SELECT s_suppkey, s_nationkey, s_acctbal, pick
+FROM supplier
+DECIDE pick IS BOOLEAN
+SUCH THAT MAX(s_acctbal * pick) >= 8000 WHEN (s_nationkey <= 10)
+  AND SUM(pick) <= 30
+MAXIMIZE SUM(pick);
+
+-- --- C32: Bilinear constraint with WHEN + PER -------------------------
+-- Branch: McCormick bilinear (bool * int) under both WHEN row filter and
+-- PER grouping. C11/P9 cover bilinear without filters; M5/M7 cover
+-- WHEN/PER on linear. This combination exercises bilinear constraint
+-- emission per group with row filtering.
+SELECT p_partkey, p_size, p_retailprice, pick, qty
+FROM part
+WHERE p_size < 10
+DECIDE pick IS BOOLEAN, qty IS INTEGER
+SUCH THAT qty <= 20
+  AND SUM(pick * qty) <= 30 WHEN (p_retailprice > 1000) PER p_size
+MAXIMIZE SUM(p_retailprice * pick * qty);
+
+-- --- C33: Per-row ABS hard direction (ABS >= K) -----------------------
+-- Branch: hard-direction ABS in constraint, Big-M sign-indicator pair
+-- (aux <= e + 2M(1-y), aux <= -e + 2M*y) on top of the lower envelope.
+-- Was previously rejected (R26 in old 05_rejected.sql); now solves.
+-- Expected: qty in {0,1,2,8,9,10} feasible per row, MAX picks 10. Sum=1000.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND ABS(qty - 5) >= 3
+MAXIMIZE SUM(qty);
+
+-- --- C34: ABS equality (ABS = K) --------------------------------------
+-- Branch: hard-direction ABS in equality. Big-M pins aux = |inner|
+-- exactly; the equality then forces |inner| = K. qty in {2, 8}.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND ABS(qty - 5) = 3
+MAXIMIZE SUM(qty);
+
+-- --- C35: MIN(ABS) >= K (easy-direction stripped to per-row hard ABS) -
+-- Branch: MIN >= K rewrites under easy-MIN to per-row ABS >= K. Each
+-- per-row ABS is hard-direction → Big-M envelope per row. qty != 4 for
+-- every row. MAX picks qty=10. Sum=1000.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND MIN(ABS(qty - 4)) >= 1
+MAXIMIZE SUM(qty);
+
+-- --- C36: SUM(ABS) >= K (aggregate hard direction) --------------------
+-- Branch: aggregate hard direction over ABS. Each aux pinned via Big-M;
+-- the SUM aggregate then operates on pinned auxes. With qty<=10, max
+-- SUM(|qty-5|) = 100*5 = 500, so 200 is comfortably feasible.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND SUM(ABS(qty - 5)) >= 200
+MAXIMIZE SUM(qty);
+
+-- --- C37: ABS in BETWEEN ----------------------------------------------
+-- Branch: BETWEEN over ABS — desugars to two comparisons, both bounding
+-- aux. Lower bound is hard direction; upper bound is sound. Big-M on
+-- aux makes both comparisons exact. qty in {1,2,3,7,8,9}. MAX picks 9.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10 AND ABS(qty - 5) BETWEEN 2 AND 4
 MAXIMIZE SUM(qty);

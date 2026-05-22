@@ -15,8 +15,10 @@ MAXIMIZE SUM(pick);
 
 -- --- R2: SQRT over decision variable ----------------------------------
 -- Expected: rejected — non-linear scalar function.
--- BUG (UX): error surfaces as "INTERNAL Error: ToSymbolic: Unsupported
---           function: sqrt". Should be a clean Binder/Invalid Input error.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Scalar function 'sqrt' over a DECIDE variable is not
+--    supported: it would make the model non-linear. Only ABS() and
+--    POWER(..., 2) can wrap a decision variable."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -25,8 +27,8 @@ MAXIMIZE SUM(qty);
 
 -- --- R3: EXP over decision variable -----------------------------------
 -- Expected: rejected.
--- BUG (UX): "INTERNAL Error: ToSymbolic: Unsupported function: exp" —
---           should be a clean Binder error.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Scalar function 'exp' over a DECIDE variable is not supported..."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -35,8 +37,8 @@ MAXIMIZE SUM(qty);
 
 -- --- R4: LN/LOG over decision variable --------------------------------
 -- Expected: rejected.
--- BUG (UX): "INTERNAL Error: ToSymbolic: Unsupported function: ln" —
---           should be a clean Binder error.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Scalar function 'ln' over a DECIDE variable is not supported..."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -45,8 +47,8 @@ MAXIMIZE SUM(LN(qty + 1));
 
 -- --- R5: Trig (SIN) over decision variable ----------------------------
 -- Expected: rejected.
--- BUG (UX): "INTERNAL Error: ToSymbolic: Unsupported function: sin" —
---           should be a clean Binder error.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Scalar function 'sin' over a DECIDE variable is not supported..."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -55,8 +57,8 @@ MAXIMIZE SUM(SIN(qty));
 
 -- --- R6: FLOOR over decision variable ---------------------------------
 -- Expected: rejected.
--- BUG (UX): "INTERNAL Error: ToSymbolic: Unsupported function: floor" —
---           should be a clean Binder error.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Scalar function 'floor' over a DECIDE variable is not supported..."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -65,8 +67,8 @@ MAXIMIZE SUM(FLOOR(qty));
 
 -- --- R7: ROUND over decision variable ---------------------------------
 -- Expected: rejected.
--- BUG (UX): "INTERNAL Error: ToSymbolic: Unsupported function: round" —
---           should be a clean Binder error.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Scalar function 'round' over a DECIDE variable is not supported..."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -135,10 +137,10 @@ MAXIMIZE SUM(pick);
 
 -- --- R15: Division by decision variable -------------------------------
 -- Expected: rejected — non-linear.
--- BUG (UX): "INTERNAL Error: FromSymbolic: Non-integer exponents are not
---           supported in DECIDE normalization" — error message is correct
---           in spirit but leaks internal terminology; should be a clean
---           Invalid Input error mentioning division by a decision variable.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Division by a DECIDE variable is not supported: it would
+--    make the model non-linear. The divisor must not reference a decision
+--    variable."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -147,7 +149,7 @@ MAXIMIZE SUM(1 / qty);
 
 -- --- R16: Division of one decision var by another ---------------------
 -- Expected: rejected.
--- BUG (UX): same INTERNAL Error leak as R15.
+-- Verified 2026-05-07: same clean Binder Error as R15.
 SELECT p_partkey, x, y
 FROM part
 WHERE p_size < 3
@@ -213,8 +215,8 @@ MAXIMIZE SUM(qty);
 
 -- --- R23: CEIL/CEILING over decision variable -------------------------
 -- Expected: rejected — non-linear scalar function.
--- BUG (UX): "INTERNAL Error: ToSymbolic: Unsupported function: ceil" —
---           should be a clean Binder error.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Scalar function 'ceil' over a DECIDE variable is not supported..."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -223,8 +225,8 @@ MAXIMIZE SUM(CEIL(qty));
 
 -- --- R24: LOG over decision variable ----------------------------------
 -- Expected: rejected — non-linear; verifies LOG is treated like LN.
--- BUG (UX): "INTERNAL Error: ToSymbolic: Unsupported function: log" —
---           should be a clean Binder error.
+-- Verified 2026-05-07: now returns clean
+--   "Binder Error: Scalar function 'log' over a DECIDE variable is not supported..."
 SELECT p_partkey, qty
 FROM part
 DECIDE qty IS REAL
@@ -233,13 +235,18 @@ MAXIMIZE SUM(LOG(qty));
 
 -- --- R25: Empty aggregate after WHEN (non-PER) ------------------------
 -- Expected per docs: rejected — WHEN filters out every row leaving SUM(∅).
--- ACTUAL: silently no-ops. Constraint SUM(∅) <= 5 is treated as 0 <= 5
---         (trivially true), picks become unconstrained, and all saturate
---         at 1. Either the docs are stale (non-PER WHEN-empty also gets
---         the silent-skip treatment, parallel to PER groups) or this is
---         a real gap that should error. Worth surfacing.
+-- Verified 2026-05-07: behavior matches docs — raises
+--   "Invalid Input Error: DECIDE empty row set for aggregate in constraint."
+-- (Earlier observation that this silently no-op'd is no longer reproducible.)
 SELECT s_suppkey, s_acctbal, pick
 FROM supplier
 DECIDE pick IS BOOLEAN
 SUCH THAT SUM(pick) <= 5 WHEN (s_acctbal > 9999999)
 MAXIMIZE SUM(s_acctbal * pick);
+
+-- --- R26/R27/R28 promoted to positive cases ---------------------------
+-- These three were rejection cases under the old ABS soundness gate (the
+-- conservative bind-time stopgap). They are now full hard-direction ABS
+-- constraints implemented via Big-M with sign-indicator binaries, see
+-- C33–C35 in 01_constraints.sql. Removed from 05_rejected.sql because
+-- they no longer reject.

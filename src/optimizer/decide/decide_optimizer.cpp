@@ -25,6 +25,9 @@ static ObjectiveAggregateType StrToAggType(const string &name) {
 	return ObjectiveAggregateType::NONE;
 }
 
+// Forward declaration: defined further down with the ABS soundness handling.
+static void TagAbsConstraintsForBigM(LogicalDecide &decide);
+
 DecideOptimizer::DecideOptimizer(Optimizer &optimizer) : optimizer(optimizer) {
 }
 
@@ -50,6 +53,7 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 		timer.Start();
 	}
 
+	TagAbsConstraintsForBigM(decide); // Must run before RewriteAbs: marks ABS nodes that need Big-M
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
 	RewriteComposedMinMax(decide); // Detect composed MIN/MAX before single-term MIN/MAX rewrite
@@ -192,6 +196,140 @@ static bool BoundExprReferencesDecideVar(const Expression &expr, idx_t decide_in
 		}
 	});
 	return found;
+}
+
+// ---------------------------------------------------------------------------
+// ABS-in-constraint soundness handling (must run BEFORE RewriteAbs)
+// ---------------------------------------------------------------------------
+//
+// PackDB's ABS linearization replaces `ABS(e)` with an auxiliary `aux` and
+// adds the lower-envelope constraints `aux >= e` and `aux >= -e`. That alone
+// only forces `aux >= |e|`. Soundness then requires that aux be pinned to
+// exactly |e|, not free above it. There are three pinning mechanisms:
+//
+//   1. Solver pressure under MINIMIZE objective: aux contributes positively
+//      to the objective, the solver pushes aux down to |e|. Sound — no
+//      Big-M needed.
+//   2. Constraint context that upper-bounds aux: ABS on the LHS of `<=`/`<`,
+//      or on the RHS of `>=`/`>`. The constraint itself caps aux from
+//      above, the lower envelope caps it from below at |e|. Sound — no
+//      Big-M needed.
+//   3. Big-M upper envelope with a sign-indicator binary y: emit
+//      `aux <= e + 2M(1-y)` and `aux <= -e + 2M*y`. Combined with the
+//      lower envelope this forces aux = |e| exactly, regardless of solver
+//      pressure or constraint shape. Used for MAXIMIZE objective ABS, and
+//      now for any constraint shape outside category 2.
+//
+// This pass walks the constraint tree, classifies each ABS-bearing
+// comparison, and tags ABS function expressions in non-category-2 positions
+// with ABS_NEEDS_BIGM_TAG. RewriteAbs reads the tag and propagates to
+// AbsPairInfo::needs_bigm; Phase 2 then allocates the y indicator and emits
+// the upper-envelope at execution time (the existing AbsMaximizeLink path).
+//
+// Aggregates over ABS (`SUM`, `AVG`, `MIN`, `MAX`) compose under the same
+// rule. When the aggregate constraint upper-bounds the aggregate value
+// (e.g. `SUM(ABS) <= K`, `MAX(ABS) <= K`), individual auxes are pinned
+// transitively and Big-M is not needed. Otherwise we Big-M each aux and
+// the aggregate then operates on pinned auxes.
+// ---------------------------------------------------------------------------
+
+static bool ContainsAbsOverDecideVar(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1) {
+			if (BoundExprReferencesDecideVar(*func.children[0], decide_index)) {
+				return true;
+			}
+		}
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = ContainsAbsOverDecideVar(child, decide_index);
+		}
+	});
+	return found;
+}
+
+// Walk an expression tree and tag every BoundFunctionExpression for ABS over
+// a decide var with ABS_NEEDS_BIGM_TAG. Used on the side of a comparison that
+// does not upper-bound aux (or on entire BETWEEN/IN/equality/<> subtrees).
+static void TagAbsForBigM(Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1) {
+			if (BoundExprReferencesDecideVar(*func.children[0], decide_index)) {
+				func.alias = ABS_NEEDS_BIGM_TAG;
+				return;
+			}
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
+		TagAbsForBigM(child, decide_index);
+	});
+}
+
+static void ClassifyAbsConstraints(Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		// WHEN/PER wrappers: child[0] is the inner constraint; recurse into it.
+		// The WHEN/PER filter only affects which rows participate in the
+		// aggregate; aux pinning is unconditional per row, so the wrapper
+		// doesn't change classification.
+		if (conj.alias == WHEN_CONSTRAINT_TAG || IsPerConstraintTag(conj.alias)) {
+			if (!conj.children.empty()) {
+				ClassifyAbsConstraints(*conj.children[0], decide_index);
+			}
+			return;
+		}
+		for (auto &child : conj.children) {
+			ClassifyAbsConstraints(*child, decide_index);
+		}
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+		auto &comp = expr.Cast<BoundComparisonExpression>();
+		bool lhs_has_abs = ContainsAbsOverDecideVar(*comp.left, decide_index);
+		bool rhs_has_abs = ContainsAbsOverDecideVar(*comp.right, decide_index);
+		if (!lhs_has_abs && !rhs_has_abs) {
+			return;
+		}
+		auto t = comp.type;
+		bool lhs_upper_bounded = (t == ExpressionType::COMPARE_LESSTHAN ||
+		                          t == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+		bool rhs_upper_bounded = (t == ExpressionType::COMPARE_GREATERTHAN ||
+		                          t == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
+		// Sound (no Big-M needed): exactly one side has ABS and the comparison
+		// upper-bounds that side. ABS on both sides falls through to Big-M
+		// because we'd have to upper-bound both auxes anyway.
+		bool sound = (lhs_has_abs && lhs_upper_bounded && !rhs_has_abs) ||
+		             (rhs_has_abs && rhs_upper_bounded && !lhs_has_abs);
+		if (sound) {
+			return;
+		}
+		// Hard-direction or symmetric: tag every ABS in both sides for Big-M.
+		// Tagging both sides covers the "ABS on both sides" case correctly.
+		if (lhs_has_abs) {
+			TagAbsForBigM(*comp.left, decide_index);
+		}
+		if (rhs_has_abs) {
+			TagAbsForBigM(*comp.right, decide_index);
+		}
+		return;
+	}
+	// Other top-level shapes (BETWEEN, IN, equality, <>, conjunctions handled
+	// above): no per-side direction analysis available — tag every ABS in the
+	// subtree for Big-M to be safe.
+	if (ContainsAbsOverDecideVar(expr, decide_index)) {
+		TagAbsForBigM(expr, decide_index);
+	}
+}
+
+static void TagAbsConstraintsForBigM(LogicalDecide &decide) {
+	if (!decide.decide_constraints) {
+		return;
+	}
+	ClassifyAbsConstraints(*decide.decide_constraints, decide.decide_index);
 }
 
 // ---------------------------------------------------------------------------
@@ -806,16 +944,23 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	}
 
 	// Phase 2: Generate linearization constraints for each auxiliary variable.
-	// For MINIMIZE (or ABS in constraints): emit only the lower-bound envelope
+	// Always emit the lower-bound envelope:
 	//   aux >= inner  and  aux >= -inner
-	// which is sufficient because the solver drives aux down to |inner|.
-	//
-	// For MAXIMIZE + ABS in objective: also allocate a binary sign indicator y and
-	// record an AbsMaximizeLink so physical_decide.cpp can emit the upper-bound
-	// constraints at execution time (after variable bounds are known):
+	// (forces aux >= |inner|). Then, for auxes that are NOT pinned to |inner|
+	// by natural solver pressure or constraint shape, allocate a binary sign
+	// indicator y and tag the lower-envelope constraints so physical_decide.cpp
+	// can emit the upper envelope at execution time:
 	//   aux <= inner  + 2M*(1-y)   (pins aux to inner  when y=1)
 	//   aux <= -inner + 2M*y       (pins aux to -inner when y=0)
-	// Together all four constraints force aux = |inner| regardless of sense.
+	//
+	// Big-M is required when:
+	//   - ABS appears in the objective with sense==MAXIMIZE (solver pushes aux up).
+	//   - ABS appears in a constraint shape that does not upper-bound aux (the
+	//     hard direction: ABS(...) >= K, ABS = K, ABS <> K, BETWEEN, etc.).
+	//     These auxes are flagged via pair.needs_bigm by TagAbsConstraintsForBigM.
+	//
+	// MINIMIZE objective and sound constraint shapes (e.g. ABS <= K) skip the
+	// upper envelope — solver pressure / direct upper-bounding handles pinning.
 	for (idx_t pi = 0; pi < abs_pairs.size(); pi++) {
 		auto &pair = abs_pairs[pi];
 		auto &aux_var = decide.decide_variables[pair.aux_idx];
@@ -839,7 +984,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 		    std::move(aux_ref2), std::move(neg_expr));
 
-		if (pair.in_objective && decide.decide_sense == DecideSense::MAXIMIZE) {
+		bool needs_bigm = pair.needs_bigm ||
+		                  (pair.in_objective && decide.decide_sense == DecideSense::MAXIMIZE);
+		if (needs_bigm) {
 			// Allocate a boolean sign indicator variable y.
 			idx_t y_idx = decide.decide_variables.size();
 			string y_name = "__abs_y_" + to_string(pi) + "__";
@@ -899,8 +1046,14 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 					decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 				}
 
+				// Read the Big-M marker set by TagAbsConstraintsForBigM. Tag is
+				// set on the BoundFunctionExpression alias before the rewrite.
+				// Constraint context owns the tag; objective ABS sets needs_bigm
+				// independently below in Phase 2 based on sense.
+				bool needs_bigm = (func.alias == ABS_NEEDS_BIGM_TAG);
+
 				// Stash the bound inner expression for constraint generation
-				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), in_objective});
+				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), in_objective, needs_bigm});
 
 				// Replace ABS(inner) with aux var reference
 				expr = make_uniq<BoundColumnRefExpression>(

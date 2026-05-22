@@ -437,6 +437,40 @@ static bool ReferencesDecideVariable(ParsedExpression &expr,
 // BoundAggregateExpression nodes; the optimizer classifies easy/hard, creates
 // indicator variables, and rewrites to SUM.
 
+// Rewrite qualified `Table.var` ColumnRefs into bare `var` ColumnRefs when
+// `Table.var` matches a registered table-scoped DECIDE variable. After this
+// pass, every reference to a scoped decision variable is unqualified, so the
+// regular DuckDB binder (used for SELECT/ORDER/etc.) and the per-row branch
+// of DecideConstraintsBinder both resolve it through the generic
+// `decide_variables` binding instead of routing `Table` to the real table
+// binding (which has no such column). The aggregate-SUM path already strips
+// qualifiers via SymEngine round-trip in NormalizeDecideConstraints; this
+// pre-pass extends that behavior uniformly to per-row constraints, the
+// SELECT list, and the objective.
+static void RewriteScopedVarRefs(unique_ptr<ParsedExpression> &expr,
+                                  const case_insensitive_map_t<idx_t> &variables) {
+	if (!expr) {
+		return;
+	}
+	if (expr->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+		auto &colref = expr->Cast<ColumnRefExpression>();
+		if (colref.IsQualified()) {
+			string qualified = colref.GetTableName() + "." + colref.GetColumnName();
+			if (variables.count(qualified)) {
+				auto alias = colref.GetAlias();
+				expr = make_uniq<ColumnRefExpression>(colref.GetColumnName());
+				if (!alias.empty()) {
+					expr->alias = alias;
+				}
+				return;
+			}
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
+		RewriteScopedVarRefs(child, variables);
+	});
+}
+
 // Rewrite IN domain constraints on DECIDE variables into auxiliary binary indicator
 // variables + cardinality/linking constraints.
 // x IN (v1, v2, ..., vK) becomes:
@@ -749,6 +783,18 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 
         // Capture user var count BEFORE any rewrites that add auxiliary variables
         idx_t num_user_vars = var_names.size();
+
+        // Strip table qualifiers from `Table.var` references that match a
+        // registered scoped DECIDE variable. Applied to the SELECT list, the
+        // SUCH THAT tree, and the objective tree so that downstream binders
+        // (regular DuckDB binder for SELECT, per-row branch of
+        // DecideConstraintsBinder) see bare `var` instead of `Table.var`.
+        // No-op when no scoped variables are declared.
+        RewriteScopedVarRefs(statement.decide_constraints, decide_variable_names);
+        RewriteScopedVarRefs(statement.decide_objective, decide_variable_names);
+        for (auto &sel_expr : statement.select_list) {
+            RewriteScopedVarRefs(sel_expr, decide_variable_names);
+        }
 
         // MIN/MAX rewrite is handled by DecideOptimizer::RewriteMinMax (post-binding).
 

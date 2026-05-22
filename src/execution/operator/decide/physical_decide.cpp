@@ -456,6 +456,67 @@ static unique_ptr<Expression> BuildCoefficientFromFactors(const vector<const Exp
 	return result;
 }
 
+// Distribute multiplication over addition/subtraction: when a `*` chain has
+// an additive (`+` / `-` / unary-`-`) factor, expand into a vector of
+// (sign, product) pairs, each a pure `*` chain with the additive factor
+// replaced by one of its addends. The caller recurses into each pair with
+// its sign applied, so `K * (a - b*x)` becomes `(+1, K*a)` and `(-1, K*b*x)`.
+//
+// Without this expansion, `ClassifyNormalizedProduct` rejects the `(a - b*x)`
+// factor as "unexpanded nonlinear product" because it isn't a bare decide-var
+// reference, even though the algebraic form is linear in decision vars.
+//
+// Returns empty when no additive factor is present (caller falls through to
+// the existing classification logic).
+static vector<pair<int, unique_ptr<Expression>>>
+TryDistributeMultiplyOverAdd(const BoundFunctionExpression &mul_expr) {
+	vector<pair<int, unique_ptr<Expression>>> out;
+	vector<const Expression *> factors;
+	CollectMultiplicativeFactors(mul_expr, factors);
+
+	int additive_idx = -1;
+	for (idx_t i = 0; i < factors.size(); i++) {
+		const Expression *f = factors[i];
+		if (f->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) continue;
+		auto &ff = f->Cast<BoundFunctionExpression>();
+		if (ff.function.name == "+" && ff.children.size() >= 1) {
+			additive_idx = (int)i; break;
+		}
+		if (ff.function.name == "-" &&
+		    (ff.children.size() == 1 || ff.children.size() == 2)) {
+			additive_idx = (int)i; break;
+		}
+	}
+	if (additive_idx < 0) return out;
+
+	auto &add_func = factors[additive_idx]->Cast<BoundFunctionExpression>();
+	vector<pair<int, const Expression *>> addends;
+	if (add_func.function.name == "+") {
+		for (auto &c : add_func.children) addends.push_back({1, c.get()});
+	} else { // "-"
+		if (add_func.children.size() == 2) {
+			addends.push_back({1, add_func.children[0].get()});
+			addends.push_back({-1, add_func.children[1].get()});
+		} else {
+			addends.push_back({-1, add_func.children[0].get()});
+		}
+	}
+
+	for (auto &kv : addends) {
+		int s = kv.first;
+		const Expression *ad = kv.second;
+		vector<const Expression *> new_factors;
+		for (idx_t j = 0; j < factors.size(); j++) {
+			if ((int)j == additive_idx) continue;
+			new_factors.push_back(factors[j]);
+		}
+		new_factors.push_back(ad);
+		auto prod = BuildCoefficientFromFactors(new_factors, mul_expr);
+		out.push_back({s, std::move(prod)});
+	}
+	return out;
+}
+
 static bool TryGetBareDecideFactor(const Expression &expr, const PhysicalDecide &op, idx_t &var_idx) {
 	const Expression *cur = UnwrapBoundCasts(expr);
 	if (cur->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
@@ -814,6 +875,24 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
 
         // Multiplication: extract variable and coefficient
         if (func.function.name == "*") {
+            // If the `*` chain has an additive factor (e.g. `K * (1 - pick)`),
+            // distribute first so each resulting product is `coef * var`-shaped.
+            // Without this, ExtractCoefficientWithoutVariable would silently
+            // drop the additive structure and produce a wrong coefficient.
+            auto distributed = TryDistributeMultiplyOverAdd(func);
+            if (!distributed.empty()) {
+                for (auto &kv : distributed) {
+                    idx_t before = out_terms.size();
+                    ExtractTerms(*kv.second, out_terms);
+                    if (kv.first == -1) {
+                        for (idx_t i = before; i < out_terms.size(); i++) {
+                            out_terms[i].sign *= -1;
+                        }
+                    }
+                }
+                return;
+            }
+
             idx_t var_idx = FindDecideVariable(func);
 
             if (var_idx == DConstants::INVALID_INDEX) {
@@ -1198,15 +1277,16 @@ public:
             }
         }
         if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-            throw InternalException("DECIDE aggregate constraint LHS contains a non-aggregate term: %s",
-                                    expr.ToString());
+            throw InvalidInputException("DECIDE aggregate constraint LHS contains a non-aggregate term: %s.\n"
+                                        "Use SUM/MIN/MAX/AVG of an expression in decision variables.",
+                                        expr.ToString());
         }
 
         auto &agg = expr.Cast<BoundAggregateExpression>();
         auto agg_name = StringUtil::Lower(agg.function.name);
         if (agg_name != "sum") {
-            throw InternalException("DECIDE optimizer should rewrite aggregate '%s' to SUM before execution",
-                                    agg.function.name);
+            throw InvalidInputException("DECIDE optimizer should rewrite aggregate '%s' to SUM before execution",
+                                        agg.function.name);
         }
         bool is_avg = (agg.alias == AVG_REWRITE_TAG);
 
@@ -1459,6 +1539,17 @@ public:
             // expansion; at physical planning we only flatten already-normalized
             // product factors for classification.
             if (fname == "*") {
+                // Distribute before ClassifyNormalizedProduct (which throws on
+                // additive factors). See ExtractConstraintTerms for rationale.
+                {
+                    auto distributed = TryDistributeMultiplyOverAdd(func);
+                    if (!distributed.empty()) {
+                        for (auto &kv : distributed) {
+                            ExtractLinearAndBilinearTerms(*kv.second, obj, sign * kv.first, filter);
+                        }
+                        return;
+                    }
+                }
                 NormalizedProductTerm product;
                 if (ClassifyNormalizedProduct(func, op, product)) {
                     if (product.decide_factors.size() == 2) {
@@ -1622,6 +1713,20 @@ public:
                         }
                     }
                 }
+                // Distribution must come BEFORE ClassifyNormalizedProduct, since
+                // the classifier throws on additive factors instead of returning
+                // false. Shapes like `K * (1 - pick)` reach here from MIN/MAX
+                // hard-direction rewrites and other paths the symbolic normalizer
+                // didn't fully expand.
+                {
+                    auto distributed = TryDistributeMultiplyOverAdd(func);
+                    if (!distributed.empty()) {
+                        for (auto &kv : distributed) {
+                            ExtractConstraintTerms(*kv.second, constr, sign * kv.first, filter);
+                        }
+                        return;
+                    }
+                }
                 NormalizedProductTerm product;
                 if (ClassifyNormalizedProduct(func, op, product)) {
                     if (product.decide_factors.size() == 2) {
@@ -1685,14 +1790,19 @@ public:
             }
         }
         if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-            throw InternalException("DECIDE objective contains a non-aggregate term: %s", expr.ToString());
+            throw InvalidInputException(
+                "DECIDE objective contains a non-aggregate term: %s.\n"
+                "The objective must be a SUM/MIN/MAX/AVG of an expression in decision variables.\n"
+                "If you wrapped an aggregate inside another function (e.g. POWER(AVG(x), 2)), "
+                "use the supported shape SUM(POWER(x, 2)) instead.",
+                expr.ToString());
         }
 
         auto &agg = expr.Cast<BoundAggregateExpression>();
         auto agg_name = StringUtil::Lower(agg.function.name);
         if (agg_name != "sum") {
-            throw InternalException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
-                                    agg.function.name);
+            throw InvalidInputException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
+                                        agg.function.name);
         }
         bool is_avg = (agg.alias == AVG_REWRITE_TAG);
 
@@ -2378,13 +2488,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                          chunk_expr_cache, context, gstate.data, num_rows,
                                          /*null_excludes=*/true, row_is_included,
                                          eval_const.row_group_ids, eval_const.num_groups);
-                // PER: individual empty groups are skipped downstream (preserved),
-                // but reject when *every* group is empty (the aggregate as a whole
-                // sees no rows after WHEN filtering). Per-row constraints are
-                // exempt — a per-row WHEN matching zero rows is a valid no-op
-                // (the constraint applies to no rows), not an empty aggregate.
-                // Easy-direction MIN/MAX were rewritten by the optimizer to
-                // per-row form but still count as aggregates for rejection.
+                // PER: individual empty groups are skipped silently, but the
+                // aggregate as a whole must see at least one group. Per-row
+                // constraints are exempt — a per-row WHEN matching zero rows is
+                // a valid no-op. Easy-direction MIN/MAX have been rewritten to
+                // per-row form by the optimizer but still count as aggregates
+                // for rejection. Spec: when/done.md → "Empty Row Sets" — reject
+                // when *every* group is empty.
                 if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
                     RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
                 }
@@ -3016,10 +3126,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             idx_t indicator_idx = ec.minmax_indicator_idx;
             bool is_max_agg = (ec.minmax_agg_type == "max");
 
-            // Compute Big-M from variable bounds
+            // Compute Big-M from variable bounds. Skip constant LHS terms
+            // (var_idx == INVALID_INDEX) — they have no associated variable
+            // bound; their contribution will be folded into the RHS by the
+            // per-row constraint emitter.
             double M = 1e6;
             for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
                 idx_t var_idx = ec.variable_indices[t];
+                if (var_idx == DConstants::INVALID_INDEX) continue;
                 double ub = solver_input.upper_bounds[var_idx];
                 if (ub < 1e20) {
                     double max_coef = 0.0;
@@ -3129,6 +3243,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
         return true;
     };
+    // Companion check on the RHS. With integer-valued LHS and a non-integer K,
+    // `LHS <> K` is a tautology (no integer can equal K). The ±1 Big-M rewrite
+    // would emit `LHS <= K-1 ∨ LHS >= K+1`, which on the integer lattice
+    // wrongly excludes floor(K) and ceil(K) — both of which the original
+    // predicate accepted. Treat such RHS values as a silent drop.
+    auto NEIsIntegerValuedRhs = [](double k) {
+        return std::abs(k - std::round(k)) < 1e-9;
+    };
 
     if (!ne_indicator_indices.empty()) {
         vector<EvaluatedConstraint> new_constraints;
@@ -3163,13 +3285,47 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 if (ec.lhs_is_aggregate) {
                     // Aggregate NE: defer to after var_indexer is built.
                     // Will be expanded with a single global z per group.
+                    // The per-group integer-RHS check (for AVG <> where the
+                    // rescaled K*N_g may or may not be integer) lives in the
+                    // deferred expansion below; we don't filter here.
                     DeferredAggregateNE deferred;
                     deferred.original = ec; // copy before the loop moves on
                     deferred.big_M = M;
                     deferred_ne_aggregate.push_back(std::move(deferred));
                     // Don't add to new_constraints — handled via global_constraints later
                 } else {
-                    // Per-row NE: expand inline with row-scoped indicator variable
+                    // Per-row NE: expand inline with row-scoped indicator variable.
+                    //
+                    // Integer-valued RHS guard. If RHS is uniform and non-integer,
+                    // every row's `LHS <> K` is a tautology — drop the whole
+                    // constraint. If RHS varies per row (e.g. correlated subquery),
+                    // mask out only the non-integer rows by adding them to
+                    // row_group_ids as INVALID_INDEX so the model builder skips
+                    // them. The remaining rows still get the real Big-M pair.
+                    if (ec.rhs_values.IsUniform()) {
+                        if (!NEIsIntegerValuedRhs(ec.rhs_values.UniformValue())) {
+                            continue; // drop ec entirely (tautology)
+                        }
+                    } else {
+                        // Build/extend a mask. row_group_ids may be empty (no WHEN/PER);
+                        // in that case materialize one initialised to group 0 so we can
+                        // exclude individual rows by setting INVALID_INDEX.
+                        if (ec.row_group_ids.empty()) {
+                            ec.row_group_ids.assign(num_rows, 0);
+                            ec.num_groups = 1;
+                        }
+                        idx_t dropped = 0;
+                        for (idx_t r = 0; r < num_rows; r++) {
+                            if (ec.row_group_ids[r] == DConstants::INVALID_INDEX) continue;
+                            if (!NEIsIntegerValuedRhs(ec.rhs_values.Get(r))) {
+                                ec.row_group_ids[r] = DConstants::INVALID_INDEX;
+                                dropped++;
+                            }
+                        }
+                        if (dropped == num_rows) {
+                            continue; // every row is a tautology — drop the constraint
+                        }
+                    }
                     idx_t indicator_var_idx = ec.ne_indicator_idx;
 
                     // Build indicator coefficient column. If no WHEN/PER filter, every
@@ -3326,8 +3482,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     double ub = solver_input.upper_bounds[c1.variable_indices[t]];
                     if (ub >= 1e20 || lb <= -1e20) {
                         throw InvalidInputException(
-                            "MAXIMIZE SUM(ABS(...)) requires a finite bound on variable '%s'. "
-                            "Add constraints '%s >= <lower>' and '%s <= <upper>'.",
+                            "ABS over decision variable requires a finite bound on '%s' "
+                            "for the Big-M sign-indicator linearization. Add constraints "
+                            "'%s >= <lower>' and '%s <= <upper>'. (Triggered by "
+                            "MAXIMIZE SUM(ABS(...)) or by a hard-direction ABS constraint "
+                            "such as ABS(...) >= K or ABS(...) = K.)",
                             decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias,
                             decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias,
                             decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias);
@@ -3623,6 +3782,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             double rhs = base_rhs;
             if (ec.ne_avg_rhs_scale) {
                 rhs *= static_cast<double>(g_size);
+            }
+
+            // Integer-RHS guard: with integer LHS (already enforced by
+            // NELhsIsIntegerValued at deferral time) and a non-integer K,
+            // `LHS <> K` is a tautology — every integer LHS satisfies it.
+            // The ±1 Big-M rewrite would wrongly cut floor(K) and ceil(K).
+            // Skip the group entirely. For AVG <> with mixed group sizes,
+            // some groups may have integer K*N_g and others not — each is
+            // handled independently. No global z is allocated for skipped
+            // groups, so the model stays clean.
+            if (std::abs(rhs - std::round(rhs)) >= 1e-9) {
+                continue;
             }
 
             // Allocate one global binary z for this group

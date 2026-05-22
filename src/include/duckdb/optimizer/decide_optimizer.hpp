@@ -123,7 +123,12 @@ private:
 	struct AbsPairInfo {
 		idx_t aux_idx;
 		unique_ptr<Expression> inner_expr;
-		bool in_objective; // true = ABS came from the objective, false = from a constraint
+		bool in_objective;   // true = ABS came from the objective, false = from a constraint
+		bool needs_bigm;     // true = aux needs Big-M upper envelope (constraint
+		                     //        hard-direction or MAXIMIZE+objective). When
+		                     //        false aux pins to |inner| naturally via
+		                     //        solver pressure (MINIMIZE objective, or
+		                     //        constraint shape that upper-bounds aux).
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,

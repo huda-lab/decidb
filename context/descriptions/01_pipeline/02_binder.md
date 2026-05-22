@@ -134,13 +134,13 @@ These algebraic rewrites have been migrated to `DecideOptimizer` in `src/optimiz
 
 ### 6.2 ABS Linearization
 
-- `ABS(expr)` where `expr` contains decision variables is linearized using a standard LP technique:
-  - Creates an auxiliary REAL variable `__abs_aux_N__`
-  - Generates two linearization constraints: `aux >= expr` and `aux >= -expr`
-  - Replaces `ABS(expr)` with `aux` in the original expression
-- This works because minimizing `aux` subject to `aux >= expr` and `aux >= -expr` forces `aux = |expr|`.
+- `ABS(expr)` where `expr` contains decision variables is linearized via auxiliary variables. Two paths depending on context:
+  - Always: creates an auxiliary REAL variable `__abs_aux_N__` and emits the lower envelope `aux >= expr` and `aux >= -expr` (forces `aux >= |expr|`). Replaces `ABS(expr)` with `aux`.
+  - **Path A (lower-envelope only)** — used when the surrounding context naturally pins `aux` down to `|expr|`: ABS in a `MINIMIZE` objective (solver pressure drives `aux` down) or in a constraint that upper-bounds `aux` (`ABS <= K`, `SUM(ABS) <= K`, etc.). No binary indicator allocated.
+  - **Path B (Big-M sign-indicator)** — used when `aux` is not naturally pinned: `MAXIMIZE` objective ABS, and constraint shapes that don't upper-bound `aux` (`ABS >= K`, `ABS = K`, `ABS <> K`, `ABS BETWEEN`, ABS on both sides of a comparison, and the analogous aggregate forms `SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`). Allocates a binary sign indicator `__abs_y_N__` and emits the Big-M upper envelope `aux <= expr + 2M(1-y)` and `aux <= -expr + 2M*y`, which combined with the lower envelope force `aux = |expr|` exactly.
+- Path classification: `TagAbsConstraintsForBigM` walks the constraint tree before `RewriteAbs` and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG` (set on `BoundFunctionExpression.alias`). `RewriteAbs` Phase 1 reads the tag, propagates `needs_bigm` to `AbsPairInfo`; Phase 2 allocates `y` for any pair where `needs_bigm || (in_objective && MAXIMIZE)`.
 - The binder binds ABS as a normal `BoundFunctionExpression`. The symbolic normalization layer treats ABS as an opaque placeholder (`__ABS_N__`) to preserve it through algebraic simplification. The optimizer handles all detection, aux var creation, and constraint generation.
-- **Code**: `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`
+- **Code**: `DecideOptimizer::RewriteAbs` and `TagAbsConstraintsForBigM` in `decide_optimizer.cpp`. Tag constants `ABS_NEEDS_BIGM_TAG`, `ABS_UB_POS_TAG_PREFIX`, `ABS_UB_NEG_TAG_PREFIX` in `decide.hpp`. Full Path-A / Path-B table in `03_expressivity/sql_functions/done.md`.
 
 > **Note**: All rewrites in this section are now implemented in `DecideOptimizer`. The binder's role is limited to semantic validation and binding.
 

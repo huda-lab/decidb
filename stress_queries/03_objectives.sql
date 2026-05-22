@@ -313,3 +313,73 @@ FROM supplier
 DECIDE pick IS BOOLEAN
 SUCH THAT SUM(pick) <= 30
 MINIMIZE MAX(AVG(s_acctbal * pick)) PER s_nationkey;
+
+-- --- O37: Linear+quadratic mixed inside one SUM -----------------------
+-- Branch: SUM(POWER(linear, 2) + linear) — quadratic and linear terms
+-- combined inside a single SUM. Doc-claimed equivalent to the sibling-
+-- sum form (O16) but the parser path is distinct: the quadratic
+-- extractor must split the inner expression into a POWER part
+-- populating Q and a linear part populating c.
+SELECT p_partkey, p_retailprice, qty
+FROM part
+WHERE p_size < 5
+DECIDE qty IS REAL
+SUCH THAT qty <= 20
+MINIMIZE SUM(POWER(qty - 3, 2) + p_retailprice * qty);
+
+-- --- O38: Nested-aggregate quadratic objective ------------------------
+-- Branch: SUM(SUM(POWER(...))) PER — quadratic inner under nested-
+-- aggregate routing. M11–M13/O26–O36 cover nested aggregates with
+-- linear/MIN/MAX inner; this exercises the QP path under the same
+-- nested wrapper.
+SELECT s_suppkey, s_nationkey, qty
+FROM supplier
+DECIDE qty IS REAL
+SUCH THAT qty <= 10
+MINIMIZE SUM(SUM(POWER(qty - 5, 2))) PER s_nationkey;
+
+-- --- O39: ABS in PER-grouped objective --------------------------------
+-- Branch: SUM(ABS(...)) PER. O22 covers flat ABS objective (single SUM);
+-- M5–M9 cover PER on linear. This combination exercises ABS auxiliary
+-- emission organized by PER groups.
+SELECT s_suppkey, s_nationkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10
+MINIMIZE SUM(ABS(qty - 5)) PER s_nationkey;
+
+-- --- O40: Hard MAX in objective with WHEN -----------------------------
+-- Branch: MAXIMIZE MAX(...) WHEN — hard direction (per-row binary
+-- indicators + global aux z + sum-y >= 1) composed with WHEN row
+-- filter. O6 is hard MAX without WHEN; O21 is easy MAX with WHEN.
+-- The combination affects which rows participate in the indicator pool.
+SELECT s_suppkey, s_nationkey, s_acctbal, pick
+FROM supplier
+DECIDE pick IS BOOLEAN
+SUCH THAT SUM(pick) >= 5
+MAXIMIZE MAX(s_acctbal * pick) WHEN (s_nationkey <= 10);
+
+-- --- O41: POWER over multi-variable linear inner ----------------------
+-- Branch: POWER(x + y - K, 2) — the quadratic extractor must produce
+-- off-diagonal Q entries from the cross-term 2xy. O11–O15 are all
+-- single-variable inner.
+SELECT p_partkey, qty, stock
+FROM part
+WHERE p_size < 5
+DECIDE qty IS REAL, stock IS REAL
+SUCH THAT qty <= 10 AND stock <= 10
+MINIMIZE SUM(POWER(qty + stock - 8, 2));
+
+-- --- O42: MAXIMIZE SUM(ABS(expr)) — Big-M sign-indicator path ---------
+-- Branch: MAXIMIZE of SUM over ABS(linear-in-decide-var) is the one
+-- remaining ABS code path that uses Big-M with a per-row sign-indicator
+-- binary. After the 2026-05-07 ABS soundness gate, hard-direction ABS
+-- in constraints is rejected, leaving this objective shape as the only
+-- Big-M ABS user. Without this query that code path goes untested by
+-- the stress suite (the audit flagged this regression in coverage).
+-- The optimum picks qty=0 or qty=10 for every row to maximize |qty-5|.
+SELECT s_suppkey, qty
+FROM supplier
+DECIDE qty IS INTEGER
+SUCH THAT qty <= 10
+MAXIMIZE SUM(ABS(qty - 5));

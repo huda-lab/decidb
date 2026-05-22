@@ -143,6 +143,7 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	LOAD_SYM(startenv,          "GRBstartenv")
 	LOAD_SYM(freeenv,           "GRBfreeenv")
 	LOAD_SYM(setintparam,       "GRBsetintparam")
+	LOAD_SYM(setdblparam,       "GRBsetdblparam")
 	LOAD_SYM(newmodel,          "GRBnewmodel")
 	LOAD_SYM(freemodel,         "GRBfreemodel")
 	LOAD_SYM(setintattr,        "GRBsetintattr")

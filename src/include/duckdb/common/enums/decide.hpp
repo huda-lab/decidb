@@ -59,11 +59,24 @@ static constexpr const char *NE_INDICATOR_TAG_PREFIX = "__ne_ind_tag_";
 //! per-row. Set on the BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 
-//! Tag prefix for ABS MAXIMIZE upper-bound constraint linking.
+//! Tag prefix for ABS upper-bound constraint linking.
 //! Format: "__abs_ub_pos_<y_idx>__" on C1 (aux >= inner)
 //!         "__abs_ub_neg_<y_idx>__" on C2 (aux >= -inner)
-//! Set on BoundComparisonExpression.alias by RewriteAbs when sense==MAXIMIZE and ABS is in the objective.
+//! Set on BoundComparisonExpression.alias by RewriteAbs when the aux needs the
+//! Big-M upper envelope: either (a) sense==MAXIMIZE and ABS is in the objective,
+//! or (b) ABS is in a constraint shape that does not naturally upper-bound aux
+//! (e.g. ABS(...) >= K, ABS(...) = K). Both cases need the sign-indicator
+//! binary y to pin aux = |inner| under solver pressure that would otherwise
+//! let aux float free above |inner|.
 static constexpr const char *ABS_UB_POS_TAG_PREFIX = "__abs_ub_pos_";
 static constexpr const char *ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_";
+
+//! Tag set on BoundFunctionExpression.alias for ABS occurrences inside a
+//! constraint shape that does not naturally upper-bound the auxiliary
+//! (i.e. hard-direction ABS). Read by FindAndReplaceAbs, propagated to
+//! AbsPairInfo::needs_bigm so RewriteAbs allocates a sign-indicator y and
+//! emits the Big-M upper envelope at execution time. The tag is set by
+//! TagAbsConstraintsForBigM (formerly ValidateAbsConstraintDirection).
+static constexpr const char *ABS_NEEDS_BIGM_TAG = "__abs_needs_bigm__";
 
 } // namespace duckdb

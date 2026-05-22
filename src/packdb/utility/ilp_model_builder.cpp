@@ -661,19 +661,31 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // per-row LHS arrives here with constant/data terms still attached.
                 double rhs_adjustment = 0.0;
 
+                // Aggregate coefficients per Gurobi variable index. Multiple
+                // lhs_terms can reference the same decision variable (e.g. after
+                // multiply-over-add distribution: `K * (1 - x)` becomes a
+                // constant plus a `-K*x` term, and any other `*x` term in the
+                // same constraint produces a duplicate column index that
+                // GRBaddconstr rejects). Sum-then-emit avoids duplicates.
+                std::unordered_map<int, double> coeff_by_var;
                 for (idx_t term_idx = 0; term_idx < num_terms; term_idx++) {
                     idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                     double coeff = eval_const.row_coefficients[term_idx][row];
 
                     if (decide_var_idx != DConstants::INVALID_INDEX) {
                         if (coeff != 0.0) {
-                            idx_t var_idx = indexer.Get(decide_var_idx, row);
-                            constr.indices.push_back((int)var_idx);
-                            constr.coefficients.push_back(coeff);
+                            int var_idx = (int)indexer.Get(decide_var_idx, row);
+                            coeff_by_var[var_idx] += coeff;
                         }
                     } else {
                         // Constant / row-data LHS term: subtract from RHS.
                         rhs_adjustment += coeff;
+                    }
+                }
+                for (auto &kv : coeff_by_var) {
+                    if (kv.second != 0.0) {
+                        constr.indices.push_back(kv.first);
+                        constr.coefficients.push_back(kv.second);
                     }
                 }
 

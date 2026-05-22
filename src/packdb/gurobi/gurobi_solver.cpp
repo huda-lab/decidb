@@ -61,6 +61,10 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                 error);
     }
     api.setintparam(guard.env, "OutputFlag", 0);
+    // Cap solve time so a hard MIQP/QCQP doesn't hang the session indefinitely.
+    // 300s is generous for typical workloads; truly hard problems return the best
+    // feasible solution found so far (handled by the GRB_TIME_LIMIT branch below).
+    api.setdblparam(guard.env, "TimeLimit", 300.0);
     // Enable non-convex QP solving via spatial branching when needed
     if (ilp.nonconvex_quadratic) {
         api.setintparam(guard.env, "NonConvex", 2);
@@ -115,8 +119,10 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                              const_cast<double *>(constr.coefficients.data()),
                              constr.sense, constr.rhs, nullptr);
         if (error) {
-            throw InternalException("Failed to add constraint to Gurobi: %s",
-                                    api.geterrormsg(guard.env));
+            // Use InvalidInputException so a malformed constraint rejects this query
+            // without invalidating the DuckDB session for subsequent queries.
+            throw InvalidInputException("Failed to add constraint to Gurobi: %s",
+                                        api.geterrormsg(guard.env));
         }
     }
 
@@ -137,8 +143,8 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                const_cast<double *>(qc.q_coefficients.data()),
                                qc.sense, qc.rhs, nullptr);
         if (error) {
-            throw InternalException("Failed to add quadratic constraint to Gurobi: %s",
-                                    api.geterrormsg(guard.env));
+            throw InvalidInputException("Failed to add quadratic constraint to Gurobi: %s",
+                                        api.geterrormsg(guard.env));
         }
     }
 
@@ -153,8 +159,8 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                const_cast<int *>(ilp.q_cols.data()),
                                const_cast<double *>(ilp.q_vals.data()));
         if (error) {
-            throw InternalException("Failed to add quadratic objective terms to Gurobi: %s",
-                                    api.geterrormsg(guard.env));
+            throw InvalidInputException("Failed to add quadratic objective terms to Gurobi: %s",
+                                        api.geterrormsg(guard.env));
         }
     }
 
@@ -164,8 +170,8 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
 
     error = api.optimize(guard.model);
     if (error) {
-        throw InternalException("Gurobi optimization call failed: %s",
-                                api.geterrormsg(guard.env));
+        throw InvalidInputException("Gurobi optimization call failed: %s",
+                                    api.geterrormsg(guard.env));
     }
 
     //===--------------------------------------------------------------------===//
@@ -179,6 +185,12 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                 api.geterrormsg(guard.env));
     }
 
+    // Soundness: never relabel a non-OPTIMAL termination to OPTIMAL. A
+    // suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
+    // not a proof of optimality; returning it as if it were would silently
+    // mislead the caller. We throw a clear error instead. The TimeLimit set
+    // above keeps the session from hanging; surfacing it as a query error
+    // (rather than relabeling to OPTIMAL) preserves correctness.
     if (status != GRB_OPTIMAL) {
         if (status == GRB_INFEASIBLE) {
             throw InvalidInputException(

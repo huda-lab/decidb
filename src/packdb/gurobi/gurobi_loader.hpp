@@ -25,7 +25,7 @@ static constexpr char GRB_INTEGER = 'I';
 static constexpr int GRB_MINIMIZE = 1;
 static constexpr int GRB_MAXIMIZE = -1;
 
-// Model status codes
+// Model status codes (must match Gurobi's GRB_* values in gurobi_c.h)
 static constexpr int GRB_OPTIMAL = 2;
 static constexpr int GRB_INFEASIBLE = 3;
 static constexpr int GRB_INF_OR_UNBD = 4;
@@ -33,8 +33,16 @@ static constexpr int GRB_UNBOUNDED = 5;
 // Values must mirror Gurobi's gurobi_c.h. Drift here is silent: a wrong
 // integer here makes the branch in gurobi_solver.cpp unreachable while a
 // different real status falls through to the generic error message.
+static constexpr int GRB_CUTOFF = 6;
 static constexpr int GRB_ITERATION_LIMIT = 7;
+static constexpr int GRB_NODE_LIMIT = 8;
 static constexpr int GRB_TIME_LIMIT = 9;
+static constexpr int GRB_SOLUTION_LIMIT = 10;
+static constexpr int GRB_INTERRUPTED = 11;
+static constexpr int GRB_NUMERIC = 12;
+static constexpr int GRB_SUBOPTIMAL = 13;
+static constexpr int GRB_INPROGRESS = 14;
+static constexpr int GRB_USER_OBJ_LIMIT = 15;
 
 // Attribute name strings
 static constexpr const char *GRB_INT_ATTR_MODELSENSE = "ModelSense";
@@ -51,6 +59,7 @@ struct GurobiAPI {
 	int (*startenv)(void *env);
 	void (*freeenv)(void *env);
 	int (*setintparam)(void *env, const char *paramname, int value);
+	int (*setdblparam)(void *env, const char *paramname, double value);
 
 	// Model management
 	int (*newmodel)(void *env, void **modelP, const char *name, int numvars,

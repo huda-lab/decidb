@@ -167,8 +167,29 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
             }
             return DecideExpression::SUM;
 		} else {
-            if (ContainsDecideAggregate(expr)) {
+            // Non-aggregate outer function. Only additive/scalar composition of
+            // aggregates (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`,
+            // `SUM(x) / K`) is allowed; wrapping an aggregate in a non-additive
+            // function (e.g. `POWER(AVG(x), 2)`, `SQRT(SUM(x))`, `LOG(...)`) is
+            // not a linearly-composable objective. Supported quadratic shape is
+            // SUM(POWER(_, 2)), not POWER(AGG(_), _).
+            bool is_additive_or_scalar = (fname == "+" || fname == "-" || fname == "*");
+            // Division is scalar only when the divisor does not contain a
+            // decide aggregate (otherwise the result is genuinely non-linear).
+            if (fname == "/" && func.children.size() == 2 &&
+                !ContainsDecideAggregate(*func.children[1])) {
+                is_additive_or_scalar = true;
+            }
+            if (is_additive_or_scalar && ContainsDecideAggregate(expr)) {
                 return DecideExpression::SUM;
+            }
+            if (ContainsDecideAggregate(expr)) {
+                error_msg = StringUtil::Format(
+                    "[MAXIMIZE|MINIMIZE] does not support wrapping an aggregate in '%s'. "
+                    "The aggregate must be the outermost function. "
+                    "For quadratic objectives use SUM(POWER(expr, 2)), not %s(AGG(expr), ...).",
+                    func.function_name, StringUtil::Upper(func.function_name));
+                return DecideExpression::INVALID;
             }
             error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
             return DecideExpression::INVALID;
