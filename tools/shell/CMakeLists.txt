@@ -62,7 +62,7 @@ if(WIN32 AND NOT MINGW)
   target_sources(shell PRIVATE rc/duckdb.rc)
 endif()
 
-set_target_properties(shell PROPERTIES OUTPUT_NAME packdb)
+set_target_properties(shell PROPERTIES OUTPUT_NAME decidb)
 set_target_properties(shell PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                        ${PROJECT_BINARY_DIR})
 

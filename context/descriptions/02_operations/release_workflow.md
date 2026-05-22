@@ -1,6 +1,6 @@
 # GitHub Actions Release Workflow
 
-This document describes the `PackDBRelease.yml` GitHub Actions workflow that builds release binaries for PackDB across Windows, Linux, and macOS platforms.
+This document describes the `DecidBRelease.yml` GitHub Actions workflow that builds release binaries for DecidB across Windows, Linux, and macOS platforms.
 
 ## Overview
 
@@ -56,17 +56,17 @@ The workflow consists of **4 jobs** that can run in parallel (platform builds) p
 ### Build Verification
 
 ```bash
-./build/release/packdb -c "PRAGMA platform;"
-./build/release/packdb --version
+./build/release/decidb -c "PRAGMA platform;"
+./build/release/decidb --version
 ```
 
 ### Packaged Artifacts
 
 | Artifact | Contents |
 |----------|----------|
-| `packdb_cli-linux-amd64.zip` | CLI executable (zip) |
-| `packdb_cli-linux-amd64.gz` | CLI executable (gzip) |
-| `libpackdb-linux-amd64.zip` | Shared library (`.so`), static library (`.a`), headers |
+| `decidb_cli-linux-amd64.zip` | CLI executable (zip) |
+| `decidb_cli-linux-amd64.gz` | CLI executable (gzip) |
+| `libdecidb-linux-amd64.zip` | Shared library (`.so`), static library (`.a`), headers |
 
 ---
 
@@ -87,18 +87,18 @@ The workflow consists of **4 jobs** that can run in parallel (platform builds) p
 ### Build Verification
 
 ```bash
-./build/release/packdb -c "PRAGMA platform;"
-./build/release/packdb --version
-file build/release/packdb  # Verifies universal binary
+./build/release/decidb -c "PRAGMA platform;"
+./build/release/decidb --version
+file build/release/decidb  # Verifies universal binary
 ```
 
 ### Packaged Artifacts
 
 | Artifact | Contents |
 |----------|----------|
-| `packdb_cli-osx-universal.zip` | CLI executable (zip) |
-| `packdb_cli-osx-universal.gz` | CLI executable (gzip) |
-| `libpackdb-osx-universal.zip` | Dynamic library (`.dylib`), headers |
+| `decidb_cli-osx-universal.zip` | CLI executable (zip) |
+| `decidb_cli-osx-universal.gz` | CLI executable (gzip) |
+| `libdecidb-osx-universal.zip` | Dynamic library (`.dylib`), headers |
 
 ---
 
@@ -123,16 +123,16 @@ file build/release/packdb  # Verifies universal binary
 ### Build Verification
 
 ```bash
-Release/packdb.exe -c "PRAGMA platform;"
-Release/packdb.exe --version
+Release/decidb.exe -c "PRAGMA platform;"
+Release/decidb.exe --version
 ```
 
 ### Packaged Artifacts
 
 | Artifact | Contents |
 |----------|----------|
-| `packdb_cli-windows-amd64.zip` | CLI executable (`.exe`) |
-| `libpackdb-windows-amd64.zip` | DLL (`.dll`), import library (`.lib`), headers |
+| `decidb_cli-windows-amd64.zip` | CLI executable (`.exe`) |
+| `libdecidb-windows-amd64.zip` | DLL (`.dll`), import library (`.lib`), headers |
 
 ---
 
@@ -152,7 +152,7 @@ Release/packdb.exe --version
 3. **Create draft release** using GitHub CLI:
    ```bash
    gh release create ${version} \
-     --title "PackDB ${version}" \
+     --title "DecidB ${version}" \
      --notes-file release_notes.md \
      --draft \
      artifacts/**/*.zip artifacts/**/*.gz
@@ -182,7 +182,7 @@ All uploaded artifacts are retained for **7 days** (`retention-days: 7`).
 ## How to Trigger the Workflow
 
 1. Go to the repository's **Actions** tab
-2. Select **PackDB Release Build** from the workflow list
+2. Select **DecidB Release Build** from the workflow list
 3. Click **Run workflow**
 4. Fill in the inputs:
    - **version**: e.g., `v0.1.0-beta`
@@ -240,11 +240,11 @@ The Makefile respects these environment variables:
 
 | Platform | Executable | Libraries |
 |----------|------------|-----------|
-| Linux | `build/release/packdb` | `build/release/src/libduckdb.so`, `libduckdb_static.a` |
-| macOS | `build/release/packdb` | `build/release/src/libduckdb.dylib` |
-| Windows | `Release/packdb.exe` | `src/Release/duckdb.dll`, `duckdb.lib` |
+| Linux | `build/release/decidb` | `build/release/src/libduckdb.so`, `libduckdb_static.a` |
+| macOS | `build/release/decidb` | `build/release/src/libduckdb.dylib` |
+| Windows | `Release/decidb.exe` | `src/Release/duckdb.dll`, `duckdb.lib` |
 
-**Note**: The executable is renamed to `packdb`, but the internal libraries retain the `libduckdb` naming for compatibility with DuckDB extensions and APIs.
+**Note**: The executable is renamed to `decidb`, but the internal libraries retain the `libduckdb` naming for compatibility with DuckDB extensions and APIs.
 
 ---
 
@@ -314,14 +314,14 @@ symbolic/sum.h:422: warning: if statement has empty body
 
 These are cosmetic issues in the third-party SymbolicC++ library.
 
-### PackDB-Specific Warnings (macOS)
+### DecidB-Specific Warnings (macOS)
 
 ```
 decide_binder.hpp:42: warning: 'BindAggregate' overrides but is not marked 'override'
 logical_operator_type.cpp:10: warning: enumeration value 'LOGICAL_DECIDE' not handled in switch
 ```
 
-These are minor code style issues in the PackDB extensions that don't affect functionality.
+These are minor code style issues in the DecidB extensions that don't affect functionality.
 
 ---
 
@@ -331,4 +331,4 @@ These are minor code style issues in the PackDB extensions that don't affect fun
 - **manylinux2014**: The Linux build uses manylinux2014 for maximum compatibility
 - **Universal binary**: The macOS build produces a single binary that runs natively on both Intel and Apple Silicon Macs
 - **Ccache**: macOS and Windows builds use ccache to speed up subsequent builds
-- **Library naming**: Libraries are packaged as `libpackdb-*.zip` but contain `libduckdb.*` files internally for DuckDB API compatibility
+- **Library naming**: Libraries are packaged as `libdecidb-*.zip` but contain `libduckdb.*` files internally for DuckDB API compatibility

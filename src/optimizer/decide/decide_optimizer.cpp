@@ -47,7 +47,7 @@ unique_ptr<LogicalOperator> DecideOptimizer::Optimize(unique_ptr<LogicalOperator
 }
 
 void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
-	bool bench = std::getenv("PACKDB_BENCH") != nullptr;
+	bool bench = std::getenv("DECIDB_BENCH") != nullptr;
 	Profiler timer;
 	if (bench) {
 		timer.Start();
@@ -63,7 +63,7 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 
 	if (bench) {
 		timer.End();
-		fprintf(stderr, "PACKDB_BENCH: optimizer_ms=%.2f\n", timer.Elapsed() * 1000.0);
+		fprintf(stderr, "DECIDB_BENCH: optimizer_ms=%.2f\n", timer.Elapsed() * 1000.0);
 	}
 }
 
@@ -202,7 +202,7 @@ static bool BoundExprReferencesDecideVar(const Expression &expr, idx_t decide_in
 // ABS-in-constraint soundness handling (must run BEFORE RewriteAbs)
 // ---------------------------------------------------------------------------
 //
-// PackDB's ABS linearization replaces `ABS(e)` with an auxiliary `aux` and
+// DecidB's ABS linearization replaces `ABS(e)` with an auxiliary `aux` and
 // adds the lower-envelope constraints `aux >= e` and `aux >= -e`. That alone
 // only forces `aux >= |e|`. Soundness then requires that aux be pinned to
 // exactly |e|, not free above it. There are three pinning mechanisms:

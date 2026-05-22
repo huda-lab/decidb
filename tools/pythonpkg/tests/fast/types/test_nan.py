@@ -1,6 +1,6 @@
 import numpy as np
 import datetime
-import packdb
+import decidb
 import pytest
 
 pandas = pytest.importorskip("pandas")
@@ -18,9 +18,9 @@ class TestPandasNaN(object):
         df['datetest'] = current_time
         # introduce a NaT (Not a Time value)
         df.loc[0, 'datetest'] = pandas.NaT
-        # now pass the DF through packdb:
+        # now pass the DF through decidb:
 
-        conn = packdb.connect(':memory:')
+        conn = decidb.connect(':memory:')
         conn.register('testing_null_values', df)
         # scan the DF and fetch the results normally
         results = conn.execute('select * from testing_null_values').fetchall()

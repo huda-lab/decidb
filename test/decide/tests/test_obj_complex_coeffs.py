@@ -17,7 +17,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q03_complex_coeffs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q03_complex_coeffs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Complex coefficients: discounted price with tax calculation."""
     sql = """
         SELECT l_orderkey, l_extendedprice, l_discount, l_tax, x
@@ -28,8 +28,8 @@ def test_q03_complex_coeffs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -66,12 +66,12 @@ def test_q03_complex_coeffs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 
     # Objective is SUM(x), so coefficient per row is 1.0
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "q03_complex_coeffs", packdb_time, build_time,
+        "q03_complex_coeffs", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -92,7 +92,7 @@ def test_q03_complex_coeffs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_objective_with_constant_offset(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`MAXIMIZE SUM(x * cost) + 100` — additive constant peeled away."""
     sql = """
@@ -103,8 +103,8 @@ def test_objective_with_constant_offset(
         MAXIMIZE SUM(x * c_acctbal) + 100
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(c_custkey AS BIGINT), CAST(c_acctbal AS DOUBLE)
@@ -127,11 +127,11 @@ def test_objective_with_constant_offset(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("c_acctbal")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("c_acctbal")])},
     )
     perf_tracker.record(
-        "obj_const_offset", packdb_time, build_time,
+        "obj_const_offset", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -142,7 +142,7 @@ def test_objective_with_constant_offset(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_objective_with_scalar_multiplier(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`MAXIMIZE 2 * SUM(x * cost)` — constant multiplier folded into the
     SUM body. Doesn't change argmax (2 > 0) but must not throw."""
@@ -154,8 +154,8 @@ def test_objective_with_scalar_multiplier(
         MAXIMIZE 2 * SUM(x * c_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(c_custkey AS BIGINT), CAST(c_acctbal AS DOUBLE)
@@ -178,11 +178,11 @@ def test_objective_with_scalar_multiplier(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": 2.0 * float(row[packdb_cols.index("c_acctbal")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 2.0 * float(row[decidb_cols.index("c_acctbal")])},
     )
     perf_tracker.record(
-        "obj_scalar_mult", packdb_time, build_time,
+        "obj_scalar_mult", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

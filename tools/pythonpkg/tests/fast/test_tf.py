@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 
@@ -6,7 +6,7 @@ tf = pytest.importorskip('tensorflow')
 
 
 def test_tf():
-    con = packdb.connect()
+    con = decidb.connect()
 
     con.execute("create table t( a integer, b integer)")
     con.execute("insert into t values (1,2), (3,4)")
@@ -26,7 +26,7 @@ def test_tf():
     numeric_types = ['TINYINT', 'SMALLINT', 'BIGINT', 'HUGEINT', 'FLOAT', 'DOUBLE', 'DECIMAL(4,1)', 'UTINYINT']
 
     for supported_type in numeric_types:
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(f"create table t( a {supported_type} , b {supported_type})")
         con.execute("insert into t values (1,2), (3,4)")
         duck_tf = con.sql("select * from t").tf()

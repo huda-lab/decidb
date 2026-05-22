@@ -5,7 +5,7 @@ from spark_namespace.sql.types import (
     Row,
 )
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 
 
 class TestDataFrameDropDuplicates(object):

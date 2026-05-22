@@ -40,8 +40,8 @@ For each changed area, read the corresponding documentation to understand the fe
 - `src/optimizer/decide/` → read `context/descriptions/04_optimizer/rewrite_passes/done.md`
 - `src/execution/operator/decide/` → read `context/descriptions/01_pipeline/03_execution.md`
 - `src/planner/expression_binder/` → read `context/descriptions/01_pipeline/02_binder.md`
-- `src/packdb/symbolic/` or `third_party/libpg_query/` → read `context/descriptions/01_pipeline/01_parser.md`
-- `src/include/duckdb/packdb/` → read corresponding pipeline docs
+- `src/decidb/symbolic/` or `third_party/libpg_query/` → read `context/descriptions/01_pipeline/01_parser.md`
+- `src/include/duckdb/decidb/` → read corresponding pipeline docs
 - `test/decide/` → read test file(s) to understand what's being tested
 
 ### 4. Group changes by area

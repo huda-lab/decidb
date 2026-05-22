@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import packdb
+import decidb
 import os
 import tempfile
 
@@ -8,7 +8,7 @@ import tempfile
 class TestNonDefaultConn(object):
     def test_values(self, duckdb_cursor):
         duckdb_cursor.execute("create table t (a integer)")
-        packdb.values([1], connection=duckdb_cursor).insert_into("t")
+        decidb.values([1], connection=duckdb_cursor).insert_into("t")
         assert duckdb_cursor.execute("select count(*) from t").fetchall()[0] == (1,)
 
     def test_query(self, duckdb_cursor):
@@ -43,7 +43,7 @@ class TestNonDefaultConn(object):
         duckdb_cursor.execute("create table t (a integer)")
         duckdb_cursor.execute("insert into t values (1)")
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4]})
-        rel = packdb.df(test_df, connection=duckdb_cursor)
+        rel = decidb.df(test_df, connection=duckdb_cursor)
         assert rel.query('t_2', 'select count(*) from t inner join t_2 on (a = i)').fetchall()[0] == (1,)
         rel = duckdb_cursor.from_df(test_df)
         assert rel.query('t_2', 'select count(*) from t inner join t_2 on (a = i)').fetchall()[0] == (1,)
@@ -60,54 +60,54 @@ class TestNonDefaultConn(object):
         test_arrow = pa.Table.from_pandas(test_df)
         rel = duckdb_cursor.from_arrow(test_arrow)
         assert rel.query('t_2', 'select count(*) from t inner join t_2 on (a = i)').fetchall()[0] == (1,)
-        rel = packdb.arrow(test_arrow, connection=duckdb_cursor)
+        rel = decidb.arrow(test_arrow, connection=duckdb_cursor)
         assert rel.query('t_2', 'select count(*) from t inner join t_2 on (a = i)').fetchall()[0] == (1,)
 
     def test_filter_df(self, duckdb_cursor):
         duckdb_cursor.execute("create table t (a integer)")
         duckdb_cursor.execute("insert into t values (1), (4)")
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4]})
-        rel = packdb.filter(test_df, "i < 2", connection=duckdb_cursor)
+        rel = decidb.filter(test_df, "i < 2", connection=duckdb_cursor)
         assert rel.query('t_2', 'select count(*) from t inner join t_2 on (a = i)').fetchall()[0] == (1,)
 
     def test_project_df(self, duckdb_cursor):
         duckdb_cursor.execute("create table t (a integer)")
         duckdb_cursor.execute("insert into t values (1), (4)")
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": [1, 2, 3, 4]})
-        rel = packdb.project(test_df, "i", connection=duckdb_cursor)
+        rel = decidb.project(test_df, "i", connection=duckdb_cursor)
         assert rel.query('t_2', 'select * from t inner join t_2 on (a = i)').fetchall()[0] == (1, 1)
 
     def test_agg_df(self, duckdb_cursor):
         duckdb_cursor.execute("create table t (a integer)")
         duckdb_cursor.execute("insert into t values (1), (4)")
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": [1, 2, 3, 4]})
-        rel = packdb.aggregate(test_df, "count(*) as i", connection=duckdb_cursor)
+        rel = decidb.aggregate(test_df, "count(*) as i", connection=duckdb_cursor)
         assert rel.query('t_2', 'select * from t inner join t_2 on (a = i)').fetchall()[0] == (4, 4)
 
     def test_distinct_df(self, duckdb_cursor):
         duckdb_cursor.execute("create table t (a integer)")
         duckdb_cursor.execute("insert into t values (1)")
         test_df = pd.DataFrame.from_dict({"i": [1, 1, 2, 3, 4]})
-        rel = packdb.distinct(test_df, connection=duckdb_cursor)
+        rel = decidb.distinct(test_df, connection=duckdb_cursor)
         assert rel.query('t_2', 'select * from t inner join t_2 on (a = i)').fetchall()[0] == (1, 1)
 
     def test_limit_df(self, duckdb_cursor):
         duckdb_cursor.execute("create table t (a integer)")
         duckdb_cursor.execute("insert into t values (1),(4)")
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4]})
-        rel = packdb.limit(test_df, 1, connection=duckdb_cursor)
+        rel = decidb.limit(test_df, 1, connection=duckdb_cursor)
         assert rel.query('t_2', 'select * from t inner join t_2 on (a = i)').fetchall()[0] == (1, 1)
 
     def test_query_df(self, duckdb_cursor):
         duckdb_cursor.execute("create table t (a integer)")
         duckdb_cursor.execute("insert into t values (1),(4)")
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4]})
-        rel = packdb.query_df(test_df, 't_2', 'select * from t inner join t_2 on (a = i)', connection=duckdb_cursor)
+        rel = decidb.query_df(test_df, 't_2', 'select * from t inner join t_2 on (a = i)', connection=duckdb_cursor)
         assert rel.fetchall()[0] == (1, 1)
 
     def test_query_order(self, duckdb_cursor):
         duckdb_cursor.execute("create table t (a integer)")
         duckdb_cursor.execute("insert into t values (1),(4)")
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4]})
-        rel = packdb.order(test_df, 'i', connection=duckdb_cursor)
+        rel = decidb.order(test_df, 'i', connection=duckdb_cursor)
         assert rel.query('t_2', 'select * from t inner join t_2 on (a = i)').fetchall()[0] == (1, 1)

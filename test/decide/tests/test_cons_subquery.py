@@ -18,7 +18,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.obj_maximize
 @pytest.mark.sql_subquery
 @pytest.mark.correctness
-def test_q04_subquery_rhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q04_subquery_rhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Subquery RHS: total price <= avg customer acctbal for nation 10."""
     sql = """
         SELECT o_orderkey, o_totalprice, x
@@ -29,8 +29,8 @@ def test_q04_subquery_rhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * o_totalprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     # Fetch data + resolve subquery via duckdb
     data = duckdb_conn.execute("""
@@ -61,12 +61,12 @@ def test_q04_subquery_rhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("o_totalprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("o_totalprice")])},
     )
 
     perf_tracker.record(
-        "q04_subquery_rhs", packdb_time, build_time,
+        "q04_subquery_rhs", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -82,7 +82,7 @@ def test_q04_subquery_rhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.sql_subquery
 @pytest.mark.correctness
 def test_per_constraint_with_subquery_rhs(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Uncorrelated scalar subquery as the RHS of a PER constraint.
 
@@ -98,8 +98,8 @@ def test_per_constraint_with_subquery_rhs(
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -130,14 +130,14 @@ def test_per_constraint_with_subquery_rhs(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
-    packdb_obj = sum(int(r[x_idx]) for r in packdb_rows)
-    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    x_idx = decidb_cols.index("x")
+    decidb_obj = sum(int(r[x_idx]) for r in decidb_rows)
+    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(
-        "per_subquery_rhs", packdb_time, build_time,
+        "per_subquery_rhs", decidb_time, build_time,
         result.solve_time_seconds, n, n, len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",

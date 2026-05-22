@@ -17,7 +17,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q01_knapsack_binary(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q01_knapsack_binary(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Binary knapsack: maximize extendedprice, total quantity <= 100."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -28,8 +28,8 @@ def test_q01_knapsack_binary(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     # Oracle data
     data = duckdb_conn.execute("""
@@ -60,12 +60,12 @@ def test_q01_knapsack_binary(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
 
     # Compare objectives
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "q01_knapsack_binary", packdb_time, build_time,
+        "q01_knapsack_binary", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

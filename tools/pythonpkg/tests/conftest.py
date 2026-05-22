@@ -4,14 +4,14 @@ import pytest
 import shutil
 from os.path import abspath, join, dirname, normpath
 import glob
-import packdb
+import decidb
 import warnings
 from importlib import import_module
 
-# The compiled C++ extension (_packdb.so) internally does `import duckdb` at
-# runtime for certain operations (e.g. Value conversion).  Register packdb
+# The compiled C++ extension (_decidb.so) internally does `import duckdb` at
+# runtime for certain operations (e.g. Value conversion).  Register decidb
 # under the old module name so those internal imports resolve correctly.
-# sys.modules['duckdb'] = packdb
+# sys.modules['duckdb'] = decidb
 
 try:
     # need to ignore warnings that might be thrown deep inside pandas's import tree (from dateutil in this case)
@@ -69,7 +69,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="function")
 def duckdb_empty_cursor(request):
-    connection = packdb.connect('')
+    connection = decidb.connect('')
     cursor = connection.cursor()
     return cursor
 
@@ -219,7 +219,7 @@ def require():
         for path in extension_paths_found:
             print(path)
             if path.endswith(extension_name + ".duckdb_extension"):
-                conn = packdb.connect(db_name, config={'allow_unsigned_extensions': 'true'})
+                conn = decidb.connect(db_name, config={'allow_unsigned_extensions': 'true'})
                 conn.execute(f"LOAD '{path}'")
                 return conn
         pytest.skip(f'could not load {extension_name}')
@@ -243,7 +243,7 @@ def spark():
 
 @pytest.fixture(scope='function')
 def duckdb_cursor():
-    connection = packdb.connect('')
+    connection = decidb.connect('')
     yield connection
     connection.close()
 
@@ -286,13 +286,13 @@ def duckdb_cursor_autocommit(request, tmp_path):
     test_dbfarm = tmp_path.resolve().as_posix()
 
     def finalizer():
-        packdb.shutdown()
+        decidb.shutdown()
         if tmp_path.is_dir():
             shutil.rmtree(test_dbfarm)
 
     request.addfinalizer(finalizer)
 
-    connection = packdb.connect(test_dbfarm)
+    connection = decidb.connect(test_dbfarm)
     connection.set_autocommit(True)
     cursor = connection.cursor()
     return (cursor, connection, test_dbfarm)
@@ -303,11 +303,11 @@ def initialize_duckdb(request, tmp_path):
     test_dbfarm = tmp_path.resolve().as_posix()
 
     def finalizer():
-        packdb.shutdown()
+        decidb.shutdown()
         if tmp_path.is_dir():
             shutil.rmtree(test_dbfarm)
 
     request.addfinalizer(finalizer)
 
-    packdb.connect(test_dbfarm)
+    decidb.connect(test_dbfarm)
     return test_dbfarm

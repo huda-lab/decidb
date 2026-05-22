@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 import os
 import pandas as pd
@@ -15,7 +15,7 @@ class TestArrowReplacementScan(object):
         userdata_parquet_table = pq.read_table(parquet_filename)
         df = userdata_parquet_table.to_pandas()
 
-        con = packdb.connect()
+        con = decidb.connect()
 
         for i in range(5):
             assert con.execute("select count(*) from userdata_parquet_table").fetchone() == (1000,)
@@ -42,13 +42,13 @@ class TestArrowReplacementScan(object):
         rel = duckdb_cursor.sql("select b, d from capsule")
         assert rel.fetchall() == [(i, i + 6) for i in range(4, 7)]
 
-        with pytest.raises(packdb.InvalidInputException, match='The ArrowArrayStream was already released'):
+        with pytest.raises(decidb.InvalidInputException, match='The ArrowArrayStream was already released'):
             rel = duckdb_cursor.sql("select b, d from capsule")
 
         schema_obj = tbl.schema
         schema_capsule = schema_obj.__arrow_c_schema__()
         with pytest.raises(
-            packdb.InvalidInputException, match="""Expected a 'arrow_array_stream' PyCapsule, got: arrow_schema"""
+            decidb.InvalidInputException, match="""Expected a 'arrow_array_stream' PyCapsule, got: arrow_schema"""
         ):
             rel = duckdb_cursor.sql("select b, d from schema_capsule")
 
@@ -57,11 +57,11 @@ class TestArrowReplacementScan(object):
         parquet_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'userdata1.parquet')
         userdata_parquet_table = pq.read_table(parquet_filename)
 
-        con = packdb.connect()
+        con = decidb.connect()
 
         con.execute("create view x as select * from userdata_parquet_table")
         del userdata_parquet_table
-        with pytest.raises(packdb.CatalogException, match='Table with name userdata_parquet_table does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name userdata_parquet_table does not exist'):
             assert con.execute("select count(*) from x").fetchone()
 
     def test_arrow_dataset_replacement_scan(self, duckdb_cursor):
@@ -69,5 +69,5 @@ class TestArrowReplacementScan(object):
         userdata_parquet_table = pq.read_table(parquet_filename)
         userdata_parquet_dataset = ds.dataset(parquet_filename)
 
-        con = packdb.connect()
+        con = decidb.connect()
         assert con.execute("select count(*) from userdata_parquet_dataset").fetchone() == (1000,)

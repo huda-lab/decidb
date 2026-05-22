@@ -126,7 +126,7 @@ MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp   -- sum per-group SSE; ≡ flat
 MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp   -- inner AVG scales each row by 1/n_g
 ```
 
-These forms are detected by `SumInnerIsQuadratic` (`src/packdb/symbolic/decide_symbolic.cpp`), which preserves the raw AST through normalization so the post-bind optimizer can strip the outer wrapper. `SUM(MIN(POWER(...))) PER grp` and `SUM(MAX(POWER(...))) PER grp` also bind, but physical-layer correctness for the quadratic per-row auxiliary path is tracked separately in `context/descriptions/05_testing/quadratic/todo.md`.
+These forms are detected by `SumInnerIsQuadratic` (`src/decidb/symbolic/decide_symbolic.cpp`), which preserves the raw AST through normalization so the post-bind optimizer can strip the outer wrapper. `SUM(MIN(POWER(...))) PER grp` and `SUM(MAX(POWER(...))) PER grp` also bind, but physical-layer correctness for the quadratic per-row auxiliary path is tracked separately in `context/descriptions/05_testing/quadratic/todo.md`.
 
 ---
 
@@ -187,4 +187,4 @@ MAXIMIZE SUM(keepS) + SUM(keepP)
   - `RewriteMinMaxObjective()` detects `OUTER(INNER(expr)) PER col`, sets `per_inner_*` / `per_outer_*` metadata, and rewrites inner `MIN/MAX/AVG` to `SUM`
   - Rejects flat `MIN(...) PER col` / `MAX(...) PER col` as ambiguous (requires nested aggregate form)
 
-- **Solver input**: `src/include/duckdb/packdb/solver_input.hpp`
+- **Solver input**: `src/include/duckdb/decidb/solver_input.hpp`

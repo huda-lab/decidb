@@ -4,7 +4,7 @@
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 
-#include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
 
 namespace duckdb {
 
@@ -150,7 +150,7 @@ bool SelectNode::Equals(const QueryNode *other_p) const {
 	if (!TableRef::Equals(from_table, other.from_table)) {
 		return false;
 	}
-    // packdb's DECIDE
+    // decidb's DECIDE
 	if (!ParsedExpression::ListEquals(decide_variables, other.decide_variables)) {
 		return false;
 	}
@@ -196,7 +196,7 @@ unique_ptr<QueryNode> SelectNode::Copy() const {
 		result->select_list.push_back(child->Copy());
 	}
 	result->from_table = from_table ? from_table->Copy() : nullptr;
-    // packdb's decide
+    // decidb's decide
 	for (auto &child : decide_variables) {
 		result->decide_variables.push_back(child->Copy());
 	}

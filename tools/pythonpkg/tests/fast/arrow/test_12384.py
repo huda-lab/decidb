@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 import os
 
@@ -10,7 +10,7 @@ def test_10795():
     with pa.memory_map(arrow_filename, 'r') as source:
         reader = pa.ipc.RecordBatchFileReader(source)
         taxi_fhvhv_arrow = reader.read_all()
-        con = packdb.connect(database=':memory:')
+        con = decidb.connect(database=':memory:')
         con.execute("SET TimeZone='UTC';")
         con.register('taxi_fhvhv', taxi_fhvhv_arrow)
         res = con.execute(

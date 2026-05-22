@@ -10,9 +10,9 @@ rm -rf	$SCRIPTPATH/.eggs \
 		$SCRIPTPATH/build \
 		$SCRIPTPATH/duckdb_build \
 		$SCRIPTPATH/dist \
-		$SCRIPTPATH/packdb.egg-info \
-		$SCRIPTPATH/packdb.cpp \
-		$SCRIPTPATH/packdb.hpp \
+		$SCRIPTPATH/decidb.egg-info \
+		$SCRIPTPATH/decidb.cpp \
+		$SCRIPTPATH/decidb.hpp \
 		$SCRIPTPATH/parquet_extension.cpp \
 		$SCRIPTPATH/parquet_extension.hpp \
 		$SCRIPTPATH/duckdb_tarball
@@ -21,4 +21,4 @@ rm -f	$SCRIPTPATH/sources.list \
 		$SCRIPTPATH/includes.list \
 		$SCRIPTPATH/githash.list
 
-python3 -m pip uninstall packdb --yes 2>/dev/null || true
+python3 -m pip uninstall decidb --yes 2>/dev/null || true

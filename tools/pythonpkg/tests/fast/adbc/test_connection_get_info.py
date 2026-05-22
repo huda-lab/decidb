@@ -1,6 +1,6 @@
 import sys
 
-import packdb
+import decidb
 import pytest
 
 pa = pytest.importorskip("pyarrow")
@@ -40,8 +40,8 @@ class TestADBCConnectionGetInfo(object):
 
         expected_result = pa.array(
             [
-                "packdb",
-                "v" + packdb.__version__,  # don't hardcode this, as it will change every version
+                "decidb",
+                "v" + decidb.__version__,  # don't hardcode this, as it will change every version
                 "ADBC DuckDB Driver",
                 "(unknown)",
                 "(unknown)",
@@ -73,7 +73,7 @@ class TestADBCConnectionGetInfo(object):
         table = reader.read_all()
         values = table["info_value"]
 
-        expected_result = pa.array(["packdb", "(unknown)"], type=pa.string())
+        expected_result = pa.array(["decidb", "(unknown)"], type=pa.string())
 
         assert values.num_chunks == 1
         chunk = values.chunk(0)

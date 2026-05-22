@@ -1,6 +1,6 @@
 """Tests for PER on objective with nested aggregate syntax.
 
-The two-level ILP formulation (per PackDB docs):
+The two-level ILP formulation (per DecidB docs):
   INNER creates per-group auxiliary variables; OUTER creates a global
   auxiliary. Easy / hard classification applies at each level independently.
 
@@ -16,7 +16,7 @@ The two-level ILP formulation (per PackDB docs):
     to SUM when groups differ in size.
 
 Every correctness case below builds the same two-level model in gurobipy and
-compares PackDB's nested-aggregate objective (evaluated on its own output)
+compares DecidB's nested-aggregate objective (evaluated on its own output)
 against the oracle's ``objective_value``.
 """
 
@@ -36,7 +36,7 @@ from ._oracle_helpers import (
 
 
 # ---------------------------------------------------------------------------
-# Utilities for evaluating nested-aggregate objectives on PackDB output
+# Utilities for evaluating nested-aggregate objectives on DecidB output
 # ---------------------------------------------------------------------------
 
 def _per_group_selected(rows, cols, per_col, expr_fn, x_col="x"):
@@ -71,7 +71,7 @@ def _per_group_values_if_selected(rows, cols, per_col, expr_fn, x_col="x"):
 @pytest.mark.per_clause
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x * cost) PER col ≡ SUM(x * cost)."""
     sql_per = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
@@ -81,8 +81,8 @@ def test_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MINIMIZE SUM(x * s_acctbal) PER s_nationkey
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql_per)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql_per)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(s_suppkey AS BIGINT),
@@ -109,7 +109,7 @@ def test_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         coeff_fn=lambda row: {"x": float(row[cols.index("s_acctbal")])},
     )
     perf_tracker.record(
-        "sum_per_noop", packdb_time, build_time, result.solve_time_seconds,
+        "sum_per_noop", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -118,7 +118,7 @@ def test_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.per_clause
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(SUM(x * cost)) PER col — nested SUMs cancel to flat SUM."""
     sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
@@ -128,8 +128,8 @@ def test_sum_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(SUM(x * s_acctbal)) PER s_nationkey
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(s_suppkey AS BIGINT),
@@ -156,7 +156,7 @@ def test_sum_sum_per_noop(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         coeff_fn=lambda row: {"x": float(row[cols.index("s_acctbal")])},
     )
     perf_tracker.record(
-        "sum_sum_per_noop", packdb_time, build_time, result.solve_time_seconds,
+        "sum_sum_per_noop", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -192,7 +192,7 @@ def _group_rows(data, key_idx):
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_minimize_sum_max_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(MAX(x * qty)) PER flag — easy inner MAX."""
     sql = """
@@ -203,8 +203,8 @@ def test_minimize_sum_max_per(
         MINIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 7")
     n = len(data)
@@ -234,7 +234,7 @@ def test_minimize_sum_max_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         gs = _per_group_values_if_selected(
             rs, cs, "l_returnflag",
             lambda r: r[cs.index("l_quantity")],
@@ -243,10 +243,10 @@ def test_minimize_sum_max_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "minimize_sum_max_per", packdb_time, build_time,
+        "minimize_sum_max_per", decidb_time, build_time,
         result.solve_time_seconds, n, n + len(groups), len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -258,7 +258,7 @@ def test_minimize_sum_max_per(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_maximize_sum_min_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE SUM(MIN(x * qty)) PER flag — easy inner MIN."""
     sql = """
@@ -269,8 +269,8 @@ def test_maximize_sum_min_per(
         MAXIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 7")
     n = len(data)
@@ -298,7 +298,7 @@ def test_maximize_sum_min_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         gs = _per_group_values_if_selected(
             rs, cs, "l_returnflag",
             lambda r: r[cs.index("l_quantity")],
@@ -307,10 +307,10 @@ def test_maximize_sum_min_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "maximize_sum_min_per", packdb_time, build_time,
+        "maximize_sum_min_per", decidb_time, build_time,
         result.solve_time_seconds, n, n + len(groups), len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -322,7 +322,7 @@ def test_maximize_sum_min_per(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_maximize_sum_max_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE SUM(MAX(x * qty)) PER flag — hard inner MAX (needs indicators)."""
     sql = """
@@ -334,8 +334,8 @@ def test_maximize_sum_max_per(
         MAXIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 7")
     n = len(data)
@@ -366,7 +366,7 @@ def test_maximize_sum_max_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         gs = _per_group_values_if_selected(
             rs, cs, "l_returnflag",
             lambda r: r[cs.index("l_quantity")],
@@ -375,10 +375,10 @@ def test_maximize_sum_max_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "maximize_sum_max_per", packdb_time, build_time,
+        "maximize_sum_max_per", decidb_time, build_time,
         result.solve_time_seconds, n, 2 * n + len(groups), 2 * len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -390,7 +390,7 @@ def test_maximize_sum_max_per(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_minimize_sum_min_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(MIN(x * qty)) PER flag — hard inner MIN."""
     sql = """
@@ -402,8 +402,8 @@ def test_minimize_sum_min_per(
         MINIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 7")
     n = len(data)
@@ -434,7 +434,7 @@ def test_minimize_sum_min_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         gs = _per_group_values_if_selected(
             rs, cs, "l_returnflag",
             lambda r: r[cs.index("l_quantity")],
@@ -443,10 +443,10 @@ def test_minimize_sum_min_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "minimize_sum_min_per", packdb_time, build_time,
+        "minimize_sum_min_per", decidb_time, build_time,
         result.solve_time_seconds, n, 2 * n + len(groups), 2 * len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -462,7 +462,7 @@ def test_minimize_sum_min_per(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_minimize_max_sum_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE MAX(SUM(x * qty)) PER flag — easy outer MAX over per-group SUMs."""
     sql = """
@@ -473,8 +473,8 @@ def test_minimize_max_sum_per(
         MINIMIZE MAX(SUM(x * l_quantity)) PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
     n = len(data)
@@ -500,7 +500,7 @@ def test_minimize_max_sum_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         gs = _per_group_values_if_selected(
             rs, cs, "l_returnflag",
             lambda r: r[cs.index("l_quantity")],
@@ -509,10 +509,10 @@ def test_minimize_max_sum_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "minimize_max_sum_per", packdb_time, build_time,
+        "minimize_max_sum_per", decidb_time, build_time,
         result.solve_time_seconds, n, n + 1, len(groups) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -524,7 +524,7 @@ def test_minimize_max_sum_per(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_maximize_min_sum_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE MIN(SUM(x * qty)) PER flag — easy outer MIN over per-group SUMs."""
     sql = """
@@ -535,8 +535,8 @@ def test_maximize_min_sum_per(
         MAXIMIZE MIN(SUM(x * l_quantity)) PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
     n = len(data)
@@ -561,7 +561,7 @@ def test_maximize_min_sum_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         gs = _per_group_values_if_selected(
             rs, cs, "l_returnflag",
             lambda r: r[cs.index("l_quantity")],
@@ -570,10 +570,10 @@ def test_maximize_min_sum_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "maximize_min_sum_per", packdb_time, build_time,
+        "maximize_min_sum_per", decidb_time, build_time,
         result.solve_time_seconds, n, n + 1, len(groups) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -589,7 +589,7 @@ def test_maximize_min_sum_per(
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_sum_max_when_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(MAX(x * qty)) WHEN qty>10 PER flag — WHEN filters each group."""
     sql = """
@@ -600,8 +600,8 @@ def test_sum_max_when_per(
         MINIMIZE SUM(MAX(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
     n = len(data)
@@ -634,7 +634,7 @@ def test_sum_max_when_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); qi = cs.index("l_quantity"); fi = cs.index("l_returnflag")
         gs: dict = defaultdict(list)
         for r in rs:
@@ -644,10 +644,10 @@ def test_sum_max_when_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "sum_max_when_per", packdb_time, build_time, result.solve_time_seconds,
+        "sum_max_when_per", decidb_time, build_time, result.solve_time_seconds,
         n, n + len(z_names), len(groups) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -662,7 +662,7 @@ def test_sum_max_when_per(
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_single_group(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """All rows share one PER key ⇒ SUM(MAX(...)) PER col === MAX(x*qty)."""
     sql = """
@@ -673,8 +673,8 @@ def test_single_group(
         MINIMIZE SUM(MAX(x * l_quantity)) PER l_orderkey
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT), CAST(l_linenumber AS BIGINT),
@@ -699,17 +699,17 @@ def test_single_group(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); qi = cs.index("l_quantity")
         vals = [float(r[qi]) if float(r[xi]) > 0.5 else 0.0 for r in rs]
         return max(vals) if vals else 0.0
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "single_group", packdb_time, build_time, result.solve_time_seconds,
+        "single_group", decidb_time, build_time, result.solve_time_seconds,
         n, n + 1, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -723,7 +723,7 @@ def test_single_group(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_sum_avg_per_unequal_groups(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """SUM(AVG(x*cost)) PER col — inner AVG scales coeffs by 1/n_g per group."""
     sql = """
@@ -734,8 +734,8 @@ def test_sum_avg_per_unequal_groups(
         MINIMIZE SUM(AVG(x * s_acctbal)) PER s_nationkey
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(s_suppkey AS BIGINT),
@@ -765,7 +765,7 @@ def test_sum_avg_per_unequal_groups(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); ni = cs.index("s_nationkey"); ai = cs.index("s_acctbal")
         g: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
         for r in rs:
@@ -776,10 +776,10 @@ def test_sum_avg_per_unequal_groups(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "sum_avg_per_unequal_groups", packdb_time, build_time,
+        "sum_avg_per_unequal_groups", decidb_time, build_time,
         result.solve_time_seconds, n, n, len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -790,7 +790,7 @@ def test_sum_avg_per_unequal_groups(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_avg_sum_per_noop(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(SUM(x*cost)) PER col — outer AVG divides by constant G ⇒ argmin matches SUM."""
     sql = """
@@ -801,8 +801,8 @@ def test_avg_sum_per_noop(
         MINIMIZE AVG(SUM(x * s_acctbal)) PER s_nationkey
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(s_suppkey AS BIGINT),
@@ -821,14 +821,14 @@ def test_avg_sum_per_noop(
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 3.0, name="total")
     # AVG outer over G groups ⇒ SUM(x*acctbal) / G. The 1/G factor is absorbed
-    # into each coefficient so the reported ``objective_value`` matches PackDB.
+    # into each coefficient so the reported ``objective_value`` matches DecidB.
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] / G for i in range(n)}, ObjSense.MINIMIZE,
     )
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); ni = cs.index("s_nationkey"); ai = cs.index("s_acctbal")
         g: dict = defaultdict(float)
         for r in rs:
@@ -838,10 +838,10 @@ def test_avg_sum_per_noop(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "avg_sum_per_noop", packdb_time, build_time, result.solve_time_seconds,
+        "avg_sum_per_noop", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -852,7 +852,7 @@ def test_avg_sum_per_noop(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_minimize_max_avg_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE MAX(AVG(x*qty)) PER flag — easy outer MAX, inner AVG."""
     sql = """
@@ -863,8 +863,8 @@ def test_minimize_max_avg_per(
         MINIMIZE MAX(AVG(x * l_quantity)) PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
     n = len(data)
@@ -890,7 +890,7 @@ def test_minimize_max_avg_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); qi = cs.index("l_quantity"); fi = cs.index("l_returnflag")
         g: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
         for r in rs:
@@ -901,10 +901,10 @@ def test_minimize_max_avg_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "minimize_max_avg_per", packdb_time, build_time, result.solve_time_seconds,
+        "minimize_max_avg_per", decidb_time, build_time, result.solve_time_seconds,
         n, n + 1, len(groups) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -916,7 +916,7 @@ def test_minimize_max_avg_per(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_maximize_min_avg_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE MIN(AVG(x*qty)) PER flag — easy outer MIN, inner AVG."""
     sql = """
@@ -927,8 +927,8 @@ def test_maximize_min_avg_per(
         MAXIMIZE MIN(AVG(x * l_quantity)) PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
     n = len(data)
@@ -954,7 +954,7 @@ def test_maximize_min_avg_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); qi = cs.index("l_quantity"); fi = cs.index("l_returnflag")
         g: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
         for r in rs:
@@ -965,10 +965,10 @@ def test_maximize_min_avg_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "maximize_min_avg_per", packdb_time, build_time, result.solve_time_seconds,
+        "maximize_min_avg_per", decidb_time, build_time, result.solve_time_seconds,
         n, n + 1, len(groups) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -980,7 +980,7 @@ def test_maximize_min_avg_per(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_sum_avg_when_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(AVG(x*qty)) WHEN qty>10 PER flag — WHEN filters each group's AVG."""
     sql = """
@@ -991,8 +991,8 @@ def test_sum_avg_when_per(
         MINIMIZE SUM(AVG(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch_lineitem_nested(duckdb_conn, "l_orderkey <= 10")
     n = len(data)
@@ -1019,7 +1019,7 @@ def test_sum_avg_when_per(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); qi = cs.index("l_quantity"); fi = cs.index("l_returnflag")
         g: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
         for r in rs:
@@ -1031,24 +1031,24 @@ def test_sum_avg_when_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "sum_avg_when_per", packdb_time, build_time, result.solve_time_seconds,
+        "sum_avg_when_per", decidb_time, build_time, result.solve_time_seconds,
         n, n, len(groups), result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
 
 # ===========================================================================
-# Error cases — no oracle (PackDB is expected to reject these)
+# Error cases — no oracle (DecidB is expected to reject these)
 # ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_sum_avg_per_extreme_unequal_groups(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """SUM(AVG(x*cost)) PER grp with a 1:5 group-size ratio.
 
@@ -1076,8 +1076,8 @@ def test_sum_avg_per_extreme_unequal_groups(
         MINIMIZE SUM(AVG(x * cost)) PER grp
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(cost AS DOUBLE) "
@@ -1108,7 +1108,7 @@ def test_sum_avg_per_extreme_unequal_groups(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj_fn(rs, cs):
+    def decidb_obj_fn(rs, cs):
         xi = cs.index("x"); gi = cs.index("grp"); ci = cs.index("cost")
         per_group: dict = defaultdict(lambda: {"sum": 0.0, "n": 0})
         for r in rs:
@@ -1119,10 +1119,10 @@ def test_sum_avg_per_extreme_unequal_groups(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj_fn,
+        decidb_objective_fn=decidb_obj_fn,
     )
     perf_tracker.record(
-        "sum_avg_per_extreme_unequal_groups", packdb_time, build_time,
+        "sum_avg_per_extreme_unequal_groups", decidb_time, build_time,
         result.solve_time_seconds, n, n, len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1159,7 +1159,7 @@ def _power_data(duckdb_conn):
 
 def _power_group_obj(rs, cs, reducer):
     """Evaluate SUM_g reducer({POWER(x_i - target_i, 2) : i in group g})
-    from PackDB's output rows. Uses the full (x-t)^2 value — no constant
+    from DecidB's output rows. Uses the full (x-t)^2 value — no constant
     stripping — so the oracle side must match."""
     xi = cs.index("x")
     gi = cs.index("grp")
@@ -1176,13 +1176,13 @@ def _power_group_obj(rs, cs, reducer):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_maximize_sum_max_power_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp — hard inner MAX,
     quadratic per-row expression. Budget couples x's so at most some rows
     can reach the bound extremes; the group MAX must pick among affordable
     pushes. Non-convex (MAX of convex, then MAXIMIZE): Gurobi only — fall
-    through to the documented HiGHS rejection if PackDB is configured for
+    through to the documented HiGHS rejection if DecidB is configured for
     HiGHS.
     """
     sql = f"""
@@ -1194,12 +1194,12 @@ def test_maximize_sum_max_power_per(
     """
     t0 = time.perf_counter()
     try:
-        rows, cols = packdb_cli.execute(sql)
+        rows, cols = decidb_cli.execute(sql)
     except Exception as e:
         if "require Gurobi" in str(e) or "Non-convex" in str(e):
-            pytest.skip(f"PackDB rejected non-convex shape: {e}")
+            pytest.skip(f"DecidB rejected non-convex shape: {e}")
         raise
-    packdb_time = time.perf_counter() - t0
+    decidb_time = time.perf_counter() - t0
 
     data = _power_data(duckdb_conn)
     n = len(data)
@@ -1239,10 +1239,10 @@ def test_maximize_sum_max_power_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=lambda rs, cs: _power_group_obj(rs, cs, max),
+        decidb_objective_fn=lambda rs, cs: _power_group_obj(rs, cs, max),
     )
     perf_tracker.record(
-        "sum_max_power_per", packdb_time, build_time,
+        "sum_max_power_per", decidb_time, build_time,
         result.solve_time_seconds, n, 3 * n + len(groups), 2 * n + len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1255,7 +1255,7 @@ def test_maximize_sum_max_power_per(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_minimize_sum_min_power_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp — hard inner MIN,
     quadratic per-row expression. INTEGER x with non-integer targets forces
@@ -1280,12 +1280,12 @@ def test_minimize_sum_min_power_per(
     """
     t0 = time.perf_counter()
     try:
-        rows, cols = packdb_cli.execute(sql)
+        rows, cols = decidb_cli.execute(sql)
     except Exception as e:
         if "require Gurobi" in str(e) or "Non-convex" in str(e):
-            pytest.skip(f"PackDB rejected non-convex shape: {e}")
+            pytest.skip(f"DecidB rejected non-convex shape: {e}")
         raise
-    packdb_time = time.perf_counter() - t0
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), "
@@ -1323,10 +1323,10 @@ def test_minimize_sum_min_power_per(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=lambda rs, cs: _power_group_obj(rs, cs, min),
+        decidb_objective_fn=lambda rs, cs: _power_group_obj(rs, cs, min),
     )
     perf_tracker.record(
-        "sum_min_power_per", packdb_time, build_time,
+        "sum_min_power_per", decidb_time, build_time,
         result.solve_time_seconds, n, 3 * n + len(groups), 2 * n + len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1335,10 +1335,10 @@ def test_minimize_sum_min_power_per(
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
-def test_flat_max_per_error(packdb_cli):
+def test_flat_max_per_error(decidb_cli):
     """MAX(x * cost) PER col without outer aggregate is ambiguous ⇒ error."""
     with pytest.raises(Exception, match="ambiguous|nested aggregate"):
-        packdb_cli.execute("""
+        decidb_cli.execute("""
             SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
             WHERE s_nationkey < 5
             DECIDE x IS BOOLEAN
@@ -1349,10 +1349,10 @@ def test_flat_max_per_error(packdb_cli):
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
-def test_flat_min_per_error(packdb_cli):
+def test_flat_min_per_error(decidb_cli):
     """MIN(x * cost) PER col without outer aggregate ⇒ error."""
     with pytest.raises(Exception, match="ambiguous|nested aggregate"):
-        packdb_cli.execute("""
+        decidb_cli.execute("""
             SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
             WHERE s_nationkey < 5
             DECIDE x IS BOOLEAN

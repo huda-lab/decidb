@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 try:
@@ -23,7 +23,7 @@ class TestArrowFetch(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("CREATE TABLE test (a  INTEGER)")
         for value in range(10000):
             duckdb_conn.execute("INSERT INTO  test VALUES (" + str(value) + ");")
@@ -35,7 +35,7 @@ class TestArrowFetch(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("CREATE TABLE test (a  INTEGER)")
 
         check_equal(duckdb_conn)
@@ -44,7 +44,7 @@ class TestArrowFetch(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
 
         duckdb_conn.execute("CREATE TABLE test (a  INTEGER)")
         for value in range(10000):
@@ -57,7 +57,7 @@ class TestArrowFetch(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
 
         duckdb_conn.execute("CREATE TABLE test (a  INTEGER)")
         duckdb_conn.execute("INSERT INTO  test VALUES(NULL);")
@@ -68,7 +68,7 @@ class TestArrowFetch(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
 
         duckdb_conn.execute("CREATE TABLE test (a  INTEGER)")
         duckdb_conn.execute("INSERT INTO  test VALUES(1);")
@@ -79,7 +79,7 @@ class TestArrowFetch(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
 
         duckdb_conn.execute("CREATE TABLE test (a  INTEGER)")
         duckdb_conn.execute("PREPARE s1 AS INSERT INTO test VALUES ($1), ($2 / 2)")
@@ -93,7 +93,7 @@ class TestArrowFetch(object):
         if not can_run:
             return
 
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select range a from range(3000);")
         relation = duckdb_cursor.table('t')
         arrow_tbl = relation.arrow()

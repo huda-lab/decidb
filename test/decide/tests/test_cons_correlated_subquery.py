@@ -23,7 +23,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_subquery
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_correlated_subquery_perrow_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_correlated_subquery_perrow_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Correlated subquery provides per-row upper bound from another table.
 
     x <= (SELECT p_size FROM part WHERE p_partkey = ps_partkey) bounds each
@@ -40,8 +40,8 @@ def test_correlated_subquery_perrow_bound(packdb_cli, duckdb_conn, oracle_solver
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -71,12 +71,12 @@ def test_correlated_subquery_perrow_bound(packdb_cli, duckdb_conn, oracle_solver
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "correlated_subquery_perrow", packdb_time, build_time,
+        "correlated_subquery_perrow", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -89,7 +89,7 @@ def test_correlated_subquery_perrow_bound(packdb_cli, duckdb_conn, oracle_solver
 @pytest.mark.cons_subquery
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_correlated_subquery_boolean_filter(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_correlated_subquery_boolean_filter(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Correlated subquery as a boolean gate: only select items whose supplier has positive balance.
 
     x <= (SELECT 1 FROM supplier WHERE s_suppkey = ps_suppkey AND s_acctbal > 0)
@@ -105,8 +105,8 @@ def test_correlated_subquery_boolean_filter(packdb_cli, duckdb_conn, oracle_solv
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -136,12 +136,12 @@ def test_correlated_subquery_boolean_filter(packdb_cli, duckdb_conn, oracle_solv
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "correlated_subquery_boolean", packdb_time, build_time,
+        "correlated_subquery_boolean", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -154,7 +154,7 @@ def test_correlated_subquery_boolean_filter(packdb_cli, duckdb_conn, oracle_solv
 @pytest.mark.cons_subquery
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_correlated_subquery_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_correlated_subquery_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Correlated subquery provides per-row objective coefficients.
 
     MAXIMIZE SUM(x * (SELECT p_retailprice ...)) uses a correlated subquery
@@ -173,8 +173,8 @@ def test_correlated_subquery_objective(packdb_cli, duckdb_conn, oracle_solver, p
                           WHERE p_partkey = ps_partkey))
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -204,12 +204,12 @@ def test_correlated_subquery_objective(packdb_cli, duckdb_conn, oracle_solver, p
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("retail_price")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("retail_price")])},
     )
 
     perf_tracker.record(
-        "correlated_subquery_objective", packdb_time, build_time,
+        "correlated_subquery_objective", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -224,7 +224,7 @@ def test_correlated_subquery_objective(packdb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.when_constraint
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_correlated_subquery_when_composition(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_correlated_subquery_when_composition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN filter combined with correlated subquery on per-row bound.
 
     x <= COALESCE((SELECT 1 FROM supplier ...), 0) WHEN ps_supplycost < 500
@@ -244,8 +244,8 @@ def test_correlated_subquery_when_composition(packdb_cli, duckdb_conn, oracle_so
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -280,12 +280,12 @@ def test_correlated_subquery_when_composition(packdb_cli, duckdb_conn, oracle_so
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "correlated_subquery_when", packdb_time, build_time,
+        "correlated_subquery_when", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -299,7 +299,7 @@ def test_correlated_subquery_when_composition(packdb_cli, duckdb_conn, oracle_so
 @pytest.mark.cons_subquery
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_correlated_subquery_null_coalesce(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_correlated_subquery_null_coalesce(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Correlated subquery returning NULL for some rows, handled via COALESCE.
 
     (SELECT p_size FROM part WHERE p_partkey = ps_partkey AND p_size > 30)
@@ -318,8 +318,8 @@ def test_correlated_subquery_null_coalesce(packdb_cli, duckdb_conn, oracle_solve
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -349,12 +349,12 @@ def test_correlated_subquery_null_coalesce(packdb_cli, duckdb_conn, oracle_solve
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "correlated_subquery_null", packdb_time, build_time,
+        "correlated_subquery_null", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -369,7 +369,7 @@ def test_correlated_subquery_null_coalesce(packdb_cli, duckdb_conn, oracle_solve
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_correlated_subquery_is_real(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Correlated subquery providing a fractional per-row upper bound on IS REAL.
 
@@ -393,8 +393,8 @@ def test_correlated_subquery_is_real(
         MAXIMIZE SUM(x * l.l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l.l_orderkey AS BIGINT),
@@ -430,11 +430,11 @@ def test_correlated_subquery_is_real(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "correlated_subquery_is_real", packdb_time, build_time,
+        "correlated_subquery_is_real", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,

@@ -1,6 +1,6 @@
 import pytest
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 
 
 class TestSparkUDF(object):

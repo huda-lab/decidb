@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 
@@ -70,20 +70,20 @@ def from_arrow():
     return df
 
 
-def create_relation(conn, query: str) -> packdb.DuckDBPyRelation:
+def create_relation(conn, query: str) -> decidb.DuckDBPyRelation:
     df = pd.DataFrame({'a': [1, 2, 3]})
     return conn.sql(query)
 
 
 class TestReplacementScan(object):
     def test_csv_replacement(self):
-        con = packdb.connect()
+        con = decidb.connect()
         filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'integers.csv')
         res = con.execute("select count(*) from '%s'" % (filename))
         assert res.fetchone()[0] == 2
 
     def test_parquet_replacement(self):
-        con = packdb.connect()
+        con = decidb.connect()
         filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'binary_string.parquet')
         res = con.execute("select count(*) from '%s'" % (filename))
         assert res.fetchone()[0] == 3
@@ -105,7 +105,7 @@ class TestReplacementScan(object):
 
     def test_scan_global(self, duckdb_cursor):
         duckdb_cursor.execute("set python_enable_replacements=false")
-        with pytest.raises(packdb.CatalogException, match='Table with name global_polars_df does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name global_polars_df does not exist'):
             # We set the depth to look for global variables to 0 so it's never found
             duckdb_cursor.sql("select * from global_polars_df")
         duckdb_cursor.execute("set python_enable_replacements=true")
@@ -119,11 +119,11 @@ class TestReplacementScan(object):
 
         def inner_func(duckdb_cursor):
             duckdb_cursor.execute("set python_enable_replacements=false")
-            with pytest.raises(packdb.CatalogException, match='Table with name df does not exist'):
+            with pytest.raises(decidb.CatalogException, match='Table with name df does not exist'):
                 # We set the depth to look for local variables to 0 so it's never found
                 duckdb_cursor.sql("select * from df")
             duckdb_cursor.execute("set python_enable_replacements=true")
-            with pytest.raises(packdb.CatalogException, match='Table with name df does not exist'):
+            with pytest.raises(decidb.CatalogException, match='Table with name df does not exist'):
                 # Here it's still not found, because it's not visible to this frame
                 duckdb_cursor.sql("select * from df")
 
@@ -141,7 +141,7 @@ class TestReplacementScan(object):
 
         def inner_func(duckdb_cursor):
             duckdb_cursor.execute("set python_enable_replacements=true")
-            with pytest.raises(packdb.CatalogException, match='Table with name df does not exist'):
+            with pytest.raises(decidb.CatalogException, match='Table with name df does not exist'):
                 # We set the depth to look for local variables to 1 so it's still not found because it wasn't defined in this function
                 duckdb_cursor.sql("select * from df")
             duckdb_cursor.execute("set python_scan_all_frames=true")
@@ -154,35 +154,35 @@ class TestReplacementScan(object):
         inner_func(duckdb_cursor)
 
     def test_replacement_scan_relapi(self):
-        con = packdb.connect()
+        con = decidb.connect()
         pyrel1 = con.query('from (values (42), (84), (120)) t(i)')
-        assert isinstance(pyrel1, packdb.DuckDBPyRelation)
+        assert isinstance(pyrel1, decidb.DuckDBPyRelation)
         assert pyrel1.fetchall() == [(42,), (84,), (120,)]
 
         pyrel2 = con.query('from pyrel1 limit 2')
-        assert isinstance(pyrel2, packdb.DuckDBPyRelation)
+        assert isinstance(pyrel2, decidb.DuckDBPyRelation)
         assert pyrel2.fetchall() == [(42,), (84,)]
 
         pyrel3 = con.query('select i + 100 from pyrel2')
-        assert type(pyrel3) == packdb.DuckDBPyRelation
+        assert type(pyrel3) == decidb.DuckDBPyRelation
         assert pyrel3.fetchall() == [(142,), (184,)]
 
     def test_replacement_scan_not_found(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("set python_scan_all_frames=true")
-        with pytest.raises(packdb.CatalogException, match='Table with name non_existant does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name non_existant does not exist'):
             res = con.sql("select * from non_existant").fetchall()
 
     def test_replacement_scan_alias(self):
-        con = packdb.connect()
+        con = decidb.connect()
         pyrel1 = con.query('from (values (1, 2)) t(i, j)')
         pyrel2 = con.query('from (values (1, 10)) t(i, k)')
         pyrel3 = con.query('from pyrel1 join pyrel2 using(i)')
-        assert type(pyrel3) == packdb.DuckDBPyRelation
+        assert type(pyrel3) == decidb.DuckDBPyRelation
         assert pyrel3.fetchall() == [(1, 2, 10)]
 
     def test_replacement_scan_pandas_alias(self):
-        con = packdb.connect()
+        con = decidb.connect()
         df1 = con.query('from (values (1, 2)) t(i, j)').df()
         df2 = con.query('from (values (1, 10)) t(i, k)').df()
         df3 = con.query('from df1 join df2 using(i)')
@@ -212,9 +212,9 @@ class TestReplacementScan(object):
 
     def test_replacement_scan_fail(self):
         random_object = "I love salmiak rondos"
-        con = packdb.connect()
+        con = decidb.connect()
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match=r'Python Object "random_object" of type "str" found on line .* not suitable for replacement scans.',
         ):
             con.execute("select count(*) from random_object").fetchone()
@@ -347,7 +347,7 @@ class TestReplacementScan(object):
         create_view_in_func(duckdb_cursor)
 
         # FIXME: this should be fixed in the future, likely by unifying the behavior of .sql and .execute
-        with pytest.raises(packdb.CatalogException, match='Table with name df does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name df does not exist'):
             rel = duckdb_cursor.sql("select * from v1")
 
     def test_recursive_cte(self, duckdb_cursor):
@@ -452,29 +452,29 @@ class TestReplacementScan(object):
 
     def test_replacement_disabled(self):
         # Create regular connection, not disabled
-        con = packdb.connect()
+        con = decidb.connect()
         rel = create_relation(con, "select * from df")
         res = rel.fetchall()
         assert res == [(1,), (2,), (3,)]
 
         ## disable external access
         con.execute("set enable_external_access=false")
-        with pytest.raises(packdb.CatalogException, match='Table with name df does not exist!'):
+        with pytest.raises(decidb.CatalogException, match='Table with name df does not exist!'):
             rel = create_relation(con, "select * from df")
             res = rel.fetchall()
         with pytest.raises(
-            packdb.InvalidInputException, match='Cannot change enable_external_access setting while database is running'
+            decidb.InvalidInputException, match='Cannot change enable_external_access setting while database is running'
         ):
             con.execute("set enable_external_access=true")
 
         # Create connection with external access disabled
-        con = packdb.connect(config={'enable_external_access': False})
-        with pytest.raises(packdb.CatalogException, match='Table with name df does not exist!'):
+        con = decidb.connect(config={'enable_external_access': False})
+        with pytest.raises(decidb.CatalogException, match='Table with name df does not exist!'):
             rel = create_relation(con, "select * from df")
             res = rel.fetchall()
 
         # Create regular connection, disable inbetween creation and execution
-        con = packdb.connect()
+        con = decidb.connect()
         rel = create_relation(con, "select * from df")
 
         con.execute("set enable_external_access=false")
@@ -486,15 +486,15 @@ class TestReplacementScan(object):
         assert res == [(1,), (2,), (3,)]
 
     def test_replacement_of_cross_connection_relation(self):
-        con1 = packdb.connect(':memory:')
-        con2 = packdb.connect(':memory:')
+        con1 = decidb.connect(':memory:')
+        con2 = decidb.connect(':memory:')
         con1.query('create table integers(i int)')
         con2.query('create table integers(v varchar)')
         con1.query('insert into integers values (42)')
         con2.query('insert into integers values (\'xxx\')')
         rel1 = con1.query('select * from integers')
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match=r'The object was created by another Connection and can therefore not be used by this Connection.',
         ):
             con2.query('from rel1')
@@ -502,7 +502,7 @@ class TestReplacementScan(object):
         del con1
 
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match=r'The object was created by another Connection and can therefore not be used by this Connection.',
         ):
             con2.query('from rel1')

@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pandas as pd
 import numpy
 import datetime
@@ -7,7 +7,7 @@ import time
 
 class TestPartitionedPandasScan(object):
     def test_parallel_pandas(self, duckdb_cursor):
-        con = packdb.connect()
+        con = decidb.connect()
         df = pd.DataFrame({'i': numpy.arange(10000000)})
 
         con.register('df', df)

@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 import uuid
 import json
@@ -11,7 +11,7 @@ pa = pytest.importorskip('pyarrow', '18.0.0')
 class TestCanonicalExtensionTypes(object):
 
     def test_uuid(self):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("SET arrow_lossless_conversion = true")
 
         storage_array = pa.array([uuid.uuid4().bytes for _ in range(4)], pa.binary(16))
@@ -24,7 +24,7 @@ class TestCanonicalExtensionTypes(object):
         assert duck_arrow.equals(arrow_table)
 
     def test_uuid_from_duck(self):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("SET arrow_lossless_conversion = true")
 
         arrow_table = duckdb_cursor.execute("select uuid from test_all_types()").fetch_arrow_table()
@@ -64,7 +64,7 @@ class TestCanonicalExtensionTypes(object):
         assert duck_arrow.equals(arrow_table)
 
     def test_uuid_no_def(self):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("SET arrow_lossless_conversion = true")
 
         res_arrow = duckdb_cursor.execute("select uuid from test_all_types()").arrow()
@@ -76,7 +76,7 @@ class TestCanonicalExtensionTypes(object):
         ]
 
     def test_uuid_no_def_lossless(self):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         res_arrow = duckdb_cursor.execute("select uuid from test_all_types()").arrow()
         assert res_arrow.to_pylist() == [
             {'uuid': '00000000-0000-0000-0000-000000000000'},
@@ -92,11 +92,11 @@ class TestCanonicalExtensionTypes(object):
         ]
 
     def test_uuid_no_def_stream(self):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("SET arrow_lossless_conversion = true")
 
         res_arrow = duckdb_cursor.execute("select uuid from test_all_types()").fetch_record_batch()
-        res_duck = packdb.execute("from res_arrow").fetchall()
+        res_duck = decidb.execute("from res_arrow").fetchall()
         assert res_duck == [
             (UUID('00000000-0000-0000-0000-000000000000'),),
             (UUID('ffffffff-ffff-ffff-ffff-ffffffffffff'),),
@@ -108,7 +108,7 @@ class TestCanonicalExtensionTypes(object):
             print(x.type.__class__)
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('test', test_function, ['UUID'], 'UUID', type='arrow')
 
         rel = con.sql("select ? as x", params=[uuid.UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')])
@@ -138,7 +138,7 @@ class TestCanonicalExtensionTypes(object):
         assert duckdb_cursor.execute('FROM duck_arrow').fetchall() == [(b'pedro', 29)]
 
     def test_hugeint(self):
-        con = packdb.connect()
+        con = decidb.connect()
 
         con.execute("SET arrow_lossless_conversion = true")
 
@@ -167,7 +167,7 @@ class TestCanonicalExtensionTypes(object):
         assert duckdb_cursor.execute('FROM arrow_table').fetchall() == [(340282366920938463463374607431768211455,)]
 
     def test_bit(self):
-        con = packdb.connect()
+        con = decidb.connect()
 
         res_blob = con.execute("SELECT '0101011'::BIT str FROM range(5) tbl(i)").arrow()
 
@@ -191,7 +191,7 @@ class TestCanonicalExtensionTypes(object):
         ]
 
     def test_timetz(self):
-        con = packdb.connect()
+        con = decidb.connect()
 
         res_time = con.execute("SELECT '02:30:00+04'::TIMETZ str FROM range(1) tbl(i)").arrow()
 
@@ -205,7 +205,7 @@ class TestCanonicalExtensionTypes(object):
         ]
 
     def test_varint(self):
-        con = packdb.connect()
+        con = decidb.connect()
         res_varint = con.execute(
             "SELECT '179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368'::varint a FROM range(1) tbl(i)"
         ).arrow()
@@ -219,7 +219,7 @@ class TestCanonicalExtensionTypes(object):
         ]
 
     def test_nested_types_with_extensions(self):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("SET arrow_lossless_conversion = true")
 
         arrow_table = duckdb_cursor.execute("select map {uuid(): 1::uhugeint, uuid(): 2::uhugeint} as li").arrow()
@@ -257,7 +257,7 @@ class TestCanonicalExtensionTypes(object):
         ]
 
     def test_boolean(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("SET arrow_lossless_conversion = true")
         storage_array = pa.array([-1, 0, 1, 2, None], pa.int8())
         bool8_array = pa.ExtensionArray.from_storage(pa.bool8(), storage_array)

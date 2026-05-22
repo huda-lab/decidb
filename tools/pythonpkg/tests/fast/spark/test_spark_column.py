@@ -1,6 +1,6 @@
 import pytest
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 
 from spark_namespace import USE_ACTUAL_SPARK
 from spark_namespace.sql.column import Column
@@ -8,7 +8,7 @@ from spark_namespace.sql.functions import struct, array, col
 from spark_namespace.sql.types import Row
 from spark_namespace.errors import PySparkTypeError
 
-import packdb
+import decidb
 import re
 
 
@@ -16,7 +16,7 @@ class TestSparkColumn(object):
     def test_struct_column(self, spark):
         df = spark.createDataFrame([Row(a=1, b=2, c=3, d=4)])
 
-        # FIXME: column names should be set explicitly using the Row, rather than letting packdb assign defaults (col0, col1, etc..)
+        # FIXME: column names should be set explicitly using the Row, rather than letting decidb assign defaults (col0, col1, etc..)
         if USE_ACTUAL_SPARK:
             df = df.withColumn('struct', struct(df.a, df.b))
         else:

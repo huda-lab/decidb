@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 import tempfile
 import os
@@ -11,14 +11,14 @@ class TestPandasUnregister(object):
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_pandas_unregister1(self, duckdb_cursor, pandas):
         df = pandas.DataFrame([[1, 2, 3], [4, 5, 6]])
-        connection = packdb.connect(":memory:")
+        connection = decidb.connect(":memory:")
         connection.register("dataframe", df)
 
         df2 = connection.execute("SELECT * FROM dataframe;").fetchdf()
         connection.unregister("dataframe")
-        with pytest.raises(packdb.CatalogException, match='Table with name dataframe does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name dataframe does not exist'):
             connection.execute("SELECT * FROM dataframe;").fetchdf()
-        with pytest.raises(packdb.CatalogException, match='View with name dataframe does not exist'):
+        with pytest.raises(decidb.CatalogException, match='View with name dataframe does not exist'):
             connection.execute("DROP VIEW dataframe;")
         connection.execute("DROP VIEW IF EXISTS dataframe;")
 
@@ -28,7 +28,7 @@ class TestPandasUnregister(object):
         os.close(fd)
         os.remove(db)
 
-        connection = packdb.connect(db)
+        connection = decidb.connect(db)
         df = pandas.DataFrame([[1, 2, 3], [4, 5, 6]])
 
         connection.register("dataframe", df)
@@ -36,10 +36,10 @@ class TestPandasUnregister(object):
         connection.close()
 
         # Reconnecting while DataFrame still in mem.
-        connection = packdb.connect(db)
+        connection = decidb.connect(db)
         assert len(connection.execute("PRAGMA show_tables;").fetchall()) == 0
 
-        with pytest.raises(packdb.CatalogException, match='Table with name dataframe does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name dataframe does not exist'):
             connection.execute("SELECT * FROM dataframe;").fetchdf()
 
         connection.close()
@@ -48,8 +48,8 @@ class TestPandasUnregister(object):
         gc.collect()
 
         # Reconnecting after DataFrame freed.
-        connection = packdb.connect(db)
+        connection = decidb.connect(db)
         assert len(connection.execute("PRAGMA show_tables;").fetchall()) == 0
-        with pytest.raises(packdb.CatalogException, match='Table with name dataframe does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name dataframe does not exist'):
             connection.execute("SELECT * FROM dataframe;").fetchdf()
         connection.close()

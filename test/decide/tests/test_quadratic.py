@@ -2,9 +2,9 @@
 
 Every correctness test formulates the same QP independently via
 ``oracle_solver.set_quadratic_objective(linear, quadratic, sense)`` and
-compares objective values. PackDB's reported objective drops the constant
+compares objective values. DecidB's reported objective drops the constant
 ``t^2`` term from ``POWER(x - t, 2)`` expansion, so the oracle also omits
-that constant and the test's packdb-side evaluator strips it on the fly.
+that constant and the test's decidb-side evaluator strips it on the fly.
 
 Covers:
   - POWER(linear_expr, 2) syntax
@@ -23,7 +23,7 @@ import time
 
 import pytest
 
-from packdb_cli import PackDBCliError
+from decidb_cli import DecidBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 
@@ -32,30 +32,30 @@ from solver.types import ObjSense, SolverStatus, VarType
 # ---------------------------------------------------------------------------
 
 def _solve_and_compare(
-    oracle_solver, packdb_rows, packdb_cols, packdb_obj_fn,
+    oracle_solver, decidb_rows, decidb_cols, decidb_obj_fn,
 ):
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL, (
         f"Oracle failed to solve: status={result.status}"
     )
-    packdb_obj = packdb_obj_fn(packdb_rows, packdb_cols)
-    diff = abs(packdb_obj - result.objective_value)
+    decidb_obj = decidb_obj_fn(decidb_rows, decidb_cols)
+    diff = abs(decidb_obj - result.objective_value)
     assert diff <= 1e-3, (
-        f"QP objective mismatch: PackDB={packdb_obj:.6f}, "
+        f"QP objective mismatch: DecidB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
     )
     return result
 
 
-def _qp_target_obj(packdb_rows, packdb_cols, *, x_col="x", target_col="target",
+def _qp_target_obj(decidb_rows, decidb_cols, *, x_col="x", target_col="target",
                    scale=1.0, mask_fn=None, linear_coeff=None):
-    """PackDB-side evaluator for SUM(scale * POWER(x - target, 2)
+    """DecidB-side evaluator for SUM(scale * POWER(x - target, 2)
        (+ linear_coeff * x)), with the t^2 constant stripped to match
        the oracle's ``set_quadratic_objective`` (no constant offset)."""
-    xi = packdb_cols.index(x_col)
-    ti = packdb_cols.index(target_col)
+    xi = decidb_cols.index(x_col)
+    ti = decidb_cols.index(target_col)
     total = 0.0
-    for row in packdb_rows:
+    for row in decidb_rows:
         if mask_fn is not None and not mask_fn(row):
             continue
         x = float(row[xi]); t = float(row[ti])
@@ -65,10 +65,10 @@ def _qp_target_obj(packdb_rows, packdb_cols, *, x_col="x", target_col="target",
     return total
 
 
-def _qp_simple_obj(packdb_rows, packdb_cols, *, x_col="x", scale=1.0):
-    """PackDB-side evaluator for SUM(scale * POWER(x, 2)) (no target)."""
-    xi = packdb_cols.index(x_col)
-    return sum(scale * float(row[xi]) ** 2 for row in packdb_rows)
+def _qp_simple_obj(decidb_rows, decidb_cols, *, x_col="x", scale=1.0):
+    """DecidB-side evaluator for SUM(scale * POWER(x, 2)) (no target)."""
+    xi = decidb_cols.index(x_col)
+    return sum(scale * float(row[xi]) ** 2 for row in decidb_rows)
 
 
 # ===========================================================================
@@ -82,7 +82,7 @@ class TestQuadraticBasic:
     """Inline-data QP smoke tests, each oracle-compared."""
 
     def test_power_syntax_unconstrained(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """MINIMIZE SUM(POWER(x - target, 2)) with bounds [0, 100]."""
         data_sql = """
@@ -99,8 +99,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM(POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -120,14 +120,14 @@ class TestQuadraticBasic:
             lambda rs, cs: _qp_target_obj(rs, cs),
         )
         perf_tracker.record(
-            "qp_power_unconstrained", packdb_time, build_time,
+            "qp_power_unconstrained", decidb_time, build_time,
             result.solve_time_seconds, n, n, 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_starstar_operator(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """** operator behaves identically to POWER."""
         data_sql = (
@@ -141,8 +141,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM((x - target) ** 2)
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -163,13 +163,13 @@ class TestQuadraticBasic:
             oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
         )
         perf_tracker.record(
-            "qp_starstar", packdb_time, build_time, result.solve_time_seconds,
+            "qp_starstar", decidb_time, build_time, result.solve_time_seconds,
             n, n, 0, result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_multiplication_form(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """(expr)*(expr) == POWER."""
         data_sql = (
@@ -183,8 +183,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM((x - target) * (x - target))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -205,13 +205,13 @@ class TestQuadraticBasic:
             oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
         )
         perf_tracker.record(
-            "qp_multform", packdb_time, build_time, result.solve_time_seconds,
+            "qp_multform", decidb_time, build_time, result.solve_time_seconds,
             n, n, 0, result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_qp_with_binding_constraint(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """Box constraints bind: target=[5, 50] with bounds [10, 40]."""
         data_sql = "SELECT 1 AS id, 5.0 AS target UNION ALL SELECT 2, 50.0"
@@ -223,8 +223,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM(POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -245,13 +245,13 @@ class TestQuadraticBasic:
             oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
         )
         perf_tracker.record(
-            "qp_binding", packdb_time, build_time, result.solve_time_seconds,
+            "qp_binding", decidb_time, build_time, result.solve_time_seconds,
             n, n, 2, result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_qp_with_aggregate_constraint(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """SUM(x) = 60 matches unconstrained optimum — constraint not binding."""
         data_sql = """
@@ -267,8 +267,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM(POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -292,14 +292,14 @@ class TestQuadraticBasic:
             oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
         )
         perf_tracker.record(
-            "qp_aggregate_constraint", packdb_time, build_time,
+            "qp_aggregate_constraint", decidb_time, build_time,
             result.solve_time_seconds, n, n, 1,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_qp_simple_squared_variable(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """MINIMIZE SUM(POWER(x, 2)) — pure squared variable, optimum at 0."""
         data_sql = "SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3"
@@ -311,8 +311,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM(POWER(x, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT) FROM ({data_sql})"
         ).fetchall()
@@ -331,14 +331,14 @@ class TestQuadraticBasic:
             oracle_solver, rows, cols, lambda rs, cs: _qp_simple_obj(rs, cs),
         )
         perf_tracker.record(
-            "qp_squared_simple", packdb_time, build_time,
+            "qp_squared_simple", decidb_time, build_time,
             result.solve_time_seconds, n, n, 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_qp_with_when(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """QP with WHEN — only grp='A' rows contribute to the objective."""
         data_sql = """
@@ -355,8 +355,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM(POWER(x - target, 2)) WHEN grp = 'A'
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(grp AS VARCHAR) FROM ({data_sql})"
         ).fetchall()
@@ -383,13 +383,13 @@ class TestQuadraticBasic:
             ),
         )
         perf_tracker.record(
-            "qp_with_when", packdb_time, build_time, result.solve_time_seconds,
+            "qp_with_when", decidb_time, build_time, result.solve_time_seconds,
             n, n, 0, result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_qp_multiple_variables(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """Two REAL vars; only x appears in the QP objective. y is unconstrained by Q."""
         data_sql = """
@@ -407,8 +407,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM(POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(cap AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -427,13 +427,13 @@ class TestQuadraticBasic:
             oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
         )
         perf_tracker.record(
-            "qp_multivar", packdb_time, build_time, result.solve_time_seconds,
+            "qp_multivar", decidb_time, build_time, result.solve_time_seconds,
             n, 2 * n, 0, result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_qp_power_with_constant_division(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """MINIMIZE SUM(POWER(x/2 - 1, 2)).
 
@@ -451,8 +451,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM(POWER(x/2 - 1, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT) FROM ({data_sql})"
         ).fetchall()
@@ -468,22 +468,22 @@ class TestQuadraticBasic:
         oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
         build_time = time.perf_counter() - t_build
 
-        def packdb_obj(rs, cs):
+        def decidb_obj(rs, cs):
             xi = cs.index("x")
             # Match oracle: drop the per-row constant +1 (oracle's
             # set_quadratic_objective ignores the additive constant).
             return sum(0.25 * float(r[xi]) ** 2 - float(r[xi]) for r in rs)
 
-        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
         perf_tracker.record(
-            "qp_power_const_div", packdb_time, build_time,
+            "qp_power_const_div", decidb_time, build_time,
             result.solve_time_seconds, n, n, 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_qp_power_with_column_division(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """MINIMIZE SUM(POWER(x/w - 1, 2)) with per-row data divisor w.
 
@@ -504,8 +504,8 @@ class TestQuadraticBasic:
             MINIMIZE SUM(POWER(x/w - 1, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(w AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -521,7 +521,7 @@ class TestQuadraticBasic:
         oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
         build_time = time.perf_counter() - t_build
 
-        def packdb_obj(rs, cs):
+        def decidb_obj(rs, cs):
             xi = cs.index("x"); wi = cs.index("w")
             return sum(
                 (float(r[xi]) ** 2) / (float(r[wi]) ** 2)
@@ -529,9 +529,9 @@ class TestQuadraticBasic:
                 for r in rs
             )
 
-        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
         perf_tracker.record(
-            "qp_power_col_div", packdb_time, build_time,
+            "qp_power_col_div", decidb_time, build_time,
             result.solve_time_seconds, n, n, 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
@@ -566,7 +566,7 @@ class TestQuadraticMaximize:
         return xnames
 
     def test_maximize_negated_power_case_a(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         data_sql = """
             SELECT 1 AS id, 10.0 AS target UNION ALL
@@ -581,8 +581,8 @@ class TestQuadraticMaximize:
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -596,14 +596,14 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
         )
         perf_tracker.record(
-            "qp_max_case_a", packdb_time, build_time, result.solve_time_seconds,
+            "qp_max_case_a", decidb_time, build_time, result.solve_time_seconds,
             len(data), len(data), 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_negated_power_with_binding_constraint(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         data_sql = "SELECT 1 AS id, 5.0 AS target UNION ALL SELECT 2, 50.0"
         sql = f"""
@@ -614,8 +614,8 @@ class TestQuadraticMaximize:
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -629,14 +629,14 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
         )
         perf_tracker.record(
-            "qp_max_case_a_binding", packdb_time, build_time,
+            "qp_max_case_a_binding", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 2,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_negated_starstar_syntax(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         data_sql = "SELECT 1 AS id, 15.0 AS target UNION ALL SELECT 2, 25.0"
         sql = f"""
@@ -647,8 +647,8 @@ class TestQuadraticMaximize:
             MAXIMIZE SUM(-((x - target) ** 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -662,14 +662,14 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
         )
         perf_tracker.record(
-            "qp_max_starstar", packdb_time, build_time,
+            "qp_max_starstar", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_convex_power_case_b(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """Case B (non-convex, Gurobi-only): MAXIMIZE SUM(POWER(x, 2))."""
         data_sql = "SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3"
@@ -682,9 +682,9 @@ class TestQuadraticMaximize:
         """
         try:
             t0 = time.perf_counter()
-            rows, cols = packdb_cli.execute(sql)
-            packdb_time = time.perf_counter() - t0
-        except PackDBCliError as e:
+            rows, cols = decidb_cli.execute(sql)
+            decidb_time = time.perf_counter() - t0
+        except DecidBCliError as e:
             assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
             return
 
@@ -705,13 +705,13 @@ class TestQuadraticMaximize:
             oracle_solver, rows, cols, lambda rs, cs: _qp_simple_obj(rs, cs),
         )
         perf_tracker.record(
-            "qp_max_case_b", packdb_time, build_time, result.solve_time_seconds,
+            "qp_max_case_b", decidb_time, build_time, result.solve_time_seconds,
             n, n, 0, result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_convex_power_integer_case_b(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """Non-convex MIQP: MAXIMIZE SUM(POWER(x - 5, 2)) with INTEGER x."""
         data_sql = "SELECT 1 AS id UNION ALL SELECT 2"
@@ -724,9 +724,9 @@ class TestQuadraticMaximize:
         """
         try:
             t0 = time.perf_counter()
-            rows, cols = packdb_cli.execute(sql)
-            packdb_time = time.perf_counter() - t0
-        except PackDBCliError as e:
+            rows, cols = decidb_cli.execute(sql)
+            decidb_time = time.perf_counter() - t0
+        except DecidBCliError as e:
             assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
             return
 
@@ -747,22 +747,22 @@ class TestQuadraticMaximize:
         )
         build_time = time.perf_counter() - t_build
 
-        def packdb_obj(rs, cs):
+        def decidb_obj(rs, cs):
             xi = cs.index("x")
             return sum(
                 (float(row[xi]) - 5.0) ** 2 - 25.0 for row in rs
             )
 
-        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
         perf_tracker.record(
-            "qp_max_case_b_int", packdb_time, build_time,
+            "qp_max_case_b_int", decidb_time, build_time,
             result.solve_time_seconds, n, n, 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_negated_coefficient_not_one(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """Coefficient -2 on POWER(x - t, 2) must be preserved."""
         data_sql = """
@@ -778,8 +778,8 @@ class TestQuadraticMaximize:
             MAXIMIZE SUM((-2) * POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -793,14 +793,14 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-2.0),
         )
         perf_tracker.record(
-            "qp_max_coef_neg2", packdb_time, build_time,
+            "qp_max_coef_neg2", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_half_negated_coefficient(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """Fractional coefficient -0.5 with binding constraint SUM(x)=90."""
         data_sql = """
@@ -816,8 +816,8 @@ class TestQuadraticMaximize:
             MAXIMIZE SUM((-0.5) * POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -838,14 +838,14 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-0.5),
         )
         perf_tracker.record(
-            "qp_max_coef_halfneg", packdb_time, build_time,
+            "qp_max_coef_halfneg", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 1,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_power_times_neg_one_rhs(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """POWER(x - t, 2) * (-1) — negation on RHS of multiply."""
         data_sql = "SELECT 1 AS id, 15.0 AS target UNION ALL SELECT 2, 25.0"
@@ -857,8 +857,8 @@ class TestQuadraticMaximize:
             MAXIMIZE SUM(POWER(x - target, 2) * (-1))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -872,14 +872,14 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
         )
         perf_tracker.record(
-            "qp_max_neg_rhs", packdb_time, build_time,
+            "qp_max_neg_rhs", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_negated_multiplication_form(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """-((x-t) * (x-t)) — negated identical-child multiply."""
         data_sql = "SELECT 1 AS id, 12.0 AS target UNION ALL SELECT 2, 35.0"
@@ -891,8 +891,8 @@ class TestQuadraticMaximize:
             MAXIMIZE SUM(-((x - target) * (x - target)))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -906,14 +906,14 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
         )
         perf_tracker.record(
-            "qp_max_neg_mult", packdb_time, build_time,
+            "qp_max_neg_mult", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_negated_power_integer_case_a(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """Case A with INTEGER (MIQP) — Gurobi required, HiGHS rejects."""
         data_sql = """
@@ -930,9 +930,9 @@ class TestQuadraticMaximize:
         """
         try:
             t0 = time.perf_counter()
-            rows, cols = packdb_cli.execute(sql)
-            packdb_time = time.perf_counter() - t0
-        except PackDBCliError as e:
+            rows, cols = decidb_cli.execute(sql)
+            decidb_time = time.perf_counter() - t0
+        except DecidBCliError as e:
             assert re.search(
                 r"MIQP.*require Gurobi|integer.*require Gurobi",
                 e.message, re.IGNORECASE,
@@ -954,14 +954,14 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
         )
         perf_tracker.record(
-            "qp_max_int_case_a", packdb_time, build_time,
+            "qp_max_int_case_a", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_maximize_negated_power_with_sum_constraint(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """Case A with aggregate constraint SUM(x)=60 (not binding)."""
         data_sql = """
@@ -977,8 +977,8 @@ class TestQuadraticMaximize:
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
         t0 = time.perf_counter()
-        rows, cols = packdb_cli.execute(sql)
-        packdb_time = time.perf_counter() - t0
+        rows, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
         data = duckdb_conn.execute(
             f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
         ).fetchall()
@@ -996,7 +996,7 @@ class TestQuadraticMaximize:
             lambda rs, cs: _qp_target_obj(rs, cs, scale=-1.0),
         )
         perf_tracker.record(
-            "qp_max_case_a_sum", packdb_time, build_time,
+            "qp_max_case_a_sum", decidb_time, build_time,
             result.solve_time_seconds, len(data), len(data), 1,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
@@ -1012,8 +1012,8 @@ class TestQuadraticMaximize:
 class TestQuadraticErrors:
     """Queries rejected by the binder or physical operator."""
 
-    def test_power_exponent_3_rejected(self, packdb_cli):
-        packdb_cli.assert_error("""
+    def test_power_exponent_3_rejected(self, decidb_cli):
+        decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id, 10.0 AS target)
             SELECT id, x FROM data
             DECIDE x IS REAL
@@ -1022,7 +1022,7 @@ class TestQuadraticErrors:
         """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
 
     def test_product_of_different_vars_now_supported(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """x * y bilinear: now accepted (Gurobi) or rejected (HiGHS)."""
         sql = """
@@ -1034,9 +1034,9 @@ class TestQuadraticErrors:
         """
         try:
             t0 = time.perf_counter()
-            rows, cols = packdb_cli.execute(sql)
-            packdb_time = time.perf_counter() - t0
-        except PackDBCliError as e:
+            rows, cols = decidb_cli.execute(sql)
+            decidb_time = time.perf_counter() - t0
+        except DecidBCliError as e:
             assert re.search(r"Non-convex|require Gurobi", e.message)
             return
 
@@ -1050,20 +1050,20 @@ class TestQuadraticErrors:
         )
         build_time = time.perf_counter() - t_build
 
-        def packdb_obj(rs, cs):
+        def decidb_obj(rs, cs):
             xi = cs.index("x"); yi = cs.index("y")
             return float(rs[0][xi]) * float(rs[0][yi])
 
-        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
         perf_tracker.record(
-            "qp_bilinear_min", packdb_time, build_time,
+            "qp_bilinear_min", decidb_time, build_time,
             result.solve_time_seconds, 1, 2, 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
     def test_minimize_negated_power_nonconvex(
-        self, packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+        self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
         """MINIMIZE -POWER(x, 2) is non-convex; Gurobi pushes x to boundary."""
         sql = """
@@ -1077,9 +1077,9 @@ class TestQuadraticErrors:
         """
         try:
             t0 = time.perf_counter()
-            rows, cols = packdb_cli.execute(sql)
-            packdb_time = time.perf_counter() - t0
-        except PackDBCliError as e:
+            rows, cols = decidb_cli.execute(sql)
+            decidb_time = time.perf_counter() - t0
+        except DecidBCliError as e:
             assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
             return
 
@@ -1094,20 +1094,20 @@ class TestQuadraticErrors:
         )
         build_time = time.perf_counter() - t_build
 
-        def packdb_obj(rs, cs):
+        def decidb_obj(rs, cs):
             xi = cs.index("x")
             return sum(-float(row[xi]) ** 2 for row in rs)
 
-        result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+        result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
         perf_tracker.record(
-            "qp_min_neg_nonconvex", packdb_time, build_time,
+            "qp_min_neg_nonconvex", decidb_time, build_time,
             result.solve_time_seconds, n, n, 0,
             result.objective_value, oracle_solver.solver_name(),
             comparison_status="optimal",
         )
 
-    def test_power_with_variable_exponent_rejected(self, packdb_cli):
-        packdb_cli.assert_error("""
+    def test_power_with_variable_exponent_rejected(self, decidb_cli):
+        decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id, 10.0 AS target, 2 AS exp)
             SELECT id, x FROM data
             DECIDE x IS REAL
@@ -1115,8 +1115,8 @@ class TestQuadraticErrors:
             MINIMIZE SUM(POWER(x - target, exp))
         """, match=r"POWER exponent.*must be a constant integer")
 
-    def test_qp_multiple_quadratic_groups_rejected(self, packdb_cli):
-        packdb_cli.assert_error("""
+    def test_qp_multiple_quadratic_groups_rejected(self, decidb_cli):
+        decidb_cli.assert_error("""
             WITH data AS (
                 SELECT 1 AS id, 1.0 AS a, 2.0 AS b UNION ALL
                 SELECT 2, 3.0, 4.0
@@ -1128,10 +1128,10 @@ class TestQuadraticErrors:
             MINIMIZE SUM(POWER(x - a, 2)) + SUM(POWER(y - b, 2))
         """, match=r"multiple quadratic")
 
-    def test_qp_self_product_of_power_rejected(self, packdb_cli):
+    def test_qp_self_product_of_power_rejected(self, decidb_cli):
         # POWER(x, 2) * POWER(x, 2) = x^4 — identical-children self-product with
         # a quadratic inner must be rejected, not silently reduced to x^2.
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, ROUND(x, 4) AS x FROM data
             DECIDE x IS REAL
@@ -1139,11 +1139,11 @@ class TestQuadraticErrors:
             MINIMIZE SUM(POWER(x - 1, 2) * POWER(x - 1, 2)) + SUM(-2 * x)
         """, match=r"self-product .* non-linear|degree > 2")
 
-    def test_qp_product_of_two_powers_rejected(self, packdb_cli):
+    def test_qp_product_of_two_powers_rejected(self, decidb_cli):
         # POWER(x, 2) * POWER(y, 2) = x^2 y^2 — falls into the bilinear branch
         # of ExtractLinearAndBilinearTerms with a degree-2 "coefficient"; must
         # be rejected before the coefficient evaluator touches it.
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, x, y FROM data
             DECIDE x IS REAL, y IS REAL
@@ -1151,10 +1151,10 @@ class TestQuadraticErrors:
             MINIMIZE SUM(POWER(x, 2) * POWER(y, 2))
         """, match=r"degree > 2")
 
-    def test_qp_variable_times_power_rejected(self, packdb_cli):
+    def test_qp_variable_times_power_rejected(self, decidb_cli):
         # a * POWER(x, 2) with a a DECIDE var — total degree 3; same bilinear
         # misclassification as (2) and previously crashed the engine.
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, a, x FROM data
             DECIDE a IS REAL, x IS REAL
@@ -1171,7 +1171,7 @@ class TestQuadraticErrors:
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_minimize_squared_deviation_tpch(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Minimize squared deviation from ps_supplycost on partsupp (ps_partkey<=10)."""
     sql = """
@@ -1183,8 +1183,8 @@ def test_qp_minimize_squared_deviation_tpch(
         MINIMIZE SUM(POWER(x - ps_supplycost, 2))
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_suppkey AS BIGINT),
                CAST(ps_supplycost AS DOUBLE)
@@ -1204,15 +1204,15 @@ def test_qp_minimize_squared_deviation_tpch(
 
     cost_col = cols.index("ps_supplycost"); x_col = cols.index("x")
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         return sum(
             (float(r[x_col]) - float(r[cost_col])) ** 2 - float(r[cost_col]) ** 2
             for r in rs
         )
 
-    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
     perf_tracker.record(
-        "qp_tpch_deviation", packdb_time, build_time, result.solve_time_seconds,
+        "qp_tpch_deviation", decidb_time, build_time, result.solve_time_seconds,
         n, n, 0, result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
@@ -1222,7 +1222,7 @@ def test_qp_minimize_squared_deviation_tpch(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_with_sum_constraint_tpch(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Inflate total cost by 10% via SUM(x) >= 1.1 * total_cost."""
     total_cost = duckdb_conn.execute("""
@@ -1240,8 +1240,8 @@ def test_qp_with_sum_constraint_tpch(
         MINIMIZE SUM(POWER(x - ps_supplycost, 2))
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_suppkey AS BIGINT),
                CAST(ps_supplycost AS DOUBLE)
@@ -1264,15 +1264,15 @@ def test_qp_with_sum_constraint_tpch(
 
     cost_col = cols.index("ps_supplycost"); x_col = cols.index("x")
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         return sum(
             (float(r[x_col]) - float(r[cost_col])) ** 2 - float(r[cost_col]) ** 2
             for r in rs
         )
 
-    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
     perf_tracker.record(
-        "qp_tpch_sum_inflate", packdb_time, build_time, result.solve_time_seconds,
+        "qp_tpch_sum_inflate", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
@@ -1282,7 +1282,7 @@ def test_qp_with_sum_constraint_tpch(
 # Mixed linear + quadratic objective — already oracle-verified, unchanged
 # ===========================================================================
 #
-# PackDB extracts a mixed objective SUM(POWER(x-t, 2) + c*x) into
+# DecidB extracts a mixed objective SUM(POWER(x-t, 2) + c*x) into
 # ``squared_terms`` (Q matrix) and ``terms`` (linear c vector) simultaneously.
 # The oracle mirrors this via ``set_quadratic_objective(linear, quadratic)``.
 
@@ -1290,7 +1290,7 @@ def test_qp_with_sum_constraint_tpch(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_mixed_linear_quadratic(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(POWER(x - target, 2) + penalty * x) — mixed inside one SUM."""
     sql = """
@@ -1306,8 +1306,8 @@ def test_qp_mixed_linear_quadratic(
         MINIMIZE SUM(POWER(x - target, 2) + penalty * x)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute("""
         SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(penalty AS DOUBLE)
         FROM (
@@ -1330,14 +1330,14 @@ def test_qp_mixed_linear_quadratic(
 
     pen_col = cols.index("penalty")
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         return _qp_target_obj(
             rs, cs, linear_coeff=lambda r: float(r[pen_col]),
         )
 
-    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
     perf_tracker.record(
-        "qp_mixed_linear_quadratic", packdb_time, build_time,
+        "qp_mixed_linear_quadratic", decidb_time, build_time,
         result.solve_time_seconds, n, n, 0,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1348,7 +1348,7 @@ def test_qp_mixed_linear_quadratic(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_mixed_separate_sums(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Same as test_qp_mixed_linear_quadratic but split across sibling SUMs."""
     sql = """
@@ -1364,8 +1364,8 @@ def test_qp_mixed_separate_sums(
         MINIMIZE SUM(POWER(x - target, 2)) + SUM(penalty * x)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute("""
         SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(penalty AS DOUBLE)
         FROM (
@@ -1388,14 +1388,14 @@ def test_qp_mixed_separate_sums(
 
     pen_col = cols.index("penalty")
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         return _qp_target_obj(
             rs, cs, linear_coeff=lambda r: float(r[pen_col]),
         )
 
-    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
     perf_tracker.record(
-        "qp_mixed_separate_sums", packdb_time, build_time,
+        "qp_mixed_separate_sums", decidb_time, build_time,
         result.solve_time_seconds, n, n, 0,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1406,7 +1406,7 @@ def test_qp_mixed_separate_sums(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_qp_mixed_negated_quadratic(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE SUM(-POWER(x - target, 2) + penalty * x) — concave mixed."""
     sql = """
@@ -1422,8 +1422,8 @@ def test_qp_mixed_negated_quadratic(
         MAXIMIZE SUM(-POWER(x - target, 2) + penalty * x)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute("""
         SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE), CAST(penalty AS DOUBLE)
         FROM (
@@ -1446,15 +1446,15 @@ def test_qp_mixed_negated_quadratic(
 
     pen_col = cols.index("penalty")
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         return _qp_target_obj(
             rs, cs, scale=-1.0,
             linear_coeff=lambda r: float(r[pen_col]),
         )
 
-    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
     perf_tracker.record(
-        "qp_mixed_negated_quadratic", packdb_time, build_time,
+        "qp_mixed_negated_quadratic", decidb_time, build_time,
         result.solve_time_seconds, n, n, 0,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1482,7 +1482,7 @@ def test_qp_mixed_negated_quadratic(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_nested_sum_sum_per_binding(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp with a binding PER upper
     bound that forces x below each row's target.
@@ -1509,8 +1509,8 @@ def test_qp_nested_sum_sum_per_binding(
         MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute(f"""
         SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(target AS DOUBLE)
         FROM ({data_sql})
@@ -1538,7 +1538,7 @@ def test_qp_nested_sum_sum_per_binding(
         oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
     )
     perf_tracker.record(
-        "qp_nested_sum_sum_per_binding", packdb_time, build_time,
+        "qp_nested_sum_sum_per_binding", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1550,10 +1550,10 @@ def test_qp_nested_sum_sum_per_binding(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_nested_sum_sum_per_unconstrained(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Unconstrained nested-PER QP: each x_i = target_i, objective = -Σ t²
-    (after PackDB's constant-stripping convention). Sanity test confirming
+    (after DecidB's constant-stripping convention). Sanity test confirming
     the nested form degenerates to flat SUM(POWER(x-t,2)) semantically.
     """
     data_sql = """
@@ -1570,8 +1570,8 @@ def test_qp_nested_sum_sum_per_unconstrained(
         MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute(f"""
         SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(target AS DOUBLE)
         FROM ({data_sql})
@@ -1592,7 +1592,7 @@ def test_qp_nested_sum_sum_per_unconstrained(
         oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
     )
     perf_tracker.record(
-        "qp_nested_sum_sum_per_unconstrained", packdb_time, build_time,
+        "qp_nested_sum_sum_per_unconstrained", decidb_time, build_time,
         result.solve_time_seconds, n, n, 0,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1604,7 +1604,7 @@ def test_qp_nested_sum_sum_per_unconstrained(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_nested_sum_avg_per_binding(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp with unequal group
     sizes (A: 2 rows, B: 3 rows). Inner AVG scales each row's contribution
@@ -1630,8 +1630,8 @@ def test_qp_nested_sum_avg_per_binding(
         MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute(f"""
         SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(target AS DOUBLE)
         FROM ({data_sql})
@@ -1663,8 +1663,8 @@ def test_qp_nested_sum_avg_per_binding(
     x_col = cols.index("x")
     target_col = cols.index("target")
 
-    def packdb_obj(rs, cs):
-        # Mirror PackDB's per-group 1/n_g weighting with constant t² stripped.
+    def decidb_obj(rs, cs):
+        # Mirror DecidB's per-group 1/n_g weighting with constant t² stripped.
         counts = Counter(r[grp_col] for r in rs)
         total = 0.0
         for r in rs:
@@ -1673,9 +1673,9 @@ def test_qp_nested_sum_avg_per_binding(
             total += w * ((x - t) ** 2 - t ** 2)
         return total
 
-    result = _solve_and_compare(oracle_solver, rows, cols, packdb_obj)
+    result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
     perf_tracker.record(
-        "qp_nested_sum_avg_per_binding", packdb_time, build_time,
+        "qp_nested_sum_avg_per_binding", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1687,7 +1687,7 @@ def test_qp_nested_sum_avg_per_binding(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_nested_sum_sum_per_constant_free_regression(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Regression: MINIMIZE SUM(SUM(POWER(x, 2))) PER grp — no constant term
     in POWER. This form accidentally passed validation pre-fix (the factoring
@@ -1711,8 +1711,8 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
         MINIMIZE SUM(SUM(POWER(x, 2))) PER grp
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute(f"""
         SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR) FROM ({data_sql})
     """).fetchall()
@@ -1737,7 +1737,7 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
         oracle_solver, rows, cols, lambda rs, cs: _qp_simple_obj(rs, cs),
     )
     perf_tracker.record(
-        "qp_nested_sum_sum_per_constant_free", packdb_time, build_time,
+        "qp_nested_sum_sum_per_constant_free", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1752,7 +1752,7 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
 @pytest.mark.quadratic
 @pytest.mark.correctness
 def test_qp_entity_scoped_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(POWER(x - target, 2)) with entity-scoped ``items.x``
     and a cross-entity resource cap.
@@ -1784,8 +1784,8 @@ def test_qp_entity_scoped_objective(
         MINIMIZE SUM(POWER(x - target, 2))
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT CAST(item AS VARCHAR), CAST(target AS DOUBLE) FROM ({data_sql})"
@@ -1839,7 +1839,7 @@ def test_qp_entity_scoped_objective(
         lambda rs, cs: _qp_target_obj(rs, cs, x_col="x", target_col="target"),
     )
     perf_tracker.record(
-        "qp_entity_scoped_objective", packdb_time, build_time,
+        "qp_entity_scoped_objective", decidb_time, build_time,
         result.solve_time_seconds, n, len(items), 0,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1847,22 +1847,22 @@ def test_qp_entity_scoped_objective(
 
 
 # ---------------------------------------------------------------------------
-# HiGHS-forced rejection tests (require PACKDB_FORCE_SOLVER=highs)
+# HiGHS-forced rejection tests (require DECIDB_FORCE_SOLVER=highs)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
 class TestHighsRejection:
-    """Error-path tests that pin the solver to HiGHS via ``packdb_cli_highs``.
+    """Error-path tests that pin the solver to HiGHS via ``decidb_cli_highs``.
 
     On Gurobi-linked hosts the unforced suite would take the Gurobi path
-    (and succeed on non-convex / MIQP shapes). The ``packdb_cli_highs``
-    fixture sets ``PACKDB_FORCE_SOLVER=highs`` so these shapes reach the
-    rejection message in ``src/packdb/naive/deterministic_naive.cpp``.
+    (and succeed on non-convex / MIQP shapes). The ``decidb_cli_highs``
+    fixture sets ``DECIDB_FORCE_SOLVER=highs`` so these shapes reach the
+    rejection message in ``src/decidb/naive/deterministic_naive.cpp``.
     """
 
-    def test_highs_nonconvex_qp_rejected(self, packdb_cli_highs):
+    def test_highs_nonconvex_qp_rejected(self, decidb_cli_highs):
         """MAXIMIZE SUM(POWER(x, 2)) with x IS REAL is non-convex and HiGHS-rejected."""
         sql = """
             WITH data AS (SELECT 1 AS id UNION ALL SELECT 2)
@@ -1871,9 +1871,9 @@ class TestHighsRejection:
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(POWER(x, 2))
         """
-        packdb_cli_highs.assert_error(sql, match=r"[Nn]on-convex.*Gurobi")
+        decidb_cli_highs.assert_error(sql, match=r"[Nn]on-convex.*Gurobi")
 
-    def test_highs_miqp_rejected(self, packdb_cli_highs):
+    def test_highs_miqp_rejected(self, decidb_cli_highs):
         """MINIMIZE SUM(POWER(x, 2)) with x IS INTEGER triggers MIQP, HiGHS-rejected."""
         sql = """
             WITH data AS (
@@ -1885,6 +1885,6 @@ class TestHighsRejection:
             SUCH THAT x <= 10
             MINIMIZE SUM(POWER(x - target, 2))
         """
-        packdb_cli_highs.assert_error(
+        decidb_cli_highs.assert_error(
             sql, match=r"MIQP|integer.*quadratic.*Gurobi",
         )

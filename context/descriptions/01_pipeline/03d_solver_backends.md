@@ -2,12 +2,12 @@
 
 ## Overview
 
-PackDB uses a solver facade pattern. The `SolveModel()` function in `ilp_solver.cpp` builds a `SolverModel` from the `SolverInput`, then dispatches to the selected backend. It supports a test override (`PACKDB_FORCE_SOLVER=highs|gurobi`) before the default auto-selection:
+DecidB uses a solver facade pattern. The `SolveModel()` function in `ilp_solver.cpp` builds a `SolverModel` from the `SolverInput`, then dispatches to the selected backend. It supports a test override (`DECIDB_FORCE_SOLVER=highs|gurobi`) before the default auto-selection:
 
 ```cpp
 vector<double> SolveModel(SolverInput &input, const VarIndexer &indexer) {
     SolverModel model = SolverModel::Build(input, indexer);
-    if (const char *force = std::getenv("PACKDB_FORCE_SOLVER")) {
+    if (const char *force = std::getenv("DECIDB_FORCE_SOLVER")) {
         std::string choice(force);
         if (choice == "highs" || choice == "HIGHS") {
             return DeterministicNaive::Solve(model);
@@ -15,7 +15,7 @@ vector<double> SolveModel(SolverInput &input, const VarIndexer &indexer) {
         if (choice == "gurobi" || choice == "GUROBI") {
             if (!GurobiSolver::IsAvailable()) {
                 throw InvalidInputException(
-                    "PACKDB_FORCE_SOLVER=gurobi but Gurobi is not available on this host");
+                    "DECIDB_FORCE_SOLVER=gurobi but Gurobi is not available on this host");
             }
             return GurobiSolver::Solve(model);
         }
@@ -28,17 +28,17 @@ vector<double> SolveModel(SolverInput &input, const VarIndexer &indexer) {
 ```
 
 **Key Source Files**:
-- `src/packdb/utility/ilp_solver.cpp` — solver facade (dispatch logic)
-- `src/packdb/gurobi/gurobi_solver.cpp` — Gurobi backend (C API)
-- `src/packdb/naive/deterministic_naive.cpp` — HiGHS backend (C++ API)
+- `src/decidb/utility/ilp_solver.cpp` — solver facade (dispatch logic)
+- `src/decidb/gurobi/gurobi_solver.cpp` — Gurobi backend (C API)
+- `src/decidb/naive/deterministic_naive.cpp` — HiGHS backend (C++ API)
 
 ## Solver Selection
 
-- If `PACKDB_FORCE_SOLVER=highs` or `PACKDB_FORCE_SOLVER=gurobi` is set, that backend is used first (unknown values are ignored and fall back to normal auto-selection).
-- If `GurobiSolver::IsAvailable()` returns true, Gurobi is used. **Gurobi is the primary solver** and is strongly recommended — empirical benchmarking has shown it to be significantly faster than HiGHS for PackDB workloads.
+- If `DECIDB_FORCE_SOLVER=highs` or `DECIDB_FORCE_SOLVER=gurobi` is set, that backend is used first (unknown values are ignored and fall back to normal auto-selection).
+- If `GurobiSolver::IsAvailable()` returns true, Gurobi is used. **Gurobi is the primary solver** and is strongly recommended — empirical benchmarking has shown it to be significantly faster than HiGHS for DecidB workloads.
 - Otherwise, HiGHS (via `DeterministicNaive`) is used as a fallback. HiGHS is substantially slower in practice and should only be used when a Gurobi license is unavailable.
 
-`GurobiSolver::IsAvailable()` performs a one-time lazy check (static local variable with lambda initialization): it attempts to create a Gurobi environment via `GRBloadenv()`. If compilation did not include Gurobi (`PACKDB_HAS_GUROBI` not defined), it always returns false.
+`GurobiSolver::IsAvailable()` performs a one-time lazy check (static local variable with lambda initialization): it attempts to create a Gurobi environment via `GRBloadenv()`. If compilation did not include Gurobi (`DECIDB_HAS_GUROBI` not defined), it always returns false.
 
 ## Gurobi Backend
 
@@ -78,7 +78,7 @@ Solution values are extracted via `GRBgetdblattrarray(GRB_DBL_ATTR_X, ...)` into
 
 ## HiGHS Backend
 
-> **Note**: HiGHS is retained as an open-source fallback for environments without a Gurobi license. Empirical benchmarking has shown it to be significantly slower than Gurobi for PackDB workloads. It is not recommended for production use.
+> **Note**: HiGHS is retained as an open-source fallback for environments without a Gurobi license. Empirical benchmarking has shown it to be significantly slower than Gurobi for DecidB workloads. It is not recommended for production use.
 
 Uses HiGHS's **C++ API** (`Highs.h`). Despite the class name `DeterministicNaive`, this is a full-featured MIP solver.
 

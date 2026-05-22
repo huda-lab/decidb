@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import tempfile
 import os
 import pandas as pd
@@ -36,13 +36,13 @@ class TestGetAttribute(object):
         rel = duckdb_cursor.sql('select i as df from range(100) tbl(i)')
 
         # 'df' also exists as a method on DuckDBPyRelation
-        assert rel.df.__class__ != packdb.DuckDBPyRelation
+        assert rel.df.__class__ != decidb.DuckDBPyRelation
 
     def test_getitem_collision(self, duckdb_cursor):
         rel = duckdb_cursor.sql('select i as df from range(100) tbl(i)')
 
         # this case is not an issue on __getitem__
-        assert rel['df'].__class__ == packdb.DuckDBPyRelation
+        assert rel['df'].__class__ == decidb.DuckDBPyRelation
 
     def test_getitem_struct(self, duckdb_cursor):
         rel = duckdb_cursor.sql("select {'a':5, 'b':6} as a, 5 as b")

@@ -1,10 +1,10 @@
-import packdb
+import decidb
 
 
 class Test3728(object):
     def test_3728_describe_enum(self, duckdb_cursor):
         # Create an in-memory database, but the problem is also present in file-backed DBs
-        cursor = packdb.connect(":memory:")
+        cursor = decidb.connect(":memory:")
 
         # Create an arbitrary enum type
         cursor.execute("CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');")

@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <script>
-  (function(){var t=localStorage.getItem('packdb-theme')||'light';
+  (function(){var t=localStorage.getItem('decidb-theme')||'light';
   document.documentElement.setAttribute('data-theme',t)})();
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="PackDB Documentation - Complete syntax reference for the DECIDE clause, constraints, objectives, and best practices.">
-  <meta name="keywords" content="PackDB, DuckDB, SQL, documentation, syntax, DECIDE, constraints, optimization">
-  <title>Documentation - PackDB</title>
+  <meta name="description" content="DecidB Documentation - Complete syntax reference for the DECIDE clause, constraints, objectives, and best practices.">
+  <meta name="keywords" content="DecidB, DuckDB, SQL, documentation, syntax, DECIDE, constraints, optimization">
+  <title>Documentation - DecidB</title>
 
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
@@ -62,7 +62,7 @@
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="PackDB" class="h-8 logo-img">
+        <img src="assets/images/logo.svg" alt="DecidB" class="h-8 logo-img">
         <div class="hidden sm:block">
           <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
@@ -79,7 +79,7 @@
 
       <!-- CTA Buttons -->
       <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
            class="btn btn-secondary text-sm">
           <i data-lucide="github" class="w-4 h-4"></i>
           GitHub
@@ -111,7 +111,7 @@
         <a href="examples.html" class="block py-2 nav-link">Examples</a>
         <a href="about.html" class="block py-2 nav-link">About</a>
         <hr class="border-bdcolor">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
            class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
           <i data-lucide="github" class="w-5 h-5"></i>
           GitHub
@@ -143,7 +143,7 @@
 
         <div class="max-w-4xl">
           <h1 class="text-4xl md:text-5xl text-fg mb-4">
-            PackDB Documentation
+            DecidB Documentation
           </h1>
           <p class="text-xl text-fg-muted">
             Complete reference for writing optimization queries with the DECIDE clause.
@@ -184,7 +184,7 @@
               <h2 class="text-3xl text-fg mb-6">Syntax Overview</h2>
 
               <p class="text-fg-muted mb-6">
-                PackDB adds a <code>DECIDE</code> clause to standard SQL. You declare decision variables, define constraints with <code>SUCH THAT</code>, and optionally set an objective with <code>MAXIMIZE</code> or <code>MINIMIZE</code>. PackDB solves the optimization problem and returns every candidate row with the optimal variable values filled in.
+                DecidB adds a <code>DECIDE</code> clause to standard SQL. You declare decision variables, define constraints with <code>SUCH THAT</code>, and optionally set an objective with <code>MAXIMIZE</code> or <code>MINIMIZE</code>. DecidB solves the optimization problem and returns every candidate row with the optimal variable values filled in.
               </p>
 
               <h3 class="text-xl font-semibold text-fg mb-4">Complete Syntax</h3>
@@ -207,7 +207,7 @@ SUCH THAT
 
               <h3 class="text-xl font-semibold text-fg mb-4">Execution Order</h3>
               <p class="text-fg-muted mb-4">
-                PackDB processes your query in this order:
+                DecidB processes your query in this order:
               </p>
               <ol class="space-y-3 mb-6">
                 <li class="flex gap-4">
@@ -793,7 +793,7 @@ MAXIMIZE SUM(x * p.profit);</code></pre>
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 logo-img">
+          <img src="assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
           <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
@@ -808,8 +808,8 @@ MAXIMIZE SUM(x * p.profit);</code></pre>
         <div>
           <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
+            <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
             <li><a href="about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
           </ul>
         </div>

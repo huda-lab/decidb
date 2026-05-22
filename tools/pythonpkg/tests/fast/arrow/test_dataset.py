@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 
@@ -10,7 +10,7 @@ pyarrow.dataset = pytest.importorskip("pyarrow.dataset")
 
 class TestArrowDataset(object):
     def test_parallel_dataset(self, duckdb_cursor):
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
         duckdb_conn.execute("PRAGMA verify_parallelism")
 
@@ -32,7 +32,7 @@ class TestArrowDataset(object):
         )
 
     def test_parallel_dataset_register(self, duckdb_cursor):
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
         duckdb_conn.execute("PRAGMA verify_parallelism")
 
@@ -57,7 +57,7 @@ class TestArrowDataset(object):
         )
 
     def test_parallel_dataset_roundtrip(self, duckdb_cursor):
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
         duckdb_conn.execute("PRAGMA verify_parallelism")
 
@@ -89,7 +89,7 @@ class TestArrowDataset(object):
         assert result_1 == result_2
 
     def test_ducktyping(self, duckdb_cursor):
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         dataset = CustomDataset()
         query = duckdb_conn.execute("SELECT b FROM dataset WHERE a < 5")
         record_batch_reader = query.fetch_record_batch(2048)
@@ -98,7 +98,7 @@ class TestArrowDataset(object):
 
 
 class CustomDataset(pyarrow.dataset.Dataset):
-    # For testing duck-typing of dataset/scanner https://github.com/packdb/packdb/pull/5998
+    # For testing duck-typing of dataset/scanner https://github.com/decidb/decidb/pull/5998
     SCHEMA = pyarrow.schema([pyarrow.field("a", pyarrow.int64(), True), pyarrow.field("b", pyarrow.float64(), True)])
     DATA = pyarrow.Table.from_arrays([pyarrow.array(range(100)), pyarrow.array(np.arange(100) * 1.0)], schema=SCHEMA)
 

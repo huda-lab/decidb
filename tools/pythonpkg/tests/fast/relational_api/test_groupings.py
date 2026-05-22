@@ -1,10 +1,10 @@
-import packdb
+import decidb
 import pytest
 
 
 @pytest.fixture
 def con():
-    conn = packdb.connect()
+    conn = decidb.connect()
     conn.execute(
         """
 		create table tbl as (SELECT * FROM (VALUES

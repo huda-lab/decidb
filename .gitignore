@@ -344,9 +344,9 @@ zig-cache/*
 
 # .db files
 *.db
-!packdb.db
+!decidb.db
 *.db.gz
-# keep packdb.db because its used for testing
+# keep decidb.db because its used for testing
 
 
 
@@ -375,7 +375,7 @@ test/automated-old/highs.log
 gurobi.log
 test/automated-old/gurobi.log
 
-# PackDB test results
+# DecidB test results
 test/automated-old/results/
 
 
@@ -393,7 +393,7 @@ test/automated-old/=
 # Removed duplicate highs.log entry (consolidated above)
 
 
-# Inherited upstream files (not used by PackDB)
+# Inherited upstream files (not used by DecidB)
 CITATION.cff
 .codecov.yml
 .sanitizer-leak-suppressions.txt

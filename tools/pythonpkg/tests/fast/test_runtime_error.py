@@ -1,63 +1,63 @@
-import packdb
+import decidb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
 
-closed = lambda: pytest.raises(packdb.ConnectionException, match='Connection already closed')
-no_result_set = lambda: pytest.raises(packdb.InvalidInputException, match='No open result set')
+closed = lambda: pytest.raises(decidb.ConnectionException, match='Connection already closed')
+no_result_set = lambda: pytest.raises(decidb.InvalidInputException, match='No open result set')
 
 
 class TestRuntimeError(object):
     def test_fetch_error(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("create table tbl as select 'hello' i")
-        with pytest.raises(packdb.ConversionException):
+        with pytest.raises(decidb.ConversionException):
             con.execute("select i::int from tbl").fetchall()
 
     def test_df_error(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("create table tbl as select 'hello' i")
-        with pytest.raises(packdb.ConversionException):
+        with pytest.raises(decidb.ConversionException):
             con.execute("select i::int from tbl").df()
 
     def test_arrow_error(self):
         pytest.importorskip('pyarrow')
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("create table tbl as select 'hello' i")
-        with pytest.raises(packdb.ConversionException):
+        with pytest.raises(decidb.ConversionException):
             con.execute("select i::int from tbl").arrow()
 
     def test_register_error(self):
-        con = packdb.connect()
+        con = decidb.connect()
         py_obj = "this is a string"
-        with pytest.raises(packdb.InvalidInputException, match='Python Object "this is a string" of type "str"'):
+        with pytest.raises(decidb.InvalidInputException, match='Python Object "this is a string" of type "str"'):
             con.register(py_obj, "v")
 
     def test_arrow_fetch_table_error(self):
         pytest.importorskip('pyarrow')
 
-        con = packdb.connect()
+        con = decidb.connect()
         arrow_object = con.execute("select 1").arrow()
         arrow_relation = con.from_arrow(arrow_object)
         res = arrow_relation.execute()
         res.close()
-        with pytest.raises(packdb.InvalidInputException, match='There is no query result'):
+        with pytest.raises(decidb.InvalidInputException, match='There is no query result'):
             res.fetch_arrow_table()
 
     def test_arrow_record_batch_reader_error(self):
         pytest.importorskip('pyarrow')
 
-        con = packdb.connect()
+        con = decidb.connect()
         arrow_object = con.execute("select 1").arrow()
         arrow_relation = con.from_arrow(arrow_object)
         res = arrow_relation.execute()
         res.close()
-        with pytest.raises(packdb.ProgrammingError, match='There is no query result'):
+        with pytest.raises(decidb.ProgrammingError, match='There is no query result'):
             res.fetch_arrow_reader(1)
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_relation_cache_fetchall(self, pandas):
-        conn = packdb.connect()
+        conn = decidb.connect()
         df_in = pandas.DataFrame(
             {
                 'numbers': [1, 2, 3, 4, 5],
@@ -66,7 +66,7 @@ class TestRuntimeError(object):
         conn.execute("create view x as select * from df_in")
         rel = conn.query("select * from x")
         del df_in
-        with pytest.raises(packdb.ProgrammingError, match='Table with name df_in does not exist'):
+        with pytest.raises(decidb.ProgrammingError, match='Table with name df_in does not exist'):
             # Even when we preserve ExternalDependency objects correctly, this is not supported
             # Relations only save dependencies for their immediate TableRefs,
             # so the dependency of 'x' on 'df_in' is not registered in 'rel'
@@ -74,7 +74,7 @@ class TestRuntimeError(object):
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_relation_cache_execute(self, pandas):
-        conn = packdb.connect()
+        conn = decidb.connect()
         df_in = pandas.DataFrame(
             {
                 'numbers': [1, 2, 3, 4, 5],
@@ -83,12 +83,12 @@ class TestRuntimeError(object):
         conn.execute("create view x as select * from df_in")
         rel = conn.query("select * from x")
         del df_in
-        with pytest.raises(packdb.ProgrammingError, match='Table with name df_in does not exist'):
+        with pytest.raises(decidb.ProgrammingError, match='Table with name df_in does not exist'):
             rel.execute()
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_relation_query_error(self, pandas):
-        conn = packdb.connect()
+        conn = decidb.connect()
         df_in = pandas.DataFrame(
             {
                 'numbers': [1, 2, 3, 4, 5],
@@ -97,12 +97,12 @@ class TestRuntimeError(object):
         conn.execute("create view x as select * from df_in")
         rel = conn.query("select * from x")
         del df_in
-        with pytest.raises(packdb.CatalogException, match='Table with name df_in does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name df_in does not exist'):
             rel.query("bla", "select * from bla")
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_conn_broken_statement_error(self, pandas):
-        conn = packdb.connect()
+        conn = decidb.connect()
         df_in = pandas.DataFrame(
             {
                 'numbers': [1, 2, 3, 4, 5],
@@ -110,21 +110,21 @@ class TestRuntimeError(object):
         )
         conn.execute("create view x as select * from df_in")
         del df_in
-        with pytest.raises(packdb.CatalogException, match='Table with name df_in does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name df_in does not exist'):
             conn.execute("select 1; select * from x; select 3;")
 
     def test_conn_prepared_statement_error(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.execute("create table integers (a integer, b integer)")
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='Values were not provided for the following prepared statement parameters: 2',
         ):
             conn.execute("select * from integers where a =? and b=?", [1])
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_closed_conn_exceptions(self, pandas):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.close()
         df_in = pandas.DataFrame(
             {
@@ -166,7 +166,7 @@ class TestRuntimeError(object):
             conn.from_arrow("bla")
 
     def test_missing_result_from_conn_exceptions(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
 
         with no_result_set():
             conn.fetchone()

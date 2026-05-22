@@ -1,6 +1,6 @@
 # Problem Types — Implemented Features
 
-PackDB can express several classes of mathematical optimization problems. The problem class is determined automatically by the combination of variable types declared in `DECIDE` and the form of the objective expression. This page catalogs the supported problem classes from a mathematical optimization perspective — for syntax details, see the per-keyword done.md files.
+DecidB can express several classes of mathematical optimization problems. The problem class is determined automatically by the combination of variable types declared in `DECIDE` and the form of the objective expression. This page catalogs the supported problem classes from a mathematical optimization perspective — for syntax details, see the per-keyword done.md files.
 
 ---
 
@@ -196,7 +196,7 @@ Composes with WHEN, PER, and linear constraints. Multiple quadratic constraints 
 
 ## How Problem Class Is Determined
 
-The user does not declare a problem class. PackDB infers it from the variable types and objective form:
+The user does not declare a problem class. DecidB infers it from the variable types and objective form:
 
 | Variable Types | Objective | Problem Class |
 |---|---|---|
@@ -297,7 +297,7 @@ All variable types have a default lower bound of 0:
 - INTEGER: [0, 1e30]
 - REAL: [0, 1e30]
 
-PackDB cannot currently express problems requiring negative variable values (see [todo.md](todo.md)).
+DecidB cannot currently express problems requiring negative variable values (see [todo.md](todo.md)).
 
 ### Big-M Linearization Is Transparent
 
@@ -319,7 +319,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 
 ## Code Pointers
 
-- **Variable type -> solver flags**: `src/packdb/utility/ilp_model_builder.cpp`
+- **Variable type -> solver flags**: `src/decidb/utility/ilp_model_builder.cpp`
   - DOUBLE/FLOAT -> `is_integer=false`, BOOLEAN -> `is_binary=true`, INTEGER -> `is_integer=true`
   - These flags determine whether the solver treats the problem as LP, ILP, or MILP
 
@@ -328,20 +328,20 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
   - Extracts inner linear expression terms into `Objective::squared_terms` with `quadratic_sign` (scalar; sign combines negation and constant scaling).
   - **Degree guard**: `PhysicalDecide::IsLinearInDecideVars` is invoked on the inner of every POWER / self-product pattern and on each side of a bilinear `*`. Inputs whose total decision-variable degree would exceed 2 (e.g. `POWER(x,2)*POWER(x,2)`, `POWER(x,2)*POWER(y,2)`, `a*POWER(x,2)`, `POWER(POWER(x,2),2)`) are rejected with a clear `InvalidInputException` rather than silently misclassified as a lower-degree Q term. Same guard runs in the constraint path (`TryDetectConstraintQuadratic` and the constraint bilinear branch).
 
-- **Q matrix construction**: `src/packdb/utility/ilp_model_builder.cpp`
+- **Q matrix construction**: `src/decidb/utility/ilp_model_builder.cpp`
   - Builds Q from outer products of per-row inner expression coefficients: Q = sign * A^T A
   - sign = +1.0 produces PSD Q (convex), sign = -1.0 produces NSD Q (concave)
   - Sets `nonconvex_quadratic` flag based on sign+sense combination
   - Handles constant-term cross-contributions to linear objective (also sign-adjusted)
 
-- **Gurobi QP**: `src/packdb/gurobi/gurobi_solver.cpp` — calls `GRBaddqpterms` for Q matrix; sets `NonConvex=2` when `nonconvex_quadratic` is true
+- **Gurobi QP**: `src/decidb/gurobi/gurobi_solver.cpp` — calls `GRBaddqpterms` for Q matrix; sets `NonConvex=2` when `nonconvex_quadratic` is true
 
-- **HiGHS QP**: `src/packdb/naive/deterministic_naive.cpp` — calls `passHessian` with COO->CSC conversion; rejects non-convex QP and MIQP with errors
+- **HiGHS QP**: `src/decidb/naive/deterministic_naive.cpp` — calls `passHessian` with COO->CSC conversion; rejects non-convex QP and MIQP with errors
 
-- **Solver dispatch**: `src/packdb/utility/ilp_solver.cpp`
+- **Solver dispatch**: `src/decidb/utility/ilp_solver.cpp`
   - `SolverModel::Build()` constructs the formulation; `SolveModel()` dispatches to Gurobi (if available) or HiGHS
 
-- **Solver input (Q matrix storage)**: `src/include/duckdb/packdb/solver_input.hpp`
+- **Solver input (Q matrix storage)**: `src/include/duckdb/decidb/solver_input.hpp`
   - `quadratic_inner_coefficients`, `quadratic_inner_variable_indices`, `has_quadratic_objective`
 
 - **SUM argument validation (QP + bilinear syntax)**: `src/planner/expression_binder/decide_binder.cpp`
@@ -353,14 +353,14 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
   - `TryDetectConstraintQuadratic` (local lambda) handles pattern matching for all syntax forms
   - Populates `DecideConstraint::QuadraticGroup` with inner linear terms and sign
 
-- **Quadratic constraint Q matrix**: `src/packdb/utility/ilp_model_builder.cpp`
+- **Quadratic constraint Q matrix**: `src/decidb/utility/ilp_model_builder.cpp`
   - `BuildQuadraticConstraint` lambda builds `QuadraticConstraint` from `EvaluatedConstraint` quadratic groups
   - Computes outer product Q = sign * A^T A per group, accumulates into single Q matrix
   - Handles PER groups (one QuadraticConstraint per group), WHEN filtering, and per-row constraints
 
 - **Feasibility support**: Grammar rule in `third_party/libpg_query/grammar/statements/select.y` accepts `DECIDE ... SUCH THAT ...` without objective. `DecideSense::FEASIBILITY` flows through parser → binder → physical → model builder. Model builder sets all objective coefficients to zero.
 
-- **Symbolic normalization skip**: `src/packdb/symbolic/decide_symbolic.cpp`
+- **Symbolic normalization skip**: `src/decidb/symbolic/decide_symbolic.cpp`
   - `ComparisonLhsHasQuadraticOrBilinear` prevents symbolic expansion of POWER/bilinear structure
 
 - **Bilinear implementation**: See [bilinear/done.md](../bilinear/done.md) for full implementation details including:

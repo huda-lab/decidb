@@ -2,9 +2,9 @@ from multiprocessing.sharedctypes import Value
 import datetime
 import pytest
 import platform
-import packdb
+import decidb
 from io import StringIO, BytesIO
-from packdb import CSVLineTerminator
+from decidb import CSVLineTerminator
 
 
 def TestFile(name):
@@ -34,13 +34,13 @@ def create_temp_csv(tmp_path):
 
 class TestReadCSV(object):
     def test_using_connection_wrapper(self):
-        rel = packdb.read_csv(TestFile('category.csv'))
+        rel = decidb.read_csv(TestFile('category.csv'))
         res = rel.fetchone()
         print(res)
         assert res == (1, 'Action', datetime.datetime(2006, 2, 15, 4, 46, 27))
 
     def test_using_connection_wrapper_with_keyword(self):
-        rel = packdb.read_csv(TestFile('category.csv'), dtype={'category_id': 'string'})
+        rel = decidb.read_csv(TestFile('category.csv'), dtype={'category_id': 'string'})
         res = rel.fetchone()
         print(res)
         assert res == ('1', 'Action', datetime.datetime(2006, 2, 15, 4, 46, 27))
@@ -81,7 +81,7 @@ class TestReadCSV(object):
         assert res == ('1|Action|2006-02-15', datetime.time(4, 46, 27))
 
     def test_delimiter_and_sep(self, duckdb_cursor):
-        with pytest.raises(packdb.InvalidInputException, match="read_csv takes either 'delimiter' or 'sep', not both"):
+        with pytest.raises(decidb.InvalidInputException, match="read_csv takes either 'delimiter' or 'sep', not both"):
             rel = duckdb_cursor.read_csv(TestFile('category.csv'), delimiter=" ", sep=" ")
 
     def test_header_true(self, duckdb_cursor):
@@ -115,7 +115,7 @@ class TestReadCSV(object):
 
     # We want to detect this at bind time
     def test_compression_wrong(self, duckdb_cursor):
-        with pytest.raises(packdb.Error, match="Input is not a GZIP stream"):
+        with pytest.raises(decidb.Error, match="Input is not a GZIP stream"):
             rel = duckdb_cursor.read_csv(TestFile('category.csv'), compression='gzip')
 
     def test_quotechar(self, duckdb_cursor):
@@ -126,7 +126,7 @@ class TestReadCSV(object):
 
     def test_quote(self, duckdb_cursor):
         with pytest.raises(
-            packdb.Error, match="The methods read_csv and read_csv_auto do not have the \"quote\" argument."
+            decidb.Error, match="The methods read_csv and read_csv_auto do not have the \"quote\" argument."
         ):
             rel = duckdb_cursor.read_csv(TestFile('unquote_without_delimiter.csv'), quote="", header=False)
 
@@ -138,7 +138,7 @@ class TestReadCSV(object):
 
     def test_encoding_wrong(self, duckdb_cursor):
         with pytest.raises(
-            packdb.BinderException, match="Copy is only supported for UTF-8 encoded files, ENCODING 'UTF-8'"
+            decidb.BinderException, match="Copy is only supported for UTF-8 encoded files, ENCODING 'UTF-8'"
         ):
             rel = duckdb_cursor.read_csv(TestFile('quote_escape.csv'), encoding=";")
 
@@ -214,7 +214,7 @@ class TestReadCSV(object):
             ('2', 'b', 'bob', None),
         ]
 
-        rel = packdb.read_csv(TestFile('nullpadding.csv'), null_padding=False, header=False)
+        rel = decidb.read_csv(TestFile('nullpadding.csv'), null_padding=False, header=False)
         res = rel.fetchall()
         assert res == [
             ('# this file has a bunch of gunk at the top',),
@@ -223,7 +223,7 @@ class TestReadCSV(object):
             ('2,b,bob',),
         ]
 
-        rel = packdb.read_csv(TestFile('nullpadding.csv'), null_padding=True, header=False)
+        rel = decidb.read_csv(TestFile('nullpadding.csv'), null_padding=True, header=False)
         res = rel.fetchall()
         assert res == [
             ('# this file has a bunch of gunk at the top', None, None, None),
@@ -446,7 +446,7 @@ class TestReadCSV(object):
         file1_path, file2_path = create_temp_csv
 
         # Use the temporary file paths to read CSV files
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.read_csv(f'{tmp_path}/file*.csv')
         res = con.sql("select * from rel order by all").fetchall()
         assert res == [(1,), (2,), (3,), (4,), (5,), (6,)]
@@ -467,7 +467,7 @@ class TestReadCSV(object):
             'message': 'VARCHAR',
         }
 
-        rel = packdb.read_csv(CSV_FILE, skiprows=1, delimiter=",", quotechar='"', escapechar="\\", dtype=COLUMNS)
+        rel = decidb.read_csv(CSV_FILE, skiprows=1, delimiter=",", quotechar='"', escapechar="\\", dtype=COLUMNS)
         res = rel.fetchall()
 
         rel2 = duckdb_cursor.sql(rel.sql_query())
@@ -484,18 +484,18 @@ class TestReadCSV(object):
         file = tmp_path / "file.csv"
         file.write_text('one,two,three,four\n1,2,3,4\n1,2,3,4\n1,2,3,4')
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.read_csv(str(file), names=['a', 'b', 'c'])
         assert rel.columns == ['a', 'b', 'c', 'four']
 
-        with pytest.raises(packdb.InvalidInputException, match="read_csv only accepts 'names' as a list of strings"):
+        with pytest.raises(decidb.InvalidInputException, match="read_csv only accepts 'names' as a list of strings"):
             rel = con.read_csv(file, names=True)
 
-        with pytest.raises(packdb.InvalidInputException, match="not possible to detect the CSV Header"):
+        with pytest.raises(decidb.InvalidInputException, match="not possible to detect the CSV Header"):
             rel = con.read_csv(file, names=['a', 'b', 'c', 'd', 'e'])
 
         # Duplicates are not okay
-        with pytest.raises(packdb.BinderException, match="names must have unique values"):
+        with pytest.raises(decidb.BinderException, match="names must have unique values"):
             rel = con.read_csv(file, names=['a', 'b', 'a', 'b'])
             assert rel.columns == ['a', 'b', 'a', 'b']
 
@@ -503,7 +503,7 @@ class TestReadCSV(object):
         file = tmp_path / "file.csv"
         file.write_text('one,two,three,four\n1,2,3,4\n1,2,3,4\n1,2,3,4')
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.read_csv(
             file,
             names=['a', 'b', 'c'],
@@ -520,7 +520,7 @@ class TestReadCSV(object):
         # FIXME: seems the order columns are named in this error is non-deterministic
         # so for now I'm excluding the list of columns from the expected error
         expected_error = """do not exist in the CSV File"""
-        with pytest.raises(packdb.BinderException, match=expected_error):
+        with pytest.raises(decidb.BinderException, match=expected_error):
             rel = con.read_csv(
                 file,
                 names=['a', 'b', 'c'],
@@ -541,7 +541,7 @@ class TestReadCSV(object):
         file3 = tmp_path / "file3.csv"
         file3.write_text('one,two,three,four\n9,10,11,12\n9,10,11,12\n9,10,11,12')
 
-        con = packdb.connect()
+        con = decidb.connect()
         files = [str(file1), str(file2), str(file3)]
         rel = con.read_csv(files)
         res = rel.fetchall()
@@ -558,10 +558,10 @@ class TestReadCSV(object):
         ]
 
     def test_read_csv_empty_list(self):
-        con = packdb.connect()
+        con = decidb.connect()
         files = []
         with pytest.raises(
-            packdb.InvalidInputException, match='Please provide a non-empty list of paths or file-like objects'
+            decidb.InvalidInputException, match='Please provide a non-empty list of paths or file-like objects'
         ):
             rel = con.read_csv(files)
             res = rel.fetchall()
@@ -570,12 +570,12 @@ class TestReadCSV(object):
         file1 = tmp_path / "file1.csv"
         file1.write_text('one|two|three|four\n1|2|3|4')
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.read_csv(str(file1), columns={'a': 'VARCHAR'}, auto_detect=False, header=False)
         assert rel.fetchall() == [('one|two|three|four',), ('1|2|3|4',)]
 
     def test_read_csv_list_invalid_path(self, tmp_path):
-        con = packdb.connect()
+        con = decidb.connect()
 
         file1 = tmp_path / "file1.csv"
         file1.write_text('one,two,three,four\n1,2,3,4\n1,2,3,4\n1,2,3,4')
@@ -584,7 +584,7 @@ class TestReadCSV(object):
         file3.write_text('one,two,three,four\n9,10,11,12\n9,10,11,12\n9,10,11,12')
 
         files = [str(file1), 'not_valid_path', str(file3)]
-        with pytest.raises(packdb.IOException, match='No files found that match the pattern "not_valid_path"'):
+        with pytest.raises(decidb.IOException, match='No files found that match the pattern "not_valid_path"'):
             rel = con.read_csv(files)
             res = rel.fetchall()
 
@@ -625,7 +625,7 @@ class TestReadCSV(object):
         file.write_text('one,two,three,four\n1,2,3,4\n1,2,3,4\n1,2,3,4')
         print(options)
         if 'hive_types' in options:
-            with pytest.raises(packdb.InvalidInputException, match=r'Unknown hive_type:'):
+            with pytest.raises(decidb.InvalidInputException, match=r'Unknown hive_type:'):
                 rel = duckdb_cursor.read_csv(file, **options)
         else:
             rel = duckdb_cursor.read_csv(file, **options)
@@ -635,7 +635,7 @@ class TestReadCSV(object):
         file1 = tmp_path / "file1.csv"
         file1.write_text('one|two|three|four\n1|2|3|4#|5|6\n#bla\n1|2|3|4\n')
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.read_csv(str(file1), columns={'a': 'VARCHAR'}, auto_detect=False, header=False, comment='#')
         assert rel.fetchall() == [('one|two|three|four',), ('1|2|3|4',), ('1|2|3|4',)]
 
@@ -643,8 +643,8 @@ class TestReadCSV(object):
         file1 = tmp_path / "file1.csv"
         file1.write_text('one|two|three|four\n1|2|3|4\n1|2|3|4|5\n1|2|3|4\n')
 
-        con = packdb.connect()
-        with pytest.raises(packdb.InvalidInputException, match="CSV Error on Line"):
+        con = decidb.connect()
+        with pytest.raises(decidb.InvalidInputException, match="CSV Error on Line"):
             rel = con.read_csv(
                 str(file1),
                 header=True,
@@ -670,7 +670,7 @@ class TestReadCSV(object):
         file1 = tmp_path / "file2.csv"
         file1.write_text('two|three|four|five\n2|3|4|5')
 
-        con = packdb.connect()
+        con = decidb.connect()
 
         file_path = tmp_path / "file*.csv"
         rel = con.read_csv(file_path, union_by_name=True)

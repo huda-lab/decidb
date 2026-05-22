@@ -1,8 +1,8 @@
-# PackDB
+# DecidB
 
 **Optimization, Native in SQL**
 
-PackDB extends SQL with the `DECIDE` clause for declarative in-database optimization. Express Integer Linear Programming (ILP) problems directly in SQL — no external solvers, no data export, no context switching.
+DecidB extends SQL with the `DECIDE` clause for declarative in-database optimization. Express Integer Linear Programming (ILP) problems directly in SQL — no external solvers, no data export, no context switching.
 
 A research project by [HUDA Lab](https://huda-lab.github.io/) at NYU Abu Dhabi.
 
@@ -22,7 +22,7 @@ prob.solve()
 # ... then map results back to database
 ```
 
-**With PackDB** — one SQL query:
+**With DecidB** — one SQL query:
 
 ```sql
 SELECT id, value, weight, x
@@ -39,16 +39,16 @@ Same result, a fraction of the code.
 ## Installation
 
 ```bash
-pip install packdb
+pip install decidb
 ```
 
 ## Usage
 
 ```python
-import packdb
+import decidb
 
 # Connect (in-memory or file-based)
-conn = packdb.connect()
+conn = decidb.connect()
 
 # Create data
 conn.execute("""
@@ -71,7 +71,7 @@ print(result)
 
 ## The DECIDE Clause
 
-PackDB adds the `DECIDE` clause to standard SQL:
+DecidB adds the `DECIDE` clause to standard SQL:
 
 ```sql
 SELECT columns
@@ -123,13 +123,13 @@ All expressions involving decision variables must be **linear**.
 
 ## Documentation
 
-- [Getting Started](https://huda-lab.github.io/packdb/getting-started.html)
-- [Syntax Reference](https://huda-lab.github.io/packdb/documentation.html)
-- [Examples](https://huda-lab.github.io/packdb/examples.html)
+- [Getting Started](https://huda-lab.github.io/decidb/getting-started.html)
+- [Syntax Reference](https://huda-lab.github.io/decidb/documentation.html)
+- [Examples](https://huda-lab.github.io/decidb/examples.html)
 
 ## Research
 
-PackDB builds on the **Package Queries** framework:
+DecidB builds on the **Package Queries** framework:
 
 - *Scalable Package Queries in Relational Database Systems* — Brucato, Abouzied, Meliou (VLDB 2016)
 - *Scalable Computation of High-Order Optimization Queries* — Brucato, Abouzied, Meliou (CACM 2019)
@@ -137,11 +137,11 @@ PackDB builds on the **Package Queries** framework:
 
 ## License
 
-MIT License. See [LICENSE](https://github.com/huda-lab/packdb/blob/main/LICENSE) for details.
+MIT License. See [LICENSE](https://github.com/huda-lab/decidb/blob/main/LICENSE) for details.
 
 ## Links
 
-- [Website](https://huda-lab.github.io/packdb)
-- [GitHub](https://github.com/huda-lab/packdb)
-- [Issue Tracker](https://github.com/huda-lab/packdb/issues)
+- [Website](https://huda-lab.github.io/decidb)
+- [GitHub](https://github.com/huda-lab/decidb)
+- [Issue Tracker](https://github.com/huda-lab/decidb/issues)
 - [HUDA Lab](https://huda-lab.github.io/)

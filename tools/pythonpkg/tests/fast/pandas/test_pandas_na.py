@@ -1,6 +1,6 @@
 import numpy as np
 import datetime
-import packdb
+import decidb
 import pytest
 import platform
 from conftest import NumpyPandas, ArrowPandas
@@ -16,7 +16,7 @@ def assert_nullness(items, null_indices):
 
 @pytest.mark.skipif(platform.system() == "Emscripten", reason="Pandas interaction is broken in Pyodide 3.11")
 class TestPandasNA(object):
-    @pytest.mark.parametrize('rows', [100, packdb.__standard_vector_size__, 5000, 1000000])
+    @pytest.mark.parametrize('rows', [100, decidb.__standard_vector_size__, 5000, 1000000])
     @pytest.mark.parametrize('pd', [NumpyPandas(), ArrowPandas()])
     def test_pandas_string_null(self, duckdb_cursor, rows, pd):
         df: pd.DataFrame = pd.DataFrame(index=np.arange(rows))

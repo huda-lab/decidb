@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 from packaging import version
 
@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(
 
 # Compares with manually constructed arrow tables
 def RoundTripStringView(query, array):
-    con = packdb.connect()
+    con = decidb.connect()
     con.execute("SET produce_arrow_string_view=True")
     arrow_tbl = con.execute(query).arrow()
     # Assert that we spit the same as the defined array
@@ -32,7 +32,7 @@ def RoundTripStringView(query, array):
 
 
 def RoundTripDuckDBInternal(query):
-    con = packdb.connect()
+    con = decidb.connect()
     con.execute("SET produce_arrow_string_view=True")
     arrow_tbl = con.execute(query).arrow()
     arrow_tbl.validate(full=True)
@@ -141,7 +141,7 @@ class TestArrowStringView(object):
     def test_large_string_polars(self):
         pass
         # pl = pytest.importorskip('polars')
-        # con = packdb.connect()
+        # con = decidb.connect()
         # con.execute("SET produce_arrow_string_view=True")
         # query = '''select * from (SELECT i::varchar str FROM range(10000) tbl(i) UNION SELECT 'Imaverybigstringmuchbiggerthanfourbytes'||i::varchar str FROM range(10000) tbl(i) UNION select null)  order by str'''
         # polars_df = con.execute(query).pl()

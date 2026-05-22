@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 
@@ -7,7 +7,7 @@ torch = pytest.importorskip('torch')
 
 @pytest.mark.skip(reason="some issues with Numpy, to be reverted")
 def test_pytorch():
-    con = packdb.connect()
+    con = decidb.connect()
 
     con.execute("create table t( a integer, b integer)")
     con.execute("insert into t values (1,2), (3,4)")
@@ -27,7 +27,7 @@ def test_pytorch():
     numeric_types = ['TINYINT', 'SMALLINT', 'BIGINT', 'HUGEINT', 'FLOAT', 'DOUBLE', 'DECIMAL(4,1)', 'UTINYINT']
 
     for supported_type in numeric_types:
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(f"create table t( a {supported_type} , b {supported_type})")
         con.execute("insert into t values (1,2), (3,4)")
         duck_torch = con.sql("select * from t").torch()
@@ -37,6 +37,6 @@ def test_pytorch():
 
     # Comment out test that might fail or not depending on pytorch versions
     # with pytest.raises(TypeError, match="can't convert"):
-    #    con = packdb.connect()
+    #    con = decidb.connect()
     #    con.execute(f"create table t( a UINTEGER)")
     #    duck_torch = con.sql("select * from t").torch()

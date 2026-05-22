@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 pq = pytest.importorskip("pyarrow.parquet")

@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import datetime
 import pytest
@@ -26,7 +26,7 @@ class TestArrowInterval(object):
             pa.array([1], pa.duration('s')),
         )
         arrow_table = pa.Table.from_arrays([data[0], data[1], data[2], data[3]], ['a', 'b', 'c', 'd'])
-        rel = packdb.from_arrow(arrow_table).arrow()
+        rel = decidb.from_arrow(arrow_table).arrow()
         assert rel['a'] == expected_arrow['a']
         assert rel['b'] == expected_arrow['a']
         assert rel['c'] == expected_arrow['a']
@@ -43,7 +43,7 @@ class TestArrowInterval(object):
             pa.array([None], pa.duration('s')),
         )
         arrow_table = pa.Table.from_arrays([data[0], data[1], data[2], data[3]], ['a', 'b', 'c', 'd'])
-        rel = packdb.from_arrow(arrow_table).arrow()
+        rel = decidb.from_arrow(arrow_table).arrow()
         assert rel['a'] == expected_arrow['a']
         assert rel['b'] == expected_arrow['a']
         assert rel['c'] == expected_arrow['a']
@@ -57,5 +57,5 @@ class TestArrowInterval(object):
         data = pa.array([9223372036854775807], pa.duration('s'))
         arrow_table = pa.Table.from_arrays([data], ['a'])
 
-        with pytest.raises(packdb.ConversionException, match='Could not convert Interval to Microsecond'):
-            arrow_from_duck = packdb.from_arrow(arrow_table).arrow()
+        with pytest.raises(decidb.ConversionException, match='Could not convert Interval to Microsecond'):
+            arrow_from_duck = decidb.from_arrow(arrow_table).arrow()

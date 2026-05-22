@@ -1,11 +1,11 @@
-import packdb
+import decidb
 import os
 import pandas as pd
 import pytest
 from typing import Union, Optional
 import sys
 
-from packdb.typing import (
+from decidb.typing import (
     SQLNULL,
     BOOLEAN,
     TINYINT,
@@ -35,12 +35,12 @@ from packdb.typing import (
     BIT,
     INTERVAL,
 )
-import packdb.typing
+import decidb.typing
 
 
 class TestType(object):
     def test_sqltype(self):
-        assert str(packdb.sqltype('struct(a VARCHAR, b BIGINT)')) == 'STRUCT(a VARCHAR, b BIGINT)'
+        assert str(decidb.sqltype('struct(a VARCHAR, b BIGINT)')) == 'STRUCT(a VARCHAR, b BIGINT)'
         # todo: add tests with invalid type_str
 
     def test_primitive_types(self):
@@ -73,76 +73,76 @@ class TestType(object):
         assert str(INTERVAL) == 'INTERVAL'
 
     def test_list_type(self):
-        type = packdb.list_type(BIGINT)
+        type = decidb.list_type(BIGINT)
         assert str(type) == 'BIGINT[]'
 
     def test_array_type(self):
-        type = packdb.array_type(BIGINT, 3)
+        type = decidb.array_type(BIGINT, 3)
         assert str(type) == 'BIGINT[3]'
 
     def test_struct_type(self):
-        type = packdb.struct_type({'a': BIGINT, 'b': BOOLEAN})
+        type = decidb.struct_type({'a': BIGINT, 'b': BOOLEAN})
         assert str(type) == 'STRUCT(a BIGINT, b BOOLEAN)'
 
         # FIXME: create an unnamed struct when fields are provided as a list
-        type = packdb.struct_type([BIGINT, BOOLEAN])
+        type = decidb.struct_type([BIGINT, BOOLEAN])
         assert str(type) == 'STRUCT(v1 BIGINT, v2 BOOLEAN)'
 
     def test_incomplete_struct_type(self):
         with pytest.raises(
-            packdb.InvalidInputException, match='Could not convert empty dictionary to a duckdb STRUCT type'
+            decidb.InvalidInputException, match='Could not convert empty dictionary to a duckdb STRUCT type'
         ):
-            type = packdb.typing.DuckDBPyType(dict())
+            type = decidb.typing.DuckDBPyType(dict())
 
     def test_map_type(self):
-        type = packdb.map_type(packdb.sqltype("BIGINT"), packdb.sqltype("DECIMAL(10, 2)"))
+        type = decidb.map_type(decidb.sqltype("BIGINT"), decidb.sqltype("DECIMAL(10, 2)"))
         assert str(type) == 'MAP(BIGINT, DECIMAL(10,2))'
 
     def test_decimal_type(self):
-        type = packdb.decimal_type(5, 3)
+        type = decidb.decimal_type(5, 3)
         assert str(type) == 'DECIMAL(5,3)'
 
     def test_string_type(self):
-        type = packdb.string_type()
+        type = decidb.string_type()
         assert str(type) == 'VARCHAR'
 
     def test_string_type_collation(self):
-        type = packdb.string_type('NOCASE')
+        type = decidb.string_type('NOCASE')
         # collation does not show up in the string representation..
         assert str(type) == 'VARCHAR'
 
     def test_union_type(self):
-        type = packdb.union_type([BIGINT, VARCHAR, TINYINT])
+        type = decidb.union_type([BIGINT, VARCHAR, TINYINT])
         assert str(type) == 'UNION(v1 BIGINT, v2 VARCHAR, v3 TINYINT)'
 
-        type = packdb.union_type({'a': BIGINT, 'b': VARCHAR, 'c': TINYINT})
+        type = decidb.union_type({'a': BIGINT, 'b': VARCHAR, 'c': TINYINT})
         assert str(type) == 'UNION(a BIGINT, b VARCHAR, c TINYINT)'
 
     import sys
 
     @pytest.mark.skipif(sys.version_info < (3, 9), reason="requires >= python3.9")
     def test_implicit_convert_from_builtin_type(self):
-        type = packdb.list_type(list[str])
+        type = decidb.list_type(list[str])
         assert str(type.child) == "VARCHAR[]"
 
         mapping = {str: 'VARCHAR', int: 'BIGINT', bytes: 'BLOB', bytearray: 'BLOB', bool: 'BOOLEAN', float: 'DOUBLE'}
         for duckdb_type, expected in mapping.items():
-            res = packdb.list_type(duckdb_type)
+            res = decidb.list_type(duckdb_type)
             assert str(res.child) == expected
 
-        res = packdb.list_type({'a': str, 'b': int})
+        res = decidb.list_type({'a': str, 'b': int})
         assert str(res.child) == 'STRUCT(a VARCHAR, b BIGINT)'
 
-        res = packdb.list_type(dict[str, int])
+        res = decidb.list_type(dict[str, int])
         assert str(res.child) == 'MAP(VARCHAR, BIGINT)'
 
-        res = packdb.list_type(list[str])
+        res = decidb.list_type(list[str])
         assert str(res.child) == 'VARCHAR[]'
 
-        res = packdb.list_type(list[dict[str, dict[list[str], str]]])
+        res = decidb.list_type(list[dict[str, dict[list[str], str]]])
         assert str(res.child) == 'MAP(VARCHAR, MAP(VARCHAR[], VARCHAR))[]'
 
-        res = packdb.list_type(list[Union[str, int]])
+        res = decidb.list_type(list[Union[str, int]])
         assert str(res.child) == 'UNION(u1 VARCHAR, u2 BIGINT)[]'
 
     def test_implicit_convert_from_numpy(self, duckdb_cursor):
@@ -188,7 +188,7 @@ class TestType(object):
             assert type_mapping[dtype_str] == duckdb_type_str
 
     def test_attribute_accessor(self):
-        type = packdb.row_type([BIGINT, packdb.list_type(packdb.map_type(BLOB, BIT))])
+        type = decidb.row_type([BIGINT, decidb.list_type(decidb.map_type(BLOB, BIT))])
         assert hasattr(type, 'a') == False
         assert hasattr(type, 'v1') == True
 
@@ -204,39 +204,39 @@ class TestType(object):
         assert str(child_type) == 'MAP(BLOB, BIT)'
 
     def test_json_type(self):
-        json_type = packdb.type('JSON')
+        json_type = decidb.type('JSON')
 
-        val = packdb.Value('{"duck": 42}', json_type)
-        res = packdb.execute("select typeof($1)", [val]).fetchone()
+        val = decidb.Value('{"duck": 42}', json_type)
+        res = decidb.execute("select typeof($1)", [val]).fetchone()
         assert res == ('JSON',)
 
     def test_struct_from_dict(self):
-        res = packdb.list_type({'a': VARCHAR, 'b': VARCHAR})
+        res = decidb.list_type({'a': VARCHAR, 'b': VARCHAR})
         assert res == 'STRUCT(a VARCHAR, b VARCHAR)[]'
 
     # NOTE: we can support this, but I don't think going through hoops for an outdated version of python is worth it
     @pytest.mark.skipif(sys.version_info < (3, 9), reason="python3.7 does not store Optional[..] in a recognized way")
     def test_optional(self):
-        type = packdb.typing.DuckDBPyType(Optional[str])
+        type = decidb.typing.DuckDBPyType(Optional[str])
         assert type == 'VARCHAR'
-        type = packdb.typing.DuckDBPyType(Optional[Union[int, bool]])
+        type = decidb.typing.DuckDBPyType(Optional[Union[int, bool]])
         assert type == 'UNION(u1 BIGINT, u2 BOOLEAN)'
-        type = packdb.typing.DuckDBPyType(Optional[list[int]])
+        type = decidb.typing.DuckDBPyType(Optional[list[int]])
         assert type == 'BIGINT[]'
-        type = packdb.typing.DuckDBPyType(Optional[dict[int, str]])
+        type = decidb.typing.DuckDBPyType(Optional[dict[int, str]])
         assert type == 'MAP(BIGINT, VARCHAR)'
-        type = packdb.typing.DuckDBPyType(Optional[dict[Optional[int], Optional[str]]])
+        type = decidb.typing.DuckDBPyType(Optional[dict[Optional[int], Optional[str]]])
         assert type == 'MAP(BIGINT, VARCHAR)'
-        type = packdb.typing.DuckDBPyType(Optional[dict[Optional[int], Optional[str]]])
+        type = decidb.typing.DuckDBPyType(Optional[dict[Optional[int], Optional[str]]])
         assert type == 'MAP(BIGINT, VARCHAR)'
-        type = packdb.typing.DuckDBPyType(Optional[Union[Optional[str], Optional[bool]]])
+        type = decidb.typing.DuckDBPyType(Optional[Union[Optional[str], Optional[bool]]])
         assert type == 'UNION(u1 VARCHAR, u2 BOOLEAN)'
-        type = packdb.typing.DuckDBPyType(Union[str, None])
+        type = decidb.typing.DuckDBPyType(Union[str, None])
         assert type == 'VARCHAR'
 
     @pytest.mark.skipif(sys.version_info < (3, 10), reason="'str | None' syntax requires Python 3.10 or higher")
     def test_optional_310(self):
-        type = packdb.typing.DuckDBPyType(str | None)
+        type = decidb.typing.DuckDBPyType(str | None)
         assert type == 'VARCHAR'
 
     def test_children_attribute(self):

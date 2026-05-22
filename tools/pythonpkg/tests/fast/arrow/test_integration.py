@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import datetime
 import pytest
@@ -17,7 +17,7 @@ class TestArrowIntegration(object):
 
         userdata_parquet_table = pq.read_table(parquet_filename)
         userdata_parquet_table.validate(full=True)
-        rel_from_arrow = packdb.arrow(userdata_parquet_table).project(cols).arrow()
+        rel_from_arrow = decidb.arrow(userdata_parquet_table).project(cols).arrow()
         rel_from_arrow.validate(full=True)
 
         rel_from_duckdb = duckdb_cursor.from_parquet(parquet_filename).project(cols).arrow()
@@ -28,7 +28,7 @@ class TestArrowIntegration(object):
             userdata_parquet_table2 = pa.Table.from_batches(userdata_parquet_table.to_batches(i))
             assert userdata_parquet_table.equals(userdata_parquet_table2, check_metadata=True)
 
-            rel_from_arrow2 = packdb.arrow(userdata_parquet_table2).project(cols).arrow()
+            rel_from_arrow2 = decidb.arrow(userdata_parquet_table2).project(cols).arrow()
             rel_from_arrow2.validate(full=True)
 
             assert rel_from_arrow.equals(rel_from_arrow2, check_metadata=True)
@@ -40,7 +40,7 @@ class TestArrowIntegration(object):
 
         unsigned_parquet_table = pq.read_table(parquet_filename)
         unsigned_parquet_table.validate(full=True)
-        rel_from_arrow = packdb.arrow(unsigned_parquet_table).project(cols).arrow()
+        rel_from_arrow = decidb.arrow(unsigned_parquet_table).project(cols).arrow()
         rel_from_arrow.validate(full=True)
 
         rel_from_duckdb = duckdb_cursor.from_parquet(parquet_filename).project(cols).arrow()
@@ -56,7 +56,7 @@ class TestArrowIntegration(object):
         arrow_result.combine_chunks()
         arrow_result.validate(full=True)
 
-        round_tripping = packdb.from_arrow(arrow_result).to_arrow_table()
+        round_tripping = decidb.from_arrow(arrow_result).to_arrow_table()
         round_tripping.validate(full=True)
 
         assert round_tripping.equals(arrow_result, check_metadata=True)
@@ -116,7 +116,7 @@ class TestArrowIntegration(object):
 
         assert duck_arrow_tbl[0].value == expected_value
 
-        # test for select interval from packdb
+        # test for select interval from decidb
         duckdb_cursor.execute("CREATE TABLE test (a INTERVAL)")
         duckdb_cursor.execute("INSERT INTO  test VALUES (INTERVAL 1 YEAR + INTERVAL 1 DAY + INTERVAL 1 SECOND)")
         expected_value = pa.MonthDayNano([12, 1, 1000000000])

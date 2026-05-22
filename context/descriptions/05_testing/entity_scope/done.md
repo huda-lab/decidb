@@ -2,7 +2,7 @@
 
 Tests live in `test/decide/tests/test_entity_scope.py`.
 
-Tests marked ✓ compare PackDB's output against an independently-formulated
+Tests marked ✓ compare DecidB's output against an independently-formulated
 gurobipy ILP via `compare_solutions` (objective + decision vector). Tests
 marked (constraint only) verify feasibility but not optimality — a legacy
 tier per `05_testing/README.md`; new tests in this area should move to

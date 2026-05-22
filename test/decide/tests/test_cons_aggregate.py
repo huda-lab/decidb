@@ -17,7 +17,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q08_marketing_campaign(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q08_marketing_campaign(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Marketing: select customers, cost=10/customer, budget=500."""
     sql = """
         SELECT c_custkey, c_acctbal, x
@@ -28,8 +28,8 @@ def test_q08_marketing_campaign(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE SUM(x * c_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(c_custkey AS BIGINT),
@@ -57,12 +57,12 @@ def test_q08_marketing_campaign(packdb_cli, duckdb_conn, oracle_solver, perf_tra
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("c_acctbal")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("c_acctbal")])},
     )
 
     perf_tracker.record(
-        "q08_marketing_campaign", packdb_time, build_time,
+        "q08_marketing_campaign", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -74,7 +74,7 @@ def test_q08_marketing_campaign(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_order_selection(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_order_selection(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Select orders: SUM(x) <= 300, maximize total price."""
     sql = """
         SELECT x, o_orderkey, o_totalprice
@@ -85,8 +85,8 @@ def test_order_selection(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * o_totalprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(o_orderkey AS BIGINT),
@@ -114,12 +114,12 @@ def test_order_selection(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("o_totalprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("o_totalprice")])},
     )
 
     perf_tracker.record(
-        "order_selection", packdb_time, build_time,
+        "order_selection", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -131,7 +131,7 @@ def test_order_selection(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_gte_with_maximize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_gte_with_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Set-covering pattern: SUM(x) >= 10 with MAXIMIZE objective."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -143,8 +143,8 @@ def test_sum_gte_with_maximize(packdb_cli, duckdb_conn, oracle_solver, perf_trac
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -176,12 +176,12 @@ def test_sum_gte_with_maximize(packdb_cli, duckdb_conn, oracle_solver, perf_trac
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "sum_gte_maximize", packdb_time, build_time,
+        "sum_gte_maximize", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -201,10 +201,10 @@ def test_sum_gte_with_maximize(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_aggregate_lhs_with_constant_offset(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`SUM(x) + 3 <= 10` must give `SUM(x) <= 7`. If the `+3` silently drops
-    instead of moving to RHS, packdb would solve `SUM(x) <= 10` and produce
+    instead of moving to RHS, decidb would solve `SUM(x) <= 10` and produce
     a larger objective than the oracle."""
     sql = """
         SELECT ps_partkey, ps_availqty, x
@@ -215,8 +215,8 @@ def test_aggregate_lhs_with_constant_offset(
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
@@ -239,11 +239,11 @@ def test_aggregate_lhs_with_constant_offset(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "agg_const_offset", packdb_time, build_time,
+        "agg_const_offset", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -263,7 +263,7 @@ def test_aggregate_lhs_with_constant_offset(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_aggregate_sum_divided_by_constant(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`SUM(x / 2) <= 5` is equivalent to `SUM(x) <= 10` (constant divisor)."""
     sql = """
@@ -275,8 +275,8 @@ def test_aggregate_sum_divided_by_constant(
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
@@ -299,11 +299,11 @@ def test_aggregate_sum_divided_by_constant(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "agg_div_const", packdb_time, build_time,
+        "agg_div_const", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -315,7 +315,7 @@ def test_aggregate_sum_divided_by_constant(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_aggregate_sum_divided_by_data_column(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`SUM(x / w) <= K` with per-row divisor w. The coefficient on each
     x_i is 1/w_i; the symbolic normalizer must reconstruct the division
@@ -333,8 +333,8 @@ def test_aggregate_sum_divided_by_data_column(
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(id AS BIGINT), CAST(w AS DOUBLE) FROM (
@@ -359,11 +359,11 @@ def test_aggregate_sum_divided_by_data_column(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
     perf_tracker.record(
-        "agg_div_col", packdb_time, build_time,
+        "agg_div_col", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,

@@ -1,6 +1,6 @@
 import pytest
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 pa = pytest.importorskip("pyarrow")
 from spark_namespace import USE_ACTUAL_SPARK
 

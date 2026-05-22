@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 try:
@@ -18,7 +18,7 @@ class Test3654(object):
                 'id': [1, 1, 2],
             }
         )
-        con = packdb.connect()
+        con = decidb.connect()
         con.register("df1", df1)
         rel = con.view("df1")
         print(rel.execute().fetchall())
@@ -35,7 +35,7 @@ class Test3654(object):
             }
         )
         table = pa.Table.from_pandas(df1)
-        con = packdb.connect()
+        con = decidb.connect()
         con.register("df1", table)
         rel = con.view("df1")
         print(rel.execute().fetchall())

@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pandas as pd
 import numpy
 import pytest
@@ -10,7 +10,7 @@ def check_category_equal(category):
             'x': pd.Categorical(category, ordered=True),
         }
     )
-    df_out = packdb.query_df(df_in, "data", "SELECT * FROM data").df()
+    df_out = decidb.query_df(df_in, "data", "SELECT * FROM data").df()
     assert df_in.equals(df_out)
 
 
@@ -20,12 +20,12 @@ def check_result_list(category, res):
 
 
 def check_create_table(category):
-    conn = packdb.connect()
+    conn = decidb.connect()
 
     conn.execute("PRAGMA enable_verification")
     df_in = pd.DataFrame({'x': pd.Categorical(category, ordered=True), 'y': pd.Categorical(category, ordered=True)})
 
-    df_out = packdb.query_df(df_in, "data", "SELECT * FROM data").df()
+    df_out = decidb.query_df(df_in, "data", "SELECT * FROM data").df()
     assert df_in.equals(df_out)
 
     conn.execute("CREATE TABLE t1 AS SELECT * FROM df_in")
@@ -58,16 +58,16 @@ class TestCategory(object):
     def test_category_simple(self, duckdb_cursor):
         df_in = pd.DataFrame({'float': [1.0, 2.0, 1.0], 'int': pd.Series([1, 2, 1], dtype="category")})
 
-        df_out = packdb.query_df(df_in, "data", "SELECT * FROM data").df()
-        print(packdb.query_df(df_in, "data", "SELECT * FROM data").fetchall())
+        df_out = decidb.query_df(df_in, "data", "SELECT * FROM data").df()
+        print(decidb.query_df(df_in, "data", "SELECT * FROM data").fetchall())
         print(df_out['int'])
         assert numpy.all(df_out['float'] == numpy.array([1.0, 2.0, 1.0]))
         assert numpy.all(df_out['int'] == numpy.array([1, 2, 1]))
 
     def test_category_nulls(self, duckdb_cursor):
         df_in = pd.DataFrame({'int': pd.Series([1, 2, None], dtype="category")})
-        df_out = packdb.query_df(df_in, "data", "SELECT * FROM data").df()
-        print(packdb.query_df(df_in, "data", "SELECT * FROM data").fetchall())
+        df_out = decidb.query_df(df_in, "data", "SELECT * FROM data").df()
+        print(decidb.query_df(df_in, "data", "SELECT * FROM data").fetchall())
         assert df_out['int'][0] == 1
         assert df_out['int'][1] == 2
         assert pd.isna(df_out['int'][2])
@@ -87,7 +87,7 @@ class TestCategory(object):
                 'x': pd.Categorical(['foo', 'bla', None, 'zoo', 'foo', 'foo', None, 'bla'], ordered=True),
             }
         )
-        assert packdb.query_df(df_in, "data", "SELECT * FROM data").fetchall() == [
+        assert decidb.query_df(df_in, "data", "SELECT * FROM data").fetchall() == [
             ('foo',),
             ('bla',),
             (None,),
@@ -110,14 +110,14 @@ class TestCategory(object):
         res = duckdb_cursor.table('test').fetchall()
         assert res == []
 
-        with pytest.raises(packdb.ConversionException, match="Could not convert string 'test' to UINT8"):
+        with pytest.raises(decidb.ConversionException, match="Could not convert string 'test' to UINT8"):
             duckdb_cursor.execute("insert into test VALUES('test')")
         duckdb_cursor.execute("insert into test VALUES(NULL)")
         res = duckdb_cursor.table('test').fetchall()
         assert res == [(None,)]
 
     def test_category_fetch_df_chunk(self, duckdb_cursor):
-        con = packdb.connect()
+        con = decidb.connect()
         categories = ['foo', 'bla', None, 'zoo', 'foo', 'foo', None, 'bla']
         result = categories * 256
         categories = result * 2
@@ -151,5 +151,5 @@ class TestCategory(object):
             }
         )
 
-        df_out = packdb.query_df(df_in, "data", "SELECT * FROM data").df()
+        df_out = decidb.query_df(df_in, "data", "SELECT * FROM data").df()
         assert df_out.equals(df_in)

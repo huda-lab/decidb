@@ -19,7 +19,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_multi
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q10_logic_dependency(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q10_logic_dependency(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """BETWEEN constraint: x BETWEEN 0 AND 5, maximize count."""
     sql = """
         SELECT l_orderkey, l_extendedprice, x
@@ -31,8 +31,8 @@ def test_q10_logic_dependency(packdb_cli, duckdb_conn, oracle_solver, perf_track
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -61,12 +61,12 @@ def test_q10_logic_dependency(packdb_cli, duckdb_conn, oracle_solver, perf_track
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "q10_logic_dependency", packdb_time, build_time,
+        "q10_logic_dependency", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -80,7 +80,7 @@ def test_q10_logic_dependency(packdb_cli, duckdb_conn, oracle_solver, perf_track
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_aggregate_between_standalone(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Standalone aggregate BETWEEN: ``SUM(x * weight) BETWEEN lo AND hi``.
 
@@ -107,8 +107,8 @@ def test_aggregate_between_standalone(
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(decide_sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(decide_sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT CAST(id AS BIGINT), CAST(weight AS DOUBLE), CAST(value AS DOUBLE) "
@@ -132,14 +132,14 @@ def test_aggregate_between_standalone(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    value_idx = packdb_cols.index("value")
+    value_idx = decidb_cols.index("value")
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
+        decidb_rows, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[value_idx])},
     )
 
     perf_tracker.record(
-        "aggregate_between_standalone", packdb_time, build_time,
+        "aggregate_between_standalone", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -152,7 +152,7 @@ def test_aggregate_between_standalone(
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_between_oracle(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_between_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Per-row BETWEEN with non-integer bounds on a REAL variable.
 
     Regression test for the integer-step rewrite sweep. BETWEEN desugars into
@@ -169,8 +169,8 @@ def test_real_between_oracle(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -195,12 +195,12 @@ def test_real_between_oracle(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_between_oracle", packdb_time, build_time,
+        "real_between_oracle", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

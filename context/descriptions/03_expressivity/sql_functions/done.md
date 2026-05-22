@@ -30,7 +30,7 @@ SUCH THAT SUM(x * weight) <= 50
 - WHEN+PER: N = count of WHEN-matching rows per group
 - Aggregate-local WHEN: N = count of rows matching that aggregate-local filter, within each PER group if PER is present
 
-**Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` uses the same optimal assignment as `SUM(expr)` when there is one global denominator. In mixed additive aggregate expressions, PackDB preserves AVG scaling per term so `AVG(a) + SUM(b)` is not treated as `SUM(a) + SUM(b)`.
+**Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` uses the same optimal assignment as `SUM(expr)` when there is one global denominator. In mixed additive aggregate expressions, DecidB preserves AVG scaling per term so `AVG(a) + SUM(b)` is not treated as `SUM(a) + SUM(b)`.
 
 **Objectives (nested PER)**: `OUTER(AVG(expr)) PER col` is fully supported. Inner AVG scales each row's coefficient by `1/n_g` (group size), producing true per-group averages. Outer AVG maps to SUM (dividing by constant G). See [maximize_minimize/done.md](../maximize_minimize/done.md).
 
@@ -43,7 +43,7 @@ SUCH THAT AVG(x * hours) <= 8 PER emp   -- per-group average
 MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
 ```
 
-**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so PackDB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead.
+**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so DecidB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead.
 
 **Tests**: `test/decide/tests/test_avg.py` — 11 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOLEAN, INTEGER, non-linear rejection, `<>` with and without WHEN, and no-decide-var passthrough.
 
@@ -233,7 +233,7 @@ MINIMIZE SUM(POWER(x / weight - 1, 2))     -- OK: data-column divisor in QP
 - Bind-time validation: `IsAllowedNameOverDecideVar` and the dedicated `/`-arm of `ValidateDecideNoNonLinearScalar` (per-row pre-pass) and `ValidateSumArgumentInternal` (SUM/POWER inner) in `src/planner/expression_binder/decide_binder.cpp` reject any `/` whose divisor contains a decide variable.
 - Per-row extraction: `ExtractTerms` at `src/execution/operator/decide/physical_decide.cpp` walks `/` by recursing into the numerator and wrapping each emitted coefficient as `coef / divisor`.
 - QP linearity check: `IsLinearInDecideVars` in the same file accepts `/` when the divisor is decide-var-free, so quadratic patterns like `POWER(x/2 - 1, 2)` reach the QP extractor.
-- Symbolic normalization: `FromSymbolic` in `src/packdb/symbolic/decide_symbolic.cpp` recognises negative-integer Power exponents (which the symbolic library produces for `x / w` as `x * w^-1`) and rebuilds them as `1.0 / base^|k|`. Without this round-trip, `SUM(x / col)` would crash with `Non-integer exponents are not supported in DECIDE normalization`.
+- Symbolic normalization: `FromSymbolic` in `src/decidb/symbolic/decide_symbolic.cpp` recognises negative-integer Power exponents (which the symbolic library produces for `x / w` as `x * w^-1`) and rebuilds them as `1.0 / base^|k|`. Without this round-trip, `SUM(x / col)` would crash with `Non-integer exponents are not supported in DECIDE normalization`.
 
 ### Per-row linear LHS (`+ const`, `- col`, `/ const`, unary `-`)
 
@@ -247,7 +247,7 @@ SUCH THAT 2 * x + 3 <= 11      -- x <= 4
 SUCH THAT x / 2 + 1 <= 3       -- x <= 4
 ```
 
-**Code**: `ExtractTerms` in `src/execution/operator/decide/physical_decide.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`. `ExtractConstraintTerms` delegates there. In `src/packdb/utility/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
+**Code**: `ExtractTerms` in `src/execution/operator/decide/physical_decide.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`. `ExtractConstraintTerms` delegates there. In `src/decidb/utility/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
 
 **Tests**: `test/decide/tests/test_cons_perrow.py` — `test_perrow_linear_lhs_upper_bound` (parametrized over `x+c`, `x-c`, `x/c`, `c*x+c`, `x/c+c`, `x+c-c`), `test_perrow_unary_minus_lower_bound`, `test_perrow_data_column_in_lhs`, all oracle-verified.
 

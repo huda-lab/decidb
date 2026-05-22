@@ -16,7 +16,7 @@ from collections import defaultdict
 
 import pytest
 
-from packdb_cli import PackDBCliError
+from decidb_cli import DecidBCliError
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 from ._oracle_helpers import add_bool_and, add_ne_indicator, group_indices
@@ -33,7 +33,7 @@ def _fetch(duckdb_conn, sql):
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE AVG(x * col) should give the same argmax as MAXIMIZE SUM(x * col)."""
     base = """
@@ -46,9 +46,9 @@ def test_avg_objective(
     sql_sum = base.format(data_sql=_DATA_SQL_4, objective="MAXIMIZE SUM(x * value)")
 
     t0 = time.perf_counter()
-    rows_avg, cols_avg = packdb_cli.execute(sql_avg)
-    rows_sum, cols_sum = packdb_cli.execute(sql_sum)
-    packdb_time = time.perf_counter() - t0
+    rows_avg, cols_avg = decidb_cli.execute(sql_avg)
+    rows_sum, cols_sum = decidb_cli.execute(sql_sum)
+    decidb_time = time.perf_counter() - t0
 
     ci_avg = {c: i for i, c in enumerate(cols_avg)}
     ci_sum = {c: i for i, c in enumerate(cols_sum)}
@@ -81,7 +81,7 @@ def test_avg_objective(
         coeff_fn=lambda row: {"x": float(row[cols_sum.index("value")])},
     )
     perf_tracker.record(
-        "avg_objective", packdb_time, build_time, result.solve_time_seconds,
+        "avg_objective", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -90,7 +90,7 @@ def test_avg_objective(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(x*value) <= 5 with N=4 rows ⇒ SUM(x*value) <= 20."""
     sql = f"""
@@ -100,8 +100,8 @@ def test_avg_constraint(
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -123,11 +123,11 @@ def test_avg_constraint(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("value")])},
     )
     perf_tracker.record(
-        "avg_constraint", packdb_time, build_time, result.solve_time_seconds,
+        "avg_constraint", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -136,7 +136,7 @@ def test_avg_constraint(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_with_when(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(x*value) <= 6 WHEN tier='high' uses N_when (number of high rows)."""
     values = (
@@ -151,8 +151,8 @@ def test_avg_with_when(
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -176,11 +176,11 @@ def test_avg_with_when(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("value")])},
     )
     perf_tracker.record(
-        "avg_with_when", packdb_time, build_time, result.solve_time_seconds,
+        "avg_with_when", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -189,7 +189,7 @@ def test_avg_with_when(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_with_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(x*value) <= 4 PER grp uses N_g per group."""
     values = (
@@ -203,8 +203,8 @@ def test_avg_with_per(
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -228,11 +228,11 @@ def test_avg_with_per(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("value")])},
     )
     perf_tracker.record(
-        "avg_with_per", packdb_time, build_time, result.solve_time_seconds,
+        "avg_with_per", decidb_time, build_time, result.solve_time_seconds,
         n, n, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -241,7 +241,7 @@ def test_avg_with_per(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_with_when_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG with both WHEN and PER: filter WHEN first, then group by PER."""
     values = (
@@ -257,8 +257,8 @@ def test_avg_with_when_per(
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -286,11 +286,11 @@ def test_avg_with_when_per(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("value")])},
     )
     perf_tracker.record(
-        "avg_with_when_per", packdb_time, build_time, result.solve_time_seconds,
+        "avg_with_when_per", decidb_time, build_time, result.solve_time_seconds,
         n, n, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -299,7 +299,7 @@ def test_avg_with_when_per(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_boolean(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(x) <= 0.5 with 4 BOOLEAN rows ⇒ SUM(x) <= 2."""
     sql = f"""
@@ -309,8 +309,8 @@ def test_avg_boolean(
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -332,11 +332,11 @@ def test_avg_boolean(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("value")])},
     )
     perf_tracker.record(
-        "avg_boolean", packdb_time, build_time, result.solve_time_seconds,
+        "avg_boolean", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -345,7 +345,7 @@ def test_avg_boolean(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_integer(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(x) <= 3 with 3 INTEGER rows (x <= 5) ⇒ SUM(x) <= 9."""
     values = "VALUES ('a', 10), ('b', 5), ('c', 8)"
@@ -357,8 +357,8 @@ def test_avg_integer(
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -380,11 +380,11 @@ def test_avg_integer(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("value")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("value")])},
     )
     perf_tracker.record(
-        "avg_integer", packdb_time, build_time, result.solve_time_seconds,
+        "avg_integer", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -393,7 +393,7 @@ def test_avg_integer(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_bilinear_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(x*y) <= 0.5 with 3 rows, both x,y BOOLEAN. AND-linearize the product."""
     data_sql = "SELECT * FROM (VALUES (1), (2), (3)) t(value)"
@@ -404,8 +404,8 @@ def test_avg_bilinear_constraint(
         MAXIMIZE SUM(x + y)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -431,11 +431,11 @@ def test_avg_bilinear_constraint(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x", "y"],
+        decidb_rows, decidb_cols, result, data, ["x", "y"],
         coeff_fn=lambda row: {"x": 1.0, "y": 1.0},
     )
     perf_tracker.record(
-        "avg_bilinear_constraint", packdb_time, build_time, result.solve_time_seconds,
+        "avg_bilinear_constraint", decidb_time, build_time, result.solve_time_seconds,
         n, 3 * n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -444,7 +444,7 @@ def test_avg_bilinear_constraint(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_not_equal_boolean(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(x) <> 0.5 with 4 BOOLEAN rows ⇒ SUM(x) <> 2 (Big-M disjunction).
 
@@ -465,8 +465,8 @@ def test_avg_not_equal_boolean(
         MAXIMIZE SUM(x * profit)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -495,11 +495,11 @@ def test_avg_not_equal_boolean(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("profit")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("profit")])},
     )
     perf_tracker.record(
-        "avg_not_equal_boolean", packdb_time, build_time, result.solve_time_seconds,
+        "avg_not_equal_boolean", decidb_time, build_time, result.solve_time_seconds,
         n, n, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -508,7 +508,7 @@ def test_avg_not_equal_boolean(
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_avg_not_equal_with_when(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(x) <> 0.5 WHEN tier='high' — N scales with WHEN-qualifying rows.
 
@@ -532,8 +532,8 @@ def test_avg_not_equal_with_when(
         MAXIMIZE SUM(x * profit)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _fetch(
         duckdb_conn,
@@ -563,24 +563,24 @@ def test_avg_not_equal_with_when(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("profit")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("profit")])},
     )
     perf_tracker.record(
-        "avg_not_equal_with_when", packdb_time, build_time, result.solve_time_seconds,
+        "avg_not_equal_with_when", decidb_time, build_time, result.solve_time_seconds,
         n, n, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
 
 @pytest.mark.avg_rewrite
-def test_avg_no_decide_var(packdb_cli):
+def test_avg_no_decide_var(decidb_cli):
     """AVG(col) without decide variables must pass through to normal DuckDB.
 
     This is a pass-through test — no decision problem means no oracle to
-    compare against. Kept as PackDB-only behavior verification.
+    compare against. Kept as DecidB-only behavior verification.
     """
-    rows, cols = packdb_cli.execute("""
+    rows, cols = decidb_cli.execute("""
         SELECT AVG(value) as avg_val FROM (
             VALUES (10), (5), (8), (3)
         ) t(value)

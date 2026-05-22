@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 from os import path
 import shutil
@@ -8,7 +8,7 @@ from pathlib import Path
 
 def export_database(export_location):
     # Create the db
-    con = packdb.connect()
+    con = decidb.connect()
     con.execute("create table tbl (a integer, b integer);")
     con.execute("insert into tbl values (5,1);")
 
@@ -18,7 +18,7 @@ def export_database(export_location):
 
 
 def import_database(import_location):
-    con = packdb.connect()
+    con = decidb.connect()
     con.execute(f"import database '{import_location}'")
     print(f"Imported database from {import_location}")
 
@@ -44,14 +44,14 @@ def export_move_and_import(export_path, import_path):
 
 
 def export_and_import_empty_db(db_path, _):
-    con = packdb.connect()
+    con = decidb.connect()
 
     # Export the db
     con.execute(f"export database '{db_path}';")
     print(f"Exported database to {db_path}")
 
     con.close()
-    con = packdb.connect()
+    con = decidb.connect()
     con.execute(f"import database '{db_path}'")
 
 
@@ -69,7 +69,7 @@ class TestDuckDBImportExport:
         Path(Path(import_path) / 'load.sql').touch()
         Path(Path(import_path) / 'schema.sql').touch()
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(f"import database '{import_path}'")
 
         # Put a single comment into the 'schema.sql' file
@@ -77,5 +77,5 @@ class TestDuckDBImportExport:
             f.write('--\n')
 
         con.close()
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(f"import database '{import_path}'")

@@ -1,7 +1,7 @@
-import packdb
+import decidb
 from pytest import raises
-from packdb import NotImplementedException, InvalidInputException
-from packdb.value.constant import (
+from decidb import NotImplementedException, InvalidInputException
+from decidb.value.constant import (
     Value,
     NullValue,
     BooleanValue,
@@ -37,7 +37,7 @@ import datetime
 import pytest
 import decimal
 
-from packdb.typing import (
+from decidb.typing import (
     SQLNULL,
     BOOLEAN,
     TINYINT,
@@ -87,7 +87,7 @@ class TestValue(object):
             (FLOAT, FloatValue(1.8349000215530396), 1.8349000215530396),
             (DOUBLE, DoubleValue(0.23234234234), 0.23234234234),
             (
-                packdb.decimal_type(12, 8),
+                decidb.decimal_type(12, 8),
                 DecimalValue(decimal.Decimal('1234.12345678'), 12, 8),
                 decimal.Decimal('1234.12345678'),
             ),
@@ -115,7 +115,7 @@ class TestValue(object):
         value_object = item[1]
         expected_value = item[2]
 
-        con = packdb.connect()
+        con = decidb.connect()
         observed_type = con.execute('select typeof(a) from (select $1) tbl(a)', [value_object]).fetchall()[0][0]
         assert observed_type == str(expected_type)
 
@@ -127,8 +127,8 @@ class TestValue(object):
     def test_float_to_decimal_prevention(self):
         value = DecimalValue(1.2345, 12, 8)
 
-        con = packdb.connect()
-        with pytest.raises(packdb.ConversionException, match="Can't losslessly convert"):
+        con = decidb.connect()
+        with pytest.raises(decidb.ConversionException, match="Can't losslessly convert"):
             con.execute('select $1', [value]).fetchall()
 
     @pytest.mark.parametrize(
@@ -140,9 +140,9 @@ class TestValue(object):
         ],
     )
     def test_timestamp_sec_not_supported(self, value):
-        con = packdb.connect()
+        con = decidb.connect()
         with pytest.raises(
-            packdb.NotImplementedException, match="Conversion from 'datetime' to type .* is not implemented yet"
+            decidb.NotImplementedException, match="Conversion from 'datetime' to type .* is not implemented yet"
         ):
             con.execute('select $1', [value]).fetchall()
 
@@ -185,7 +185,7 @@ class TestValue(object):
     )
     def test_numeric_values(self, target_type, test_value, expected_conversion_success):
         value = Value(test_value, target_type)
-        con = packdb.connect()
+        con = decidb.connect()
 
         work = lambda: con.execute('select typeof(a) from (select $1) tbl(a)', [value]).fetchall()
 

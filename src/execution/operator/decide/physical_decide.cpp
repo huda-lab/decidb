@@ -10,9 +10,9 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
-#include "duckdb/packdb/utility/debug.hpp"
-#include "duckdb/packdb/ilp_solver.hpp"
-#include "duckdb/packdb/ilp_model.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
+#include "duckdb/decidb/ilp_solver.hpp"
+#include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -971,7 +971,7 @@ static bool BoundExpressionContainsAggregate(const Expression &expr) {
     return found;
 }
 
-// PackDB: reject an aggregate whose effective row set is empty (after WHEN
+// DecidB: reject an aggregate whose effective row set is empty (after WHEN
 // filtering). An empty aggregate has no well-defined value — MIN(∅)=+∞ and
 // MAX(∅)=-∞ cannot be represented in the MILP encoding, SUM(∅)=0 and AVG(∅)
 // is undefined. Without this guard the hard-direction MIN/MAX z_k auxiliary
@@ -1325,7 +1325,7 @@ public:
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
-                // PackDB: PER wrapper — outermost layer
+                // DecidB: PER wrapper — outermost layer
                 if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
                     // child[0] = the constraint (possibly WHEN-wrapped)
                     // children[1..N] = the PER column expressions
@@ -1337,7 +1337,7 @@ public:
                                       std::move(per_cols));
                     break;
                 }
-                // PackDB: Check if this is a WHEN constraint wrapper
+                // DecidB: Check if this is a WHEN constraint wrapper
                 if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
                     // child[0] = the actual constraint, child[1] = the WHEN condition
                     AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(),
@@ -1395,7 +1395,7 @@ public:
                     constraint->was_minmax_easy = true;
                 }
 
-                // PackDB: Store WHEN condition and PER columns if present
+                // DecidB: Store WHEN condition and PER columns if present
                 if (when_condition) {
                     constraint->when_condition = std::move(when_condition);
                 }
@@ -1478,7 +1478,7 @@ public:
     //! Linear terms (c * x, constants) go to objective->terms via ExtractTerms.
     void ExtractLinearAndBilinearTerms(const Expression &expr, Objective &obj, int sign,
                                        const Expression *filter = nullptr) {
-        // PackDB: detect quadratic patterns (POWER / x*x / negated / const * POWER)
+        // DecidB: detect quadratic patterns (POWER / x*x / negated / const * POWER)
         // *before* any linear-structure traversal. This allows mixed shapes like
         // SUM(POWER(x-t, 2) + penalty*x) to route the POWER leaf into squared_terms
         // while the `+` recursion below sends the linear sibling into terms.
@@ -1827,7 +1827,7 @@ public:
             expr = expr->Cast<BoundCastExpression>().child.get();
         }
 
-        // PackDB: Check for PER wrapper on objective (outermost layer)
+        // DecidB: Check for PER wrapper on objective (outermost layer)
         vector<unique_ptr<Expression>> per_cols;
         if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
             auto &conj = expr->Cast<BoundConjunctionExpression>();
@@ -1842,7 +1842,7 @@ public:
             }
         }
 
-        // PackDB: Check for WHEN wrapper on objective (inside PER, if present)
+        // DecidB: Check for WHEN wrapper on objective (inside PER, if present)
         unique_ptr<Expression> when_cond;
         if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
             auto &conj = expr->Cast<BoundConjunctionExpression>();
@@ -1907,12 +1907,12 @@ public:
         switch (expr.GetExpressionClass()) {
             case ExpressionClass::BOUND_CONJUNCTION: {
                 auto &conj = expr.Cast<BoundConjunctionExpression>();
-                // PackDB PER: only recurse into the constraint (child[0]), skip the columns
+                // DecidB PER: only recurse into the constraint (child[0]), skip the columns
                 if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
                     TraverseBoundsConstraints(*conj.children[0], lower_bounds, upper_bounds);
                     break;
                 }
-                // PackDB WHEN: skip entirely — WHEN constraints are conditional (per-row),
+                // DecidB WHEN: skip entirely — WHEN constraints are conditional (per-row),
                 // so they must NOT contribute to global variable bounds.
                 // E.g., "x <= 0 WHEN condition" should NOT set upper_bounds[x] = 0 globally.
                 if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
@@ -2152,7 +2152,7 @@ SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, Operato
 
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
-    bool bench = std::getenv("PACKDB_BENCH") != nullptr;
+    bool bench = std::getenv("DECIDB_BENCH") != nullptr;
     Profiler model_timer;
     Profiler solver_timer;
 
@@ -2458,7 +2458,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
-        // PackDB: Unified WHEN+PER row→group assignment
+        // DecidB: Unified WHEN+PER row→group assignment
         // Produces row_group_ids and num_groups for the evaluated constraint.
         // - No WHEN, no PER: row_group_ids stays empty, num_groups = 0 (fast path)
         // - WHEN only: row_group_ids[row] = 0 (matching) or INVALID_INDEX (excluded), num_groups = 1
@@ -2821,7 +2821,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
-        // PackDB: evaluate both the linear and quadratic-inner term lists so that
+        // DecidB: evaluate both the linear and quadratic-inner term lists so that
         // mixed objectives (e.g. SUM(POWER(x-t, 2) + penalty * x)) emit coefficients
         // into both solver-input arrays. The two buckets are processed together
         // inside a single scan over gstate.data — doubling coefficient evaluators
@@ -4782,11 +4782,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     if (bench) {
         solver_timer.End();
-        fprintf(stderr, "PACKDB_BENCH: model_construction_ms=%.2f\n", model_timer.Elapsed() * 1000.0);
-        fprintf(stderr, "PACKDB_BENCH: solver_ms=%.2f\n", solver_timer.Elapsed() * 1000.0);
-        fprintf(stderr, "PACKDB_BENCH: total_variables=%zu\n", bench_total_vars);
-        fprintf(stderr, "PACKDB_BENCH: total_constraints=%zu\n", bench_total_constraints);
-        fprintf(stderr, "PACKDB_BENCH: num_rows=%zu\n", (size_t)num_rows);
+        fprintf(stderr, "DECIDB_BENCH: model_construction_ms=%.2f\n", model_timer.Elapsed() * 1000.0);
+        fprintf(stderr, "DECIDB_BENCH: solver_ms=%.2f\n", solver_timer.Elapsed() * 1000.0);
+        fprintf(stderr, "DECIDB_BENCH: total_variables=%zu\n", bench_total_vars);
+        fprintf(stderr, "DECIDB_BENCH: total_constraints=%zu\n", bench_total_constraints);
+        fprintf(stderr, "DECIDB_BENCH: num_rows=%zu\n", (size_t)num_rows);
     }
 
     return SinkFinalizeType::READY;

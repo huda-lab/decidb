@@ -2,7 +2,7 @@
 
 ## 1. High-Level Design
 
-PackDB is implemented as an extension to DuckDB. It leverages DuckDB's extensible parser and planner architecture to inject new query operators. The system follows a pipelined execution model where the `DECIDE` clause is treated as a specialized aggregation step that occurs after standard filtering and before final projection.
+DecidB is implemented as an extension to DuckDB. It leverages DuckDB's extensible parser and planner architecture to inject new query operators. The system follows a pipelined execution model where the `DECIDE` clause is treated as a specialized aggregation step that occurs after standard filtering and before final projection.
 
 ### 1.1 Core Components
 
@@ -11,7 +11,7 @@ PackDB is implemented as an extension to DuckDB. It leverages DuckDB's extensibl
 *   **Binder**: Validates the mathematical properties of the optimization problem (e.g., linearity checks) and applies IN domain rewrites (`RewriteInDomain` in `bind_select_node.cpp`).
 *   **DecideOptimizer** (separate optimizer pass after binding): Applies algebraic rewrites (AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicator creation) that prepare expressions for the solver.
 *   **Execution Runtime**: A dedicated physical operator (`PhysicalDecide`) that acts as a bridge between the relational engine and the linear solver.
-*   **Solvers**: PackDB uses **Gurobi** as its primary ILP solver — empirical benchmarking showed it to be significantly faster than HiGHS for PackDB workloads. **HiGHS** (open-source, bundled) is retained as a fallback for environments without a Gurobi license, but is substantially slower in practice.
+*   **Solvers**: DecidB uses **Gurobi** as its primary ILP solver — empirical benchmarking showed it to be significantly faster than HiGHS for DecidB workloads. **HiGHS** (open-source, bundled) is retained as a fallback for environments without a Gurobi license, but is substantially slower in practice.
 
 ## 2. Query Lifecycle
 
@@ -20,14 +20,14 @@ The execution of a Package Query follows these stages:
 ```mermaid
 graph TD
     User[User SQL Query] --> Parser
-    subgraph DuckDB + PackDB Extension
+    subgraph DuckDB + DecidB Extension
     Parser[Parser (DuckDB + Symbolic Layer)] --> Binder
     Binder[Binder (Validation & Types)] --> Planner
     Planner[Logical Planner] --> Opt[Optimizer]
     Opt --> Phys[Physical Planner]
     Phys --> Exec[Execution Engine]
     
-    subgraph PackDB Execution
+    subgraph DecidB Execution
         Exec --> Data[Materialize Candidates]
         Data --> Matrix[Build Solver Matrix]
         Matrix --> Model[SolverModel Builder]
@@ -60,7 +60,7 @@ The `PhysicalDecide` operator works in a "stop-and-go" fashion (pipeline breaker
 > **Note**: The execution phase is documented in detail across five sub-documents: expression analysis (03a), coefficient evaluation (03b), model building (03c), solver backends (03d), and result projection (03e). See each for implementation details.
 
 ## 4. Integration Point
-PackDB links against DuckDB as a loadable extension. It registers:
+DecidB links against DuckDB as a loadable extension. It registers:
 -   New Parser Keywords: `DECIDE`, `SUCH THAT`, `MAXIMIZE`, `MINIMIZE`.
 -   New Transformer Rules: To convert parsed nodes into logical operators.
 -   New Physical Operator: `PhysicalDecide`.

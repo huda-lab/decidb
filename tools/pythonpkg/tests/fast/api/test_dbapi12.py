@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import tempfile
 import os
 import pandas as pd
@@ -59,7 +59,7 @@ class TestRelationApi(object):
         test_rel(rel_df, duckdb_cursor)
 
     def test_fromquery(self, duckdb_cursor):
-        assert packdb.from_query('select 42').fetchone()[0] == 42
+        assert decidb.from_query('select 42').fetchone()[0] == 42
         assert duckdb_cursor.query('select 43').fetchone()[0] == 43
 
         # assert duckdb_cursor.from_query('select 44').execute().fetchone()[0] == 44
@@ -67,5 +67,5 @@ class TestRelationApi(object):
         # assert duckdb_cursor.from_query('select 45').execute().fetchone()[0] == 45
 
 
-# cursor = packdb.connect().cursor()
+# cursor = decidb.connect().cursor()
 # TestRelationApi().test_readonly(cursor)

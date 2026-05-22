@@ -1,11 +1,11 @@
 import pytest
-from packdb.experimental.spark.exception import (
+from decidb.experimental.spark.exception import (
     ContributionsAcceptedError,
 )
 from spark_namespace.sql.types import Row
 from spark_namespace import USE_ACTUAL_SPARK
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 from spark_namespace.sql import SparkSession
 
 

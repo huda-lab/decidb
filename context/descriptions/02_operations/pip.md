@@ -1,7 +1,7 @@
 # Python Package (pip install)
 
 ## 1. Overview
-PackDB is distributed as a Python package named `packdb`. The package builds the entire C++ codebase (DuckDB core + PackDB extensions + HiGHS solver) from source into a single compiled `.so` extension module, then wraps it with Python bindings via pybind11.
+DecidB is distributed as a Python package named `decidb`. The package builds the entire C++ codebase (DuckDB core + DecidB extensions + HiGHS solver) from source into a single compiled `.so` extension module, then wraps it with Python bindings via pybind11.
 
 Key files:
 - `tools/pythonpkg/setup.py` — Main build logic
@@ -21,7 +21,7 @@ When `DUCKDB_BINARY_DIR` is **not** set (the normal `pip install .` path):
    - Uses `package_build.third_party_includes()` to gather all include paths.
    - Copies everything into a `duckdb_build/` staging directory inside `tools/pythonpkg/`.
    - Generates unity build files where CMakeLists.txt uses `add_library_unity`.
-3. All gathered sources are compiled into a single `packdb._packdb` extension module (the `.so`).
+3. All gathered sources are compiled into a single `decidb._decidb` extension module (the `.so`).
 
 ### 2.2 Pre-Built Binary Path (CMake `BUILD_PYTHON=1`)
 When `DUCKDB_BINARY_DIR` **is** set:
@@ -30,7 +30,7 @@ When `DUCKDB_BINARY_DIR` **is** set:
 3. Third-party includes (including SymbolicC++, HiGHS) are added via `package_build.third_party_includes()`.
 
 ## 3. Bundled Extensions
-Extensions are compiled directly into the `_packdb.so` binary ("baked in"). They require no network access or downloads at runtime.
+Extensions are compiled directly into the `_decidb.so` binary ("baked in"). They require no network access or downloads at runtime.
 
 The extensions list is defined in `setup.py`:
 ```python
@@ -48,7 +48,7 @@ All extension source code lives locally in `extension/` (e.g., `extension/icu/`,
 
 The `duckdb_extension_config.cmake` file separately configures extensions for CMake-based builds (used by `BUILD_PYTHON=1`). Keep both in sync when adding/removing extensions.
 
-**Important**: PackDB does not have its own extension hosting server. Extensions that are not baked into the wheel cannot be auto-downloaded at runtime (DuckDB's `extensions.duckdb.org` does not host PackDB builds). Always bundle any required extensions in `setup.py`.
+**Important**: DecidB does not have its own extension hosting server. Extensions that are not baked into the wheel cannot be auto-downloaded at runtime (DuckDB's `extensions.duckdb.org` does not host DecidB builds). Always bundle any required extensions in `setup.py`.
 
 ## 4. HiGHS Integration in pip
 HiGHS is compiled directly into the wheel — there is no external dependency or system library required.
@@ -58,11 +58,11 @@ HiGHS is compiled directly into the wheel — there is no external dependency or
 - **CMake build**: `third_party/highs/CMakeLists.txt` builds `duckdb_highs` as a static library. `src/CMakeLists.txt` links both `duckdb` and `duckdb_static` against `duckdb_highs`.
 
 ## 5. Package Structure
-The installed `packdb` package contains:
+The installed `decidb` package contains:
 ```
-packdb/
-├── __init__.py              # Re-exports everything from ._packdb
-├── _packdb.cpython-*.so     # The compiled C++ extension (DuckDB + PackDB + HiGHS)
+decidb/
+├── __init__.py              # Re-exports everything from ._decidb
+├── _decidb.cpython-*.so     # The compiled C++ extension (DuckDB + DecidB + HiGHS)
 ├── functional/              # UDF type helpers
 ├── typing/                  # Type system wrappers
 ├── value/                   # Value type wrappers
@@ -71,26 +71,26 @@ packdb/
 └── ...
 ```
 
-The compiled `.so` is named `_packdb` (as `lib_name + '._packdb'` in setup.py, where `lib_name = 'packdb'`). All Python modules import from `packdb._packdb` (the `.so`) using `from ._packdb import ...`.
+The compiled `.so` is named `_decidb` (as `lib_name + '._decidb'` in setup.py, where `lib_name = 'decidb'`). All Python modules import from `decidb._decidb` (the `.so`) using `from ._decidb import ...`.
 
-## 6. DuckDB-to-PackDB Rename (Python Module Name)
+## 6. DuckDB-to-DecidB Rename (Python Module Name)
 
-Since PackDB is a fork of DuckDB, the Python module was renamed from `duckdb` to `packdb`. This rename touches three layers:
+Since DecidB is a fork of DuckDB, the Python module was renamed from `duckdb` to `decidb`. This rename touches three layers:
 
 ### 6.1 Python Layer
-- Package name in `setup.py`: `lib_name = 'packdb'`
-- All Python source files under `tools/pythonpkg/packdb/` use `import packdb`
-- The `packdb/experimental/spark/` subpackage uses `packdb.xxx` (not `duckdb.xxx`) for type annotations, function calls, etc.
+- Package name in `setup.py`: `lib_name = 'decidb'`
+- All Python source files under `tools/pythonpkg/decidb/` use `import decidb`
+- The `decidb/experimental/spark/` subpackage uses `decidb.xxx` (not `duckdb.xxx`) for type annotations, function calls, etc.
 
 ### 6.2 C++ Layer (runtime Python imports)
 The compiled C++ extension internally imports the Python module for certain operations (e.g., `Value` conversion, filesystem access). These import strings are defined in:
-- `tools/pythonpkg/duckdb_python.cpp` — `m.attr("__package__") = "packdb"`
-- `tools/pythonpkg/src/include/duckdb_python/import_cache/modules/duckdb_module.hpp` — Import cache items use `"packdb"` and `"packdb.filesystem"`
+- `tools/pythonpkg/duckdb_python.cpp` — `m.attr("__package__") = "decidb"`
+- `tools/pythonpkg/src/include/duckdb_python/import_cache/modules/duckdb_module.hpp` — Import cache items use `"decidb"` and `"decidb.filesystem"`
 
 Note: The C++ namespace remains `namespace duckdb { ... }` — this is a code-level namespace and is independent of the Python module name.
 
 ### 6.3 Test Suite
-- All test files under `tools/pythonpkg/tests/` use `import packdb` (not `import duckdb`)
+- All test files under `tools/pythonpkg/tests/` use `import decidb` (not `import duckdb`)
 
 ## 7. How to Build Locally
 
@@ -113,7 +113,7 @@ cd tools/pythonpkg
 ```
 
 ### Editable install (recommended for development)
-Use `pip install -e .` to install in editable/development mode. This builds the `_packdb.cpython-*.so` directly into the `packdb/` source directory, so the local directory *is* the installed package — no shadowing issues:
+Use `pip install -e .` to install in editable/development mode. This builds the `_decidb.cpython-*.so` directly into the `decidb/` source directory, so the local directory *is* the installed package — no shadowing issues:
 ```bash
 cd tools/pythonpkg
 source venv/bin/activate
@@ -121,10 +121,10 @@ pip install -e .
 ```
 
 ### Important: shadowing with non-editable installs
-If you use `pip install .` (non-editable), **do not** run Python from within `tools/pythonpkg/`. The local `packdb/` source directory will shadow the installed package, causing `ModuleNotFoundError: No module named 'packdb._packdb'` because the source directory lacks the compiled `.so`. Run from any other directory:
+If you use `pip install .` (non-editable), **do not** run Python from within `tools/pythonpkg/`. The local `decidb/` source directory will shadow the installed package, causing `ModuleNotFoundError: No module named 'decidb._decidb'` because the source directory lacks the compiled `.so`. Run from any other directory:
 ```bash
 cd /tmp
-/path/to/venv/bin/python -c "import packdb; print(packdb.connect().sql('SELECT 42').fetchall())"
+/path/to/venv/bin/python -c "import decidb; print(decidb.connect().sql('SELECT 42').fetchall())"
 ```
 
 ### Using CMake (alternative)
@@ -154,7 +154,7 @@ The GitHub Actions workflow (`.github/workflows/python-wheels.yml`) uses `cibuil
 ### Build Job (`build_wheels`)
 - **Platforms**: ubuntu-22.04 (Linux x86_64), macos-14 (macOS arm64), windows-2022 (AMD64)
 - **Python versions**: cp311, cp312, cp313
-- **Smoke test**: After building, runs `python -c "import packdb; print(packdb.__version__)"`
+- **Smoke test**: After building, runs `python -c "import decidb; print(decidb.__version__)"`
 - **Artifacts**: Wheels are uploaded as GitHub Actions artifacts (7-day retention). Each OS produces 3 `.whl` files (one per Python version). The sdist is built separately on Linux.
 
 ### Test Job (`test_wheels`)
@@ -220,10 +220,10 @@ To test a pre-built wheel artifact (e.g., from CI):
 ```bash
 python3 -m venv /path/to/test-env
 source /path/to/test-env/bin/activate
-pip install /path/to/packdb-*.whl
+pip install /path/to/decidb-*.whl
 pip install pytest numpy 'pandas<3.0' pyarrow pytz typing_extensions
 
-cd /path/to/packdb-repo
+cd /path/to/decidb-repo
 python -m pytest tools/pythonpkg/tests/fast --verbose
 ```
 
@@ -237,7 +237,7 @@ With all extensions bundled and `pandas<3.0`:
 - **0 failed**
 
 ### Key Test Fixtures (`conftest.py`)
-- `duckdb_cursor` — Creates a fresh in-memory PackDB connection per test
+- `duckdb_cursor` — Creates a fresh in-memory DecidB connection per test
 - `require` — Loads a DuckDB extension from build directory (for extension tests)
 - `spark` — Creates a Spark-compatible session (requires spark_namespace helpers)
 - `integers`, `timestamps` — Pre-populated table fixtures

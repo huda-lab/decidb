@@ -6,8 +6,8 @@ from typing import Callable, List
 from os.path import exists
 from pathlib import PurePosixPath
 
-import packdb
-from packdb import DuckDBPyConnection, InvalidInputException
+import decidb
+from decidb import DuckDBPyConnection, InvalidInputException
 from pytest import raises, importorskip, fixture, MonkeyPatch, mark
 
 importorskip('fsspec', '2022.11.0')
@@ -37,7 +37,7 @@ def intercept(monkeypatch: MonkeyPatch, obj: object, name: str) -> List[str]:
 
 @fixture()
 def duckdb_cursor():
-    with packdb.connect() as conn:
+    with decidb.connect() as conn:
         yield conn
 
 
@@ -162,7 +162,7 @@ class TestPythonFilesystem:
         db_path = str(tmp_path / 'hello.db')
 
         # setup a database to attach later
-        with packdb.connect(db_path) as conn:
+        with decidb.connect(db_path) as conn:
             conn.execute(
                 '''
                 CREATE TABLE t (id int);
@@ -172,7 +172,7 @@ class TestPythonFilesystem:
 
         assert exists(db_path)
 
-        with packdb.connect() as conn:
+        with decidb.connect() as conn:
             fs = filesystem('file', skip_instance_cache=True)
             write_errors = intercept(monkeypatch, LocalFileOpener, 'write')
             conn.register_filesystem(fs)
@@ -184,7 +184,7 @@ class TestPythonFilesystem:
             conn.execute('FROM hello.t')
             assert conn.fetchall() == [(0,), (1,)]
 
-        # packdb sometimes seems to swallow write errors, so we use this to ensure that
+        # decidb sometimes seems to swallow write errors, so we use this to ensure that
         # isn't happening
         assert not write_errors
 
@@ -279,7 +279,7 @@ class TestPythonFilesystem:
         table2_path = tmp_path / "table2.parquet"
         pq.write_table(table2, table2_path)
 
-        c = packdb.connect()
+        c = decidb.connect()
         c.register_filesystem(LocalFileSystem())
 
         q = f"SELECT * FROM read_parquet('file://{tmp_path}/table*.parquet', union_by_name = TRUE) ORDER BY time DESC LIMIT 1"

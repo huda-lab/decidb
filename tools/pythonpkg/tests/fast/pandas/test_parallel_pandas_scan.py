@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import packdb
+import decidb
 import numpy
 import datetime
 import pytest
@@ -22,7 +22,7 @@ def run_parallel_queries(main_table, left_join_table, expected_df, pandas, itera
             on main_table.join_column = t2.join_column
         """
         try:
-            duckdb_conn = packdb.connect()
+            duckdb_conn = decidb.connect()
             duckdb_conn.execute("PRAGMA threads=4")
             duckdb_conn.register('main_table', main_table)
             duckdb_conn.register('left_join_table', left_join_table)
@@ -97,7 +97,7 @@ class TestParallelPandasScan(object):
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_parallel_empty(self, duckdb_cursor, pandas):
         df_empty = pandas.DataFrame({'A': []})
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
         duckdb_conn.execute("PRAGMA verify_parallelism")
         duckdb_conn.register('main_table', df_empty)

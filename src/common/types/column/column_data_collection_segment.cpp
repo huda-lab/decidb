@@ -2,7 +2,7 @@
 
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
-#include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
 
 namespace duckdb {
 

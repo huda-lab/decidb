@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import datetime
 import pytz
 import os
@@ -51,7 +51,7 @@ class TestNativeTimeZone(object):
 
     def test_pandas_timestamp_time(self, duckdb_cursor):
         with pytest.raises(
-            packdb.NotImplementedException, match="Not implemented Error: Unsupported type \"TIME WITH TIME ZONE\""
+            decidb.NotImplementedException, match="Not implemented Error: Unsupported type \"TIME WITH TIME ZONE\""
         ):
             duckdb_cursor.execute(f"select TimeRecStart::TIMETZ  as tz  from '{filename}'").df()
 

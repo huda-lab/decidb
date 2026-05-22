@@ -25197,7 +25197,7 @@ yyreduce:
   case 553:
 #line 239 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: objective WHEN condition PER column */
+					/* DecidB: objective WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (5)].node), (yyvsp[(3) - (5)].node), (yylsp[(2) - (5)]));
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
@@ -25208,7 +25208,7 @@ yyreduce:
   case 554:
 #line 247 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: objective WHEN condition PER (col1, col2, ...) */
+					/* DecidB: objective WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (7)].node), (yyvsp[(3) - (7)].node), (yylsp[(2) - (7)]));
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
@@ -25219,7 +25219,7 @@ yyreduce:
   case 555:
 #line 255 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: objective WHEN condition (b_expr excludes AND/OR) */
+					/* DecidB: objective WHEN condition (b_expr excludes AND/OR) */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
 				;}
     break;
@@ -25227,7 +25227,7 @@ yyreduce:
   case 556:
 #line 260 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: objective PER column */
+					/* DecidB: objective PER column */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
 				;}
@@ -25236,7 +25236,7 @@ yyreduce:
   case 557:
 #line 266 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: objective PER (col1, col2, ...) */
+					/* DecidB: objective PER (col1, col2, ...) */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", (yyvsp[(1) - (5)].node), (PGNode *) (yyvsp[(4) - (5)].list), (yylsp[(2) - (5)]));
 				;}
@@ -25306,7 +25306,7 @@ yyreduce:
   case 566:
 #line 317 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: constraint WHEN condition PER column */
+					/* DecidB: constraint WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (5)].node), (yyvsp[(3) - (5)].node), (yylsp[(2) - (5)]));
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
@@ -25317,7 +25317,7 @@ yyreduce:
   case 567:
 #line 325 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: constraint WHEN condition PER (col1, col2, ...) */
+					/* DecidB: constraint WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (7)].node), (yyvsp[(3) - (7)].node), (yylsp[(2) - (7)]));
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
@@ -25328,7 +25328,7 @@ yyreduce:
   case 568:
 #line 333 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: constraint WHEN condition (b_expr excludes AND/OR) */
+					/* DecidB: constraint WHEN condition (b_expr excludes AND/OR) */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
 				;}
     break;
@@ -25336,7 +25336,7 @@ yyreduce:
   case 569:
 #line 338 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: constraint PER column */
+					/* DecidB: constraint PER column */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
 				;}
@@ -25345,7 +25345,7 @@ yyreduce:
   case 570:
 #line 344 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: constraint PER (col1, col2, ...) */
+					/* DecidB: constraint PER (col1, col2, ...) */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", (yyvsp[(1) - (5)].node), (PGNode *) (yyvsp[(4) - (5)].list), (yylsp[(2) - (5)]));
 				;}
@@ -28746,7 +28746,7 @@ yyreduce:
   case 1053:
 #line 2915 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* PackDB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
+					/* DecidB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)]));
 				;}
     break;

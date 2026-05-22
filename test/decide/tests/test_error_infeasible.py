@@ -1,8 +1,8 @@
 """Infeasibility and unboundedness error tests — now cross-verified by gurobipy.
 
-For each problem that PackDB must reject as infeasible / unbounded, the
+For each problem that DecidB must reject as infeasible / unbounded, the
 oracle builds the same model in gurobipy and asserts the corresponding
-``SolverStatus``. This guards against PackDB falsely reporting infeasibility
+``SolverStatus``. This guards against DecidB falsely reporting infeasibility
 on a feasible problem (or vice versa).
 """
 
@@ -14,14 +14,14 @@ from solver.types import ObjSense, SolverStatus, VarType
 @pytest.mark.error_infeasible
 @pytest.mark.error
 class TestInfeasibleModels:
-    """PackDB should raise InvalidInputException for infeasible problems,
+    """DecidB should raise InvalidInputException for infeasible problems,
     and the oracle should independently report INFEASIBLE."""
 
     def test_contradictory_per_row_bounds(
-        self, packdb_cli, duckdb_conn, oracle_solver
+        self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """Per-row bounds ``x >= 10 AND x <= 5`` contradict each other."""
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey < 10
             DECIDE x IS INTEGER
             SUCH THAT x >= 10 AND x <= 5
@@ -44,10 +44,10 @@ class TestInfeasibleModels:
         )
 
     def test_impossible_sum_constraint(
-        self, packdb_cli, duckdb_conn, oracle_solver
+        self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """``SUM(x) >= 999999`` with BOOLEAN x caps at ``N <= 999999`` rows."""
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey = 1
             DECIDE x IS BOOLEAN
             SUCH THAT SUM(x) >= 999999
@@ -71,10 +71,10 @@ class TestInfeasibleModels:
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
     def test_negative_sum_upper_bound(
-        self, packdb_cli, duckdb_conn, oracle_solver
+        self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """Non-negative ``x`` cannot have a negative weighted SUM."""
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey < 5
             DECIDE x IS BOOLEAN
             SUCH THAT SUM(x) >= 1 AND SUM(x * l_quantity) <= -1
@@ -101,10 +101,10 @@ class TestInfeasibleModels:
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
     def test_infeasible_when_forces_all_zero(
-        self, packdb_cli, duckdb_conn, oracle_solver
+        self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """WHEN forces ``x=0`` for every qualifying row; aggregate still demands SUM(x)>=1."""
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             SELECT l_orderkey, l_quantity, l_returnflag, x
             FROM lineitem WHERE l_orderkey < 10
             DECIDE x IS BOOLEAN
@@ -138,15 +138,15 @@ class TestInfeasibleModels:
 @pytest.mark.error_infeasible
 @pytest.mark.error
 class TestUnboundedModels:
-    """PackDB should detect unbounded models (as opposed to infeasible ones).
+    """DecidB should detect unbounded models (as opposed to infeasible ones).
     The oracle cross-verifies by also returning UNBOUNDED (or INFEASIBLE —
     Gurobi normalises some unbounded MIPs to infeasible in its status enum)."""
 
     def test_unbounded_integer_maximize(
-        self, packdb_cli, duckdb_conn, oracle_solver
+        self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """Integer x >= 1 with no upper bound — unbounded when maximising SUM(x)."""
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
             DECIDE x IS INTEGER
             SUCH THAT x >= 1
@@ -168,10 +168,10 @@ class TestUnboundedModels:
         )
 
     def test_unbounded_real_maximize(
-        self, packdb_cli, duckdb_conn, oracle_solver
+        self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """REAL x >= 0 with no upper bound — unbounded when maximising SUM(x)."""
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
             DECIDE x IS REAL
             SUCH THAT x >= 0
@@ -193,7 +193,7 @@ class TestUnboundedModels:
         )
 
     def test_mixed_unbounded_integer_var(
-        self, packdb_cli, oracle_solver
+        self, decidb_cli, oracle_solver
     ):
         """Mixed problem where one variable is unconstrained.
 
@@ -203,7 +203,7 @@ class TestUnboundedModels:
         model as bounded because *some* variable is constrained would miss
         this — hence the separate test from the lone-integer case.
         """
-        packdb_cli.assert_error("""
+        decidb_cli.assert_error("""
             SELECT id, val, x, y FROM (
                 VALUES (1, 10.0), (2, 20.0), (3, 30.0)
             ) t(id, val)
@@ -217,7 +217,7 @@ class TestUnboundedModels:
         oracle_solver.create_model("mixed_unbounded_int")
         for i in range(n):
             oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
-            # INTEGER y with no upper bound mirrors PackDB's default.
+            # INTEGER y with no upper bound mirrors DecidB's default.
             oracle_solver.add_variable(f"y_{i}", VarType.INTEGER, lb=0.0)
         oracle_solver.add_constraint(
             {f"x_{i}": 1.0 for i in range(n)}, "<=", 5.0, name="sum_x_cap",

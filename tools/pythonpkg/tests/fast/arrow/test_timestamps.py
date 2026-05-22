@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import datetime
 import pytest
@@ -23,7 +23,7 @@ class TestArrowTimestamps(object):
             pa.array([datetime.datetime.now()], pa.timestamp('s')),
         )
         arrow_table = pa.Table.from_arrays([data[0], data[1], data[2], data[3]], ['a', 'b', 'c', 'd'])
-        rel = packdb.from_arrow(arrow_table).arrow()
+        rel = decidb.from_arrow(arrow_table).arrow()
         assert rel['a'] == arrow_table['a']
         assert rel['b'] == arrow_table['b']
         assert rel['c'] == arrow_table['c']
@@ -39,7 +39,7 @@ class TestArrowTimestamps(object):
             pa.array([None], pa.timestamp('s')),
         )
         arrow_table = pa.Table.from_arrays([data[0], data[1], data[2], data[3]], ['a', 'b', 'c', 'd'])
-        rel = packdb.from_arrow(arrow_table).arrow()
+        rel = decidb.from_arrow(arrow_table).arrow()
         assert rel['a'] == arrow_table['a']
         assert rel['b'] == arrow_table['b']
         assert rel['c'] == arrow_table['c']
@@ -54,24 +54,24 @@ class TestArrowTimestamps(object):
             pa.array([9223372036854775807], pa.timestamp('us')),
         )
         arrow_table = pa.Table.from_arrays([data[0], data[1], data[2]], ['a', 'b', 'c'])
-        arrow_from_duck = packdb.from_arrow(arrow_table).arrow()
+        arrow_from_duck = decidb.from_arrow(arrow_table).arrow()
         assert arrow_from_duck['a'] == arrow_table['a']
         assert arrow_from_duck['b'] == arrow_table['b']
         assert arrow_from_duck['c'] == arrow_table['c']
 
         expected = (datetime.datetime(9999, 12, 31, 23, 59, 59, 999999),)
 
-        duck_rel = packdb.from_arrow(arrow_table)
+        duck_rel = decidb.from_arrow(arrow_table)
         res = duck_rel.project('a::TIMESTAMP_US')
         result = res.fetchone()
         assert result == expected
 
-        duck_rel = packdb.from_arrow(arrow_table)
+        duck_rel = decidb.from_arrow(arrow_table)
         res = duck_rel.project('b::TIMESTAMP_US')
         result = res.fetchone()
         assert result == expected
 
-        duck_rel = packdb.from_arrow(arrow_table)
+        duck_rel = decidb.from_arrow(arrow_table)
         res = duck_rel.project('c::TIMESTAMP_NS')
         result = res.fetchone()
         assert result == expected

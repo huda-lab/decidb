@@ -24,7 +24,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_force_zero(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Block non-returned items: x <= 0 WHEN returnflag='N', plus capacity."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -37,8 +37,8 @@ def test_when_perrow_force_zero(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -72,12 +72,12 @@ def test_when_perrow_force_zero(packdb_cli, duckdb_conn, oracle_solver, perf_tra
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_perrow_zero", packdb_time, build_time,
+        "when_perrow_zero", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -91,7 +91,7 @@ def test_when_perrow_force_zero(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_force_select(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Force selection of high-discount items: x = 1 WHEN discount >= 0.09."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -104,8 +104,8 @@ def test_when_perrow_force_select(packdb_cli, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -138,12 +138,12 @@ def test_when_perrow_force_select(packdb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_perrow_select", packdb_time, build_time,
+        "when_perrow_select", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -157,7 +157,7 @@ def test_when_perrow_force_select(packdb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_numeric_condition(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Exclude large-quantity items: x <= 0 WHEN quantity > 40."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -169,8 +169,8 @@ def test_when_perrow_numeric_condition(packdb_cli, duckdb_conn, oracle_solver, p
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -201,12 +201,12 @@ def test_when_perrow_numeric_condition(packdb_cli, duckdb_conn, oracle_solver, p
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_perrow_numeric", packdb_time, build_time,
+        "when_perrow_numeric", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -220,7 +220,7 @@ def test_when_perrow_numeric_condition(packdb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_no_matches(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_no_matches(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN matches nothing — per-row constraint is inert, only aggregate limits."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -233,8 +233,8 @@ def test_when_perrow_no_matches(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -264,12 +264,12 @@ def test_when_perrow_no_matches(packdb_cli, duckdb_conn, oracle_solver, perf_tra
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_perrow_none", packdb_time, build_time,
+        "when_perrow_none", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -283,7 +283,7 @@ def test_when_perrow_no_matches(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_all_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN matches all rows — equivalent to unconditional per-row bound."""
     sql = """
         SELECT ps_partkey, ps_availqty, x
@@ -295,8 +295,8 @@ def test_when_perrow_all_match(packdb_cli, duckdb_conn, oracle_solver, perf_trac
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -326,12 +326,12 @@ def test_when_perrow_all_match(packdb_cli, duckdb_conn, oracle_solver, perf_trac
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
 
     perf_tracker.record(
-        "when_perrow_all", packdb_time, build_time,
+        "when_perrow_all", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -345,7 +345,7 @@ def test_when_perrow_all_match(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_real(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_perrow_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Per-row WHEN bound with IS REAL — continuous skip-constraint path.
 
     All existing per-row WHEN tests use BOOLEAN or INTEGER variables, both
@@ -372,8 +372,8 @@ def test_when_perrow_real(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -404,14 +404,14 @@ def test_when_perrow_real(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    price_idx = packdb_cols.index("l_extendedprice")
+    price_idx = decidb_cols.index("l_extendedprice")
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[price_idx])},
     )
 
     perf_tracker.record(
-        "when_perrow_real", packdb_time, build_time,
+        "when_perrow_real", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

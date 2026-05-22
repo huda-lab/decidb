@@ -1,18 +1,18 @@
 """Shared fixtures and configuration for DECIDE tests.
 
-Provides a CLI wrapper for the native packdb executable, a vanilla duckdb
+Provides a CLI wrapper for the native decidb executable, a vanilla duckdb
 connection for oracle data fetching (via dbgen-generated TPC-H data), an
 oracle solver instance (with transparent result caching), and performance
 tracking.
 
 Architecture
 ------------
-- **PackDB (DECIDE queries)**: native ``build/release/packdb`` executable
-  invoked via subprocess (``PackDBCli``).  Reads ``packdb.db``.
+- **DecidB (DECIDE queries)**: native ``build/release/decidb`` executable
+  invoked via subprocess (``DecidBCli``).  Reads ``decidb.db``.
 - **Oracle (data fetching)**: vanilla ``duckdb`` Python package reading a
   separately generated TPC-H database (``_tpch_oracle.duckdb``).  The oracle
   database is created once per session via ``CALL dbgen(sf=0.01)`` and cached
-  on disk.  This keeps the oracle completely independent of PackDB.
+  on disk.  This keeps the oracle completely independent of DecidB.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from packdb_cli import PackDBCli
+from decidb_cli import DecidBCli
 from solver.factory import get_solver
 from oracle_cache import OracleCache, CachedOracleSolver
 from performance.tracker import PerfTracker
@@ -35,38 +35,38 @@ from performance.reporter import print_perf_table
 _TPCH_SF = 0.01
 
 # ---------------------------------------------------------------------------
-# Locate packdb.db and the packdb executable
+# Locate decidb.db and the decidb executable
 # ---------------------------------------------------------------------------
 
-_PACKDB_DB_CANDIDATES = [
-    Path(__file__).resolve().parent.parent.parent / "packdb.db",
-    Path(__file__).resolve().parent.parent.parent / "build" / "packdb.db",
+_DECIDB_DB_CANDIDATES = [
+    Path(__file__).resolve().parent.parent.parent / "decidb.db",
+    Path(__file__).resolve().parent.parent.parent / "build" / "decidb.db",
 ]
 
-_PACKDB_EXE_CANDIDATES = [
-    Path(__file__).resolve().parent.parent.parent / "build" / "release" / "packdb",
+_DECIDB_EXE_CANDIDATES = [
+    Path(__file__).resolve().parent.parent.parent / "build" / "release" / "decidb",
 ]
 
 _ORACLE_DB_PATH = Path(__file__).resolve().parent / "_tpch_oracle.duckdb"
 
 
-def _find_packdb_db() -> Path | None:
-    env = os.environ.get("PACKDB_DB_PATH")
+def _find_decidb_db() -> Path | None:
+    env = os.environ.get("DECIDB_DB_PATH")
     if env:
         p = Path(env)
         return p if p.exists() else None
-    for p in _PACKDB_DB_CANDIDATES:
+    for p in _DECIDB_DB_CANDIDATES:
         if p.exists():
             return p
     return None
 
 
-def _find_packdb_exe() -> Path | None:
-    env = os.environ.get("PACKDB_EXE_PATH")
+def _find_decidb_exe() -> Path | None:
+    env = os.environ.get("DECIDB_EXE_PATH")
     if env:
         p = Path(env)
         return p if p.exists() else None
-    for p in _PACKDB_EXE_CANDIDATES:
+    for p in _DECIDB_EXE_CANDIDATES:
         if p.exists():
             return p
     return None
@@ -91,61 +91,61 @@ def _ensure_oracle_db() -> Path:
 
 
 @pytest.fixture(scope="session")
-def packdb_db_path():
+def decidb_db_path():
     """Path to the TPC-H database file.  Skips the session if not found."""
-    path = _find_packdb_db()
+    path = _find_decidb_db()
     if path is None:
-        pytest.skip("packdb.db not found — set PACKDB_DB_PATH or build first")
+        pytest.skip("decidb.db not found — set DECIDB_DB_PATH or build first")
     return str(path)
 
 
 @pytest.fixture(scope="session")
-def packdb_exe_path():
-    """Path to the native packdb executable."""
-    path = _find_packdb_exe()
+def decidb_exe_path():
+    """Path to the native decidb executable."""
+    path = _find_decidb_exe()
     if path is None:
         pytest.skip(
-            "packdb executable not found — build first or set PACKDB_EXE_PATH"
+            "decidb executable not found — build first or set DECIDB_EXE_PATH"
         )
     return str(path)
 
 
 @pytest.fixture(scope="session")
-def packdb_cli(packdb_exe_path, packdb_db_path):
-    """Session-wide CLI wrapper for the native packdb executable.
+def decidb_cli(decidb_exe_path, decidb_db_path):
+    """Session-wide CLI wrapper for the native decidb executable.
 
     Queries are executed via subprocess, allowing multi-core execution.
     """
-    return PackDBCli(packdb_exe_path, packdb_db_path)
+    return DecidBCli(decidb_exe_path, decidb_db_path)
 
 
 @pytest.fixture(scope="session")
-def packdb_cli_highs(packdb_exe_path, packdb_db_path):
-    """CLI wrapper that forces PackDB to use the HiGHS backend.
+def decidb_cli_highs(decidb_exe_path, decidb_db_path):
+    """CLI wrapper that forces DecidB to use the HiGHS backend.
 
-    Backed by the ``PACKDB_FORCE_SOLVER=highs`` env var read in
-    ``src/packdb/utility/ilp_solver.cpp``. Use in tests that must verify
+    Backed by the ``DECIDB_FORCE_SOLVER=highs`` env var read in
+    ``src/decidb/utility/ilp_solver.cpp``. Use in tests that must verify
     HiGHS-specific error paths (e.g. non-convex QP rejection) on hosts
     where Gurobi is also linked.
     """
-    return PackDBCli(
-        packdb_exe_path, packdb_db_path, env={"PACKDB_FORCE_SOLVER": "highs"},
+    return DecidBCli(
+        decidb_exe_path, decidb_db_path, env={"DECIDB_FORCE_SOLVER": "highs"},
     )
 
 
 @pytest.fixture(scope="session")
-def packdb_cli_gurobi(packdb_exe_path, packdb_db_path, _raw_oracle_solver):
-    """CLI wrapper that forces PackDB to use the Gurobi backend.
+def decidb_cli_gurobi(decidb_exe_path, decidb_db_path, _raw_oracle_solver):
+    """CLI wrapper that forces DecidB to use the Gurobi backend.
 
     Skips the test if Gurobi is not available on this host. Availability
     is probed indirectly via ``_raw_oracle_solver``: the oracle factory
     requires gurobipy, which in turn requires a working Gurobi install,
-    the same dependency PackDB's Gurobi backend has.
+    the same dependency DecidB's Gurobi backend has.
     """
     if _raw_oracle_solver is None:
-        pytest.skip("Gurobi not available — packdb_cli_gurobi requires it")
-    return PackDBCli(
-        packdb_exe_path, packdb_db_path, env={"PACKDB_FORCE_SOLVER": "gurobi"},
+        pytest.skip("Gurobi not available — decidb_cli_gurobi requires it")
+    return DecidBCli(
+        decidb_exe_path, decidb_db_path, env={"DECIDB_FORCE_SOLVER": "gurobi"},
     )
 
 
@@ -173,9 +173,9 @@ def _raw_oracle_solver():
 
 
 @pytest.fixture(scope="session")
-def _oracle_cache(packdb_db_path, request):
+def _oracle_cache(decidb_db_path, request):
     """Session-wide oracle result cache.  GC runs only on full (unfiltered) runs."""
-    cache = OracleCache(packdb_db_path)
+    cache = OracleCache(decidb_db_path)
     yield cache
     is_full_run = (
         not getattr(request.config.option, "markexpr", "")

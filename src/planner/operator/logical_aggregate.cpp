@@ -3,7 +3,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/config.hpp"
 
-#include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
 
 namespace duckdb {
 

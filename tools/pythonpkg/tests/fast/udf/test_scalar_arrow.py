@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 
@@ -9,7 +9,7 @@ import pyarrow.compute as pc
 import uuid
 import datetime
 
-from packdb.typing import *
+from decidb.typing import *
 
 
 class TestPyArrowUDF(object):
@@ -22,7 +22,7 @@ class TestPyArrowUDF(object):
             df['c0'] = df['c0'] + 1
             return pa.lib.Table.from_pandas(df)
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('plus_one', plus_one, [BIGINT], BIGINT, type='arrow')
         assert [(6,)] == con.sql('select plus_one(5)').fetchall()
 
@@ -30,11 +30,11 @@ class TestPyArrowUDF(object):
         res = con.sql('select plus_one(i) from range_table tbl(i)').fetchall()
         assert len(res) == 5000
 
-        vector_size = packdb.__standard_vector_size__
+        vector_size = decidb.__standard_vector_size__
         res = con.sql(f'select i, plus_one(i) from test_vector_types(NULL::BIGINT, false) t(i), range({vector_size})')
         assert len(res) == (vector_size * 11)
 
-    # NOTE: This only works up to packdb.__standard_vector_size__,
+    # NOTE: This only works up to decidb.__standard_vector_size__,
     # because we process up to STANDARD_VECTOR_SIZE tuples at a time
     def test_sort_table(self):
         def sort_table(x):
@@ -42,7 +42,7 @@ class TestPyArrowUDF(object):
             sorted_table = table.sort_by([("c0", "ascending")])
             return sorted_table
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('sort_table', sort_table, [BIGINT], BIGINT, type='arrow')
         res = con.sql("select 100-i as original, sort_table(original) from range(100) tbl(i)").fetchall()
         assert res[0] == (100, 1)
@@ -55,7 +55,7 @@ class TestPyArrowUDF(object):
             for item in args:
                 return item
 
-        con = packdb.connect()
+        con = decidb.connect()
         # This function takes any number of arguments, returning the first column
         con.create_function('varargs', variable_args, None, BIGINT, type='arrow')
         res = con.sql("""select varargs(5, '3', '2', 1, 0.12345)""").fetchall()
@@ -68,7 +68,7 @@ class TestPyArrowUDF(object):
         def takes_string(col):
             return col
 
-        con = packdb.connect()
+        con = decidb.connect()
         # The return type of the function is set to BIGINT, but it takes a VARCHAR
         con.create_function('pyarrow_string_to_num', takes_string, [VARCHAR], BIGINT, type='arrow')
 
@@ -76,7 +76,7 @@ class TestPyArrowUDF(object):
         res = con.sql("""select pyarrow_string_to_num('5')""").fetchall()
         assert res == [(5,)]
 
-        with pytest.raises(packdb.ConversionException, match="""Could not convert string 'test' to INT64"""):
+        with pytest.raises(decidb.ConversionException, match="""Could not convert string 'test' to INT64"""):
             res = con.sql("""select pyarrow_string_to_num('test')""").fetchall()
 
     def test_return_multiple_columns(self):
@@ -84,13 +84,13 @@ class TestPyArrowUDF(object):
             import pandas as pd
 
             # Return a pyarrow table consisting of two columns
-            return pa.lib.Table.from_pandas(pd.DataFrame({'a': [5, 4, 3], 'b': ['test', 'quack', 'packdb']}))
+            return pa.lib.Table.from_pandas(pd.DataFrame({'a': [5, 4, 3], 'b': ['test', 'quack', 'decidb']}))
 
-        con = packdb.connect()
+        con = decidb.connect()
         # Scalar functions only return a single value per tuple
         con.create_function('two_columns', returns_two_columns, [BIGINT], BIGINT, type='arrow')
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='The returned table from a pyarrow scalar udf should only contain one column, found 2',
         ):
             res = con.sql("""select two_columns(5)""").fetchall()
@@ -99,9 +99,9 @@ class TestPyArrowUDF(object):
         def returns_none(col):
             return None
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('will_crash', returns_none, [BIGINT], BIGINT, type='arrow')
-        with pytest.raises(packdb.Error, match="""Could not convert the result into an Arrow Table"""):
+        with pytest.raises(decidb.Error, match="""Could not convert the result into an Arrow Table"""):
             res = con.sql("""select will_crash(5)""").fetchall()
 
     def test_empty_result(self):
@@ -109,9 +109,9 @@ class TestPyArrowUDF(object):
             # Always returns an empty table
             return pa.lib.Table.from_arrays([[]], names=['c0'])
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('empty_result', return_empty, [BIGINT], BIGINT, type='arrow')
-        with pytest.raises(packdb.InvalidInputException, match='Returned pyarrow table should have 1 tuples, found 0'):
+        with pytest.raises(decidb.InvalidInputException, match='Returned pyarrow table should have 1 tuples, found 0'):
             res = con.sql("""select empty_result(5)""").fetchall()
 
     def test_excessive_result(self):
@@ -119,9 +119,9 @@ class TestPyArrowUDF(object):
             # Always returns a table consisting of 5 tuples
             return pa.lib.Table.from_arrays([[5, 4, 3, 2, 1]], names=['c0'])
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('too_many_tuples', return_too_many, [BIGINT], BIGINT, type='arrow')
-        with pytest.raises(packdb.InvalidInputException, match='Returned pyarrow table should have 1 tuples, found 5'):
+        with pytest.raises(decidb.InvalidInputException, match='Returned pyarrow table should have 1 tuples, found 5'):
             res = con.sql("""select too_many_tuples(5)""").fetchall()
 
     def test_arrow_side_effects(self, duckdb_cursor):
@@ -150,14 +150,14 @@ class TestPyArrowUDF(object):
 
     def test_return_struct(self):
         def return_struct(col):
-            con = packdb.connect()
+            con = decidb.connect()
             return con.sql(
                 """
                 select {'a': 5, 'b': 'test', 'c': [5,3,2]}
             """
             ).arrow()
 
-        con = packdb.connect()
+        con = decidb.connect()
         struct_type = con.struct_type({'a': BIGINT, 'b': VARCHAR, 'c': con.list_type(BIGINT)})
         con.create_function('return_struct', return_struct, [BIGINT], struct_type, type='arrow')
         res = con.sql("""select return_struct(5)""").fetchall()
@@ -167,7 +167,7 @@ class TestPyArrowUDF(object):
         def return_unmodified(col):
             return col
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('unmodified', return_unmodified, [BIGINT], BIGINT, type='arrow')
         res = con.sql(
             """
@@ -186,7 +186,7 @@ class TestPyArrowUDF(object):
             df['c0'] = df['c0'] ** 2
             return pa.lib.Table.from_pandas(df)
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('inferred', func, type='arrow')
         res = con.sql('select inferred(42)').fetchall()
         assert res == [(1764,)]
@@ -198,13 +198,13 @@ class TestPyArrowUDF(object):
             length = len(x)
             return pa.lib.Table.from_pandas(pd.DataFrame({'a': [5 for _ in range(length)]}))
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('return_five', return_five, [BIGINT], BIGINT, null_handling='special', type='arrow')
         res = con.sql('select return_five(NULL) from range(10)').fetchall()
         # without 'special' null handling these would all be NULL
         assert res == [(5,), (5,), (5,), (5,), (5,), (5,), (5,), (5,), (5,), (5,)]
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('return_five', return_five, [BIGINT], BIGINT, null_handling='default', type='arrow')
         res = con.sql('select return_five(NULL) from range(10)').fetchall()
         # Because we didn't specify 'special' null handling, these are all NULL

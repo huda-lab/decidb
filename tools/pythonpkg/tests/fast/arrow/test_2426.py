@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 
 try:
@@ -14,7 +14,7 @@ class Test2426(object):
         if not can_run:
             return
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("Create Table test (a integer)")
 
         for i in range(1024):

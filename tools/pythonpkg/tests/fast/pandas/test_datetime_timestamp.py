@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import datetime
 import numpy as np
 import pytest

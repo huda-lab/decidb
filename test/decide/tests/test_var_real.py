@@ -21,7 +21,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Continuous variable: maximize weighted sum with aggregate constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -32,8 +32,8 @@ def test_real_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -61,12 +61,12 @@ def test_real_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_basic", packdb_time, build_time,
+        "real_basic", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -78,7 +78,7 @@ def test_real_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_with_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_with_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """REAL variable with explicit upper bound constraint x <= 5."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -90,8 +90,8 @@ def test_real_with_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -118,12 +118,12 @@ def test_real_with_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_with_bounds", packdb_time, build_time,
+        "real_with_bounds", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -136,7 +136,7 @@ def test_real_with_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_mixed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_mixed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Mixed BOOLEAN + REAL variables in same query."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, s, w
@@ -148,8 +148,8 @@ def test_real_mixed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(s * l_extendedprice + w * l_quantity)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -181,15 +181,15 @@ def test_real_mixed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["s", "w"],
+        decidb_result, decidb_cols, result, data, ["s", "w"],
         coeff_fn=lambda row: {
-            "s": float(row[packdb_cols.index("l_extendedprice")]),
-            "w": float(row[packdb_cols.index("l_quantity")]),
+            "s": float(row[decidb_cols.index("l_extendedprice")]),
+            "w": float(row[decidb_cols.index("l_quantity")]),
         },
     )
 
     perf_tracker.record(
-        "real_mixed", packdb_time, build_time,
+        "real_mixed", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(snames) + len(wnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -201,7 +201,7 @@ def test_real_mixed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.when_constraint
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """REAL variable with WHEN conditional on constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, l_returnflag, x
@@ -213,8 +213,8 @@ def test_real_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -244,12 +244,12 @@ def test_real_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_with_when", packdb_time, build_time,
+        "real_with_when", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -261,7 +261,7 @@ def test_real_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_real_minimize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """REAL variable with MINIMIZE — exercises the coefficient-sign path distinct
     from MAXIMIZE (negation happens at the solver boundary or in the objective
     builder). Constraint SUM(x) >= 10 forces a non-zero optimum; MINIMIZE picks
@@ -275,8 +275,8 @@ def test_real_minimize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MINIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -304,12 +304,12 @@ def test_real_minimize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_minimize", packdb_time, build_time,
+        "real_minimize", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -322,7 +322,7 @@ def test_real_minimize(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_real_fractional_readback(
-    packdb_cli, oracle_solver, perf_tracker
+    decidb_cli, oracle_solver, perf_tracker
 ):
     """Force a genuinely non-integer REAL optimum and confirm the readback
     path preserves the fractional value.
@@ -343,9 +343,9 @@ def test_real_fractional_readback(
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
-    assert len(packdb_rows) == 3
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+    assert len(decidb_rows) == 3
 
     n = 3
     t_build = time.perf_counter()
@@ -363,24 +363,24 @@ def test_real_fractional_readback(
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    x_idx = packdb_cols.index("x")
-    packdb_sum = sum(float(r[x_idx]) for r in packdb_rows)
-    assert abs(packdb_sum - 10.5) <= 1e-4, (
-        f"Readback lost fractional precision: SUM(x)={packdb_sum}, expected 10.5"
+    x_idx = decidb_cols.index("x")
+    decidb_sum = sum(float(r[x_idx]) for r in decidb_rows)
+    assert abs(decidb_sum - 10.5) <= 1e-4, (
+        f"Readback lost fractional precision: SUM(x)={decidb_sum}, expected 10.5"
     )
-    assert abs(packdb_sum - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: PackDB={packdb_sum}, Oracle={result.objective_value}"
+    assert abs(decidb_sum - result.objective_value) <= 1e-4, (
+        f"Objective mismatch: DecidB={decidb_sum}, Oracle={result.objective_value}"
     )
     # Structural check: at least one value must be genuinely fractional.
     has_fractional = any(
-        abs(float(r[x_idx]) - round(float(r[x_idx]))) > 1e-4 for r in packdb_rows
+        abs(float(r[x_idx]) - round(float(r[x_idx]))) > 1e-4 for r in decidb_rows
     )
     assert has_fractional, (
-        f"No fractional value in readback; got x={[r[x_idx] for r in packdb_rows]}"
+        f"No fractional value in readback; got x={[r[x_idx] for r in decidb_rows]}"
     )
 
     perf_tracker.record(
-        "real_fractional_readback", packdb_time, build_time,
+        "real_fractional_readback", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="oracle_match",
@@ -392,7 +392,7 @@ def test_real_fractional_readback(
 @pytest.mark.per_clause
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """REAL variable with PER grouping constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -403,8 +403,8 @@ def test_real_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -439,12 +439,12 @@ def test_real_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_with_per", packdb_time, build_time,
+        "real_with_per", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

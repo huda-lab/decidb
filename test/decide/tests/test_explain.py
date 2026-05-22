@@ -17,29 +17,29 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_explain_output(packdb_cli):
+def _reset_explain_output(decidb_cli):
     """Ensure explain_output is reset to default before each test."""
-    packdb_cli.execute_raw("pragma explain_output='physical_only'")
+    decidb_cli.execute_raw("pragma explain_output='physical_only'")
     yield
-    packdb_cli.execute_raw("pragma explain_output='physical_only'")
+    decidb_cli.execute_raw("pragma explain_output='physical_only'")
 
 
 # ── helpers ──────────────────────────────────────────────────────────
 
-def _explain(packdb_cli, sql: str) -> str:
-    result = packdb_cli.execute_raw(f"EXPLAIN {sql}")
+def _explain(decidb_cli, sql: str) -> str:
+    result = decidb_cli.execute_raw(f"EXPLAIN {sql}")
     return result.stdout
 
 
-def _explain_json(packdb_cli, sql: str, *, logical: bool = False) -> str:
+def _explain_json(decidb_cli, sql: str, *, logical: bool = False) -> str:
     if logical:
-        packdb_cli.execute_raw("pragma explain_output='optimized_only'")
-    result = packdb_cli.execute_raw(f"EXPLAIN (FORMAT JSON) {sql}")
+        decidb_cli.execute_raw("pragma explain_output='optimized_only'")
+    result = decidb_cli.execute_raw(f"EXPLAIN (FORMAT JSON) {sql}")
     return result.stdout
 
 
-def _explain_analyze(packdb_cli, sql: str) -> str:
-    result = packdb_cli.execute_raw(f"EXPLAIN ANALYZE {sql}")
+def _explain_analyze(decidb_cli, sql: str) -> str:
+    result = decidb_cli.execute_raw(f"EXPLAIN ANALYZE {sql}")
     return result.stdout
 
 
@@ -48,7 +48,7 @@ def _explain_analyze(packdb_cli, sql: str) -> str:
 # ===================================================================
 
 @pytest.mark.explain
-def test_explain_basic_knapsack(packdb_cli):
+def test_explain_basic_knapsack(decidb_cli):
     """EXPLAIN on a basic knapsack query shows DECIDE, Variables, Objective, Constraints."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -57,7 +57,7 @@ def test_explain_basic_knapsack(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "DECIDE" in out, f"DECIDE node missing from EXPLAIN:\n{out}"
     assert "Variables" in out
     assert "x" in out
@@ -66,7 +66,7 @@ def test_explain_basic_knapsack(packdb_cli):
 
 
 @pytest.mark.explain
-def test_explain_minimize(packdb_cli):
+def test_explain_minimize(decidb_cli):
     """EXPLAIN shows MINIMIZE for a minimize objective."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -75,12 +75,12 @@ def test_explain_minimize(packdb_cli):
         SUCH THAT SUM(x * l_extendedprice) >= 5000
         MINIMIZE SUM(x * l_quantity)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "MINIMIZE" in out, f"MINIMIZE missing from EXPLAIN:\n{out}"
 
 
 @pytest.mark.explain
-def test_explain_integer_variable(packdb_cli):
+def test_explain_integer_variable(decidb_cli):
     """EXPLAIN works for INTEGER decision variables."""
     sql = """
         SELECT ps_partkey, ps_availqty, ps_supplycost, x
@@ -89,13 +89,13 @@ def test_explain_integer_variable(packdb_cli):
         SUCH THAT x <= 10 AND SUM(x * ps_supplycost) <= 5000
         MAXIMIZE SUM(x * ps_availqty)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "DECIDE" in out
     assert "Variables" in out
 
 
 @pytest.mark.explain
-def test_explain_multi_variable(packdb_cli):
+def test_explain_multi_variable(decidb_cli):
     """EXPLAIN with multiple decision variables shows all of them."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x, y
@@ -106,7 +106,7 @@ def test_explain_multi_variable(packdb_cli):
             AND SUM(y) <= 10
         MAXIMIZE SUM(x * l_extendedprice + y)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "DECIDE" in out
     assert "x" in out
     assert "y" in out
@@ -118,7 +118,7 @@ def test_explain_multi_variable(packdb_cli):
 
 @pytest.mark.explain
 @pytest.mark.when_constraint
-def test_explain_when_string_filter(packdb_cli):
+def test_explain_when_string_filter(decidb_cli):
     """EXPLAIN shows WHEN suffix for conditional constraints on TPC-H data."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -128,14 +128,14 @@ def test_explain_when_string_filter(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "DECIDE" in out
     assert "WHEN" in out, f"WHEN clause missing from EXPLAIN:\n{out}"
 
 
 @pytest.mark.explain
 @pytest.mark.when_constraint
-def test_explain_when_numeric_comparison(packdb_cli):
+def test_explain_when_numeric_comparison(decidb_cli):
     """EXPLAIN shows WHEN for numeric comparison filters."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_discount, x
@@ -144,13 +144,13 @@ def test_explain_when_numeric_comparison(packdb_cli):
         SUCH THAT SUM(x * l_extendedprice) <= 5000 WHEN l_discount >= 0.06
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "WHEN" in out
 
 
 @pytest.mark.explain
 @pytest.mark.when_constraint
-def test_explain_when_mixed_constraints(packdb_cli):
+def test_explain_when_mixed_constraints(decidb_cli):
     """EXPLAIN with one WHEN-filtered + one unconditional constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -161,7 +161,7 @@ def test_explain_when_mixed_constraints(packdb_cli):
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "WHEN" in out
     assert "Constraints" in out
 
@@ -172,7 +172,7 @@ def test_explain_when_mixed_constraints(packdb_cli):
 
 @pytest.mark.explain
 @pytest.mark.per_clause
-def test_explain_per_basic(packdb_cli):
+def test_explain_per_basic(decidb_cli):
     """EXPLAIN shows PER suffix for group-partitioned constraints."""
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
@@ -180,13 +180,13 @@ def test_explain_per_basic(packdb_cli):
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "PER" in out, f"PER clause missing from EXPLAIN:\n{out}"
 
 
 @pytest.mark.explain
 @pytest.mark.per_clause
-def test_explain_per_integer(packdb_cli):
+def test_explain_per_integer(decidb_cli):
     """EXPLAIN shows PER for integer variable with weighted constraint."""
     sql = """
         SELECT ps_partkey, ps_availqty, ps_supplycost, x
@@ -195,7 +195,7 @@ def test_explain_per_integer(packdb_cli):
         SUCH THAT SUM(x * ps_supplycost) <= 1000 PER ps_partkey
         MAXIMIZE SUM(x * ps_availqty)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "PER" in out
 
 
@@ -206,7 +206,7 @@ def test_explain_per_integer(packdb_cli):
 @pytest.mark.explain
 @pytest.mark.when_constraint
 @pytest.mark.per_clause
-def test_explain_when_and_per(packdb_cli):
+def test_explain_when_and_per(decidb_cli):
     """EXPLAIN shows both WHEN and PER when used together."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -217,7 +217,7 @@ def test_explain_when_and_per(packdb_cli):
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "PER" in out, f"PER missing from EXPLAIN:\n{out}"
 
 
@@ -226,7 +226,7 @@ def test_explain_when_and_per(packdb_cli):
 # ===================================================================
 
 @pytest.mark.explain
-def test_explain_json_structure(packdb_cli):
+def test_explain_json_structure(decidb_cli):
     """EXPLAIN (FORMAT JSON) contains expected keys for DECIDE node."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -235,7 +235,7 @@ def test_explain_json_structure(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain_json(packdb_cli, sql)
+    out = _explain_json(decidb_cli, sql)
     assert '"DECIDE"' in out or '"name": "DECIDE"' in out or "DECIDE" in out
     assert "Variables" in out
     assert "Objective" in out
@@ -244,7 +244,7 @@ def test_explain_json_structure(packdb_cli):
 
 @pytest.mark.explain
 @pytest.mark.when_constraint
-def test_explain_json_when(packdb_cli):
+def test_explain_json_when(decidb_cli):
     """JSON EXPLAIN includes WHEN information in constraint display."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -254,13 +254,13 @@ def test_explain_json_when(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain_json(packdb_cli, sql)
+    out = _explain_json(decidb_cli, sql)
     assert "WHEN" in out
 
 
 @pytest.mark.explain
 @pytest.mark.per_clause
-def test_explain_json_per(packdb_cli):
+def test_explain_json_per(decidb_cli):
     """JSON EXPLAIN includes PER information in constraint display."""
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
@@ -268,12 +268,12 @@ def test_explain_json_per(packdb_cli):
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
-    out = _explain_json(packdb_cli, sql)
+    out = _explain_json(decidb_cli, sql)
     assert "PER" in out
 
 
 @pytest.mark.explain
-def test_explain_json_logical_plan(packdb_cli):
+def test_explain_json_logical_plan(decidb_cli):
     """JSON EXPLAIN of logical plan contains DECIDE node."""
     sql = """
         SELECT l_orderkey, x FROM lineitem WHERE l_orderkey < 100
@@ -281,7 +281,7 @@ def test_explain_json_logical_plan(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain_json(packdb_cli, sql, logical=True)
+    out = _explain_json(decidb_cli, sql, logical=True)
     assert "DECIDE" in out
 
 
@@ -290,7 +290,7 @@ def test_explain_json_logical_plan(packdb_cli):
 # ===================================================================
 
 @pytest.mark.explain
-def test_explain_analyze_basic(packdb_cli):
+def test_explain_analyze_basic(decidb_cli):
     """EXPLAIN ANALYZE executes the query and shows DECIDE with timing info."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -299,13 +299,13 @@ def test_explain_analyze_basic(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain_analyze(packdb_cli, sql)
+    out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out, f"DECIDE missing from EXPLAIN ANALYZE:\n{out}"
 
 
 @pytest.mark.explain
 @pytest.mark.when_constraint
-def test_explain_analyze_when(packdb_cli):
+def test_explain_analyze_when(decidb_cli):
     """EXPLAIN ANALYZE works with WHEN clause queries."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -315,13 +315,13 @@ def test_explain_analyze_when(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain_analyze(packdb_cli, sql)
+    out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out
 
 
 @pytest.mark.explain
 @pytest.mark.per_clause
-def test_explain_analyze_per(packdb_cli):
+def test_explain_analyze_per(decidb_cli):
     """EXPLAIN ANALYZE works with PER clause queries."""
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
@@ -329,12 +329,12 @@ def test_explain_analyze_per(packdb_cli):
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
-    out = _explain_analyze(packdb_cli, sql)
+    out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out
 
 
 @pytest.mark.explain
-def test_explain_analyze_multiple_constraints(packdb_cli):
+def test_explain_analyze_multiple_constraints(decidb_cli):
     """EXPLAIN ANALYZE with multiple constraints still produces output."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -345,7 +345,7 @@ def test_explain_analyze_multiple_constraints(packdb_cli):
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain_analyze(packdb_cli, sql)
+    out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out
 
 
@@ -354,9 +354,9 @@ def test_explain_analyze_multiple_constraints(packdb_cli):
 # ===================================================================
 
 @pytest.mark.explain
-def test_explain_logical_plan(packdb_cli):
+def test_explain_logical_plan(decidb_cli):
     """Logical plan output (optimized_only) shows DECIDE node with all sections."""
-    packdb_cli.execute_raw("pragma explain_output='optimized_only'")
+    decidb_cli.execute_raw("pragma explain_output='optimized_only'")
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
@@ -364,7 +364,7 @@ def test_explain_logical_plan(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "DECIDE" in out
     assert "Variables" in out
     assert "Objective" in out
@@ -373,9 +373,9 @@ def test_explain_logical_plan(packdb_cli):
 
 @pytest.mark.explain
 @pytest.mark.when_constraint
-def test_explain_logical_when(packdb_cli):
+def test_explain_logical_when(decidb_cli):
     """Logical plan shows WHEN in constraint display."""
-    packdb_cli.execute_raw("pragma explain_output='optimized_only'")
+    decidb_cli.execute_raw("pragma explain_output='optimized_only'")
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
@@ -384,20 +384,20 @@ def test_explain_logical_when(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "WHEN" in out
 
 
 @pytest.mark.explain
 @pytest.mark.per_clause
-def test_explain_logical_per(packdb_cli):
+def test_explain_logical_per(decidb_cli):
     """Logical plan shows PER in constraint display."""
-    packdb_cli.execute_raw("pragma explain_output='optimized_only'")
+    decidb_cli.execute_raw("pragma explain_output='optimized_only'")
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
-    out = _explain(packdb_cli, sql)
+    out = _explain(decidb_cli, sql)
     assert "PER" in out

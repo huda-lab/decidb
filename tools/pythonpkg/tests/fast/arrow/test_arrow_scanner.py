@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 
 try:
@@ -19,7 +19,7 @@ class TestArrowScanner(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
 
         parquet_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'userdata1.parquet')
@@ -45,7 +45,7 @@ class TestArrowScanner(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
 
         parquet_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'userdata1.parquet')
@@ -69,7 +69,7 @@ class TestArrowScanner(object):
         if not can_run:
             return
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
 
         parquet_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'userdata1.parquet')
@@ -110,6 +110,6 @@ class TestArrowScanner(object):
 
         arrow_scanner = Scanner.from_dataset(arrow_dataset, filter=scanner_filter)
 
-        rel = packdb.from_arrow(arrow_scanner)
+        rel = decidb.from_arrow(arrow_scanner)
 
         assert rel.aggregate('count(*)').execute().fetchone()[0] == 12

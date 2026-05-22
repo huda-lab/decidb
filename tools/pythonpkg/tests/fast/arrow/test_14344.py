@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 pa = pytest.importorskip("pyarrow")

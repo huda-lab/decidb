@@ -16,11 +16,11 @@ namespace duckdb {
 struct DuckdbFilesystemCacheItem : public PythonImportCacheItem {
 
 public:
-	static constexpr const char *Name = "packdb.filesystem";
+	static constexpr const char *Name = "decidb.filesystem";
 
 public:
 	DuckdbFilesystemCacheItem()
-	    : PythonImportCacheItem("packdb.filesystem"), ModifiedMemoryFileSystem("ModifiedMemoryFileSystem", this) {
+	    : PythonImportCacheItem("decidb.filesystem"), ModifiedMemoryFileSystem("ModifiedMemoryFileSystem", this) {
 	}
 	~DuckdbFilesystemCacheItem() override {
 	}
@@ -36,10 +36,10 @@ protected:
 struct DuckdbCacheItem : public PythonImportCacheItem {
 
 public:
-	static constexpr const char *Name = "packdb";
+	static constexpr const char *Name = "decidb";
 
 public:
-	DuckdbCacheItem() : PythonImportCacheItem("packdb"), filesystem(), Value("Value", this) {
+	DuckdbCacheItem() : PythonImportCacheItem("decidb"), filesystem(), Value("Value", this) {
 	}
 	~DuckdbCacheItem() override {
 	}

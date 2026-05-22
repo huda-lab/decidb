@@ -192,7 +192,7 @@ A constraint or objective without `WHEN` applies to all rows.
 
 ### Expression-level and Aggregate-local WHEN Do Not Mix
 
-PackDB rejects a constraint or objective that contains both a whole-expression `WHEN` and one or more aggregate-local `WHEN` filters:
+DecidB rejects a constraint or objective that contains both a whole-expression `WHEN` and one or more aggregate-local `WHEN` filters:
 
 ```sql
 -- ERROR: expression-level WHEN and aggregate-local WHEN in same constraint
@@ -219,7 +219,7 @@ The outer-WHEN form remains supported and equivalent for single-aggregate constr
 SUCH THAT SUM(x) + 3 <= 10 WHEN active
 ```
 
-**How it works**: `NormalizeComparisonExpr` in `src/packdb/symbolic/decide_symbolic.cpp` can't run the SymEngine expand/simplify path on a WHEN-bearing LHS — that would flatten the per-aggregate filter. Instead it does a parsed-level rewrite: (1) folds `K * (SUM(...) WHEN c)` (and `(SUM(...) WHEN c) / K`) into `WHEN(SUM(K * inner), c)` so the downstream extractor sees a bare WHEN-tagged aggregate; (2) decomposes the LHS additively (recursing through `+`, binary `-`, unary `-`, CAST), peels pure-numeric leaves into a single offset; (3) rebuilds the LHS from the structural terms and emits `LHS_struct OP (RHS - offset)`.
+**How it works**: `NormalizeComparisonExpr` in `src/decidb/symbolic/decide_symbolic.cpp` can't run the SymEngine expand/simplify path on a WHEN-bearing LHS — that would flatten the per-aggregate filter. Instead it does a parsed-level rewrite: (1) folds `K * (SUM(...) WHEN c)` (and `(SUM(...) WHEN c) / K`) into `WHEN(SUM(K * inner), c)` so the downstream extractor sees a bare WHEN-tagged aggregate; (2) decomposes the LHS additively (recursing through `+`, binary `-`, unary `-`, CAST), peels pure-numeric leaves into a single offset; (3) rebuilds the LHS from the structural terms and emits `LHS_struct OP (RHS - offset)`.
 
 Objectives get the same treatment as constraints: `MAXIMIZE (SUM(x) WHEN cond) + 3`, `MAXIMIZE 2 * (SUM(x) WHEN cond)`, and combinations like `MINIMIZE SUM(x) + SUM(y) WHEN c - 7` are all supported. Additive constants don't affect `argmax`/`argmin` so the peel drops them from the body (stored on `LogicalDecide.objective_constant_offset` for any future feature that reports the objective value); `K * AGG` and `AGG / K` fold the scalar into the aggregate body via the same rewrite used for constraints.
 
@@ -258,7 +258,7 @@ MAXIMIZE SUM(x * value) WHEN region = 'US'
 
 ## Note: WHEN vs SQL CASE WHEN
 
-PackDB's `WHEN` is a **row filter** — it controls whether a constraint or objective *applies* to a row. SQL's `CASE WHEN` is a **value expression** — it produces different values conditionally. These serve different purposes and are not interchangeable.
+DecidB's `WHEN` is a **row filter** — it controls whether a constraint or objective *applies* to a row. SQL's `CASE WHEN` is a **value expression** — it produces different values conditionally. These serve different purposes and are not interchangeable.
 
 When you need **conditional coefficients or bounds** (different values per row based on conditions), use a CTE or subquery to pre-compute the value, then reference the resulting column inside DECIDE. This avoids any need to support `CASE WHEN` within the DECIDE clause itself.
 
@@ -367,7 +367,7 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
 
 - **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
   - `BindExpression()`: Handles PER stripping on objectives, then WHEN condition extraction on the objective expression. Nested `WHEN_CONSTRAINT_TAG` binds as aggregate-local.
-  - Objective normalization in `src/packdb/symbolic/decide_symbolic.cpp`: reassociates legacy objective comparisons like `SUM(x) WHEN flag = 'R'` back into whole-objective `WHEN(flag = 'R')`.
+  - Objective normalization in `src/decidb/symbolic/decide_symbolic.cpp`: reassociates legacy objective comparisons like `SUM(x) WHEN flag = 'R'` back into whole-objective `WHEN(flag = 'R')`.
 
 - **Base DECIDE binder**: `src/planner/expression_binder/decide_binder.cpp`
   - `BindLocalWhenAggregate()`: Binds the aggregate child, binds the data-only boolean condition, and stores the condition as `BoundAggregateExpression::filter`.
@@ -386,11 +386,11 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
   - `Objective::per_columns`: Same for objectives.
   - `Term::filter`, `BilinearConstraintTerm::filter`, `DecideConstraint::QuadraticGroup::filter`, and `Objective::BilinearTerm::filter`: Optional aggregate-local WHEN filters carried to coefficient evaluation.
 
-- **Evaluated constraint**: `src/include/duckdb/packdb/solver_input.hpp`
+- **Evaluated constraint**: `src/include/duckdb/decidb/solver_input.hpp`
   - `EvaluatedConstraint::row_group_ids`: Per-row group assignment (`INVALID_INDEX` = excluded).
   - `EvaluatedConstraint::num_groups`: `0` = ungrouped fast path, `1` = WHEN-only, `>1` = PER groups.
 
-- **Model builder**: `src/packdb/utility/ilp_model_builder.cpp`
+- **Model builder**: `src/decidb/utility/ilp_model_builder.cpp`
   - Empty groups are skipped — no constraint is emitted.
 
 - **Tag constants and helpers**: `src/include/duckdb/common/enums/decide.hpp`

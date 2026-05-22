@@ -21,7 +21,7 @@ from ._oracle_helpers import group_indices as _group_indices, add_ne_bigm as _ad
 
 @pytest.mark.per_clause
 @pytest.mark.correctness
-def test_per_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """PER keyword should partition constraints by group."""
     sql = """
         SELECT s_suppkey, s_acctbal, s_nationkey, x FROM supplier
@@ -30,8 +30,8 @@ def test_per_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(s_suppkey AS BIGINT),
@@ -58,11 +58,11 @@ def test_per_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("s_acctbal")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("s_acctbal")])},
     )
     perf_tracker.record(
-        "per_basic", packdb_time, build_time, result.solve_time_seconds,
+        "per_basic", decidb_time, build_time, result.solve_time_seconds,
         n, n, len(set(r[2] for r in data)),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -72,7 +72,7 @@ def test_per_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_with_integer_variable(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """PER with integer variables and a weighted constraint."""
     sql = """
@@ -83,8 +83,8 @@ def test_per_with_integer_variable(
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -112,11 +112,11 @@ def test_per_with_integer_variable(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "per_with_integer_variable", packdb_time, build_time,
+        "per_with_integer_variable", decidb_time, build_time,
         result.solve_time_seconds, n, n, len(set(r[0] for r in data)),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -127,7 +127,7 @@ def test_per_with_integer_variable(
 @pytest.mark.when_constraint
 @pytest.mark.correctness
 def test_per_combined_with_when(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """PER and WHEN used together — group-level constraint with row filter."""
     sql = """
@@ -140,8 +140,8 @@ def test_per_combined_with_when(
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -177,17 +177,17 @@ def test_per_combined_with_when(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
+        decidb_rows, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": (
-                float(row[packdb_cols.index("l_extendedprice")])
-                if row[packdb_cols.index("l_returnflag")] == "R"
+                float(row[decidb_cols.index("l_extendedprice")])
+                if row[decidb_cols.index("l_returnflag")] == "R"
                 else 0.0
             )
         },
     )
     perf_tracker.record(
-        "per_combined_with_when", packdb_time, build_time,
+        "per_combined_with_when", decidb_time, build_time,
         result.solve_time_seconds, n, n, len(set(r[4] for r in data)) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -198,7 +198,7 @@ def test_per_combined_with_when(
 @pytest.mark.cons_comparison
 @pytest.mark.correctness
 def test_per_not_equal(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """PER with <> operator — Big-M disjunction generated per group."""
     sql = """
@@ -210,8 +210,8 @@ def test_per_not_equal(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -244,11 +244,11 @@ def test_per_not_equal(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "per_not_equal", packdb_time, build_time, result.solve_time_seconds,
+        "per_not_equal", decidb_time, build_time, result.solve_time_seconds,
         n, n, len(set(r[2] for r in data)) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -259,7 +259,7 @@ def test_per_not_equal(
 @pytest.mark.edge_case
 @pytest.mark.correctness
 def test_per_null_group_key(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """NULL values in PER column should be excluded from all groups."""
     data_sql = """
@@ -278,8 +278,8 @@ def test_per_null_group_key(
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(val AS DOUBLE) FROM ({data_sql})"
@@ -303,11 +303,11 @@ def test_per_null_group_key(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("val")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("val")])},
     )
     perf_tracker.record(
-        "per_null_group_key", packdb_time, build_time, result.solve_time_seconds,
+        "per_null_group_key", decidb_time, build_time, result.solve_time_seconds,
         n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -317,7 +317,7 @@ def test_per_null_group_key(
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_different_grouping_columns(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Two PER constraints on different columns — overlapping group structures."""
     sql = """
@@ -330,8 +330,8 @@ def test_per_different_grouping_columns(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -365,11 +365,11 @@ def test_per_different_grouping_columns(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "per_different_grouping_columns", packdb_time, build_time,
+        "per_different_grouping_columns", decidb_time, build_time,
         result.solve_time_seconds, n, n,
         len(set(r[2] for r in data)) + len(set(r[3] for r in data)),
         result.objective_value, oracle_solver.solver_name(),
@@ -383,7 +383,7 @@ def test_per_different_grouping_columns(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_real_between_per_oracle(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """PER grouping combined with BETWEEN on a REAL variable.
 
@@ -402,8 +402,8 @@ def test_real_between_per_oracle(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -431,11 +431,11 @@ def test_real_between_per_oracle(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "real_between_per_oracle", packdb_time, build_time,
+        "real_between_per_oracle", decidb_time, build_time,
         result.solve_time_seconds, n, n, len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,

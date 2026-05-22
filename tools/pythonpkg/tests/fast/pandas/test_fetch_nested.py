@@ -1,5 +1,5 @@
 import pytest
-import packdb
+import decidb
 import sys
 
 pd = pytest.importorskip("pandas")
@@ -316,7 +316,7 @@ class TestFetchNested(object):
         if not expected_error:
             compare_results(duckdb_cursor, query, expected)
         else:
-            with pytest.raises(packdb.InvalidInputException, match=expected_error):
+            with pytest.raises(decidb.InvalidInputException, match=expected_error):
                 compare_results(duckdb_cursor, query, expected)
 
     # fmt: off

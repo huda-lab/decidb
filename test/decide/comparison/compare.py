@@ -1,4 +1,4 @@
-"""Comparison logic for PackDB DECIDE results vs oracle solver results.
+"""Comparison logic for DecidB DECIDE results vs oracle solver results.
 
 Two levels of comparison:
   1. Objective value comparison (always performed).
@@ -30,17 +30,17 @@ def _sortable(val):
         return val
 
 
-def compute_packdb_objective(
-    packdb_rows: list[tuple],
-    packdb_cols: list[str],
+def compute_decidb_objective(
+    decidb_rows: list[tuple],
+    decidb_cols: list[str],
     decide_var_names: list[str],
     coeff_fn: Callable[[tuple], dict[str, float]],
 ) -> float:
-    """Compute the achieved objective from PackDB output rows.
+    """Compute the achieved objective from DecidB output rows.
 
     Args:
-        packdb_rows: Rows returned by packdb_conn.execute(...).fetchall().
-        packdb_cols: Column names from packdb_conn.description.
+        decidb_rows: Rows returned by decidb_conn.execute(...).fetchall().
+        decidb_cols: Column names from decidb_conn.description.
         decide_var_names: Names of the DECIDE variable columns (e.g. ["x"]).
         coeff_fn: Given a row tuple, returns {var_name: coefficient} for the
             objective.  For a simple ``MAXIMIZE SUM(x * col)``, this would
@@ -49,9 +49,9 @@ def compute_packdb_objective(
     Returns:
         The sum of (variable_value * coefficient) across all rows.
     """
-    col_idx = {name: i for i, name in enumerate(packdb_cols)}
+    col_idx = {name: i for i, name in enumerate(decidb_cols)}
     total = 0.0
-    for row in packdb_rows:
+    for row in decidb_rows:
         coeffs = coeff_fn(row)
         for vname in decide_var_names:
             var_val = float(row[col_idx[vname]])
@@ -65,39 +65,39 @@ def compute_packdb_objective(
 
 @dataclass
 class ComparisonResult:
-    """Result of comparing PackDB output against the oracle solution."""
+    """Result of comparing DecidB output against the oracle solution."""
     status: str                  # "identical" or "optimal"
-    packdb_objective: float
+    decidb_objective: float
     oracle_objective: float
-    packdb_vector: list[float]
+    decidb_vector: list[float]
     oracle_vector: list[float]
 
 
 def compare_solutions(
-    packdb_rows: list[tuple],
-    packdb_cols: list[str],
+    decidb_rows: list[tuple],
+    decidb_cols: list[str],
     oracle_result: SolverResult,
     oracle_data: list[tuple],
     decide_var_names: list[str],
     coeff_fn: Callable[[tuple], dict[str, float]] | None = None,
     tolerance: float = 1e-4,
-    packdb_objective_fn: Callable[[list[tuple], list[str]], float] | None = None,
+    decidb_objective_fn: Callable[[list[tuple], list[str]], float] | None = None,
 ) -> ComparisonResult:
-    """Compare PackDB output against the oracle solution.
+    """Compare DecidB output against the oracle solution.
 
     1. Asserts that objectives match (raises on mismatch).
     2. Sorts both sides by non-decision columns and compares variable
        assignments element-wise.
 
     Args:
-        packdb_rows: Rows from PackDB query.
-        packdb_cols: Column names from PackDB result description.
+        decidb_rows: Rows from DecidB query.
+        decidb_cols: Column names from DecidB result description.
         oracle_result: Result from the oracle solver (must include
             variable_values for vector comparison).
         oracle_data: Raw data rows from duckdb_conn — same rows the oracle
             model was built from, in original query order.
         decide_var_names: DECIDE variable column names (e.g. ["x"]).
-        coeff_fn: Maps a PackDB row to objective coefficients per variable.
+        coeff_fn: Maps a DecidB row to objective coefficients per variable.
         tolerance: Acceptable absolute difference.
 
     Returns:
@@ -111,31 +111,31 @@ def compare_solutions(
     )
     assert oracle_result.objective_value is not None
 
-    if packdb_objective_fn is not None:
-        packdb_obj = packdb_objective_fn(packdb_rows, packdb_cols)
+    if decidb_objective_fn is not None:
+        decidb_obj = decidb_objective_fn(decidb_rows, decidb_cols)
     else:
         if coeff_fn is None:
             raise ValueError(
-                "compare_solutions: pass either coeff_fn (linear) or packdb_objective_fn"
+                "compare_solutions: pass either coeff_fn (linear) or decidb_objective_fn"
             )
-        packdb_obj = compute_packdb_objective(
-            packdb_rows, packdb_cols, decide_var_names, coeff_fn
+        decidb_obj = compute_decidb_objective(
+            decidb_rows, decidb_cols, decide_var_names, coeff_fn
         )
     oracle_obj = oracle_result.objective_value
 
-    obj_diff = abs(packdb_obj - oracle_obj)
+    obj_diff = abs(decidb_obj - oracle_obj)
     assert obj_diff <= tolerance, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, "
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
         f"Oracle={oracle_obj:.6f}, diff={obj_diff:.6f} (tolerance={tolerance})"
     )
 
-    # Sort key: all non-decision columns in PackDB
+    # Sort key: all non-decision columns in DecidB
     var_set = set(decide_var_names)
-    key_indices = [i for i, c in enumerate(packdb_cols) if c not in var_set]
-    var_indices = [packdb_cols.index(v) for v in decide_var_names]
+    key_indices = [i for i, c in enumerate(decidb_cols) if c not in var_set]
+    var_indices = [decidb_cols.index(v) for v in decide_var_names]
 
-    packdb_sorted = sorted(
-        enumerate(packdb_rows),
+    decidb_sorted = sorted(
+        enumerate(decidb_rows),
         key=lambda pair: tuple(_sortable(pair[1][i]) for i in key_indices),
     )
 
@@ -144,9 +144,9 @@ def compare_solutions(
         key=lambda pair: tuple(_sortable(v) for v in pair[1]),
     )
 
-    packdb_vector = [
+    decidb_vector = [
         float(row[vi])
-        for _, row in packdb_sorted
+        for _, row in decidb_sorted
         for vi in var_indices
     ]
 
@@ -157,10 +157,10 @@ def compare_solutions(
     ]
 
     vectors_match = (
-        len(packdb_vector) == len(oracle_vector)
+        len(decidb_vector) == len(oracle_vector)
         and all(
             abs(p - o) <= tolerance
-            for p, o in zip(packdb_vector, oracle_vector)
+            for p, o in zip(decidb_vector, oracle_vector)
         )
     )
 
@@ -168,9 +168,9 @@ def compare_solutions(
 
     return ComparisonResult(
         status=status,
-        packdb_objective=packdb_obj,
+        decidb_objective=decidb_obj,
         oracle_objective=oracle_obj,
-        packdb_vector=packdb_vector,
+        decidb_vector=decidb_vector,
         oracle_vector=oracle_vector,
     )
 
@@ -180,14 +180,14 @@ def compare_solutions(
 # ---------------------------------------------------------------------------
 
 def assert_optimal_match(
-    packdb_rows: list[tuple],
-    packdb_cols: list[str],
+    decidb_rows: list[tuple],
+    decidb_cols: list[str],
     oracle_result: SolverResult,
     decide_var_names: list[str],
     coeff_fn: Callable[[tuple], dict[str, float]],
     tolerance: float = 1e-4,
 ) -> None:
-    """Assert that PackDB's objective matches the oracle's optimal value.
+    """Assert that DecidB's objective matches the oracle's optimal value.
 
     Objective-only comparison — kept for backward compatibility.
     Prefer compare_solutions() for new tests.
@@ -197,18 +197,18 @@ def assert_optimal_match(
     )
     assert oracle_result.objective_value is not None
 
-    packdb_obj = compute_packdb_objective(
-        packdb_rows, packdb_cols, decide_var_names, coeff_fn
+    decidb_obj = compute_decidb_objective(
+        decidb_rows, decidb_cols, decide_var_names, coeff_fn
     )
     oracle_obj = oracle_result.objective_value
 
-    diff = abs(packdb_obj - oracle_obj)
+    diff = abs(decidb_obj - oracle_obj)
     assert diff <= tolerance, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, "
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
         f"Oracle={oracle_obj:.6f}, diff={diff:.6f} (tolerance={tolerance})"
     )
 
 
-def assert_infeasible(packdb_cli, sql: str) -> None:
-    """Assert that executing *sql* on packdb raises an infeasibility error."""
-    packdb_cli.assert_error(sql, match=r"(?i)(infeasible|unbounded)")
+def assert_infeasible(decidb_cli, sql: str) -> None:
+    """Assert that executing *sql* on decidb raises an infeasibility error."""
+    decidb_cli.assert_error(sql, match=r"(?i)(infeasible|unbounded)")

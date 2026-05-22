@@ -3,7 +3,7 @@ import tempfile
 
 import os
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 
 
 @pytest.fixture

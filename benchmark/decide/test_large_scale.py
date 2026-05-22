@@ -18,7 +18,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_knapsack_large(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_knapsack_large(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Knapsack on a larger range (l_orderkey < 500)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -29,8 +29,8 @@ def test_knapsack_large(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -58,12 +58,12 @@ def test_knapsack_large(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "knapsack_large", packdb_time, build_time,
+        "knapsack_large", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -77,7 +77,7 @@ def test_knapsack_large(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_order_selection_large(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_order_selection_large(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Order selection on a wider date range (full year 1995)."""
     sql = """
         SELECT o_orderkey, o_totalprice, x
@@ -88,8 +88,8 @@ def test_order_selection_large(packdb_cli, duckdb_conn, oracle_solver, perf_trac
         MAXIMIZE SUM(x * o_totalprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(o_orderkey AS BIGINT),
@@ -116,12 +116,12 @@ def test_order_selection_large(packdb_cli, duckdb_conn, oracle_solver, perf_trac
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("o_totalprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("o_totalprice")])},
     )
 
     perf_tracker.record(
-        "order_selection_large", packdb_time, build_time,
+        "order_selection_large", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

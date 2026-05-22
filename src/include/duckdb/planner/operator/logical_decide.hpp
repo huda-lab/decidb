@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         PackDB
+//                         DecidB
 //
 // duckdb/planner/operator/logical_decide.hpp
 //

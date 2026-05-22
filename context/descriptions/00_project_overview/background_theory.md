@@ -12,7 +12,7 @@ The concept of "Package Queries" was formalized by generic Package Query Languag
 -   **Contrast**: Standard SQL `WHERE` clauses apply predicates to *individual* tuples independently. `DECIDE` clauses apply predicates to the *collection* of selected tuples.
 
 ## 3. Integer Linear Programming (ILP)
-PackDB maps these queries to ILP problems.
+DecidB maps these queries to ILP problems.
 -   **Canonical Form**:
     $$ \text{maximize } \mathbf{c}^T \mathbf{x} $$
     $$ \text{subject to } A \mathbf{x} \le \mathbf{b} $$
@@ -25,4 +25,4 @@ PackDB maps these queries to ILP problems.
 ## 4. Why DuckDB + Gurobi/HiGHS?
 -   **DuckDB**: Columnar, vectorized execution makes it fast to compute the coefficients ($\mathbf{c}$ and $A$) over large datasets.
 -   **Gurobi**: A state-of-the-art commercial solver with excellent performance on large-scale mixed-integer problems. Used as the primary solver when a license is available.
--   **HiGHS**: A modern, open-source C++ solver bundled as the fallback. Embedding it creates a zero-copy (or near zero-copy) path from DB memory to Solver memory, ensuring PackDB works out of the box without any commercial dependencies.
+-   **HiGHS**: A modern, open-source C++ solver bundled as the fallback. Embedding it creates a zero-copy (or near zero-copy) path from DB memory to Solver memory, ensuring DecidB works out of the box without any commercial dependencies.

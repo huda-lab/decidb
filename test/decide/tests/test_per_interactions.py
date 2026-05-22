@@ -40,7 +40,7 @@ from solver.types import VarType, ObjSense, SolverStatus
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_per_max_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x * l_quantity) >= 30 PER l_returnflag — Big-M indicators must be
     partitioned per group. A global-scoping bug would let one row's indicator
     satisfy all groups simultaneously."""
@@ -53,8 +53,8 @@ def test_per_max_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MINIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -102,19 +102,19 @@ def test_per_max_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_obj = sum(
         int(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: PackDB={packdb_obj:.2f}, "
+    assert abs(decidb_obj - result.objective_value) <= 1.0, (
+        f"Objective mismatch: DecidB={decidb_obj:.2f}, "
         f"Oracle={result.objective_value:.2f}"
     )
 
     # Sanity: each group has at least one row with x=1 AND qty>=30
     by_grp: dict[str, list[tuple[int, float]]] = {}
-    for row in packdb_result:
+    for row in decidb_result:
         flag = str(row[ci["l_returnflag"]])
         by_grp.setdefault(flag, []).append(
             (int(row[ci["x"]]), float(row[ci["l_quantity"]]))
@@ -125,7 +125,7 @@ def test_per_max_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         )
 
     perf_tracker.record(
-        "per_max_geq", packdb_time, build_time,
+        "per_max_geq", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, n + len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -142,7 +142,7 @@ def test_per_max_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_min_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MIN(x * l_quantity) <= 20 PER l_returnflag with INTEGER x in [1,5].
     The lower bound x>=1 prevents the trivial x=0 escape, so the MIN constraint
     actively limits at least one row's x value per group. Big-M indicators must
@@ -157,8 +157,8 @@ def test_per_min_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -210,19 +210,19 @@ def test_per_min_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_obj = sum(
         int(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: PackDB={packdb_obj:.2f}, "
+    assert abs(decidb_obj - result.objective_value) <= 1.0, (
+        f"Objective mismatch: DecidB={decidb_obj:.2f}, "
         f"Oracle={result.objective_value:.2f}"
     )
 
     # Sanity: each group has at least one row with x*qty <= K
     by_grp: dict[str, list[float]] = {}
-    for row in packdb_result:
+    for row in decidb_result:
         flag = str(row[ci["l_returnflag"]])
         x_val = int(row[ci["x"]])
         qty = float(row[ci["l_quantity"]])
@@ -233,7 +233,7 @@ def test_per_min_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         )
 
     perf_tracker.record(
-        "per_min_leq", packdb_time, build_time,
+        "per_min_leq", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, n + len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -250,7 +250,7 @@ def test_per_min_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_max_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x * l_quantity) = 30 PER l_returnflag with INTEGER x in [0,5].
     Combines easy direction (per-row x*qty <= 30) with hard direction
     (per-group existence of x*qty = 30). Both must be partitioned per group
@@ -267,8 +267,8 @@ def test_per_max_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_trac
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -323,19 +323,19 @@ def test_per_max_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_obj = sum(
         int(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: PackDB={packdb_obj:.2f}, "
+    assert abs(decidb_obj - result.objective_value) <= 1.0, (
+        f"Objective mismatch: DecidB={decidb_obj:.2f}, "
         f"Oracle={result.objective_value:.2f}"
     )
 
     # Sanity: each group has MAX(x*qty) == K
     by_grp: dict[str, list[float]] = {}
-    for row in packdb_result:
+    for row in decidb_result:
         flag = str(row[ci["l_returnflag"]])
         x_val = int(row[ci["x"]])
         qty = float(row[ci["l_quantity"]])
@@ -346,7 +346,7 @@ def test_per_max_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_trac
         )
 
     perf_tracker.record(
-        "per_max_eq", packdb_time, build_time,
+        "per_max_eq", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, n * 2 + len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -362,7 +362,7 @@ def test_per_max_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_abs_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_abs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(ABS(x - target)) <= 5 PER grp — ABS auxiliary variables must be
     partitioned by PER group. A global-scoping bug would let cross-group
     deviations cancel against each other in the aggregate, relaxing the
@@ -382,8 +382,8 @@ def test_per_abs_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     # Mirror the inline CTE for the oracle.
     data = [
@@ -431,16 +431,16 @@ def test_per_abs_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_obj = sum(float(row[ci["x"]]) for row in packdb_result)
-    assert abs(packdb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, "
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_obj = sum(float(row[ci["x"]]) for row in decidb_result)
+    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}"
     )
 
     # Sanity: per-group SUM(|x - target|) <= K
     by_grp: dict[str, float] = {}
-    for row in packdb_result:
+    for row in decidb_result:
         g = str(row[ci["grp"]])
         x_val = float(row[ci["x"]])
         target = float(row[ci["target"]])
@@ -451,7 +451,7 @@ def test_per_abs_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
         )
 
     perf_tracker.record(
-        "per_abs_aggregate", packdb_time, build_time,
+        "per_abs_aggregate", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, n * 2 + len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -469,7 +469,7 @@ def test_per_abs_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_multi_variable(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_multi_variable(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Two decision variables (BOOLEAN x, INTEGER y) under PER grouping.
     The variable-indexing layer must produce the right column mapping for
     each group's constraint, with each variable's coefficients partitioned
@@ -491,8 +491,8 @@ def test_per_multi_variable(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
         MAXIMIZE SUM(x * w + y)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [
         (1, 'A', 10),
@@ -536,20 +536,20 @@ def test_per_multi_variable(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_obj = sum(
         int(row[ci["x"]]) * int(row[ci["w"]]) + int(row[ci["y"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 0.5, (
-        f"Objective mismatch: PackDB={packdb_obj}, "
+    assert abs(decidb_obj - result.objective_value) <= 0.5, (
+        f"Objective mismatch: DecidB={decidb_obj}, "
         f"Oracle={result.objective_value:.0f}"
     )
 
     # Sanity: per-group SUM(x*w) <= 12 and global SUM(y) <= 8
     by_grp: dict[str, float] = {}
     sum_y = 0
-    for row in packdb_result:
+    for row in decidb_result:
         g = str(row[ci["grp"]])
         xw = int(row[ci["x"]]) * int(row[ci["w"]])
         by_grp[g] = by_grp.get(g, 0.0) + xw
@@ -559,7 +559,7 @@ def test_per_multi_variable(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
     assert sum_y <= 8, f"SUM(y)={sum_y} > 8 — global constraint violated"
 
     perf_tracker.record(
-        "per_multi_var", packdb_time, build_time,
+        "per_multi_var", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, len(groups) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -578,7 +578,7 @@ def test_per_multi_variable(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_per_multi_variable(packdb_cli, oracle_solver, perf_tracker):
+def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
     """WHEN + PER + two decision variables (BOOLEAN x, INTEGER y).
 
     The WHEN filter applies to the per-group aggregate constraint — only
@@ -606,8 +606,8 @@ def test_when_per_multi_variable(packdb_cli, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * w + y * v)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     # Inline CTE data: (id, grp, active, w, v)
     data = [
@@ -651,18 +651,18 @@ def test_when_per_multi_variable(packdb_cli, oracle_solver, perf_tracker):
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: j for j, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
+    ci = {name: j for j, name in enumerate(decidb_cols)}
+    decidb_obj = sum(
         int(row[ci["x"]]) * int(row[ci["w"]]) + int(row[ci["y"]]) * int(row[ci["v"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 0.5, (
-        f"Objective mismatch: PackDB={packdb_obj}, "
+    assert abs(decidb_obj - result.objective_value) <= 0.5, (
+        f"Objective mismatch: DecidB={decidb_obj}, "
         f"Oracle={result.objective_value:.0f}"
     )
 
     # Sanity: per-group WHEN-filtered sum <= 18
-    row_by_id = {int(row[ci["id"]]): row for row in packdb_result}
+    row_by_id = {int(row[ci["id"]]): row for row in decidb_result}
     by_grp_active: dict[str, float] = {}
     for row_id, grp, active, w, v in data:
         if active:
@@ -675,7 +675,7 @@ def test_when_per_multi_variable(packdb_cli, oracle_solver, perf_tracker):
         )
 
     perf_tracker.record(
-        "when_per_multi_var", packdb_time, build_time,
+        "when_per_multi_var", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, len(groups_active),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -693,7 +693,7 @@ def test_when_per_multi_variable(packdb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_qp_objective_per_constraint(
-    packdb_cli, oracle_solver, perf_tracker,
+    decidb_cli, oracle_solver, perf_tracker,
 ):
     """QP objective (MINIMIZE SUM(POWER(x - target, 2))) with a linear PER
     constraint (SUM(x) >= 5 PER grp).
@@ -716,12 +716,12 @@ def test_qp_objective_per_constraint(
         MINIMIZE SUM(POWER(x - target, 2))
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     # Oracle: mirror the SQL with row-indexed continuous vars, a PER-group
     # SUM(x) >= 5 constraint, and the expanded POWER quadratic. Expansion of
-    # (x_i - t_i)^2 drops the constant t_i^2 term (PackDB's reported
+    # (x_i - t_i)^2 drops the constant t_i^2 term (DecidB's reported
     # objective does the same), leaving linear = -2*t_i * x_i and
     # quadratic = x_i^2.
     data = [
@@ -749,22 +749,22 @@ def test_qp_objective_per_constraint(
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: j for j, name in enumerate(packdb_cols)}
-    # Packdb-side objective: strip the constant t_i^2 term to match the
+    ci = {name: j for j, name in enumerate(decidb_cols)}
+    # Decidb-side objective: strip the constant t_i^2 term to match the
     # oracle's constant-free formulation.
-    packdb_obj = sum(
+    decidb_obj = sum(
         (float(row[ci["x"]]) - float(row[ci["target"]])) ** 2
         - float(row[ci["target"]]) ** 2
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1e-3, (
-        f"QP+PER objective mismatch: PackDB={packdb_obj:.6f}, "
+    assert abs(decidb_obj - result.objective_value) <= 1e-3, (
+        f"QP+PER objective mismatch: DecidB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}"
     )
 
     # Invariant: PER constraint must hold per group.
     by_grp: dict[str, float] = {}
-    for row in packdb_result:
+    for row in decidb_result:
         g = str(row[ci["grp"]])
         by_grp[g] = by_grp.get(g, 0.0) + float(row[ci["x"]])
     for g, total in by_grp.items():
@@ -773,7 +773,7 @@ def test_qp_objective_per_constraint(
         )
 
     perf_tracker.record(
-        "qp_objective_per", packdb_time, build_time,
+        "qp_objective_per", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2 + n,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -789,7 +789,7 @@ def test_qp_objective_per_constraint(
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_single_row_groups(packdb_cli, oracle_solver, perf_tracker):
+def test_per_single_row_groups(decidb_cli, oracle_solver, perf_tracker):
     """Every PER group has exactly one row — |group| = 1 degenerate case.
 
     Each group's aggregate has a single-element coefficient vector; the
@@ -806,8 +806,8 @@ def test_per_single_row_groups(packdb_cli, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [(1, 'A', 100.0), (2, 'B', 50.0), (3, 'C', 75.0)]
     n = len(data)
@@ -833,15 +833,15 @@ def test_per_single_row_groups(packdb_cli, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    val_idx = packdb_cols.index("val")
-    x_idx = packdb_cols.index("x")
-    packdb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in packdb_rows)
-    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    val_idx = decidb_cols.index("val")
+    x_idx = decidb_cols.index("x")
+    decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
+    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(
-        "per_single_row_groups", packdb_time, build_time,
+        "per_single_row_groups", decidb_time, build_time,
         result.solve_time_seconds, n, n, len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -853,7 +853,7 @@ def test_per_single_row_groups(packdb_cli, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_zero_coefficient_group(packdb_cli, oracle_solver, perf_tracker):
+def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
     """One PER group has all-zero coefficients — its aggregate constraint is
     vacuously satisfied regardless of the decision.
 
@@ -873,8 +873,8 @@ def test_per_zero_coefficient_group(packdb_cli, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [(1, 'A', 0.0), (2, 'A', 0.0), (3, 'B', 5.0), (4, 'B', 20.0)]
     n = len(data)
@@ -893,7 +893,7 @@ def test_per_zero_coefficient_group(packdb_cli, oracle_solver, perf_tracker):
     for g, idxs in groups.items():
         coeffs = {vnames[i]: data[i][2] for i in idxs}
         # Emit only if not trivially zero (structural equivalent of the
-        # "vacuous" group that PackDB may or may not emit; the solver
+        # "vacuous" group that DecidB may or may not emit; the solver
         # behaves identically either way).
         if any(abs(c) > 0.0 for c in coeffs.values()):
             oracle_solver.add_constraint(
@@ -906,14 +906,14 @@ def test_per_zero_coefficient_group(packdb_cli, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    x_idx = packdb_cols.index("x")
-    packdb_obj = sum(int(r[x_idx]) for r in packdb_rows)
-    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    x_idx = decidb_cols.index("x")
+    decidb_obj = sum(int(r[x_idx]) for r in decidb_rows)
+    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(
-        "per_zero_coefficient_group", packdb_time, build_time,
+        "per_zero_coefficient_group", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -926,7 +926,7 @@ def test_per_zero_coefficient_group(packdb_cli, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_null_group_with_when(packdb_cli, oracle_solver, perf_tracker):
+def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
     """Row with NULL PER-key that passes the WHEN mask, combined with a
     group whose only row fails the WHEN mask (empty WHEN-bucket).
 
@@ -948,8 +948,8 @@ def test_per_null_group_with_when(packdb_cli, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [
         (1, 'A', 10.0, True),
@@ -987,15 +987,15 @@ def test_per_null_group_with_when(packdb_cli, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    val_idx = packdb_cols.index("val")
-    x_idx = packdb_cols.index("x")
-    packdb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in packdb_rows)
-    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    val_idx = decidb_cols.index("val")
+    x_idx = decidb_cols.index("x")
+    decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
+    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(
-        "per_null_group_with_when", packdb_time, build_time,
+        "per_null_group_with_when", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",

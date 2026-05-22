@@ -13,8 +13,8 @@ Picks a small batch of high-value gaps from `context/descriptions/05_testing/*/t
 
 - **No unilateral design choices.** Every nontrivial decision goes through `AskUserQuestion`: which gaps, how many, where to put tests, what SQL shape, what to do if a bug is found.
 - **Every new correctness test is oracle-verified.** Build the same problem independently in gurobipy via `oracle_solver` and compare with `compare_solutions`. Analytical / hand-computed closed-form assertions (e.g. `expected = {1: 10.0, 2: 20.0, 3: 30.0}`) are **forbidden** — see `context/descriptions/05_testing/README.md` and `02_operations/oracle.md`. "constraint only" is a legacy tier, acceptable only for pure feasibility queries with no objective.
-- **Independent semantics, not Big-M mirrors.** For discrete constructs PackDB rewrites into Big-M ILPs (`<>`, etc.), encode the semantics natively using Gurobi features via `oracle_solver.add_indicator_constraint` or the primitives in `tests/_oracle_helpers.py`. Mirroring PackDB's Big-M only detects lockstep bugs; independent encoding catches encoding errors too.
-- **Never silently flip a failing test to make it pass.** Stop and escalate to the user. Oracle mismatches usually mean a real bug — don't rewrite the oracle to match PackDB.
+- **Independent semantics, not Big-M mirrors.** For discrete constructs DecidB rewrites into Big-M ILPs (`<>`, etc.), encode the semantics natively using Gurobi features via `oracle_solver.add_indicator_constraint` or the primitives in `tests/_oracle_helpers.py`. Mirroring DecidB's Big-M only detects lockstep bugs; independent encoding catches encoding errors too.
+- **Never silently flip a failing test to make it pass.** Stop and escalate to the user. Oracle mismatches usually mean a real bug — don't rewrite the oracle to match DecidB.
 - **Update docs in the same session** — `done.md` and `todo.md` for every area touched. Not optional (CLAUDE.md mandate).
 - **One batch per invocation.** Don't sprawl into Batch 2 unless the user asks.
 
@@ -85,7 +85,7 @@ Then `ExitPlanMode`.
 For risky cases (equality constraints, bounded-data constraints, anything where infeasibility depends on data values), run the bare query via the CLI to confirm feasibility before committing to the test design:
 
 ```bash
-./build/release/packdb packdb.db -readonly -json -c "<SQL>"
+./build/release/decidb decidb.db -readonly -json -c "<SQL>"
 ```
 
 If infeasible: adjust constants, expand data scope (e.g., `l_orderkey <= 100`), or fall back to a CTE. Re-confirm with user if the change is material.
@@ -96,7 +96,7 @@ If infeasible: adjust constants, expand data scope (e.g., `l_orderkey <= 100`), 
 - Each test:
   - Pytest marks (per_clause, min_max, var_*, correctness, etc.)
   - SQL string
-  - Run PackDB via `packdb_cli.execute(sql)` → `(rows, cols)`
+  - Run DecidB via `decidb_cli.execute(sql)` → `(rows, cols)`
   - Fetch oracle data via `duckdb_conn` with explicit casts
   - Build the ILP in gurobipy via `oracle_solver`. Use the helpers in
     `tests/_oracle_helpers.py` for common constructs rather than rolling
@@ -105,13 +105,13 @@ If infeasible: adjust constants, expand data scope (e.g., `l_orderkey <= 100`), 
     `oracle_solver.add_quadratic_constraint(linear, quadratic, sense, rhs)`.
     For `<>`, discrete domain restrictions, use native
     indicator constraints via `oracle_solver.add_indicator_constraint` or
-    the matching helpers — **do not mirror PackDB's Big-M rewrite**.
+    the matching helpers — **do not mirror DecidB's Big-M rewrite**.
   - `oracle_solver.solve()` → assert OPTIMAL (or INFEASIBLE/UNBOUNDED for
     cross-verified error tests)
-  - Compare via `compare_solutions(packdb_rows, packdb_cols, result, data,
+  - Compare via `compare_solutions(decidb_rows, decidb_cols, result, data,
     decide_var_names, coeff_fn=...)`. For non-linear (QP/QCQP) objectives,
-    pass `packdb_objective_fn=lambda rows, cols: ...` instead of `coeff_fn`
-    and evaluate the objective directly on PackDB's variable values.
+    pass `decidb_objective_fn=lambda rows, cols: ...` instead of `coeff_fn`
+    and evaluate the objective directly on DecidB's variable values.
   - `perf_tracker.record(..., comparison_status=cmp.status, decide_vector=cmp.oracle_vector)`
 
 Reference patterns: `test_var_boolean.py`, `test_per_clause.py`,

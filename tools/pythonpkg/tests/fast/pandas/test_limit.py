@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
 
@@ -11,7 +11,7 @@ class TestLimitPandas(object):
                 'numbers': [1, 2, 3, 4, 5],
             }
         )
-        limit_df = packdb.limit(df_in, 2)
+        limit_df = decidb.limit(df_in, 2)
         assert len(limit_df.execute().fetchall()) == 2
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
@@ -21,5 +21,5 @@ class TestLimitPandas(object):
                 'numbers': [1, 2, 2, 2],
             }
         )
-        aggregate_df = packdb.aggregate(df_in, 'count(numbers)', 'numbers').order('all')
+        aggregate_df = decidb.aggregate(df_in, 'count(numbers)', 'numbers').order('all')
         assert aggregate_df.execute().fetchall() == [(1,), (3,)]

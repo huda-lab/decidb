@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
 
@@ -6,7 +6,7 @@ from conftest import NumpyPandas, ArrowPandas
 class TestAppendDF(object):
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_df_to_table_append(self, duckdb_cursor, pandas):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.execute("Create table integers (i integer)")
         df_in = pandas.DataFrame(
             {
@@ -18,12 +18,12 @@ class TestAppendDF(object):
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_append_by_name(self, pandas):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("create table tbl (a integer, b bool, c varchar)")
         df_in = pandas.DataFrame({'c': ['duck', 'db'], 'b': [False, True], 'a': [4, 2]})
         # By default we append by position, causing the following exception:
         with pytest.raises(
-            packdb.ConversionException, match="Conversion Error: Could not convert string 'duck' to INT32"
+            decidb.ConversionException, match="Conversion Error: Could not convert string 'duck' to INT32"
         ):
             con.append('tbl', df_in)
 
@@ -34,7 +34,7 @@ class TestAppendDF(object):
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_append_by_name_quoted(self, pandas):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(
             """
             create table tbl ("needs to be quoted" integer, other varchar)
@@ -47,11 +47,11 @@ class TestAppendDF(object):
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_append_by_name_no_exact_match(self, pandas):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("create table tbl (a integer, b bool)")
         df_in = pandas.DataFrame({'c': ['a', 'b'], 'b': [True, False], 'a': [42, 1337]})
         # Too many columns raises an error, because the columns cant be found in the targeted table
-        with pytest.raises(packdb.BinderException, match='Table "tbl" does not have a column with name "c"'):
+        with pytest.raises(decidb.BinderException, match='Table "tbl" does not have a column with name "c"'):
             con.append('tbl', df_in, by_name=True)
 
         df_in = pandas.DataFrame({'b': [False, False, False]})

@@ -43,6 +43,6 @@ Optimizations that make the ILP matrix smaller, tighter, or safer to solve.
 - Both solvers return the best feasible solution found when timeout is reached (with a status indicating optimality was not proven)
 
 **Code locations to modify**:
-- `src/packdb/gurobi/gurobi_solver.cpp` — add `GRBsetdblparam` call
-- `src/packdb/naive/deterministic_naive.cpp` — add `highs.setOptionValue("time_limit", ...)` call
+- `src/decidb/gurobi/gurobi_solver.cpp` — add `GRBsetdblparam` call
+- `src/decidb/naive/deterministic_naive.cpp` — add `highs.setOptionValue("time_limit", ...)` call
 - `src/execution/operator/decide/physical_decide.cpp` — read SET variable, pass to `SolverInput`

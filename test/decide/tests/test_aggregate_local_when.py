@@ -31,12 +31,12 @@ def _accumulate(coeffs: dict, key: str, val: float) -> None:
 
 
 def _run_constraint_test(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
-    *, test_id, decide_sql, data_sql, build_oracle, packdb_obj_fn,
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+    *, test_id, decide_sql, data_sql, build_oracle, decidb_obj_fn,
 ):
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(decide_sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(decide_sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute(data_sql).fetchall()
 
     t_build = time.perf_counter()
@@ -47,10 +47,10 @@ def _run_constraint_test(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj_fn,
+        decidb_objective_fn=decidb_obj_fn,
     )
     perf_tracker.record(
-        test_id, packdb_time, build_time, result.solve_time_seconds,
+        test_id, decidb_time, build_time, result.solve_time_seconds,
         len(data), n_vars, n_constrs,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -66,7 +66,7 @@ def _run_constraint_test(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_aggregate_local_when_constraint_independent_masks(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """SUM(x*v) WHEN w1 + SUM(x*v) WHEN w2 <= 6: row c (neither flag) is free."""
     data_sql = """
@@ -103,15 +103,15 @@ def test_aggregate_local_when_constraint_independent_masks(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_independent_masks",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -120,7 +120,7 @@ def test_aggregate_local_when_constraint_independent_masks(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_aggregate_local_when_constraint_parenthesized_condition(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Parenthesized comparison in WHEN condition."""
     data_sql = """
@@ -152,14 +152,14 @@ def test_aggregate_local_when_constraint_parenthesized_condition(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_paren_cond", decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -167,7 +167,7 @@ def test_aggregate_local_when_constraint_parenthesized_condition(
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_aggregate_local_when_objective_independent_masks(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Objective: SUM(x*value) WHEN w1 + SUM(x*bonus) WHEN w2."""
     data_sql = """
@@ -202,7 +202,7 @@ def test_aggregate_local_when_objective_independent_masks(
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         bi = cs.index("bonus"); w1i = cs.index("w1"); w2i = cs.index("w2")
         total = 0.0
@@ -213,9 +213,9 @@ def test_aggregate_local_when_objective_independent_masks(
         return total
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_obj_indep", decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -223,7 +223,7 @@ def test_aggregate_local_when_objective_independent_masks(
 @pytest.mark.when_constraint
 @pytest.mark.correctness
 def test_expression_level_when_still_works(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Whole-expression (non-aggregate-local) WHEN stays available."""
     data_sql = """
@@ -252,15 +252,15 @@ def test_expression_level_when_still_works(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="expr_level_when_works",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -268,9 +268,9 @@ def test_expression_level_when_still_works(
 @pytest.mark.when_constraint
 @pytest.mark.error
 @pytest.mark.error_binder
-def test_expression_level_when_cannot_mix_with_aggregate_local_when(packdb_cli):
+def test_expression_level_when_cannot_mix_with_aggregate_local_when(decidb_cli):
     """Mixed expression-level + aggregate-local WHEN is rejected."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT name, value, w1, w2, x FROM (
             VALUES ('a', 6, true, false), ('b', 4, false, true)
         ) t(name, value, w1, w2)
@@ -289,7 +289,7 @@ def test_expression_level_when_cannot_mix_with_aggregate_local_when(packdb_cli):
 @pytest.mark.avg_rewrite
 @pytest.mark.correctness
 def test_aggregate_local_when_with_avg_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG with aggregate-local WHEN: N = number of WHEN-matching rows."""
     data_sql = """
@@ -321,15 +321,15 @@ def test_aggregate_local_when_with_avg_constraint(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_avg_constraint",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -338,7 +338,7 @@ def test_aggregate_local_when_with_avg_constraint(
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_aggregate_local_when_with_per_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Aggregate-local WHEN composes with PER for per-group filtered constraints."""
     data_sql = """
@@ -376,15 +376,15 @@ def test_aggregate_local_when_with_per_constraint(
         )
         return n, 2
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_per_constraint",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -394,7 +394,7 @@ def test_aggregate_local_when_with_per_constraint(
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_aggregate_local_when_with_avg_and_per(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG + WHEN + PER: N_g = per-group count of WHEN-qualifying rows."""
     data_sql = """
@@ -434,15 +434,15 @@ def test_aggregate_local_when_with_avg_and_per(
         )
         return n, 2
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_avg_per",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -451,7 +451,7 @@ def test_aggregate_local_when_with_avg_and_per(
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_aggregate_local_when_with_max(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAX(x*value) WHEN eligible <= 7 (easy-case MAX strips to per-row)."""
     data_sql = """
@@ -483,14 +483,14 @@ def test_aggregate_local_when_with_max(
         )
         return n, 3
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_max", decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -499,12 +499,12 @@ def test_aggregate_local_when_with_max(
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_aggregate_local_when_with_hard_max(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAX(x*value) WHEN active >= 6 (hard-case MAX with aggregate-local WHEN).
 
     Hard MAX(>=) is disjunctive: at least one WHEN-matching row must satisfy the
-    bound. PackDB must emit Big-M indicators *only* for active rows — a bug that
+    bound. DecidB must emit Big-M indicators *only* for active rows — a bug that
     ignores the WHEN mask would let non-active row c (value=20) trivially satisfy
     the constraint, relaxing the selection and changing the optimum.
 
@@ -557,14 +557,14 @@ def test_aggregate_local_when_with_hard_max(
         )
         return n + len(y_names), 2 + len(y_names)
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_hard_max", decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -576,7 +576,7 @@ def test_aggregate_local_when_with_hard_max(
 @pytest.mark.when_constraint
 @pytest.mark.correctness
 def test_aggregate_local_when_mixed_filtered_unfiltered_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """SUM(x*v) WHEN premium + SUM(x) <= 12."""
     data_sql = """
@@ -608,15 +608,15 @@ def test_aggregate_local_when_mixed_filtered_unfiltered_constraint(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_mixed_constraint",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -624,7 +624,7 @@ def test_aggregate_local_when_mixed_filtered_unfiltered_constraint(
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Objective: SUM(x*value) WHEN vip + SUM(x*bonus)."""
     data_sql = """
@@ -657,7 +657,7 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         bi = cs.index("bonus"); vip_i = cs.index("vip")
         total = 0.0
@@ -668,10 +668,10 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
         return total
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_obj_mixed",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -683,7 +683,7 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
 @pytest.mark.when_constraint
 @pytest.mark.edge_case
 @pytest.mark.error_infeasible
-def test_aggregate_local_when_all_filtered_out(packdb_cli):
+def test_aggregate_local_when_all_filtered_out(decidb_cli):
     """Mixed aggregate-local WHEN with one term's mask all-false — rejected
     pre-solver per the "reject all empty aggregate sets" rule. Previously the
     empty term was allowed to contribute 0 while the unmasked term still
@@ -696,14 +696,14 @@ def test_aggregate_local_when_all_filtered_out(packdb_cli):
         SUCH THAT SUM(x * value) WHEN flag + SUM(x * value) <= 23
         MAXIMIZE SUM(x * value)
     """
-    packdb_cli.assert_error(decide_sql, match=r"empty|WHEN")
+    decidb_cli.assert_error(decide_sql, match=r"empty|WHEN")
 
 
 @pytest.mark.when
 @pytest.mark.when_constraint
 @pytest.mark.correctness
 def test_aggregate_local_when_overlapping_filters(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Row matching both WHEN conditions contributes to both terms."""
     data_sql = """
@@ -738,15 +738,15 @@ def test_aggregate_local_when_overlapping_filters(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_overlap",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -755,7 +755,7 @@ def test_aggregate_local_when_overlapping_filters(
 @pytest.mark.edge_case
 @pytest.mark.correctness
 def test_aggregate_local_when_single_aggregate(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Single aggregate with WHEN — degenerate case equivalent to expression-level."""
     data_sql = """
@@ -784,15 +784,15 @@ def test_aggregate_local_when_single_aggregate(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_single_aggregate",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -800,7 +800,7 @@ def test_aggregate_local_when_single_aggregate(
 @pytest.mark.when_constraint
 @pytest.mark.correctness
 def test_aggregate_local_when_three_terms(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Three additive aggregate terms with different WHEN conditions."""
     data_sql = """
@@ -838,28 +838,28 @@ def test_aggregate_local_when_three_terms(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_three_terms",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
 # ---------------------------------------------------------------------------
-# D. Error cases (PackDB-only; no oracle can help)
+# D. Error cases (DecidB-only; no oracle can help)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.when
 @pytest.mark.when_constraint
 @pytest.mark.error
 @pytest.mark.error_binder
-def test_aggregate_local_when_decide_var_in_condition_error(packdb_cli):
-    packdb_cli.assert_error("""
+def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
+    decidb_cli.assert_error("""
         SELECT name, value, x FROM (
             VALUES ('a', 10), ('b', 5)
         ) t(name, value)
@@ -873,8 +873,8 @@ def test_aggregate_local_when_decide_var_in_condition_error(packdb_cli):
 @pytest.mark.when_objective
 @pytest.mark.error
 @pytest.mark.error_binder
-def test_aggregate_local_when_mixed_expression_objective_error(packdb_cli):
-    packdb_cli.assert_error("""
+def test_aggregate_local_when_mixed_expression_objective_error(decidb_cli):
+    decidb_cli.assert_error("""
         SELECT name, value, w1, w2, x FROM (
             VALUES ('a', 10, true, false), ('b', 5, false, true)
         ) t(name, value, w1, w2)
@@ -888,8 +888,8 @@ def test_aggregate_local_when_mixed_expression_objective_error(packdb_cli):
 @pytest.mark.when_objective
 @pytest.mark.error
 @pytest.mark.error_binder
-def test_aggregate_local_when_decide_var_in_objective_condition_error(packdb_cli):
-    packdb_cli.assert_error("""
+def test_aggregate_local_when_decide_var_in_objective_condition_error(decidb_cli):
+    decidb_cli.assert_error("""
         SELECT name, value, x FROM (
             VALUES ('a', 10), ('b', 5)
         ) t(name, value)
@@ -907,7 +907,7 @@ def test_aggregate_local_when_decide_var_in_objective_condition_error(packdb_cli
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_expression_level_when_objective_still_works(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Expression-level WHEN on objective."""
     data_sql = """
@@ -936,17 +936,17 @@ def test_expression_level_when_objective_still_works(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value"); vip_i = cs.index("vip")
         return sum(
             float(r[xi]) * float(r[vi]) * (1.0 if r[vip_i] else 0.0) for r in rs
         )
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="expr_when_obj",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -955,7 +955,7 @@ def test_expression_level_when_objective_still_works(
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_expression_level_when_per_still_works(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Expression-level WHEN + PER."""
     data_sql = """
@@ -993,15 +993,15 @@ def test_expression_level_when_per_still_works(
         )
         return n, 2
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="expr_when_per",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1014,7 +1014,7 @@ def test_expression_level_when_per_still_works(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_bilinear_aggregate_local_when_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Bilinear b*x with WHEN — AND-linearize the bool product, then mask."""
     data_sql = """
@@ -1031,8 +1031,8 @@ def test_bilinear_aggregate_local_when_constraint(
         MAXIMIZE SUM(b * value + x * value)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(decide_sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(decide_sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute(data_sql).fetchall()
     n = len(data)
 
@@ -1055,7 +1055,7 @@ def test_bilinear_aggregate_local_when_constraint(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         bi = cs.index("b"); xi = cs.index("x"); vi = cs.index("value")
         return sum(
             (float(r[bi]) + float(r[xi])) * float(r[vi]) for r in rs
@@ -1063,10 +1063,10 @@ def test_bilinear_aggregate_local_when_constraint(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["b", "x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "alw_bilinear_constraint", packdb_time, build_time,
+        "alw_bilinear_constraint", decidb_time, build_time,
         result.solve_time_seconds, n, 3 * n, 4 * n + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1077,7 +1077,7 @@ def test_bilinear_aggregate_local_when_constraint(
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_bilinear_aggregate_local_when_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Triple bilinear b*x*value WHEN premium — AND-linearize b∧x then scale by value."""
     data_sql = """
@@ -1094,8 +1094,8 @@ def test_bilinear_aggregate_local_when_objective(
         MAXIMIZE SUM(b * x * value) WHEN premium
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(decide_sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(decide_sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute(data_sql).fetchall()
     n = len(data)
 
@@ -1115,7 +1115,7 @@ def test_bilinear_aggregate_local_when_objective(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         bi = cs.index("b"); xi = cs.index("x")
         vi = cs.index("value"); pi = cs.index("premium")
         return sum(
@@ -1126,10 +1126,10 @@ def test_bilinear_aggregate_local_when_objective(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["b", "x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "alw_bilinear_obj", packdb_time, build_time, result.solve_time_seconds,
+        "alw_bilinear_obj", decidb_time, build_time, result.solve_time_seconds,
         n, 3 * n, 3 * n + 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1142,7 +1142,7 @@ def test_bilinear_aggregate_local_when_objective(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_ne_aggregate_local_when_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """SUM(x) WHEN active <> 2 — the active-only count cannot equal 2."""
     data_sql = """
@@ -1176,15 +1176,15 @@ def test_ne_aggregate_local_when_constraint(
         )
         return n + 1, 4
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_ne_constraint",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1194,7 +1194,7 @@ def test_ne_aggregate_local_when_constraint(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_ne_with_per_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """SUM(x) <> 2 PER dept — each dept's count cannot equal 2."""
     data_sql = """
@@ -1230,15 +1230,15 @@ def test_ne_with_per_constraint(
         )
         return n + 2, 6
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_ne_per",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1248,7 +1248,7 @@ def test_ne_with_per_constraint(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_between_aggregate_local_when_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """BETWEEN on aggregate with aggregate-local WHEN."""
     data_sql = """
@@ -1278,15 +1278,15 @@ def test_between_aggregate_local_when_constraint(
         )
         return n, 2
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_between",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1295,7 +1295,7 @@ def test_between_aggregate_local_when_constraint(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_entity_scoped_aggregate_local_when(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Entity-scoped ``n.keepN`` with aggregate-local WHEN on a row-scoped column."""
     sql = """
@@ -1307,8 +1307,8 @@ def test_entity_scoped_aggregate_local_when(
         MAXIMIZE SUM(keepN)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute("""
         SELECT CAST(c.c_custkey AS BIGINT),
                CAST(n.n_nationkey AS BIGINT),
@@ -1329,7 +1329,7 @@ def test_entity_scoped_aggregate_local_when(
         if r[3] > 5000:
             _accumulate(coeffs, f"keepN_{r[1]}", r[3])
     oracle_solver.add_constraint(coeffs, "<=", 50000.0, name="high_bal")
-    # Objective: SUM(keepN) — but in PackDB this sums per row (not per entity).
+    # Objective: SUM(keepN) — but in DecidB this sums per row (not per entity).
     # So the oracle objective equals (# rows per entity) * keepN per entity.
     obj: dict = defaultdict(float)
     for r in data:
@@ -1347,13 +1347,13 @@ def test_entity_scoped_aggregate_local_when(
         seen[nk] = v
 
     oracle_obj = result.objective_value
-    packdb_obj_val = sum(float(r[keep_col]) for r in rows)
-    assert abs(oracle_obj - packdb_obj_val) < 1e-4, (
-        f"Objective mismatch: oracle={oracle_obj}, packdb={packdb_obj_val}"
+    decidb_obj_val = sum(float(r[keep_col]) for r in rows)
+    assert abs(oracle_obj - decidb_obj_val) < 1e-4, (
+        f"Objective mismatch: oracle={oracle_obj}, decidb={decidb_obj_val}"
     )
 
     perf_tracker.record(
-        "alw_entity_scoped", packdb_time, build_time, result.solve_time_seconds,
+        "alw_entity_scoped", decidb_time, build_time, result.solve_time_seconds,
         n, len(nation_keys), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="identical",
@@ -1364,8 +1364,8 @@ def test_entity_scoped_aggregate_local_when(
 @pytest.mark.when
 @pytest.mark.when_constraint
 @pytest.mark.error
-def test_aggregate_local_when_unparenthesized_comparison_error(packdb_cli):
-    packdb_cli.assert_error("""
+def test_aggregate_local_when_unparenthesized_comparison_error(decidb_cli):
+    decidb_cli.assert_error("""
         SELECT name, value, tier, x FROM (
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'none')
         ) t(name, value, tier)
@@ -1379,7 +1379,7 @@ def test_aggregate_local_when_unparenthesized_comparison_error(packdb_cli):
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_aggregate_local_when_objective_reassociation(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Objective reassociator converts ``WHEN tier = 'high'`` (unparenthesized)
     into expression-level WHEN(tier = 'high')."""
@@ -1409,7 +1409,7 @@ def test_aggregate_local_when_objective_reassociation(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value"); ti = cs.index("tier")
         return sum(
             float(r[xi]) * float(r[vi]) * (1.0 if r[ti] == "high" else 0.0)
@@ -1417,10 +1417,10 @@ def test_aggregate_local_when_objective_reassociation(
         )
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_obj_reassoc",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1447,7 +1447,7 @@ def test_aggregate_local_when_objective_reassociation(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_with_constant_offset_paren_condition(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`SUM(x) WHEN (w > 1) + 3 <= K` — additive constant peeled to RHS."""
     data_sql = """
@@ -1478,15 +1478,15 @@ def test_when_with_constant_offset_paren_condition(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x")
         return sum(float(r[xi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_offset_paren_cond",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1495,7 +1495,7 @@ def test_when_with_constant_offset_paren_condition(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_with_scalar_multiplier(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`2 * (SUM(x) WHEN cond) <= K` — constant scalar folded into the SUM
     body so the extractor sees `WHEN(SUM(2*x), cond)` instead of
@@ -1528,15 +1528,15 @@ def test_when_with_scalar_multiplier(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x")
         return sum(float(r[xi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_scalar_mult",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1545,7 +1545,7 @@ def test_when_with_scalar_multiplier(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_with_parallel_sum_and_offset(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`(SUM(x) WHEN w) + (SUM(y) + 3) <= K` — additive walker peels the
     constant offset out of a deeper parenthesized parallel sum, leaving
@@ -1582,22 +1582,22 @@ def test_when_with_parallel_sum_and_offset(
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return 2 * n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); yi = cs.index("y")
         return sum(float(r[xi]) + float(r[yi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_parallel_offset",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
 @pytest.mark.when
 @pytest.mark.error_parser
 @pytest.mark.error
-def test_when_unparenthesized_condition_misparses(packdb_cli):
+def test_when_unparenthesized_condition_misparses(decidb_cli):
     """`(SUM(x) WHEN w > 1) + 3 <= K` — parens in the wrong place. The
     aggregate-local WHEN binds tighter than `>` per POSTFIXOP precedence,
     so `(SUM(x) WHEN w)` reduces first and the outer `>` produces a
@@ -1605,7 +1605,7 @@ def test_when_unparenthesized_condition_misparses(packdb_cli):
     user-facing message at least names the type mismatch; the intended
     form `SUM(x) WHEN (w > 1) + 3 <= K` (parens around the condition)
     is the exercised positive path above."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, x FROM (VALUES (1, 2.0), (2, 0.5), (3, 3.0)) t(id, w)
         DECIDE x IS REAL
         SUCH THAT (SUM(x) WHEN w > 1) + 3 <= 10
@@ -1619,11 +1619,11 @@ def test_when_unparenthesized_condition_misparses(packdb_cli):
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
 def test_when_objective_with_constant_offset(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`MAXIMIZE (SUM(x) WHEN cond) + 3` — the additive `+3` is peeled from
     the objective body by NormalizeDecideObjective. The constant doesn't
-    affect argmax, so packdb's optimal assignment matches an oracle that
+    affect argmax, so decidb's optimal assignment matches an oracle that
     maximizes just the aggregate without the constant."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(w AS DOUBLE) FROM (
@@ -1651,16 +1651,16 @@ def test_when_objective_with_constant_offset(
         )
         return n, 0
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); wi = cs.index("w")
         # Match oracle: sum of x over w>1 rows (no constant offset).
         return sum(float(r[xi]) for r in rs if float(r[wi]) > 1)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_obj_constant_offset",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1673,7 +1673,7 @@ def test_when_objective_with_constant_offset(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_outer_when_with_arithmetic_offset_works(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`SUM(x) + 3 <= K WHEN cond` — outer-WHEN form. Same semantics as
     the now-working aggregate-local form `(SUM(x) WHEN cond) + 3 <= K`
@@ -1705,15 +1705,15 @@ def test_outer_when_with_arithmetic_offset_works(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("value")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_outer_when_offset",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1733,7 +1733,7 @@ def test_outer_when_with_arithmetic_offset_works(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_with_data_column_scalar_left(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`col * (SUM(x) WHEN w) <= K` — data column on the left of the `*`.
     The fold rewrites to `WHEN(SUM(col * x), w)`, giving per-row
@@ -1766,15 +1766,15 @@ def test_when_with_data_column_scalar_left(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x")
         return sum(float(r[xi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_col_mul_left",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1783,7 +1783,7 @@ def test_when_with_data_column_scalar_left(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_with_data_column_scalar_right(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`(SUM(x) WHEN w) * col <= K` — data column on the right of the `*`.
     The fold accepts either operand order and produces the same rewrite
@@ -1815,15 +1815,15 @@ def test_when_with_data_column_scalar_right(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x")
         return sum(float(r[xi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_col_mul_right",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -1832,7 +1832,7 @@ def test_when_with_data_column_scalar_right(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_divided_by_data_column(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`(SUM(x) WHEN w) / col <= K` — WHEN-tagged aggregate divided by a
     per-row data column. The fold rewrites to `WHEN(SUM(x / col), w)`,
@@ -1865,13 +1865,13 @@ def test_when_divided_by_data_column(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x")
         return sum(float(r[xi]) for r in rs)
 
     _run_constraint_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="alw_when_div_col",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )

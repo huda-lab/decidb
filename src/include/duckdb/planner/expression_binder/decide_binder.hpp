@@ -11,7 +11,7 @@
 #include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp" // Required for NotImplementedException
-#include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
 
 namespace duckdb {
 

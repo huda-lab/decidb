@@ -1,7 +1,7 @@
 """Tests for IN (...) constraints on decision variables.
 
 ``x IN (v1, ..., vK)`` restricts the variable's domain to a discrete set.
-PackDB rewrites this at bind time into K binary indicator variables z_k with
+DecidB rewrites this at bind time into K binary indicator variables z_k with
 ``SUM(z_k) = 1`` (cardinality) and ``x = SUM(v_k * z_k)`` (linking). The oracle
 mirrors the same construction via ``add_in_domain``.
 """
@@ -48,7 +48,7 @@ def _build_in_domain_model(oracle, test_id, data, domain, big_M,
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_in_domain_restriction(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """x IN (0, 1, 3) — restrict integer variable to a sparse domain."""
     sql = """
@@ -60,8 +60,8 @@ def test_in_domain_restriction(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
     n = len(data)
@@ -80,16 +80,16 @@ def test_in_domain_restriction(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
-    for row in packdb_rows:
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
         assert row[x_idx] in (0, 1, 3), f"x={row[x_idx]} not in allowed domain"
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_domain_restriction", packdb_time, build_time, result.solve_time_seconds,
+        "in_domain_restriction", decidb_time, build_time, result.solve_time_seconds,
         n, n * 4, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -100,7 +100,7 @@ def test_in_domain_restriction(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_in_binary_domain(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """x IN (0, 1) on an implicitly typed variable — equivalent to IS BOOLEAN."""
     sql = """
@@ -112,8 +112,8 @@ def test_in_binary_domain(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
     n = len(data)
@@ -132,16 +132,16 @@ def test_in_binary_domain(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
-    for row in packdb_rows:
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
         assert row[x_idx] in (0, 1), f"x={row[x_idx]} not in {{0, 1}}"
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_binary_domain", packdb_time, build_time, result.solve_time_seconds,
+        "in_binary_domain", decidb_time, build_time, result.solve_time_seconds,
         n, n * 3, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -152,7 +152,7 @@ def test_in_binary_domain(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_in_single_value(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """x IN (3) — single-value IN, equivalent to x = 3."""
     sql = """
@@ -163,8 +163,8 @@ def test_in_single_value(
         MINIMIZE SUM(x * l_quantity)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
     n = len(data)
@@ -179,16 +179,16 @@ def test_in_single_value(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
-    for row in packdb_rows:
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
         assert row[x_idx] == 3, f"x={row[x_idx]}, expected 3"
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_quantity")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_single_value", packdb_time, build_time, result.solve_time_seconds,
+        "in_single_value", decidb_time, build_time, result.solve_time_seconds,
         n, n * 2, 0, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -199,7 +199,7 @@ def test_in_single_value(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_in_minimize_picks_smallest(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """x IN (3, 5, 7) MINIMIZE SUM(x) — solver should pick 3 for all rows."""
     sql = """
@@ -210,8 +210,8 @@ def test_in_minimize_picks_smallest(
         MINIMIZE SUM(x * l_quantity)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
     n = len(data)
@@ -226,17 +226,17 @@ def test_in_minimize_picks_smallest(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
-    for row in packdb_rows:
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
         assert row[x_idx] in (3, 5, 7)
         assert row[x_idx] == 3, f"MINIMIZE should pick smallest: x={row[x_idx]}"
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_quantity")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
     )
     perf_tracker.record(
-        "in_minimize_picks_smallest", packdb_time, build_time, result.solve_time_seconds,
+        "in_minimize_picks_smallest", decidb_time, build_time, result.solve_time_seconds,
         n, n * 4, 0, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -247,7 +247,7 @@ def test_in_minimize_picks_smallest(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_in_maximize_picks_largest(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """x IN (2, 5) MAXIMIZE SUM(x * extendedprice) with a loose aggregate cap."""
     sql = """
@@ -259,8 +259,8 @@ def test_in_maximize_picks_largest(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
     n = len(data)
@@ -279,16 +279,16 @@ def test_in_maximize_picks_largest(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
-    for row in packdb_rows:
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
         assert row[x_idx] in (2, 5), f"x={row[x_idx]} not in domain"
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_maximize_picks_largest", packdb_time, build_time, result.solve_time_seconds,
+        "in_maximize_picks_largest", decidb_time, build_time, result.solve_time_seconds,
         n, n * 3, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -300,7 +300,7 @@ def test_in_maximize_picks_largest(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_in_with_when(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """x IN (0, 2, 4) WHEN condition — IN restriction gated by a row filter."""
     sql = """
@@ -312,8 +312,8 @@ def test_in_with_when(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
     n = len(data)
@@ -334,19 +334,19 @@ def test_in_with_when(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
-    qty_idx = packdb_cols.index("l_quantity")
-    for row in packdb_rows:
+    x_idx = decidb_cols.index("x")
+    qty_idx = decidb_cols.index("l_quantity")
+    for row in decidb_rows:
         if row[qty_idx] > 20:
             assert row[x_idx] in (0, 2, 4), \
                 f"x={row[x_idx]} not in domain when l_quantity={row[qty_idx]} > 20"
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_with_when", packdb_time, build_time, result.solve_time_seconds,
+        "in_with_when", decidb_time, build_time, result.solve_time_seconds,
         n, n * 4, 2, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -357,7 +357,7 @@ def test_in_with_when(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_in_boolean_explicit(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """x IS BOOLEAN with x IN (0, 1) — trivially satisfied, no auxiliary vars needed."""
     sql = """
@@ -369,8 +369,8 @@ def test_in_boolean_explicit(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
     n = len(data)
@@ -389,16 +389,16 @@ def test_in_boolean_explicit(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
-    for row in packdb_rows:
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
         assert row[x_idx] in (0, 1), f"x={row[x_idx]} not in {{0, 1}}"
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "in_boolean_explicit", packdb_time, build_time, result.solve_time_seconds,
+        "in_boolean_explicit", decidb_time, build_time, result.solve_time_seconds,
         n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
@@ -408,10 +408,10 @@ def test_in_boolean_explicit(
 @pytest.mark.var_real
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_in_oracle(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (non-integer values) on a REAL variable.
 
-    Regression test for the integer-step rewrite sweep. PackDB rewrites IN into
+    Regression test for the integer-step rewrite sweep. DecidB rewrites IN into
     binary-indicator cardinality + linking `=` (no discretization of `x`), so
     REAL variables with fractional domain values must solve correctly. Also
     verifies each row's ``x`` is exactly one of the allowed values.
@@ -425,8 +425,8 @@ def test_real_in_oracle(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -452,19 +452,19 @@ def test_real_in_oracle(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    x_idx = packdb_cols.index("x")
+    x_idx = decidb_cols.index("x")
     allowed = {0.5, 1.5, 2.75}
-    for row in packdb_rows:
+    for row in decidb_rows:
         assert any(abs(float(row[x_idx]) - a) < 1e-6 for a in allowed), (
             f"x={row[x_idx]} not in {allowed}"
         )
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     perf_tracker.record(
-        "real_in_oracle", packdb_time, build_time, result.solve_time_seconds,
+        "real_in_oracle", decidb_time, build_time, result.solve_time_seconds,
         n, n * 4, 1 + n, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )

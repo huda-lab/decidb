@@ -3,13 +3,13 @@
 ## 1. Overview
 The Parser and Symbolic Layer is the entry point for the `DECIDE` clause. Its primary responsibility is not just to build a parse tree, but to **normalize** the user's algebraic expressions into a canonical form that the system can optimize. This is a critical step because SQL allows flexible expression shapes (e.g., `x * 2 + 5`), whereas linear solvers require a strict `coeff * variable` structure.
 
-**Key Source File**: `src/packdb/symbolic/decide_symbolic.cpp`
+**Key Source File**: `src/decidb/symbolic/decide_symbolic.cpp`
 
 ## 2. Symbolic Translation
 
 > **Note on IN/BETWEEN**: `IN` and `BETWEEN` are handled as symbolic predicate types during parsing. The symbolic layer passes them through unchanged — they are validated or rewritten at the binder stage, not during normalization. `IN` on decision variables is supported via `RewriteInDomain()` in `bind_select_node.cpp`, which rewrites `x IN (v1, ..., vK)` into K binary indicator variables with cardinality and linking constraints. `IN` on aggregates (e.g., `SUM(x) IN (...)`) remains unsupported.
 
-PackDB integrates `SymbolicC++` to perform algebraic manipulations. The translation pipeline is as follows:
+DecidB integrates `SymbolicC++` to perform algebraic manipulations. The translation pipeline is as follows:
 
 1.  **DuckDB to Symbolic**: The `ToSymbolicRecursive` function traverses the DuckDB `ParsedExpression` tree.
     -   `ColumnRef` (decision variable) $\rightarrow$ `Symbolic Variable`
@@ -82,7 +82,7 @@ This invariant is pinned down by oracle-verified cross-product integration tests
 
 The four-path structure is tolerable but smelly — every bypass exists because SymEngine destroys structure the downstream pipeline needs. A fifth bypass is the signal to refactor to a single classification-driven normalizer: classify the LHS once into `{ Constant, DataScalar, Aggregate, AggregateWithWhen, QpBase, BilinearProduct, PerRowVariable }`, then dispatch each leaf type to a dedicated handler in one walker. That refactor would also eliminate the SymEngine dependency, since its only remaining value-add (`expand()` distribution + `simplify()` like-term combination) is implementable with the same parsed-level walker that already powers paths 3 and 4.
 
-Until then, the architecture comment at the top of `src/packdb/symbolic/decide_symbolic.cpp` is the authoritative reference for the path ordering and helpers.
+Until then, the architecture comment at the top of `src/decidb/symbolic/decide_symbolic.cpp` is the authoritative reference for the path ordering and helpers.
 
 ## 4. Interaction with Binder
 The Binder receives this normalized tree. It no longer needs to perform algebraic rearrangement; it simply validates that the structure matches the expectation (linear sum on LHS, scalar on RHS) and binds the column references.

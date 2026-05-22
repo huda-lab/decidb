@@ -1,6 +1,6 @@
 """Cross-product integration tests for the constraint normalizer paths.
 
-`NormalizeComparisonExpr` in `src/packdb/symbolic/decide_symbolic.cpp` has
+`NormalizeComparisonExpr` in `src/decidb/symbolic/decide_symbolic.cpp` has
 four mutually-exclusive paths (see the architecture comment at the top of
 that file): quadratic LHS bypass, bilinear LHS bypass, composed-MIN/MAX
 LHS bypass, and the aggregate-local WHEN path. They are first-match-wins
@@ -30,7 +30,7 @@ import time
 
 import pytest
 
-from packdb_cli import PackDBCliError
+from decidb_cli import DecidBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 
@@ -43,14 +43,14 @@ def _expect_gurobi(func):
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except PackDBCliError as e:
+        except DecidBCliError as e:
             assert re.search(r"[Qq]uadratic|[Gg]urobi|McCormick|bilinear|non-convex", str(e)), \
                 f"Unexpected error (expected QP/bilinear backend rejection): {e}"
     return wrapper
 
 
-def _solve_and_compare(oracle_solver, packdb_obj, tol=5e-2):
-    """Solve the oracle, assert its objective matches PackDB's within tol.
+def _solve_and_compare(oracle_solver, decidb_obj, tol=5e-2):
+    """Solve the oracle, assert its objective matches DecidB's within tol.
     Looser tolerance than the linear suite because QP/QCQP solutions sit
     on the solver's feasibility boundary and can drift by ~1e-6 in
     constraint slack, which propagates into the objective."""
@@ -58,9 +58,9 @@ def _solve_and_compare(oracle_solver, packdb_obj, tol=5e-2):
     assert result.status == SolverStatus.OPTIMAL, (
         f"Oracle failed to solve: status={result.status}"
     )
-    diff = abs(packdb_obj - result.objective_value)
+    diff = abs(decidb_obj - result.objective_value)
     assert diff <= tol, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, "
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
     )
     return result
@@ -82,7 +82,7 @@ def _solve_and_compare(oracle_solver, packdb_obj, tol=5e-2):
 @pytest.mark.when_objective
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_quadratic_objective_with_when(packdb_cli, oracle_solver):
+def test_quadratic_objective_with_when(decidb_cli, oracle_solver):
     """`MINIMIZE SUM(POWER(x - t, 2)) WHEN w` — quadratic objective with
     aggregate-local WHEN. Only w-true rows contribute to Q and linear
     coefficients; w-false rows are unconstrained."""
@@ -94,7 +94,7 @@ def test_quadratic_objective_with_when(packdb_cli, oracle_solver):
         SUCH THAT x >= 0 AND x <= 10
         MINIMIZE SUM(POWER(x - t, 2)) WHEN w
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
     data = [(1, 5.0, True), (2, 8.0, False), (3, 3.0, True)]
 
     oracle_solver.create_model("qp_when_obj")
@@ -109,11 +109,11 @@ def test_quadratic_objective_with_when(packdb_cli, oracle_solver):
     oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE)
 
     xi = cols.index("x"); ti = cols.index("t")
-    packdb_obj = sum(
+    decidb_obj = sum(
         ((float(r[xi]) - float(r[ti])) ** 2 - float(r[ti]) ** 2)
         for r in rows if r[cols.index("id")] in (1, 3)  # only w-true rows
     )
-    _solve_and_compare(oracle_solver, packdb_obj)
+    _solve_and_compare(oracle_solver, decidb_obj)
 
 
 @pytest.mark.quadratic
@@ -123,7 +123,7 @@ def test_quadratic_objective_with_when(packdb_cli, oracle_solver):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 @_expect_gurobi
-def test_quadratic_constraint_with_when_and_constant_offset(packdb_cli, oracle_solver):
+def test_quadratic_constraint_with_when_and_constant_offset(decidb_cli, oracle_solver):
     """`(SUM(POWER(x, 2)) WHEN w) + 3 <= K` — quadratic constraint with
     WHEN AND additive constant. The WHEN path peels `+3` to the RHS;
     the rebuilt LHS is still a recognizable WHEN-tagged quadratic SUM
@@ -137,7 +137,7 @@ def test_quadratic_constraint_with_when_and_constant_offset(packdb_cli, oracle_s
             AND x <= 10
         MAXIMIZE SUM(x)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
     data = [(1, True), (2, False), (3, True)]
 
     oracle_solver.create_model("qcqp_when_offset")
@@ -151,8 +151,8 @@ def test_quadratic_constraint_with_when_and_constant_offset(packdb_cli, oracle_s
     oracle_solver.set_objective({xn: 1.0 for xn in xnames}, ObjSense.MAXIMIZE)
 
     xi = cols.index("x")
-    packdb_obj = sum(float(r[xi]) for r in rows)
-    _solve_and_compare(oracle_solver, packdb_obj, tol=1e-2)
+    decidb_obj = sum(float(r[xi]) for r in rows)
+    _solve_and_compare(oracle_solver, decidb_obj, tol=1e-2)
 
 
 # ===========================================================================
@@ -169,7 +169,7 @@ def test_quadratic_constraint_with_when_and_constant_offset(packdb_cli, oracle_s
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_bilinear_constraint_with_when(packdb_cli, oracle_solver):
+def test_bilinear_constraint_with_when(decidb_cli, oracle_solver):
     """`SUM(x * y) WHEN w <= K` — bilinear (Bool * Real) constraint with
     aggregate-local WHEN. McCormick reformulation must apply only to
     w-true rows; w-false rows are unconstrained."""
@@ -182,7 +182,7 @@ def test_bilinear_constraint_with_when(packdb_cli, oracle_solver):
             AND y <= 5
         MAXIMIZE SUM(x * y)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
     data = [(1, True), (2, False), (3, True)]
 
     oracle_solver.create_model("bilinear_when")
@@ -215,8 +215,8 @@ def test_bilinear_constraint_with_when(packdb_cli, oracle_solver):
     oracle_solver.set_objective({pn: 1.0 for pn in pnames}, ObjSense.MAXIMIZE)
 
     xi = cols.index("x"); yi = cols.index("y")
-    packdb_obj = sum(float(r[xi]) * float(r[yi]) for r in rows)
-    _solve_and_compare(oracle_solver, packdb_obj, tol=1e-3)
+    decidb_obj = sum(float(r[xi]) * float(r[yi]) for r in rows)
+    _solve_and_compare(oracle_solver, decidb_obj, tol=1e-3)
 
 
 @pytest.mark.bilinear
@@ -224,7 +224,7 @@ def test_bilinear_constraint_with_when(packdb_cli, oracle_solver):
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_bilinear_constraint_with_when_and_constant_offset(packdb_cli, oracle_solver):
+def test_bilinear_constraint_with_when_and_constant_offset(decidb_cli, oracle_solver):
     """`(SUM(x * y) WHEN w) + 3 <= K` — bilinear + WHEN + constant offset.
     Verifies the WHEN-path additive walk peels the `+3` cleanly without
     disturbing the bilinear shape inside the SUM body."""
@@ -237,7 +237,7 @@ def test_bilinear_constraint_with_when_and_constant_offset(packdb_cli, oracle_so
             AND y <= 5
         MAXIMIZE SUM(x * y)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
     data = [(1, True), (2, False), (3, True)]
 
     # Same model as above; just RHS shifts from 8 to 11-3 = 8 (identical
@@ -267,8 +267,8 @@ def test_bilinear_constraint_with_when_and_constant_offset(packdb_cli, oracle_so
     oracle_solver.set_objective({pn: 1.0 for pn in pnames}, ObjSense.MAXIMIZE)
 
     xi = cols.index("x"); yi = cols.index("y")
-    packdb_obj = sum(float(r[xi]) * float(r[yi]) for r in rows)
-    _solve_and_compare(oracle_solver, packdb_obj, tol=1e-3)
+    decidb_obj = sum(float(r[xi]) * float(r[yi]) for r in rows)
+    _solve_and_compare(oracle_solver, decidb_obj, tol=1e-3)
 
 
 # ===========================================================================
@@ -288,7 +288,7 @@ def test_bilinear_constraint_with_when_and_constant_offset(packdb_cli, oracle_so
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_composed_sum_plus_min_with_when(packdb_cli, oracle_solver):
+def test_composed_sum_plus_min_with_when(decidb_cli, oracle_solver):
     """`SUM(x*v) + (MIN(x*v) WHEN w) >= K` — composed MIN with the MIN
     term WHEN-filtered. The MIN here is in the easy direction (MIN >= K
     is enforced by per-row x*v >= K for w-true rows, no Big-M needed)."""
@@ -300,7 +300,7 @@ def test_composed_sum_plus_min_with_when(packdb_cli, oracle_solver):
         SUCH THAT SUM(x * v) + (MIN(x * v) WHEN w) >= 5
         MAXIMIZE SUM(x * v)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
     data = [(1, 10.0, True), (2, 5.0, True), (3, 7.0, False)]
 
     # Hand-encoded composed-MIN: introduce z = MIN_{w-true rows}(x_i * v_i),
@@ -335,9 +335,9 @@ def test_composed_sum_plus_min_with_when(packdb_cli, oracle_solver):
     )
 
     xi = cols.index("x")
-    # Reuse SUM(x*v) from packdb result rows (v is a SELECT-list column? It's
+    # Reuse SUM(x*v) from decidb result rows (v is a SELECT-list column? It's
     # not selected here — recover from data by id).
     id_to_v = {row[0]: row[1] for row in data}
     id_idx = cols.index("id")
-    packdb_obj = sum(float(r[xi]) * id_to_v[r[id_idx]] for r in rows)
-    _solve_and_compare(oracle_solver, packdb_obj, tol=1e-3)
+    decidb_obj = sum(float(r[xi]) * id_to_v[r[id_idx]] for r in rows)
+    _solve_and_compare(oracle_solver, decidb_obj, tol=1e-3)

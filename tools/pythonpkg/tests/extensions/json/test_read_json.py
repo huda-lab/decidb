@@ -2,7 +2,7 @@ import numpy
 import datetime
 import pandas
 import pytest
-import packdb
+import decidb
 import re
 from io import StringIO
 
@@ -16,35 +16,35 @@ def TestFile(name):
 
 class TestReadJSON(object):
     def test_read_json_columns(self):
-        rel = packdb.read_json(TestFile('example.json'), columns={'id': 'integer', 'name': 'varchar'})
+        rel = decidb.read_json(TestFile('example.json'), columns={'id': 'integer', 'name': 'varchar'})
         res = rel.fetchone()
         print(res)
         assert res == (1, 'O Brother, Where Art Thou?')
 
     def test_read_json_auto(self):
-        rel = packdb.read_json(TestFile('example.json'))
+        rel = decidb.read_json(TestFile('example.json'))
         res = rel.fetchone()
         print(res)
         assert res == (1, 'O Brother, Where Art Thou?')
 
     def test_read_json_maximum_depth(self):
-        rel = packdb.read_json(TestFile('example.json'), maximum_depth=4)
+        rel = decidb.read_json(TestFile('example.json'), maximum_depth=4)
         res = rel.fetchone()
         print(res)
         assert res == (1, 'O Brother, Where Art Thou?')
 
     def test_read_json_sample_size(self):
-        rel = packdb.read_json(TestFile('example.json'), sample_size=2)
+        rel = decidb.read_json(TestFile('example.json'), sample_size=2)
         res = rel.fetchone()
         print(res)
         assert res == (1, 'O Brother, Where Art Thou?')
 
     def test_read_json_format(self):
         # Wrong option
-        with pytest.raises(packdb.BinderException, match="format must be one of .* not 'test'"):
-            rel = packdb.read_json(TestFile('example.json'), format='test')
+        with pytest.raises(decidb.BinderException, match="format must be one of .* not 'test'"):
+            rel = decidb.read_json(TestFile('example.json'), format='test')
 
-        rel = packdb.read_json(TestFile('example.json'), format='unstructured')
+        rel = decidb.read_json(TestFile('example.json'), format='unstructured')
         res = rel.fetchone()
         print(res)
         assert res == (
@@ -76,10 +76,10 @@ class TestReadJSON(object):
 
     def test_read_json_records(self):
         # Wrong option
-        with pytest.raises(packdb.BinderException, match="""read_json requires "records" to be one of"""):
-            rel = packdb.read_json(TestFile('example.json'), records='none')
+        with pytest.raises(decidb.BinderException, match="""read_json requires "records" to be one of"""):
+            rel = decidb.read_json(TestFile('example.json'), records='none')
 
-        rel = packdb.read_json(TestFile('example.json'), records='true')
+        rel = decidb.read_json(TestFile('example.json'), records='true')
         res = rel.fetchone()
         print(res)
         assert res == (1, 'O Brother, Where Art Thou?')
@@ -120,7 +120,7 @@ class TestReadJSON(object):
         option_name, option_value = option
         keyword_arguments[option_name] = option_value
         if option_name == 'hive_types':
-            with pytest.raises(packdb.InvalidInputException, match=r'Unknown hive_type:'):
+            with pytest.raises(decidb.InvalidInputException, match=r'Unknown hive_type:'):
                 rel = duckdb_cursor.read_json(TestFile('example.json'), **keyword_arguments)
         else:
             rel = duckdb_cursor.read_json(TestFile('example.json'), **keyword_arguments)

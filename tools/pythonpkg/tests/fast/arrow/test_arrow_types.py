@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 pa = pytest.importorskip("pyarrow")
@@ -11,7 +11,7 @@ class TestArrowTypes(object):
         inputs = [pa.array([None, None, None], type=pa.null())]
         arrow_table = pa.Table.from_arrays(inputs, schema=schema)
         duckdb_cursor.register("testarrow", arrow_table)
-        rel = packdb.from_arrow(arrow_table).arrow()
+        rel = decidb.from_arrow(arrow_table).arrow()
         # We turn it to an array of int32 nulls
         schema = pa.schema([("data", pa.int32())])
         inputs = [pa.array([None, None, None], type=pa.null())]
@@ -26,7 +26,7 @@ class TestArrowTypes(object):
         empty_array = pa.array([], type=empty_struct_type)
         arrow_table = pa.Table.from_arrays([empty_array], schema=pa.schema([("data", empty_struct_type)]))
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='Attempted to convert a STRUCT with no fields to DuckDB which is not supported',
         ):
             duckdb_cursor.sql("select * from arrow_table").fetchall()
@@ -38,7 +38,7 @@ class TestArrowTypes(object):
 
         arrow_table = pa.Table.from_arrays([sparse_union_array], schema=pa.schema([("data", sparse_union_array.type)]))
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='Attempted to convert a UNION with no fields to DuckDB which is not supported',
         ):
             duckdb_cursor.register('invalid_union', arrow_table)

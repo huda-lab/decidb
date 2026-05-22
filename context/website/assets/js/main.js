@@ -1,5 +1,5 @@
 /**
- * PackDB Website - Main JavaScript
+ * DecidB Website - Main JavaScript
  * Handles navigation, code copying, scroll spy, and interactive elements
  */
 
@@ -21,7 +21,7 @@
       var next = current === 'dark' ? 'light' : 'dark';
 
       document.documentElement.setAttribute('data-theme', next);
-      localStorage.setItem('packdb-theme', next);
+      localStorage.setItem('decidb-theme', next);
 
       // Remove transition class after animation completes
       setTimeout(function() {
@@ -388,17 +388,17 @@
   // ============================================
   function initPrism() {
     if (typeof Prism !== 'undefined') {
-      // Extend SQL grammar with PackDB-specific clause keywords so that
+      // Extend SQL grammar with DecidB-specific clause keywords so that
       // DECIDE, SUCH THAT, MAXIMIZE, and MINIMIZE are highlighted just like
       // standard SQL clauses (SELECT, FROM, WHERE, etc.).
       if (Prism.languages.sql) {
         var orig = Prism.languages.sql['keyword'];
-        var packdbKeywords = {
+        var decidbKeywords = {
           pattern: /\bDECIDE\b|\bSUCH\s+THAT\b|\bMAXIMIZE\b|\bMINIMIZE\b/i
         };
         Prism.languages.sql['keyword'] = Array.isArray(orig)
-          ? [packdbKeywords].concat(orig)
-          : [packdbKeywords, orig];
+          ? [decidbKeywords].concat(orig)
+          : [decidbKeywords, orig];
       }
       Prism.highlightAll();
     }
@@ -431,7 +431,7 @@
     initMermaid();
     initPrism();
 
-    console.log('PackDB website initialized');
+    console.log('DecidB website initialized');
   });
 
 })();

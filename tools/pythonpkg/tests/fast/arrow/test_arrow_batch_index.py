@@ -1,14 +1,14 @@
-import packdb
+import decidb
 import pytest
 import pandas as pd
-import packdb
+import decidb
 
 pa = pytest.importorskip("pyarrow")
 
 
 class TestArrowBatchIndex(object):
     def test_arrow_batch_index(self, duckdb_cursor):
-        con = packdb.connect()
+        con = decidb.connect()
         df = con.execute('SELECT * FROM range(10000000) t(i)').df()
         arrow_tbl = pa.Table.from_pandas(df)
 

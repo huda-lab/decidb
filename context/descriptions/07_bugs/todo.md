@@ -54,10 +54,10 @@ User DECIDE queries and regular user-table queries are unaffected.
 ### Where to look next
 
 1. Binary-search one of the failing view bodies (start with `pg_class` or `information_schema.tables` in `src/catalog/default/default_views.cpp`) to isolate the minimal sub-expression that fails under the current grammar.
-2. Once the construct is identified, check `third_party/libpg_query/grammar/statements/select.y` for rules added during PackDB development that may shadow or conflict with it. Prime suspects:
+2. Once the construct is identified, check `third_party/libpg_query/grammar/statements/select.y` for rules added during DecidB development that may shadow or conflict with it. Prime suspects:
    - The postfix `a_expr WHEN b_expr` / `a_expr WHEN b_expr PER columnref` rules added for DECIDE constraints/objectives (`select.y` around lines 232–335 and 2914).
    - Anything that altered operator precedence for `%prec POSTFIXOP` in combination with `WHEN`/`PER`.
-3. The "near 'then'" token name in the error is a Bison artifact: the offending bareword is being lexed into a token that shares a yacc rule with `THEN`. That's the same signature as the `type`/`COUNT` class of keyword-bucket mistakes seen in prior commits (e.g. `5375579` "removed COUNT from packdb keywords").
+3. The "near 'then'" token name in the error is a Bison artifact: the offending bareword is being lexed into a token that shares a yacc rule with `THEN`. That's the same signature as the `type`/`COUNT` class of keyword-bucket mistakes seen in prior commits (e.g. `5375579` "removed COUNT from decidb keywords").
 
 ### Impact
 

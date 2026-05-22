@@ -3,7 +3,7 @@
 """
 
 import numpy as np
-import packdb
+import decidb
 from datetime import timedelta
 import pytest
 
@@ -81,29 +81,29 @@ class TestScanNumpy(object):
         res = duckdb_cursor.sql("select * from z").fetchall()
         assert res == [(1, 'z'), (2, 'x'), (3, 'c')]
 
-        # currently unsupported formats, will throw packdb.InvalidInputException
+        # currently unsupported formats, will throw decidb.InvalidInputException
 
         # list of arrays with different length
         z = [np.array([1, 2]), np.array([3])]
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             duckdb_cursor.sql("select * from z")
 
         # dict of ndarrays of different length
         z = {"z": np.array([1, 2]), "x": np.array([3])}
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             duckdb_cursor.sql("select * from z")
 
         # high dimensional tensors
         z = np.array([[[1, 2]]])
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             duckdb_cursor.sql("select * from z")
 
         # list of ndarrys with len(shape) > 1
         z = [np.array([[1, 2], [3, 4]])]
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             duckdb_cursor.sql("select * from z")
 
         # dict of ndarrays with len(shape) > 1
         z = {"x": np.array([[1, 2], [3, 4]])}
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             duckdb_cursor.sql("select * from z")

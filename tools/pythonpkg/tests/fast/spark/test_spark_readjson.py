@@ -1,10 +1,10 @@
 import pytest
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 
 from spark_namespace.sql.types import Row
 import textwrap
-import packdb
+import decidb
 
 
 class TestSparkReadJson(object):

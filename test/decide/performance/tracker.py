@@ -30,7 +30,7 @@ class PerfRecord:
     test_name: str
     timestamp: str
     git_commit: str
-    packdb_wall_time_s: float
+    decidb_wall_time_s: float
     oracle_build_time_s: float
     oracle_solve_time_s: float
     num_input_rows: int
@@ -55,7 +55,7 @@ class PerfTracker:
     def record(
         self,
         test_name: str,
-        packdb_wall_time_s: float,
+        decidb_wall_time_s: float,
         oracle_build_time_s: float,
         oracle_solve_time_s: float,
         num_input_rows: int,
@@ -72,7 +72,7 @@ class PerfTracker:
                 test_name=test_name,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 git_commit=_git_commit(),
-                packdb_wall_time_s=packdb_wall_time_s,
+                decidb_wall_time_s=decidb_wall_time_s,
                 oracle_build_time_s=oracle_build_time_s,
                 oracle_solve_time_s=oracle_solve_time_s,
                 num_input_rows=num_input_rows,

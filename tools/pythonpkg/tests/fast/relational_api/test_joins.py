@@ -1,11 +1,11 @@
-import packdb
+import decidb
 import pytest
-from packdb import ColumnExpression
+from decidb import ColumnExpression
 
 
 @pytest.fixture
 def con():
-    conn = packdb.connect()
+    conn = decidb.connect()
     # Main relation
     conn.execute(
         """

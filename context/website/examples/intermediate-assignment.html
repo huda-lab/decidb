@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <script>
-  (function(){var t=localStorage.getItem('packdb-theme')||'light';
+  (function(){var t=localStorage.getItem('decidb-theme')||'light';
   document.documentElement.setAttribute('data-theme',t)})();
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Task Assignment - PackDB Examples</title>
+  <title>Task Assignment - DecidB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -31,7 +31,7 @@
   <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <a href="../index.html" class="flex items-center space-x-2">
-        <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 logo-img">
+        <img src="../assets/images/logo.svg" alt="DecidB" class="h-8 logo-img">
         <div class="hidden sm:block">
           <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
@@ -44,7 +44,7 @@
         <a href="../about.html" class="nav-link">About</a>
       </div>
       <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary text-sm">
+        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary text-sm">
           <i data-lucide="github" class="w-4 h-4"></i> GitHub
         </a>
         <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
@@ -78,7 +78,7 @@
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        A project manager needs to assign workers to tasks. Each worker-task pair has a skill match score and an hours requirement. Each worker can be assigned to at most one task, and each task must be assigned to exactly one worker. The goal is to maximize total skill match. This example demonstrates multiple decision variables (x for assignment, y for hours) and uses the PER clause for grouped constraints — a planned PackDB feature for per-group aggregation.
+        A project manager needs to assign workers to tasks. Each worker-task pair has a skill match score and an hours requirement. Each worker can be assigned to at most one task, and each task must be assigned to exactly one worker. The goal is to maximize total skill match. This example demonstrates multiple decision variables (x for assignment, y for hours) and uses the PER clause for grouped constraints — a planned DecidB feature for per-group aggregation.
       </p>
     </section>
 
@@ -184,7 +184,7 @@ MAXIMIZE SUM(x * skill_match);</code></pre>
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="../assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 logo-img">
+          <img src="../assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
           <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
@@ -199,8 +199,8 @@ MAXIMIZE SUM(x * skill_match);</code></pre>
         <div>
           <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
+            <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
             <li><a href="../about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
           </ul>
         </div>

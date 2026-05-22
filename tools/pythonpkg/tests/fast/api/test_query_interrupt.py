@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import time
 import pytest
 
@@ -20,7 +20,7 @@ class TestQueryInterruption(object):
         reason="Emscripten builds cannot use threads",
     )
     def test_query_interruption(self):
-        con = packdb.connect()
+        con = decidb.connect()
         thread = threading.Thread(target=send_keyboard_interrupt)
         # Start the thread
         thread.start()

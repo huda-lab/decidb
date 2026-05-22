@@ -237,7 +237,7 @@ decide_when_condition:
 decide_objective_item:
 			a_expr WHEN b_expr PER columnref
 				{
-					/* PackDB: objective WHEN condition PER column */
+					/* DecidB: objective WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 					$$ = (PGNode *) makeSimpleAExpr(
@@ -245,7 +245,7 @@ decide_objective_item:
 				}
 			| a_expr WHEN b_expr PER '(' columnrefList ')'
 				{
-					/* PackDB: objective WHEN condition PER (col1, col2, ...) */
+					/* DecidB: objective WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 					$$ = (PGNode *) makeSimpleAExpr(
@@ -253,18 +253,18 @@ decide_objective_item:
 				}
 			| a_expr WHEN b_expr
 				{
-					/* PackDB: objective WHEN condition (b_expr excludes AND/OR) */
+					/* DecidB: objective WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
 			| a_expr PER columnref
 				{
-					/* PackDB: objective PER column */
+					/* DecidB: objective PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
 			| a_expr PER '(' columnrefList ')'
 				{
-					/* PackDB: objective PER (col1, col2, ...) */
+					/* DecidB: objective PER (col1, col2, ...) */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
 				}
@@ -315,7 +315,7 @@ decide_constraint_list:
 decide_constraint_item:
 			a_expr WHEN b_expr PER columnref
 				{
-					/* PackDB: constraint WHEN condition PER column */
+					/* DecidB: constraint WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 					$$ = (PGNode *) makeSimpleAExpr(
@@ -323,7 +323,7 @@ decide_constraint_item:
 				}
 			| a_expr WHEN b_expr PER '(' columnrefList ')'
 				{
-					/* PackDB: constraint WHEN condition PER (col1, col2, ...) */
+					/* DecidB: constraint WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 					$$ = (PGNode *) makeSimpleAExpr(
@@ -331,18 +331,18 @@ decide_constraint_item:
 				}
 			| a_expr WHEN b_expr
 				{
-					/* PackDB: constraint WHEN condition (b_expr excludes AND/OR) */
+					/* DecidB: constraint WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
 			| a_expr PER columnref
 				{
-					/* PackDB: constraint PER column */
+					/* DecidB: constraint PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
 			| a_expr PER '(' columnrefList ')'
 				{
-					/* PackDB: constraint PER (col1, col2, ...) */
+					/* DecidB: constraint PER (col1, col2, ...) */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
 				}
@@ -2913,7 +2913,7 @@ b_expr:		c_expr
 c_expr:		d_expr
 			| func_application WHEN decide_when_condition	%prec POSTFIXOP
 				{
-					/* PackDB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
+					/* DecidB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
 			| indirection_expr_or_a_expr opt_extended_indirection

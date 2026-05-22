@@ -1,6 +1,6 @@
 """Smoke tests for the quadratic oracle API.
 
-These don't exercise PackDB at all — they only verify that
+These don't exercise DecidB at all — they only verify that
 set_quadratic_objective and add_quadratic_constraint in solver/gurobi_backend.py
 solve tiny hand-checked problems correctly, so downstream tests in
 test_quadratic.py / test_quadratic_constraints.py can rely on the API.

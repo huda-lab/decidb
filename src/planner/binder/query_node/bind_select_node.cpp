@@ -36,8 +36,8 @@
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
-#include "duckdb/packdb/utility/debug.hpp"
-#include "duckdb/packdb/symbolic/decide_symbolic.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
+#include "duckdb/decidb/symbolic/decide_symbolic.hpp"
 
 namespace duckdb {
 

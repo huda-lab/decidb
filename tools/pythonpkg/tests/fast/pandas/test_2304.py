@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import numpy as np
 import pytest
 from conftest import NumpyPandas, ArrowPandas
@@ -26,7 +26,7 @@ class TestPandasMergeSameName(object):
             }
         )
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.register('df1', df1)
         con.register('df2', df2)
         query = """SELECT * from df1
@@ -75,7 +75,7 @@ class TestPandasMergeSameName(object):
             }
         )
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.register('df1', df1)
         con.register('df2', df2)
         query = """SELECT * from df1
@@ -106,7 +106,7 @@ class TestPandasMergeSameName(object):
             }
         )
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.register('df1', df1)
         con.register('df2', df2)
 

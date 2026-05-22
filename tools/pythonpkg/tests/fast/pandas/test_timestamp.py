@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import datetime
 import os
 import pytest
@@ -17,7 +17,7 @@ class TestPandasTimestamps(object):
             )
         }
         df = pd.DataFrame(data=d)
-        df_from_duck = packdb.from_df(df).df()
+        df_from_duck = decidb.from_df(df).df()
         assert df_from_duck.equals(df)
 
     @pytest.mark.parametrize('unit', ['s', 'ms', 'us', 'ns'])
@@ -30,7 +30,7 @@ class TestPandasTimestamps(object):
             expected_dtype = pd.core.dtypes.dtypes.DatetimeTZDtype(unit='ns', tz='UTC')
             dtype = pd.core.dtypes.dtypes.DatetimeTZDtype(unit='ns', tz='UTC')
 
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.execute("SET TimeZone =UTC")
         d = {
             'time': pd.Series(
@@ -50,7 +50,7 @@ class TestPandasTimestamps(object):
     def test_timestamp_nulls(self, unit):
         d = {'time': pd.Series([pd.Timestamp(None, unit=unit)], dtype=f'datetime64[{unit}]')}
         df = pd.DataFrame(data=d)
-        df_from_duck = packdb.from_df(df).df()
+        df_from_duck = decidb.from_df(df).df()
         assert df_from_duck.equals(df)
 
     def test_timestamp_timedelta(self):
@@ -62,7 +62,7 @@ class TestPandasTimestamps(object):
                 'd': [pd.Timedelta(1, unit='ms')],
             }
         )
-        df_from_duck = packdb.from_df(df).df()
+        df_from_duck = decidb.from_df(df).df()
         assert df_from_duck.equals(df)
 
     @pytest.mark.xfail(

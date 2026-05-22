@@ -7,7 +7,7 @@ Conventions:
   - Row-scoped DECIDE variable ``v`` for row ``i`` is named ``"v_{i}"``.
   - Entity-scoped ``t.v`` uses ``f"{var}_{entity_key}"``.
   - Group indices refer to positions in the original data list, not
-    PackDB's output (which may be reordered).
+    DecidB's output (which may be reordered).
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def add_in_domain(
       SUM(z_k) = 1             (exactly one selected)
       var = SUM(v_k * z_k)    (linking)
 
-    Mirrors PackDB's bind-time rewrite for ``x IN (v1, ..., vK)``. Returns
+    Mirrors DecidB's bind-time rewrite for ``x IN (v1, ..., vK)``. Returns
     the list of indicator variable names.
     """
     prefix = name_prefix or f"{var_name}_in"

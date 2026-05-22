@@ -23,7 +23,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_and_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_and_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """AND compound: SUM(x*qty) <= 50 WHEN (returnflag='R' AND linestatus='F')."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -35,8 +35,8 @@ def test_when_compound_and_aggregate(packdb_cli, duckdb_conn, oracle_solver, per
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -69,12 +69,12 @@ def test_when_compound_and_aggregate(packdb_cli, duckdb_conn, oracle_solver, per
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_cmpd_and_agg", packdb_time, build_time,
+        "when_cmpd_and_agg", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -88,7 +88,7 @@ def test_when_compound_and_aggregate(packdb_cli, duckdb_conn, oracle_solver, per
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_or_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_or_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """OR compound: SUM(x*qty) <= 100 WHEN (returnflag='R' OR returnflag='A')."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -100,8 +100,8 @@ def test_when_compound_or_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -133,12 +133,12 @@ def test_when_compound_or_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_cmpd_or_agg", packdb_time, build_time,
+        "when_cmpd_or_agg", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -153,7 +153,7 @@ def test_when_compound_or_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_and_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_and_perrow(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """AND compound on per-row: x <= 0 WHEN (returnflag='N' AND quantity > 30)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -166,8 +166,8 @@ def test_when_compound_and_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -199,12 +199,12 @@ def test_when_compound_and_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_cmpd_and_perrow", packdb_time, build_time,
+        "when_cmpd_and_perrow", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -218,7 +218,7 @@ def test_when_compound_and_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_and_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_and_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """AND compound on objective: MAXIMIZE WHEN (returnflag='R' AND discount >= 0.06)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -230,8 +230,8 @@ def test_when_compound_and_objective(packdb_cli, duckdb_conn, oracle_solver, per
         MAXIMIZE SUM(x * l_extendedprice) WHEN (l_returnflag = 'R' AND l_discount >= 0.06)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -263,11 +263,11 @@ def test_when_compound_and_objective(packdb_cli, duckdb_conn, oracle_solver, per
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    price_idx = packdb_cols.index("l_extendedprice")
-    flag_idx = packdb_cols.index("l_returnflag")
-    disc_idx = packdb_cols.index("l_discount")
+    price_idx = decidb_cols.index("l_extendedprice")
+    flag_idx = decidb_cols.index("l_returnflag")
+    disc_idx = decidb_cols.index("l_discount")
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {
             "x": float(row[price_idx])
             if row[flag_idx] == 'R' and float(row[disc_idx]) >= 0.06
@@ -276,7 +276,7 @@ def test_when_compound_and_objective(packdb_cli, duckdb_conn, oracle_solver, per
     )
 
     perf_tracker.record(
-        "when_cmpd_and_obj", packdb_time, build_time,
+        "when_cmpd_and_obj", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -290,7 +290,7 @@ def test_when_compound_and_objective(packdb_cli, duckdb_conn, oracle_solver, per
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_mixed_types(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_mixed_types(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Mixed string + numeric compound: WHEN (returnflag='A' AND quantity <= 25)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -302,8 +302,8 @@ def test_when_compound_mixed_types(packdb_cli, duckdb_conn, oracle_solver, perf_
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -335,12 +335,12 @@ def test_when_compound_mixed_types(packdb_cli, duckdb_conn, oracle_solver, perf_
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_cmpd_mixed", packdb_time, build_time,
+        "when_cmpd_mixed", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -355,7 +355,7 @@ def test_when_compound_mixed_types(packdb_cli, duckdb_conn, oracle_solver, perf_
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_compound_or_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_compound_or_perrow(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """OR compound on per-row: x = 1 WHEN (discount >= 0.09 OR quantity < 3)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -368,8 +368,8 @@ def test_when_compound_or_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -401,12 +401,12 @@ def test_when_compound_or_perrow(packdb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_cmpd_or_perrow", packdb_time, build_time,
+        "when_cmpd_or_perrow", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

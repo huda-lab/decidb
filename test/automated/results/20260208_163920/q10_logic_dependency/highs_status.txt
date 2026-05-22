@@ -1,2 +1,0 @@
-Status: OPTIMAL
-Objective: -4.0

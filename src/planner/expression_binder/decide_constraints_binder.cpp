@@ -410,11 +410,11 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
     }
     case ExpressionClass::FUNCTION: {
         auto &func = expr.Cast<FunctionExpression>();
-        // PackDB: PER constraint wrapper (outermost, wraps optional WHEN)
+        // DecidB: PER constraint wrapper (outermost, wraps optional WHEN)
         if (func.is_operator && IsPerConstraintTag(func.function_name)) {
             return BindPerConstraint(expr_ptr, depth);
         }
-        // PackDB: top-level WHEN wraps a whole constraint. Nested WHEN is the
+        // DecidB: top-level WHEN wraps a whole constraint. Nested WHEN is the
         // aggregate-local form and binds through DecideBinder::BindFunction.
         if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
             if (!is_top_expression) {

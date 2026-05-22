@@ -18,7 +18,7 @@ def print_perf_table(tracker: PerfTracker) -> None:
 
     header = (
         f"  {'Test Name':<{name_w}}  {'Rows':>7}  {'Vars':>7}  "
-        f"{'PackDB(s)':>10}  {'Oracle(s)':>10}  {'Obj Value':>14}  "
+        f"{'DecidB(s)':>10}  {'Oracle(s)':>10}  {'Obj Value':>14}  "
         f"{'Match':>10}  {'Solver':<8}"
     )
     sep = "  " + "-" * (len(header) - 2)
@@ -30,7 +30,7 @@ def print_perf_table(tracker: PerfTracker) -> None:
         cmp_str = r.comparison_status or "-"
         lines.append(
             f"  {r.test_name:<{name_w}}  {r.num_input_rows:>7}  "
-            f"{r.num_solver_variables:>7}  {r.packdb_wall_time_s:>10.4f}  "
+            f"{r.num_solver_variables:>7}  {r.decidb_wall_time_s:>10.4f}  "
             f"{oracle_total:>10.4f}  {obj_str:>14}  "
             f"{cmp_str:>10}  {r.solver_backend:<8}"
         )

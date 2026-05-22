@@ -43,7 +43,7 @@ public:
 	AggregateHandling aggregate_handling;
 	//! The SAMPLE clause
 	unique_ptr<SampleOptions> sample;
-    // packdb's DECIDE
+    // decidb's DECIDE
     vector<unique_ptr<ParsedExpression>> decide_variables;
     unique_ptr<ParsedExpression> decide_constraints;
     DecideSense decide_sense;

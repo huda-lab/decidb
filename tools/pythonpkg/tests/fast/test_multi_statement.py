@@ -1,13 +1,13 @@
-import packdb
+import decidb
 import os
 import shutil
 
 
 class TestMultiStatement(object):
     def test_multi_statement(self, duckdb_cursor):
-        import packdb
+        import decidb
 
-        con = packdb.connect(':memory:')
+        con = decidb.connect(':memory:')
 
         # test empty statement
         con.execute('')
@@ -33,7 +33,7 @@ class TestMultiStatement(object):
         con.execute('INSERT INTO integers2 VALUES (1), (5), (7), (1928)')
         con.execute("EXPORT DATABASE '%s'" % (export_location,))
         # reset connection
-        con = packdb.connect(':memory:')
+        con = decidb.connect(':memory:')
         con.execute("IMPORT DATABASE '%s'" % (export_location,))
         integers = [x[0] for x in con.execute('SELECT * FROM integers').fetchall()]
         integers2 = [x[0] for x in con.execute('SELECT * FROM integers2').fetchall()]

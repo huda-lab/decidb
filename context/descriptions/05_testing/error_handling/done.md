@@ -14,7 +14,7 @@ Tests live in:
 | MAXIMIZE/MINIMIZE without an objective expression | `test_error_parser.py::test_missing_objective_expression` |
 | `IS <unknown-type>` | `test_error_parser.py::test_unknown_variable_type` |
 
-All expect `packdb.ParserException`.
+All expect `decidb.ParserException`.
 
 ## Binder errors
 
@@ -32,7 +32,7 @@ All expect `packdb.ParserException`.
 | Aggregate LHS vs aggregate RHS | `test_aggregate_vs_aggregate_constraint_rejected` |
 | Flat MIN/MAX + PER | Rejected via `test_per_objective.py` |
 
-All expect `packdb.InvalidInputException` or `packdb.BinderException`.
+All expect `decidb.InvalidInputException` or `decidb.BinderException`.
 
 ## Infeasibility detection
 
@@ -43,7 +43,7 @@ All expect `packdb.InvalidInputException` or `packdb.BinderException`.
 | Negative SUM upper bound | `test_error_infeasible.py::TestInfeasibleModels::test_negative_sum_upper_bound` |
 | WHEN-forced infeasibility (all rows zero) | `test_error_infeasible.py::TestInfeasibleModels::test_infeasible_when_forces_all_zero` |
 
-All expect `packdb.InvalidInputException` matching `"infeasible"`.
+All expect `decidb.InvalidInputException` matching `"infeasible"`.
 
 ## Unboundedness detection
 

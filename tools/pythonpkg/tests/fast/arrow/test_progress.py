@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 
@@ -14,7 +14,7 @@ class TestProgressBarArrow(object):
         pyarrow = pytest.importorskip("pyarrow")
 
         data = pyarrow.array(np.arange(10000000), type=pyarrow.int32())
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA progress_bar_time=1")
         duckdb_conn.execute("PRAGMA disable_print_progress_bar")
 
@@ -46,7 +46,7 @@ class TestProgressBarArrow(object):
         pyarrow = pytest.importorskip("pyarrow")
 
         data = pyarrow.array(np.arange(0), type=pyarrow.int32())
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA progress_bar_time=1")
         duckdb_conn.execute("PRAGMA disable_print_progress_bar")
 

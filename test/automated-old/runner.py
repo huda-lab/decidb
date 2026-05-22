@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Automated Testing Framework for PackDB - Refactored
+Automated Testing Framework for DecidB - Refactored
 
-This framework tests PackDB's DECIDE clause by:
+This framework tests DecidB's DECIDE clause by:
 1. Auto-discovering all queries in test/automated/queries/
-2. Using the real packdb.db database
-3. Comparing Gurobi solver results with PackDB results in matching table formats
+2. Using the real decidb.db database
+3. Comparing Gurobi solver results with DecidB results in matching table formats
 
 Note: This runner uses gurobi_cl as the reference solver (must be in PATH).
-PackDB internally may use either Gurobi or HiGHS depending on availability.
+DecidB internally may use either Gurobi or HiGHS depending on availability.
 """
 
 import subprocess
@@ -258,25 +258,25 @@ def run_highs_solver(mps_file, solution_file):
         return _run_highs(mps_file, solution_file)
 
 
-def run_packdb_query(query_file, db_file):
-    """Run the query using PackDB (DuckDB)"""
+def run_decidb_query(query_file, db_file):
+    """Run the query using DecidB (DuckDB)"""
     # Assuming read_config is defined elsewhere or will be added.
     # For now, we'll define a placeholder for read_config to make the code syntactically correct.
     # In a real scenario, this would come from a configuration module.
     def read_config():
-        packdb_bin = Path(__file__).parent.parent.parent / "build" / "release" / "packdb"
-        return packdb_bin, None # Placeholder for other config value
+        decidb_bin = Path(__file__).parent.parent.parent / "build" / "release" / "decidb"
+        return decidb_bin, None # Placeholder for other config value
 
-    packdb_bin, _ = read_config()
+    decidb_bin, _ = read_config()
 
     # Use -csv flag to ensure CSV output
-    cmd = [str(packdb_bin), str(db_file), '-csv']
+    cmd = [str(decidb_bin), str(db_file), '-csv']
     
     # Read query content
     with open(query_file, 'r') as f:
         query_sql = f.read()
         
-    print(f"ℹ Running PackDB with: {' '.join(cmd)}")
+    print(f"ℹ Running DecidB with: {' '.join(cmd)}")
     result = subprocess.run(cmd, input=query_sql, capture_output=True, text=True)
     
     return result.stdout, result.stderr, result.returncode
@@ -408,7 +408,7 @@ def strip_comments(sql):
 
 def query_to_mps(query_file, db_file, mps_file):
     """Convert SQL query to MPS format by querying the real database"""
-    packdb_bin = Path(__file__).parent.parent.parent / "build" / "release" / "packdb"
+    decidb_bin = Path(__file__).parent.parent.parent / "build" / "release" / "decidb"
     
     # Read the query
     with open(query_file, 'r') as f:
@@ -465,7 +465,7 @@ def query_to_mps(query_file, db_file, mps_file):
     if 'SUM(' in obj_part:
         obj_expr = obj_part.split('SUM(')[1].split(')')[0].strip().lower()
     else:
-        # Fallback if no SUM (unlikely for PackDB)
+        # Fallback if no SUM (unlikely for DecidB)
         obj_expr = "0" 
     
     # Parse constraints and bounds
@@ -518,7 +518,7 @@ def query_to_mps(query_file, db_file, mps_file):
             print(f"ℹ Resolving subquery: {subquery}")
             
             # Execute subquery
-            res = subprocess.run([str(packdb_bin), str(db_file), '-csv', '-noheader'], input=subquery, capture_output=True, text=True)
+            res = subprocess.run([str(decidb_bin), str(db_file), '-csv', '-noheader'], input=subquery, capture_output=True, text=True)
             if res.returncode != 0:
                 print(f"Error executing subquery: {res.stderr}")
                 break 
@@ -682,10 +682,10 @@ def query_to_mps(query_file, db_file, mps_file):
         # Try to drop table if simple name
         if ' ' not in from_clause and ',' not in from_clause:
              drop_table_cmd = f"DROP TABLE IF EXISTS {from_clause};"
-             subprocess.run([str(packdb_bin), str(db_file)], input=drop_table_cmd, capture_output=True, text=True)
+             subprocess.run([str(decidb_bin), str(db_file)], input=drop_table_cmd, capture_output=True, text=True)
              
         setup_commands = ';\n'.join(setup_sql) + ';'
-        result = subprocess.run([str(packdb_bin), str(db_file)], input=setup_commands, capture_output=True, text=True)
+        result = subprocess.run([str(decidb_bin), str(db_file)], input=setup_commands, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"ERROR setting up tables: {result.stderr}")
             return False
@@ -700,7 +700,7 @@ def query_to_mps(query_file, db_file, mps_file):
     
     print(f"ℹ Fetching data with: {data_query}")
     
-    result = subprocess.run([str(packdb_bin), str(db_file), '-csv'], input=data_query, capture_output=True, text=True)
+    result = subprocess.run([str(decidb_bin), str(db_file), '-csv'], input=data_query, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"ERROR querying database: {result.stderr}")
         return False
@@ -749,7 +749,7 @@ def query_to_mps(query_file, db_file, mps_file):
     
     # Write MPS file
     with open(mps_file, 'w') as f:
-        f.write("NAME          PACKDB_TEST\n")
+        f.write("NAME          DECIDB_TEST\n")
         f.write("ROWS\n")
         f.write(" N  OBJ\n")
         for i, constraint in enumerate(constraints):
@@ -1058,7 +1058,7 @@ def write_highs_solution_csv(data, columns, solution, objective, obj_sense, outp
                         # Try case insensitive lookup in row
                         found = False
                         
-                        # PackDB/DuckDB often flattens "table.col" to "col" or "table_col"
+                        # DecidB/DuckDB often flattens "table.col" to "col" or "table_col"
                         # Try removing table alias prefix (everything before dot)
                         if '.' in col_lower:
                             simple_name = col_lower.split('.')[-1]
@@ -1148,9 +1148,9 @@ def run_test(query_file, db_file, output_dir):
         # Write solution to CSV (overwrite with formatted output)
         write_highs_solution_csv(data, columns, solution, objective, obj_sense, highs_solution_csv, decide_vars, projected_cols)
     
-    # 5. Run PackDB
-    packdb_solution_csv = test_dir / 'packdb_solution.csv'
-    packdb_status_file = test_dir / 'packdb_status.txt'
+    # 5. Run DecidB
+    decidb_solution_csv = test_dir / 'decidb_solution.csv'
+    decidb_status_file = test_dir / 'decidb_status.txt'
     
     print(f"✓ HiGHS: {status}, Objective: {objective}")
     
@@ -1159,29 +1159,29 @@ def run_test(query_file, db_file, output_dir):
         f.write(f"Status: {status}\n")
         f.write(f"Objective: {objective}\n")
     
-    # 4. Run PackDB
-    packdb_out, packdb_err, returncode = run_packdb_query(query_file, db_file)
+    # 4. Run DecidB
+    decidb_out, decidb_err, returncode = run_decidb_query(query_file, db_file)
     
     if returncode == 0:
         # Parse output to extract CSV
-        # print(f"DEBUG: PackDB Output (first 10 lines):\n{chr(10).join(packdb_out.splitlines()[:10])}")
-        csv_content = parse_packdb_output(packdb_out, known_columns=columns)
+        # print(f"DEBUG: DecidB Output (first 10 lines):\n{chr(10).join(decidb_out.splitlines()[:10])}")
+        csv_content = parse_decidb_output(decidb_out, known_columns=columns)
         if csv_content:
-            with open(packdb_solution_csv, 'w') as f:
+            with open(decidb_solution_csv, 'w') as f:
                 f.write(csv_content)
         else:
-            print("ERROR: Failed to parse CSV from PackDB output")
-        with open(packdb_status_file, 'w') as f:
+            print("ERROR: Failed to parse CSV from DecidB output")
+        with open(decidb_status_file, 'w') as f:
             f.write("Status: SUCCESS\n")
-        print(f"✓ PackDB: SUCCESS")
+        print(f"✓ DecidB: SUCCESS")
         
         # 5. Compare Results
-        match, reason = compare_results(highs_solution_csv, packdb_solution_csv)
+        match, reason = compare_results(highs_solution_csv, decidb_solution_csv)
         if match:
             print(f"✓ Comparison: PASS")
             return True
         else:
-            # Fallback: Verify if PackDB solution satisfies constraints and matches objective
+            # Fallback: Verify if DecidB solution satisfies constraints and matches objective
             print(f"⚠ Exact match failed ({reason}). Verifying constraints and objective...")
             
             # We need constraints, bounds, etc. from query_to_mps result
@@ -1199,7 +1199,7 @@ def run_test(query_file, db_file, output_dir):
             # I will update the unpacking line separately.
             
             # Here I just call verify_solution
-            v_match, v_reason = verify_solution(packdb_solution_csv, data, constraints, bounds, obj_expr, obj_sense, decide_vars, objective)
+            v_match, v_reason = verify_solution(decidb_solution_csv, data, constraints, bounds, obj_expr, obj_sense, decide_vars, objective)
             
             if v_match:
                 print(f"✓ Verification: PASS ({v_reason})")
@@ -1209,21 +1209,21 @@ def run_test(query_file, db_file, output_dir):
                 return False
             
     else:
-        # Check if this is an expected infeasibility (both HiGHS and PackDB agree)
-        packdb_infeasible = 'infeasible' in packdb_err.lower()
+        # Check if this is an expected infeasibility (both HiGHS and DecidB agree)
+        decidb_infeasible = 'infeasible' in decidb_err.lower()
         highs_infeasible = (status == 'INFEASIBLE')
         
-        if highs_infeasible and packdb_infeasible:
-            print(f"✓ PackDB: INFEASIBLE (matches HiGHS)")
-            with open(packdb_status_file, 'w') as f:
-                f.write(f"Status: INFEASIBLE\nError: {packdb_err}\n")
+        if highs_infeasible and decidb_infeasible:
+            print(f"✓ DecidB: INFEASIBLE (matches HiGHS)")
+            with open(decidb_status_file, 'w') as f:
+                f.write(f"Status: INFEASIBLE\nError: {decidb_err}\n")
             print(f"✓ Comparison: PASS (both agree problem is infeasible)")
             return True
         else:
-            print(f"✗ PackDB: FAILED")
-            print(packdb_err)
-            with open(packdb_status_file, 'w') as f:
-                f.write(f"Status: FAILED\nError: {packdb_err}\n")
+            print(f"✗ DecidB: FAILED")
+            print(decidb_err)
+            with open(decidb_status_file, 'w') as f:
+                f.write(f"Status: FAILED\nError: {decidb_err}\n")
             return False
     
     return True
@@ -1235,7 +1235,7 @@ def read_config(repo_root):
     
     # Defaults
     build_mode = "release"
-    db_filename = "packdb.db"
+    db_filename = "decidb.db"
     
     if config_file.exists():
         with open(config_file, 'r') as f:
@@ -1248,7 +1248,7 @@ def read_config(repo_root):
                     section = line[1:-1]
                     continue
                 
-                if section == 'packdb' and '=' in line:
+                if section == 'decidb' and '=' in line:
                     key, value = [p.strip() for p in line.split('=', 1)]
                     if key == 'db_file':
                         db_filename = value
@@ -1266,8 +1266,8 @@ def read_config(repo_root):
     return db_path
 
 
-def parse_packdb_output(output, known_columns=None):
-    """Extract CSV content from noisy PackDB output"""
+def parse_decidb_output(output, known_columns=None):
+    """Extract CSV content from noisy DecidB output"""
     lines = output.split('\n')
     csv_lines = []
     
@@ -1312,38 +1312,38 @@ def parse_packdb_output(output, known_columns=None):
     return '\n'.join(csv_lines)
 
 
-def compare_results(highs_csv, packdb_csv, sort_cols=None):
-    """Compare HiGHS and PackDB results"""
+def compare_results(highs_csv, decidb_csv, sort_cols=None):
+    """Compare HiGHS and DecidB results"""
     try:
         with open(highs_csv, 'r') as f:
             highs_rows = list(csv.reader(f))
         
-        with open(packdb_csv, 'r') as f:
-            packdb_rows = list(csv.reader(f))
+        with open(decidb_csv, 'r') as f:
+            decidb_rows = list(csv.reader(f))
             
-        if not highs_rows or not packdb_rows:
+        if not highs_rows or not decidb_rows:
             return False, "Empty result file"
             
         # Normalize headers (lowercase, strip)
         h_header = [c.strip().lower() for c in highs_rows[0]]
-        p_header = [c.strip().lower() for c in packdb_rows[0]]
+        p_header = [c.strip().lower() for c in decidb_rows[0]]
         
         # Find index of decision variables (assume 'x' or 'x_value' or similar)
         # Actually, the user wants to compare "decision variables".
         # In HiGHS output we write 'x_value'. 
-        # In PackDB output, it depends on the SELECT clause.
+        # In DecidB output, it depends on the SELECT clause.
         # We need to match columns by name.
         
         common_cols = set(h_header) & set(p_header)
         if not common_cols:
-            return False, f"No common columns. HiGHS: {h_header}, PackDB: {p_header}"
+            return False, f"No common columns. HiGHS: {h_header}, DecidB: {p_header}"
             
         # Sort both by all common columns to ensure alignment
         # But wait, floating point comparison might be needed.
         
         # Filter rows to data only
         h_data = highs_rows[1:]
-        p_data = packdb_rows[1:]
+        p_data = decidb_rows[1:]
         
         # Remove empty lines or summary lines (like "objective")
         h_data = [r for r in h_data if r and len(r) == len(h_header) and r[0] != 'objective']
@@ -1380,7 +1380,7 @@ def compare_results(highs_csv, packdb_csv, sort_cols=None):
             p_dicts.sort(key=sort_key)
         
         if len(h_dicts) != len(p_dicts):
-            return False, f"Row count mismatch: HiGHS={len(h_dicts)}, PackDB={len(p_dicts)}"
+            return False, f"Row count mismatch: HiGHS={len(h_dicts)}, DecidB={len(p_dicts)}"
             
         for i, (h, p) in enumerate(zip(h_dicts, p_dicts)):
             for col in common_cols:
@@ -1412,7 +1412,7 @@ def compare_results(highs_csv, packdb_csv, sort_cols=None):
     except Exception as e:
         return False, f"Comparison error: {e}"
 
-def check_objectives(highs_csv, packdb_csv):
+def check_objectives(highs_csv, decidb_csv):
     """Check if objective values match (for multiple optimal solutions)"""
     try:
         def get_obj(filename):
@@ -1427,24 +1427,24 @@ def check_objectives(highs_csv, packdb_csv):
             return None
 
         obj_h = get_obj(highs_csv)
-        obj_p = get_obj(packdb_csv)
+        obj_p = get_obj(decidb_csv)
 
         if obj_h is not None and obj_p is not None:
              if abs(obj_h - obj_p) < 1e-4:
                  return True, f"Objectives match: {obj_h}"
              else:
-                 return False, f"Objectives mismatch: HiGHS={obj_h}, PackDB={obj_p}"
+                 return False, f"Objectives mismatch: HiGHS={obj_h}, DecidB={obj_p}"
         return False, "Objective not found in output"
     except Exception as e:
         return False, f"Error checking objectives: {e}"
 
 
 
-def verify_solution(packdb_csv, data, constraints, bounds, obj_expr, obj_sense, decide_vars, highs_objective):
-    """Verify if PackDB solution satisfies constraints and matches objective"""
+def verify_solution(decidb_csv, data, constraints, bounds, obj_expr, obj_sense, decide_vars, highs_objective):
+    """Verify if DecidB solution satisfies constraints and matches objective"""
     try:
-        # 1. Parse PackDB output to get decision variables
-        with open(packdb_csv, 'r') as f:
+        # 1. Parse DecidB output to get decision variables
+        with open(decidb_csv, 'r') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             
@@ -1452,13 +1452,13 @@ def verify_solution(packdb_csv, data, constraints, bounds, obj_expr, obj_sense, 
             return False, "Empty result file"
             
         # Map rows to decision variables
-        # We assume the order of rows in PackDB output matches 'data' if sorted by primary key?
+        # We assume the order of rows in DecidB output matches 'data' if sorted by primary key?
         # Or we need to join by key.
-        # PackDB output contains all columns.
+        # DecidB output contains all columns.
         
         # Let's try to match rows by content (excluding decide vars)
         # Or just assume order is preserved if we didn't sort?
-        # PackDB might reorder.
+        # DecidB might reorder.
         
         # Better: Build a map of data rows to their index in 'data' list
         # But 'data' list doesn't have a unique key guaranteed.
@@ -1467,14 +1467,14 @@ def verify_solution(packdb_csv, data, constraints, bounds, obj_expr, obj_sense, 
         # Let's assume the user provided a sort key or we can find one.
         # For now, let's assume we can match by all non-decide columns.
         
-        # Extract decide vars from PackDB rows
+        # Extract decide vars from DecidB rows
         solution_values = [] # List of dicts {var: value} for each row in 'data'
         
-        # We need to align 'rows' (PackDB output) with 'data' (Original input for MPS)
+        # We need to align 'rows' (DecidB output) with 'data' (Original input for MPS)
         # to correctly evaluate constraints that depend on column values.
         
         # Determine common columns for matching
-        # We need to know which columns are in the PackDB output (excluding decide vars)
+        # We need to know which columns are in the DecidB output (excluding decide vars)
         sample_row = rows[0]
         common_keys = []
         for k in sample_row.keys():
@@ -1544,7 +1544,7 @@ def verify_solution(packdb_csv, data, constraints, bounds, obj_expr, obj_sense, 
                 pass
                 
         if matched_count != len(data):
-            return False, f"Could not match all PackDB rows to input data. Matched {matched_count}/{len(data)}"
+            return False, f"Could not match all DecidB rows to input data. Matched {matched_count}/{len(data)}"
             
         # 2. Verify Constraints
         
@@ -1645,7 +1645,7 @@ def verify_solution(packdb_csv, data, constraints, bounds, obj_expr, obj_sense, 
                 obj_val += coef * val
                 
             # Constant part?
-            # Objective usually doesn't have constant part in PackDB syntax (SUM(x*...))
+            # Objective usually doesn't have constant part in DecidB syntax (SUM(x*...))
             # But if it did, it would be an offset.
             # eval_constant_part(obj_expr, row, decide_vars)
             obj_val += eval_constant_part(obj_expr, row, decide_vars)
@@ -1704,7 +1704,7 @@ def main():
     """Main entry point"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='PackDB Test Runner')
+    parser = argparse.ArgumentParser(description='DecidB Test Runner')
     parser.add_argument('query_file', nargs='?', help='Path to specific SQL query file to test')
     args = parser.parse_args()
 

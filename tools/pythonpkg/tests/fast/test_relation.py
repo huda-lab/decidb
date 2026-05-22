@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import numpy as np
 import platform
 import tempfile
@@ -8,14 +8,14 @@ import pytest
 from conftest import ArrowPandas, NumpyPandas
 import datetime
 import gc
-from packdb import ColumnExpression
+from decidb import ColumnExpression
 
-from packdb.typing import BIGINT, VARCHAR, TINYINT, BOOLEAN
+from decidb.typing import BIGINT, VARCHAR, TINYINT, BOOLEAN
 
 
 @pytest.fixture(scope="session")
 def tmp_database(tmp_path_factory):
-    database = tmp_path_factory.mktemp("databases", numbered=True) / "tmp.packdb"
+    database = tmp_path_factory.mktemp("databases", numbered=True) / "tmp.decidb"
     return database
 
 
@@ -27,14 +27,14 @@ def get_relation(conn):
 
 class TestRelation(object):
     def test_csv_auto(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         df_rel = get_relation(conn)
         temp_file_name = os.path.join(tempfile.mkdtemp(), next(tempfile._get_candidate_names()))
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
         test_df.to_csv(temp_file_name, index=False)
 
         # now create a relation from it
-        csv_rel = packdb.from_csv_auto(temp_file_name)
+        csv_rel = decidb.from_csv_auto(temp_file_name)
         assert df_rel.execute().fetchall() == csv_rel.execute().fetchall()
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
@@ -45,7 +45,7 @@ class TestRelation(object):
             rel.to_view("my_view")
 
         create_view(duckdb_cursor)
-        with pytest.raises(packdb.CatalogException, match="df_in does not exist"):
+        with pytest.raises(decidb.CatalogException, match="df_in does not exist"):
             # The df_in object is no longer reachable
             rel1 = duckdb_cursor.query("select * from df_in")
         # But it **is** reachable through our 'my_view' VIEW
@@ -57,28 +57,28 @@ class TestRelation(object):
         assert res == [(1,), (2,), (3,), (4,), (5,)]
 
     def test_filter_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         rel = get_relation(conn)
         assert rel.filter('i > 1').execute().fetchall() == [(2, 'two'), (3, 'three'), (4, 'four')]
 
     def test_projection_operator_single(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         rel = get_relation(conn)
         assert rel.project('i').execute().fetchall() == [(1,), (2,), (3,), (4,)]
 
     def test_projection_operator_double(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         rel = get_relation(conn)
         assert rel.order('j').execute().fetchall() == [(4, 'four'), (1, 'one'), (3, 'three'), (2, 'two')]
 
     def test_limit_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         rel = get_relation(conn)
         assert rel.limit(2).execute().fetchall() == [(1, 'one'), (2, 'two')]
         assert rel.limit(2, offset=1).execute().fetchall() == [(2, 'two'), (3, 'three')]
 
     def test_intersect_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4]})
         conn.register("test_df", test_df)
         test_df_2 = pd.DataFrame.from_dict({"i": [3, 4, 5, 6]})
@@ -89,7 +89,7 @@ class TestRelation(object):
         assert rel.intersect(rel_2).order('i').execute().fetchall() == [(3,), (4,)]
 
     def test_aggregate_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         rel = get_relation(conn)
         assert rel.aggregate("sum(i)").execute().fetchall() == [(10,)]
         assert rel.aggregate("j, sum(i)").order('#2').execute().fetchall() == [
@@ -100,43 +100,43 @@ class TestRelation(object):
         ]
 
     def test_relation_fetch_df_chunk(self, duckdb_cursor):
-        duckdb_cursor.execute(f"create table tbl as select * from range({packdb.__standard_vector_size__ * 3})")
+        duckdb_cursor.execute(f"create table tbl as select * from range({decidb.__standard_vector_size__ * 3})")
 
         rel = duckdb_cursor.table('tbl')
         # default arguments
         df1 = rel.fetch_df_chunk()
-        assert len(df1) == packdb.__standard_vector_size__
+        assert len(df1) == decidb.__standard_vector_size__
 
         df2 = rel.fetch_df_chunk(2)
-        assert len(df2) == packdb.__standard_vector_size__ * 2
+        assert len(df2) == decidb.__standard_vector_size__ * 2
 
         duckdb_cursor.execute(
-            f"create table dates as select (DATE '2021/02/21' + INTERVAL (i) DAYS)::DATE a from range({packdb.__standard_vector_size__ * 4}) t(i)"
+            f"create table dates as select (DATE '2021/02/21' + INTERVAL (i) DAYS)::DATE a from range({decidb.__standard_vector_size__ * 4}) t(i)"
         )
 
         rel = duckdb_cursor.table('dates')
         # default arguments
         df1 = rel.fetch_df_chunk()
-        assert len(df1) == packdb.__standard_vector_size__
+        assert len(df1) == decidb.__standard_vector_size__
         assert df1['a'][0].__class__ == pd.Timestamp
 
         # date as object
         df1 = rel.fetch_df_chunk(date_as_object=True)
-        assert len(df1) == packdb.__standard_vector_size__
+        assert len(df1) == decidb.__standard_vector_size__
         assert df1['a'][0].__class__ == datetime.date
 
         # vectors and date as object
         df1 = rel.fetch_df_chunk(2, date_as_object=True)
-        assert len(df1) == packdb.__standard_vector_size__ * 2
+        assert len(df1) == decidb.__standard_vector_size__ * 2
         assert df1['a'][0].__class__ == datetime.date
 
     def test_distinct_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         rel = get_relation(conn)
         assert rel.distinct().order('all').execute().fetchall() == [(1, 'one'), (2, 'two'), (3, 'three'), (4, 'four')]
 
     def test_union_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         rel = get_relation(conn)
         print(rel.union(rel).execute().fetchall())
         assert rel.union(rel).execute().fetchall() == [
@@ -152,7 +152,7 @@ class TestRelation(object):
 
     def test_join_operator(self):
         # join rel with itself on i
-        conn = packdb.connect()
+        conn = decidb.connect()
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
         rel = conn.from_df(test_df)
         rel2 = conn.from_df(test_df)
@@ -164,14 +164,14 @@ class TestRelation(object):
         ]
 
     def test_except_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
         rel = conn.from_df(test_df)
         rel2 = conn.from_df(test_df)
         assert rel.except_(rel2).execute().fetchall() == []
 
     def test_create_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
         rel = conn.from_df(test_df)
         rel.create("test_df")
@@ -183,7 +183,7 @@ class TestRelation(object):
         ]
 
     def test_create_view_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
         rel = conn.from_df(test_df)
         rel.create_view("test_df")
@@ -200,32 +200,32 @@ class TestRelation(object):
         duckdb_cursor.table('tbl').insert(['hello', 42])
         # UPDATE tbl SET a = DEFAULT where b = 42
         duckdb_cursor.table('tbl').update(
-            {'a': packdb.DefaultExpression()}, condition=packdb.ColumnExpression('b') == 42
+            {'a': decidb.DefaultExpression()}, condition=decidb.ColumnExpression('b') == 42
         )
         assert duckdb_cursor.table('tbl').fetchall() == [('hello', 21), ('test', 42)]
 
         rel = duckdb_cursor.table('tbl')
-        with pytest.raises(packdb.InvalidInputException, match='Please provide at least one set expression'):
+        with pytest.raises(decidb.InvalidInputException, match='Please provide at least one set expression'):
             rel.update({})
         with pytest.raises(
-            packdb.InvalidInputException, match='Please provide the column name as the key of the dictionary'
+            decidb.InvalidInputException, match='Please provide the column name as the key of the dictionary'
         ):
             rel.update({1: 21})
-        with pytest.raises(packdb.BinderException, match='Referenced update column c not found in table!'):
+        with pytest.raises(decidb.BinderException, match='Referenced update column c not found in table!'):
             rel.update({'c': 21})
         with pytest.raises(
-            packdb.InvalidInputException, match="Please provide 'set' as a dictionary of column name to Expression"
+            decidb.InvalidInputException, match="Please provide 'set' as a dictionary of column name to Expression"
         ):
             rel.update(21)
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match="Please provide an object of type Expression as the value, not <class 'set'>",
         ):
             rel.update({'a': {21}})
 
     def test_value_relation(self, duckdb_cursor):
         # Needs at least one input
-        with pytest.raises(packdb.InvalidInputException, match='Could not create a ValueRelation without any inputs'):
+        with pytest.raises(decidb.InvalidInputException, match='Could not create a ValueRelation without any inputs'):
             duckdb_cursor.values()
 
         # From a list of (python) values
@@ -233,55 +233,55 @@ class TestRelation(object):
         assert rel.fetchall() == [(1, 2, 3)]
 
         # From an Expression
-        rel = duckdb_cursor.values(packdb.ConstantExpression('test'))
+        rel = duckdb_cursor.values(decidb.ConstantExpression('test'))
         assert rel.fetchall() == [('test',)]
 
         # From multiple Expressions
         rel = duckdb_cursor.values(
-            packdb.ConstantExpression('1'), packdb.ConstantExpression('2'), packdb.ConstantExpression('3')
+            decidb.ConstantExpression('1'), decidb.ConstantExpression('2'), decidb.ConstantExpression('3')
         )
         assert rel.fetchall() == [('1', '2', '3')]
 
         # From Expressions mixed with random values
-        with pytest.raises(packdb.InvalidInputException, match='Please provide arguments of type Expression!'):
+        with pytest.raises(decidb.InvalidInputException, match='Please provide arguments of type Expression!'):
             rel = duckdb_cursor.values(
-                packdb.ConstantExpression('1'),
+                decidb.ConstantExpression('1'),
                 {'test'},
-                packdb.ConstantExpression('3'),
+                decidb.ConstantExpression('3'),
             )
 
         # From Expressions mixed with values that *can* be autocast to Expression
         rel = duckdb_cursor.values(
-            packdb.ConstantExpression('1'),
+            decidb.ConstantExpression('1'),
             2,
-            packdb.ConstantExpression('3'),
+            decidb.ConstantExpression('3'),
         )
 
-        const = packdb.ConstantExpression
+        const = decidb.ConstantExpression
         # From a tuple of Expressions
         rel = duckdb_cursor.values((const(1), const(2), const(3)))
         assert rel.fetchall() == [(1, 2, 3)]
 
         # From mismatching tuples of Expressions
         with pytest.raises(
-            packdb.InvalidInputException, match='Mismatch between length of tuples in input, expected 3 but found 2'
+            decidb.InvalidInputException, match='Mismatch between length of tuples in input, expected 3 but found 2'
         ):
             rel = duckdb_cursor.values((const(1), const(2), const(3)), (const(5), const(4)))
 
         # From an empty tuple
-        with pytest.raises(packdb.InvalidInputException, match='Please provide a non-empty tuple'):
+        with pytest.raises(decidb.InvalidInputException, match='Please provide a non-empty tuple'):
             rel = duckdb_cursor.values(())
 
         # Mixing tuples with Expressions
-        with pytest.raises(packdb.InvalidInputException, match='Expected objects of type tuple'):
+        with pytest.raises(decidb.InvalidInputException, match='Expected objects of type tuple'):
             rel = duckdb_cursor.values((const(1), const(2), const(3)), const(4))
 
         # Using Expressions that can't be resolved:
-        with pytest.raises(packdb.BinderException, match='Referenced column "a" not found in FROM clause!'):
-            duckdb_cursor.values(packdb.ColumnExpression('a'))
+        with pytest.raises(decidb.BinderException, match='Referenced column "a" not found in FROM clause!'):
+            duckdb_cursor.values(decidb.ColumnExpression('a'))
 
     def test_insert_into_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
         rel = conn.from_df(test_df)
         rel.create("test_table2")
@@ -304,16 +304,16 @@ class TestRelation(object):
         ]
 
     def test_write_csv_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         df_rel = get_relation(conn)
         temp_file_name = os.path.join(tempfile.mkdtemp(), next(tempfile._get_candidate_names()))
         df_rel.write_csv(temp_file_name)
 
-        csv_rel = packdb.from_csv_auto(temp_file_name)
+        csv_rel = decidb.from_csv_auto(temp_file_name)
         assert df_rel.execute().fetchall() == csv_rel.execute().fetchall()
 
     def test_get_attr_operator(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.execute("CREATE TABLE test (i INTEGER)")
         rel = conn.table("test")
         assert rel.alias == "test"
@@ -322,14 +322,14 @@ class TestRelation(object):
         assert rel.types == ['INTEGER']
 
     def test_query_fail(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.execute("CREATE TABLE test (i INTEGER)")
         rel = conn.table("test")
         with pytest.raises(TypeError, match='incompatible function arguments'):
             rel.query("select j from test")
 
     def test_execute_fail(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.execute("CREATE TABLE test (i INTEGER)")
         rel = conn.table("test")
         with pytest.raises(TypeError, match='incompatible function arguments'):
@@ -337,7 +337,7 @@ class TestRelation(object):
 
     def test_df_proj(self):
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
-        rel = packdb.project(test_df, 'i')
+        rel = decidb.project(test_df, 'i')
         assert rel.execute().fetchall() == [(1,), (2,), (3,), (4,)]
 
     def test_relation_lifetime(self, duckdb_cursor):
@@ -371,7 +371,7 @@ class TestRelation(object):
         assert rel.fetchall() == [(1, 1, 2, 3, 4, 5, 6)]
 
     def test_project_on_types(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.sql(
             """
             create table tbl(
@@ -394,44 +394,44 @@ class TestRelation(object):
         assert projection.columns == ["c0", "c1"]
 
         ## select with empty projection list, not possible
-        with pytest.raises(packdb.Error):
+        with pytest.raises(decidb.Error):
             projection = rel.select_types([])
 
         # select with type-filter that matches nothing
-        with pytest.raises(packdb.Error):
+        with pytest.raises(decidb.Error):
             projection = rel.select_types([BOOLEAN])
 
     def test_df_alias(self):
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
-        rel = packdb.alias(test_df, 'dfzinho')
+        rel = decidb.alias(test_df, 'dfzinho')
         assert rel.alias == "dfzinho"
 
     def test_df_filter(self):
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
-        rel = packdb.filter(test_df, 'i > 1')
+        rel = decidb.filter(test_df, 'i > 1')
         assert rel.execute().fetchall() == [(2, 'two'), (3, 'three'), (4, 'four')]
 
     def test_df_order_by(self):
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
-        rel = packdb.order(test_df, 'j')
+        rel = decidb.order(test_df, 'j')
         assert rel.execute().fetchall() == [(4, 'four'), (1, 'one'), (3, 'three'), (2, 'two')]
 
     def test_df_distinct(self):
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
-        rel = packdb.distinct(test_df).order('i')
+        rel = decidb.distinct(test_df).order('i')
         assert rel.execute().fetchall() == [(1, 'one'), (2, 'two'), (3, 'three'), (4, 'four')]
 
     def test_df_write_csv(self):
         test_df = pd.DataFrame.from_dict({"i": [1, 2, 3, 4], "j": ["one", "two", "three", "four"]})
         temp_file_name = os.path.join(tempfile.mkdtemp(), next(tempfile._get_candidate_names()))
-        packdb.write_csv(test_df, temp_file_name)
-        csv_rel = packdb.from_csv_auto(temp_file_name)
+        decidb.write_csv(test_df, temp_file_name)
+        csv_rel = decidb.from_csv_auto(temp_file_name)
         assert csv_rel.execute().fetchall() == [(1, 'one'), (2, 'two'), (3, 'three'), (4, 'four')]
 
     def test_join_types(self):
         test_df1 = pd.DataFrame.from_dict({"i": [1, 2, 3, 4]})
         test_df2 = pd.DataFrame.from_dict({"j": [3, 4, 5, 6]})
-        con = packdb.connect()
+        con = decidb.connect()
         rel1 = con.from_df(test_df1)
         rel2 = con.from_df(test_df2)
 
@@ -443,7 +443,7 @@ class TestRelation(object):
         start, stop = -1000, 2000
         count = stop - start
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(f"CREATE table t AS SELECT range AS a FROM range({start}, {stop});")
         rel = con.table("t")
 
@@ -465,7 +465,7 @@ class TestRelation(object):
                 assert len(res["a"]) == size
             assert np.all(res["a"] == np.arange(start, start + size))
 
-        with pytest.raises(packdb.ConversionException, match="Conversion Error.*out of range.*"):
+        with pytest.raises(decidb.ConversionException, match="Conversion Error.*out of range.*"):
             # invalid conversion of negative integer to UINTEGER
             rel.project("CAST(a as UINTEGER)").fetchnumpy()
 
@@ -475,7 +475,7 @@ class TestRelation(object):
             return 42
 
         counter.count = 0
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.create_function('my_counter', counter, [], BIGINT)
 
         # Create a relation
@@ -496,7 +496,7 @@ class TestRelation(object):
         assert counter.count == 3
 
     def test_relation_print(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("Create table t1 as select * from range(1000000)")
         rel1 = con.table('t1')
         text1 = str(rel1)
@@ -553,7 +553,7 @@ class TestRelation(object):
         assert filtered.fetchall() == []
 
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match=r"Invalid Input Error: 'DuckDBPyRelation.insert' can only be used on a table relation",
         ):
             rel.insert([1, 2, 3, 4])
@@ -640,7 +640,7 @@ class TestRelation(object):
         assert res == [([2], ['Alice'])]
 
     def test_serialized_materialized_relation(self, tmp_database):
-        con = packdb.connect(tmp_database)
+        con = decidb.connect(tmp_database)
 
         def create_view(con, view_name: str):
             rel = con.sql("select 'this is not a small string ' || range::varchar from range(?)", params=[10])
@@ -655,7 +655,7 @@ class TestRelation(object):
         # Make sure the VIEW has to be deserialized from disk
         con.close()
         gc.collect()
-        con = packdb.connect(tmp_database)
+        con = decidb.connect(tmp_database)
 
         res = con.sql("select * from vw").fetchall()
         assert res == expected

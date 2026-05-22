@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import numpy
 import pytest
 from datetime import date, timedelta
@@ -17,15 +17,15 @@ def evil1(df):
 class TestMap(object):
     @pytest.mark.parametrize('pandas', [NumpyPandas()])
     def test_evil_map(self, duckdb_cursor, pandas):
-        testrel = packdb.values([1, 2])
-        with pytest.raises(packdb.InvalidInputException, match='Expected 1 columns from UDF, got 2'):
+        testrel = decidb.values([1, 2])
+        with pytest.raises(decidb.InvalidInputException, match='Expected 1 columns from UDF, got 2'):
             rel = testrel.map(evil1, schema={'i': str})
             df = rel.df()
             print(df)
 
     @pytest.mark.parametrize('pandas', [NumpyPandas()])
     def test_map(self, duckdb_cursor, pandas):
-        testrel = packdb.values([1, 2])
+        testrel = decidb.values([1, 2])
         conn = duckdb_cursor
         conn.execute('CREATE TABLE t (a integer)')
         empty_rel = conn.table('t')
@@ -67,21 +67,21 @@ class TestMap(object):
         def return_empty_df(df):
             return pandas.DataFrame()
 
-        with pytest.raises(packdb.InvalidInputException, match='Expected 1 columns from UDF, got 2'):
+        with pytest.raises(decidb.InvalidInputException, match='Expected 1 columns from UDF, got 2'):
             print(testrel.map(evil1).df())
 
-        with pytest.raises(packdb.InvalidInputException, match='UDF column type mismatch'):
+        with pytest.raises(decidb.InvalidInputException, match='UDF column type mismatch'):
             print(testrel.map(evil2).df())
 
-        with pytest.raises(packdb.InvalidInputException, match='UDF column name mismatch'):
+        with pytest.raises(decidb.InvalidInputException, match='UDF column name mismatch'):
             print(testrel.map(evil3).df())
 
         with pytest.raises(
-            packdb.InvalidInputException, match="Expected the UDF to return an object of type 'pandas.DataFrame'"
+            decidb.InvalidInputException, match="Expected the UDF to return an object of type 'pandas.DataFrame'"
         ):
             print(testrel.map(evil4).df())
 
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             print(testrel.map(evil5).df())
 
         # not a function
@@ -95,16 +95,16 @@ class TestMap(object):
         testrel.map(return_dataframe).df().equals(pandas.DataFrame({'A': [1]}))
 
         with pytest.raises(
-            packdb.InvalidInputException, match='UDF returned more than 2048 rows, which is not allowed.'
+            decidb.InvalidInputException, match='UDF returned more than 2048 rows, which is not allowed.'
         ):
             testrel.map(return_big_dataframe).df()
 
         empty_rel.map(return_dataframe).df().equals(pandas.DataFrame({'A': []}))
 
-        with pytest.raises(packdb.InvalidInputException, match='No return value from Python function'):
+        with pytest.raises(decidb.InvalidInputException, match='No return value from Python function'):
             testrel.map(return_none).df()
 
-        with pytest.raises(packdb.InvalidInputException, match='Need a DataFrame with at least one column'):
+        with pytest.raises(decidb.InvalidInputException, match='Need a DataFrame with at least one column'):
             testrel.map(return_empty_df).df()
 
     def test_map_with_object_column(self, duckdb_cursor):
@@ -142,7 +142,7 @@ class TestMap(object):
         df = pandas.DataFrame(
             {'date': pandas.Series([date(2000, 1, 1), date(2000, 1, 2)], dtype="datetime64[us]"), 'days_to_add': [1, 2]}
         )
-        rel = packdb.from_df(df)
+        rel = decidb.from_df(df)
         rel = process(rel)
         x = rel.fetchdf()
         assert x['days_to_add'].to_numpy()[0] == 1
@@ -152,7 +152,7 @@ class TestMap(object):
             df['i'] = df['i'].astype(str)
             return df
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.sql('select i from range (10) tbl(i)')
         assert rel.types[0] == int
         mapped_rel = rel.map(cast_to_string, schema={'i': str})
@@ -162,12 +162,12 @@ class TestMap(object):
         def does_nothing(df):
             return df
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.sql('select i from range(10) tbl(i)')
         # expects the mapper to return a string column
         rel = rel.map(does_nothing, schema={'i': str})
         with pytest.raises(
-            packdb.InvalidInputException, match=re.escape("UDF column type mismatch, expected [VARCHAR], got [BIGINT]")
+            decidb.InvalidInputException, match=re.escape("UDF column type mismatch, expected [VARCHAR], got [BIGINT]")
         ):
             rel.fetchall()
 
@@ -176,10 +176,10 @@ class TestMap(object):
         def renames_column(df):
             return pandas.DataFrame({'a': df['i']})
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.sql('select i from range(10) tbl(i)')
         rel = rel.map(renames_column, schema={'i': int})
-        with pytest.raises(packdb.InvalidInputException, match=re.escape('UDF column name mismatch')):
+        with pytest.raises(decidb.InvalidInputException, match=re.escape('UDF column name mismatch')):
             rel.fetchall()
 
     @pytest.mark.parametrize('pandas', [NumpyPandas()])
@@ -187,10 +187,10 @@ class TestMap(object):
         def no_op(df):
             return df
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.sql('select 42')
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match=re.escape("Invalid Input Error: 'schema' should be given as a Dict[str, DuckDBType]"),
         ):
             rel.map(no_op, schema=[int])
@@ -200,10 +200,10 @@ class TestMap(object):
         def returns_series(df):
             return df.loc[:, 'i']
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.sql('select i, i as j from range(10) tbl(i)')
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match=re.escape(
                 "Expected the UDF to return an object of type 'pandas.DataFrame', found '<class 'pandas.core.series.Series'>' instead"
             ),
@@ -215,11 +215,11 @@ class TestMap(object):
         def returns_subset(df):
             return pandas.DataFrame({'i': df.loc[:, 'i']})
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.sql('select i, i as j from range(10) tbl(i)')
         rel = rel.map(returns_subset, schema={'i': int, 'j': int})
         with pytest.raises(
-            packdb.InvalidInputException, match='Invalid Input Error: Expected 2 columns from UDF, got 1'
+            decidb.InvalidInputException, match='Invalid Input Error: Expected 2 columns from UDF, got 1'
         ):
             rel.fetchall()
 
@@ -233,6 +233,6 @@ class TestMap(object):
             df = pandas.DataFrame({'a': [5, 3, 2, 1, 2]}).convert_dtypes(dtype_backend='pyarrow')
             return df
 
-        con = packdb.connect()
-        with pytest.raises(packdb.InvalidInputException):
+        con = decidb.connect()
+        with pytest.raises(decidb.InvalidInputException):
             rel = con.sql('select 42').map(basic_function)

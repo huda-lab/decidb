@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
 
@@ -7,7 +7,7 @@ pyarrow = pytest.importorskip('pyarrow')
 
 @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
 def test_6796(pandas):
-    conn = packdb.connect()
+    conn = decidb.connect()
     input_df = pandas.DataFrame({"foo": ["bar"]})
     conn.register("input_df", input_df)
 

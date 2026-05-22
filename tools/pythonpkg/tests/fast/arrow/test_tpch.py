@@ -1,4 +1,4 @@
-import packdb
+import decidb
 
 try:
     import pyarrow
@@ -40,7 +40,7 @@ class TestTPCHArrow(object):
         tpch_tables = ['part', 'partsupp', 'supplier', 'customer', 'lineitem', 'orders', 'nation', 'region']
         arrow_tables = []
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("CALL dbgen(sf=0.01);")
 
         for tpch_table in tpch_tables:
@@ -70,7 +70,7 @@ class TestTPCHArrow(object):
         tpch_tables = ['part', 'partsupp', 'supplier', 'customer', 'lineitem', 'orders', 'nation', 'region']
         arrow_tables = []
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("CALL dbgen(sf=0.1);")
 
         for tpch_table in tpch_tables:
@@ -98,7 +98,7 @@ class TestTPCHArrow(object):
         tpch_tables = ['part', 'partsupp', 'supplier', 'customer', 'lineitem', 'orders', 'nation', 'region']
         arrow_tables = []
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("CALL dbgen(sf=0.01);")
 
         for tpch_table in tpch_tables:

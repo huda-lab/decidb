@@ -67,7 +67,7 @@ MINIMIZE SUM(POWER(qty - 3, 2));
 -- SUM=10) so the integer search closes the LP/IP gap quickly. Larger
 -- formulations of the same shape (e.g. p_size<5, qty<=10, SUM=30) are a
 -- genuinely hard MIQP whose B&B explores millions of nodes without
--- closing the gap; PackDB's 300s solver TimeLimit will return a feasible
+-- closing the gap; DecidB's 300s solver TimeLimit will return a feasible
 -- (not necessarily optimal) result on such inputs.
 SELECT p_partkey, qty
 FROM part

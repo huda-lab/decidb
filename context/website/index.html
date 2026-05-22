@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <script>
-  (function(){var t=localStorage.getItem('packdb-theme')||'light';
+  (function(){var t=localStorage.getItem('decidb-theme')||'light';
   document.documentElement.setAttribute('data-theme',t)})();
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="PackDB - Optimization-enabled SQL queries for DuckDB. Express optimization problems directly in SQL with the DECIDE clause.">
-  <meta name="keywords" content="PackDB, DuckDB, SQL, optimization, ILP, integer linear programming, database, HUDA Lab, UMass Amherst">
-  <title>PackDB - Optimization, Native in SQL</title>
+  <meta name="description" content="DecidB - Optimization-enabled SQL queries for DuckDB. Express optimization problems directly in SQL with the DECIDE clause.">
+  <meta name="keywords" content="DecidB, DuckDB, SQL, optimization, ILP, integer linear programming, database, HUDA Lab, UMass Amherst">
+  <title>DecidB - Optimization, Native in SQL</title>
 
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
@@ -65,7 +65,7 @@
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="PackDB" class="h-8 logo-img">
+        <img src="assets/images/logo.svg" alt="DecidB" class="h-8 logo-img">
         <div class="hidden sm:block">
           <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
@@ -82,7 +82,7 @@
 
       <!-- CTA Buttons -->
       <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
            class="btn btn-secondary text-sm">
           <i data-lucide="github" class="w-4 h-4"></i>
           GitHub
@@ -114,7 +114,7 @@
         <a href="examples.html" class="block py-2 nav-link">Examples</a>
         <a href="about.html" class="block py-2 nav-link">About</a>
         <hr class="border-bdcolor">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
            class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
           <i data-lucide="github" class="w-5 h-5"></i>
           GitHub
@@ -143,7 +143,7 @@
           </h1>
 
           <p class="text-lg md:text-xl text-fg-muted mb-10 max-w-2xl mx-auto leading-relaxed">
-            PackDB extends DuckDB with declarative optimization.
+            DecidB extends DuckDB with declarative optimization.
             Select optimal subsets of data with constraints and objectives &mdash; no external tools required.
           </p>
 
@@ -153,7 +153,7 @@
               Get Started
               <i data-lucide="arrow-right" class="w-5 h-5"></i>
             </a>
-            <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+            <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
                class="btn btn-secondary text-base px-8 py-3">
               <i data-lucide="github" class="w-5 h-5"></i>
               View on GitHub
@@ -202,7 +202,7 @@ MAXIMIZE SUM(x * value);</code></pre>
             <p class="text-lg text-fg-muted leading-relaxed">
               Many real-world decisions require choosing the best subset of items from a table &mdash; which products to stock, which patients to schedule, which assets to include.
               Today, solving these <em>package queries</em> means exporting data, writing solver code in Python, and mapping results back.
-              PackDB collapses that entire pipeline into a single SQL statement.
+              DecidB collapses that entire pipeline into a single SQL statement.
             </p>
           </div>
 
@@ -246,12 +246,12 @@ prob.solve()
 # Step 4: Map results back to database...</code></pre>
             </div>
 
-            <!-- PackDB Approach -->
+            <!-- DecidB Approach -->
             <div class="code-block">
               <div class="code-header bg-success-tint">
                 <span class="language-label flex items-center gap-2">
                   <span class="w-1.5 h-1.5 rounded-full bg-success"></span>
-                  With PackDB
+                  With DecidB
                 </span>
                 <button class="copy-button">
                   <i data-lucide="copy" class="w-4 h-4"></i>
@@ -316,13 +316,13 @@ MAXIMIZE SUM(x * value);</code></pre>
     <hr class="section-divider max-w-5xl mx-auto">
 
     <!-- ============================================
-         SECTION 3: WHY PACKDB (feature strip)
+         SECTION 3: WHY DECIDB (feature strip)
          ============================================ -->
     <section class="py-20 md:py-28">
       <div class="container mx-auto px-4">
         <div class="max-w-5xl mx-auto">
           <h2 class="text-3xl md:text-4xl text-fg text-center mb-14">
-            Why PackDB?
+            Why DecidB?
           </h2>
 
           <div class="feature-strip">
@@ -363,7 +363,7 @@ MAXIMIZE SUM(x * value);</code></pre>
             Ready to Try It?
           </h2>
           <p class="text-lg text-fg-muted mb-10 max-w-xl mx-auto">
-            Install PackDB and run your first optimization query in minutes.
+            Install DecidB and run your first optimization query in minutes.
           </p>
           <a href="getting-started.html" class="btn btn-primary text-base px-8 py-3">
             Get Started
@@ -384,7 +384,7 @@ MAXIMIZE SUM(x * value);</code></pre>
 
         <!-- Col 1: Branding -->
         <div>
-          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 logo-img">
+          <img src="assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">
             Optimization-enabled SQL queries for DuckDB
           </p>
@@ -409,14 +409,14 @@ MAXIMIZE SUM(x * value);</code></pre>
           <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
             <li>
-              <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+              <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
                  class="text-fg-subtle hover:text-accent transition-colors flex items-center gap-1">
                 <i data-lucide="github" class="w-4 h-4"></i>
                 GitHub Repository
               </a>
             </li>
             <li>
-              <a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer"
+              <a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer"
                  class="text-fg-subtle hover:text-accent transition-colors">Issue Tracker</a>
             </li>
             <li><a href="about.html#research" class="text-fg-subtle hover:text-accent transition-colors">Research Papers</a></li>

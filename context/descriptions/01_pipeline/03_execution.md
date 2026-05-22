@@ -1,7 +1,7 @@
 # Physical Execution & Optimization
 
 ## 1. Overview
-The `PhysicalDecide` operator sits at the heart of PackDB's execution engine. It is a **blocking operator**, meaning it must consume its entire input before it can produce any output. This is necessary because the optimal value for any single decision variable depends on the entire dataset (global optimization).
+The `PhysicalDecide` operator sits at the heart of DecidB's execution engine. It is a **blocking operator**, meaning it must consume its entire input before it can produce any output. This is necessary because the optimal value for any single decision variable depends on the entire dataset (global optimization).
 
 **Key Source File**: `src/execution/operator/decide/physical_decide.cpp`
 
@@ -35,4 +35,4 @@ Projects solution values back onto original rows with type-specific casting. See
 Both `LogicalDecide` and `PhysicalDecide` expose structured plan output for `EXPLAIN`, `EXPLAIN ANALYZE`, and `EXPLAIN (FORMAT JSON)`. Serialization support enables prepared statement caching. See `04_explain.md`.
 
 ## 3. Data Consistency
-A critical design choice is that PackDB guarantees **read consistency**. The optimization is performed on the snapshot of data seen by the query. Any concurrent modifications to the tables do not affect the running optimization model, as it works on the materialized buffer.
+A critical design choice is that DecidB guarantees **read consistency**. The optimization is performed on the snapshot of data seen by the query. Any concurrent modifications to the tables do not affect the running optimization model, as it works on the materialized buffer.

@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
 
@@ -15,72 +15,72 @@ def is_dunder_method(method_name: str) -> bool:
 
 @pytest.fixture(scope="session")
 def tmp_database(tmp_path_factory):
-    database = tmp_path_factory.mktemp("databases", numbered=True) / "tmp.packdb"
+    database = tmp_path_factory.mktemp("databases", numbered=True) / "tmp.decidb"
     return database
 
 
 # This file contains tests for DuckDBPyConnection methods,
-# wrapped by the 'packdb' module, to execute with the 'default_connection'
+# wrapped by the 'decidb' module, to execute with the 'default_connection'
 class TestDuckDBConnection(object):
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_append(self, pandas):
-        packdb.execute("Create table integers (i integer)")
+        decidb.execute("Create table integers (i integer)")
         df_in = pandas.DataFrame(
             {
                 'numbers': [1, 2, 3, 4, 5],
             }
         )
-        packdb.append('integers', df_in)
-        assert packdb.execute('select count(*) from integers').fetchone()[0] == 5
+        decidb.append('integers', df_in)
+        assert decidb.execute('select count(*) from integers').fetchone()[0] == 5
         # cleanup
-        packdb.execute("drop table integers")
+        decidb.execute("drop table integers")
 
     def test_default_connection_from_connect(self):
-        packdb.sql('create or replace table connect_default_connect (i integer)')
-        con = packdb.connect(':default:')
+        decidb.sql('create or replace table connect_default_connect (i integer)')
+        con = decidb.connect(':default:')
         con.sql('select i from connect_default_connect')
-        packdb.sql('drop table connect_default_connect')
-        with pytest.raises(packdb.Error):
+        decidb.sql('drop table connect_default_connect')
+        with pytest.raises(decidb.Error):
             con.sql('select i from connect_default_connect')
 
         # not allowed with additional options
         with pytest.raises(
-            packdb.InvalidInputException, match='Default connection fetching is only allowed without additional options'
+            decidb.InvalidInputException, match='Default connection fetching is only allowed without additional options'
         ):
-            con = packdb.connect(':default:', read_only=True)
+            con = decidb.connect(':default:', read_only=True)
 
     def test_arrow(self):
         pyarrow = pytest.importorskip("pyarrow")
-        packdb.execute("select [1,2,3]")
-        result = packdb.arrow()
+        decidb.execute("select [1,2,3]")
+        result = decidb.arrow()
 
     def test_begin_commit(self):
-        packdb.begin()
-        packdb.execute("create table tbl as select 1")
-        packdb.commit()
-        res = packdb.table("tbl")
-        packdb.execute("drop table tbl")
+        decidb.begin()
+        decidb.execute("create table tbl as select 1")
+        decidb.commit()
+        res = decidb.table("tbl")
+        decidb.execute("drop table tbl")
 
     def test_begin_rollback(self):
-        packdb.begin()
-        packdb.execute("create table tbl as select 1")
-        packdb.rollback()
-        with pytest.raises(packdb.CatalogException):
+        decidb.begin()
+        decidb.execute("create table tbl as select 1")
+        decidb.rollback()
+        with pytest.raises(decidb.CatalogException):
             # Table does not exist
-            res = packdb.table("tbl")
+            res = decidb.table("tbl")
 
     def test_cursor(self):
-        packdb.execute("create table tbl as select 3")
-        duckdb_cursor = packdb.cursor()
+        decidb.execute("create table tbl as select 3")
+        duckdb_cursor = decidb.cursor()
         res = duckdb_cursor.table("tbl").fetchall()
         assert res == [(3,)]
         duckdb_cursor.execute("drop table tbl")
-        with pytest.raises(packdb.CatalogException):
+        with pytest.raises(decidb.CatalogException):
             # 'tbl' no longer exists
-            packdb.table("tbl")
+            decidb.table("tbl")
 
     def test_cursor_lifetime(self):
-        con = packdb.connect()
+        con = decidb.connect()
 
         def use_cursors():
             cursors = []
@@ -96,197 +96,197 @@ class TestDuckDBConnection(object):
 
     def test_df(self):
         ref = [([1, 2, 3],)]
-        packdb.execute("select [1,2,3]")
-        res_df = packdb.fetch_df()
-        res = packdb.query("select * from res_df").fetchall()
+        decidb.execute("select [1,2,3]")
+        res_df = decidb.fetch_df()
+        res = decidb.query("select * from res_df").fetchall()
         assert res == ref
 
     def test_duplicate(self):
-        packdb.execute("create table tbl as select 5")
-        dup_conn = packdb.duplicate()
+        decidb.execute("create table tbl as select 5")
+        dup_conn = decidb.duplicate()
         dup_conn.table("tbl").fetchall()
-        packdb.execute("drop table tbl")
-        with pytest.raises(packdb.CatalogException):
+        decidb.execute("drop table tbl")
+        with pytest.raises(decidb.CatalogException):
             dup_conn.table("tbl").fetchall()
 
     def test_readonly_properties(self):
-        packdb.execute("select 42")
-        description = packdb.description()
-        rowcount = packdb.rowcount()
+        decidb.execute("select 42")
+        description = decidb.description()
+        rowcount = decidb.rowcount()
         assert description == [('42', 'NUMBER', None, None, None, None, None)]
         assert rowcount == -1
 
     def test_execute(self):
-        assert [([4, 2],)] == packdb.execute("select [4,2]").fetchall()
+        assert [([4, 2],)] == decidb.execute("select [4,2]").fetchall()
 
     def test_executemany(self):
         # executemany does not keep an open result set
         # TODO: shouldn't we also have a version that executes a query multiple times with different parameters, returning all of the results?
-        packdb.execute("create table tbl (i integer, j varchar)")
-        packdb.executemany("insert into tbl VALUES (?, ?)", [(5, 'test'), (2, 'duck'), (42, 'quack')])
-        res = packdb.table("tbl").fetchall()
+        decidb.execute("create table tbl (i integer, j varchar)")
+        decidb.executemany("insert into tbl VALUES (?, ?)", [(5, 'test'), (2, 'duck'), (42, 'quack')])
+        res = decidb.table("tbl").fetchall()
         assert res == [(5, 'test'), (2, 'duck'), (42, 'quack')]
-        packdb.execute("drop table tbl")
+        decidb.execute("drop table tbl")
 
     def test_pystatement(self):
-        with pytest.raises(packdb.ParserException, match='seledct'):
-            statements = packdb.extract_statements('seledct 42; select 21')
+        with pytest.raises(decidb.ParserException, match='seledct'):
+            statements = decidb.extract_statements('seledct 42; select 21')
 
-        statements = packdb.extract_statements('select $1; select 21')
+        statements = decidb.extract_statements('select $1; select 21')
         assert len(statements) == 2
         assert statements[0].query == 'select $1'
-        assert statements[0].type == packdb.StatementType.SELECT
+        assert statements[0].type == decidb.StatementType.SELECT
         assert statements[0].named_parameters == set('1')
-        assert statements[0].expected_result_type == [packdb.ExpectedResultType.QUERY_RESULT]
+        assert statements[0].expected_result_type == [decidb.ExpectedResultType.QUERY_RESULT]
 
         assert statements[1].query == ' select 21'
-        assert statements[1].type == packdb.StatementType.SELECT
+        assert statements[1].type == decidb.StatementType.SELECT
         assert statements[1].named_parameters == set()
 
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='Please provide either a DuckDBPyStatement or a string representing the query',
         ):
-            rel = packdb.query(statements)
+            rel = decidb.query(statements)
 
-        with pytest.raises(packdb.BinderException, match="This type of statement can't be prepared!"):
-            rel = packdb.query(statements[0])
+        with pytest.raises(decidb.BinderException, match="This type of statement can't be prepared!"):
+            rel = decidb.query(statements[0])
 
-        assert packdb.query(statements[1]).fetchall() == [(21,)]
-        assert packdb.execute(statements[1]).fetchall() == [(21,)]
+        assert decidb.query(statements[1]).fetchall() == [(21,)]
+        assert decidb.execute(statements[1]).fetchall() == [(21,)]
 
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='Values were not provided for the following prepared statement parameters: 1',
         ):
-            packdb.execute(statements[0])
-        assert packdb.execute(statements[0], {'1': 42}).fetchall() == [(42,)]
+            decidb.execute(statements[0])
+        assert decidb.execute(statements[0], {'1': 42}).fetchall() == [(42,)]
 
-        packdb.execute("create table tbl(a integer)")
-        statements = packdb.extract_statements('insert into tbl select $1')
+        decidb.execute("create table tbl(a integer)")
+        statements = decidb.extract_statements('insert into tbl select $1')
         assert statements[0].expected_result_type == [
-            packdb.ExpectedResultType.CHANGED_ROWS,
-            packdb.ExpectedResultType.QUERY_RESULT,
+            decidb.ExpectedResultType.CHANGED_ROWS,
+            decidb.ExpectedResultType.QUERY_RESULT,
         ]
         with pytest.raises(
-            packdb.InvalidInputException, match='executemany requires a non-empty list of parameter sets to be provided'
+            decidb.InvalidInputException, match='executemany requires a non-empty list of parameter sets to be provided'
         ):
-            packdb.executemany(statements[0])
-        packdb.executemany(statements[0], [(21,), (22,), (23,)])
-        assert packdb.table('tbl').fetchall() == [(21,), (22,), (23,)]
-        packdb.execute("drop table tbl")
+            decidb.executemany(statements[0])
+        decidb.executemany(statements[0], [(21,), (22,), (23,)])
+        assert decidb.table('tbl').fetchall() == [(21,), (22,), (23,)]
+        decidb.execute("drop table tbl")
 
     def test_fetch_arrow_table(self):
         # Needed for 'fetch_arrow_table'
         pyarrow = pytest.importorskip("pyarrow")
 
-        packdb.execute("Create Table test (a integer)")
+        decidb.execute("Create Table test (a integer)")
 
         for i in range(1024):
             for j in range(2):
-                packdb.execute("Insert Into test values ('" + str(i) + "')")
-        packdb.execute("Insert Into test values ('5000')")
-        packdb.execute("Insert Into test values ('6000')")
+                decidb.execute("Insert Into test values ('" + str(i) + "')")
+        decidb.execute("Insert Into test values ('5000')")
+        decidb.execute("Insert Into test values ('6000')")
         sql = '''
         SELECT  a, COUNT(*) AS repetitions
         FROM    test
         GROUP BY a
         '''
 
-        result_df = packdb.execute(sql).df()
+        result_df = decidb.execute(sql).df()
 
-        arrow_table = packdb.execute(sql).fetch_arrow_table()
+        arrow_table = decidb.execute(sql).fetch_arrow_table()
 
         arrow_df = arrow_table.to_pandas()
         assert result_df['repetitions'].sum() == arrow_df['repetitions'].sum()
-        packdb.execute("drop table test")
+        decidb.execute("drop table test")
 
     def test_fetch_df(self):
         ref = [([1, 2, 3],)]
-        packdb.execute("select [1,2,3]")
-        res_df = packdb.fetch_df()
-        res = packdb.query("select * from res_df").fetchall()
+        decidb.execute("select [1,2,3]")
+        res_df = decidb.fetch_df()
+        res = decidb.query("select * from res_df").fetchall()
         assert res == ref
 
     def test_fetch_df_chunk(self):
-        packdb.execute("CREATE table t as select range a from range(3000);")
-        query = packdb.execute("SELECT a FROM t")
+        decidb.execute("CREATE table t as select range a from range(3000);")
+        query = decidb.execute("SELECT a FROM t")
         cur_chunk = query.fetch_df_chunk()
         assert cur_chunk['a'][0] == 0
         assert len(cur_chunk) == 2048
         cur_chunk = query.fetch_df_chunk()
         assert cur_chunk['a'][0] == 2048
         assert len(cur_chunk) == 952
-        packdb.execute("DROP TABLE t")
+        decidb.execute("DROP TABLE t")
 
     def test_fetch_record_batch(self):
         # Needed for 'fetch_arrow_table'
         pyarrow = pytest.importorskip("pyarrow")
 
-        packdb.execute("CREATE table t as select range a from range(3000);")
-        packdb.execute("SELECT a FROM t")
-        record_batch_reader = packdb.fetch_record_batch(1024)
+        decidb.execute("CREATE table t as select range a from range(3000);")
+        decidb.execute("SELECT a FROM t")
+        record_batch_reader = decidb.fetch_record_batch(1024)
         chunk = record_batch_reader.read_all()
         assert len(chunk) == 3000
 
     def test_fetchall(self):
-        assert [([1, 2, 3],)] == packdb.execute("select [1,2,3]").fetchall()
+        assert [([1, 2, 3],)] == decidb.execute("select [1,2,3]").fetchall()
 
     def test_fetchdf(self):
         ref = [([1, 2, 3],)]
-        packdb.execute("select [1,2,3]")
-        res_df = packdb.fetchdf()
-        res = packdb.query("select * from res_df").fetchall()
+        decidb.execute("select [1,2,3]")
+        res_df = decidb.fetchdf()
+        res = decidb.query("select * from res_df").fetchall()
         assert res == ref
 
     def test_fetchmany(self):
-        assert [(0,), (1,)] == packdb.execute("select * from range(5)").fetchmany(2)
+        assert [(0,), (1,)] == decidb.execute("select * from range(5)").fetchmany(2)
 
     def test_fetchnumpy(self):
         numpy = pytest.importorskip("numpy")
-        packdb.execute("SELECT BLOB 'hello'")
-        results = packdb.fetchall()
+        decidb.execute("SELECT BLOB 'hello'")
+        results = decidb.fetchall()
         assert results[0][0] == b'hello'
 
-        packdb.execute("SELECT BLOB 'hello' AS a")
-        results = packdb.fetchnumpy()
+        decidb.execute("SELECT BLOB 'hello' AS a")
+        results = decidb.fetchnumpy()
         assert results['a'] == numpy.array([b'hello'], dtype=object)
 
     def test_fetchone(self):
-        assert (0,) == packdb.execute("select * from range(5)").fetchone()
+        assert (0,) == decidb.execute("select * from range(5)").fetchone()
 
     def test_from_arrow(self):
-        assert None != packdb.from_arrow
+        assert None != decidb.from_arrow
 
     def test_from_csv_auto(self):
-        assert None != packdb.from_csv_auto
+        assert None != decidb.from_csv_auto
 
     def test_from_df(self):
-        assert None != packdb.from_df
+        assert None != decidb.from_df
 
     def test_from_parquet(self):
-        assert None != packdb.from_parquet
+        assert None != decidb.from_parquet
 
     def test_from_query(self):
-        assert None != packdb.from_query
+        assert None != decidb.from_query
 
     def test_get_table_names(self):
-        assert None != packdb.get_table_names
+        assert None != decidb.get_table_names
 
     def test_install_extension(self):
-        assert None != packdb.install_extension
+        assert None != decidb.install_extension
 
     def test_load_extension(self):
-        assert None != packdb.load_extension
+        assert None != decidb.load_extension
 
     def test_query(self):
-        assert [(3,)] == packdb.query("select 3").fetchall()
+        assert [(3,)] == decidb.query("select 3").fetchall()
 
     def test_register(self):
-        assert None != packdb.register
+        assert None != decidb.register
 
     def test_register_relation(self):
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.sql('select [5,4,3]')
         con.register("relation", rel)
 
@@ -300,7 +300,7 @@ class TestDuckDBConnection(object):
 
         # Create a registered object called 'vw'
         arrow_result = duckdb_cursor.execute("select 42").arrow()
-        with pytest.raises(packdb.CatalogException, match='View with name "vw" already exists'):
+        with pytest.raises(decidb.CatalogException, match='View with name "vw" already exists'):
             duckdb_cursor.register('vw', arrow_result)
 
         # Temporary views take precedence over registered objects
@@ -316,7 +316,7 @@ class TestDuckDBConnection(object):
     def test_relation_out_of_scope(self, pandas):
         def temporary_scope():
             # Create a connection, we will return this
-            con = packdb.connect()
+            con = decidb.connect()
             # Create a dataframe
             df = pandas.DataFrame({'a': [1, 2, 3]})
             # The dataframe has to be registered as well
@@ -331,70 +331,70 @@ class TestDuckDBConnection(object):
         print(res)
 
     def test_table(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("create table tbl as select 1")
         assert [(1,)] == con.table("tbl").fetchall()
 
     def test_table_function(self):
-        assert None != packdb.table_function
+        assert None != decidb.table_function
 
     def test_unregister(self):
-        assert None != packdb.unregister
+        assert None != decidb.unregister
 
     def test_values(self):
-        assert None != packdb.values
+        assert None != decidb.values
 
     def test_view(self):
-        packdb.execute("create view vw as select range(5)")
-        assert [([0, 1, 2, 3, 4],)] == packdb.view("vw").fetchall()
-        packdb.execute("drop view vw")
+        decidb.execute("create view vw as select range(5)")
+        assert [([0, 1, 2, 3, 4],)] == decidb.view("vw").fetchall()
+        decidb.execute("drop view vw")
 
     def test_description(self):
-        assert None != packdb.description
+        assert None != decidb.description
 
     def test_close(self):
-        assert None != packdb.close
+        assert None != decidb.close
 
     def test_interrupt(self):
-        assert None != packdb.interrupt
+        assert None != decidb.interrupt
 
     def test_wrap_shadowing(self):
         pd = NumpyPandas()
-        import packdb
+        import decidb
 
         df = pd.DataFrame({"a": [1, 2, 3]})
-        res = packdb.sql("from df").fetchall()
+        res = decidb.sql("from df").fetchall()
         assert res == [(1,), (2,), (3,)]
 
     def test_wrap_coverage(self):
-        con = packdb.default_connection
+        con = decidb.default_connection
 
         # Skip all of the initial __xxxx__ methods
         connection_methods = dir(con)
         filtered_methods = [method for method in connection_methods if not is_dunder_method(method)]
         for method in filtered_methods:
-            # Assert that every method of DuckDBPyConnection is wrapped by the 'packdb' module
-            assert method in dir(packdb)
+            # Assert that every method of DuckDBPyConnection is wrapped by the 'decidb' module
+            assert method in dir(decidb)
 
     def test_connect_with_path(self, tmp_database):
         import pathlib
 
         assert isinstance(tmp_database, pathlib.Path)
-        con = packdb.connect(tmp_database)
+        con = decidb.connect(tmp_database)
         assert con.sql("select 42").fetchall() == [(42,)]
 
         with pytest.raises(
-            packdb.InvalidInputException, match="Please provide either a str or a pathlib.Path, not <class 'int'>"
+            decidb.InvalidInputException, match="Please provide either a str or a pathlib.Path, not <class 'int'>"
         ):
-            con = packdb.connect(5)
+            con = decidb.connect(5)
 
     def test_set_pandas_analyze_sample_size(self):
-        con = packdb.connect(":memory:named", config={"pandas_analyze_sample": 0})
+        con = decidb.connect(":memory:named", config={"pandas_analyze_sample": 0})
         res = con.sql("select current_setting('pandas_analyze_sample')").fetchone()
         assert res == (0,)
 
         # Find the cached config
-        con2 = packdb.connect(":memory:named", config={"pandas_analyze_sample": 0})
+        con2 = decidb.connect(":memory:named", config={"pandas_analyze_sample": 0})
         con2.execute(f"SET GLOBAL pandas_analyze_sample=2")
 
         # This change is reflected in 'con' because the instance was cached

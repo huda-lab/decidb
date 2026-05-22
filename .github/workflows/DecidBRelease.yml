@@ -1,0 +1,316 @@
+name: DecidB Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v0.1.0)'
+        required: true
+        type: string
+      platforms:
+        description: 'Platforms to build (comma-separated: linux, macos, windows)'
+        required: true
+        default: 'linux'
+        type: string
+      create_release:
+        description: 'Create GitHub release'
+        required: true
+        default: true
+        type: boolean
+
+env:
+  OVERRIDE_GIT_DESCRIBE: ${{ inputs.version }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  #############################################################################
+  # JOB 1: Linux x86-64 Build
+  #############################################################################
+  linux-x64:
+    if: contains(inputs.platforms, 'linux')
+    name: Linux x86-64 Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.12'
+
+      - name: Build with Docker (manylinux2014)
+        shell: bash
+        run: |
+          export PWD=$(pwd)
+          docker run \
+            -v$PWD:$PWD \
+            -e CMAKE_BUILD_PARALLEL_LEVEL=4 \
+            -e OVERRIDE_GIT_DESCRIBE=${{ inputs.version }} \
+            quay.io/pypa/manylinux2014_x86_64 \
+            bash -c "yum install -y perl-IPC-Cmd && \
+                     git config --global --add safe.directory $PWD && \
+                     cd $PWD && \
+                     make"
+
+      - name: Verify Build
+        shell: bash
+        run: |
+          ./build/release/decidb -c "PRAGMA platform;"
+          ./build/release/decidb --version
+
+      - name: Package Binaries
+        shell: bash
+        run: |
+          # Create CLI packages only (skip library package - build from source if needed)
+          zip -j decidb_cli-linux-amd64.zip build/release/decidb
+          gzip -9 -k -n -c build/release/decidb > decidb_cli-linux-amd64.gz
+
+          # Verify packages
+          ls -lh decidb_cli-linux-amd64.zip
+          ls -lh decidb_cli-linux-amd64.gz
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: decidb-binaries-linux-amd64
+          path: |
+            decidb_cli-linux-amd64.zip
+            decidb_cli-linux-amd64.gz
+          retention-days: 7
+
+  #############################################################################
+  # JOB 2: macOS Universal Build (Intel + Apple Silicon)
+  #############################################################################
+  macos-universal:
+    if: contains(inputs.platforms, 'macos')
+    name: macOS Universal Build
+    runs-on: macos-14
+
+    env:
+      OSX_BUILD_UNIVERSAL: 1
+      GEN: ninja
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: brew install ninja
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639  # main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'huda-lab/decidb' }}
+
+      - name: Build
+        shell: bash
+        run: make
+
+      - name: Verify Build
+        shell: bash
+        run: |
+          ./build/release/decidb -c "PRAGMA platform;"
+          ./build/release/decidb --version
+          file build/release/decidb  # Should show universal binary
+
+      - name: Package Binaries
+        shell: bash
+        run: |
+          # Create CLI packages only (skip library package - build from source if needed)
+          zip -j decidb_cli-osx-universal.zip build/release/decidb
+          gzip -9 -k -n -c build/release/decidb > decidb_cli-osx-universal.gz
+
+          # Verify packages
+          ls -lh decidb_cli-osx-universal.zip
+          ls -lh decidb_cli-osx-universal.gz
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: decidb-binaries-osx-universal
+          path: |
+            decidb_cli-osx-universal.zip
+            decidb_cli-osx-universal.gz
+          retention-days: 7
+
+  #############################################################################
+  # JOB 3: Windows x64 Build
+  #############################################################################
+  windows-x64:
+    if: contains(inputs.platforms, 'windows')
+    name: Windows x64 Build
+    runs-on: windows-2019
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639  # main
+        with:
+          key: ${{ github.job }}
+          save: ${{ github.ref == 'refs/heads/main' || github.repository != 'huda-lab/decidb' }}
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1 -DOVERRIDE_GIT_DESCRIBE="${{ inputs.version }}"
+          ninja -C build/release
+
+      - name: Verify Build
+        shell: bash
+        run: |
+          build/release/decidb.exe -c "PRAGMA platform;"
+          build/release/decidb.exe --version
+
+      - name: Package Binaries
+        shell: bash
+        run: |
+          # Create CLI package only (skip library package - build from source if needed)
+          choco install zip -y --force
+          zip -j decidb_cli-windows-amd64.zip build/release/decidb.exe
+
+          # Verify package
+          ls -lh decidb_cli-windows-amd64.zip
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: decidb-binaries-windows-amd64
+          path: |
+            decidb_cli-windows-amd64.zip
+          retention-days: 7
+
+  #############################################################################
+  # JOB 4: Create GitHub Release
+  #############################################################################
+  create-release:
+    name: Create GitHub Release
+    needs: [linux-x64, macos-universal, windows-x64]
+    if: always() && inputs.create_release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          path: artifacts
+
+      - name: Display Downloaded Artifacts
+        run: |
+          ls -R artifacts/
+
+      - name: Generate Release Notes
+        shell: bash
+        run: |
+          cat > release_notes.md << 'EOF'
+          # DecidB ${{ inputs.version }}
+
+          DecidB is a fork of DuckDB that adds package query optimization through a DECIDE clause.
+
+          ## Downloads
+
+          Choose the appropriate package for your platform:
+
+          | Platform | Download |
+          |----------|----------|
+          | **Linux x86-64** | `decidb_cli-linux-amd64.zip` or `.gz` |
+          | **macOS (Universal)** | `decidb_cli-osx-universal.zip` or `.gz` |
+          | **Windows x64** | `decidb_cli-windows-amd64.zip` |
+
+          ## Quick Start
+
+          ### Linux/macOS
+
+          ```bash
+          # Download and extract (example for Linux)
+          unzip decidb_cli-linux-amd64.zip
+          chmod +x decidb
+          ./decidb
+          ```
+
+          ### Windows
+
+          1. Download `decidb_cli-windows-amd64.zip`
+          2. Extract the zip file
+          3. Run `decidb.exe`
+
+          **Note**: Windows/macOS may show security warnings because the binary is not signed. See below for instructions.
+
+          ## Package Optimization
+
+          DecidB extends DuckDB with a DECIDE clause for optimizing queries with packaging operations:
+
+          ```sql
+          SELECT x, item_name, item_price
+          FROM items
+          DECIDE x
+          SUCH THAT SUM(x * item_weight) <= 50
+          MAXIMIZE SUM(x * item_value);
+          ```
+
+          For documentation and examples, see: https://huda-lab.github.io/decidb
+
+          ## Security Warnings
+
+          These are **unsigned binaries** for beta testing:
+
+          - **macOS**: Right-click → Open → Open (first time only)
+          - **Windows**: Click "More info" → "Run anyway"
+
+          If you require signed executables, please [build from source](https://huda-lab.github.io/decidb/getting-started.html).
+
+          ## System Requirements
+
+          - **Linux**: CentOS 7+, Ubuntu 18.04+, Debian 10+ (glibc 2.17+)
+          - **macOS**: macOS 11.0 (Big Sur) or later
+          - **Windows**: Windows 10 or later
+
+          ## Issues
+
+          Report issues at: https://github.com/huda-lab/decidb/issues
+          EOF
+
+          cat release_notes.md
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Create the release as DRAFT
+          gh release create ${{ inputs.version }} \
+            --repo ${{ github.repository }} \
+            --title "DecidB ${{ inputs.version }}" \
+            --notes-file release_notes.md \
+            --draft \
+            artifacts/**/*.zip artifacts/**/*.gz || true
+
+          echo "::notice::Release created at https://github.com/${{ github.repository }}/releases/tag/${{ inputs.version }}"
+          echo "::notice::Release is in DRAFT mode - review and publish manually at the URL above"

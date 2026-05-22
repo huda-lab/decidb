@@ -1,4 +1,4 @@
-import packdb
+import decidb
 
 
 class TestRAPIFunctions(object):
@@ -8,5 +8,5 @@ class TestRAPIFunctions(object):
         res.show()
 
     def test_rapi_relation_sql_query(self):
-        res = packdb.table_function('range', [10])
+        res = decidb.table_function('range', [10])
         assert res.sql_query() == 'SELECT * FROM "range"(10)'

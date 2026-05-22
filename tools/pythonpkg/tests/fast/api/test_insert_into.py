@@ -1,4 +1,4 @@
-import packdb
+import decidb
 from pandas import DataFrame
 import pytest
 
@@ -6,7 +6,7 @@ import pytest
 class TestInsertInto(object):
     def test_insert_into_schema(self, duckdb_cursor):
         # open connection
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute('CREATE SCHEMA s')
         con.execute('CREATE TABLE s.t (id INTEGER PRIMARY KEY)')
 
@@ -19,7 +19,7 @@ class TestInsertInto(object):
         assert con.execute("select * from s.t").fetchall() == [(1,)]
 
         # This should fail since this will go to default schema
-        with pytest.raises(packdb.CatalogException):
+        with pytest.raises(decidb.CatalogException):
             rel.insert_into('t')
 
         # If we add t in the default schema it should work.

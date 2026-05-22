@@ -1,5 +1,5 @@
 /**
- * PackDB Website — Tailwind CDN semantic color config
+ * DecidB Website — Tailwind CDN semantic color config
  * Maps semantic class names (bg-canvas, text-fg, border-bdcolor, etc.)
  * to CSS custom properties defined in custom.css.
  * Must be loaded BEFORE the Tailwind CDN script.

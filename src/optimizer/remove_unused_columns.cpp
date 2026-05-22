@@ -22,7 +22,7 @@
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 
-#include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
 
 namespace duckdb {
 

@@ -2,7 +2,7 @@ from pytest import importorskip
 
 importorskip('pyarrow')
 
-import packdb
+import decidb
 from pyarrow import scalar, string, large_string, list_, int32, types
 
 

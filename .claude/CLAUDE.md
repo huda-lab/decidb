@@ -1,6 +1,6 @@
-# PackDB
+# DecidB
 
-PackDB extends DuckDB with a DECIDE clause for in-database Integer Linear Programming.
+DecidB extends DuckDB with a DECIDE clause for in-database Integer Linear Programming.
 See `context/descriptions/` for full documentation (start with `README.md` there).
 
 ## Build
@@ -9,7 +9,7 @@ See `context/descriptions/` for full documentation (start with `README.md` there
 make release                         # Linux release build
 ```
 
-Build output: `build/release/packdb` (CLI), `build/release/src/libduckdb.so`
+Build output: `build/release/decidb` (CLI), `build/release/src/libduckdb.so`
 
 ## Test
 
@@ -34,15 +34,15 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q
 
 **Recording performance commits.** When a commit lands whose primary purpose is improving performance, the user runs the benchmark and then asks for a perf-log entry to be appended to `context/descriptions/06_performance/` (one file per batch, named `{NNN}_{baseline_commit}_{evaluated_commit}.md` where `NNN` is the next sequential log number — e.g., `002_9c3a53fb62_6bc8ae1412.md`). The entry should reference the commit hash, list the change set + hypothesis, and include measured deltas vs. the prior baseline (with both `benchmark/decide/results/<commit>.json` paths). The log is append-only — supersede entries by adding a new one, don't rewrite history. The perf-log lands as a follow-up commit after the user has measured; do not write it speculatively at code-commit time.
 
-## Key PackDB source paths
+## Key DecidB source paths
 
-- Parser/Symbolic: `src/packdb/symbolic/decide_symbolic.cpp`
+- Parser/Symbolic: `src/decidb/symbolic/decide_symbolic.cpp`
 - Binder: `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp`, `decide_objective_binder.cpp`
 - Logical operator: `src/planner/operator/logical_decide.cpp`
 - Optimizer: `src/optimizer/decide/decide_optimizer.cpp` (algebraic rewrites: AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators, bilinear McCormick linearization)
 - Physical execution + solver integration (Gurobi/HiGHS): `src/execution/operator/decide/physical_decide.cpp`
-- Solver integration: `src/packdb/utility/ilp_model_builder.cpp` (SolverInput → SolverModel, VarIndexer, quadratic constraint emission), `src/packdb/utility/ilp_solver.cpp` (facade), `src/packdb/gurobi/gurobi_solver.cpp` (Gurobi backend), `src/packdb/naive/deterministic_naive.cpp` (HiGHS backend)
-- Headers: `src/include/duckdb/` (see `common/enums/decide.hpp`, `planner/operator/logical_decide.hpp`, `optimizer/decide_optimizer.hpp`, `packdb/solver_input.hpp`, `packdb/ilp_model.hpp`, etc.)
+- Solver integration: `src/decidb/utility/ilp_model_builder.cpp` (SolverInput → SolverModel, VarIndexer, quadratic constraint emission), `src/decidb/utility/ilp_solver.cpp` (facade), `src/decidb/gurobi/gurobi_solver.cpp` (Gurobi backend), `src/decidb/naive/deterministic_naive.cpp` (HiGHS backend)
+- Headers: `src/include/duckdb/` (see `common/enums/decide.hpp`, `planner/operator/logical_decide.hpp`, `optimizer/decide_optimizer.hpp`, `decidb/solver_input.hpp`, `decidb/ilp_model.hpp`, etc.)
 
 ## DECIDE Syntax (Quick Reference)
 
@@ -85,7 +85,7 @@ For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
 
 - **Follow DuckDB patterns first**: When adding a feature, find how DuckDB handles the analogous SQL case and mirror that approach. Don't invent new patterns when DuckDB already has one.
 - **Solver-agnostic**: Features must work with both Gurobi and HiGHS. Don't rely on solver-specific capabilities without a fallback path.
-- **Minimal DuckDB core modifications**: PackDB extends DuckDB; prefer adding new code over modifying core DuckDB files. The less we touch upstream, the easier version upgrades are.
+- **Minimal DuckDB core modifications**: DecidB extends DuckDB; prefer adding new code over modifying core DuckDB files. The less we touch upstream, the easier version upgrades are.
 
 ## Demand Elegance (Balanced)
 
@@ -95,9 +95,9 @@ For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
 
 ## Conventions
 
-- PackDB code follows DuckDB coding conventions (CamelCase classes, snake_case methods)
+- DecidB code follows DuckDB coding conventions (CamelCase classes, snake_case methods)
 - Libraries are named `libduckdb.*` internally for DuckDB API compatibility
-- The executable is named `packdb`
+- The executable is named `decidb`
 - DECIDE clause keywords: DECIDE, SUCH THAT, MAXIMIZE, MINIMIZE, WHEN
 - WHEN is postfix on constraints and objectives: `expression WHEN condition` (not `WHEN condition THEN expression`)
 - Constraints support linear and bilinear terms; objectives support linear, quadratic (QP via `POWER`), bilinear (`x * y`), or mixed forms

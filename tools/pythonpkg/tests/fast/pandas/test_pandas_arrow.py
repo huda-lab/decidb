@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 import datetime
 
@@ -14,7 +14,7 @@ class TestPandasArrow(object):
     def test_pandas_arrow(self, duckdb_cursor):
         pd = pytest.importorskip("pandas")
         df = pd.DataFrame({'a': pd.Series([5, 4, 3])}).convert_dtypes()
-        con = packdb.connect()
+        con = decidb.connect()
         res = con.sql("select * from df").fetchall()
         assert res == [(5,), (4,), (3,)]
 
@@ -35,9 +35,9 @@ class TestPandasArrow(object):
             }
         )
         pyarrow_df = df.convert_dtypes(dtype_backend='pyarrow')
-        con = packdb.connect()
+        con = decidb.connect()
         with pytest.raises(
-            packdb.InvalidInputException, match='The dataframe could not be converted to a pyarrow.lib.Table'
+            decidb.InvalidInputException, match='The dataframe could not be converted to a pyarrow.lib.Table'
         ):
             res = con.sql('select * from pyarrow_df').fetchall()
 
@@ -64,7 +64,7 @@ class TestPandasArrow(object):
         assert isinstance(df.dtypes['python'], np.dtype('O').__class__)
 
         with pytest.raises(
-            packdb.InvalidInputException, match='The dataframe could not be converted to a pyarrow.lib.Table'
+            decidb.InvalidInputException, match='The dataframe could not be converted to a pyarrow.lib.Table'
         ):
             res = con.sql('select * from df').fetchall()
 
@@ -86,7 +86,7 @@ class TestPandasArrow(object):
         )
         pyarrow_df = df.convert_dtypes(dtype_backend='pyarrow')
 
-        con = packdb.connect()
+        con = decidb.connect()
         res = con.sql('select * from pyarrow_df').fetchall()
         assert res == []
 
@@ -104,7 +104,7 @@ class TestPandasArrow(object):
         )
         pyarrow_df = df.convert_dtypes(dtype_backend='pyarrow')
 
-        con = packdb.connect()
+        con = decidb.connect()
         res = con.sql('select * from pyarrow_df').fetchall()
         assert res == [(None,), (None,), (None,)]
 
@@ -123,7 +123,7 @@ class TestPandasArrow(object):
             }
         )
         pyarrow_df = df.convert_dtypes(dtype_backend='pyarrow')
-        con = packdb.connect()
+        con = decidb.connect()
         res = con.sql('select * from pyarrow_df').fetchone()
         assert res == (
             4.123123,

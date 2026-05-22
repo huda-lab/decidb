@@ -18,7 +18,7 @@ Variables are declared as a comma-separated list with optional type annotations.
 
 ### `IS BOOLEAN`
 
-The variable takes values in {0, 1}. PackDB automatically adds lower bound (`x >= 0`) and upper bound (`x <= 1`) constraints.
+The variable takes values in {0, 1}. DecidB automatically adds lower bound (`x >= 0`) and upper bound (`x <= 1`) constraints.
 
 ```sql
 DECIDE x IS BOOLEAN
@@ -101,7 +101,7 @@ Here `keepN` has one value per nurse entity, while `scheduleHours` has one value
 
 ## Linearity / Non-Linearity
 
-Linear expressions are always supported. PackDB additionally supports two classes of non-linear terms — bilinear (`x * y`) and quadratic (`x * x`, `POWER(x, 2)`) — via dedicated optimizer rewrites and solver paths:
+Linear expressions are always supported. DecidB additionally supports two classes of non-linear terms — bilinear (`x * y`) and quadratic (`x * x`, `POWER(x, 2)`) — via dedicated optimizer rewrites and solver paths:
 
 | Expression | Status |
 |---|---|
@@ -172,7 +172,7 @@ DECIDE n.keepN IS BOOLEAN, assignHours IS INTEGER
   - Boolean type detected via `type_marker == "bool_variable"`
 
 - **ILP model builder** (variable type handling):
-  `src/packdb/utility/ilp_model_builder.cpp`
+  `src/decidb/utility/ilp_model_builder.cpp`
   - DOUBLE/FLOAT → `is_integer = false`, bounds `[0, 1e30]`
   - LogicalType::BOOLEAN → `is_binary = true`, bounds `[0, 1]` (only used by optimizer-created auxiliary variables: NE / IN indicators)
   - INTEGER → `is_integer = true`, bounds `[0, 1e30]`
@@ -186,6 +186,6 @@ DECIDE n.keepN IS BOOLEAN, assignHours IS INTEGER
 
 - **Table-scoped variables**:
   - `EntityScopeInfo` struct: `src/include/duckdb/planner/operator/logical_decide.hpp` — stores the table alias and entity column indices for each scoped variable
-  - `VarIndexer`: `src/include/duckdb/packdb/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
+  - `VarIndexer`: `src/include/duckdb/decidb/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
   - Entity mapping (Phase 1.5): `src/execution/operator/decide/physical_decide.cpp` — scans result rows, extracts source-table columns, builds entity-to-variable mappings
   - Physical index resolution: `src/execution/physical_plan/plan_decide.cpp` — resolves table-scoped column references to physical indices in the execution plan

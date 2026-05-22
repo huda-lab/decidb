@@ -19,7 +19,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_two_variables_separate_constraints(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """DECIDE x IS BOOLEAN, y IS INTEGER with independent constraints."""
     sql = """
@@ -32,8 +32,8 @@ def test_two_variables_separate_constraints(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -66,15 +66,15 @@ def test_two_variables_separate_constraints(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x", "y"],
+        decidb_rows, decidb_cols, result, data, ["x", "y"],
         coeff_fn=lambda row: {
-            "x": float(row[packdb_cols.index("l_extendedprice")]),
+            "x": float(row[decidb_cols.index("l_extendedprice")]),
             "y": 0.0,
         },
     )
 
     perf_tracker.record(
-        "two_variables_separate_constraints", packdb_time, build_time,
+        "two_variables_separate_constraints", decidb_time, build_time,
         result.solve_time_seconds, n, 2 * n, 3,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -88,7 +88,7 @@ def test_two_variables_separate_constraints(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_two_boolean_variables(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Two boolean variables with a cross-constraint."""
     sql = """
@@ -100,8 +100,8 @@ def test_two_boolean_variables(
         MAXIMIZE SUM(x * l_extendedprice + y * l_quantity)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -135,15 +135,15 @@ def test_two_boolean_variables(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x", "y"],
+        decidb_rows, decidb_cols, result, data, ["x", "y"],
         coeff_fn=lambda row: {
-            "x": float(row[packdb_cols.index("l_extendedprice")]),
-            "y": float(row[packdb_cols.index("l_quantity")]),
+            "x": float(row[decidb_cols.index("l_extendedprice")]),
+            "y": float(row[decidb_cols.index("l_quantity")]),
         },
     )
 
     perf_tracker.record(
-        "two_boolean_variables", packdb_time, build_time,
+        "two_boolean_variables", decidb_time, build_time,
         result.solve_time_seconds, n, 2 * n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -158,7 +158,7 @@ def test_two_boolean_variables(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_integer_real_paired(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """DECIDE x IS INTEGER, y IS REAL without a BOOLEAN in the mix.
 
@@ -179,8 +179,8 @@ def test_integer_real_paired(
         MAXIMIZE SUM(x * val_a + y * val_b)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT id, CAST(val_a AS DOUBLE), CAST(val_b AS DOUBLE) FROM ({data_sql})"
@@ -211,14 +211,14 @@ def test_integer_real_paired(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x", "y"],
+        decidb_rows, decidb_cols, result, data, ["x", "y"],
         coeff_fn=lambda row: {
-            "x": float(row[packdb_cols.index("val_a")]),
-            "y": float(row[packdb_cols.index("val_b")]),
+            "x": float(row[decidb_cols.index("val_a")]),
+            "y": float(row[decidb_cols.index("val_b")]),
         },
     )
     perf_tracker.record(
-        "integer_real_paired", packdb_time, build_time,
+        "integer_real_paired", decidb_time, build_time,
         result.solve_time_seconds, n, 2 * n, 3,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -233,7 +233,7 @@ def test_integer_real_paired(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_three_decide_variables(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Three-variable stress test for VarIndexer / physical_decide loop bounds.
 
@@ -260,8 +260,8 @@ def test_three_decide_variables(
         MAXIMIZE SUM(x * val_a + y * val_b + z * val_c)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"""SELECT id,
@@ -303,15 +303,15 @@ def test_three_decide_variables(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x", "y", "z"],
+        decidb_rows, decidb_cols, result, data, ["x", "y", "z"],
         coeff_fn=lambda row: {
-            "x": float(row[packdb_cols.index("val_a")]),
-            "y": float(row[packdb_cols.index("val_b")]),
-            "z": float(row[packdb_cols.index("val_c")]),
+            "x": float(row[decidb_cols.index("val_a")]),
+            "y": float(row[decidb_cols.index("val_b")]),
+            "z": float(row[decidb_cols.index("val_c")]),
         },
     )
     perf_tracker.record(
-        "three_decide_variables", packdb_time, build_time,
+        "three_decide_variables", decidb_time, build_time,
         result.solve_time_seconds, n, 3 * n, 4,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -325,7 +325,7 @@ def test_three_decide_variables(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_mixed_types_same_aggregate_term(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """BOOLEAN + REAL user-declared variables in the same SUM(...) term.
 
@@ -348,8 +348,8 @@ def test_mixed_types_same_aggregate_term(
         MAXIMIZE SUM(x * val_x + y * val_y)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"""SELECT id,
@@ -383,14 +383,14 @@ def test_mixed_types_same_aggregate_term(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x", "y"],
+        decidb_rows, decidb_cols, result, data, ["x", "y"],
         coeff_fn=lambda row: {
-            "x": float(row[packdb_cols.index("val_x")]),
-            "y": float(row[packdb_cols.index("val_y")]),
+            "x": float(row[decidb_cols.index("val_x")]),
+            "y": float(row[decidb_cols.index("val_y")]),
         },
     )
     perf_tracker.record(
-        "mixed_types_same_aggregate_term", packdb_time, build_time,
+        "mixed_types_same_aggregate_term", decidb_time, build_time,
         result.solve_time_seconds, n, 2 * n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,

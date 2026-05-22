@@ -1,6 +1,6 @@
 # Performance Benchmarking
 
-This document describes the benchmarking infrastructure for measuring PackDB DECIDE query performance.
+This document describes the benchmarking infrastructure for measuring DecidB DECIDE query performance.
 
 ## Overview
 
@@ -53,24 +53,24 @@ Generate with `make decide-bench-setup` (runs `generate_databases.py`). Database
 
 ## Stage Timers
 
-When `PACKDB_BENCH=1` is set (automatically by `make decide-bench`), the DECIDE pipeline emits per-stage timing to stderr:
+When `DECIDB_BENCH=1` is set (automatically by `make decide-bench`), the DECIDE pipeline emits per-stage timing to stderr:
 
 ```
-PACKDB_BENCH: optimizer_ms=0.01         # DecideOptimizer rewrite passes
-PACKDB_BENCH: model_construction_ms=32  # ILP/QP model building
-PACKDB_BENCH: solver_ms=1448            # SolveModel() call (Gurobi or HiGHS)
-PACKDB_BENCH: total_variables=9965      # num_rows * num_decide_vars plus auxiliaries
-PACKDB_BENCH: total_constraints=5       # per-row + global constraints
-PACKDB_BENCH: num_rows=9965
+DECIDB_BENCH: optimizer_ms=0.01         # DecideOptimizer rewrite passes
+DECIDB_BENCH: model_construction_ms=32  # ILP/QP model building
+DECIDB_BENCH: solver_ms=1448            # SolveModel() call (Gurobi or HiGHS)
+DECIDB_BENCH: total_variables=9965      # num_rows * num_decide_vars plus auxiliaries
+DECIDB_BENCH: total_constraints=5       # per-row + global constraints
+DECIDB_BENCH: num_rows=9965
 ```
 
-The Python runner parses these lines and includes them in the result JSON. It wraps PackDB with `/usr/bin/time`; on macOS it uses `time -l` when available for RSS, and falls back to `time -p` when sandbox restrictions prevent resource collection.
+The Python runner parses these lines and includes them in the result JSON. It wraps DecidB with `/usr/bin/time`; on macOS it uses `time -l` when available for RSS, and falls back to `time -p` when sandbox restrictions prevent resource collection.
 
 **Source locations:**
 - `src/execution/operator/decide/physical_decide.cpp` - model_construction_ms, solver_ms, total_variables, total_constraints, num_rows
 - `src/optimizer/decide/decide_optimizer.cpp` - optimizer_ms
 
-Timers use DuckDB's `Profiler` class (`src/include/duckdb/common/profiler.hpp`). They are gated behind `std::getenv("PACKDB_BENCH")`.
+Timers use DuckDB's `Profiler` class (`src/include/duckdb/common/profiler.hpp`). They are gated behind `std::getenv("DECIDB_BENCH")`.
 
 ## Benchmark Query Set
 

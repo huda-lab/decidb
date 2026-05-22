@@ -1,4 +1,4 @@
-import packdb
+import decidb
 from decimal import Decimal
 import pytest
 
@@ -113,9 +113,9 @@ class TestRAPIAggregations(object):
         expected = [(1, "0011000000000"), (2, "0000000000011"), (3, "1000001000000")]
         assert len(result) == len(expected)
         assert all([r == e for r, e in zip(result, expected)])
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             table.bitstring_agg("v", min="1")
-        with pytest.raises(packdb.InvalidTypeException):
+        with pytest.raises(decidb.InvalidTypeException):
             table.bitstring_agg("v", min="1", max=11)
 
     def test_bool_and(self, table):

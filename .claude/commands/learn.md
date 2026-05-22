@@ -1,6 +1,6 @@
 # /learn — ELI5 Feature & Concept Explainer
 
-Explains how a PackDB feature or concept works — the mental model, not just the code. Use this when you want to understand something without reading through source files yourself.
+Explains how a DecidB feature or concept works — the mental model, not just the code. Use this when you want to understand something without reading through source files yourself.
 
 ## Arguments
 
@@ -25,11 +25,11 @@ Based on the topic, identify which files and docs to read:
 - Also read the relevant source files listed in those docs
 
 **Pipeline topics** — map to `context/descriptions/01_pipeline/`:
-- `parser` → `01_parser.md` + `src/packdb/symbolic/decide_symbolic.cpp`
+- `parser` → `01_parser.md` + `src/decidb/symbolic/decide_symbolic.cpp`
 - `binder` → `02_binder.md` + `src/planner/expression_binder/decide_binder.cpp`
 - `optimizer` → `context/descriptions/04_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
 - `execution` → `03_execution.md` (and sub-docs `03a`-`03e`) + `src/execution/operator/decide/physical_decide.cpp`
-- `solver` → `03_execution.md` + solver backends in `src/packdb/solver/`
+- `solver` → `03_execution.md` + solver backends in `src/decidb/solver/`
 - `pipeline` (broad) → read `01_parser.md`, `02_binder.md`, `03_execution.md` for the full flow
 
 **Concept topics** — read the optimizer docs and relevant source:

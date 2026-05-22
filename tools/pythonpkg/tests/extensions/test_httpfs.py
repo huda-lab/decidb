@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 from pytest import raises, mark
 import pytest
@@ -20,7 +20,7 @@ class TestHTTPFS(object):
         try:
             res = connection.read_json('https://jsonplaceholder.typicode.com/todos')
             assert len(res.types) == 4
-        except packdb.Error as e:
+        except decidb.Error as e:
             if '403' in e:
                 pytest.skip(reason="Test is flaky, sometimes returns 403")
             else:
@@ -29,7 +29,7 @@ class TestHTTPFS(object):
     def test_s3fs(self, require):
         connection = require('httpfs')
 
-        rel = connection.read_csv(f"s3://packdb-blobs/data/Star_Trek-Season_1.csv", header=True)
+        rel = connection.read_csv(f"s3://decidb-blobs/data/Star_Trek-Season_1.csv", header=True)
         res = rel.fetchone()
         assert res == (1, 0, datetime.date(1965, 2, 28), 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 6, 0, 0, 0, 0)
 
@@ -38,7 +38,7 @@ class TestHTTPFS(object):
         connection = require('httpfs')
         try:
             connection.execute(
-                "SELECT id, first_name, last_name FROM PARQUET_SCAN('https://raw.githubusercontent.com/packdb/packdb/main/data/parquet-testing/userdata1.parquet') LIMIT 3;"
+                "SELECT id, first_name, last_name FROM PARQUET_SCAN('https://raw.githubusercontent.com/decidb/decidb/main/data/parquet-testing/userdata1.parquet') LIMIT 3;"
             )
         except RuntimeError as e:
             # Test will ignore result if it fails due to networking issues while running the test.
@@ -63,7 +63,7 @@ class TestHTTPFS(object):
         connection = require('httpfs')
 
         # Read from a bogus HTTPS url, assert that it errors with a non-successful status code
-        with raises(packdb.HTTPException) as exc:
+        with raises(decidb.HTTPException) as exc:
             connection.execute("SELECT * FROM PARQUET_SCAN('https://example.com/userdata1.parquet')")
 
         value = exc.value

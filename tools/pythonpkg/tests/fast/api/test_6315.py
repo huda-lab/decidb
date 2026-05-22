@@ -1,10 +1,10 @@
-import packdb
+import decidb
 
 
 class Test6315(object):
     def test_6315(self, duckdb_cursor):
         # segfault when accessing description after fetching rows
-        c = packdb.connect(":memory:")
+        c = decidb.connect(":memory:")
         rv = c.execute("select * from sqlite_master where type = 'table'")
         rv.fetchall()
         desc = rv.description

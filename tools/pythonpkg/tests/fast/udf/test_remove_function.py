@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 
@@ -11,14 +11,14 @@ import datetime
 import numpy as np
 import cmath
 
-from packdb.typing import *
+from decidb.typing import *
 
 
 class TestRemoveFunction(object):
     def test_not_created(self):
-        con = packdb.connect()
+        con = decidb.connect()
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match="No function by the name of 'not_a_registered_function' was found in the list of registered functions",
         ):
             con.remove_function('not_a_registered_function')
@@ -27,24 +27,24 @@ class TestRemoveFunction(object):
         def func(x: int) -> int:
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('func', func)
         con.sql('select func(42)')
         con.remove_function('func')
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match="No function by the name of 'func' was found in the list of registered functions",
         ):
             con.remove_function('func')
 
-        with pytest.raises(packdb.CatalogException, match='Scalar Function with name func does not exist!'):
+        with pytest.raises(decidb.CatalogException, match='Scalar Function with name func does not exist!'):
             con.sql('select func(42)')
 
     def test_use_after_remove(self):
         def func(x: int) -> int:
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('func', func)
         rel = con.sql('select func(42)')
         con.remove_function('func')
@@ -52,7 +52,7 @@ class TestRemoveFunction(object):
             Error: Catalog Error: Scalar Function with name func does not exist!
         """
         with pytest.raises(
-            packdb.InvalidInputException, match='Attempting to execute an unsuccessful or closed pending query result'
+            decidb.InvalidInputException, match='Attempting to execute an unsuccessful or closed pending query result'
         ):
             res = rel.fetchall()
 
@@ -60,10 +60,10 @@ class TestRemoveFunction(object):
         def func(x: str) -> str:
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('func', func)
 
-        with pytest.raises(packdb.BinderException, match='No function matches the given name'):
+        with pytest.raises(decidb.BinderException, match='No function matches the given name'):
             rel1 = con.sql('select func(42)')
         rel2 = con.sql("select func('test'::VARCHAR)")
         con.remove_function('func')
@@ -72,14 +72,14 @@ class TestRemoveFunction(object):
             return x
 
         con.create_function('func', also_func)
-        with pytest.raises(packdb.InvalidInputException, match='No function matches the given name'):
+        with pytest.raises(decidb.InvalidInputException, match='No function matches the given name'):
             res = rel2.fetchall()
 
     def test_overwrite_name(self):
         def func(x):
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         # create first version of the function
         con.create_function('func', func, [BIGINT], BIGINT)
 
@@ -90,7 +90,7 @@ class TestRemoveFunction(object):
             return x
 
         with pytest.raises(
-            packdb.NotImplementedException,
+            decidb.NotImplementedException,
             match="A function by the name of 'func' is already created, creating multiple functions with the same name is not supported yet, please remove it first",
         ):
             con.create_function('func', other_func, [VARCHAR], VARCHAR)
@@ -98,7 +98,7 @@ class TestRemoveFunction(object):
         con.remove_function('func')
 
         with pytest.raises(
-            packdb.InvalidInputException, match='Catalog Error: Scalar Function with name func does not exist!'
+            decidb.InvalidInputException, match='Catalog Error: Scalar Function with name func does not exist!'
         ):
             # Attempted to execute the relation using the 'func' function, but it was deleted
             rel1.fetchall()

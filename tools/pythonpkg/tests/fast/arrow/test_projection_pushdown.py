@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 

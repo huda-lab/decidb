@@ -23,7 +23,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_aggregate_string_equality(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_aggregate_string_equality(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Capacity limit on returned items only: SUM(x*qty) <= 100 WHEN returnflag='R'."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -35,8 +35,8 @@ def test_when_aggregate_string_equality(packdb_cli, duckdb_conn, oracle_solver, 
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -66,12 +66,12 @@ def test_when_aggregate_string_equality(packdb_cli, duckdb_conn, oracle_solver, 
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_agg_str_eq", packdb_time, build_time,
+        "when_agg_str_eq", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -85,7 +85,7 @@ def test_when_aggregate_string_equality(packdb_cli, duckdb_conn, oracle_solver, 
 @pytest.mark.cons_multi
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_multiple_categories(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Different capacity limits per category using multiple WHEN constraints."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -98,8 +98,8 @@ def test_when_multiple_categories(packdb_cli, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -133,12 +133,12 @@ def test_when_multiple_categories(packdb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_multi_cat", packdb_time, build_time,
+        "when_multi_cat", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -151,7 +151,7 @@ def test_when_multiple_categories(packdb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_aggregate_numeric_comparison(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_aggregate_numeric_comparison(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Capacity limit on discounted items: SUM(x*price) <= 5000 WHEN discount >= 0.06."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -163,8 +163,8 @@ def test_when_aggregate_numeric_comparison(packdb_cli, duckdb_conn, oracle_solve
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -194,12 +194,12 @@ def test_when_aggregate_numeric_comparison(packdb_cli, duckdb_conn, oracle_solve
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_agg_numeric", packdb_time, build_time,
+        "when_agg_numeric", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -212,7 +212,7 @@ def test_when_aggregate_numeric_comparison(packdb_cli, duckdb_conn, oracle_solve
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_all_rows_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN condition matches all rows — equivalent to no WHEN."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -223,8 +223,8 @@ def test_when_all_rows_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -253,12 +253,12 @@ def test_when_all_rows_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_all_match", packdb_time, build_time,
+        "when_all_match", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -271,7 +271,7 @@ def test_when_all_rows_match(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.error_infeasible
-def test_when_no_rows_match(packdb_cli):
+def test_when_no_rows_match(decidb_cli):
     """Aggregate constraint with WHEN matching no rows — now rejected pre-solver
     per the "reject all empty aggregate sets" rule."""
     sql = """
@@ -283,7 +283,7 @@ def test_when_no_rows_match(packdb_cli):
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'Z'
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    packdb_cli.assert_error(sql, match=r"empty|WHEN")
+    decidb_cli.assert_error(sql, match=r"empty|WHEN")
 
 
 @pytest.mark.when_constraint
@@ -292,7 +292,7 @@ def test_when_no_rows_match(packdb_cli):
 @pytest.mark.cons_multi
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_mixed_conditional_and_unconditional(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_mixed_conditional_and_unconditional(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """One WHEN-filtered constraint + one unconditional constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -305,8 +305,8 @@ def test_when_mixed_conditional_and_unconditional(packdb_cli, duckdb_conn, oracl
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -341,12 +341,12 @@ def test_when_mixed_conditional_and_unconditional(packdb_cli, duckdb_conn, oracl
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_mixed", packdb_time, build_time,
+        "when_mixed", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -359,7 +359,7 @@ def test_when_mixed_conditional_and_unconditional(packdb_cli, duckdb_conn, oracl
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_aggregate_constant_coeff(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Constant coefficient in SUM with WHEN: SUM(x*10) <= 200 WHEN mktsegment='AUTOMOBILE'."""
     sql = """
         SELECT c_custkey, c_acctbal, c_mktsegment, x
@@ -370,8 +370,8 @@ def test_when_aggregate_constant_coeff(packdb_cli, duckdb_conn, oracle_solver, p
         MAXIMIZE SUM(x * c_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(c_custkey AS BIGINT),
@@ -399,12 +399,12 @@ def test_when_aggregate_constant_coeff(packdb_cli, duckdb_conn, oracle_solver, p
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("c_acctbal")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("c_acctbal")])},
     )
 
     perf_tracker.record(
-        "when_const_coeff", packdb_time, build_time,
+        "when_const_coeff", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -417,7 +417,7 @@ def test_when_aggregate_constant_coeff(packdb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_not_equal(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_not_equal(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN with not-equal operator: SUM(x*qty) <= 80 WHEN returnflag <> 'N'."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -429,8 +429,8 @@ def test_when_not_equal(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -459,12 +459,12 @@ def test_when_not_equal(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "when_not_eq", packdb_time, build_time,
+        "when_not_eq", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -476,7 +476,7 @@ def test_when_not_equal(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_multi
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_constraint_ordering_invariance(packdb_cli):
+def test_when_constraint_ordering_invariance(decidb_cli):
     """WHEN must apply only to its constraint regardless of AND ordering.
 
     Regression test: the grammar has a shift/reduce ambiguity where
@@ -506,8 +506,8 @@ def test_when_constraint_ordering_invariance(packdb_cli):
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    result_before, cols_before = packdb_cli.execute(sql_before)
-    result_after, cols_after = packdb_cli.execute(sql_after)
+    result_before, cols_before = decidb_cli.execute(sql_before)
+    result_after, cols_after = decidb_cli.execute(sql_after)
 
     assert cols_before == cols_after, "Column names should match"
     assert len(result_before) == len(result_after), "Row counts should match"
@@ -533,7 +533,7 @@ def test_when_constraint_ordering_invariance(packdb_cli):
 
 @pytest.mark.when_constraint
 @pytest.mark.edge_case
-def test_when_null_condition_column(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_null_condition_column(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN condition on column with NULL values — NULLs treated as false.
 
     Rows where the WHEN condition evaluates to NULL should be excluded from
@@ -553,7 +553,7 @@ def test_when_null_condition_column(packdb_cli, duckdb_conn, oracle_solver, perf
         SUCH THAT SUM(x * val) <= 20 WHEN flag = 'R'
         MAXIMIZE SUM(x * val)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     id_idx = cols.index("id")
@@ -582,7 +582,7 @@ def test_when_null_condition_column(packdb_cli, duckdb_conn, oracle_solver, perf
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_is_not_null_predicate(packdb_cli, oracle_solver, perf_tracker):
+def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
     """WHEN (col IS NOT NULL) — explicit IS NOT NULL predicate in WHEN.
 
     Companion to ``test_when_null_condition_column`` (which exercises NULL
@@ -602,8 +602,8 @@ def test_when_is_not_null_predicate(packdb_cli, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [
         (1, 10.0, 'a'),
@@ -639,15 +639,15 @@ def test_when_is_not_null_predicate(packdb_cli, oracle_solver, perf_tracker):
     from solver.types import SolverStatus
     assert result.status == SolverStatus.OPTIMAL
 
-    val_idx = packdb_cols.index("val")
-    x_idx = packdb_cols.index("x")
-    packdb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in packdb_rows)
-    assert abs(packdb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={result.objective_value}"
+    val_idx = decidb_cols.index("val")
+    x_idx = decidb_cols.index("x")
+    decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
+    assert abs(decidb_obj - result.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(
-        "when_is_not_null_predicate", packdb_time, build_time,
+        "when_is_not_null_predicate", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",

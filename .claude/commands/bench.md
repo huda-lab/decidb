@@ -1,6 +1,6 @@
 # /bench — Build, Benchmark, Analyze
 
-Automates the PackDB optimization loop: build → benchmark → view → analyze → suggest.
+Automates the DecidB optimization loop: build → benchmark → view → analyze → suggest.
 
 ## Arguments
 
@@ -24,7 +24,7 @@ Parse `$ARGUMENTS` into:
 
 ### 2. Build (unless skip-build)
 
-Check if `build/release/packdb` exists and is older than the newest file under `src/`. If stale or missing, run:
+Check if `build/release/decidb` exists and is older than the newest file under `src/`. If stale or missing, run:
 ```bash
 make release
 ```
@@ -43,7 +43,7 @@ make decide-bench-setup
 
 Run with stage timers enabled:
 ```bash
-PACKDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py --sizes {sizes} [--compare] [--manual]
+DECIDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py --sizes {sizes} [--compare] [--manual]
 ```
 
 Add `--compare` if `do_compare` is true.

@@ -1,6 +1,6 @@
 import pytest
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 from spark_namespace.sql.types import Row
 from spark_namespace.sql.functions import concat_ws, col
 

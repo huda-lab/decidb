@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pandas as pd
 from pandas.testing import assert_frame_equal
 import pytest
@@ -23,7 +23,7 @@ def test_5547():
         )
     )
 
-    con = packdb.connect()
+    con = decidb.connect()
     expected = tbl.to_pandas()
     result = con.execute(
         """

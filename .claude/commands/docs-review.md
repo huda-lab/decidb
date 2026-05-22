@@ -30,7 +30,7 @@ Launch up to 3 agents in parallel, each responsible for a different audit dimens
 
 **Agent 1 — Code Pointer Verifier**
 
-> You are auditing PackDB documentation for **stale or broken code pointers**. Your job is to verify that every file path, function name, line number, constant, tag, and data structure reference in the documentation still exists and is accurate in the current codebase.
+> You are auditing DecidB documentation for **stale or broken code pointers**. Your job is to verify that every file path, function name, line number, constant, tag, and data structure reference in the documentation still exists and is accurate in the current codebase.
 >
 > **What to check in each doc file**:
 >
@@ -67,7 +67,7 @@ Launch up to 3 agents in parallel, each responsible for a different audit dimens
 
 **Agent 2 — Content Accuracy Verifier**
 
-> You are auditing PackDB documentation for **content that no longer matches the code's actual behavior**. Your job is to read what the docs claim the system does, then read the code and verify those claims are true.
+> You are auditing DecidB documentation for **content that no longer matches the code's actual behavior**. Your job is to read what the docs claim the system does, then read the code and verify those claims are true.
 >
 > **What to check in each doc file**:
 >
@@ -107,14 +107,14 @@ Launch up to 3 agents in parallel, each responsible for a different audit dimens
 
 **Agent 3 — Completeness & Consistency Auditor**
 
-> You are auditing PackDB documentation for **gaps, inconsistencies, and staleness**. Your job is to find things that are missing, contradictory between docs, or that have been implemented but not documented.
+> You are auditing DecidB documentation for **gaps, inconsistencies, and staleness**. Your job is to find things that are missing, contradictory between docs, or that have been implemented but not documented.
 >
 > **What to check**:
 >
 > 1. **todo.md vs code** — Read every `todo.md` file. For each planned item, check if it has already been implemented in the code. If so, it should be moved to `done.md`. Grep for keywords from the todo item to find implementations.
 > 2. **done.md completeness** — For each feature area, are all implemented behaviors documented? Read the relevant source files and check if there are code paths, edge cases, or features not mentioned in done.md.
 > 3. **Cross-doc consistency** — The same concept is often described in multiple places (e.g., PER appears in `03_expressivity/per/done.md`, `01_pipeline/03b_coefficient_evaluation.md`, and `.claude/CLAUDE.md`). Are these descriptions consistent with each other? Flag contradictions.
-> 4. **CLAUDE.md key paths** — The "Key PackDB source paths" section lists important files. Are any paths stale? Are important new files missing from the list?
+> 4. **CLAUDE.md key paths** — The "Key DecidB source paths" section lists important files. Are any paths stale? Are important new files missing from the list?
 > 5. **lessons.md relevance** — Read `.claude/lessons.md`. Are any lessons now obsolete (the underlying issue was fixed)? Are there gotchas in the code that should be lessons but aren't?
 > 6. **README.md navigation** — Does `context/descriptions/README.md` accurately describe what's in each directory? Are any new files or directories missing from the navigation?
 > 7. **Example queries** — Do the SQL examples in the docs use valid syntax? Cross-check against the grammar and parser. Flag examples that would fail if actually run.

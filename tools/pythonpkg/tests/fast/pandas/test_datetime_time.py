@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import numpy as np
 import pytest
 from conftest import NumpyPandas, ArrowPandas
@@ -13,7 +13,7 @@ class TestDateTimeTime(object):
         duckdb_time = duckdb_cursor.sql("SELECT make_time(23, 1, 34.234345) AS '0'").df()
         data = [time(hour=23, minute=1, second=34, microsecond=234345)]
         df_in = pandas.DataFrame({'0': pandas.Series(data=data, dtype='object')})
-        df_out = packdb.query_df(df_in, "df", "select * from df").df()
+        df_out = decidb.query_df(df_in, "df", "select * from df").df()
         pandas.testing.assert_frame_equal(df_out, duckdb_time)
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
@@ -21,13 +21,13 @@ class TestDateTimeTime(object):
         duckdb_time = duckdb_cursor.sql("SELECT make_time(00, 01, 1.000) AS '0'").df()
         data = [time(hour=0, minute=1, second=1)]
         df_in = pandas.DataFrame({'0': pandas.Series(data=data, dtype='object')})
-        df_out = packdb.query_df(df_in, "df", "select * from df").df()
+        df_out = decidb.query_df(df_in, "df", "select * from df").df()
         pandas.testing.assert_frame_equal(df_out, duckdb_time)
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     @pytest.mark.parametrize('input', ['2263-02-28', '9999-01-01'])
     def test_pandas_datetime_big(self, pandas, input):
-        duckdb_con = packdb.connect()
+        duckdb_con = decidb.connect()
 
         duckdb_con.execute("create table test (date DATE)")
         duckdb_con.execute(f"INSERT INTO TEST VALUES ('{input}')")
@@ -38,7 +38,7 @@ class TestDateTimeTime(object):
         pandas.testing.assert_frame_equal(res, df)
 
     def test_timezone_datetime(self):
-        con = packdb.connect()
+        con = decidb.connect()
 
         dt = datetime.now(timezone.utc).replace(microsecond=0)
 

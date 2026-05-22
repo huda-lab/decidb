@@ -1,16 +1,16 @@
-import packdb
+import decidb
 import datetime
 import numpy as np
 import pytest
 import copy
 from conftest import NumpyPandas, ArrowPandas
-from packdb import Value
+from decidb import Value
 
 NULL = None
 
 
 def check_equal(conn, df, reference_query, data):
-    duckdb_conn = packdb.connect()
+    duckdb_conn = decidb.connect()
     duckdb_conn.execute(reference_query, parameters=[data])
     res = duckdb_conn.query('SELECT * FROM tbl').fetchall()
     df_res = duckdb_conn.query('SELECT * FROM tbl').df()

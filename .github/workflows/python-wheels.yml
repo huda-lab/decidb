@@ -80,7 +80,7 @@ jobs:
           CIBW_ENVIRONMENT_WINDOWS: >
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
           CIBW_BEFORE_TEST: ""
-          CIBW_TEST_COMMAND: python -c "import packdb; print(packdb.__version__)"
+          CIBW_TEST_COMMAND: python -c "import decidb; print(decidb.__version__)"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4

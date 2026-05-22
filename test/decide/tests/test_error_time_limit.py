@@ -1,10 +1,10 @@
 """Time-limit error path test.
 
 Triggers a deliberately pathological MIQP under a 1s Gurobi TimeLimit and
-asserts that PackDB surfaces a "exceeded time limit" message rather than
+asserts that DecidB surfaces a "exceeded time limit" message rather than
 the generic Gurobi-status fallback.
 
-Regression test for a bug in src/packdb/gurobi/gurobi_loader.hpp where the
+Regression test for a bug in src/decidb/gurobi/gurobi_loader.hpp where the
 hand-mirrored Gurobi status constants drifted from upstream values:
 GRB_TIME_LIMIT was set to 7 (actually GRB_ITERATION_LIMIT) and
 GRB_ITERATION_LIMIT to 8 (actually GRB_NODE_LIMIT). The friendly
@@ -22,14 +22,14 @@ import pytest
 
 @pytest.mark.error
 def test_time_limit_surfaces_friendly_error(
-    packdb_exe_path, packdb_db_path, _raw_oracle_solver, tmp_path
+    decidb_exe_path, decidb_db_path, _raw_oracle_solver, tmp_path
 ):
     if _raw_oracle_solver is None:
         pytest.skip("Gurobi not available — time-limit test requires it")
 
     # Gurobi auto-loads gurobi.env from the working directory at GRBenv
-    # creation. Drop one in tmp_path and run packdb there so the limit is
-    # enforced without needing a SQL-level Gurobi parameter knob (PackDB
+    # creation. Drop one in tmp_path and run decidb there so the limit is
+    # enforced without needing a SQL-level Gurobi parameter knob (DecidB
     # does not currently expose one).
     (tmp_path / "gurobi.env").write_text("TimeLimit 1\n")
 
@@ -47,12 +47,12 @@ def test_time_limit_surfaces_friendly_error(
     """
 
     result = subprocess.run(
-        [packdb_exe_path, packdb_db_path, "-readonly", "-c", sql],
+        [decidb_exe_path, decidb_db_path, "-readonly", "-c", sql],
         capture_output=True,
         text=True,
         timeout=30,
         cwd=str(tmp_path),
-        env={**os.environ, "PACKDB_FORCE_SOLVER": "gurobi"},
+        env={**os.environ, "DECIDB_FORCE_SOLVER": "gurobi"},
     )
 
     combined = result.stderr + result.stdout

@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import datetime
 import pytest
 
@@ -24,7 +24,7 @@ class TestDateTimeDateTime(object):
         ],
     )
     def test_timestamp_infinity(self, positive, type):
-        con = packdb.connect()
+        con = decidb.connect()
 
         if type in ['TIMESTAMP_S', 'TIMESTAMP_MS', 'TIMESTAMP_NS']:
             # Infinity (both positive and negative) is not supported for non-usecond timetamps
@@ -36,7 +36,7 @@ class TestDateTimeDateTime(object):
         assert res == expected_val
 
     def test_timestamp_infinity_roundtrip(self):
-        con = packdb.connect()
+        con = decidb.connect()
 
         # positive infinity
         con.execute("select $1, $1 = 'infinity'::TIMESTAMP", [datetime.datetime.max])

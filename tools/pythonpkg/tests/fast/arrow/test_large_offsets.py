@@ -1,5 +1,5 @@
 from re import S
-import packdb
+import decidb
 import os
 import pytest
 import tempfile
@@ -17,7 +17,7 @@ class TestArrowLargeOffsets(object):
         ary = pa.array([np.arange(start=0, stop=3000, dtype=np.uint8) for i in range(1_000_000)])
         tbl = pa.Table.from_pydict(dict(col=ary))
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='Arrow Appender: The maximum combined list offset for regular list buffers is 2147483647 but the offset of 2147481000 exceeds this.',
         ):
             res = duckdb_cursor.sql("SELECT col FROM tbl").arrow()
@@ -33,7 +33,7 @@ class TestArrowLargeOffsets(object):
         tbl = pa.Table.from_pydict(dict(col=ary))
 
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='Arrow Appender: The maximum combined list offset for regular list buffers is 2147483647 but the offset of 2147481000 exceeds this.',
         ):
             arrow_map = duckdb_cursor.sql("select map(col, col) from tbl").arrow()

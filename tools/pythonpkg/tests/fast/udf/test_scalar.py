@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 
@@ -11,7 +11,7 @@ import datetime
 import numpy as np
 import cmath
 
-from packdb.typing import *
+from decidb.typing import *
 
 
 def make_annotated_function(type):
@@ -54,10 +54,10 @@ class TestScalarUDF(object):
             (INTERVAL, datetime.timedelta(days=30969, seconds=999, microseconds=999999)),
             (BOOLEAN, True),
             (
-                packdb.struct_type(['BIGINT[]', 'VARCHAR[]']),
-                {'v1': [1, 2, 3], 'v2': ['a', 'non-inlined string', 'packdb']},
+                decidb.struct_type(['BIGINT[]', 'VARCHAR[]']),
+                {'v1': [1, 2, 3], 'v2': ['a', 'non-inlined string', 'decidb']},
             ),
-            (packdb.list_type('VARCHAR'), ['the', 'duck', 'non-inlined string']),
+            (decidb.list_type('VARCHAR'), ['the', 'duck', 'non-inlined string']),
         ],
     )
     def test_type_coverage(self, test_type, function_type):
@@ -66,7 +66,7 @@ class TestScalarUDF(object):
 
         test_function = make_annotated_function(type)
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('test', test_function, type=function_type)
         # Single value
         res = con.execute(f"select test(?::{str(type)})", [value]).fetchall()
@@ -77,12 +77,12 @@ class TestScalarUDF(object):
         assert res[0][0] == None
 
         # Multiple chunks
-        size = packdb.__standard_vector_size__ * 3
+        size = decidb.__standard_vector_size__ * 3
         res = con.execute(f"select test(x) from repeat(?::{str(type)}, {size}) as tbl(x)", [value]).fetchall()
         assert len(res) == size
 
         # Mixed NULL/NON-NULL
-        size = packdb.__standard_vector_size__ * 3
+        size = decidb.__standard_vector_size__ * 3
         con.execute("select setseed(0.1337)").fetchall()
         actual = con.execute(
             f"""
@@ -123,22 +123,22 @@ class TestScalarUDF(object):
         def no_op(x):
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         map_type = con.map_type('VARCHAR', 'BIGINT')
         con.create_function('test_map', no_op, [map_type], map_type, type=udf_type)
-        rel = con.sql("select test_map(map(['non-inlined string', 'test', 'packdb'], [42, 1337, 123]))")
+        rel = con.sql("select test_map(map(['non-inlined string', 'test', 'decidb'], [42, 1337, 123]))")
         res = rel.fetchall()
-        assert res == [({'non-inlined string': 42, 'test': 1337, 'packdb': 123},)]
+        assert res == [({'non-inlined string': 42, 'test': 1337, 'decidb': 123},)]
 
     @pytest.mark.parametrize('udf_type', ['arrow', 'native'])
     def test_exceptions(self, udf_type):
         def raises_exception(x):
             raise AttributeError("error")
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('raises', raises_exception, [BIGINT], BIGINT, type=udf_type)
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match=' Python exception occurred while executing the UDF: AttributeError: error',
         ):
             res = con.sql('select raises(3)').fetchall()
@@ -151,7 +151,7 @@ class TestScalarUDF(object):
         assert res == [(None,), (None,), (None,), (None,), (None,)]
 
     def test_non_callable(self):
-        con = packdb.connect()
+        con = decidb.connect()
         with pytest.raises(TypeError):
             con.create_function('func', 5, [BIGINT], BIGINT, type='arrow')
 
@@ -175,7 +175,7 @@ class TestScalarUDF(object):
             if udf_type == 'native':
                 return pd.NA
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('return_pd_nan', return_pd_nan, None, duckdb_type, null_handling='SPECIAL', type=udf_type)
 
         res = con.sql('select return_pd_nan()').fetchall()
@@ -189,7 +189,7 @@ class TestScalarUDF(object):
 
         count.counter = 0
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('my_counter', count, side_effects=False)
         res = con.sql('select my_counter() from range(10)').fetchall()
         assert res == [(0,), (0,), (0,), (0,), (0,), (0,), (0,), (0,), (0,), (0,)]
@@ -211,7 +211,7 @@ class TestScalarUDF(object):
 
                 return pa.chunked_array([[np.nan]], type=pa.float64())
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('return_np_nan', return_np_nan, None, duckdb_type, null_handling='SPECIAL', type=udf_type)
 
         res = con.sql('select return_np_nan()').fetchall()
@@ -230,7 +230,7 @@ class TestScalarUDF(object):
 
                 return pa.chunked_array([[cmath.nan]], type=pa.float64())
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function(
             'return_math_nan', return_math_nan, None, duckdb_type, null_handling='SPECIAL', type=udf_type
         )
@@ -262,8 +262,8 @@ class TestScalarUDF(object):
             BLOB,
             INTERVAL,
             BOOLEAN,
-            packdb.struct_type(['BIGINT[]', 'VARCHAR[]']),
-            packdb.list_type('VARCHAR'),
+            decidb.struct_type(['BIGINT[]', 'VARCHAR[]']),
+            decidb.list_type('VARCHAR'),
         ],
     )
     def test_return_null(self, data_type, udf_type):
@@ -275,7 +275,7 @@ class TestScalarUDF(object):
 
                 return pa.nulls(1)
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('return_null', return_null, None, data_type, null_handling='special', type=udf_type)
         rel = con.sql('select return_null() as x')
         assert rel.types[0] == data_type
@@ -285,7 +285,7 @@ class TestScalarUDF(object):
         def func(x: int) -> int:
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         rel = con.sql('select 42')
         # Using fetchone keeps the result open, with a transaction
         rel.fetchone()

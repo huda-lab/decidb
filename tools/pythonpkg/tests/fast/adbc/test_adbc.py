@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 import sys
 import datetime
@@ -16,8 +16,8 @@ adbc_driver_manager_lib = pytest.importorskip("adbc_driver_manager._lib")
 pyarrow = pytest.importorskip("pyarrow")
 
 # When testing local, if you build via BUILD_PYTHON=1 make, you need to manually set up the
-# dylib packdb path.
-driver_path = packdb._packdb.__file__
+# dylib decidb path.
+driver_path = decidb._decidb.__file__
 
 
 @pytest.fixture

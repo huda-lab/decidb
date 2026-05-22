@@ -1,7 +1,7 @@
 import pytest
 import tempfile
 import gc
-import packdb
+import decidb
 import os
 
 try:
@@ -21,14 +21,14 @@ class TestArrowUnregister(object):
         cols = 'id, first_name, last_name, email, gender, ip_address, cc, country, birthdate, salary, title, comments'
 
         arrow_table_obj = pyarrow.parquet.read_table(parquet_filename)
-        connection = packdb.connect(":memory:")
+        connection = decidb.connect(":memory:")
         connection.register("arrow_table", arrow_table_obj)
 
         arrow_table_2 = connection.execute("SELECT * FROM arrow_table;").fetch_arrow_table()
         connection.unregister("arrow_table")
-        with pytest.raises(packdb.CatalogException, match='Table with name arrow_table does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name arrow_table does not exist'):
             connection.execute("SELECT * FROM arrow_table;").fetch_arrow_table()
-        with pytest.raises(packdb.CatalogException, match='View with name arrow_table does not exist'):
+        with pytest.raises(decidb.CatalogException, match='View with name arrow_table does not exist'):
             connection.execute("DROP VIEW arrow_table;")
         connection.execute("DROP VIEW IF EXISTS arrow_table;")
 
@@ -39,7 +39,7 @@ class TestArrowUnregister(object):
         os.close(fd)
         os.remove(db)
 
-        connection = packdb.connect(db)
+        connection = decidb.connect(db)
         parquet_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'userdata1.parquet')
         cols = 'id, first_name, last_name, email, gender, ip_address, cc, country, birthdate, salary, title, comments'
         arrow_table_obj = pyarrow.parquet.read_table(parquet_filename)
@@ -47,16 +47,16 @@ class TestArrowUnregister(object):
         connection.unregister("arrow_table")  # Attempting to unregister.
         connection.close()
         # Reconnecting while Arrow Table still in mem.
-        connection = packdb.connect(db)
+        connection = decidb.connect(db)
         assert len(connection.execute("PRAGMA show_tables;").fetchall()) == 0
-        with pytest.raises(packdb.CatalogException, match='Table with name arrow_table does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name arrow_table does not exist'):
             connection.execute("SELECT * FROM arrow_table;").fetch_arrow_table()
         connection.close()
         del arrow_table_obj
         gc.collect()
         # Reconnecting after Arrow Table is freed.
-        connection = packdb.connect(db)
+        connection = decidb.connect(db)
         assert len(connection.execute("PRAGMA show_tables;").fetchall()) == 0
-        with pytest.raises(packdb.CatalogException, match='Table with name arrow_table does not exist'):
+        with pytest.raises(decidb.CatalogException, match='Table with name arrow_table does not exist'):
             connection.execute("SELECT * FROM arrow_table;").fetch_arrow_table()
         connection.close()

@@ -1,8 +1,8 @@
 # Oracle-Based DECIDE Testing Framework
 
-Pytest-based differential testing framework that validates PackDB's DECIDE clause
+Pytest-based differential testing framework that validates DecidB's DECIDE clause
 by comparing its output against hand-written ILP models formulated in
-**gurobipy** (no SQL parsing on the oracle side, no dependence on PackDB's own
+**gurobipy** (no SQL parsing on the oracle side, no dependence on DecidB's own
 solver or optimizer).
 
 Located at `test/decide/`.
@@ -13,7 +13,7 @@ Located at `test/decide/`.
 
 ```
                        ┌──────────────┐
-  DECIDE SQL ─────────►│   PackDB CLI │──► rows (variable values)
+  DECIDE SQL ─────────►│   DecidB CLI │──► rows (variable values)
                        └──────────────┘
                               │
                               ▼
@@ -26,13 +26,13 @@ Located at `test/decide/`.
 ```
 
 Each correctness test:
-1. Runs a DECIDE query through the native PackDB CLI (`build/release/packdb`)
-   via `packdb_cli.execute(sql)` and captures the output `(rows, cols)`.
+1. Runs a DECIDE query through the native DecidB CLI (`build/release/decidb`)
+   via `decidb_cli.execute(sql)` and captures the output `(rows, cols)`.
 2. Fetches the same underlying data via `duckdb_conn` (vanilla `duckdb`
    against a separately-generated TPC-H database, `_tpch_oracle.duckdb`).
 3. Builds an equivalent ILP in gurobipy via the `oracle_solver` fixture.
 4. Solves it.
-5. Calls `compare_solutions` which checks (a) that PackDB's objective
+5. Calls `compare_solutions` which checks (a) that DecidB's objective
    (computed from its variable values) matches the oracle's `objective_value`
    within tolerance and (b) that the decision-variable vector matches row
    by row. The returned `ComparisonResult.status` is `"identical"` when both
@@ -52,7 +52,7 @@ gurobipy formulation.
 ```
 test/decide/
 ├── run_tests.sh               # Virtualenv manager + gurobipy pre-flight + test runner
-├── packdb_cli.py              # Subprocess wrapper around build/release/packdb
+├── decidb_cli.py              # Subprocess wrapper around build/release/decidb
 ├── conftest.py                # Fixtures, markers, session hooks
 ├── oracle_cache.py            # On-disk cache of oracle solve results
 ├── pytest.ini                 # Marker registration
@@ -125,32 +125,32 @@ native implication that does not require a hand-picked Big-M.
 **`factory.py`** — `get_solver()` returns a `GurobiSolver`. If gurobipy is
 not installed or the Gurobi environment cannot start (missing/expired
 license), raises `ImportError` with a clear message. HiGHS is not a fallback
-on the oracle side; the separate PackDB CLI-side HiGHS backend documented
+on the oracle side; the separate DecidB CLI-side HiGHS backend documented
 in `01_pipeline/03d_solver_backends.md` is unrelated.
 
 ### 3.2 Comparison (`comparison/compare.py`)
 
-**`compare_solutions(packdb_rows, packdb_cols, oracle_result, oracle_data, decide_var_names, coeff_fn=None, tolerance=1e-4, packdb_objective_fn=None) -> ComparisonResult`**
+**`compare_solutions(decidb_rows, decidb_cols, oracle_result, oracle_data, decide_var_names, coeff_fn=None, tolerance=1e-4, decidb_objective_fn=None) -> ComparisonResult`**
 
 The modern API. Checks both the objective value and the decision-variable
 vector; prefer this for every new correctness test.
 
 - For linear objectives, pass `coeff_fn(row) -> {var_name: coefficient}`. The
-  PackDB objective is computed as `Σ (row[var] × coeff_fn(row)[var])` over
+  DecidB objective is computed as `Σ (row[var] × coeff_fn(row)[var])` over
   rows × variables.
 - For non-linear objectives (QP/QCQP), pass
-  `packdb_objective_fn(rows, cols) -> float` which evaluates the objective
-  directly on PackDB's variable values — e.g. for
+  `decidb_objective_fn(rows, cols) -> float` which evaluates the objective
+  directly on DecidB's variable values — e.g. for
   `MINIMIZE SUM(POWER(x - t, 2))` compute `Σ (x_i - t_i)²` from the rows.
   When the oracle uses `set_quadratic_objective` without a `constant`, the
   oracle's reported `objective_value` omits the `Σ t_i²` term; the
-  `packdb_objective_fn` should subtract the same constant so both sides
+  `decidb_objective_fn` should subtract the same constant so both sides
   match.
 
 Returns a `ComparisonResult` with:
 - `status`: `"identical"` (objective + vector match) or `"optimal"`
   (objective matches but vector differs — alternate optimum).
-- `packdb_objective`, `oracle_objective`, `packdb_vector`, `oracle_vector`.
+- `decidb_objective`, `oracle_objective`, `decidb_vector`, `oracle_vector`.
 
 Raises `AssertionError` if objectives differ beyond `tolerance`. Typical
 tolerance is `1e-4` for linear problems; QCQP with tight
@@ -161,26 +161,26 @@ to absorb Gurobi's feasibility tolerance — see
 **`assert_optimal_match(...)`** — Legacy objective-only comparison, retained
 for backward compatibility. New tests should not use it.
 
-**`assert_infeasible(packdb_cli, sql)`** — Asserts that the SQL produces an
-`infeasible`/`unbounded` error from PackDB. Compose it with an independent
+**`assert_infeasible(decidb_cli, sql)`** — Asserts that the SQL produces an
+`infeasible`/`unbounded` error from DecidB. Compose it with an independent
 gurobipy check (see §3.6) to cross-verify on the oracle side.
 
 ### 3.3 Fixtures (`conftest.py`)
 
 | Fixture | Scope | Purpose |
 |---------|-------|---------|
-| `packdb_db_path` | session | Path to `packdb.db` (TPC-H SF-0.01); skip if missing |
-| `packdb_exe_path` | session | Path to `build/release/packdb`; skip if missing |
-| `packdb_cli` | session | `PackDBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)` |
+| `decidb_db_path` | session | Path to `decidb.db` (TPC-H SF-0.01); skip if missing |
+| `decidb_exe_path` | session | Path to `build/release/decidb`; skip if missing |
+| `decidb_cli` | session | `DecidBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)` |
 | `_oracle_db_path` | session | Path to `_tpch_oracle.duckdb`; auto-generated on first run via `CALL dbgen(sf=0.01)` against a vanilla duckdb connection |
-| `duckdb_conn` | function | Per-test read-only vanilla `duckdb` connection to `_tpch_oracle.duckdb` (no `packdb` Python package involved) |
+| `duckdb_conn` | function | Per-test read-only vanilla `duckdb` connection to `_tpch_oracle.duckdb` (no `decidb` Python package involved) |
 | `oracle_solver` | function | `CachedOracleSolver` wrapping a `GurobiSolver`; per-test so the cache can disambiguate multiple models per test |
 | `perf_tracker` | session | Collects timing; writes JSON + prints table on teardown |
 
-PackDB and the oracle use two separate databases (`packdb.db` and
+DecidB and the oracle use two separate databases (`decidb.db` and
 `_tpch_oracle.duckdb`) generated with the same deterministic `dbgen`
 algorithm at the same scale factor, so the data is identical. The oracle
-side never touches the `packdb` Python package.
+side never touches the `decidb` Python package.
 
 ### 3.4 Oracle Cache (`oracle_cache.py`)
 
@@ -190,7 +190,7 @@ Oracle solves are deterministic for a fixed (test source, database) pair, so the
 
 **Keying**: each entry is keyed by pytest node ID, with an `input_hash` derived from:
 - `inspect.getsource(test_fn)` — hash of the test function's source code.
-- DB checksum — `sha256("{size}:{mtime_ns}")[:16]` of `packdb.db`.
+- DB checksum — `sha256("{size}:{mtime_ns}")[:16]` of `decidb.db`.
 
 Changing either the test body or the underlying database invalidates only the affected entries.
 
@@ -228,7 +228,7 @@ For infeasible / unbounded tests, the oracle independently formulates the
 same ILP in gurobipy and asserts the solver's status matches:
 
 ```python
-packdb_cli.assert_error(sql, match=r"(?i)(infeasible|unbounded)")
+decidb_cli.assert_error(sql, match=r"(?i)(infeasible|unbounded)")
 
 # Independent cross-check:
 oracle_solver.create_model("infeas_case")
@@ -238,31 +238,31 @@ assert oracle_solver.solve().status in (
 )
 ```
 
-This guards against PackDB falsely reporting infeasibility on a feasible
+This guards against DecidB falsely reporting infeasibility on a feasible
 problem (or vice versa). See `tests/test_error_infeasible.py` for the
 canonical pattern.
 
 ### 3.7 Independent semantics, not Big-M mirrors
 
-For discrete constructs that PackDB rewrites into Big-M linear programs
+For discrete constructs that DecidB rewrites into Big-M linear programs
 (`<>`, IN, etc.), the oracle should encode the **semantics
-natively using Gurobi features** — not mirror PackDB's Big-M reformulation.
+natively using Gurobi features** — not mirror DecidB's Big-M reformulation.
 Mirroring only detects lockstep bugs (where both implementations agree on
-an incorrect rewrite); independent encoding catches PackDB encoding errors
+an incorrect rewrite); independent encoding catches DecidB encoding errors
 too.
 
 Concretely:
 
 - **`<>`** — use `add_ne_indicator` (disjunctive branch indicator with native
-  implications). Do not mirror PackDB's `SUM + M·z <= rhs - 1 + M` / `SUM - M·z >= rhs + 1 - M`.
+  implications). Do not mirror DecidB's `SUM + M·z <= rhs - 1 + M` / `SUM - M·z >= rhs + 1 - M`.
 - **IN (…)** — use `add_in_domain` (SOS1 with indicators). This one happens
-  to coincide with PackDB's bind-time rewrite; it's still the right oracle
+  to coincide with DecidB's bind-time rewrite; it's still the right oracle
   shape because it's the canonical formulation, not a mirror.
 
 ### 3.8 Performance Tracking (`performance/`)
 
 Each correctness test calls `perf_tracker.record(...)` with:
-- PackDB wall-clock time, oracle build time, oracle solve time
+- DecidB wall-clock time, oracle build time, oracle solve time
 - Problem dimensions (rows, variables, constraints)
 - Objective value and solver backend name
 
@@ -286,7 +286,7 @@ bash run_tests.sh -m "not large_scale"    # Skip perf tests
 `run_tests.sh` creates a `.venv/` virtualenv on first run, installs
 `duckdb`, `gurobipy`, and `pytest` from `requirements.txt`, pre-flights
 gurobipy by starting a Gurobi environment (catches missing/expired
-licenses up front), and then invokes pytest. The `packdb` Python package is
+licenses up front), and then invokes pytest. The `decidb` Python package is
 not a dependency — DECIDE queries run via the native CLI executable, not
 an in-process binding.
 
@@ -443,7 +443,7 @@ Both compare objective values and record timing.
 | `test_missing_decide_keyword` | SUCH THAT without DECIDE |
 | `test_empty_constraint` | SUCH THAT (empty) |
 
-All expect `packdb.ParserException`.
+All expect `decidb.ParserException`.
 
 ### 7.2 Binder Errors (`test_error_binder.py`) — 16 tests
 
@@ -477,7 +477,7 @@ All expect `packdb.ParserException`.
 | `test_impossible_sum` | SUM(x) >= 1000, but only 6 boolean vars |
 | `test_conflicting_aggregate` | SUM(x) >= 100 AND SUM(x) <= 1 |
 
-All expect `packdb.InvalidInputException` matching "infeasible".
+All expect `decidb.InvalidInputException` matching "infeasible".
 
 ---
 
@@ -502,8 +502,8 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate       # constraint category
 @pytest.mark.obj_maximize         # objective type
 @pytest.mark.correctness          # required for oracle-verified tests
-def test_my_new_query(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    # 1. Run DECIDE via the native CLI. packdb_cli.execute returns (rows, cols).
+def test_my_new_query(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    # 1. Run DECIDE via the native CLI. decidb_cli.execute returns (rows, cols).
     sql = """
         SELECT col1, col2, x
         FROM my_table WHERE some_filter
@@ -512,10 +512,10 @@ def test_my_new_query(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * col2)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
-    # 2. Fetch the same data via vanilla duckdb (independent of PackDB).
+    # 2. Fetch the same data via vanilla duckdb (independent of DecidB).
     data = duckdb_conn.execute("""
         SELECT CAST(col1 AS DOUBLE), CAST(col2 AS DOUBLE)
         FROM my_table WHERE some_filter
@@ -541,15 +541,15 @@ def test_my_new_query(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     # 4. Compare objective + decision vector. For non-linear objectives,
-    #    pass packdb_objective_fn=lambda rows, cols: ... instead of coeff_fn.
+    #    pass decidb_objective_fn=lambda rows, cols: ... instead of coeff_fn.
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("col2")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("col2")])},
     )
 
     # 5. Record performance and comparison status.
     perf_tracker.record(
-        "my_test", packdb_time, build_time,
+        "my_test", decidb_time, build_time,
         result.solve_time_seconds, n, len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -564,7 +564,7 @@ bilinear, MIN/MAX hard cases, nested aggregates), import helpers from
 For quadratic objectives / constraints, use
 `oracle_solver.set_quadratic_objective(linear, quadratic, sense)` and
 `oracle_solver.add_quadratic_constraint(linear, quadratic, sense, rhs)`.
-Pass `packdb_objective_fn` to `compare_solutions` since PackDB's objective
+Pass `decidb_objective_fn` to `compare_solutions` since DecidB's objective
 cannot be recovered via a linear `coeff_fn`.
 
 ### Step 3: Run
@@ -577,7 +577,7 @@ bash run_tests.sh -k "test_my_new_query" -v
 
 ## 9. Known Caveats
 
-1. **Absolute tolerance on large objectives.** Comparison uses `|packdb - oracle| <= 1e-4`.
+1. **Absolute tolerance on large objectives.** Comparison uses `|decidb - oracle| <= 1e-4`.
    For objectives in the millions, a relative tolerance might be more appropriate.
    No failures observed in practice.
 
@@ -591,17 +591,17 @@ bash run_tests.sh -k "test_my_new_query" -v
    new tests.
 
 4. **Fatal error cascading.** `test_nonlinear_decide_variables` triggers an
-   `InternalException`. `packdb_cli` shells out to a fresh subprocess per
+   `InternalException`. `decidb_cli` shells out to a fresh subprocess per
    call, so there's no shared state to corrupt — unlike the old in-process
-   `packdb_conn` fixture this replaced.
+   `decidb_conn` fixture this replaced.
 
 5. **DECIDE subquery search path.** Subqueries inside SUCH THAT don't inherit
    the connection's `search_path`. Tables must be fully qualified
    (e.g. `tpch.customer`).
 
-6. **Oracle side is fully independent of PackDB.** `duckdb_conn` uses vanilla
+6. **Oracle side is fully independent of DecidB.** `duckdb_conn` uses vanilla
    `duckdb` against a separately-generated `_tpch_oracle.duckdb`; the
-   `packdb` Python package is not imported anywhere in the test code. Both
+   `decidb` Python package is not imported anywhere in the test code. Both
    databases are seeded with the same deterministic `dbgen` scale factor
    so the data is identical.
 
@@ -613,17 +613,17 @@ bash run_tests.sh -k "test_my_new_query" -v
 8. **Gurobi is mandatory on the oracle side.** If gurobipy isn't installed or
    no valid Gurobi license is available, `run_tests.sh` pre-flights the
    failure and exits with a clear error. There is no HiGHS fallback on the
-   oracle side; the PackDB CLI's HiGHS fallback (`01_pipeline/03d_solver_backends.md`)
+   oracle side; the DecidB CLI's HiGHS fallback (`01_pipeline/03d_solver_backends.md`)
    is unrelated.
 
 9. **TPC-H scale factor sensitivity.** Tests are tuned for SF-0.01
-   (`packdb.db` and `_tpch_oracle.duckdb`). Changing the scale factor may
+   (`decidb.db` and `_tpch_oracle.duckdb`). Changing the scale factor may
    make some queries infeasible or shift constraint boundaries. Example:
    q09 uses `s_nationkey <= 5` to ensure 20+ suppliers.
 
 10. **sys.path manipulation in conftest.** `conftest.py` inserts the
     test/decide directory onto `sys.path` so that `solver/`, `comparison/`,
-    `performance/`, and the top-level `packdb_cli` and `oracle_cache`
+    `performance/`, and the top-level `decidb_cli` and `oracle_cache`
     modules are importable. This is a convenience hack; a proper package
     install would be cleaner.
 

@@ -1,6 +1,6 @@
 # simple DB API testcase
 
-import packdb
+import decidb
 import pandas as pd
 import pytest
 from conftest import NumpyPandas, ArrowPandas
@@ -25,7 +25,7 @@ else:
 class TestImplicitPandasScan(object):
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_local_pandas_scan(self, duckdb_cursor, pandas):
-        con = packdb.connect()
+        con = decidb.connect()
         df = pandas.DataFrame([{"COL1": "val1", "CoL2": 1.05}, {"COL1": "val3", "CoL2": 17}])
         r1 = con.execute('select * from df').fetchdf()
         assert r1["COL1"][0] == "val1"
@@ -35,7 +35,7 @@ class TestImplicitPandasScan(object):
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_global_pandas_scan(self, duckdb_cursor, pandas):
-        con = packdb.connect()
+        con = decidb.connect()
         r1 = con.execute(f'select * from {pandas.backend}_df').fetchdf()
         assert r1["COL1"][0] == "val1"
         assert r1["COL1"][1] == "val4"

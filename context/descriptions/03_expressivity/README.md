@@ -1,6 +1,6 @@
 # DECIQL Expressivity Reference
 
-This folder documents the expressive power of the DECIQL language — the SQL extension at the heart of PackDB. Each keyword/construct is a **subfolder** containing:
+This folder documents the expressive power of the DECIQL language — the SQL extension at the heart of DecidB. Each keyword/construct is a **subfolder** containing:
 
 - `done.md` — What is implemented today, with syntax, examples, and code pointers
 - `todo.md` — What remains to be built, with design rationale and implementation suggestions
@@ -59,7 +59,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 
 ### Problem Classification
 
-For a complete taxonomy of what mathematical optimization problem classes PackDB can express (LP, ILP, MILP, QP, MIQP, feasibility), see [problem_types/done.md](problem_types/done.md).
+For a complete taxonomy of what mathematical optimization problem classes DecidB can express (LP, ILP, MILP, QP, MIQP, feasibility), see [problem_types/done.md](problem_types/done.md).
 
 ---
 

@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
 
@@ -8,7 +8,7 @@ class TestPandasAcceptFloat16(object):
     def test_pandas_accept_float16(self, duckdb_cursor, pandas):
         df = pandas.DataFrame({'col': [1, 2, 3]})
         df16 = df.astype({'col': 'float16'})
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute('CREATE TABLE tbl AS SELECT * FROM df16')
         con.execute('select * from tbl')
         df_result = con.fetchdf()

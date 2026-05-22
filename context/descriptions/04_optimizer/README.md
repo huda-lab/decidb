@@ -1,6 +1,6 @@
-# PackDB COP Optimizer
+# DecidB COP Optimizer
 
-This folder documents the optimization strategies for Constrained Optimization Problem (COP) queries — the DECIDE clause portion of PackDB. Each area is a **subfolder** with:
+This folder documents the optimization strategies for Constrained Optimization Problem (COP) queries — the DECIDE clause portion of DecidB. Each area is a **subfolder** with:
 
 - `done.md` — What is implemented today, with code pointers
 - `todo.md` — What remains to be built, with design rationale and implementation suggestions

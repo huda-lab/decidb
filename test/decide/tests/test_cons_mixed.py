@@ -19,7 +19,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_multi
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q02_integer_procurement(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q02_integer_procurement(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Integer procurement: x <= availqty per row, budget SUM(x*cost) <= 10000."""
     sql = """
         SELECT ps_partkey, ps_suppkey, ps_supplycost, ps_availqty, x
@@ -31,8 +31,8 @@ def test_q02_integer_procurement(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -64,12 +64,12 @@ def test_q02_integer_procurement(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 
     # For MAXIMIZE SUM(x), the objective coefficient per row is 1.0
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "q02_integer_procurement", packdb_time, build_time,
+        "q02_integer_procurement", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

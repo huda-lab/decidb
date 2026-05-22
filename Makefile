@@ -535,7 +535,7 @@ gather-libs: release
 	cp third_party/*/libduckdb_*.a libs/. && \
 	cp extension/*/lib*_extension.a libs/.
 
-# ── PackDB-specific targets ──────────────────────────────────────────────
+# ── DecidB-specific targets ──────────────────────────────────────────────
 
 decide-setup:
 	test/decide/run_tests.sh --setup-only
@@ -547,10 +547,10 @@ decide-bench-setup:
 	python3 benchmark/decide/generate_databases.py
 
 decide-bench:
-	PACKDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py
+	DECIDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py
 
 decide-bench-manual:
-	PACKDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py --manual
+	DECIDB_BENCH=1 python3 benchmark/decide/run_benchmarks.py --manual
 
 decide-view:
 	python3 benchmark/decide/view_results.py

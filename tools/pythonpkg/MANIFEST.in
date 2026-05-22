@@ -1,9 +1,9 @@
 recursive-include tests *.py
-recursive-include packdb *.h *.hpp *.cpp
+recursive-include decidb *.h *.hpp *.cpp
 include duckdb_python.cpp
 recursive-include src *.h *.hpp *.cpp
-recursive-include packdb-stubs *.pyi
-recursive-include packdb
+recursive-include decidb-stubs *.pyi
+recursive-include decidb
 include scripts/optional_requirements.py
 include requirements-dev.txt
 include pyproject.toml

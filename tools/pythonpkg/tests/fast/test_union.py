@@ -1,10 +1,10 @@
-import packdb
+import decidb
 import pandas as pd
 
 
 class TestUnion(object):
     def test_union_by_all(self):
-        connection = packdb.connect()
+        connection = decidb.connect()
 
         connection.execute(
             """

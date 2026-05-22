@@ -70,7 +70,7 @@ Launch up to 3 agents in parallel.
 
 **Agent 1 — Single-Feature Gap Finder**
 
-> You are auditing PackDB's DECIDE test suite for **gaps in single-feature coverage**. For each DECIDE feature, check whether all documented behaviors are tested.
+> You are auditing DecidB's DECIDE test suite for **gaps in single-feature coverage**. For each DECIDE feature, check whether all documented behaviors are tested.
 >
 > **Start with the prior audit**: read `context/descriptions/05_testing/README.md` and the relevant area's `done.md` + `todo.md`. Treat `done.md` as the prior claim of coverage (verify against test files before trusting), and `todo.md` as known gaps — don't re-report these as new findings, only confirm they still apply.
 >
@@ -141,7 +141,7 @@ Launch up to 3 agents in parallel.
 
 **Agent 2 — Interaction Gap Finder**
 
-> You are auditing PackDB's DECIDE test suite for **cross-feature interaction gaps**. Many bugs live at the intersection of two features. Your job is to find feature combinations that are NOT tested together.
+> You are auditing DecidB's DECIDE test suite for **cross-feature interaction gaps**. Many bugs live at the intersection of two features. Your job is to find feature combinations that are NOT tested together.
 >
 > **Start with the prior audit**: read `context/descriptions/05_testing/README.md` and the `done.md` + `todo.md` for each area touched by the interaction matrix below. `done.md` lists prior-claimed coverage (verify before trusting); `todo.md` lists known gaps — don't re-report those, only confirm they still apply.
 >
@@ -213,7 +213,7 @@ Launch up to 3 agents in parallel.
 
 **Agent 3 — Edge Case & Data Shape Auditor**
 
-> You are auditing PackDB's DECIDE test suite for **edge cases and unusual data shapes** that could expose bugs. Your focus is on boundary conditions, degenerate inputs, and realistic usage patterns that are easy to overlook.
+> You are auditing DecidB's DECIDE test suite for **edge cases and unusual data shapes** that could expose bugs. Your focus is on boundary conditions, degenerate inputs, and realistic usage patterns that are easy to overlook.
 >
 > **Start with the prior audit**: read `context/descriptions/05_testing/README.md`, `05_testing/edge_cases/done.md` and `05_testing/edge_cases/todo.md` (plus any other area `done.md`/`todo.md` whose edge cases overlap your scope). `done.md` claims prior coverage; `todo.md` tracks known gaps — don't re-report those.
 >
@@ -254,7 +254,7 @@ Launch up to 3 agents in parallel.
 >
 > **Solver-specific**:
 > - The oracle is Gurobi-only by design (see `02_operations/oracle.md`); do not flag "no HiGHS oracle backend" as a gap. Do flag any test that still encodes an analytical / hand-computed closed-form expected value — those are forbidden.
-> - PackDB's CLI-side solver dispatch is Gurobi-preferred with HiGHS as a fallback. Are the HiGHS-rejection paths tested (QP with INTEGER via HiGHS, non-convex bilinear on HiGHS, quadratic constraints on HiGHS — each should emit a clear "requires Gurobi" error)?
+> - DecidB's CLI-side solver dispatch is Gurobi-preferred with HiGHS as a fallback. Are the HiGHS-rejection paths tested (QP with INTEGER via HiGHS, non-convex bilinear on HiGHS, quadratic constraints on HiGHS — each should emit a clear "requires Gurobi" error)?
 >
 > **Scope**: {scope_description}
 >
@@ -355,8 +355,8 @@ After (optionally) updating the tracker, ask: "Want me to write these tests? I'l
 
 If the user says yes, write the tests following the existing pattern:
 - Oracle-verified only. Every correctness test must formulate the same problem in gurobipy via `oracle_solver` and compare via `comparison.compare.compare_solutions`. Analytical / hand-computed closed-form assertions are forbidden (see `context/descriptions/05_testing/README.md`).
-- The flow: `packdb_cli.execute(sql)` → `(rows, cols)` from PackDB; `duckdb_conn.execute(...)` → source data (vanilla duckdb against `_tpch_oracle.duckdb`); build the ILP via `oracle_solver` using helpers in `tests/_oracle_helpers.py`; call `compare_solutions(..., coeff_fn=...)` — or `packdb_objective_fn=...` for non-linear (QP/QCQP) objectives.
-- For discrete constructs (`<>`, IN), use Gurobi native indicator constraints (`add_indicator_constraint` or the matching helpers). Do not mirror PackDB's Big-M rewrite — independent semantics is the point.
+- The flow: `decidb_cli.execute(sql)` → `(rows, cols)` from DecidB; `duckdb_conn.execute(...)` → source data (vanilla duckdb against `_tpch_oracle.duckdb`); build the ILP via `oracle_solver` using helpers in `tests/_oracle_helpers.py`; call `compare_solutions(..., coeff_fn=...)` — or `decidb_objective_fn=...` for non-linear (QP/QCQP) objectives.
+- For discrete constructs (`<>`, IN), use Gurobi native indicator constraints (`add_indicator_constraint` or the matching helpers). Do not mirror DecidB's Big-M rewrite — independent semantics is the point.
 - Follow naming conventions: `test_<feature>_<scenario>`
 - Add appropriate pytest markers
 - Place in the correct test file (or create a new one if a new category)

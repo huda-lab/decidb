@@ -1,7 +1,7 @@
 // src/planner/operator/logical_decide.cpp
 #include "duckdb/planner/operator/logical_decide.hpp"
 
-#include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"

@@ -234,8 +234,8 @@ typedef enum PGAExpr_Kind {
 	PG_AEXPR_BETWEEN_SYM,     /* name must be "BETWEEN SYMMETRIC" */
 	PG_AEXPR_NOT_BETWEEN_SYM, /* name must be "NOT BETWEEN SYMMETRIC" */
 	AEXPR_PAREN,              /* nameless dummy node for parentheses */
-	PG_AEXPR_WHEN_CONSTRAINT, /* PackDB: constraint WHEN condition */
-	PG_AEXPR_PER_CONSTRAINT   /* PackDB: constraint PER column */
+	PG_AEXPR_WHEN_CONSTRAINT, /* DecidB: constraint WHEN condition */
+	PG_AEXPR_PER_CONSTRAINT   /* DecidB: constraint PER column */
 } PGAExpr_Kind;
 
 typedef struct PGAExpr {
@@ -1269,7 +1269,7 @@ typedef struct PGSelectStmt {
 	PGList *targetList;       /* the target list (of PGResTarget) */
 	PGList *fromClause;       /* the FROM clause */
 	PGNode *whereClause;      /* WHERE qualification */
-    PGNode *decideClause;     /* PackDB's DECIDE...SUCH THAT... clause */
+    PGNode *decideClause;     /* DecidB's DECIDE...SUCH THAT... clause */
 	PGList *groupClause;      /* GROUP BY clauses */
 	PGNode *havingClause;     /* HAVING conditional-expression */
 	PGList *windowClause;     /* WINDOW window_name AS (...), ... */

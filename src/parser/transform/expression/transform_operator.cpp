@@ -14,7 +14,7 @@
 #include "duckdb/parser/parser_options.hpp"
 #include "duckdb/parser/transformer.hpp"
 
-#include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
 
 namespace duckdb {
 
@@ -208,7 +208,7 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		                                       std::move(right_expr));
 	}
 	case duckdb_libpgquery::PG_AEXPR_WHEN_CONSTRAINT: {
-		// PackDB: constraint WHEN condition
+		// DecidB: constraint WHEN condition
 		auto constraint_expr = TransformExpression(root.lexpr);
 		auto condition_expr = TransformExpression(root.rexpr);
 		vector<unique_ptr<ParsedExpression>> children;
@@ -219,7 +219,7 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		return std::move(result);
 	}
 	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT: {
-		// PackDB: constraint PER column(s)
+		// DecidB: constraint PER column(s)
 		auto constraint_expr = TransformExpression(root.lexpr);
 		vector<unique_ptr<ParsedExpression>> children;
 		children.push_back(std::move(constraint_expr));

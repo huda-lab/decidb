@@ -18,7 +18,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q05_join_decide(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q05_join_decide(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Join: select orders from BUILDING segment, maximize total price."""
     sql = """
         SELECT o.o_orderkey, o.o_totalprice, c.c_mktsegment, x
@@ -31,8 +31,8 @@ def test_q05_join_decide(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * o.o_totalprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(o.o_orderkey AS BIGINT),
@@ -64,12 +64,12 @@ def test_q05_join_decide(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("o_totalprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("o_totalprice")])},
     )
 
     perf_tracker.record(
-        "q05_join_decide", packdb_time, build_time,
+        "q05_join_decide", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -82,7 +82,7 @@ def test_q05_join_decide(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_three_way_join(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_three_way_join(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Three-table join: lineitem + orders + customer."""
     sql = """
         SELECT l.l_orderkey, l.l_linenumber, l.l_extendedprice,
@@ -97,8 +97,8 @@ def test_three_way_join(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l.l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l.l_orderkey AS BIGINT),
@@ -131,12 +131,12 @@ def test_three_way_join(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "three_way_join", packdb_time, build_time,
+        "three_way_join", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,

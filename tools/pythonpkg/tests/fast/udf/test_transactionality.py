@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 
@@ -14,5 +14,5 @@ class TestUDFTransactionality(object):
 
         duckdb_cursor.create_function('test', my_func)
 
-        with pytest.raises(packdb.InvalidInputException, match='result closed'):
+        with pytest.raises(decidb.InvalidInputException, match='result closed'):
             res = rel.fetchone()

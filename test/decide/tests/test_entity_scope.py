@@ -14,7 +14,7 @@ Covers:
 """
 
 import pytest
-from packdb_cli import PackDBCliError
+from decidb_cli import DecidBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 
 from ._oracle_helpers import add_ne_indicator
@@ -25,7 +25,7 @@ from ._oracle_helpers import add_ne_indicator
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_entity_scoped_nation_selection(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_nation_selection(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Entity-scoped variable on nation table: pick nations to maximize customer acctbal.
 
     Join customer x nation, decide keepN per nation (not per customer).
@@ -39,11 +39,11 @@ def test_entity_scoped_nation_selection(packdb_cli, duckdb_conn, oracle_solver, 
         SUCH THAT SUM(keepN) <= 100
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     # Verify: rows with the same n_nationkey have the same keepN value
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         keep = int(row[3])
         if nkey in nation_values:
@@ -90,15 +90,15 @@ def test_entity_scoped_nation_selection(packdb_cli, duckdb_conn, oracle_solver, 
     result = oracle_solver.solve()
     oracle_obj = result.objective_value
 
-    # Compute PackDB objective
-    packdb_obj = 0.0
+    # Compute DecidB objective
+    decidb_obj = 0.0
     for row in data:
         nkey = int(row[1])
         acctbal = float(row[2])
-        packdb_obj += nation_values.get(nkey, 0) * acctbal
+        decidb_obj += nation_values.get(nkey, 0) * acctbal
 
-    assert abs(packdb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={oracle_obj}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ def test_entity_scoped_nation_selection(packdb_cli, duckdb_conn, oracle_solver, 
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_entity_scoped_consistency(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_consistency(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Verify rows from the same entity always have the same variable value.
     Use tight constraint to ensure some nations are excluded."""
     sql = """
@@ -117,11 +117,11 @@ def test_entity_scoped_consistency(packdb_cli, duckdb_conn, oracle_solver, perf_
         SUCH THAT SUM(keepN) <= 5
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     # Group by nation and verify consistency
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         keep = int(row[2])
         if nkey in nation_values:
@@ -172,12 +172,12 @@ def test_entity_scoped_consistency(packdb_cli, duckdb_conn, oracle_solver, perf_
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    packdb_obj = sum(
+    decidb_obj = sum(
         nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
         for nkey in nation_ids
     )
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +185,7 @@ def test_entity_scoped_consistency(packdb_cli, duckdb_conn, oracle_solver, perf_
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_entity_scoped_integer(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Entity-scoped IS INTEGER variable — tests the INTEGER readback path with VarIndexer."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, qty
@@ -196,11 +196,11 @@ def test_entity_scoped_integer(packdb_cli, duckdb_conn, oracle_solver, perf_trac
           AND SUM(qty) <= 10
         MAXIMIZE SUM(qty * c.c_acctbal)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     # Verify consistency: same nation → same qty
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         q = int(row[2])
         if nkey in nation_values:
@@ -245,12 +245,12 @@ def test_entity_scoped_integer(packdb_cli, duckdb_conn, oracle_solver, perf_trac
     oracle_result = oracle_solver.solve()
     oracle_obj = oracle_result.objective_value
 
-    packdb_obj = sum(
+    decidb_obj = sum(
         nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
         for nkey in nation_ids
     )
-    assert abs(packdb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_obj:.4f}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +258,7 @@ def test_entity_scoped_integer(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_entity_scoped_mixed_with_row_scoped(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Mixed query: entity-scoped keepN (per nation) + row-scoped x (per customer row).
     This exercises the VarIndexer three-block layout where row-scoped and entity-scoped
     variables coexist with different indexing schemes."""
@@ -271,11 +271,11 @@ def test_entity_scoped_mixed_with_row_scoped(packdb_cli, duckdb_conn, oracle_sol
           AND SUM(x) <= 10
         MAXIMIZE SUM(x * c.c_acctbal)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     # Verify entity consistency for keepN
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         x_val = int(row[2])
         keep_val = int(row[3])
@@ -290,11 +290,11 @@ def test_entity_scoped_mixed_with_row_scoped(packdb_cli, duckdb_conn, oracle_sol
             f"Per-row constraint violated: x={x_val} > keepN={keep_val} for custkey={row[0]}"
 
     # Verify SUM(x) <= 10
-    total_x = sum(int(row[2]) for row in packdb_result)
+    total_x = sum(int(row[2]) for row in decidb_result)
     assert total_x <= 10, f"Aggregate constraint violated: SUM(x) = {total_x} > 10"
 
     # If a nation has keepN=0, all its customers must have x=0
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         x_val = int(row[2])
         if nation_values[nkey] == 0:
@@ -334,10 +334,10 @@ def test_entity_scoped_mixed_with_row_scoped(packdb_cli, duckdb_conn, oracle_sol
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    packdb_obj = sum(int(row[2]) * cust_acctbal.get(int(row[0]), 0.0)
-                     for row in packdb_result)
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(int(row[2]) * cust_acctbal.get(int(row[0]), 0.0)
+                     for row in decidb_result)
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ def test_entity_scoped_mixed_with_row_scoped(packdb_cli, duckdb_conn, oracle_sol
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_entity_scoped_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Entity-scoped variable with WHEN condition on constraint."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, keepN
@@ -355,11 +355,11 @@ def test_entity_scoped_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         SUCH THAT SUM(keepN * c.c_acctbal) <= 50000 WHEN c.c_acctbal > 0
         MAXIMIZE SUM(keepN)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     # Verify entity consistency
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         keep = int(row[2])
         if nkey in nation_values:
@@ -398,9 +398,9 @@ def test_entity_scoped_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    packdb_obj = float(sum(int(row[2]) for row in packdb_result))
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = float(sum(int(row[2]) for row in decidb_result))
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +408,7 @@ def test_entity_scoped_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_entity_scoped_nonexistent_table(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_nonexistent_table(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Scoping to a nonexistent table should produce a clear error."""
     sql = """
         SELECT c.c_custkey, x
@@ -417,8 +417,8 @@ def test_entity_scoped_nonexistent_table(packdb_cli, duckdb_conn, oracle_solver,
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(x * c.c_acctbal)
     """
-    with pytest.raises(PackDBCliError, match="not found"):
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError, match="not found"):
+        decidb_cli.execute(sql)
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +427,7 @@ def test_entity_scoped_nonexistent_table(packdb_cli, duckdb_conn, oracle_solver,
 
 @pytest.mark.correctness
 @pytest.mark.per_clause
-def test_entity_scoped_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Entity-scoped variable with PER constraint on region.
 
     Tests VarIndexer entity dedup + PER group partitioning interaction.
@@ -443,16 +443,16 @@ def test_entity_scoped_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         SUCH THAT SUM(keepN) <= 100 PER r_name
         MAXIMIZE SUM(keepN * c_acctbal)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    assert len(packdb_result) > 0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    assert len(decidb_result) > 0
 
-    nkey_idx = packdb_cols.index("n_nationkey")
-    keep_idx = packdb_cols.index("keepN")
-    region_idx = packdb_cols.index("r_name")
+    nkey_idx = decidb_cols.index("n_nationkey")
+    keep_idx = decidb_cols.index("keepN")
+    region_idx = decidb_cols.index("r_name")
 
     # Verify entity consistency: same nation → same keepN
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[nkey_idx])
         keep = int(row[keep_idx])
         if nkey in nation_values:
@@ -463,7 +463,7 @@ def test_entity_scoped_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
     # Verify PER constraint: SUM(keepN) <= 100 per region
     region_sums = {}
-    for row in packdb_result:
+    for row in decidb_result:
         region = str(row[region_idx])
         keep = int(row[keep_idx])
         region_sums[region] = region_sums.get(region, 0) + keep
@@ -511,12 +511,12 @@ def test_entity_scoped_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tra
     oracle_result = oracle_solver.solve()
     oracle_obj = oracle_result.objective_value
 
-    packdb_obj = sum(
+    decidb_obj = sum(
         nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
         for nkey in nation_ids
     )
-    assert abs(packdb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_obj:.4f}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +525,7 @@ def test_entity_scoped_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
 @pytest.mark.correctness
 @pytest.mark.min_max
-def test_entity_scoped_with_max(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_with_max(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Entity-scoped variable with MAX(expr) <= K constraint (easy case).
 
     MAX(keepN * c.c_acctbal) <= 8000 means every customer in a selected
@@ -540,12 +540,12 @@ def test_entity_scoped_with_max(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         SUCH THAT MAX(keepN * c.c_acctbal) <= 8000
         MAXIMIZE SUM(keepN)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    assert len(packdb_result) > 0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    assert len(decidb_result) > 0
 
     # Verify entity consistency
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         keep = int(row[3])
         if nkey in nation_values:
@@ -555,7 +555,7 @@ def test_entity_scoped_with_max(packdb_cli, duckdb_conn, oracle_solver, perf_tra
             nation_values[nkey] = keep
 
     # Verify MAX constraint: for selected nations, all customer acctbal <= 8000
-    for row in packdb_result:
+    for row in decidb_result:
         keep = int(row[3])
         acctbal = float(row[2])
         if keep == 1:
@@ -587,9 +587,9 @@ def test_entity_scoped_with_max(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         ObjSense.MAXIMIZE,
     )
     oracle_result9 = oracle_solver.solve()
-    packdb_obj9 = float(sum(int(row[3]) for row in packdb_result))
-    assert abs(packdb_obj9 - oracle_result9.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj9:.4f}, Oracle={oracle_result9.objective_value:.4f}"
+    decidb_obj9 = float(sum(int(row[3]) for row in decidb_result))
+    assert abs(decidb_obj9 - oracle_result9.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj9:.4f}, Oracle={oracle_result9.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +598,7 @@ def test_entity_scoped_with_max(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
 @pytest.mark.correctness
 @pytest.mark.avg_rewrite
-def test_entity_scoped_with_avg(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_with_avg(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Entity-scoped variable with AVG constraint.
 
     AVG(keepN * c.c_acctbal) <= 3000 tests the AVG→SUM scaling
@@ -613,12 +613,12 @@ def test_entity_scoped_with_avg(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         SUCH THAT AVG(keepN * c.c_acctbal) <= 3000
         MAXIMIZE SUM(keepN)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    assert len(packdb_result) > 0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    assert len(decidb_result) > 0
 
     # Verify entity consistency
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         keep = int(row[2])
         if nkey in nation_values:
@@ -668,9 +668,9 @@ def test_entity_scoped_with_avg(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    packdb_obj = float(sum(int(row[2]) for row in packdb_result))
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = float(sum(int(row[2]) for row in decidb_result))
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -680,7 +680,7 @@ def test_entity_scoped_with_avg(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.correctness
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
-def test_entity_scoped_when_per_triple(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Triple interaction: entity-scoped variable + WHEN + PER.
 
     SUM(keepN * c.c_acctbal) <= 50000 WHEN c.c_acctbal > 5000 PER r.r_name
@@ -696,17 +696,17 @@ def test_entity_scoped_when_per_triple(packdb_cli, duckdb_conn, oracle_solver, p
         SUCH THAT SUM(keepN * c_acctbal) <= 50000 WHEN c_acctbal > 5000 PER r_name
         MAXIMIZE SUM(keepN * c_acctbal)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    assert len(packdb_result) > 0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    assert len(decidb_result) > 0
 
-    nkey_idx = packdb_cols.index("n_nationkey")
-    keep_idx = packdb_cols.index("keepN")
-    region_idx = packdb_cols.index("r_name")
-    acctbal_idx = packdb_cols.index("c_acctbal")
+    nkey_idx = decidb_cols.index("n_nationkey")
+    keep_idx = decidb_cols.index("keepN")
+    region_idx = decidb_cols.index("r_name")
+    acctbal_idx = decidb_cols.index("c_acctbal")
 
     # Verify entity consistency
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[nkey_idx])
         keep = int(row[keep_idx])
         if nkey in nation_values:
@@ -717,7 +717,7 @@ def test_entity_scoped_when_per_triple(packdb_cli, duckdb_conn, oracle_solver, p
 
     # Verify WHEN+PER constraint: per region, sum over high-balance customers <= 50000
     region_sums = {}
-    for row in packdb_result:
+    for row in decidb_result:
         acctbal = float(row[acctbal_idx])
         if acctbal > 5000:  # WHEN filter
             region = str(row[region_idx])
@@ -768,12 +768,12 @@ def test_entity_scoped_when_per_triple(packdb_cli, duckdb_conn, oracle_solver, p
     oracle_result = oracle_solver.solve()
     oracle_obj = oracle_result.objective_value
 
-    packdb_obj = sum(
+    decidb_obj = sum(
         nation_values.get(nkey, 0) * nation_acctbal_all.get(nkey, 0.0)
         for nkey in nation_ids
     )
-    assert abs(packdb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_obj:.4f}"
+    assert abs(decidb_obj - oracle_obj) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +782,7 @@ def test_entity_scoped_when_per_triple(packdb_cli, duckdb_conn, oracle_solver, p
 
 @pytest.mark.correctness
 @pytest.mark.cons_comparison
-def test_entity_scoped_ne_constraint(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_ne_constraint(decidb_cli, duckdb_conn, oracle_solver):
     """SUM(keepN) <> K with entity-scoped variable — oracle-compared.
 
     Nation table only (no join) so SUM(keepN) = number of nations selected.
@@ -797,7 +797,7 @@ def test_entity_scoped_ne_constraint(packdb_cli, duckdb_conn, oracle_solver):
           AND SUM(keepN) <= 4
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     raw = duckdb_conn.execute("""
@@ -818,9 +818,9 @@ def test_entity_scoped_ne_constraint(packdb_cli, duckdb_conn, oracle_solver):
     assert res.status == SolverStatus.OPTIMAL
 
     keepN_idx = cols.index("keepN")
-    packdb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -830,7 +830,7 @@ def test_entity_scoped_ne_constraint(packdb_cli, duckdb_conn, oracle_solver):
 
 @pytest.mark.correctness
 @pytest.mark.min_max
-def test_entity_scoped_max_hard_case(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_max_hard_case(decidb_cli, duckdb_conn, oracle_solver):
     """MAX(keepN * c.c_acctbal) >= K with entity-scoped variable (hard case).
 
     MAX >= K requires at least one selected entity to have a row with
@@ -846,7 +846,7 @@ def test_entity_scoped_max_hard_case(packdb_cli, duckdb_conn, oracle_solver):
           AND SUM(keepN) <= 50
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     keepN_idx = cols.index("keepN")
@@ -895,9 +895,9 @@ def test_entity_scoped_max_hard_case(packdb_cli, duckdb_conn, oracle_solver):
         ObjSense.MAXIMIZE,
     )
     oracle_result14 = oracle_solver.solve()
-    packdb_obj14 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(packdb_obj14 - oracle_result14.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj14:.4f}, Oracle={oracle_result14.objective_value:.4f}"
+    decidb_obj14 = float(sum(int(row[keepN_idx]) for row in result))
+    assert abs(decidb_obj14 - oracle_result14.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj14:.4f}, Oracle={oracle_result14.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -908,7 +908,7 @@ def test_entity_scoped_max_hard_case(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
 def test_entity_scoped_mixed_when_per(
-    packdb_cli, duckdb_conn, oracle_solver,
+    decidb_cli, duckdb_conn, oracle_solver,
 ):
     """All-four interaction: entity-scoped keepN + row-scoped x + WHEN + PER
     — oracle-compared. Customer-level MIP (~1500 binaries) is trivial for
@@ -924,7 +924,7 @@ def test_entity_scoped_mixed_when_per(
           AND SUM(x * c.c_acctbal) <= 15000 WHEN c.c_acctbal > 0 PER r_name
         MAXIMIZE SUM(x * c.c_acctbal)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     keepN_idx = cols.index("keepN")
@@ -982,14 +982,14 @@ def test_entity_scoped_mixed_when_per(
     res = oracle_solver.solve(time_limit=120.0)
     assert res.status == SolverStatus.OPTIMAL
 
-    packdb_obj = sum(
+    decidb_obj = sum(
         int(row[x_idx]) * float(row[acctbal_idx]) for row in result
     )
     # Both solvers stop at Gurobi's default MIPGap (1e-4) from the true
     # optimum, so the two incumbents can differ by up to ~2*MIPGap of obj.
     tol = max(1e-3, 2e-4 * abs(res.objective_value))
-    assert abs(packdb_obj - res.objective_value) <= tol, (
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, "
+    assert abs(decidb_obj - res.objective_value) <= tol, (
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, "
         f"Oracle={res.objective_value:.4f}, tol={tol:.4f}"
     )
 
@@ -1024,7 +1024,7 @@ def test_entity_scoped_mixed_when_per(
 
 @pytest.mark.correctness
 @pytest.mark.when_objective
-def test_entity_scoped_when_on_objective(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_when_on_objective(decidb_cli, duckdb_conn, oracle_solver):
     """WHEN modifier on objective with entity-scoped variable.
 
     MAXIMIZE SUM(keepN * c.c_acctbal) WHEN c.c_acctbal > 0 tests that WHEN
@@ -1039,7 +1039,7 @@ def test_entity_scoped_when_on_objective(packdb_cli, duckdb_conn, oracle_solver)
         SUCH THAT SUM(keepN) <= 10
         MAXIMIZE SUM(keepN * c.c_acctbal) WHEN c.c_acctbal > 0
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     keepN_idx = cols.index("keepN")
@@ -1088,12 +1088,12 @@ def test_entity_scoped_when_on_objective(packdb_cli, duckdb_conn, oracle_solver)
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    packdb_obj = sum(
+    decidb_obj = sum(
         nation_values.get(nkey, 0) * nation_acctbal_pos.get(nkey, 0.0)
         for nkey in nation_ids
     )
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1102,7 +1102,7 @@ def test_entity_scoped_when_on_objective(packdb_cli, duckdb_conn, oracle_solver)
 
 @pytest.mark.correctness
 @pytest.mark.per_clause
-def test_entity_scoped_multi_column_per(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_multi_column_per(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped variable with multi-column PER (region × market segment).
 
     PER (n.n_regionkey, c.c_mktsegment) creates one constraint per
@@ -1117,7 +1117,7 @@ def test_entity_scoped_multi_column_per(packdb_cli, duckdb_conn, oracle_solver):
         SUCH THAT SUM(keepN) <= 30 PER (n_regionkey, c_mktsegment)
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     keepN_idx = cols.index("keepN")
@@ -1178,12 +1178,12 @@ def test_entity_scoped_multi_column_per(packdb_cli, duckdb_conn, oracle_solver):
         ObjSense.MAXIMIZE,
     )
     oracle_result = oracle_solver.solve()
-    packdb_obj = sum(
+    decidb_obj = sum(
         nation_values.get(nkey, 0) * nation_acctbal.get(nkey, 0.0)
         for nkey in nation_ids
     )
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1192,7 +1192,7 @@ def test_entity_scoped_multi_column_per(packdb_cli, duckdb_conn, oracle_solver):
 
 @pytest.mark.correctness
 @pytest.mark.min_max
-def test_entity_scoped_min_easy_case(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_min_easy_case(decidb_cli, duckdb_conn, oracle_solver):
     """MIN(keepN * c.c_acctbal) >= K with entity-scoped variable (easy case).
 
     Easy case: MIN >= K rewrites to per-row keepN * acctbal >= K, which
@@ -1208,7 +1208,7 @@ def test_entity_scoped_min_easy_case(packdb_cli, duckdb_conn, oracle_solver):
           AND SUM(keepN) <= 20
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     keepN_idx = cols.index("keepN")
@@ -1260,9 +1260,9 @@ def test_entity_scoped_min_easy_case(packdb_cli, duckdb_conn, oracle_solver):
         ObjSense.MAXIMIZE,
     )
     oracle_result19 = oracle_solver.solve()
-    packdb_obj19 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(packdb_obj19 - oracle_result19.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj19:.4f}, Oracle={oracle_result19.objective_value:.4f}"
+    decidb_obj19 = float(sum(int(row[keepN_idx]) for row in result))
+    assert abs(decidb_obj19 - oracle_result19.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj19:.4f}, Oracle={oracle_result19.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1272,7 +1272,7 @@ def test_entity_scoped_min_easy_case(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.correctness
 @pytest.mark.per_clause
 @pytest.mark.avg_rewrite
-def test_entity_scoped_avg_per(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_avg_per(decidb_cli, duckdb_conn, oracle_solver):
     """AVG constraint + PER grouping with entity-scoped variable.
 
     AVG(keepN * c.c_acctbal) <= K PER r.r_name tests that AVG→SUM scaling
@@ -1287,7 +1287,7 @@ def test_entity_scoped_avg_per(packdb_cli, duckdb_conn, oracle_solver):
         SUCH THAT AVG(keepN * c.c_acctbal) <= 2000 PER r_name
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     keepN_idx = cols.index("keepN")
@@ -1337,9 +1337,9 @@ def test_entity_scoped_avg_per(packdb_cli, duckdb_conn, oracle_solver):
         ObjSense.MAXIMIZE,
     )
     oracle_result20 = oracle_solver.solve()
-    packdb_obj20 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(packdb_obj20 - oracle_result20.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj20:.4f}, Oracle={oracle_result20.objective_value:.4f}"
+    decidb_obj20 = float(sum(int(row[keepN_idx]) for row in result))
+    assert abs(decidb_obj20 - oracle_result20.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj20:.4f}, Oracle={oracle_result20.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1349,7 +1349,7 @@ def test_entity_scoped_avg_per(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.correctness
 @pytest.mark.per_clause
 @pytest.mark.cons_comparison
-def test_entity_scoped_ne_per(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_ne_per(decidb_cli, duckdb_conn, oracle_solver):
     """NE constraint + PER grouping with entity-scoped variable — oracle-compared.
 
     Per region, number of selected nations must not equal 2. Uses nation
@@ -1363,7 +1363,7 @@ def test_entity_scoped_ne_per(packdb_cli, duckdb_conn, oracle_solver):
           AND SUM(keepN) <= 20
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     raw = duckdb_conn.execute("""
@@ -1393,9 +1393,9 @@ def test_entity_scoped_ne_per(packdb_cli, duckdb_conn, oracle_solver):
     assert res.status == SolverStatus.OPTIMAL
 
     keepN_idx = cols.index("keepN")
-    packdb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1405,7 +1405,7 @@ def test_entity_scoped_ne_per(packdb_cli, duckdb_conn, oracle_solver):
 
 @pytest.mark.correctness
 @pytest.mark.cons_between
-def test_entity_scoped_between_constraint(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_between_constraint(decidb_cli, duckdb_conn, oracle_solver):
     """BETWEEN constraint with entity-scoped variable — oracle-compared.
 
     Oracle expands BETWEEN 2 AND 4 to two linear constraints."""
@@ -1417,7 +1417,7 @@ def test_entity_scoped_between_constraint(packdb_cli, duckdb_conn, oracle_solver
         SUCH THAT SUM(keepN) BETWEEN 2 AND 4
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     raw = duckdb_conn.execute("""
@@ -1438,9 +1438,9 @@ def test_entity_scoped_between_constraint(packdb_cli, duckdb_conn, oracle_solver
     assert res.status == SolverStatus.OPTIMAL
 
     keepN_idx = cols.index("keepN")
-    packdb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1449,7 +1449,7 @@ def test_entity_scoped_between_constraint(packdb_cli, duckdb_conn, oracle_solver
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
-def test_entity_scoped_two_tables(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_two_tables(decidb_cli, duckdb_conn, oracle_solver):
     """Two entity-scoped variables from different source tables.
 
     keepN per nation, keepR per region. Constraint keepN <= keepR means
@@ -1465,7 +1465,7 @@ def test_entity_scoped_two_tables(packdb_cli, duckdb_conn, oracle_solver):
           AND SUM(keepR) <= 10
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     keepN_idx = cols.index("keepN")
@@ -1543,9 +1543,9 @@ def test_entity_scoped_two_tables(packdb_cli, duckdb_conn, oracle_solver):
         ObjSense.MAXIMIZE,
     )
     oracle_result22 = oracle_solver.solve()
-    packdb_obj22 = float(sum(int(row[keepN_idx]) for row in result))
-    assert abs(packdb_obj22 - oracle_result22.objective_value) < 1e-4, \
-        f"Objective mismatch: PackDB={packdb_obj22:.4f}, Oracle={oracle_result22.objective_value:.4f}"
+    decidb_obj22 = float(sum(int(row[keepN_idx]) for row in result))
+    assert abs(decidb_obj22 - oracle_result22.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj22:.4f}, Oracle={oracle_result22.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1553,11 +1553,11 @@ def test_entity_scoped_two_tables(packdb_cli, duckdb_conn, oracle_solver):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.error_binder
-def test_entity_scoped_var_in_when_condition_error(packdb_cli):
+def test_entity_scoped_var_in_when_condition_error(decidb_cli):
     """WHEN condition must not reference DECIDE variables (including entity-scoped)."""
-    with pytest.raises(PackDBCliError,
+    with pytest.raises(DecidBCliError,
                        match="WHEN conditions cannot reference DECIDE variables"):
-        packdb_cli.execute("""
+        decidb_cli.execute("""
             SELECT n.n_nationkey, keepN
             FROM nation n
             DECIDE n.keepN IS BOOLEAN
@@ -1572,7 +1572,7 @@ def test_entity_scoped_var_in_when_condition_error(packdb_cli):
 
 @pytest.mark.error_infeasible
 @pytest.mark.when_constraint
-def test_entity_scoped_when_entity_invisible(packdb_cli):
+def test_entity_scoped_when_entity_invisible(decidb_cli):
     """Entity-scoped aggregate constraint with WHEN matching no rows on the
     given data — now rejected pre-solver per the "reject all empty aggregate
     sets" rule."""
@@ -1585,7 +1585,7 @@ def test_entity_scoped_when_entity_invisible(packdb_cli):
           AND SUM(keepN) <= 10
         MAXIMIZE SUM(keepN)
     """
-    packdb_cli.assert_error(sql, match=r"empty|WHEN")
+    decidb_cli.assert_error(sql, match=r"empty|WHEN")
 
 
 # ---------------------------------------------------------------------------
@@ -1594,7 +1594,7 @@ def test_entity_scoped_when_entity_invisible(packdb_cli):
 
 @pytest.mark.correctness
 def test_entity_scoped_equality_constraint(
-    packdb_cli, duckdb_conn, oracle_solver,
+    decidb_cli, duckdb_conn, oracle_solver,
 ):
     """SUM(keepN) = K with entity-scoped variable — oracle-compared."""
     sql = """
@@ -1605,7 +1605,7 @@ def test_entity_scoped_equality_constraint(
         SUCH THAT SUM(keepN) = 3
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     raw = duckdb_conn.execute("""
@@ -1625,9 +1625,9 @@ def test_entity_scoped_equality_constraint(
     assert res.status == SolverStatus.OPTIMAL
 
     keepN_idx = cols.index("keepN")
-    packdb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1648,7 +1648,7 @@ def test_entity_scoped_equality_constraint(
 
 @pytest.mark.correctness
 @pytest.mark.var_real
-def test_entity_scoped_is_real(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_is_real(decidb_cli, duckdb_conn, oracle_solver):
     """IS REAL entity-scoped variable — DOUBLE readback via VarIndexer.
 
     Single-table entity-scoped REAL query. Exercises the no-JOIN path where
@@ -1662,7 +1662,7 @@ def test_entity_scoped_is_real(packdb_cli, duckdb_conn, oracle_solver):
         SUCH THAT budget <= 1000 AND SUM(budget) <= 5000
         MAXIMIZE SUM(budget * n_nationkey)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) == 15
 
     nkey_idx = cols.index("n_nationkey")
@@ -1696,14 +1696,14 @@ def test_entity_scoped_is_real(packdb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result = oracle_solver.solve()
 
-    packdb_obj = sum(float(row[nkey_idx]) * float(row[budget_idx]) for row in result)
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-3, \
-        f"PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(float(row[nkey_idx]) * float(row[budget_idx]) for row in result)
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-3, \
+        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
 @pytest.mark.min_max
-def test_entity_scoped_hard_min_max(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_hard_min_max(decidb_cli, duckdb_conn, oracle_solver):
     """MIN(qty) <= K hard case with entity-scoped INTEGER.
 
     Hard MIN case: at least one entity must have qty<=K. The Big-M indicator
@@ -1717,7 +1717,7 @@ def test_entity_scoped_hard_min_max(packdb_cli, duckdb_conn, oracle_solver):
         SUCH THAT qty <= 10 AND MIN(qty) <= 3 AND SUM(qty) >= 60
         MAXIMIZE SUM(qty)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     nkey_idx = cols.index("n_nationkey")
@@ -1777,13 +1777,13 @@ def test_entity_scoped_hard_min_max(packdb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result = oracle_solver.solve()
 
-    packdb_obj = sum(int(row[qty_idx]) for row in result)
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(int(row[qty_idx]) for row in result)
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
-def test_entity_scoped_abs(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_abs(decidb_cli, duckdb_conn, oracle_solver):
     """ABS linearization with entity-scoped coefficient aggregation.
 
     SUM(ABS(c_acctbal * keepN - 3000)) <= K. ABS rewrite creates per-row
@@ -1798,7 +1798,7 @@ def test_entity_scoped_abs(packdb_cli, duckdb_conn, oracle_solver):
         SUCH THAT SUM(ABS(c_acctbal * keepN - 3000)) <= 50000
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     nkey_idx = cols.index("n_nationkey")
@@ -1863,15 +1863,15 @@ def test_entity_scoped_abs(packdb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result = oracle_solver.solve()
 
-    packdb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
 @pytest.mark.min_max
 @pytest.mark.when_constraint
-def test_entity_scoped_when_min_max_triple(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_when_min_max_triple(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped + WHEN + hard MAX: all three features interacting.
 
     MAX(c_acctbal*keepN) >= 5000 WHEN c_acctbal > 2000. WHEN filters rows
@@ -1886,7 +1886,7 @@ def test_entity_scoped_when_min_max_triple(packdb_cli, duckdb_conn, oracle_solve
         SUCH THAT MAX(c_acctbal * keepN) >= 5000 WHEN c_acctbal > 2000
         MAXIMIZE SUM(keepN)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
 
     nkey_idx = cols.index("n_nationkey")
@@ -1933,14 +1933,14 @@ def test_entity_scoped_when_min_max_triple(packdb_cli, duckdb_conn, oracle_solve
     )
     oracle_result = oracle_solver.solve()
 
-    packdb_obj = sum(int(row[keepN_idx]) for row in result)
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(int(row[keepN_idx]) for row in result)
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
 @pytest.mark.var_integer
-def test_entity_scoped_ne_oracle(packdb_cli, duckdb_conn, oracle_solver):
+def test_entity_scoped_ne_oracle(decidb_cli, duckdb_conn, oracle_solver):
     """Entity-scoped + NE (<>) with oracle verification.
 
     qty ∈ [8, 10], qty <> 10 removes the unconstrained optimum. Forces the
@@ -1954,7 +1954,7 @@ def test_entity_scoped_ne_oracle(packdb_cli, duckdb_conn, oracle_solver):
         SUCH THAT qty >= 8 AND qty <= 10 AND qty <> 10
         MAXIMIZE SUM(qty * n_nationkey)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) == 15
 
     nkey_idx = cols.index("n_nationkey")
@@ -1999,9 +1999,9 @@ def test_entity_scoped_ne_oracle(packdb_cli, duckdb_conn, oracle_solver):
     )
     oracle_result = oracle_solver.solve()
 
-    packdb_obj = sum(int(row[nkey_idx]) * int(row[qty_idx]) for row in result)
-    assert abs(packdb_obj - oracle_result.objective_value) < 1e-4, \
-        f"PackDB={packdb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+    decidb_obj = sum(int(row[nkey_idx]) * int(row[qty_idx]) for row in result)
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
+        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -2013,7 +2013,7 @@ def test_entity_scoped_ne_oracle(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.correctness
 @pytest.mark.sql_joins
 def test_row_scoped_vars_on_fanout_join(
-    packdb_cli, duckdb_conn, oracle_solver
+    decidb_cli, duckdb_conn, oracle_solver
 ):
     """Row-scoped `x IS BOOLEAN` on a 1-to-many orders×lineitem JOIN.
 
@@ -2030,7 +2030,7 @@ def test_row_scoped_vars_on_fanout_join(
         SUCH THAT SUM(x * l_quantity) <= 50
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
     data = duckdb_conn.execute("""
         SELECT CAST(o.o_orderkey AS BIGINT),
@@ -2058,8 +2058,8 @@ def test_row_scoped_vars_on_fanout_join(
 
     from comparison.compare import compare_solutions
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, res, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_rows, decidb_cols, res, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
     assert cmp.status in ("identical", "optimal")
 
@@ -2073,7 +2073,7 @@ def test_row_scoped_vars_on_fanout_join(
 @pytest.mark.cons_subquery
 @pytest.mark.per_clause
 def test_entity_scoped_subquery_per_three_way(
-    packdb_cli, duckdb_conn, oracle_solver
+    decidb_cli, duckdb_conn, oracle_solver
 ):
     """Uncorrelated scalar subquery RHS shared across PER groups on an
     entity-scoped variable.
@@ -2091,7 +2091,7 @@ def test_entity_scoped_subquery_per_three_way(
                   PER n_regionkey
         MAXIMIZE SUM(keepN)
     """
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
     rhs_val = duckdb_conn.execute(
         "SELECT CAST(COUNT(*) / 2 AS INTEGER) FROM nation"
@@ -2125,11 +2125,11 @@ def test_entity_scoped_subquery_per_three_way(
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
-    keep_idx = packdb_cols.index("keepN")
-    nkey_idx = packdb_cols.index("n_nationkey")
+    keep_idx = decidb_cols.index("keepN")
+    nkey_idx = decidb_cols.index("n_nationkey")
     # Aggregate row-level keepN back to entity-level (same nation → same var).
     nation_to_keep: dict[int, int] = {}
-    for row in packdb_rows:
+    for row in decidb_rows:
         nkey = int(row[nkey_idx])
         k = int(row[keep_idx])
         if nkey in nation_to_keep:
@@ -2137,23 +2137,23 @@ def test_entity_scoped_subquery_per_three_way(
                 f"Nation {nkey} inconsistent keepN: {nation_to_keep[nkey]} vs {k}"
         else:
             nation_to_keep[nkey] = k
-    packdb_obj = sum(nation_to_keep.values())
-    assert abs(packdb_obj - res.objective_value) < 1e-6, (
-        f"PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(nation_to_keep.values())
+    assert abs(decidb_obj - res.objective_value) < 1e-6, (
+        f"DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
 # ---------------------------------------------------------------------------
 # Test E4: NULL in the entity-key column. Per `physical_decide.cpp:1578-1607`,
-# PackDB tags NULL vs non-NULL in the composite entity key; all NULL-keyed
+# DecidB tags NULL vs non-NULL in the composite entity key; all NULL-keyed
 # rows share a single entity variable. Oracle mirrors this exactly — a
-# divergence (e.g., PackDB accidentally creating one entity per NULL row)
+# divergence (e.g., DecidB accidentally creating one entity per NULL row)
 # would surface as a vector mismatch.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
 def test_entity_scoped_null_key(
-    packdb_cli, duckdb_conn, oracle_solver
+    decidb_cli, duckdb_conn, oracle_solver
 ):
     """NULL-keyed rows group into one entity variable (documented semantics).
 
@@ -2161,7 +2161,7 @@ def test_entity_scoped_null_key(
     shared NULL-entity variable to 1 forces both NULL rows to show keep=1,
     which means SUM(keep) = 2 across those two rows. A naive implementation
     that gave each NULL row its own variable would pick the highest-value
-    NULL row (obj=200) under SUM(keep)=1; PackDB instead picks the non-NULL
+    NULL row (obj=200) under SUM(keep)=1; DecidB instead picks the non-NULL
     row (obj=10) because the NULL entity cannot be turned on without
     violating the count cap.
     """
@@ -2177,7 +2177,7 @@ def test_entity_scoped_null_key(
         SUCH THAT SUM(keep) = 1
         MAXIMIZE SUM(keep * n.val)
     """
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
     # Oracle: two entities — NULL-entity (covers both NULL rows, combined
     # coefficient 300 = 100 + 200) and entity nk=1 (coefficient 10).
@@ -2198,18 +2198,18 @@ def test_entity_scoped_null_key(
         f"Expected obj=10 (nk=1 row, NULL-entity forced to 0), got {res.objective_value}"
     )
 
-    # Compute PackDB's objective from actual row values (order-independent).
-    keep_idx = packdb_cols.index("keep")
-    nk_idx = packdb_cols.index("nk")
-    val_idx = packdb_cols.index("val")
-    packdb_obj = sum(
-        float(row[val_idx]) * int(row[keep_idx]) for row in packdb_rows
+    # Compute DecidB's objective from actual row values (order-independent).
+    keep_idx = decidb_cols.index("keep")
+    nk_idx = decidb_cols.index("nk")
+    val_idx = decidb_cols.index("val")
+    decidb_obj = sum(
+        float(row[val_idx]) * int(row[keep_idx]) for row in decidb_rows
     )
-    assert packdb_obj == pytest.approx(res.objective_value), (
-        f"PackDB obj={packdb_obj}, oracle obj={res.objective_value}"
+    assert decidb_obj == pytest.approx(res.objective_value), (
+        f"DecidB obj={decidb_obj}, oracle obj={res.objective_value}"
     )
     # Verify NULL-entity consistency: both NULL rows must have the same keep value.
-    null_vals = [int(row[keep_idx]) for row in packdb_rows if row[nk_idx] is None]
+    null_vals = [int(row[keep_idx]) for row in decidb_rows if row[nk_idx] is None]
     assert len(set(null_vals)) == 1, (
         f"NULL-keyed rows should share an entity variable, got keep values: {null_vals}"
     )
@@ -2221,7 +2221,7 @@ def test_entity_scoped_null_key(
 
 @pytest.mark.correctness
 def test_entity_scoped_three_way_join_per_region(
-    packdb_cli, duckdb_conn, oracle_solver
+    decidb_cli, duckdb_conn, oracle_solver
 ):
     """Three-table fan-out with entity variable on the middle table and
     PER on the outer table.
@@ -2244,14 +2244,14 @@ def test_entity_scoped_three_way_join_per_region(
         SUCH THAT SUM(keepN) <= 25 PER r_name
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    assert len(packdb_rows) > 0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    assert len(decidb_rows) > 0
 
     # Entity consistency: every row with the same nation must have the same keepN.
-    nk_idx = packdb_cols.index("n_nationkey")
-    keep_idx = packdb_cols.index("keepN")
+    nk_idx = decidb_cols.index("n_nationkey")
+    keep_idx = decidb_cols.index("keepN")
     nation_keep = {}
-    for row in packdb_rows:
+    for row in decidb_rows:
         nk = int(row[nk_idx])
         kv = int(row[keep_idx])
         if nk in nation_keep:
@@ -2309,13 +2309,13 @@ def test_entity_scoped_three_way_join_per_region(
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
-    # PackDB objective from actual row values.
-    ac_idx = packdb_cols.index("c_acctbal")
-    packdb_obj = sum(
-        int(row[keep_idx]) * float(row[ac_idx]) for row in packdb_rows
+    # DecidB objective from actual row values.
+    ac_idx = decidb_cols.index("c_acctbal")
+    decidb_obj = sum(
+        int(row[keep_idx]) * float(row[ac_idx]) for row in decidb_rows
     )
-    assert abs(packdb_obj - res.objective_value) < 1e-4, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    assert abs(decidb_obj - res.objective_value) < 1e-4, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -2332,7 +2332,7 @@ def test_entity_scoped_three_way_join_per_region(
 
 @pytest.mark.correctness
 def test_entity_scoped_over_subquery_of_base_table(
-    packdb_cli, duckdb_conn, oracle_solver
+    decidb_cli, duckdb_conn, oracle_solver
 ):
     """Entity-scoped variable sourced from a subquery that wraps a base table.
 
@@ -2349,7 +2349,7 @@ def test_entity_scoped_over_subquery_of_base_table(
         SUCH THAT SUM(keep) <= 5
         MAXIMIZE SUM(keep * t.val)
     """
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
     data = duckdb_conn.execute(
         "SELECT CAST(n_nationkey AS BIGINT), CAST(n_nationkey AS DOUBLE) FROM nation"
@@ -2369,18 +2369,18 @@ def test_entity_scoped_over_subquery_of_base_table(
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
-    keep_idx = packdb_cols.index("keep")
-    val_idx = packdb_cols.index("val")
-    rk_idx = packdb_cols.index("rk")
-    packdb_obj = sum(
-        int(row[keep_idx]) * float(row[val_idx]) for row in packdb_rows
+    keep_idx = decidb_cols.index("keep")
+    val_idx = decidb_cols.index("val")
+    rk_idx = decidb_cols.index("rk")
+    decidb_obj = sum(
+        int(row[keep_idx]) * float(row[val_idx]) for row in decidb_rows
     )
-    assert packdb_obj == pytest.approx(res.objective_value), (
-        f"PackDB obj={packdb_obj}, oracle obj={res.objective_value}"
+    assert decidb_obj == pytest.approx(res.objective_value), (
+        f"DecidB obj={decidb_obj}, oracle obj={res.objective_value}"
     )
     # Entity consistency: rows with the same rk share the same keep value.
     per_rk = {}
-    for row in packdb_rows:
+    for row in decidb_rows:
         rk = int(row[rk_idx])
         keep = int(row[keep_idx])
         if rk in per_rk:
@@ -2391,7 +2391,7 @@ def test_entity_scoped_over_subquery_of_base_table(
 
 @pytest.mark.correctness
 def test_entity_scoped_over_cte_of_base_table(
-    packdb_cli, duckdb_conn, oracle_solver
+    decidb_cli, duckdb_conn, oracle_solver
 ):
     """Same regression shape as the subquery form, but via a WITH-CTE."""
     sql = """
@@ -2404,7 +2404,7 @@ def test_entity_scoped_over_cte_of_base_table(
         SUCH THAT SUM(keep) <= 5
         MAXIMIZE SUM(keep * t.val)
     """
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
     data = duckdb_conn.execute(
         "SELECT CAST(n_nationkey AS BIGINT) FROM nation"
@@ -2424,13 +2424,13 @@ def test_entity_scoped_over_cte_of_base_table(
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
-    keep_idx = packdb_cols.index("keep")
-    val_idx = packdb_cols.index("val")
-    packdb_obj = sum(
-        int(row[keep_idx]) * float(row[val_idx]) for row in packdb_rows
+    keep_idx = decidb_cols.index("keep")
+    val_idx = decidb_cols.index("val")
+    decidb_obj = sum(
+        int(row[keep_idx]) * float(row[val_idx]) for row in decidb_rows
     )
-    assert packdb_obj == pytest.approx(res.objective_value), (
-        f"PackDB obj={packdb_obj}, oracle obj={res.objective_value}"
+    assert decidb_obj == pytest.approx(res.objective_value), (
+        f"DecidB obj={decidb_obj}, oracle obj={res.objective_value}"
     )
 
 
@@ -2441,7 +2441,7 @@ def test_entity_scoped_over_cte_of_base_table(
 @pytest.mark.correctness
 @pytest.mark.per_clause
 def test_entity_scoped_vs_per_null_semantics(
-    packdb_cli, duckdb_conn, oracle_solver
+    decidb_cli, duckdb_conn, oracle_solver
 ):
     """Side-by-side: NULLs collapse into one entity, but PER drops NULL groups.
 
@@ -2466,7 +2466,7 @@ def test_entity_scoped_vs_per_null_semantics(
         SUCH THAT SUM(keep) <= 5
         MAXIMIZE SUM(keep * t.val)
     """
-    rows_entity, cols_entity = packdb_cli.execute(sql_entity)
+    rows_entity, cols_entity = decidb_cli.execute(sql_entity)
 
     data = duckdb_conn.execute("""
         SELECT NULLIF(n_regionkey, 0),
@@ -2503,7 +2503,7 @@ def test_entity_scoped_vs_per_null_semantics(
     rk_idx = cols_entity.index("rk")
     obj_a = sum(int(r[keep_idx]) * float(r[val_idx]) for r in rows_entity)
     assert obj_a == pytest.approx(res_a.objective_value), (
-        f"(A) entity-scope: PackDB obj={obj_a}, oracle={res_a.objective_value}"
+        f"(A) entity-scope: DecidB obj={obj_a}, oracle={res_a.objective_value}"
     )
     # NULL rows must all share the same keep value.
     null_keeps = [int(r[keep_idx]) for r in rows_entity if r[rk_idx] is None]
@@ -2519,7 +2519,7 @@ def test_entity_scoped_vs_per_null_semantics(
         SUCH THAT SUM(keep) <= 1 PER rk
         MAXIMIZE SUM(keep * t.val)
     """
-    rows_per, cols_per = packdb_cli.execute(sql_per)
+    rows_per, cols_per = decidb_cli.execute(sql_per)
 
     # Oracle for (B): one variable per row. NULL rows are free of the PER cap.
     oracle_solver.create_model("entity_null_vs_per_B")
@@ -2545,7 +2545,7 @@ def test_entity_scoped_vs_per_null_semantics(
     val_idx_b = cols_per.index("val")
     obj_b = sum(int(r[keep_idx_b]) * float(r[val_idx_b]) for r in rows_per)
     assert obj_b == pytest.approx(res_b.objective_value), (
-        f"(B) PER: PackDB obj={obj_b}, oracle={res_b.objective_value}"
+        f"(B) PER: DecidB obj={obj_b}, oracle={res_b.objective_value}"
     )
 
     # Divergence check: the two semantics should give different optima on
@@ -2566,7 +2566,7 @@ def test_entity_scoped_vs_per_null_semantics(
 # share the same underlying var.
 
 @pytest.mark.correctness
-def test_entity_scoped_perrow_linear_lhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_entity_scoped_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Entity-scoped var with per-row `x + 3 <= 10`. Each entity gets constrained
     once per join row; all copies agree on the same upper bound (7), so the
     shared variable's feasible range is x <= 7."""
@@ -2578,11 +2578,11 @@ def test_entity_scoped_perrow_linear_lhs(packdb_cli, duckdb_conn, oracle_solver,
         SUCH THAT keepN + 3 <= 10
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     # Verify entity consistency (same nation → same keepN) and upper bound.
     nation_values = {}
-    for row in packdb_result:
+    for row in decidb_result:
         nkey = int(row[1])
         keep = int(row[2])
         assert 0 <= keep <= 7, f"Nation {nkey} keepN={keep} violates entity-scoped x+3<=10 bound"
@@ -2615,10 +2615,10 @@ def test_entity_scoped_perrow_linear_lhs(packdb_cli, duckdb_conn, oracle_solver,
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    packdb_obj = 0.0
+    decidb_obj = 0.0
     for r in data:
-        packdb_obj += nation_values.get(int(r[1]), 0) * float(r[2])
-    assert abs(packdb_obj - result.objective_value) < 1e-4, (
-        f"Entity-scoped per-row linear LHS: PackDB={packdb_obj}, oracle={result.objective_value}"
+        decidb_obj += nation_values.get(int(r[1]), 0) * float(r[2])
+    assert abs(decidb_obj - result.objective_value) < 1e-4, (
+        f"Entity-scoped per-row linear LHS: DecidB={decidb_obj}, oracle={result.objective_value}"
     )
 

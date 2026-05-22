@@ -1,6 +1,6 @@
 import pytest
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 
 from spark_namespace.sql.types import (
     LongType,
@@ -15,7 +15,7 @@ from spark_namespace.sql.types import (
     MapType,
 )
 from spark_namespace.sql.functions import col, struct, when, lit
-import packdb
+import decidb
 import re
 
 

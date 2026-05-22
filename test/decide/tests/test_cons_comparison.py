@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from packdb_cli import PackDBCliError
+from decidb_cli import DecidBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
 
@@ -43,7 +43,7 @@ _NE_REAL_MSG = re.compile(
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_equality_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_equality_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x) = exact_value — fix the total count of selected items."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -53,8 +53,8 @@ def test_sum_equality_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -82,12 +82,12 @@ def test_sum_equality_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "sum_eq", packdb_time, build_time,
+        "sum_eq", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -100,7 +100,7 @@ def test_sum_equality_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_strict_less_than(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_strict_less_than(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x * qty) < 100 — strict less-than on aggregate."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -110,8 +110,8 @@ def test_sum_strict_less_than(packdb_cli, duckdb_conn, oracle_solver, perf_track
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -140,12 +140,12 @@ def test_sum_strict_less_than(packdb_cli, duckdb_conn, oracle_solver, perf_track
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "sum_strict_lt", packdb_time, build_time,
+        "sum_strict_lt", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -158,7 +158,7 @@ def test_sum_strict_less_than(packdb_cli, duckdb_conn, oracle_solver, perf_track
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_strict_greater_than(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_strict_greater_than(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x) > 5 — strict greater-than on aggregate."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -169,8 +169,8 @@ def test_sum_strict_greater_than(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -203,12 +203,12 @@ def test_sum_strict_greater_than(packdb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "sum_strict_gt", packdb_time, build_time,
+        "sum_strict_gt", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -222,7 +222,7 @@ def test_sum_strict_greater_than(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_sum_negative_constant_multiplier(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """``SUM(x * (-10.0)) <= -50`` — negative constant literal as the coefficient.
 
@@ -241,8 +241,8 @@ def test_sum_negative_constant_multiplier(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -270,14 +270,14 @@ def test_sum_negative_constant_multiplier(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    price_idx = packdb_cols.index("l_extendedprice")
+    price_idx = decidb_cols.index("l_extendedprice")
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
+        decidb_rows, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[price_idx])},
     )
 
     perf_tracker.record(
-        "sum_negative_constant_multiplier", packdb_time, build_time,
+        "sum_negative_constant_multiplier", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -291,7 +291,7 @@ def test_sum_negative_constant_multiplier(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_sum_negative_coeffs_aggregate(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Aggregate constraint ``SUM(x * cost) >= 0`` with mixed-sign cost column.
 
@@ -314,8 +314,8 @@ def test_sum_negative_coeffs_aggregate(
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(decide_sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(decide_sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT CAST(id AS BIGINT), CAST(cost AS DOUBLE), CAST(val AS DOUBLE) "
@@ -340,14 +340,14 @@ def test_sum_negative_coeffs_aggregate(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    val_idx = packdb_cols.index("val")
+    val_idx = decidb_cols.index("val")
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
+        decidb_rows, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": float(row[val_idx])},
     )
 
     perf_tracker.record(
-        "sum_negative_coeffs", packdb_time, build_time,
+        "sum_negative_coeffs", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -359,9 +359,9 @@ def test_sum_negative_coeffs_aggregate(
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-def test_sum_not_equal(packdb_cli):
+def test_sum_not_equal(decidb_cli):
     """SUM(x) <> 5 — not-equal on aggregate (disjunctive, hard for ILP)."""
-    result, _ = packdb_cli.execute("""
+    result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x IS BOOLEAN
@@ -377,9 +377,9 @@ def test_sum_not_equal(packdb_cli):
 @pytest.mark.cons_comparison
 @pytest.mark.var_integer
 @pytest.mark.obj_maximize
-def test_perrow_not_equal(packdb_cli):
+def test_perrow_not_equal(decidb_cli):
     """x <> 3 — per-row not-equal constraint."""
-    result, _ = packdb_cli.execute("""
+    result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x
@@ -398,9 +398,9 @@ def test_perrow_not_equal(packdb_cli):
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-def test_sum_not_equal_zero(packdb_cli):
+def test_sum_not_equal_zero(decidb_cli):
     """SUM(x) <> 0 — forces at least one selected."""
-    result, _ = packdb_cli.execute("""
+    result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x IS BOOLEAN
@@ -419,9 +419,9 @@ def test_sum_not_equal_zero(packdb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.when
 @pytest.mark.obj_maximize
-def test_sum_not_equal_with_when(packdb_cli):
+def test_sum_not_equal_with_when(decidb_cli):
     """SUM(x) <> 5 WHEN condition — NE with conditional application."""
-    result, _ = packdb_cli.execute("""
+    result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x IS BOOLEAN
@@ -441,10 +441,10 @@ def test_sum_not_equal_with_when(packdb_cli):
 @pytest.mark.when
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_not_equal_with_when_binding(packdb_cli, oracle_solver):
+def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
     """SUM(x) <> K WHEN cond — expression-level WHEN where NE is binding.
     Oracle emits an NE indicator over the active-row sum only."""
-    rows, cols = packdb_cli.execute("""
+    rows, cols = decidb_cli.execute("""
         SELECT name, value, active, x FROM (
             VALUES ('a', 10, true),
                    ('b', 5, true),
@@ -475,11 +475,11 @@ def test_sum_not_equal_with_when_binding(packdb_cli, oracle_solver):
     assert res.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(cols)}
-    packdb_obj = sum(
+    decidb_obj = sum(
         int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows
     )
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -488,10 +488,10 @@ def test_sum_not_equal_with_when_binding(packdb_cli, oracle_solver):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_not_equal_no_when_binding(packdb_cli, oracle_solver):
+def test_sum_not_equal_no_when_binding(decidb_cli, oracle_solver):
     """SUM(x) <> K without WHEN where NE is the binding constraint.
     Regression test: aggregate NE without WHEN after the global-z refactor."""
-    rows, cols = packdb_cli.execute("""
+    rows, cols = decidb_cli.execute("""
         SELECT name, value, x FROM (
             VALUES ('a', 10),
                    ('b', 5),
@@ -525,18 +525,18 @@ def test_sum_not_equal_no_when_binding(packdb_cli, oracle_solver):
     assert res.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(cols)}
-    packdb_obj = sum(
+    decidb_obj = sum(
         int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows
     )
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
 # ---------------------------------------------------------------------------
 # Strict `<` / `>` on non-integer-valued LHS: must be rejected.
 # The LHS of `SUM(x) < K` with REAL x is continuous, so the integer-step
-# rewrite (`< K → <= K-1`) would silently change the feasible set. PackDB
+# rewrite (`< K → <= K-1`) would silently change the feasible set. DecidB
 # must raise InvalidInputException rather than produce a wrong answer.
 # ---------------------------------------------------------------------------
 
@@ -544,7 +544,7 @@ def test_sum_not_equal_no_when_binding(packdb_cli, oracle_solver):
 @pytest.mark.cons_comparison
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
-def test_real_sum_strict_lt_rejected(packdb_cli):
+def test_real_sum_strict_lt_rejected(decidb_cli):
     """SUM(x) < K with IS REAL — integer-step rewrite is unsafe, must reject."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -553,8 +553,8 @@ def test_real_sum_strict_lt_rejected(packdb_cli):
         SUCH THAT SUM(x) < 5
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    with pytest.raises(PackDBCliError) as exc_info:
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
@@ -563,7 +563,7 @@ def test_real_sum_strict_lt_rejected(packdb_cli):
 @pytest.mark.cons_comparison
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
-def test_real_sum_strict_gt_rejected(packdb_cli):
+def test_real_sum_strict_gt_rejected(decidb_cli):
     """SUM(x) > K with IS REAL — integer-step rewrite is unsafe, must reject."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -573,8 +573,8 @@ def test_real_sum_strict_gt_rejected(packdb_cli):
             AND SUM(x * l_extendedprice) <= 50000
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    with pytest.raises(PackDBCliError) as exc_info:
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
     assert _STRICT_GT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
@@ -582,7 +582,7 @@ def test_real_sum_strict_gt_rejected(packdb_cli):
 
 @pytest.mark.cons_comparison
 @pytest.mark.var_real
-def test_real_perrow_strict_rejected(packdb_cli):
+def test_real_perrow_strict_rejected(decidb_cli):
     """Per-row x < K with IS REAL — same integer-step rewrite applies; must reject."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -591,8 +591,8 @@ def test_real_perrow_strict_rejected(packdb_cli):
         SUCH THAT x < 5
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(PackDBCliError) as exc_info:
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
@@ -601,7 +601,7 @@ def test_real_perrow_strict_rejected(packdb_cli):
 @pytest.mark.cons_comparison
 @pytest.mark.var_integer
 @pytest.mark.cons_aggregate
-def test_integer_fractional_coeff_strict_rejected(packdb_cli):
+def test_integer_fractional_coeff_strict_rejected(decidb_cli):
     """SUM(0.5 * x) < K on INTEGER x — coefficient makes LHS half-integer; reject."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -611,8 +611,8 @@ def test_integer_fractional_coeff_strict_rejected(packdb_cli):
             AND SUM(0.5 * x) < 5
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(PackDBCliError) as exc_info:
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
@@ -622,7 +622,7 @@ def test_integer_fractional_coeff_strict_rejected(packdb_cli):
 @pytest.mark.var_boolean
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
-def test_mixed_bool_real_strict_rejected(packdb_cli):
+def test_mixed_bool_real_strict_rejected(decidb_cli):
     """Mixed BOOLEAN + REAL in the LHS of SUM(...) < K — reject due to REAL term."""
     sql = """
         SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id)
@@ -631,8 +631,8 @@ def test_mixed_bool_real_strict_rejected(packdb_cli):
             AND SUM(x + y) < 20
         MAXIMIZE SUM(x + y)
     """
-    with pytest.raises(PackDBCliError) as exc_info:
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
@@ -644,12 +644,12 @@ def test_mixed_bool_real_strict_rejected(packdb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.bilinear
 @pytest.mark.correctness
-def test_bilinear_bool_int_strict_oracle(packdb_cli, oracle_solver):
+def test_bilinear_bool_int_strict_oracle(decidb_cli, oracle_solver):
     """SUM(b * n) < K with BOOLEAN × INTEGER LHS is integer-valued and must solve.
 
     The product b*n with b∈{0,1} and n∈ℤ takes integer values, so `< 5` is
     semantically equivalent to `<= 4`. Oracle formulates the McCormick
-    linearization directly and uses the `<= 4` form; PackDB must produce the
+    linearization directly and uses the `<= 4` form; DecidB must produce the
     same objective.
     """
     sql = """
@@ -659,7 +659,7 @@ def test_bilinear_bool_int_strict_oracle(packdb_cli, oracle_solver):
             AND SUM(b * n) < 5
         MAXIMIZE SUM(b * n)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
 
     n_rows = 3
     U = 4.0
@@ -688,11 +688,11 @@ def test_bilinear_bool_int_strict_oracle(packdb_cli, oracle_solver):
 
     b_col = cols.index("b")
     n_col = cols.index("n")
-    packdb_obj = sum(int(r[b_col]) * int(r[n_col]) for r in rows)
+    decidb_obj = sum(int(r[b_col]) * int(r[n_col]) for r in rows)
     # Integer-valued objective — no tolerance slack needed.
-    assert packdb_obj < 5, f"strict `< 5` violated: PackDB SUM(b*n) = {packdb_obj}"
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    assert decidb_obj < 5, f"strict `< 5` violated: DecidB SUM(b*n) = {decidb_obj}"
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -701,7 +701,7 @@ def test_bilinear_bool_int_strict_oracle(packdb_cli, oracle_solver):
 @pytest.mark.cons_aggregate
 @pytest.mark.bilinear
 @pytest.mark.correctness
-def test_bilinear_int_int_strict_oracle(packdb_cli, oracle_solver):
+def test_bilinear_int_int_strict_oracle(decidb_cli, oracle_solver):
     """SUM(x * y) < K with INTEGER × INTEGER LHS — integer-valued, must solve.
 
     No boolean factor, so McCormick cannot linearize; the constraint stays
@@ -719,8 +719,8 @@ def test_bilinear_int_int_strict_oracle(packdb_cli, oracle_solver):
         MAXIMIZE SUM(x * y)
     """
     try:
-        rows, cols = packdb_cli.execute(sql)
-    except PackDBCliError as e:
+        rows, cols = decidb_cli.execute(sql)
+    except DecidBCliError as e:
         # HiGHS rejects quadratic constraints with a clear message — treat as pass.
         assert re.search(r"[Qq]uadratic|[Gg]urobi|HiGHS", e.message), (
             f"Unexpected error on int×int quadratic constraint: {e.message}"
@@ -752,10 +752,10 @@ def test_bilinear_int_int_strict_oracle(packdb_cli, oracle_solver):
 
     x_col = cols.index("x")
     y_col = cols.index("y")
-    packdb_obj = sum(int(r[x_col]) * int(r[y_col]) for r in rows)
-    assert packdb_obj < 10, f"strict `< 10` violated: PackDB SUM(x*y) = {packdb_obj}"
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(int(r[x_col]) * int(r[y_col]) for r in rows)
+    assert decidb_obj < 10, f"strict `< 10` violated: DecidB SUM(x*y) = {decidb_obj}"
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -763,7 +763,7 @@ def test_bilinear_int_int_strict_oracle(packdb_cli, oracle_solver):
 @pytest.mark.var_integer
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_integer_sum_strict_lt_oracle(packdb_cli, duckdb_conn, oracle_solver):
+def test_integer_sum_strict_lt_oracle(decidb_cli, duckdb_conn, oracle_solver):
     """SUM(x) < K on pure IS INTEGER vars — the canonical integer-step rewrite case.
 
     Confirms that the `< K → <= K-1` rewrite still fires after the fix for
@@ -777,7 +777,7 @@ def test_integer_sum_strict_lt_oracle(packdb_cli, duckdb_conn, oracle_solver):
             AND SUM(x) < 10
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -800,12 +800,12 @@ def test_integer_sum_strict_lt_oracle(packdb_cli, duckdb_conn, oracle_solver):
     assert res.status == SolverStatus.OPTIMAL
 
     x_col = cols.index("x")
-    packdb_sum_x = sum(int(r[x_col]) for r in rows)
-    assert packdb_sum_x < 10, f"strict `< 10` violated: SUM(x) = {packdb_sum_x}"
+    decidb_sum_x = sum(int(r[x_col]) for r in rows)
+    assert decidb_sum_x < 10, f"strict `< 10` violated: SUM(x) = {decidb_sum_x}"
     price_col = cols.index("l_extendedprice")
-    packdb_obj = sum(int(r[x_col]) * float(r[price_col]) for r in rows)
-    assert abs(packdb_obj - res.objective_value) <= 1e-3, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(int(r[x_col]) * float(r[price_col]) for r in rows)
+    assert abs(decidb_obj - res.objective_value) <= 1e-3, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -813,7 +813,7 @@ def test_integer_sum_strict_lt_oracle(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.var_integer
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_abs_integer_strict_oracle(packdb_cli, oracle_solver):
+def test_abs_integer_strict_oracle(decidb_cli, oracle_solver):
     """SUM(ABS(x - t)) < K on INTEGER x — ABS preserves integer-valuedness.
 
     Regression test for a sibling of the original bug: the ABS rewriter
@@ -828,7 +828,7 @@ def test_abs_integer_strict_oracle(packdb_cli, oracle_solver):
             AND SUM(ABS(x - 2)) < 4
         MAXIMIZE SUM(x)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
 
     n = 3
     oracle_solver.create_model("abs_integer_strict")
@@ -853,18 +853,18 @@ def test_abs_integer_strict_oracle(packdb_cli, oracle_solver):
     assert res.status == SolverStatus.OPTIMAL
 
     x_col = cols.index("x")
-    packdb_obj = sum(int(r[x_col]) for r in rows)
-    packdb_sum_abs = sum(abs(int(r[x_col]) - 2) for r in rows)
-    assert packdb_sum_abs < 4, f"strict `< 4` violated: SUM(|x-2|) = {packdb_sum_abs}"
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(int(r[x_col]) for r in rows)
+    decidb_sum_abs = sum(abs(int(r[x_col]) - 2) for r in rows)
+    assert decidb_sum_abs < 4, f"strict `< 4` violated: SUM(|x-2|) = {decidb_sum_abs}"
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
 @pytest.mark.cons_comparison
 @pytest.mark.var_integer
 @pytest.mark.correctness
-def test_integer_perrow_strict_oracle(packdb_cli, duckdb_conn, oracle_solver):
+def test_integer_perrow_strict_oracle(decidb_cli, duckdb_conn, oracle_solver):
     """Per-row `x < K` on IS INTEGER — confirms per-row rewrite path works end-to-end."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -874,7 +874,7 @@ def test_integer_perrow_strict_oracle(packdb_cli, duckdb_conn, oracle_solver):
             AND SUM(x * l_extendedprice) <= 50000
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -903,9 +903,9 @@ def test_integer_perrow_strict_oracle(packdb_cli, duckdb_conn, oracle_solver):
     for r in rows:
         assert int(r[x_col]) < 4, f"per-row `x < 4` violated: x={r[x_col]}"
     price_col = cols.index("l_extendedprice")
-    packdb_obj = sum(int(r[x_col]) * float(r[price_col]) for r in rows)
-    assert abs(packdb_obj - res.objective_value) <= 1e-3, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    decidb_obj = sum(int(r[x_col]) * float(r[price_col]) for r in rows)
+    assert abs(decidb_obj - res.objective_value) <= 1e-3, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -920,7 +920,7 @@ def test_integer_perrow_strict_oracle(packdb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_real_sum_le_still_works(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_real_sum_le_still_works(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x) <= K on REAL x still succeeds and matches oracle."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -930,8 +930,8 @@ def test_real_sum_le_still_works(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -958,12 +958,12 @@ def test_real_sum_le_still_works(packdb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "real_sum_le", packdb_time, build_time,
+        "real_sum_le", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -974,7 +974,7 @@ def test_real_sum_le_still_works(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.cons_comparison
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
-def test_real_sum_not_equal_rejected(packdb_cli):
+def test_real_sum_not_equal_rejected(decidb_cli):
     """SUM(x) <> K with IS REAL — integer-step (±1) rewrite is unsafe, must reject.
 
     The NE Big-M rewrite expands `SUM(x) <> K` into `SUM(x) <= K-1 OR SUM(x) >= K+1`,
@@ -988,8 +988,8 @@ def test_real_sum_not_equal_rejected(packdb_cli):
         SUCH THAT x <= 3.33 AND SUM(x) <> 10
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(PackDBCliError) as exc_info:
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
     assert _NE_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
@@ -1008,7 +1008,7 @@ def test_real_sum_not_equal_rejected(packdb_cli):
 @pytest.mark.cons_comparison
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
-def test_strict_lt_rejection_quadratic_real(packdb_cli):
+def test_strict_lt_rejection_quadratic_real(decidb_cli):
     """SUM(POWER(x, 2)) < K with IS REAL — rejected by the quadratic-path guard.
 
     Routes through `BuildQuadraticConstraint`; LHS contains a REAL variable so
@@ -1021,8 +1021,8 @@ def test_strict_lt_rejection_quadratic_real(packdb_cli):
             AND SUM(POWER(x, 2)) < 5
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(PackDBCliError) as exc_info:
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
@@ -1033,7 +1033,7 @@ def test_strict_lt_rejection_quadratic_real(packdb_cli):
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
 @pytest.mark.bilinear
-def test_strict_lt_rejection_bilinear_bool_real(packdb_cli):
+def test_strict_lt_rejection_bilinear_bool_real(decidb_cli):
     """SUM(b * y) < K with BOOLEAN × REAL — rejected by the bilinear/quadratic guard.
 
     Bool × Real linearizes via McCormick to an auxiliary CONTINUOUS aux (not
@@ -1046,8 +1046,8 @@ def test_strict_lt_rejection_bilinear_bool_real(packdb_cli):
             AND SUM(b * y) < 5
         MAXIMIZE SUM(b * y)
     """
-    with pytest.raises(PackDBCliError) as exc_info:
-        packdb_cli.execute(sql)
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
@@ -1058,7 +1058,7 @@ def test_strict_lt_rejection_bilinear_bool_real(packdb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_sum_not_equal_mixed_sign_coeffs(packdb_cli, oracle_solver):
+def test_sum_not_equal_mixed_sign_coeffs(decidb_cli, oracle_solver):
     """SUM(x * cost) <> 0 with mixed-sign cost — NE disjunction must cover both
     sides of zero.
 
@@ -1067,7 +1067,7 @@ def test_sum_not_equal_mixed_sign_coeffs(packdb_cli, oracle_solver):
     ``>= 1``) must drop exactly one contributing row. A one-sided Big-M would
     let the negative branch slip through.
     """
-    rows, cols = packdb_cli.execute("""
+    rows, cols = decidb_cli.execute("""
         SELECT id, cost, val, x FROM (
             VALUES (1, -3, 10),
                    (2, 3, 10),
@@ -1098,15 +1098,15 @@ def test_sum_not_equal_mixed_sign_coeffs(packdb_cli, oracle_solver):
     assert res.status == SolverStatus.OPTIMAL
 
     ci = {name: i for i, name in enumerate(cols)}
-    packdb_signed_sum = sum(
+    decidb_signed_sum = sum(
         int(r[ci["x"]]) * int(r[ci["cost"]]) for r in rows
     )
-    assert packdb_signed_sum != 0, (
-        f"NE constraint violated: PackDB SUM(x*cost) = 0"
+    assert decidb_signed_sum != 0, (
+        f"NE constraint violated: DecidB SUM(x*cost) = 0"
     )
-    packdb_obj = sum(
+    decidb_obj = sum(
         int(r[ci["x"]]) * int(r[ci["val"]]) for r in rows
     )
-    assert abs(packdb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: PackDB={packdb_obj}, Oracle={res.objective_value}"
+    assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
     )

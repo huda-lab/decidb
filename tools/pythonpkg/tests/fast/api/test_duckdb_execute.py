@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 
@@ -53,7 +53,7 @@ class TestDuckDBExecute(object):
 
         # Prepared parameter used in a statement that is not the last
         with pytest.raises(
-            packdb.NotImplementedException, match='Prepared parameters are only supported for the last statement'
+            decidb.NotImplementedException, match='Prepared parameters are only supported for the last statement'
         ):
             duckdb_cursor.execute(
                 """

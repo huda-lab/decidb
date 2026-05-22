@@ -1,11 +1,11 @@
-import packdb
+import decidb
 import sys
 
 
 def test_version():
-    assert packdb.__version__ != "0.0.0"
+    assert decidb.__version__ != "0.0.0"
 
 
 def test_formatted_python_version():
     formatted_python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-    assert packdb.__formatted_python_version__ == formatted_python_version
+    assert decidb.__formatted_python_version__ == formatted_python_version

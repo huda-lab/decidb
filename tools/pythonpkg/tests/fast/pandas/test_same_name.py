@@ -1,5 +1,5 @@
 import pytest
-import packdb
+import decidb
 import pandas as pd
 
 

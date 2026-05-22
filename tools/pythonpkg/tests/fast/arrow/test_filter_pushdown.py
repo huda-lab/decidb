@@ -1,5 +1,5 @@
 from re import S
-import packdb
+import decidb
 import os
 import pytest
 import tempfile
@@ -628,7 +628,7 @@ class TestArrowFilterPushdown(object):
                 'c': [bytes([1]), bytes([2]), bytes([3]), None],
             }
         )
-        rel = packdb.from_df(df)
+        rel = decidb.from_df(df)
         arrow_table = create_table(rel)
 
         # Try ==
@@ -705,11 +705,11 @@ class TestArrowFilterPushdown(object):
         glob_pattern = tmp_path / 'data*.parquet'
         table = duckdb_cursor.read_parquet(glob_pattern.as_posix()).arrow()
 
-        output_df = packdb.arrow(table).filter("date > '2019-01-01'").df()
-        expected_df = packdb.from_parquet(glob_pattern.as_posix()).filter("date > '2019-01-01'").df()
+        output_df = decidb.arrow(table).filter("date > '2019-01-01'").df()
+        expected_df = decidb.from_parquet(glob_pattern.as_posix()).filter("date > '2019-01-01'").df()
         pandas.testing.assert_frame_equal(expected_df, output_df)
 
-    # https://github.com/packdb/packdb/pull/4817/files#r1339973721
+    # https://github.com/decidb/decidb/pull/4817/files#r1339973721
     @pytest.mark.parametrize('create_table', [create_pyarrow_pandas, create_pyarrow_table])
     def test_filter_column_removal(self, duckdb_cursor, create_table):
         duckdb_cursor.execute(
@@ -892,7 +892,7 @@ class TestArrowFilterPushdown(object):
         }
 
     def test_filter_pushdown_not_supported(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(
             "CREATE TABLE T as SELECT i::integer a, i::varchar b, i::uhugeint c, i::integer d FROM range(5) tbl(i)"
         )
@@ -927,7 +927,7 @@ class TestArrowFilterPushdown(object):
         ).fetchall() == [(28, '28')]
 
     def test_join_filter_pushdown(self, duckdb_cursor):
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("CREATE TABLE probe as select range a from range(10000);")
         duckdb_conn.execute("CREATE TABLE build as select (random()*9999)::INT b from range(20);")
         duck_probe = duckdb_conn.table("probe")
@@ -941,7 +941,7 @@ class TestArrowFilterPushdown(object):
         ]
 
     def test_in_filter_pushdown(self, duckdb_cursor):
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("CREATE TABLE probe as select range a from range(1000);")
         duck_probe = duckdb_conn.table("probe")
         duck_probe_arrow = duck_probe.arrow()
@@ -966,7 +966,7 @@ class TestArrowFilterPushdown(object):
             }
         )
 
-        result = packdb.query(
+        result = decidb.query(
             """
             SELECT *
             FROM cardinality_table

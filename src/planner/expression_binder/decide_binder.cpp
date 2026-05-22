@@ -14,7 +14,7 @@
 #include "duckdb/catalog/catalog.hpp"
 #include <unordered_set>
 
-#include "duckdb/packdb/utility/debug.hpp"
+#include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/main/client_context.hpp"
 
 namespace duckdb {
@@ -166,7 +166,7 @@ static bool IsAllowedNameOverDecideVar(const string &name) {
 	if (lname == "sum" || lname == "avg" || lname == "min" || lname == "max") return true;
 	if (lname == "count" || lname == "count_star") return true;
 	if (lname == "+" || lname == "-" || lname == "*" || lname == "/" || lname == "**") return true;
-	// PackDB-internal tag operators (__when_constraint__, __per_constraint__, ...)
+	// DecidB-internal tag operators (__when_constraint__, __per_constraint__, ...)
 	// are synthesized as FunctionExpression and handled by dedicated binders.
 	if (name.size() >= 4 && name.substr(0, 2) == "__" && name.substr(name.size() - 2) == "__") return true;
 	return false;

@@ -1,5 +1,5 @@
 import platform
-import packdb
+import decidb
 from threading import Thread, current_thread
 import pytest
 
@@ -13,7 +13,7 @@ pytestmark = pytest.mark.xfail(
 
 @pytest.fixture(scope="session")
 def tmp_database(tmp_path_factory):
-    database = tmp_path_factory.mktemp("databases", numbered=True) / "tmp.packdb"
+    database = tmp_path_factory.mktemp("databases", numbered=True) / "tmp.decidb"
     return str(database)
 
 
@@ -32,7 +32,7 @@ def insert_from_same_connection(duckdb_cursor):
 
 class TestPythonMultithreading(object):
     def test_multiple_cursors(self, duckdb_cursor):
-        duckdb_con = packdb.connect()  # In Memory DuckDB
+        duckdb_con = decidb.connect()  # In Memory DuckDB
         duckdb_con.execute("""CREATE OR REPLACE TABLE my_inserts (thread_name varchar)""")
 
         thread_count = 3
@@ -56,7 +56,7 @@ class TestPythonMultithreading(object):
         ]
 
     def test_same_connection(self, duckdb_cursor):
-        duckdb_con = packdb.connect()  # In Memory DuckDB
+        duckdb_con = decidb.connect()  # In Memory DuckDB
         duckdb_con.execute("""CREATE OR REPLACE TABLE my_inserts (thread_name varchar)""")
 
         thread_count = 3
@@ -82,7 +82,7 @@ class TestPythonMultithreading(object):
         ]
 
     def test_multiple_cursors_persisted(self, tmp_database):
-        duckdb_con = packdb.connect(tmp_database)
+        duckdb_con = decidb.connect(tmp_database)
         duckdb_con.execute("""CREATE OR REPLACE TABLE my_inserts (thread_name varchar)""")
 
         thread_count = 3
@@ -106,7 +106,7 @@ class TestPythonMultithreading(object):
         duckdb_con.close()
 
     def test_same_connection_persisted(self, tmp_database):
-        duckdb_con = packdb.connect(tmp_database)
+        duckdb_con = decidb.connect(tmp_database)
         duckdb_con.execute("""CREATE OR REPLACE TABLE my_inserts (thread_name varchar)""")
 
         thread_count = 3

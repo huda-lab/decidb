@@ -20,7 +20,7 @@ while IFS='=' read -r key value; do
 
   # Process keys based on the current section
   case "$current_section" in
-    packdb)
+    decidb)
       case "$key" in
         build_mode) BUILD_MODE=$value ;;
         db_file) DB_FILE=$value ;;

@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 pa = pytest.importorskip('pyarrow')
@@ -7,8 +7,8 @@ pa = pytest.importorskip('pyarrow')
 class TestArrowFetchRecordBatch(object):
     # Test with basic numeric conversion (integers, floats, and others fall this code-path)
     def test_record_batch_next_batch_numeric(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
-        duckdb_cursor_check = packdb.connect()
+        duckdb_cursor = decidb.connect()
+        duckdb_cursor_check = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select range a from range(3000);")
         query = duckdb_cursor.execute("SELECT a FROM t")
         record_batch_reader = query.fetch_record_batch(1024)
@@ -31,8 +31,8 @@ class TestArrowFetchRecordBatch(object):
 
     # Test With Bool
     def test_record_batch_next_batch_bool(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
-        duckdb_cursor_check = packdb.connect()
+        duckdb_cursor = decidb.connect()
+        duckdb_cursor_check = decidb.connect()
         duckdb_cursor.execute(
             "CREATE table t as SELECT CASE WHEN i % 2 = 0 THEN true ELSE false END AS a from range(3000) as tbl(i);"
         )
@@ -58,8 +58,8 @@ class TestArrowFetchRecordBatch(object):
 
     # Test with Varchar
     def test_record_batch_next_batch_varchar(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
-        duckdb_cursor_check = packdb.connect()
+        duckdb_cursor = decidb.connect()
+        duckdb_cursor_check = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select range::varchar a from range(3000);")
         query = duckdb_cursor.execute("SELECT a FROM t")
         record_batch_reader = query.fetch_record_batch(1024)
@@ -83,8 +83,8 @@ class TestArrowFetchRecordBatch(object):
 
     # Test with Struct
     def test_record_batch_next_batch_struct(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
-        duckdb_cursor_check = packdb.connect()
+        duckdb_cursor = decidb.connect()
+        duckdb_cursor_check = decidb.connect()
         duckdb_cursor.execute(
             "CREATE table t as select {'x': i, 'y': i::varchar, 'z': i+1} as a from range(3000)  as tbl(i);"
         )
@@ -110,8 +110,8 @@ class TestArrowFetchRecordBatch(object):
 
     # Test with List
     def test_record_batch_next_batch_list(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
-        duckdb_cursor_check = packdb.connect()
+        duckdb_cursor = decidb.connect()
+        duckdb_cursor_check = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select [i,i+1] as a from range(3000)  as tbl(i);")
         query = duckdb_cursor.execute("SELECT a FROM t")
         record_batch_reader = query.fetch_record_batch(1024)
@@ -136,8 +136,8 @@ class TestArrowFetchRecordBatch(object):
 
     # Test with Map
     def test_record_batch_next_batch_map(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
-        duckdb_cursor_check = packdb.connect()
+        duckdb_cursor = decidb.connect()
+        duckdb_cursor_check = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select map([i], [i+1]) as a from range(3000)  as tbl(i);")
         query = duckdb_cursor.execute("SELECT a FROM t")
         record_batch_reader = query.fetch_record_batch(1024)
@@ -162,8 +162,8 @@ class TestArrowFetchRecordBatch(object):
 
     # Test with Null Values
     def test_record_batch_next_batch_with_null(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
-        duckdb_cursor_check = packdb.connect()
+        duckdb_cursor = decidb.connect()
+        duckdb_cursor_check = decidb.connect()
         duckdb_cursor.execute(
             "CREATE table t as SELECT CASE WHEN i % 2 = 0 THEN i ELSE NULL END AS a from range(3000) as tbl(i);"
         )
@@ -189,7 +189,7 @@ class TestArrowFetchRecordBatch(object):
         assert res == correct
 
     def test_record_batch_read_default(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select range a from range(3000);")
         query = duckdb_cursor.execute("SELECT a FROM t")
         record_batch_reader = query.fetch_record_batch()
@@ -197,7 +197,7 @@ class TestArrowFetchRecordBatch(object):
         assert len(chunk) == 3000
 
     def test_record_batch_next_batch_multiple_vectors_per_chunk(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select range a from range(5000);")
         query = duckdb_cursor.execute("SELECT a FROM t")
         record_batch_reader = query.fetch_record_batch(2048)
@@ -221,7 +221,7 @@ class TestArrowFetchRecordBatch(object):
         assert len(chunk) == 2000
 
     def test_record_batch_next_batch_multiple_vectors_per_chunk_error(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select range a from range(5000);")
         query = duckdb_cursor.execute("SELECT a FROM t")
         with pytest.raises(RuntimeError, match='Approximate Batch Size of Record Batch MUST be higher than 0'):
@@ -230,7 +230,7 @@ class TestArrowFetchRecordBatch(object):
             record_batch_reader = query.fetch_record_batch(-1)
 
     def test_record_batch_reader_from_relation(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select range a from range(3000);")
         relation = duckdb_cursor.table('t')
         record_batch_reader = relation.record_batch()
@@ -238,7 +238,7 @@ class TestArrowFetchRecordBatch(object):
         assert len(chunk) == 3000
 
     def test_record_coverage(self, duckdb_cursor):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select range a from range(2048);")
         query = duckdb_cursor.execute("SELECT a FROM t")
         record_batch_reader = query.fetch_record_batch(1024)
@@ -247,16 +247,16 @@ class TestArrowFetchRecordBatch(object):
         assert len(chunk) == 2048
 
     def test_record_batch_query_error(self):
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         duckdb_cursor.execute("CREATE table t as select 'foo' as a;")
-        with pytest.raises(packdb.ConversionException, match='Conversion Error'):
+        with pytest.raises(decidb.ConversionException, match='Conversion Error'):
             # 'execute' materializes the result, causing the error directly
             query = duckdb_cursor.execute("SELECT cast(a as double) FROM t")
             record_batch_reader = query.fetch_record_batch(1024)
             record_batch_reader.read_next_batch()
 
     def test_many_list_batches(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
 
         conn.execute(
             """
@@ -275,7 +275,7 @@ class TestArrowFetchRecordBatch(object):
 
     def test_many_chunk_sizes(self):
         object_size = 1000000
-        duckdb_cursor = packdb.connect()
+        duckdb_cursor = decidb.connect()
         query = duckdb_cursor.execute(f"CREATE table t as select range a from range({object_size});")
         for i in [1, 2, 4, 8, 16, 32, 33, 77, 999, 999999]:
             query = duckdb_cursor.execute("SELECT a FROM t")

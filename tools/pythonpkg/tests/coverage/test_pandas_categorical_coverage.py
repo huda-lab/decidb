@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import numpy
 import pytest
 from conftest import NumpyPandas, ArrowPandas
@@ -10,7 +10,7 @@ def check_result_list(res):
 
 
 def check_create_table(category, pandas):
-    conn = packdb.connect()
+    conn = decidb.connect()
 
     conn.execute("PRAGMA enable_verification")
     df_in = pandas.DataFrame(
@@ -29,7 +29,7 @@ def check_create_table(category, pandas):
         }
     )
 
-    df_out = packdb.query_df(df_in, "data", "SELECT * FROM data")
+    df_out = decidb.query_df(df_in, "data", "SELECT * FROM data")
     df_out = df_out.df()
     assert df_in.equals(df_out)
 

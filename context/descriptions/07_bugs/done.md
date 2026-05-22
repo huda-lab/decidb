@@ -54,7 +54,7 @@ The pass is a no-op when no scoped variables are declared, and bare `ColumnRefEx
 - Background — qualified-name registration: same file (`decide_variable_names.emplace(qualified_name, var_idx)`)
 - Background — generic SELECT binding alias: same file (`bind_context.AddGenericBinding(result->decide_index, "decide_variables", var_names, var_types)`)
 - Background — per-row fall-through: `src/planner/expression_binder/decide_constraints_binder.cpp` (`return ExpressionBinder::BindExpression(expr_ptr, depth)`)
-- Background — accidental qualifier strip on aggregate path: `src/packdb/symbolic/decide_symbolic.cpp` (`ToSymbolicRecursive` reads only `colref.GetColumnName()`; `FromSymbolic` rebuilds unqualified)
+- Background — accidental qualifier strip on aggregate path: `src/decidb/symbolic/decide_symbolic.cpp` (`ToSymbolicRecursive` reads only `colref.GetColumnName()`; `FromSymbolic` rebuilds unqualified)
 
 ---
 
@@ -69,13 +69,13 @@ Invalid Input Error: DECIDE optimization failed with Gurobi status 9.
 The optimization could not find a solution.
 ```
 
-…even when Gurobi's own log reported `Solution count 4: -90 -62 -60 180` and a finite best objective. PackDB simply never surfaced the incumbent.
+…even when Gurobi's own log reported `Solution count 4: -90 -62 -60 180` and a finite best objective. DecidB simply never surfaced the incumbent.
 
 ### Root cause
 
-Two compounding bugs in `src/packdb/gurobi/gurobi_loader.hpp`:
+Two compounding bugs in `src/decidb/gurobi/gurobi_loader.hpp`:
 
-1. **Wrong status constants.** PackDB defined `GRB_TIME_LIMIT = 7` and `GRB_ITERATION_LIMIT = 8`, but Gurobi's actual values are `ITERATION_LIMIT = 7`, `NODE_LIMIT = 8`, `TIME_LIMIT = 9`. So when Gurobi returned `status == 9`, the time-limit branch in `gurobi_solver.cpp` never matched, the SolCount-check was skipped, and the fallthrough else-branch threw "no solution found with status %d" — the `9` in the user-visible error was the give-away.
+1. **Wrong status constants.** DecidB defined `GRB_TIME_LIMIT = 7` and `GRB_ITERATION_LIMIT = 8`, but Gurobi's actual values are `ITERATION_LIMIT = 7`, `NODE_LIMIT = 8`, `TIME_LIMIT = 9`. So when Gurobi returned `status == 9`, the time-limit branch in `gurobi_solver.cpp` never matched, the SolCount-check was skipped, and the fallthrough else-branch threw "no solution found with status %d" — the `9` in the user-visible error was the give-away.
 2. **Narrow accept-incumbent branch.** Even with the correct constants, only `GRB_TIME_LIMIT` was being treated as "may carry a feasible solution"; `NODE_LIMIT`, `SOLUTION_LIMIT`, `INTERRUPTED`, `SUBOPTIMAL` (all of which can also leave an incumbent in the pool) all went to the throw path.
 
 ### Fix
@@ -90,8 +90,8 @@ Two compounding bugs in `src/packdb/gurobi/gurobi_loader.hpp`:
 
 ### Code pointers
 
-- Status constants: `src/packdb/gurobi/gurobi_loader.hpp` (status code block)
-- Time-limit acceptance branch: `src/packdb/gurobi/gurobi_solver.cpp` (after the `getintattr(STATUS)` call)
+- Status constants: `src/decidb/gurobi/gurobi_loader.hpp` (status code block)
+- Time-limit acceptance branch: `src/decidb/gurobi/gurobi_solver.cpp` (after the `getintattr(STATUS)` call)
 
 ---
 
@@ -143,7 +143,7 @@ Two independent root causes, both surfacing through the same connection-poisonin
 ### Fix
 
 1. **Tighten the bind-time check.** `decide_objective_binder.cpp:GetExpressionType` now distinguishes the additive composition path (`+`/`-`/`*`) — which legitimately mixes scalar arithmetic with aggregates — from non-additive wrappers (`POWER`, `SQRT`, `LOG`, etc.) that wrap an aggregate. The latter is rejected at bind time with a message pointing the user at `SUM(POWER(expr, 2))`.
-2. **Convert the relevant throw sites to `InvalidInputException`.** All of `gurobi_solver.cpp`'s submit-time failures (`addconstr`, `addqconstr`, `addqpterms`, `optimize`) and `physical_decide.cpp`'s non-aggregate-term / non-SUM rejections now raise `InvalidInputException`, so a malformed query rejects only itself instead of poisoning the connection. `InternalException` is preserved for genuine PackDB invariant violations (Gurobi env/license setup, NaN/Inf in extracted solution).
+2. **Convert the relevant throw sites to `InvalidInputException`.** All of `gurobi_solver.cpp`'s submit-time failures (`addconstr`, `addqconstr`, `addqpterms`, `optimize`) and `physical_decide.cpp`'s non-aggregate-term / non-SUM rejections now raise `InvalidInputException`, so a malformed query rejects only itself instead of poisoning the connection. `InternalException` is preserved for genuine DecidB invariant violations (Gurobi env/license setup, NaN/Inf in extracted solution).
 
 ### Verification
 
@@ -154,7 +154,7 @@ Two independent root causes, both surfacing through the same connection-poisonin
 ### Code pointers
 
 - Bind-time tightening: `src/planner/expression_binder/decide_objective_binder.cpp` (`GetExpressionType` else-branch)
-- Gurobi submit-time throw types: `src/packdb/gurobi/gurobi_solver.cpp` (`addconstr`/`addqconstr`/`addqpterms`/`optimize` error branches)
+- Gurobi submit-time throw types: `src/decidb/gurobi/gurobi_solver.cpp` (`addconstr`/`addqconstr`/`addqpterms`/`optimize` error branches)
 - Physical-execution non-aggregate-term rejections: `src/execution/operator/decide/physical_decide.cpp` (`ExtractAggregateConstraintTerms` and `ExtractAggregateObjectiveTerms` non-aggregate / non-SUM branches)
 
 ### Notes
@@ -307,7 +307,7 @@ Three coordinated changes:
 
 1. **`TryDistributeMultiplyOverAdd`** (`src/execution/operator/decide/physical_decide.cpp`): a new helper that, given a `*` chain with at least one `+`/`-`/unary-`-` factor, returns a vector of `(sign, product)` pairs where each product replaces the additive factor with one of its addends. Algebraically equivalent: `K * (a - b * x)` becomes `[(+1, K * a), (-1, K * b * x)]`.
 2. **Apply distribution before the classifier** at every `*` branch that previously fell into `ClassifyNormalizedProduct`: `ExtractConstraintTerms`, `ExtractLinearAndBilinearTerms` (objective), and the linear `ExtractTerms`. Distribution runs *before* classification (the classifier throws rather than returning false on additive factors). When distribution applies, the caller recurses into each distributed product with its sign; otherwise the existing logic runs unchanged.
-3. **Per-row coefficient aggregation** (`src/packdb/utility/ilp_model_builder.cpp`): the per-row constraint emission now sums coefficients into an `unordered_map<int, double>` keyed on Gurobi column index before pushing entries into `ModelConstraint`. Constants (LHS terms with `var_idx == INVALID_INDEX`) continue to be folded into the RHS adjustment as before.
+3. **Per-row coefficient aggregation** (`src/decidb/utility/ilp_model_builder.cpp`): the per-row constraint emission now sums coefficients into an `unordered_map<int, double>` keyed on Gurobi column index before pushing entries into `ModelConstraint`. Constants (LHS terms with `var_idx == INVALID_INDEX`) continue to be folded into the RHS adjustment as before.
 4. **Big-M constant skip** (same file's hard MIN/MAX finalize, around line 3128): the Big-M auto-tuner now skips `INVALID_INDEX` entries when scanning `variable_indices` for upper-bound lookup. Without this, a constant LHS term in a hard MIN/MAX inner expression caused an out-of-bounds vector access during finalization.
 
 ### Verification
@@ -321,7 +321,7 @@ Three coordinated changes:
 
 - Distribution helper: `src/execution/operator/decide/physical_decide.cpp` (`TryDistributeMultiplyOverAdd`).
 - Wire-in sites (all in same file): `ExtractTerms` `*` branch; `ExtractLinearAndBilinearTerms` `*` branch; `ExtractConstraintTerms` `*` branch.
-- Per-row coefficient aggregation: `src/packdb/utility/ilp_model_builder.cpp` (per-row constraint loop, ~line 642).
+- Per-row coefficient aggregation: `src/decidb/utility/ilp_model_builder.cpp` (per-row constraint loop, ~line 642).
 - Big-M constant skip: `src/execution/operator/decide/physical_decide.cpp` (hard MIN/MAX finalize Big-M scan, ~line 3128).
 
 
@@ -331,7 +331,7 @@ Three coordinated changes:
 
 ### Symptom
 
-Earlier: PackDB's ABS rewrite was a pure lower-envelope (`aux >= e`, `aux >= -e`), forcing only `aux >= |e|`. For constraint shapes that did not upper-bound `aux` — `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, `ABS(...) BETWEEN`, ABS on both sides of a comparison, and the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`) — the solver could satisfy the constraint by inflating `aux` above `|e|`, silently producing infeasible-relative-to-the-original-predicate solutions reported as feasible.
+Earlier: DecidB's ABS rewrite was a pure lower-envelope (`aux >= e`, `aux >= -e`), forcing only `aux >= |e|`. For constraint shapes that did not upper-bound `aux` — `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, `ABS(...) BETWEEN`, ABS on both sides of a comparison, and the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`) — the solver could satisfy the constraint by inflating `aux` above `|e|`, silently producing infeasible-relative-to-the-original-predicate solutions reported as feasible.
 
 The earlier fix (a bind-time soundness gate, `ValidateAbsConstraintDirection`) rejected these shapes at bind time. Correct, but conservative: it reduced the supported surface and forced users to manually reformulate.
 

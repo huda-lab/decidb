@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PackDB DECIDE performance benchmark runner.
+"""DecidB DECIDE performance benchmark runner.
 
 Runs a set of DECIDE queries against pre-generated TPC-H databases of different
 sizes (medium/large), measuring wall-clock time, peak memory (RSS), and
@@ -13,7 +13,7 @@ Usage:
     python3 benchmark/decide/run_benchmarks.py --compare          # auto compare
 
 Databases must be generated first: make decide-bench-setup
-When PACKDB_BENCH=1 is set, also parses per-stage timers from packdb stderr.
+When DECIDB_BENCH=1 is set, also parses per-stage timers from decidb stderr.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ QUERIES_DIR = SCRIPT_DIR / "queries"
 RESULTS_DIR = SCRIPT_DIR / "results"
 DATABASES_DIR = SCRIPT_DIR / "databases"
 
-PACKDB_EXE = REPO_ROOT / "build" / "release" / "packdb"
+DECIDB_EXE = REPO_ROOT / "build" / "release" / "decidb"
 
 DB_SIZES = ["medium", "large"]
 DEFAULT_ITERATIONS = 3
@@ -276,12 +276,12 @@ def parse_time_output(stderr: str) -> dict:
 
 
 def parse_bench_output(stderr: str) -> dict:
-    """Parse PACKDB_BENCH stage timer lines from stderr.
+    """Parse DECIDB_BENCH stage timer lines from stderr.
 
-    Lines look like: PACKDB_BENCH: key=value
+    Lines look like: DECIDB_BENCH: key=value
     """
     stages: dict = {}
-    for m in re.finditer(r"PACKDB_BENCH:\s*(\w+)=([\d.]+)", stderr):
+    for m in re.finditer(r"DECIDB_BENCH:\s*(\w+)=([\d.]+)", stderr):
         key = m.group(1)
         val = m.group(2)
         try:
@@ -302,7 +302,7 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
         time_flag = get_time_flag()
         cmd = [
             "/usr/bin/time", time_flag,
-            str(PACKDB_EXE), str(db_path), "-readonly",
+            str(DECIDB_EXE), str(db_path), "-readonly",
         ]
 
         with open(sql_path) as sql_file:
@@ -321,7 +321,7 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
         time_metrics = parse_time_output(result.stderr)
         metrics.update(time_metrics)
 
-        # Parse PACKDB_BENCH stage timers if present
+        # Parse DECIDB_BENCH stage timers if present
         bench_metrics = parse_bench_output(result.stderr)
         if bench_metrics:
             metrics["stages"] = bench_metrics
@@ -462,7 +462,7 @@ def print_comparison(current: list[dict], previous: dict) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="PackDB DECIDE benchmark runner")
+    parser = argparse.ArgumentParser(description="DecidB DECIDE benchmark runner")
     parser.add_argument(
         "--queries", type=str, default=None,
         help="Comma-separated list of queries to run (e.g., Q1,Q3). Default: all",
@@ -490,8 +490,8 @@ def main() -> None:
     args = parser.parse_args()
 
     # Validate prerequisites
-    if not PACKDB_EXE.exists():
-        print(f"ERROR: packdb executable not found at {PACKDB_EXE}", file=sys.stderr)
+    if not DECIDB_EXE.exists():
+        print(f"ERROR: decidb executable not found at {DECIDB_EXE}", file=sys.stderr)
         print("Run 'make release' first.", file=sys.stderr)
         sys.exit(1)
 
@@ -524,11 +524,11 @@ def main() -> None:
         sql = manual_path.read_text()
         all_results: list[dict] = []
 
-        print(f"PackDB Manual Benchmark (commit: {commit}{'*' if dirty else ''})")
+        print(f"DecidB Manual Benchmark (commit: {commit}{'*' if dirty else ''})")
         print(f"Sizes: {', '.join(sizes)}")
         print(f"Iterations: {args.iterations}")
-        if os.environ.get("PACKDB_BENCH"):
-            print("Stage timers: ENABLED (PACKDB_BENCH=1)")
+        if os.environ.get("DECIDB_BENCH"):
+            print("Stage timers: ENABLED (DECIDB_BENCH=1)")
         print()
 
         for size in sizes:
@@ -589,12 +589,12 @@ def main() -> None:
     else:
         query_names = sorted(available_queries.keys())
 
-    print(f"PackDB DECIDE Benchmark (commit: {commit}{'*' if dirty else ''})")
+    print(f"DecidB DECIDE Benchmark (commit: {commit}{'*' if dirty else ''})")
     print(f"Queries: {', '.join(query_names)}")
     print(f"Sizes: {', '.join(sizes)}")
     print(f"Iterations: {args.iterations}")
-    if os.environ.get("PACKDB_BENCH"):
-        print("Stage timers: ENABLED (PACKDB_BENCH=1)")
+    if os.environ.get("DECIDB_BENCH"):
+        print("Stage timers: ENABLED (DECIDB_BENCH=1)")
     print()
 
     all_results: list[dict] = []

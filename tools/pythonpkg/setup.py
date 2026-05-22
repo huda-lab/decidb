@@ -209,7 +209,7 @@ class build_ext(CompilerLauncherMixin, _build_ext):
                 self.compiler.compile = original_compiler_compile
 
 
-lib_name = 'packdb'
+lib_name = 'decidb'
 
 extensions = ['core_functions', 'parquet', 'tpch', 'icu', 'json']
 
@@ -273,7 +273,7 @@ if 'DUCKDB_COMPILE_FLAGS' in os.environ:
 if 'DUCKDB_LIBS' in os.environ:
     libraries = os.environ['DUCKDB_LIBS'].split(' ')
 
-define_macros = [('DUCKDB_PYTHON_LIB_NAME', '_packdb')]
+define_macros = [('DUCKDB_PYTHON_LIB_NAME', '_decidb')]
 
 custom_platform = os.environ.get('DUCKDB_CUSTOM_PLATFORM')
 if custom_platform is not None:
@@ -415,7 +415,7 @@ if len(existing_duckdb_dir) == 0:
     include_directories = duckdb_includes + include_directories
 
     libduckdb = Extension(
-        lib_name + '._packdb',
+        lib_name + '._decidb',
         include_dirs=include_directories,
         sources=source_files,
         extra_compile_args=toolchain_args,
@@ -429,7 +429,7 @@ else:
     import package_build
 
     include_directories += [os.path.join('..', '..', include) for include in package_build.third_party_includes()]
-    # Add PackDB third-party dependencies (SymbolicC++)
+    # Add DecidB third-party dependencies (SymbolicC++)
     include_directories += [os.path.join('..', '..', 'third_party', 'symboliccpp')]
     toolchain_args += ['-I' + x for x in package_build.includes(extensions)]
 
@@ -438,7 +438,7 @@ else:
     libnames = [x[1] for x in result_libraries if x[1] is not None]
 
     libduckdb = Extension(
-        lib_name + '._packdb',
+        lib_name + '._decidb',
         include_dirs=include_directories,
         sources=main_source_files,
         extra_compile_args=toolchain_args,
@@ -479,24 +479,24 @@ if no_source_wheel:
 
 packages = [
     lib_name,
-    'packdb.typing',
-    'packdb.query_graph',
-    'packdb.functional',
-    'packdb.value',
-    'packdb-stubs',
-    'packdb-stubs.functional',
-    'packdb-stubs.typing',
-    'packdb-stubs.value',
-    'packdb-stubs.value.constant',
-    'adbc_driver_packdb',
+    'decidb.typing',
+    'decidb.query_graph',
+    'decidb.functional',
+    'decidb.value',
+    'decidb-stubs',
+    'decidb-stubs.functional',
+    'decidb-stubs.typing',
+    'decidb-stubs.value',
+    'decidb-stubs.value.constant',
+    'adbc_driver_decidb',
 ]
 
 spark_packages = [
-    'packdb.experimental',
-    'packdb.experimental.spark',
-    'packdb.experimental.spark.sql',
-    'packdb.experimental.spark.errors',
-    'packdb.experimental.spark.errors.exceptions',
+    'decidb.experimental',
+    'decidb.experimental.spark',
+    'decidb.experimental.spark.sql',
+    'decidb.experimental.spark.errors',
+    'decidb.experimental.spark.errors.exceptions',
 ]
 
 packages.extend(spark_packages)
@@ -506,13 +506,13 @@ try:
     with open('README.md', encoding='utf-8') as f:
         long_description_text = f.read()
 except FileNotFoundError:
-    long_description_text = 'PackDB - Optimization-enabled SQL queries with the DECIDE clause'
+    long_description_text = 'DecidB - Optimization-enabled SQL queries with the DECIDE clause'
 
 setup(
     name=lib_name,
-    description='PackDB - Optimization-enabled SQL queries with the DECIDE clause',
-    keywords='PackDB SQL Optimization ILP Integer-Linear-Programming DECIDE Package-Queries',
-    url="https://huda-lab.github.io/packdb",
+    description='DecidB - Optimization-enabled SQL queries with the DECIDE clause',
+    keywords='DecidB SQL Optimization ILP Integer-Linear-Programming DECIDE Package-Queries',
+    url="https://huda-lab.github.io/decidb",
     long_description=long_description_text,
     long_description_content_type='text/markdown',
     license='MIT',
@@ -534,8 +534,8 @@ setup(
     maintainer_email="huda-lab@nyu.edu",
     cmdclass={"build_ext": build_ext},
     project_urls={
-        "Documentation": "https://huda-lab.github.io/packdb/documentation.html",
-        "Source": "https://github.com/huda-lab/packdb",
-        "Issues": "https://github.com/huda-lab/packdb/issues",
+        "Documentation": "https://huda-lab.github.io/decidb/documentation.html",
+        "Source": "https://github.com/huda-lab/decidb",
+        "Issues": "https://github.com/huda-lab/decidb/issues",
     },
 )

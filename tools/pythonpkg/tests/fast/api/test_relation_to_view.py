@@ -1,5 +1,5 @@
 import pytest
-import packdb
+import decidb
 
 
 class TestRelationToView(object):
@@ -29,10 +29,10 @@ class TestRelationToView(object):
     def test_registered_relation(self, duckdb_cursor):
         rel = duckdb_cursor.sql("select 'test', 'this is a long string'")
 
-        con = packdb.connect()
+        con = decidb.connect()
         # Register on a different connection is not allowed
         with pytest.raises(
-            packdb.InvalidInputException,
+            decidb.InvalidInputException,
             match='was created by another Connection and can therefore not be used by this Connection',
         ):
             con.register('cross_connection', rel)

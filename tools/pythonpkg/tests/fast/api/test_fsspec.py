@@ -1,5 +1,5 @@
 import pytest
-import packdb
+import decidb
 import io
 
 fsspec = pytest.importorskip("fsspec")

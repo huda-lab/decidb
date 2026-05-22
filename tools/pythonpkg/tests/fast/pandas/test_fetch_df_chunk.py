@@ -1,13 +1,13 @@
 import pytest
-import packdb
+import decidb
 
-VECTOR_SIZE = packdb.__standard_vector_size__
+VECTOR_SIZE = decidb.__standard_vector_size__
 
 
 class TestType(object):
     def test_fetch_df_chunk(self):
         size = 3000
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(f"CREATE table t as select range a from range({size});")
         query = con.execute("SELECT a FROM t")
 
@@ -24,7 +24,7 @@ class TestType(object):
 
     @pytest.mark.parametrize('size', [3000, 10000, 100000, VECTOR_SIZE - 1, VECTOR_SIZE + 1, VECTOR_SIZE])
     def test_monahan(self, size):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(f"CREATE table t as select range a from range({size});")
         query = con.execute("SELECT a FROM t")
 
@@ -46,7 +46,7 @@ class TestType(object):
 
     def test_fetch_df_chunk_parameter(self):
         size = 10000
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute(f"CREATE table t as select range a from range({size});")
         query = con.execute("SELECT a FROM t")
 
@@ -83,7 +83,7 @@ class TestType(object):
         assert len(cur_chunk) == 0
 
     def test_fetch_df_chunk_negative_parameter(self):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("CREATE table t as select range a from range(100);")
         query = con.execute("SELECT a FROM t")
 

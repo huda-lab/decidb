@@ -1,10 +1,10 @@
 import platform
 import pytest
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 
-from packdb.experimental.spark.sql.types import Row
-from packdb.experimental.spark.sql.functions import col
+from decidb.experimental.spark.sql.types import Row
+from decidb.experimental.spark.sql.functions import col
 
 
 @pytest.fixture

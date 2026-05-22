@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-import packdb
+import decidb
 
 
 class TestPandasEnum(object):
@@ -38,7 +38,7 @@ class TestPandasEnum(object):
         )
         duckdb_cursor.register('df', df)
         with pytest.raises(
-            packdb.ConversionException,
+            decidb.ConversionException,
             match='Type UINT8 with value 0 can\'t be cast because the value is out of range for the destination type UINT8',
         ):
             duckdb_cursor.execute(f"INSERT INTO tab SELECT * FROM df;")

@@ -2,7 +2,7 @@
 
 import numpy
 import pytest
-import packdb
+import decidb
 from conftest import NumpyPandas, ArrowPandas
 
 

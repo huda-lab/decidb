@@ -32,7 +32,7 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	}
 	case ExpressionClass::FUNCTION: {
 	    auto &func = expr.Cast<FunctionExpression>();
-	    // PackDB: Handle PER on objective — preserve PER columns for per-group objectives
+	    // DecidB: Handle PER on objective — preserve PER columns for per-group objectives
 	    if (func.is_operator && IsPerConstraintTag(func.function_name)) {
 	        D_ASSERT(func.children.size() >= 2);
 
@@ -87,7 +87,7 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	        result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG
 	        return BindResult(std::move(result));
 	    }
-	    // PackDB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition.
+	    // DecidB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition.
 	    // Nested WHEN is the aggregate-local form and binds through
 	    // DecideBinder::BindFunction.
 	    if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {

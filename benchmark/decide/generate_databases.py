@@ -15,7 +15,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 DATABASES_DIR = SCRIPT_DIR / "databases"
-PACKDB_EXE = REPO_ROOT / "build" / "release" / "packdb"
+DECIDB_EXE = REPO_ROOT / "build" / "release" / "decidb"
 
 DB_SIZES: dict[str, tuple[float, int]] = {
     "medium": (0.085, 500_000),
@@ -25,9 +25,9 @@ DB_SIZES: dict[str, tuple[float, int]] = {
 GENERATE_TIMEOUT_SECONDS = 1_200
 
 
-def run_packdb(db_path: Path, sql: str, *, readonly: bool = False,
+def run_decidb(db_path: Path, sql: str, *, readonly: bool = False,
                timeout: int = GENERATE_TIMEOUT_SECONDS) -> subprocess.CompletedProcess[str]:
-    cmd = [str(PACKDB_EXE), str(db_path)]
+    cmd = [str(DECIDB_EXE), str(db_path)]
     if readonly:
         cmd.append("-readonly")
     cmd.extend(["-c", sql])
@@ -42,7 +42,7 @@ def run_packdb(db_path: Path, sql: str, *, readonly: bool = False,
 def get_lineitem_count(db_path: Path) -> int | None:
     result = subprocess.run(
         [
-            str(PACKDB_EXE),
+            str(DECIDB_EXE),
             str(db_path),
             "-readonly",
             "-csv",
@@ -87,7 +87,7 @@ CHECKPOINT;
 """
     print(f"  Generating {name}.db (sf={sf}, lineitem_rows={lineitem_rows})...",
           end="", flush=True)
-    result = run_packdb(db_path, sql)
+    result = run_decidb(db_path, sql)
     if result.returncode != 0:
         print(" FAILED")
         print(f"  Error: {result.stderr.strip()}", file=sys.stderr)
@@ -105,8 +105,8 @@ CHECKPOINT;
 
 
 def main() -> None:
-    if not PACKDB_EXE.exists():
-        print(f"ERROR: packdb executable not found at {PACKDB_EXE}", file=sys.stderr)
+    if not DECIDB_EXE.exists():
+        print(f"ERROR: decidb executable not found at {DECIDB_EXE}", file=sys.stderr)
         print("Run 'make release' first.", file=sys.stderr)
         sys.exit(1)
 

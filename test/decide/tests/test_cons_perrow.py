@@ -18,7 +18,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_multi
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_q07_row_wise_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q07_row_wise_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Row-wise bounds: x <= 5 for each row, plus SUM(x) <= 100."""
     sql = """
         SELECT ps_partkey, ps_availqty, x
@@ -30,8 +30,8 @@ def test_q07_row_wise_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -60,12 +60,12 @@ def test_q07_row_wise_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
 
     perf_tracker.record(
-        "q07_row_wise_bounds", packdb_time, build_time,
+        "q07_row_wise_bounds", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -78,7 +78,7 @@ def test_q07_row_wise_bounds(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_per_row_lower_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_per_row_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Per-row lower bound: x >= 1 forces all variables to at least 1."""
     sql = """
         SELECT ps_partkey, ps_suppkey, ps_supplycost, x
@@ -90,8 +90,8 @@ def test_per_row_lower_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -118,12 +118,12 @@ def test_per_row_lower_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "perrow_lb", packdb_time, build_time,
+        "perrow_lb", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -134,7 +134,7 @@ def test_per_row_lower_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
 # --- Per-row LHS with linear transforms (regression tests) ---
 # Before Fix A, these silently returned wrong answers because ExtractTerms
 # didn't handle `/` and the ilp_model_builder dropped LHS terms without a
-# decide variable instead of moving them to RHS. Each case compares packdb
+# decide variable instead of moving them to RHS. Each case compares decidb
 # against an oracle model with the constraint's algebraic solution baked into
 # the variable bounds.
 
@@ -150,10 +150,10 @@ def test_per_row_lower_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
     ("x / 2 + 1",   "3",    4.0),
     ("x + 3 - 1",   "9",    7.0),
 ])
-def test_perrow_linear_lhs_upper_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+def test_perrow_linear_lhs_upper_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
                                         lhs_sql, rhs_sql, oracle_ub):
     """Per-row upper-bound constraints with non-trivial linear LHS. The oracle
-    model encodes the algebraic solution (x <= oracle_ub); packdb should match."""
+    model encodes the algebraic solution (x <= oracle_ub); decidb should match."""
     sql = f"""
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp
@@ -163,8 +163,8 @@ def test_perrow_linear_lhs_upper_bound(packdb_cli, duckdb_conn, oracle_solver, p
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -185,11 +185,11 @@ def test_perrow_linear_lhs_upper_bound(packdb_cli, duckdb_conn, oracle_solver, p
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        f"perrow_linear_{lhs_sql.replace(' ', '')}", packdb_time, build_time,
+        f"perrow_linear_{lhs_sql.replace(' ', '')}", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -201,7 +201,7 @@ def test_perrow_linear_lhs_upper_bound(packdb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.cons_perrow
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_perrow_unary_minus_lower_bound(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_perrow_unary_minus_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Unary minus on LHS: `-x <= -K` means `x >= K`. Oracle matches via lb=K."""
     sql = """
         SELECT ps_partkey, ps_supplycost, x
@@ -212,8 +212,8 @@ def test_perrow_unary_minus_lower_bound(packdb_cli, duckdb_conn, oracle_solver, 
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -234,11 +234,11 @@ def test_perrow_unary_minus_lower_bound(packdb_cli, duckdb_conn, oracle_solver, 
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
     perf_tracker.record(
-        "perrow_unary_minus", packdb_time, build_time,
+        "perrow_unary_minus", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -250,7 +250,7 @@ def test_perrow_unary_minus_lower_bound(packdb_cli, duckdb_conn, oracle_solver, 
 @pytest.mark.cons_perrow
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_perrow_data_column_in_lhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_perrow_data_column_in_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`x - col <= K` must bound x per row by `K + col[row]`. Before Fix A, the
     data column was silently dropped and every row got x = K."""
     sql = """
@@ -261,8 +261,8 @@ def test_perrow_data_column_in_lhs(packdb_cli, duckdb_conn, oracle_solver, perf_
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -284,11 +284,11 @@ def test_perrow_data_column_in_lhs(packdb_cli, duckdb_conn, oracle_solver, perf_
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
     perf_tracker.record(
-        "perrow_data_column", packdb_time, build_time,
+        "perrow_data_column", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -303,7 +303,7 @@ def test_perrow_data_column_in_lhs(packdb_cli, duckdb_conn, oracle_solver, perf_
 @pytest.mark.var_real
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_perrow_negative_constant_divisor(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_perrow_negative_constant_divisor(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`x / -2 <= 1` is equivalent to `-0.5 * x <= 1`, i.e., `x >= -2`. The
     coefficient-scaling path must produce the correct signed coefficient — a
     naive drop of the sign would silently flip the inequality."""
@@ -316,8 +316,8 @@ def test_perrow_negative_constant_divisor(packdb_cli, duckdb_conn, oracle_solver
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
@@ -336,11 +336,11 @@ def test_perrow_negative_constant_divisor(packdb_cli, duckdb_conn, oracle_solver
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
     perf_tracker.record(
-        "perrow_neg_divisor", packdb_time, build_time,
+        "perrow_neg_divisor", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -350,7 +350,7 @@ def test_perrow_negative_constant_divisor(packdb_cli, duckdb_conn, oracle_solver
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_perrow_strict_lt_with_offset(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_perrow_strict_lt_with_offset(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`x + 3 < 10` with integer x should give `x <= 6` (strict-< on integers
     becomes `<= K-1`). Checks that RHS adjustment and strict-inequality
     handling compose."""
@@ -362,8 +362,8 @@ def test_perrow_strict_lt_with_offset(packdb_cli, duckdb_conn, oracle_solver, pe
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
@@ -382,11 +382,11 @@ def test_perrow_strict_lt_with_offset(packdb_cli, duckdb_conn, oracle_solver, pe
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "perrow_strict_lt", packdb_time, build_time,
+        "perrow_strict_lt", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -396,7 +396,7 @@ def test_perrow_strict_lt_with_offset(packdb_cli, duckdb_conn, oracle_solver, pe
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_perrow_integer_with_fractional_coef(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_perrow_integer_with_fractional_coef(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """`x / 3 <= 1` with integer x. The extracted coefficient is 1/3 (fractional)
     but the variable is integer-typed; the solver must floor correctly
     (x <= 3). Guards against the integer-LHS detector downgrading incorrectly
@@ -409,8 +409,8 @@ def test_perrow_integer_with_fractional_coef(packdb_cli, duckdb_conn, oracle_sol
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
@@ -428,11 +428,11 @@ def test_perrow_integer_with_fractional_coef(packdb_cli, duckdb_conn, oracle_sol
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "perrow_int_fractional_coef", packdb_time, build_time,
+        "perrow_int_fractional_coef", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -443,7 +443,7 @@ def test_perrow_integer_with_fractional_coef(packdb_cli, duckdb_conn, oracle_sol
 @pytest.mark.cons_perrow
 @pytest.mark.when_perrow
 @pytest.mark.correctness
-def test_perrow_when_plus_linear_lhs(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_perrow_when_plus_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN + linear LHS: `x + 3 <= 10 WHEN flag` constrains only matching rows.
     Non-matching rows fall back to the explicit `x <= 20` bound."""
     sql = """
@@ -455,8 +455,8 @@ def test_perrow_when_plus_linear_lhs(packdb_cli, duckdb_conn, oracle_solver, per
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT), CAST(ps_availqty AS DOUBLE)
@@ -476,11 +476,11 @@ def test_perrow_when_plus_linear_lhs(packdb_cli, duckdb_conn, oracle_solver, per
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_availqty")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_availqty")])},
     )
     perf_tracker.record(
-        "perrow_when_linear", packdb_time, build_time,
+        "perrow_when_linear", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -489,11 +489,11 @@ def test_perrow_when_plus_linear_lhs(packdb_cli, duckdb_conn, oracle_solver, per
 
 @pytest.mark.cons_perrow
 @pytest.mark.error
-def test_perrow_division_by_zero_column_errors_cleanly(packdb_cli):
+def test_perrow_division_by_zero_column_errors_cleanly(decidb_cli):
     """When a coefficient expression evaluates to NaN/Infinity at some row
     (e.g., `x / col` with a zero in the column), the NaN guard must fire
     instead of silently feeding garbage to the solver."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         WITH data AS (
             SELECT 1 AS id, 2.0 AS w UNION ALL
             SELECT 2, 0.0 UNION ALL

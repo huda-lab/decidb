@@ -55,7 +55,7 @@ from ._oracle_helpers import emit_inner_max, emit_inner_min
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_max_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x) <= 0 forces all x=0; MAX(x) <= 1 is trivially satisfied for BOOLEAN."""
     # MAX(x) <= 0 → each row: x <= 0 → all x = 0
     sql = """
@@ -66,11 +66,11 @@ def test_max_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
         SUCH THAT MAX(x) <= 0
         MAXIMIZE SUM(x)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     # All x should be 0
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    for row in packdb_result:
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    for row in decidb_result:
         assert int(row[ci["x"]]) == 0, f"Expected x=0, got {row[ci['x']]}"
 
 
@@ -78,7 +78,7 @@ def test_max_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_min_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_min_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MIN(x) >= 1 forces all x=1 for BOOLEAN."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -88,10 +88,10 @@ def test_min_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
         SUCH THAT MIN(x) >= 1
         MAXIMIZE SUM(x)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    for row in packdb_result:
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    for row in decidb_result:
         assert int(row[ci["x"]]) == 1, f"Expected x=1, got {row[ci['x']]}"
 
 
@@ -100,7 +100,7 @@ def test_min_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.cons_perrow
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_max_leq_with_expr(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_leq_with_expr(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x * l_quantity) <= threshold: per-row x * l_quantity <= threshold."""
     threshold = 25.0
     sql = f"""
@@ -112,8 +112,8 @@ def test_max_leq_with_expr(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -142,15 +142,15 @@ def test_max_leq_with_expr(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    # Count selected items in PackDB result
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_count = sum(1 for row in packdb_result if int(row[ci["x"]]) == 1)
-    assert abs(packdb_count - result.objective_value) <= 0.5, (
-        f"Objective mismatch: PackDB selected {packdb_count}, Oracle={result.objective_value:.0f}"
+    # Count selected items in DecidB result
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_count = sum(1 for row in decidb_result if int(row[ci["x"]]) == 1)
+    assert abs(decidb_count - result.objective_value) <= 0.5, (
+        f"Objective mismatch: DecidB selected {decidb_count}, Oracle={result.objective_value:.0f}"
     )
 
     perf_tracker.record(
-        "max_leq_expr", packdb_time, build_time,
+        "max_leq_expr", decidb_time, build_time,
         result.solve_time_seconds, n, n, n,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -166,7 +166,7 @@ def test_max_leq_with_expr(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_max_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x) >= 1 means at least one x must be 1. MINIMIZE SUM(x)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -177,13 +177,13 @@ def test_max_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
         MINIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     # Oracle: SUM(x) >= 1, MINIMIZE SUM(x) → exactly 1 selected
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_count = sum(1 for row in packdb_result if int(row[ci["x"]]) == 1)
-    assert packdb_count == 1, f"Expected exactly 1 selected, got {packdb_count}"
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_count = sum(1 for row in decidb_result if int(row[ci["x"]]) == 1)
+    assert decidb_count == 1, f"Expected exactly 1 selected, got {decidb_count}"
 
 
 @pytest.mark.min_max
@@ -191,7 +191,7 @@ def test_max_geq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_min_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MIN(x) <= 0 means at least one x must be 0. MAXIMIZE SUM(x)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -202,11 +202,11 @@ def test_min_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    zero_count = sum(1 for row in packdb_result if int(row[ci["x"]]) == 0)
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    zero_count = sum(1 for row in decidb_result if int(row[ci["x"]]) == 0)
     assert zero_count >= 1, "MIN(x) <= 0 requires at least one x=0"
 
 
@@ -215,7 +215,7 @@ def test_min_leq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_max_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x) = 1 means at least one x=1 AND all x<=1 (trivial for BOOLEAN)."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -225,10 +225,10 @@ def test_max_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
         SUCH THAT MAX(x) = 1
         MINIMIZE SUM(x)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    selected = sum(1 for row in packdb_result if int(row[ci["x"]]) == 1)
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    selected = sum(1 for row in decidb_result if int(row[ci["x"]]) == 1)
     assert selected >= 1, "MAX(x) = 1 requires at least one x=1"
     # MAX(x) = 1 with MINIMIZE SUM(x) → exactly one selected
     assert selected == 1, f"Expected 1 selected (minimize), got {selected}"
@@ -239,7 +239,7 @@ def test_max_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_min_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_min_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MIN(x) = 0 means at least one x=0 AND all x>=0 (trivial for BOOLEAN)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -249,10 +249,10 @@ def test_min_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
         SUCH THAT MIN(x) = 0
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    zeros = sum(1 for row in packdb_result if int(row[ci["x"]]) == 0)
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    zeros = sum(1 for row in decidb_result if int(row[ci["x"]]) == 0)
     assert zeros >= 1, "MIN(x) = 0 requires at least one x=0"
 
 
@@ -264,7 +264,7 @@ def test_min_eq_constraint(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
 @pytest.mark.var_boolean
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_minimize_max_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_minimize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MAX(x * l_quantity): minimize worst-case quantity."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -275,8 +275,8 @@ def test_minimize_max_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MINIMIZE MAX(x * l_quantity)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -310,18 +310,18 @@ def test_minimize_max_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
     assert result.status == SolverStatus.OPTIMAL
 
-    # Compute PackDB's MAX(x * qty)
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_max = max(
+    # Compute DecidB's MAX(x * qty)
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_max = max(
         int(row[ci["x"]]) * float(row[ci["l_quantity"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_max - result.objective_value) <= 0.5, (
-        f"Objective mismatch: PackDB MAX={packdb_max:.2f}, Oracle={result.objective_value:.2f}"
+    assert abs(decidb_max - result.objective_value) <= 0.5, (
+        f"Objective mismatch: DecidB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     perf_tracker.record(
-        "minimize_max", packdb_time, build_time,
+        "minimize_max", decidb_time, build_time,
         result.solve_time_seconds, n, n + 1, n + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -332,7 +332,7 @@ def test_minimize_max_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_maximize_min_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_maximize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAXIMIZE MIN(x * l_quantity): maximize worst-case, all must be selected."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -343,8 +343,8 @@ def test_maximize_min_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE MIN(x * l_quantity)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -376,17 +376,17 @@ def test_maximize_min_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_min = min(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_min = min(
         int(row[ci["x"]]) * float(row[ci["l_quantity"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_min - result.objective_value) <= 0.5, (
-        f"Objective mismatch: PackDB MIN={packdb_min:.2f}, Oracle={result.objective_value:.2f}"
+    assert abs(decidb_min - result.objective_value) <= 0.5, (
+        f"Objective mismatch: DecidB MIN={decidb_min:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     perf_tracker.record(
-        "maximize_min", packdb_time, build_time,
+        "maximize_min", decidb_time, build_time,
         result.solve_time_seconds, n, n + 1, n + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -401,7 +401,7 @@ def test_maximize_min_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_maximize_max_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_maximize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAXIMIZE MAX(x * l_extendedprice) with SUM(x) <= 3."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -412,8 +412,8 @@ def test_maximize_max_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE MAX(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -456,17 +456,17 @@ def test_maximize_max_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_max = max(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_max = max(
         int(row[ci["x"]]) * float(row[ci["l_extendedprice"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_max - result.objective_value) <= 1.0, (
-        f"Objective mismatch: PackDB MAX={packdb_max:.2f}, Oracle={result.objective_value:.2f}"
+    assert abs(decidb_max - result.objective_value) <= 1.0, (
+        f"Objective mismatch: DecidB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     perf_tracker.record(
-        "maximize_max", packdb_time, build_time,
+        "maximize_max", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2 + 1, n + 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -481,7 +481,7 @@ def test_maximize_max_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.when_constraint
 @pytest.mark.var_boolean
 @pytest.mark.correctness
-def test_max_constraint_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_constraint_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x) <= 0 WHEN l_quantity > 30: only rows with qty>30 must have x=0."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -491,10 +491,10 @@ def test_max_constraint_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_t
         SUCH THAT MAX(x) <= 0 WHEN l_quantity > 30
         MAXIMIZE SUM(x)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    for row in packdb_result:
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    for row in decidb_result:
         qty = float(row[ci["l_quantity"]])
         x_val = int(row[ci["x"]])
         if qty > 30:
@@ -510,13 +510,13 @@ def test_max_constraint_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.obj_maximize
 @pytest.mark.when_objective
 @pytest.mark.correctness
-def test_min_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_min_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAXIMIZE MIN(x * l_quantity) WHEN l_quantity <= 30 — easy-case flat MIN objective.
 
     Per CLAUDE.md MIN/MAX rules: MAXIMIZE MIN is an easy case — introduce a
     global `z` with ``z <= expr_i`` for each WHEN-qualifying row, then
     MAXIMIZE z (no indicators, no Big-M). This test oracle-verifies that
-    PackDB's flat-MIN-with-WHEN formulation is correctly routed to the easy
+    DecidB's flat-MIN-with-WHEN formulation is correctly routed to the easy
     linearization.
     """
     sql = """
@@ -528,8 +528,8 @@ def test_min_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         MAXIMIZE MIN(x * l_quantity) WHEN l_quantity <= 30
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -567,8 +567,8 @@ def test_min_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    # MIN(x * l_quantity) over WHEN-qualifying rows gives PackDB's objective.
-    def _packdb_min(rows, cols):
+    # MIN(x * l_quantity) over WHEN-qualifying rows gives DecidB's objective.
+    def _decidb_min(rows, cols):
         x_idx = cols.index("x")
         q_idx = cols.index("l_quantity")
         vals = [
@@ -579,12 +579,12 @@ def test_min_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         return float(min(vals)) if vals else 0.0
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
+        decidb_rows, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 0.0},
-        packdb_objective_fn=_packdb_min,
+        decidb_objective_fn=_decidb_min,
     )
     perf_tracker.record(
-        "min_objective_with_when", packdb_time, build_time,
+        "min_objective_with_when", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -596,13 +596,13 @@ def test_min_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.obj_minimize
 @pytest.mark.when_objective
 @pytest.mark.correctness
-def test_max_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MAX(x * l_quantity) WHEN l_quantity <= 30 — easy-case flat MAX objective.
 
     Mirror of ``test_min_objective_with_when``. Per CLAUDE.md, MINIMIZE MAX is
     an easy case — introduce a global ``z`` with ``z >= expr_i`` for each
     WHEN-qualifying row, then MINIMIZE z (no indicators, no Big-M). Confirms
-    PackDB's flat-MAX-with-WHEN formulation is routed to the easy
+    DecidB's flat-MAX-with-WHEN formulation is routed to the easy
     linearization.
     """
     sql = """
@@ -614,8 +614,8 @@ def test_max_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         MINIMIZE MAX(x * l_quantity) WHEN l_quantity <= 30
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -650,7 +650,7 @@ def test_max_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    def _packdb_max(rows, cols):
+    def _decidb_max(rows, cols):
         x_idx = cols.index("x")
         q_idx = cols.index("l_quantity")
         vals = [
@@ -661,12 +661,12 @@ def test_max_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         return float(max(vals)) if vals else 0.0
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
+        decidb_rows, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 0.0},
-        packdb_objective_fn=_packdb_max,
+        decidb_objective_fn=_decidb_max,
     )
     perf_tracker.record(
-        "max_objective_with_when", packdb_time, build_time,
+        "max_objective_with_when", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -681,7 +681,7 @@ def test_max_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.var_integer
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_minimize_min_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_minimize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MIN(x) with INTEGER vars, x >= 1, SUM(x) >= 10: hard objective, spread values low."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -694,8 +694,8 @@ def test_minimize_min_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MINIMIZE MIN(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -735,14 +735,14 @@ def test_minimize_min_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_min_val = min(int(row[ci["x"]]) for row in packdb_result)
-    assert abs(packdb_min_val - result.objective_value) <= 0.5, (
-        f"Objective mismatch: PackDB MIN={packdb_min_val}, Oracle={result.objective_value:.0f}"
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_min_val = min(int(row[ci["x"]]) for row in decidb_result)
+    assert abs(decidb_min_val - result.objective_value) <= 0.5, (
+        f"Objective mismatch: DecidB MIN={decidb_min_val}, Oracle={result.objective_value:.0f}"
     )
 
     perf_tracker.record(
-        "minimize_min", packdb_time, build_time,
+        "minimize_min", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2 + 1, n + 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -757,7 +757,7 @@ def test_minimize_min_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.per_clause
 @pytest.mark.var_boolean
 @pytest.mark.correctness
-def test_max_constraint_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_constraint_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x) <= 0 PER l_orderkey: within each order, no item selected.
     Easy case with PER — PER is stripped (redundant since per-row already)."""
     sql = """
@@ -768,11 +768,11 @@ def test_max_constraint_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         SUCH THAT MAX(x) <= 0 PER l_orderkey
         MAXIMIZE SUM(x)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     # MAX(x) <= 0 per group → all x = 0 (same as without PER for easy case)
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    for row in packdb_result:
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    for row in decidb_result:
         assert int(row[ci["x"]]) == 0, f"Expected x=0, got {row[ci['x']]}"
 
 
@@ -785,7 +785,7 @@ def test_max_constraint_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.per_clause
 @pytest.mark.var_boolean
 @pytest.mark.correctness
-def test_min_max_when_per_composition(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_min_max_when_per_composition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x) <= 0 WHEN l_quantity > 40 PER l_orderkey: zero out high-qty items per order."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -795,10 +795,10 @@ def test_min_max_when_per_composition(packdb_cli, duckdb_conn, oracle_solver, pe
         SUCH THAT MAX(x) <= 0 WHEN l_quantity > 40 PER l_orderkey
         MAXIMIZE SUM(x)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    for row in packdb_result:
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    for row in decidb_result:
         qty = float(row[ci["l_quantity"]])
         x_val = int(row[ci["x"]])
         if qty > 40:
@@ -813,7 +813,7 @@ def test_min_max_when_per_composition(packdb_cli, duckdb_conn, oracle_solver, pe
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_max_leq_integer(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_leq_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x) <= 3 with INTEGER variables: each x is bounded to [0, 3]."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -823,10 +823,10 @@ def test_max_leq_integer(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SUCH THAT MAX(x) <= 3
         MAXIMIZE SUM(x)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    for row in packdb_result:
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    for row in decidb_result:
         x_val = int(row[ci["x"]])
         assert x_val <= 3, f"Expected x<=3, got {x_val}"
         # With MAXIMIZE SUM(x) and MAX(x) <= 3, each x should be 3
@@ -837,7 +837,7 @@ def test_max_leq_integer(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.var_integer
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_minimize_max_integer(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_minimize_max_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE MAX(x) with INTEGER: minimize the largest x value, with sum constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -849,8 +849,8 @@ def test_minimize_max_integer(packdb_cli, duckdb_conn, oracle_solver, perf_track
         MINIMIZE MAX(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -881,14 +881,14 @@ def test_minimize_max_integer(packdb_cli, duckdb_conn, oracle_solver, perf_track
 
     assert result.status == SolverStatus.OPTIMAL
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_max = max(int(row[ci["x"]]) for row in packdb_result)
-    assert abs(packdb_max - result.objective_value) <= 0.5, (
-        f"Objective mismatch: PackDB MAX={packdb_max}, Oracle={result.objective_value:.0f}"
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_max = max(int(row[ci["x"]]) for row in decidb_result)
+    assert abs(decidb_max - result.objective_value) <= 0.5, (
+        f"Objective mismatch: DecidB MAX={decidb_max}, Oracle={result.objective_value:.0f}"
     )
 
     perf_tracker.record(
-        "minimize_max_int", packdb_time, build_time,
+        "minimize_max_int", decidb_time, build_time,
         result.solve_time_seconds, n, n + 1, n + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -903,7 +903,7 @@ def test_minimize_max_integer(packdb_cli, duckdb_conn, oracle_solver, perf_track
 @pytest.mark.var_boolean
 @pytest.mark.cons_multi
 @pytest.mark.correctness
-def test_multiple_minmax_constraints(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_multiple_minmax_constraints(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Multiple MIN/MAX constraints in same query: MAX(x) <= 0 WHEN ... AND MIN(x) >= 1 WHEN ..."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
@@ -914,10 +914,10 @@ def test_multiple_minmax_constraints(packdb_cli, duckdb_conn, oracle_solver, per
               MIN(x) >= 1 WHEN l_quantity < 5
         MAXIMIZE SUM(x)
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    for row in packdb_result:
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    for row in decidb_result:
         qty = float(row[ci["l_quantity"]])
         x_val = int(row[ci["x"]])
         if qty > 40:
@@ -931,7 +931,7 @@ def test_multiple_minmax_constraints(packdb_cli, duckdb_conn, oracle_solver, per
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_minmax_constraint_and_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_minmax_constraint_and_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MIN/MAX in both constraint and objective: MAX(x) >= 1 with MINIMIZE MAX(x * price)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -942,17 +942,17 @@ def test_minmax_constraint_and_objective(packdb_cli, duckdb_conn, oracle_solver,
         MINIMIZE MAX(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    selected = [row for row in packdb_result if int(row[ci["x"]]) == 1]
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    selected = [row for row in decidb_result if int(row[ci["x"]]) == 1]
     assert len(selected) >= 1, "MAX(x) >= 1 requires at least one x=1"
 
     # With MINIMIZE MAX(x*price) and MAX(x)>=1, should select 1 item with lowest price
     if len(selected) == 1:
         sel_price = float(selected[0][ci["l_extendedprice"]])
-        all_prices = [float(row[ci["l_extendedprice"]]) for row in packdb_result]
+        all_prices = [float(row[ci["l_extendedprice"]]) for row in decidb_result]
         min_price = min(all_prices)
         assert abs(sel_price - min_price) <= 0.01, (
             f"Should select cheapest item: got {sel_price}, min is {min_price}"
@@ -966,9 +966,9 @@ def test_minmax_constraint_and_objective(packdb_cli, duckdb_conn, oracle_solver,
 @pytest.mark.min_max
 @pytest.mark.error
 @pytest.mark.error_binder
-def test_max_notequal_error(packdb_cli):
+def test_max_notequal_error(decidb_cli):
     """MAX(x) <> K should produce a binder error."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT l_quantity FROM lineitem
         DECIDE x IS BOOLEAN
         SUCH THAT MAX(x) <> 0
@@ -987,7 +987,7 @@ def test_max_notequal_error(packdb_cli):
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.correctness
-def test_sum_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_sum_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x*v) + MAX(x*v) WHEN w <= K — minimum repro for the composed MIN/MAX bug.
 
     LHS is additive with one SUM and one MAX term. The MAX has a WHEN filter.
@@ -1004,8 +1004,8 @@ def test_sum_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
         MAXIMIZE SUM(x * v)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [(1, 10.0, False), (2, 5.0, True), (3, 7.0, False)]
     n = len(data)
@@ -1036,7 +1036,7 @@ def test_sum_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
         coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
     )
     perf_tracker.record(
-        "composed_sum_plus_max", packdb_time, build_time, result.solve_time_seconds,
+        "composed_sum_plus_max", decidb_time, build_time, result.solve_time_seconds,
         n, n + 1, n + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1046,7 +1046,7 @@ def test_sum_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.correctness
-def test_max_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_max_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAX(x*v) WHEN w1 + MAX(x*v) WHEN w2 <= K — two easy-direction MAX terms."""
     sql = """
         SELECT id, v, x FROM (
@@ -1059,8 +1059,8 @@ def test_max_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
         MAXIMIZE SUM(x * v)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [(1, 10.0, True, False), (2, 5.0, False, True), (3, 7.0, False, False)]
     n = len(data)
@@ -1088,7 +1088,7 @@ def test_max_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
         coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
     )
     perf_tracker.record(
-        "composed_max_plus_max", packdb_time, build_time, result.solve_time_seconds,
+        "composed_max_plus_max", decidb_time, build_time, result.solve_time_seconds,
         n, n + 2, n + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1098,7 +1098,7 @@ def test_max_plus_max_leq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.correctness
-def test_min_plus_min_geq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_min_plus_min_geq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MIN(x*v) WHEN w1 + MIN(x*v) WHEN w2 >= K — two easy-direction MIN terms.
 
     Easy-direction: pushed up by >=, MIN pushed up ⇒ easy. Forces both
@@ -1118,8 +1118,8 @@ def test_min_plus_min_geq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
         MINIMIZE SUM(x * v)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [(1, 10.0, True, False), (2, 8.0, False, True), (3, 7.0, False, False)]
     n = len(data)
@@ -1147,7 +1147,7 @@ def test_min_plus_min_geq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
         coeff_fn=lambda row: {"x": float(row[cols.index("v")])},
     )
     perf_tracker.record(
-        "composed_min_plus_min", packdb_time, build_time, result.solve_time_seconds,
+        "composed_min_plus_min", decidb_time, build_time, result.solve_time_seconds,
         n, n + 2, n + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1157,10 +1157,10 @@ def test_min_plus_min_geq_composed(packdb_cli, duckdb_conn, oracle_solver, perf_
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.error_binder
-def test_composed_minmax_hard_rejected(packdb_cli):
+def test_composed_minmax_hard_rejected(decidb_cli):
     """Composed MIN/MAX in hard direction (e.g. MAX(...) pushed up) should
     raise a BinderException in v1 — indicator linearization not yet implemented."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w >= 3
@@ -1170,9 +1170,9 @@ def test_composed_minmax_hard_rejected(packdb_cli):
 
 @pytest.mark.min_max
 @pytest.mark.error_binder
-def test_composed_minmax_subtraction_rejected(packdb_cli):
+def test_composed_minmax_subtraction_rejected(decidb_cli):
     """Subtraction in a composed MIN/MAX LHS is rejected in v1."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
         DECIDE x IS BOOLEAN
         SUCH THAT MAX(x * v) WHEN w - MIN(x * v) WHEN w <= 3
@@ -1182,7 +1182,7 @@ def test_composed_minmax_subtraction_rejected(packdb_cli):
 
 @pytest.mark.min_max
 @pytest.mark.error_binder
-def test_composed_minmax_scalar_mult_rejected(packdb_cli):
+def test_composed_minmax_scalar_mult_rejected(decidb_cli):
     """`(2 * MIN(x * v) WHEN w) + SUM(x * v) <= K` — composed MIN/MAX
     constraints in v1 still don't support hard-direction MIN terms (a
     `MIN(...) <= K` style bound that needs Big-M indicator linearization).
@@ -1192,7 +1192,7 @@ def test_composed_minmax_scalar_mult_rejected(packdb_cli):
     K*WHEN fold now collapses `2 * (MIN(...) WHEN w)` into
     `WHEN(MIN(2 * x * v), w)` before the walker runs, so the rejection
     that fires now is the upstream "Big-M MIN term" limitation."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
         DECIDE x IS BOOLEAN
         SUCH THAT (2 * MIN(x * v) WHEN w) + SUM(x * v) <= 20
@@ -1202,9 +1202,9 @@ def test_composed_minmax_scalar_mult_rejected(packdb_cli):
 
 @pytest.mark.min_max
 @pytest.mark.error_binder
-def test_composed_minmax_per_wrapper_rejected(packdb_cli):
+def test_composed_minmax_per_wrapper_rejected(decidb_cli):
     """PER on a composed MIN/MAX constraint is rejected in v1."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, v, g FROM (VALUES (1, 10.0, true, 'A'), (2, 5.0, true, 'B')) t(id, v, w, g)
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= 12 PER g
@@ -1214,14 +1214,14 @@ def test_composed_minmax_per_wrapper_rejected(packdb_cli):
 
 @pytest.mark.min_max
 @pytest.mark.error_binder
-def test_composed_minmax_nonconst_rhs_subquery_rejected(packdb_cli):
+def test_composed_minmax_nonconst_rhs_subquery_rejected(decidb_cli):
     """Composed MIN/MAX with a scalar-subquery RHS is rejected in v1.
 
     v1 requires the outer RHS of a composed MIN/MAX constraint to be a
     constant literal (possibly cast-wrapped). A scalar subquery — even
     one that returns a constant — trips the dedicated guard.
     """
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= (SELECT 12)
@@ -1231,7 +1231,7 @@ def test_composed_minmax_nonconst_rhs_subquery_rejected(packdb_cli):
 
 @pytest.mark.min_max
 @pytest.mark.error_binder
-def test_composed_minmax_nonconst_rhs_column_rejected(packdb_cli):
+def test_composed_minmax_nonconst_rhs_column_rejected(decidb_cli):
     """Composed MIN/MAX with a column-reference RHS is rejected in v1.
 
     Different rejection path than the subquery shape: the binder fails
@@ -1239,7 +1239,7 @@ def test_composed_minmax_nonconst_rhs_column_rejected(packdb_cli):
     guard runs. Pinned anyway so a future widen of the composed RHS
     grammar surfaces here.
     """
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true, 12), (2, 5.0, true, 12)) t(id, v, w, cap)
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= cap
@@ -1249,7 +1249,7 @@ def test_composed_minmax_nonconst_rhs_column_rejected(packdb_cli):
 
 @pytest.mark.min_max
 @pytest.mark.error_binder
-def test_composed_minmax_outer_when_rejected(packdb_cli):
+def test_composed_minmax_outer_when_rejected(decidb_cli):
     """Outer expression-level WHEN on a composed MIN/MAX is rejected in v1.
 
     Distinct from the PER-rejection pin above: shares the
@@ -1258,7 +1258,7 @@ def test_composed_minmax_outer_when_rejected(packdb_cli):
     on outer modifiers. Pinned separately so a widened composed grammar
     that admits one but not the other is detectable.
     """
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, v, tier FROM (
             VALUES (1, 10.0, true, 'high'), (2, 5.0, true, 'low')
         ) t(id, v, w, tier)
@@ -1276,7 +1276,7 @@ def test_composed_minmax_outer_when_rejected(packdb_cli):
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_minimize_sum_plus_max_composed_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(x*v) + MAX(x*v) WHEN w — both terms pushed down (easy)."""
     sql = """
@@ -1290,8 +1290,8 @@ def test_minimize_sum_plus_max_composed_objective(
         MINIMIZE SUM(x * v) + MAX(x * v) WHEN w
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [(1, 10.0, True), (2, 5.0, False), (3, 7.0, False)]
     n = len(data)
@@ -1315,7 +1315,7 @@ def test_minimize_sum_plus_max_composed_objective(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj_m(rs, cs):
+    def decidb_obj_m(rs, cs):
         xi = cs.index("x"); vi = cs.index("v"); wi = cs.index("w")
         sum_part = sum(int(r[xi]) * float(r[vi]) for r in rs)
         max_vals = [float(r[vi]) * int(r[xi]) for r in rs if r[wi]]
@@ -1324,10 +1324,10 @@ def test_minimize_sum_plus_max_composed_objective(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj_m,
+        decidb_objective_fn=decidb_obj_m,
     )
     perf_tracker.record(
-        "min_sum_plus_max_obj", packdb_time, build_time, result.solve_time_seconds,
+        "min_sum_plus_max_obj", decidb_time, build_time, result.solve_time_seconds,
         n, n + 1, 1 + sum(1 for d in data if d[2]),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1339,7 +1339,7 @@ def test_minimize_sum_plus_max_composed_objective(
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_maximize_min_plus_sum_composed_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE MIN(x*v) WHEN w + SUM(x*v) — MIN pushed up (easy) + SUM pushed up."""
     sql = """
@@ -1353,8 +1353,8 @@ def test_maximize_min_plus_sum_composed_objective(
         MAXIMIZE MIN(x * v) WHEN w + SUM(x * v)
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [(1, 10.0, True), (2, 5.0, True), (3, 7.0, False)]
     n = len(data)
@@ -1378,7 +1378,7 @@ def test_maximize_min_plus_sum_composed_objective(
     build_time = time.perf_counter() - t_build
     result = oracle_solver.solve()
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("v"); wi = cs.index("w")
         sum_part = sum(int(r[xi]) * float(r[vi]) for r in rs)
         min_vals = [float(r[vi]) * int(r[xi]) for r in rs if r[wi]]
@@ -1387,10 +1387,10 @@ def test_maximize_min_plus_sum_composed_objective(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "max_min_plus_sum_obj", packdb_time, build_time, result.solve_time_seconds,
+        "max_min_plus_sum_obj", decidb_time, build_time, result.solve_time_seconds,
         n, n + 1, 1 + sum(1 for d in data if d[2]),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1401,9 +1401,9 @@ def test_maximize_min_plus_sum_composed_objective(
 @pytest.mark.obj_maximize
 @pytest.mark.when_objective
 @pytest.mark.error_binder
-def test_composed_minmax_objective_hard_rejected(packdb_cli):
+def test_composed_minmax_objective_hard_rejected(decidb_cli):
     """MAXIMIZE MAX(...) + SUM(...) — MAX pushed UP is hard direction; v1 rejects."""
-    packdb_cli.assert_error("""
+    decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1

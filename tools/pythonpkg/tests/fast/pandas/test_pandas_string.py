@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pandas as pd
 import numpy
 
@@ -17,7 +17,7 @@ class TestPandasString(object):
         if hasattr(pd, 'StringDtype'):
             df_in['string'] = pd.Series(strings, dtype=pd.StringDtype())
 
-        df_out = packdb.query_df(df_in, "data", "SELECT * FROM data").df()
+        df_out = decidb.query_df(df_in, "data", "SELECT * FROM data").df()
 
         assert numpy.all(df_out['object'] == strings)
         if hasattr(pd, 'StringDtype'):
@@ -28,7 +28,7 @@ class TestPandasString(object):
         # Create DataFrame with string attribute
         df = pd.DataFrame({"city": ["Amsterdam", "New York", "London"] * N})
         # Copy Dataframe to DuckDB
-        con = packdb.connect()
+        con = decidb.connect()
         con.register("df", df)
         con.execute(
             f"""

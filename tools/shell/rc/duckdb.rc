@@ -18,16 +18,16 @@ BEGIN
 	BEGIN
 		BLOCK "040904b0"
 		BEGIN
-			VALUE "Comments",         "PackDB shell"
+			VALUE "Comments",         "DecidB shell"
 			VALUE "CompanyName",      "HUDA Lab"
 
-			VALUE "FileDescription",  "PackDB shell"
+			VALUE "FileDescription",  "DecidB shell"
 			VALUE "FileVersion",      QUOTE(DUCKDB_VERSION)
-			VALUE "InternalName",     "PackDB shell"
+			VALUE "InternalName",     "DecidB shell"
 			VALUE "LegalCopyright",   "Copyright 2024 HUDA Lab"
 
-			VALUE "OriginalFilename", "packdb.exe"
-			VALUE "ProductName",      "PackDB"
+			VALUE "OriginalFilename", "decidb.exe"
+			VALUE "ProductName",      "DecidB"
 			VALUE "ProductVersion",   QUOTE(DUCKDB_VERSION)
 		END
 	END

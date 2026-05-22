@@ -2,7 +2,7 @@ import platform
 import threading
 import time
 
-import packdb
+import decidb
 import pytest
 
 
@@ -12,7 +12,7 @@ class TestConnectionInterrupt(object):
         reason="threads not allowed on Emscripten",
     )
     def test_connection_interrupt(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
 
         def interrupt():
             # Wait for query to start running before interrupting
@@ -21,12 +21,12 @@ class TestConnectionInterrupt(object):
 
         thread = threading.Thread(target=interrupt)
         thread.start()
-        with pytest.raises(packdb.InterruptException):
+        with pytest.raises(decidb.InterruptException):
             conn.execute("select count(*) from range(100000000000)").fetchall()
         thread.join()
 
     def test_interrupt_closed_connection(self):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.close()
-        with pytest.raises(packdb.ConnectionException):
+        with pytest.raises(decidb.ConnectionException):
             conn.interrupt()

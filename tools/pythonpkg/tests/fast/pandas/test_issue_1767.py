@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import packdb
+import decidb
 import numpy
 import pytest
 from conftest import NumpyPandas, ArrowPandas
@@ -13,7 +13,7 @@ class TestIssue1767(object):
     def test_unicode_join_pandas(self, duckdb_cursor, pandas):
         A = pandas.DataFrame({"key": ["a", "п"]})
         B = pandas.DataFrame({"key": ["a", "п"]})
-        con = packdb.connect(":memory:")
+        con = decidb.connect(":memory:")
         arrow = con.register("A", A).register("B", B)
         q = arrow.query("""SELECT key FROM "A" FULL JOIN "B" USING ("key") ORDER BY key""")
         result = q.df()

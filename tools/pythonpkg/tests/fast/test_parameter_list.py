@@ -1,11 +1,11 @@
-import packdb
+import decidb
 import pytest
 from conftest import NumpyPandas, ArrowPandas
 
 
 class TestParameterList(object):
     def test_bool(self, duckdb_cursor):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.execute("create table bool_table (a bool)")
         conn.execute("insert into bool_table values (TRUE)")
         res = conn.execute("select count(*) from bool_table where a =?", [True])
@@ -13,7 +13,7 @@ class TestParameterList(object):
 
     @pytest.mark.parametrize('pandas', [NumpyPandas(), ArrowPandas()])
     def test_exception(self, duckdb_cursor, pandas):
-        conn = packdb.connect()
+        conn = decidb.connect()
         df_in = pandas.DataFrame(
             {
                 'numbers': [1, 2, 3, 4, 5],
@@ -21,16 +21,16 @@ class TestParameterList(object):
         )
         conn.execute("create table bool_table (a bool)")
         conn.execute("insert into bool_table values (TRUE)")
-        with pytest.raises(packdb.NotImplementedException, match='Unable to transform'):
+        with pytest.raises(decidb.NotImplementedException, match='Unable to transform'):
             res = conn.execute("select count(*) from bool_table where a =?", [df_in])
 
     def test_explicit_nan_param(self):
-        con = packdb.default_connection()
+        con = decidb.default_connection()
         res = con.execute('select isnan(cast(? as double))', (float("nan"),))
         assert res.fetchone()[0] == True
 
     def test_string_parameter(self, duckdb_cursor):
-        conn = packdb.connect()
+        conn = decidb.connect()
         conn.execute("create table orders (o_orderdate date)")
         conn.execute("insert into orders values (date '1992-01-01'), (date '1994-01-01')")
         conn.execute(

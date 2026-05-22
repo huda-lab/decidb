@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import tempfile
 import os
 import pytest
@@ -10,7 +10,7 @@ class TestInsert(object):
     def test_insert(self, pandas):
         test_df = pandas.DataFrame({"i": [1, 2, 3], "j": ["one", "two", "three"]})
         # connect to an in-memory temporary database
-        conn = packdb.connect()
+        conn = decidb.connect()
         # get a cursor
         cursor = conn.cursor()
         conn.execute("CREATE TABLE test (i INTEGER, j STRING)")

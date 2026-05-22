@@ -1,5 +1,5 @@
 import pytest
-import packdb
+import decidb
 
 
 class Test3324(object):
@@ -26,5 +26,5 @@ class Test3324(object):
                     column1 = $1"""
         ).fetch_df()
 
-        with pytest.raises(packdb.BinderException, match="Unexpected prepared parameter"):
+        with pytest.raises(decidb.BinderException, match="Unexpected prepared parameter"):
             duckdb_cursor.execute("""execute v1(?)""", ('test1',)).fetch_df()

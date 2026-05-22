@@ -8,12 +8,12 @@ MYPY_INI_PATH = os.path.join(os.path.dirname(__file__), 'mypy.ini')
 def test_generated_stubs():
     skip_stubs_errors = ['pybind11', 'git_revision', 'is inconsistent, metaclass differs']
 
-    options = stubtest.parse_options(['packdb', '--mypy-config-file', MYPY_INI_PATH])
+    options = stubtest.parse_options(['decidb', '--mypy-config-file', MYPY_INI_PATH])
     stubtest.test_stubs(options)
 
     broken_stubs = [
         error.get_description()
-        for error in stubtest.test_module('packdb')
+        for error in stubtest.test_module('decidb')
         if not any(skip in error.get_description() for skip in skip_stubs_errors)
     ]
 

@@ -1,9 +1,9 @@
-import packdb
+import decidb
 import os
 import pandas as pd
 import pytest
 
-from packdb.typing import *
+from decidb.typing import *
 
 
 class TestNativeUDF(object):
@@ -11,8 +11,8 @@ class TestNativeUDF(object):
         def passthrough(x):
             return x
 
-        packdb.create_function('default_conn_passthrough', passthrough, [BIGINT], BIGINT)
-        res = packdb.sql('select default_conn_passthrough(5)').fetchall()
+        decidb.create_function('default_conn_passthrough', passthrough, [BIGINT], BIGINT)
+        res = decidb.sql('select default_conn_passthrough(5)').fetchall()
         assert res == [(5,)]
 
     def test_basic_use(self):
@@ -21,7 +21,7 @@ class TestNativeUDF(object):
                 return x
             return x + 1
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('plus_one', plus_one, [BIGINT], BIGINT)
         assert [(6,)] == con.sql('select plus_one(5)').fetchall()
 
@@ -29,7 +29,7 @@ class TestNativeUDF(object):
         res = con.sql('select plus_one(i) from range_table tbl(i)').fetchall()
         assert len(res) == 5000
 
-        vector_size = packdb.__standard_vector_size__
+        vector_size = decidb.__standard_vector_size__
         res = con.sql(f'select i, plus_one(i) from test_vector_types(NULL::BIGINT, false) t(i), range({vector_size})')
         assert len(res) == (vector_size * 11)
 
@@ -37,7 +37,7 @@ class TestNativeUDF(object):
         def passthrough(x):
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('passthrough', passthrough, [BIGINT], BIGINT)
         assert (
             con.sql('select passthrough(i) from range(5000) tbl(i)').fetchall()
@@ -48,7 +48,7 @@ class TestNativeUDF(object):
         def func(x):
             return x % 2
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('modulo_op', func, [BIGINT], TINYINT)
         res = con.execute('select modulo_op(?)', [5]).fetchall()
         assert res == [(1,)]
@@ -57,20 +57,20 @@ class TestNativeUDF(object):
         def takes_string(x):
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('casts_from_string', takes_string, [VARCHAR], BIGINT)
 
         res = con.sql("select casts_from_string('42')").fetchall()
         assert res == [(42,)]
 
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             res = con.sql("select casts_from_string('test')").fetchall()
 
     def test_detected_parameters(self):
         def concatenate(a: str, b: str):
             return a + b
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('py_concatenate', concatenate, None, VARCHAR)
         res = con.sql(
             """
@@ -86,7 +86,7 @@ class TestNativeUDF(object):
                 sum += arg
             return sum
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('add_nums', add_nums)
         res = con.sql(
             """
@@ -100,19 +100,19 @@ class TestNativeUDF(object):
             amount = len(args)
             return amount
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('varargs', variable_args, None, BIGINT)
         res = con.sql("""select varargs('5', '3', '2', 1, 0.12345)""").fetchall()
         assert res == [(5,)]
 
     def test_return_incorrectly_typed_object(self):
         def returns_duckdb() -> int:
-            return 'packdb'
+            return 'decidb'
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('fastest_database_in_the_west', returns_duckdb)
         with pytest.raises(
-            packdb.InvalidInputException, match="Failed to cast value: Could not convert string 'packdb' to INT64"
+            decidb.InvalidInputException, match="Failed to cast value: Could not convert string 'decidb' to INT64"
         ):
             res = con.sql('select fastest_database_in_the_west()').fetchall()
 
@@ -122,7 +122,7 @@ class TestNativeUDF(object):
                 return 5
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('null_test', five_if_null, [BIGINT], BIGINT, null_handling="SPECIAL")
         res = con.sql('select null_test(NULL)').fetchall()
         assert res == [(5,)]
@@ -158,9 +158,9 @@ class TestNativeUDF(object):
         def return_overflow():
             return overflowing_value
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('return_overflow', return_overflow, None, duckdb_type)
-        with pytest.raises(packdb.InvalidInputException):
+        with pytest.raises(decidb.InvalidInputException):
             rel = con.sql('select return_overflow()')
             res = rel.fetchall()
             print(duckdb_type)
@@ -172,13 +172,13 @@ class TestNativeUDF(object):
             original['c'] = 0
             return original
 
-        con = packdb.connect()
+        con = decidb.connect()
         range_table = con.table_function('range', [5000])
         con.create_function(
             "append_field",
             add_extra_column,
-            [packdb.struct_type({'a': BIGINT, 'b': BIGINT})],
-            packdb.struct_type({'a': BIGINT, 'b': BIGINT, 'c': BIGINT}),
+            [decidb.struct_type({'a': BIGINT, 'b': BIGINT})],
+            decidb.struct_type({'a': BIGINT, 'b': BIGINT, 'c': BIGINT}),
         )
 
         res = con.sql(

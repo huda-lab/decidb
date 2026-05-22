@@ -1,6 +1,6 @@
 import pytest
 
-_ = pytest.importorskip("packdb.experimental.spark")
+_ = pytest.importorskip("decidb.experimental.spark")
 
 from spark_namespace import USE_ACTUAL_SPARK
 from spark_namespace.sql.types import (
@@ -17,7 +17,7 @@ from spark_namespace.sql.types import (
 )
 from spark_namespace.sql.functions import col, struct, when, lit, array_contains
 from spark_namespace.errors import PySparkTypeError
-import packdb
+import decidb
 import re
 
 

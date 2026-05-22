@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 import datetime
 import pytz
@@ -20,7 +20,7 @@ class TestArrowTimestampsTimezone(object):
     def test_timestamp_timezone(self, duckdb_cursor):
         precisions = ['us', 's', 'ns', 'ms']
         current_time = datetime.datetime(2017, 11, 28, 23, 55, 59, tzinfo=pytz.UTC)
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("SET TimeZone = 'UTC'")
         for precision in precisions:
             arrow_table = generate_table(current_time, precision, 'UTC')
@@ -31,14 +31,14 @@ class TestArrowTimestampsTimezone(object):
         precisions = ['s', 'ms']
         current_time = 9223372036854775807
         for precision in precisions:
-            with pytest.raises(packdb.ConversionException, match='Could not convert'):
+            with pytest.raises(decidb.ConversionException, match='Could not convert'):
                 arrow_table = generate_table(current_time, precision, 'UTC')
-                res_utc = packdb.from_arrow(arrow_table).execute().fetchall()
+                res_utc = decidb.from_arrow(arrow_table).execute().fetchall()
 
     def test_timestamp_tz_to_arrow(self, duckdb_cursor):
         precisions = ['us', 's', 'ns', 'ms']
         current_time = datetime.datetime(2017, 11, 28, 23, 55, 59)
-        con = packdb.connect()
+        con = decidb.connect()
         for precision in precisions:
             for timezone in timezones:
                 con.execute("SET TimeZone = '" + timezone + "'")
@@ -48,7 +48,7 @@ class TestArrowTimestampsTimezone(object):
                 assert res == generate_table(current_time, 'us', timezone)
 
     def test_timestamp_tz_with_null(self, duckdb_cursor):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("create table t (i timestamptz)")
         con.execute("insert into t values (NULL),('2021-11-15 02:30:00'::timestamptz)")
         rel = con.table('t')
@@ -58,7 +58,7 @@ class TestArrowTimestampsTimezone(object):
         assert con.execute("select * from t").fetchall() == con.execute("select * from t2").fetchall()
 
     def test_timestamp_stream(self, duckdb_cursor):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("create table t (i timestamptz)")
         con.execute("insert into t values (NULL),('2021-11-15 02:30:00'::timestamptz)")
         rel = con.table('t')

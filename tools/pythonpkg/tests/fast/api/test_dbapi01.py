@@ -1,7 +1,7 @@
 # multiple result sets
 
 import numpy
-import packdb
+import decidb
 
 
 class TestMultipleResultSets(object):
@@ -32,7 +32,7 @@ class TestMultipleResultSets(object):
         numpy.testing.assert_array_equal(result['i'], expected)
 
     def test_numpy_materialized(self, duckdb_cursor, integers):
-        connection = packdb.connect('')
+        connection = decidb.connect('')
         cursor = connection.cursor()
         cursor.execute('CREATE TABLE integers (i integer)')
         cursor.execute('INSERT INTO integers VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(NULL)')

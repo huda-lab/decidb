@@ -1,6 +1,6 @@
 """WHEN-clause grammar coverage.
 
-The `decide_when_condition` non-terminal in the PackDB parser is a
+The `decide_when_condition` non-terminal in the DecidB parser is a
 restricted `c_expr` that excludes unparenthesized `NOT`, comparison
 operators (`=`, `<`, `>`, `<=`, `>=`, `<>`), and arithmetic (`+`, `-`).
 Wrapping the condition in parentheses forces it through a fuller grammar
@@ -37,17 +37,17 @@ from comparison.compare import compare_solutions
 
 
 def _run_oracle_test(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
-    *, test_id, decide_sql, data_sql, build_oracle, packdb_obj_fn,
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
+    *, test_id, decide_sql, data_sql, build_oracle, decidb_obj_fn,
 ):
-    """Boilerplate: execute PackDB, build oracle, compare.
+    """Boilerplate: execute DecidB, build oracle, compare.
 
     Mirrors `test_aggregate_local_when._run_constraint_test`. Inlined here
     rather than imported to avoid cross-test-file coupling.
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(decide_sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(decide_sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(data_sql).fetchall()
 
@@ -59,10 +59,10 @@ def _run_oracle_test(
 
     cmp = compare_solutions(
         rows, cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj_fn,
+        decidb_objective_fn=decidb_obj_fn,
     )
     perf_tracker.record(
-        test_id, packdb_time, build_time, result.solve_time_seconds,
+        test_id, decidb_time, build_time, result.solve_time_seconds,
         len(data), n_vars, n_constrs,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -79,7 +79,7 @@ def _run_oracle_test(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_paren_not_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`WHEN (NOT w)` — parenthesized NOT in a constraint.
 
@@ -118,15 +118,15 @@ def test_when_paren_not_constraint(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("val")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_oracle_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="when_paren_not_constraint",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -135,7 +135,7 @@ def test_when_paren_not_constraint(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_paren_eq_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`WHEN (tier = 'high')` — parenthesized comparison in a constraint.
 
@@ -174,15 +174,15 @@ def test_when_paren_eq_constraint(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("val")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_oracle_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="when_paren_eq_constraint",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -191,7 +191,7 @@ def test_when_paren_eq_constraint(
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_when_paren_arith_constraint(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`WHEN (a + b > 5)` — parenthesized arithmetic+comparison in a constraint.
 
@@ -232,15 +232,15 @@ def test_when_paren_arith_constraint(
         )
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("val")
         return sum(float(r[xi]) * float(r[vi]) for r in rs)
 
     _run_oracle_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="when_paren_arith_constraint",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -253,7 +253,7 @@ def test_when_paren_arith_constraint(
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_when_paren_not_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`WHEN (NOT w)` — parenthesized NOT on the objective.
 
@@ -291,7 +291,7 @@ def test_when_paren_not_objective(
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("val"); wi = cs.index("w")
         return sum(
             float(r[xi]) * float(r[vi])
@@ -300,10 +300,10 @@ def test_when_paren_not_objective(
         )
 
     _run_oracle_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="when_paren_not_objective",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -311,7 +311,7 @@ def test_when_paren_not_objective(
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_when_paren_eq_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`WHEN (tier = 'high')` — parenthesized comparison on the objective.
 
@@ -352,7 +352,7 @@ def test_when_paren_eq_objective(
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("val"); ti = cs.index("tier")
         return sum(
             float(r[xi]) * float(r[vi])
@@ -361,10 +361,10 @@ def test_when_paren_eq_objective(
         )
 
     _run_oracle_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="when_paren_eq_objective",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -372,7 +372,7 @@ def test_when_paren_eq_objective(
 @pytest.mark.when_objective
 @pytest.mark.correctness
 def test_when_paren_arith_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """`WHEN (a + b > 5)` — parenthesized arithmetic+comparison on the objective."""
     data_sql = """
@@ -409,7 +409,7 @@ def test_when_paren_arith_objective(
         oracle.set_objective(obj, ObjSense.MAXIMIZE)
         return n, 1
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("val")
         ai = cs.index("a"); bi = cs.index("b")
         return sum(
@@ -419,10 +419,10 @@ def test_when_paren_arith_objective(
         )
 
     _run_oracle_test(
-        packdb_cli, duckdb_conn, oracle_solver, perf_tracker,
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
         test_id="when_paren_arith_objective",
         decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, packdb_obj_fn=packdb_obj,
+        build_oracle=build, decidb_obj_fn=decidb_obj,
     )
 
 
@@ -435,9 +435,9 @@ def test_when_paren_arith_objective(
 @pytest.mark.when_constraint
 @pytest.mark.error_parser
 @pytest.mark.error
-def test_when_unparen_not_constraint_rejects(packdb_cli):
+def test_when_unparen_not_constraint_rejects(decidb_cli):
     """`WHEN NOT w` (unparenthesized) on a constraint — parser-level reject."""
-    packdb_cli.assert_error(
+    decidb_cli.assert_error(
         """
         SELECT id, val, w, x FROM (
             VALUES (1, 10.0, true),
@@ -455,12 +455,12 @@ def test_when_unparen_not_constraint_rejects(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.error_parser
 @pytest.mark.error
-def test_when_unparen_eq_constraint_rejects(packdb_cli):
+def test_when_unparen_eq_constraint_rejects(decidb_cli):
     """`WHEN tier = 'high'` (unparenthesized) on a constraint — parser-level reject.
 
     The `<=` token after the comparison is unparseable inside `c_expr`.
     """
-    packdb_cli.assert_error(
+    decidb_cli.assert_error(
         """
         SELECT id, val, tier, x FROM (
             VALUES (1, 10.0, 'high'),
@@ -478,9 +478,9 @@ def test_when_unparen_eq_constraint_rejects(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.error_parser
 @pytest.mark.error
-def test_when_unparen_arith_constraint_rejects(packdb_cli):
+def test_when_unparen_arith_constraint_rejects(decidb_cli):
     """`WHEN a + b > 5` (unparenthesized arithmetic+comparison) on a constraint."""
-    packdb_cli.assert_error(
+    decidb_cli.assert_error(
         """
         SELECT id, val, a, b, x FROM (
             VALUES (1, 10.0, 2, 4),
@@ -498,14 +498,14 @@ def test_when_unparen_arith_constraint_rejects(packdb_cli):
 @pytest.mark.when_objective
 @pytest.mark.error_parser
 @pytest.mark.error
-def test_when_unparen_not_objective_rejects(packdb_cli):
+def test_when_unparen_not_objective_rejects(decidb_cli):
     """`WHEN NOT w` (unparenthesized) on an objective — parser-level reject.
 
     `ReassociateObjectiveWhenComparison()` only handles the comparison-of-
     aggregate shape, not unary NOT, so the parser bails before the
     reassociator can run.
     """
-    packdb_cli.assert_error(
+    decidb_cli.assert_error(
         """
         SELECT id, val, w, x FROM (
             VALUES (1, 10.0, true),
@@ -523,7 +523,7 @@ def test_when_unparen_not_objective_rejects(packdb_cli):
 @pytest.mark.when_objective
 @pytest.mark.error_binder
 @pytest.mark.error
-def test_when_unparen_arith_objective_rejects(packdb_cli):
+def test_when_unparen_arith_objective_rejects(decidb_cli):
     """`WHEN a + b > 5` (unparenthesized) on an objective — binder-level reject.
 
     The parser successfully reassociates simple comparison-of-aggregate
@@ -534,7 +534,7 @@ def test_when_unparen_arith_objective_rejects(packdb_cli):
     full asymmetry table is in
     `context/descriptions/03_expressivity/when/todo.md`.
     """
-    packdb_cli.assert_error(
+    decidb_cli.assert_error(
         """
         SELECT id, val, a, b, x FROM (
             VALUES (1, 10.0, 2, 4),
@@ -557,7 +557,7 @@ def test_when_unparen_arith_objective_rejects(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.error_parser
 @pytest.mark.error
-def test_constraint_unparen_eq_message_sentinel(packdb_cli):
+def test_constraint_unparen_eq_message_sentinel(decidb_cli):
     """SENTINEL: pins the actual constraint-side error for unparenthesized
     `WHEN x = y <= K`.
 
@@ -571,7 +571,7 @@ def test_constraint_unparen_eq_message_sentinel(packdb_cli):
     (a) delete this test and convert the constraint case to a positive
     test in this file, or (b) update the docs and re-pin the new error.
     """
-    packdb_cli.assert_error(
+    decidb_cli.assert_error(
         """
         SELECT id, val, tier, x FROM (
             VALUES (1, 10.0, 'high'),

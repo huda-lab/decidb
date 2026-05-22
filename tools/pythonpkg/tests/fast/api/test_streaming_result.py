@@ -1,5 +1,5 @@
 import pytest
-import packdb
+import decidb
 
 
 class TestStreamingResult(object):
@@ -16,7 +16,7 @@ class TestStreamingResult(object):
         res = duckdb_cursor.sql(
             "SELECT CASE WHEN i < 10000 THEN i ELSE concat('hello', i::VARCHAR)::INT END FROM range(100000) t(i)"
         )
-        with pytest.raises(packdb.ConversionException):
+        with pytest.raises(decidb.ConversionException):
             while True:
                 tpl = res.fetchone()
                 if tpl is None:
@@ -35,7 +35,7 @@ class TestStreamingResult(object):
         res = duckdb_cursor.sql(
             "SELECT CASE WHEN i < 10000 THEN i ELSE concat('hello', i::VARCHAR)::INT END FROM range(100000) t(i)"
         )
-        with pytest.raises(packdb.ConversionException):
+        with pytest.raises(decidb.ConversionException):
             while True:
                 tpl = res.fetchmany(10)
                 if tpl is None:
@@ -56,7 +56,7 @@ class TestStreamingResult(object):
         res = duckdb_cursor.sql(
             "SELECT CASE WHEN i < 10000 THEN i ELSE concat('hello', i::VARCHAR)::INT END FROM range(100000) t(i)"
         )
-        with pytest.raises(packdb.ConversionException, match="Could not convert string 'hello10000' to INT32"):
+        with pytest.raises(decidb.ConversionException, match="Could not convert string 'hello10000' to INT32"):
             reader = res.fetch_arrow_reader(batch_size=16_384)
 
     def test_9801(self, duckdb_cursor):

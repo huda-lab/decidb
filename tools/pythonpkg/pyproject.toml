@@ -7,14 +7,14 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "packdb"
-description = "PackDB - DuckDB with DECIDE clause for optimization queries"
+name = "decidb"
+description = "DecidB - DuckDB with DECIDE clause for optimization queries"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "HUDA Lab", email = "huda-lab@nyu.edu"}
 ]
-keywords = ["database", "sql", "olap", "optimization", "packdb", "duckdb", "ilp"]
+keywords = ["database", "sql", "olap", "optimization", "decidb", "duckdb", "ilp"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -32,10 +32,10 @@ requires-python = ">=3.11"
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://huda-lab.github.io/packdb"
-Documentation = "https://huda-lab.github.io/packdb/documentation.html"
-Repository = "https://github.com/huda-lab/packdb"
-Issues = "https://github.com/huda-lab/packdb/issues"
+Homepage = "https://huda-lab.github.io/decidb"
+Documentation = "https://huda-lab.github.io/decidb/documentation.html"
+Repository = "https://github.com/huda-lab/decidb"
+Issues = "https://github.com/huda-lab/decidb/issues"
 
 [tool.setuptools_scm]
 root = "../.."
@@ -49,7 +49,7 @@ dependency-versions = "latest"
 before-build = 'pip install numpy>=2.0'
 before-test = 'python scripts/optional_requirements.py'
 test-requires = 'pytest'
-test-command = 'PACKDB_PYTHON_TEST_EXTENSION_PATH={project} PACKDB_PYTHON_TEST_EXTENSION_REQUIRED=1 python -m pytest {project}/tests --verbose'
+test-command = 'DECIDB_PYTHON_TEST_EXTENSION_PATH={project} DECIDB_PYTHON_TEST_EXTENSION_REQUIRED=1 python -m pytest {project}/tests --verbose'
 
 [tool.cibuildwheel.environment]
 PIP_CONSTRAINT = 'build-constraints.txt'

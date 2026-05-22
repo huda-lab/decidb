@@ -1,14 +1,14 @@
 # test fetchdf with various types
 import numpy
 import pytest
-import packdb
+import decidb
 from conftest import NumpyPandas
 
 
 class TestType(object):
     @pytest.mark.parametrize('pandas', [NumpyPandas()])
     def test_fetchdf(self, pandas):
-        con = packdb.connect()
+        con = decidb.connect()
         con.execute("CREATE TABLE items(item VARCHAR)")
         con.execute("INSERT INTO items VALUES ('jeans'), (''), (NULL)")
         res = con.execute("SELECT item FROM items").fetchdf()

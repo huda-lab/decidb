@@ -1,5 +1,5 @@
 import pandas as pd
-import packdb
+import decidb
 import datetime
 import pytest
 
@@ -11,7 +11,7 @@ def run_checks(df):
 
 
 def test_date_as_datetime():
-    con = packdb.connect()
+    con = decidb.connect()
     con.execute("create table t (d date)")
     con.execute("insert into t values ('1992-07-30'), (NULL)")
 

@@ -23,7 +23,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_single_row(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_single_row(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Degenerate case: only 1 input row. Trivial knapsack."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -34,9 +34,9 @@ def test_single_row(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
-    assert len(packdb_result) == 1, f"Expected 1 row, got {len(packdb_result)}"
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+    assert len(decidb_result) == 1, f"Expected 1 row, got {len(decidb_result)}"
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -64,12 +64,12 @@ def test_single_row(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
 
     perf_tracker.record(
-        "single_row", packdb_time, build_time,
+        "single_row", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -82,7 +82,7 @@ def test_single_row(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_trivial_all_selected(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_trivial_all_selected(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Constraint so loose every x=1 is feasible. Optimal is all-ones."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -93,8 +93,8 @@ def test_trivial_all_selected(packdb_cli, duckdb_conn, oracle_solver, perf_track
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -122,13 +122,13 @@ def test_trivial_all_selected(packdb_cli, duckdb_conn, oracle_solver, perf_track
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
-    assert all(v == 1.0 for v in cmp.packdb_vector), "Expected all x=1"
+    assert all(v == 1.0 for v in cmp.decidb_vector), "Expected all x=1"
 
     perf_tracker.record(
-        "trivial_all_selected", packdb_time, build_time,
+        "trivial_all_selected", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -141,7 +141,7 @@ def test_trivial_all_selected(packdb_cli, duckdb_conn, oracle_solver, perf_track
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_rhs_zero_forces_all_zero(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_rhs_zero_forces_all_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x) <= 0 forces all boolean variables to 0."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
@@ -152,8 +152,8 @@ def test_rhs_zero_forces_all_zero(packdb_cli, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -180,14 +180,14 @@ def test_rhs_zero_forces_all_zero(packdb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("l_extendedprice")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
     )
-    assert all(v == 0.0 for v in cmp.packdb_vector), "Expected all x=0"
-    assert cmp.packdb_objective == 0.0
+    assert all(v == 0.0 for v in cmp.decidb_vector), "Expected all x=0"
+    assert cmp.decidb_objective == 0.0
 
     perf_tracker.record(
-        "rhs_zero", packdb_time, build_time,
+        "rhs_zero", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -200,7 +200,7 @@ def test_rhs_zero_forces_all_zero(packdb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_negative_objective_coefficients(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_negative_objective_coefficients(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Negative account balances as coefficients — solver must pick most negative."""
     sql = """
         SELECT c_custkey, c_acctbal, x
@@ -211,8 +211,8 @@ def test_negative_objective_coefficients(packdb_cli, duckdb_conn, oracle_solver,
         MINIMIZE SUM(x * c_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(c_custkey AS BIGINT),
@@ -238,12 +238,12 @@ def test_negative_objective_coefficients(packdb_cli, duckdb_conn, oracle_solver,
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("c_acctbal")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("c_acctbal")])},
     )
 
     perf_tracker.record(
-        "neg_coeffs", packdb_time, build_time,
+        "neg_coeffs", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -252,7 +252,7 @@ def test_negative_objective_coefficients(packdb_cli, duckdb_conn, oracle_solver,
 
 
 @pytest.mark.edge_case
-def test_zero_rows_empty_input(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_zero_rows_empty_input(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """DECIDE on empty result set should return empty results, like standard SQL."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -262,7 +262,7 @@ def test_zero_rows_empty_input(packdb_cli, duckdb_conn, oracle_solver, perf_trac
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) == 0
 
 
@@ -273,7 +273,7 @@ def test_zero_rows_empty_input(packdb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.error_infeasible
-def test_avg_constraint_when_filters_all_rows(packdb_cli):
+def test_avg_constraint_when_filters_all_rows(decidb_cli):
     """AVG(...) WHEN <cond> where no row matches — now rejected pre-solver.
     AVG(∅) is undefined (divide by zero); caught by the empty-aggregate guard."""
     sql = """
@@ -287,7 +287,7 @@ def test_avg_constraint_when_filters_all_rows(packdb_cli):
         SUCH THAT AVG(x * val) WHEN (flag = 'Z') <= 1
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=r"empty|WHEN")
+    decidb_cli.assert_error(sql, match=r"empty|WHEN")
 
 
 @pytest.mark.edge_case
@@ -297,7 +297,7 @@ def test_avg_constraint_when_filters_all_rows(packdb_cli):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_maximize_sum_max_per_with_empty_when_group(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE SUM(MAX(x*v)) WHEN flag PER grp where one group has no
     WHEN-matching rows — hard-case inner-MAX with an empty group.
@@ -324,8 +324,8 @@ def test_maximize_sum_max_per_with_empty_when_group(
         MAXIMIZE SUM(MAX(x * val)) WHEN flag PER grp
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = [
         (1, 'A', 10.0, True),
@@ -373,10 +373,10 @@ def test_maximize_sum_max_per_with_empty_when_group(
     from solver.types import SolverStatus
     assert result.status == SolverStatus.OPTIMAL, (
         f"Oracle expected OPTIMAL; got {result.status}. "
-        f"PackDB returned {len(packdb_rows)} rows."
+        f"DecidB returned {len(decidb_rows)} rows."
     )
 
-    def packdb_obj(rs, cs):
+    def decidb_obj(rs, cs):
         xi = cs.index("x"); vi = cs.index("val"); fi = cs.index("flag"); gi = cs.index("grp")
         per_grp: dict = {}
         for r in rs:
@@ -388,11 +388,11 @@ def test_maximize_sum_max_per_with_empty_when_group(
         return sum(max(vs) for vs in per_grp.values() if vs)
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        packdb_objective_fn=packdb_obj,
+        decidb_rows, decidb_cols, result, data, ["x"],
+        decidb_objective_fn=decidb_obj,
     )
     perf_tracker.record(
-        "max_sum_max_per_empty_when_group", packdb_time, build_time,
+        "max_sum_max_per_empty_when_group", decidb_time, build_time,
         result.solve_time_seconds, n, n + len(z_names), len(groups),
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -417,10 +417,10 @@ def test_maximize_sum_max_per_with_empty_when_group(
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.error_infeasible
-def test_min_geq_constraint_when_empty(packdb_cli):
+def test_min_geq_constraint_when_empty(decidb_cli):
     """MIN(...) >= K WHEN <never> — easy case.
 
-    PackDB rejects empty aggregate sets before reaching the solver. An empty
+    DecidB rejects empty aggregate sets before reaching the solver. An empty
     MIN/MAX has no well-defined value (MIN(∅) = +∞, MAX(∅) = −∞); per the
     project decision to "reject all cases of an empty set," even the easy
     direction (previously trivially-satisfied) now raises.
@@ -433,14 +433,14 @@ def test_min_geq_constraint_when_empty(packdb_cli):
         SUCH THAT MIN(x * val) >= 5 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.error_infeasible
-def test_min_leq_constraint_when_empty(packdb_cli):
+def test_min_leq_constraint_when_empty(decidb_cli):
     """MIN(...) <= K WHEN <never> — hard case, now rejected pre-solver."""
     sql = """
         SELECT id, val, x FROM (
@@ -450,14 +450,14 @@ def test_min_leq_constraint_when_empty(packdb_cli):
         SUCH THAT MIN(x * val) <= 3 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.error_infeasible
-def test_max_leq_constraint_when_empty(packdb_cli):
+def test_max_leq_constraint_when_empty(decidb_cli):
     """MAX(...) <= K WHEN <never> — easy case, now rejected pre-solver."""
     sql = """
         SELECT id, val, x FROM (
@@ -467,14 +467,14 @@ def test_max_leq_constraint_when_empty(packdb_cli):
         SUCH THAT MAX(x * val) <= 2 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.error_infeasible
-def test_max_geq_constraint_when_empty(packdb_cli):
+def test_max_geq_constraint_when_empty(decidb_cli):
     """MAX(...) >= K WHEN <never> — hard case, now rejected pre-solver."""
     sql = """
         SELECT id, val, x FROM (
@@ -484,7 +484,7 @@ def test_max_geq_constraint_when_empty(packdb_cli):
         SUCH THAT MAX(x * val) >= 999 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
@@ -492,7 +492,7 @@ def test_max_geq_constraint_when_empty(packdb_cli):
 @pytest.mark.per_clause
 @pytest.mark.when_constraint
 @pytest.mark.correctness
-def test_avg_per_constraint_with_empty_group(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_avg_per_constraint_with_empty_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """AVG(...) <= K PER grp WHEN <flag> where one group has no matching rows.
 
     Per-group AVG zeroes coefficients for empty groups (physical_decide.cpp
@@ -511,7 +511,7 @@ def test_avg_per_constraint_with_empty_group(packdb_cli, duckdb_conn, oracle_sol
         SUCH THAT AVG(x * val) WHEN flag <= 8 PER grp
         MAXIMIZE SUM(x * val)
     """
-    rows, cols = packdb_cli.execute(sql)
+    rows, cols = decidb_cli.execute(sql)
     x_idx, grp_idx, val_idx = cols.index("x"), cols.index("grp"), cols.index("val")
 
     # Group B is empty after WHEN → constraint skipped → both B rows selected.
@@ -536,7 +536,7 @@ _EMPTY_WHEN_ERROR_REGEX = r"infeasible|empty|WHEN|MIN|MAX"
 @pytest.mark.min_max
 @pytest.mark.when_objective
 @pytest.mark.error_infeasible
-def test_maximize_min_objective_when_empty(packdb_cli):
+def test_maximize_min_objective_when_empty(decidb_cli):
     """MAXIMIZE MIN(...) WHEN <never> — easy-case flat MIN over empty.
 
     Formulation: global z with per-row `z <= expr_i` for WHEN-matching rows.
@@ -552,14 +552,14 @@ def test_maximize_min_objective_when_empty(packdb_cli):
         SUCH THAT SUM(x) >= 1
         MAXIMIZE MIN(x * val) WHEN val > 100
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.min_max
 @pytest.mark.when_objective
 @pytest.mark.error_infeasible
-def test_minimize_max_objective_when_empty(packdb_cli):
+def test_minimize_max_objective_when_empty(decidb_cli):
     """MINIMIZE MAX(...) WHEN <never> — easy-case flat MAX over empty.
 
     Mirror of `test_maximize_min_objective_when_empty`. MAX(∅) = −∞,
@@ -573,20 +573,20 @@ def test_minimize_max_objective_when_empty(packdb_cli):
         SUCH THAT SUM(x) >= 1
         MINIMIZE MAX(x * val) WHEN val > 100
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.min_max
 @pytest.mark.when_objective
 @pytest.mark.error_infeasible
-def test_maximize_max_objective_when_empty(packdb_cli):
+def test_maximize_max_objective_when_empty(decidb_cli):
     """MAXIMIZE MAX(...) WHEN <never> — HARD-case flat MAX over empty.
 
     Hard-case formulation: global z + per-row binary indicators y_i with
     SUM(y_i) >= 1 pinning z to one row's value. Empty row set means no
     indicator can satisfy SUM(y) >= 1 → the model is infeasible. Today
-    PackDB silently returns OPTIMAL because the indicator block is skipped
+    DecidB silently returns OPTIMAL because the indicator block is skipped
     when there are zero matching rows.
     """
     sql = """
@@ -597,14 +597,14 @@ def test_maximize_max_objective_when_empty(packdb_cli):
         SUCH THAT SUM(x) >= 1
         MAXIMIZE MAX(x * val) WHEN val > 100
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
-def test_mixed_empty_and_populated_when_terms_constraint(packdb_cli):
+def test_mixed_empty_and_populated_when_terms_constraint(decidb_cli):
     """Mixed aggregate-local WHEN with one empty term — now rejected.
 
     ``SUM(x*v) WHEN <never> + SUM(x*v) WHEN <sometimes> <= K`` — previously
@@ -625,13 +625,13 @@ def test_mixed_empty_and_populated_when_terms_constraint(packdb_cli):
                 + SUM(x * val) WHEN w2 <= 8
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.when_objective
 @pytest.mark.error_infeasible
-def test_mixed_empty_and_populated_when_terms_objective(packdb_cli):
+def test_mixed_empty_and_populated_when_terms_objective(decidb_cli):
     """Mirror of the constraint-side test for an objective — now rejected."""
     sql = """
         SELECT id, val, bonus, x FROM (
@@ -644,14 +644,14 @@ def test_mixed_empty_and_populated_when_terms_objective(packdb_cli):
         MAXIMIZE SUM(x * val) WHEN (val > 1000)
                + SUM(x * bonus) WHEN w2
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.min_max
 @pytest.mark.when_objective
 @pytest.mark.error_infeasible
-def test_minimize_min_objective_when_empty(packdb_cli):
+def test_minimize_min_objective_when_empty(decidb_cli):
     """MINIMIZE MIN(...) WHEN <never> — HARD-case flat MIN over empty.
 
     Mirror of `test_maximize_max_objective_when_empty` for the MIN side.
@@ -666,7 +666,7 @@ def test_minimize_min_objective_when_empty(packdb_cli):
         SUCH THAT SUM(x) >= 1
         MINIMIZE MIN(x * val) WHEN val > 100
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 # ----- Empty-WHEN on the CONSTRAINT side (mirrors the four objective tests above) -----
@@ -686,7 +686,7 @@ def test_minimize_min_objective_when_empty(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
-def test_max_when_empty_constraint_hard(packdb_cli):
+def test_max_when_empty_constraint_hard(decidb_cli):
     """`(MAX(x*val) WHEN <never>) >= K` — hard direction. MAX(∅) = −∞ < K
     so semantically infeasible. Currently silently OPTIMAL with arbitrary x.
     """
@@ -698,7 +698,7 @@ def test_max_when_empty_constraint_hard(packdb_cli):
         SUCH THAT (MAX(x * val) WHEN (val > 100)) >= 5
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
@@ -706,7 +706,7 @@ def test_max_when_empty_constraint_hard(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
-def test_min_when_empty_constraint_hard(packdb_cli):
+def test_min_when_empty_constraint_hard(decidb_cli):
     """`(MIN(x*val) WHEN <never>) <= K` — hard direction. MIN(∅) = +∞ > K
     so semantically infeasible. Currently silently OPTIMAL with arbitrary x.
     """
@@ -718,7 +718,7 @@ def test_min_when_empty_constraint_hard(packdb_cli):
         SUCH THAT (MIN(x * val) WHEN (val > 100)) <= 5
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
@@ -726,7 +726,7 @@ def test_min_when_empty_constraint_hard(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
-def test_sum_plus_max_when_empty_silently_vacates_constraint(packdb_cli):
+def test_sum_plus_max_when_empty_silently_vacates_constraint(decidb_cli):
     """`SUM(x*val) + (MAX(x*val) WHEN <never>) <= K` — composed easy
     direction. The doc reports the entire constraint is silently vacated:
     the SUM term should still bind even when the MAX term has empty WHEN.
@@ -734,7 +734,7 @@ def test_sum_plus_max_when_empty_silently_vacates_constraint(packdb_cli):
     On `(VALUES (1, 10.0), (2, 7.0))` with K=5, the SUM term alone is binding
     (SUM=17 > 5 if both x=1, so the constraint should force x_1+x_2 ≤ 0
     if MAX vanishes, or be infeasible per the root-todo's "reject empty"
-    directive). Currently PackDB picks x=[1,1] (SUM=17), confirming the
+    directive). Currently DecidB picks x=[1,1] (SUM=17), confirming the
     constraint is a no-op.
     """
     sql = """
@@ -745,14 +745,14 @@ def test_sum_plus_max_when_empty_silently_vacates_constraint(packdb_cli):
         SUCH THAT SUM(x * val) + (MAX(x * val) WHEN (val > 100)) <= 5
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
-def test_sum_when_empty_rejected(packdb_cli):
+def test_sum_when_empty_rejected(decidb_cli):
     """`SUM(x*val) <= K WHEN <never>` — SUM(∅) = 0 is mathematically defined
     but the "reject all empty sets" directive catches this too. Surfaces the
     likely WHEN-typo rather than silently making the constraint vacuous."""
@@ -764,7 +764,7 @@ def test_sum_when_empty_rejected(packdb_cli):
         SUCH THAT SUM(x * val) <= 5 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
@@ -772,7 +772,7 @@ def test_sum_when_empty_rejected(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
-def test_avg_when_empty_rejected(packdb_cli):
+def test_avg_when_empty_rejected(decidb_cli):
     """`AVG(x*val) <= K WHEN <never>` — AVG(∅) is undefined (divide by zero
     row count); rejected pre-solver."""
     sql = """
@@ -783,7 +783,7 @@ def test_avg_when_empty_rejected(packdb_cli):
         SUCH THAT AVG(x * val) <= 5 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
@@ -791,9 +791,9 @@ def test_avg_when_empty_rejected(packdb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
-def test_composed_easy_min_when_empty_rejected(packdb_cli):
+def test_composed_easy_min_when_empty_rejected(decidb_cli):
     """`SUM(x*val) + (MIN(x*val) WHEN <never>) >= K` — composed easy-direction
-    with an empty MIN term. Pre-fix PackDB returned OPTIMAL x=[1,1] because
+    with an empty MIN term. Pre-fix DecidB returned OPTIMAL x=[1,1] because
     the per-term auxiliary z_k for the MIN floated free (happened to coincide
     with MIN(∅) = +∞ but via the wrong mechanism). Now rejected pre-solver.
     """
@@ -805,11 +805,11 @@ def test_composed_easy_min_when_empty_rejected(packdb_cli):
         SUCH THAT SUM(x * val) + (MIN(x * val) WHEN (val > 100)) >= 100
         MAXIMIZE SUM(x * val)
     """
-    packdb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
 
 @pytest.mark.edge_case
-def test_feasibility_no_objective(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_feasibility_no_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Feasibility problem (no MAXIMIZE/MINIMIZE) — should find any feasible solution."""
     sql = """
         WITH data AS (
@@ -824,7 +824,7 @@ def test_feasibility_no_objective(packdb_cli, duckdb_conn, oracle_solver, perf_t
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) = 2 AND SUM(x * val) <= 50
     """
-    result, cols = packdb_cli.execute(sql)
+    result, cols = decidb_cli.execute(sql)
     assert len(result) == 5
 
     x_idx = cols.index("x")
@@ -842,7 +842,7 @@ def test_feasibility_no_objective(packdb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_feasibility_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Feasibility problem (no objective) combined with PER constraints.
 
     Exercises the FEASIBILITY sense path through PER constraint generation:
@@ -857,10 +857,10 @@ def test_feasibility_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     Oracle role: build the same feasibility problem in gurobipy and assert
     OPTIMAL — this is independent verification that the constraints are
-    satisfiable. Then structurally validate PackDB's chosen feasible
+    satisfiable. Then structurally validate DecidB's chosen feasible
     point (per-group cardinality + global budget). Cannot compare
     variable values directly because feasibility problems admit multiple
-    optima and PackDB / Gurobi may pick different ones.
+    optima and DecidB / Gurobi may pick different ones.
     """
     data_sql = """
         SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
@@ -878,8 +878,8 @@ def test_feasibility_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
             AND SUM(x * val) <= 35
     """
     t0 = time.perf_counter()
-    rows, cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
     data = duckdb_conn.execute(f"""
         SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), CAST(val AS DOUBLE)
         FROM ({data_sql})
@@ -913,11 +913,11 @@ def test_feasibility_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL, (
         f"Oracle reports infeasible/error for feasibility+PER: status={result.status}. "
-        f"PackDB returned {len(rows)} rows, so PackDB thinks it is feasible — divergence."
+        f"DecidB returned {len(rows)} rows, so DecidB thinks it is feasible — divergence."
     )
 
-    # Structural validation of PackDB's chosen point.
-    assert len(rows) == n, f"row count mismatch: PackDB returned {len(rows)}, expected {n}"
+    # Structural validation of DecidB's chosen point.
+    assert len(rows) == n, f"row count mismatch: DecidB returned {len(rows)}, expected {n}"
     x_idx, grp_idx, val_idx = cols.index("x"), cols.index("grp"), cols.index("val")
     by_grp: dict = defaultdict(int)
     for r in rows:
@@ -928,11 +928,11 @@ def test_feasibility_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         )
     weighted = sum(int(r[x_idx]) * float(r[val_idx]) for r in rows)
     assert weighted <= 35 + 1e-4, (
-        f"PackDB violates global budget: SUM(x*val)={weighted} > 35"
+        f"DecidB violates global budget: SUM(x*val)={weighted} > 35"
     )
 
     perf_tracker.record(
-        "feasibility_per", packdb_time, build_time, result.solve_time_seconds,
+        "feasibility_per", decidb_time, build_time, result.solve_time_seconds,
         n, n, len(groups) + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -941,9 +941,9 @@ def test_feasibility_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
 @pytest.mark.edge_case
 @pytest.mark.error
-def test_null_coefficients(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """NULL values in coefficient columns — PackDB rejects with helpful COALESCE hint."""
-    packdb_cli.assert_error("""
+def test_null_coefficients(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """NULL values in coefficient columns — DecidB rejects with helpful COALESCE hint."""
+    decidb_cli.assert_error("""
         WITH data AS (
             SELECT 1 AS id, 10.0 AS weight, 5.0 AS value UNION ALL
             SELECT 2, NULL, 3.0 UNION ALL
@@ -963,10 +963,10 @@ def test_null_coefficients(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_all_zero_objective(packdb_cli, oracle_solver, perf_tracker):
+def test_all_zero_objective(decidb_cli, oracle_solver, perf_tracker):
     """``MAXIMIZE SUM(x * 0)`` — objective is identically zero.
 
-    With a zero objective, the solver returns any feasible solution. PackDB
+    With a zero objective, the solver returns any feasible solution. DecidB
     must still report OPTIMAL with objective value 0.0 and must honour the
     feasibility constraint. A status-handling or objective-builder bug
     (e.g., treating the all-zero coefficient vector as "no objective set")
@@ -979,8 +979,8 @@ def test_all_zero_objective(packdb_cli, oracle_solver, perf_tracker):
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     n = 3
     t_build = time.perf_counter()
@@ -1003,18 +1003,18 @@ def test_all_zero_objective(packdb_cli, oracle_solver, perf_tracker):
         f"Oracle objective should be 0, got {result.objective_value}"
     )
 
-    val_idx = packdb_cols.index("val")
-    x_idx = packdb_cols.index("x")
-    packdb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in packdb_rows)
-    assert abs(packdb_obj) <= 1e-9, (
-        f"PackDB objective should be 0, got {packdb_obj}"
+    val_idx = decidb_cols.index("val")
+    x_idx = decidb_cols.index("x")
+    decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
+    assert abs(decidb_obj) <= 1e-9, (
+        f"DecidB objective should be 0, got {decidb_obj}"
     )
     # Feasibility: at least one row picked (per SUM(x) >= 1).
-    total_x = sum(int(r[x_idx]) for r in packdb_rows)
+    total_x = sum(int(r[x_idx]) for r in decidb_rows)
     assert total_x >= 1, f"SUM(x)={total_x} violates feasibility constraint"
 
     perf_tracker.record(
-        "all_zero_objective", packdb_time, build_time,
+        "all_zero_objective", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -1034,13 +1034,13 @@ def test_all_zero_objective(packdb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_many_terms_objective(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """10-column linear combination in both constraint and objective.
 
     Stresses the symbolic normalizer / expression evaluator on a much wider
     term list than typical TPC-H queries (which use 2-3 columns). Coefficient
-    mismatches between PackDB's extraction and the oracle would surface as an
+    mismatches between DecidB's extraction and the oracle would surface as an
     x-vector or objective divergence.
     """
     data_sql = (
@@ -1059,8 +1059,8 @@ def test_many_terms_objective(
         MAXIMIZE SUM(x * (c1 + 2*c2 + c3 + 2*c4 + c5 + 2*c6 + c7 + 2*c8 + c9 + 2*c10))
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT id, "
@@ -1096,18 +1096,18 @@ def test_many_terms_objective(
 
     def _obj(row):
         # Per-row objective coefficient computed the same way the oracle did.
-        cols = packdb_cols
+        cols = decidb_cols
         idx = {c: cols.index(c) for c in
                ("c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10")}
         c = [float(row[idx[f"c{k+1}"]]) for k in range(10)]
         return {"x": sum(c[k] * obj_weights[k] for k in range(10))}
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
+        decidb_rows, decidb_cols, result, data, ["x"],
         coeff_fn=_obj,
     )
     perf_tracker.record(
-        "many_terms_objective", packdb_time, build_time,
+        "many_terms_objective", decidb_time, build_time,
         result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1123,7 +1123,7 @@ def test_many_terms_objective(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_five_plus_heterogeneous_constraints(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Six mixed constraints in one query: per-row, aggregate, WHEN, PER, NE, BETWEEN.
 
@@ -1155,8 +1155,8 @@ def test_five_plus_heterogeneous_constraints(
         MAXIMIZE SUM(x * price)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT id, CAST(qty AS DOUBLE), CAST(price AS DOUBLE), "
@@ -1204,11 +1204,11 @@ def test_five_plus_heterogeneous_constraints(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("price")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("price")])},
     )
     perf_tracker.record(
-        "five_plus_heterogeneous_constraints", packdb_time, build_time,
+        "five_plus_heterogeneous_constraints", decidb_time, build_time,
         result.solve_time_seconds, n, n, 6,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1222,7 +1222,7 @@ def test_five_plus_heterogeneous_constraints(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_large_coefficient_numeric_stability(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """1e9 coefficients combined with `<>` Big-M expansion.
 
@@ -1244,8 +1244,8 @@ def test_large_coefficient_numeric_stability(
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(
         f"SELECT id, CAST(val AS DOUBLE) FROM ({data_sql})"
@@ -1273,12 +1273,12 @@ def test_large_coefficient_numeric_stability(
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_rows, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("val")])},
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("val")])},
         tolerance=1.0,  # 1e9 coefficients → absolute tolerance scaled accordingly
     )
     perf_tracker.record(
-        "large_coefficient_numeric_stability", packdb_time, build_time,
+        "large_coefficient_numeric_stability", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
@@ -1292,10 +1292,10 @@ def test_large_coefficient_numeric_stability(
 
 @pytest.mark.correctness
 @pytest.mark.edge_case
-def test_gurobi_highs_agree_on_objective(packdb_cli_highs, packdb_cli_gurobi):
+def test_gurobi_highs_agree_on_objective(decidb_cli_highs, decidb_cli_gurobi):
     """Run a linear ILP through both backends; objectives must agree.
 
-    Skips if Gurobi isn't linked (``packdb_cli_gurobi`` fixture skips).
+    Skips if Gurobi isn't linked (``decidb_cli_gurobi`` fixture skips).
     The 3-row cost-knapsack shape mirrors the ``test_bilinear_minimize_objective``
     data table but without the bilinear term — a pure linear IP small enough
     that both solvers hit the same optimum exactly.
@@ -1311,8 +1311,8 @@ def test_gurobi_highs_agree_on_objective(packdb_cli_highs, packdb_cli_gurobi):
         SUCH THAT SUM(b) >= 2
         MINIMIZE SUM(cost * b)
     """
-    highs_rows, highs_cols = packdb_cli_highs.execute(sql)
-    gurobi_rows, gurobi_cols = packdb_cli_gurobi.execute(sql)
+    highs_rows, highs_cols = decidb_cli_highs.execute(sql)
+    gurobi_rows, gurobi_cols = decidb_cli_gurobi.execute(sql)
 
     h_ci = {name: i for i, name in enumerate(highs_cols)}
     g_ci = {name: i for i, name in enumerate(gurobi_cols)}

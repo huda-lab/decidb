@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import pytest
 
 
@@ -405,7 +405,7 @@ class TestRAPIWindows:
         assert all([r == e for r, e in zip(result, expected)])
 
     def test_bitstring_agg(self, table):
-        with pytest.raises(packdb.BinderException, match="Could not retrieve required statistics"):
+        with pytest.raises(decidb.BinderException, match="Could not retrieve required statistics"):
             result = (
                 table.bitstring_agg(
                     "v",

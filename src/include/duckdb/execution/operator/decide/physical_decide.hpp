@@ -48,8 +48,8 @@ struct DecideConstraint {
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
     idx_t abs_y_idx = DConstants::INVALID_INDEX;  // sign indicator for ABS Big-M (MAXIMIZE only)
     bool abs_is_pos_bound = false;                 // true=C1 (aux >= inner), false=C2 (aux >= -inner)
-    unique_ptr<Expression> when_condition;           // PackDB: optional WHEN condition (nullptr = unconditional)
-    vector<unique_ptr<Expression>> per_columns;     // PackDB: optional PER grouping columns (empty = no grouping)
+    unique_ptr<Expression> when_condition;           // DecidB: optional WHEN condition (nullptr = unconditional)
+    vector<unique_ptr<Expression>> per_columns;     // DecidB: optional PER grouping columns (empty = no grouping)
 
     // Bilinear terms in constraint (non-Boolean pairs left by optimizer)
     vector<BilinearConstraintTerm> bilinear_terms;
@@ -78,8 +78,8 @@ struct DecideConstraint {
 //! of the form MINIMIZE SUM((linear_expr)^2) + linear_terms.
 struct Objective {
     vector<Term> terms;                    // Linear objective terms
-    unique_ptr<Expression> when_condition; // PackDB: optional WHEN condition (nullptr = unconditional)
-    vector<unique_ptr<Expression>> per_columns; // PackDB: optional PER grouping columns (empty = no grouping)
+    unique_ptr<Expression> when_condition; // DecidB: optional WHEN condition (nullptr = unconditional)
+    vector<unique_ptr<Expression>> per_columns; // DecidB: optional PER grouping columns (empty = no grouping)
 
     //! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
     //! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).

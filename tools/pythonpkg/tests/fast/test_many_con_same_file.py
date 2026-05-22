@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 
@@ -15,13 +15,13 @@ def test_multiple_writes():
         os.remove("test.db")
     except:
         pass
-    con1 = packdb.connect("test.db")
-    con2 = packdb.connect("test.db")
+    con1 = decidb.connect("test.db")
+    con2 = decidb.connect("test.db")
     con1.execute("CREATE TABLE foo1 as SELECT 1 as a, 2 as b")
     con2.execute("CREATE TABLE bar1 as SELECT 2 as a, 3 as b")
     con2.close()
     con1.close()
-    con3 = packdb.connect("test.db")
+    con3 = decidb.connect("test.db")
     tbls = get_tables(con3)
     assert tbls == ['bar1', 'foo1']
     del con1
@@ -35,11 +35,11 @@ def test_multiple_writes():
 
 
 def test_multiple_writes_memory():
-    con1 = packdb.connect()
-    con2 = packdb.connect()
+    con1 = decidb.connect()
+    con2 = decidb.connect()
     con1.execute("CREATE TABLE foo1 as SELECT 1 as a, 2 as b")
     con2.execute("CREATE TABLE bar1 as SELECT 2 as a, 3 as b")
-    con3 = packdb.connect(":memory:")
+    con3 = decidb.connect(":memory:")
     tbls = get_tables(con1)
     assert tbls == ['foo1']
     tbls = get_tables(con2)
@@ -52,11 +52,11 @@ def test_multiple_writes_memory():
 
 
 def test_multiple_writes_named_memory():
-    con1 = packdb.connect(":memory:1")
-    con2 = packdb.connect(":memory:1")
+    con1 = decidb.connect(":memory:1")
+    con2 = decidb.connect(":memory:1")
     con1.execute("CREATE TABLE foo1 as SELECT 1 as a, 2 as b")
     con2.execute("CREATE TABLE bar1 as SELECT 2 as a, 3 as b")
-    con3 = packdb.connect(":memory:1")
+    con3 = decidb.connect(":memory:1")
     tbls = get_tables(con3)
     assert tbls == ['bar1', 'foo1']
     del con1
@@ -65,22 +65,22 @@ def test_multiple_writes_named_memory():
 
 
 def test_diff_config():
-    con1 = packdb.connect("test.db", False)
+    con1 = decidb.connect("test.db", False)
     with pytest.raises(
-        packdb.ConnectionException,
+        decidb.ConnectionException,
         match="Can't open a connection to same database file with a different configuration than existing connections",
     ):
-        con2 = packdb.connect("test.db", True)
+        con2 = decidb.connect("test.db", True)
     con1.close()
     del con1
 
 
 def test_diff_config_extended():
-    con1 = packdb.connect("test.db", config={'null_order': 'NULLS FIRST'})
+    con1 = decidb.connect("test.db", config={'null_order': 'NULLS FIRST'})
     with pytest.raises(
-        packdb.ConnectionException,
+        decidb.ConnectionException,
         match="Can't open a connection to same database file with a different configuration than existing connections",
     ):
-        con2 = packdb.connect("test.db")
+        con2 = decidb.connect("test.db")
     con1.close()
     del con1

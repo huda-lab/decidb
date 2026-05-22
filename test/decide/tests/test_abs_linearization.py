@@ -21,12 +21,12 @@ import pytest
 from solver.types import VarType, ObjSense, SolverStatus
 
 
-def _compute_abs_objective(packdb_rows, packdb_cols, var_name, ref_col):
-    """Compute SUM(ABS(var - ref_col)) from PackDB output."""
-    ci = {name: i for i, name in enumerate(packdb_cols)}
+def _compute_abs_objective(decidb_rows, decidb_cols, var_name, ref_col):
+    """Compute SUM(ABS(var - ref_col)) from DecidB output."""
+    ci = {name: i for i, name in enumerate(decidb_cols)}
     return sum(
         abs(float(row[ci[var_name]]) - float(row[ci[ref_col]]))
-        for row in packdb_rows
+        for row in decidb_rows
     )
 
 
@@ -34,7 +34,7 @@ def _compute_abs_objective(packdb_rows, packdb_cols, var_name, ref_col):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_abs_objective_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_objective_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE SUM(ABS(new_qty - l_quantity)) with aggregate constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
@@ -45,8 +45,8 @@ def test_abs_objective_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
         MINIMIZE SUM(ABS(new_qty - l_quantity))
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -85,13 +85,13 @@ def test_abs_objective_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    packdb_obj = _compute_abs_objective(packdb_result, packdb_cols, "new_qty", "l_quantity")
-    assert abs(packdb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "new_qty", "l_quantity")
+    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_objective_basic", packdb_time, build_time,
+        "abs_objective_basic", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, 1 + n * 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -102,7 +102,7 @@ def test_abs_objective_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracke
 @pytest.mark.when_constraint
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_abs_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE SUM(ABS(new_qty - l_quantity)) WHEN l_returnflag = 'R'."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, new_qty
@@ -113,8 +113,8 @@ def test_abs_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
         MINIMIZE SUM(ABS(new_qty - l_quantity)) WHEN l_returnflag = 'R'
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -156,18 +156,18 @@ def test_abs_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_obj = sum(
         abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
-        for row in packdb_result
+        for row in decidb_result
         if row[ci["l_returnflag"]] == 'R'
     )
-    assert abs(packdb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_objective_when", packdb_time, build_time,
+        "abs_objective_when", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, 1 + n * 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -178,7 +178,7 @@ def test_abs_objective_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.per_clause
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_abs_objective_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_objective_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE SUM(ABS(new_qty - l_quantity)) with PER l_orderkey constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
@@ -189,8 +189,8 @@ def test_abs_objective_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MINIMIZE SUM(ABS(new_qty - l_quantity))
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -235,13 +235,13 @@ def test_abs_objective_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tra
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    packdb_obj = _compute_abs_objective(packdb_result, packdb_cols, "new_qty", "l_quantity")
-    assert abs(packdb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "new_qty", "l_quantity")
+    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_objective_per", packdb_time, build_time,
+        "abs_objective_per", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, len(groups) + n * 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -252,7 +252,7 @@ def test_abs_objective_with_per(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.cons_perrow
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_abs_constraint_per_row(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_constraint_per_row(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Per-row constraint: ABS(new_qty - l_quantity) <= 5."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, new_qty
@@ -263,8 +263,8 @@ def test_abs_constraint_per_row(packdb_cli, duckdb_conn, oracle_solver, perf_tra
         MAXIMIZE SUM(new_qty * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -305,22 +305,22 @@ def test_abs_constraint_per_row(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 
     assert result.status == SolverStatus.OPTIMAL
     # Verify per-row ABS constraint
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    for row in packdb_result:
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    for row in decidb_result:
         deviation = abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
         assert deviation <= 5.0 + 1e-6, f"ABS constraint violated: deviation={deviation}"
 
     # Compare objectives
-    packdb_obj = sum(
+    decidb_obj = sum(
         float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_constraint_perrow", packdb_time, build_time,
+        "abs_constraint_perrow", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, n * 3,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -331,7 +331,7 @@ def test_abs_constraint_per_row(packdb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_abs_constraint_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_constraint_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Aggregate constraint: SUM(ABS(new_qty - l_quantity)) <= 50."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, new_qty
@@ -342,8 +342,8 @@ def test_abs_constraint_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_t
         MAXIMIZE SUM(new_qty * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -383,24 +383,24 @@ def test_abs_constraint_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_t
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    ci = {name: i for i, name in enumerate(packdb_cols)}
+    ci = {name: i for i, name in enumerate(decidb_cols)}
     # Verify aggregate ABS constraint
     total_dev = sum(
         abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
-        for row in packdb_result
+        for row in decidb_result
     )
     assert total_dev <= 50.0 + 1e-4, f"Aggregate ABS constraint violated: {total_dev}"
 
-    packdb_obj = sum(
+    decidb_obj = sum(
         float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_constraint_agg", packdb_time, build_time,
+        "abs_constraint_agg", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, 1 + n * 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -412,7 +412,7 @@ def test_abs_constraint_aggregate(packdb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.when_constraint
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_abs_constraint_aggregate_with_when(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(ABS(new_qty - l_quantity)) <= 30 WHEN l_returnflag = 'R'.
 
     Exercises WHEN mask propagation to ABS-linearization auxiliaries in an
@@ -432,8 +432,8 @@ def test_abs_constraint_aggregate_with_when(packdb_cli, duckdb_conn, oracle_solv
         MAXIMIZE SUM(new_qty * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -476,28 +476,28 @@ def test_abs_constraint_aggregate_with_when(packdb_cli, duckdb_conn, oracle_solv
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    ci = {name: i for i, name in enumerate(packdb_cols)}
+    ci = {name: i for i, name in enumerate(decidb_cols)}
 
-    # Sanity check: PackDB actually respected the WHEN-filtered ABS bound
+    # Sanity check: DecidB actually respected the WHEN-filtered ABS bound
     r_total_dev = sum(
         abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
-        for row in packdb_result
+        for row in decidb_result
         if row[ci["l_returnflag"]] == 'R'
     )
     assert r_total_dev <= 30.0 + 1e-4, (
         f"WHEN-filtered ABS sum exceeded 30: {r_total_dev}"
     )
 
-    packdb_obj = sum(
+    decidb_obj = sum(
         float(row[ci["new_qty"]]) * float(row[ci["l_extendedprice"]])
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_constraint_agg_when", packdb_time, build_time,
+        "abs_constraint_agg_when", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, 1 + n * 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -508,7 +508,7 @@ def test_abs_constraint_aggregate_with_when(packdb_cli, duckdb_conn, oracle_solv
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_abs_multiple_terms(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_multiple_terms(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Two ABS terms: MINIMIZE SUM(ABS(x - a) + ABS(y - b))."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, x, y
@@ -520,8 +520,8 @@ def test_abs_multiple_terms(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
         MINIMIZE SUM(ABS(x - l_quantity) + ABS(y - l_extendedprice))
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -578,18 +578,18 @@ def test_abs_multiple_terms(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_obj = sum(
         abs(float(row[ci["x"]]) - float(row[ci["l_quantity"]]))
         + abs(float(row[ci["y"]]) - float(row[ci["l_extendedprice"]]))
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_multiple", packdb_time, build_time,
+        "abs_multiple", decidb_time, build_time,
         result.solve_time_seconds, n, n * 4, 2 + n * 4,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -597,14 +597,14 @@ def test_abs_multiple_terms(packdb_cli, duckdb_conn, oracle_solver, perf_tracker
 
 
 @pytest.mark.correctness
-def test_abs_no_decide_var(packdb_cli, duckdb_conn):
+def test_abs_no_decide_var(decidb_cli, duckdb_conn):
     """ABS without DECIDE variable is regular SQL — should not be rewritten."""
     sql = """
         SELECT l_orderkey, ABS(l_quantity - 25) AS deviation
         FROM lineitem
         WHERE l_orderkey <= 3
     """
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
 
     expected = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -612,9 +612,9 @@ def test_abs_no_decide_var(packdb_cli, duckdb_conn):
         FROM lineitem WHERE l_orderkey <= 3
     """).fetchall()
 
-    assert len(packdb_result) == len(expected)
+    assert len(decidb_result) == len(expected)
     for pr, er in zip(
-        sorted(packdb_result, key=lambda r: r[0]),
+        sorted(decidb_result, key=lambda r: r[0]),
         sorted(expected, key=lambda r: r[0]),
     ):
         assert abs(float(pr[1]) - float(er[1])) <= 1e-6
@@ -625,7 +625,7 @@ def test_abs_no_decide_var(packdb_cli, duckdb_conn):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_abs_mixed_vars(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_mixed_vars(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Mixed BOOLEAN + REAL with ABS on REAL variable only."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, s, w
@@ -637,8 +637,8 @@ def test_abs_mixed_vars(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MINIMIZE SUM(ABS(w - l_quantity))
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -682,20 +682,20 @@ def test_abs_mixed_vars(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    packdb_obj = sum(
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    decidb_obj = sum(
         abs(float(row[ci["w"]]) - float(row[ci["l_quantity"]]))
-        for row in packdb_result
+        for row in decidb_result
     )
-    assert abs(packdb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
     # Check boolean constraint
-    s_sum = sum(1 for row in packdb_result if float(row[ci["s"]]) >= 0.5)
+    s_sum = sum(1 for row in decidb_result if float(row[ci["s"]]) >= 0.5)
     assert s_sum >= 5, f"Boolean constraint violated: SUM(s) = {s_sum}"
 
     perf_tracker.record(
-        "abs_mixed", packdb_time, build_time,
+        "abs_mixed", decidb_time, build_time,
         result.solve_time_seconds, n, n * 3, 2 + n * 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -707,7 +707,7 @@ def test_abs_mixed_vars(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_real_abs_fractional_target_oracle(
-    packdb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """``SUM(ABS(x - 2.5)) <= K`` with IS REAL and a non-integer target constant.
 
@@ -727,8 +727,8 @@ def test_real_abs_fractional_target_oracle(
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
-    packdb_rows, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -764,19 +764,19 @@ def test_real_abs_fractional_target_oracle(
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    ci = {name: i for i, name in enumerate(packdb_cols)}
-    total_dev = sum(abs(float(row[ci["x"]]) - 2.5) for row in packdb_rows)
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    total_dev = sum(abs(float(row[ci["x"]]) - 2.5) for row in decidb_rows)
     assert total_dev <= 10.0 + 1e-4, f"ABS cap violated: {total_dev}"
 
-    packdb_obj = sum(
-        float(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in packdb_rows
+    decidb_obj = sum(
+        float(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_rows
     )
-    assert abs(packdb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "real_abs_fractional_target", packdb_time, build_time,
+        "real_abs_fractional_target", decidb_time, build_time,
         result.solve_time_seconds, n, n * 2, 1 + n * 2,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -787,7 +787,7 @@ def test_real_abs_fractional_target_oracle(
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_abs_maximize_objective_basic(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_abs_maximize_objective_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MAXIMIZE SUM(ABS(x - l_quantity)): Big-M reformulation must return correct optimum.
 
     Regression test for the unsound MAXIMIZE+ABS linearization bug. Previously
@@ -804,8 +804,8 @@ def test_abs_maximize_objective_basic(packdb_cli, duckdb_conn, oracle_solver, pe
         MAXIMIZE SUM(ABS(x - l_quantity))
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -863,13 +863,13 @@ def test_abs_maximize_objective_basic(packdb_cli, duckdb_conn, oracle_solver, pe
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    packdb_obj = _compute_abs_objective(packdb_result, packdb_cols, "x", "l_quantity")
-    assert abs(packdb_obj - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: PackDB={packdb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "x", "l_quantity")
+    assert abs(decidb_obj - result.objective_value) <= 1e-3, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
-        "abs_maximize_basic", packdb_time, build_time,
+        "abs_maximize_basic", decidb_time, build_time,
         result.solve_time_seconds, n, n * 3, 1 + n * 4,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
@@ -880,11 +880,11 @@ def test_abs_maximize_objective_basic(packdb_cli, duckdb_conn, oracle_solver, pe
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_abs_maximize_no_bound_raises(packdb_cli):
+def test_abs_maximize_no_bound_raises(decidb_cli):
     """MAXIMIZE SUM(ABS(x - l_quantity)) without an upper bound on x must raise.
 
     The Big-M computation requires a finite upper bound on the decision variable
-    to pin aux = |inner|. Without it, there is no valid M and PackDB must raise
+    to pin aux = |inner|. Without it, there is no valid M and DecidB must raise
     an InvalidInputException naming the unbounded variable.
     """
     sql = """
@@ -896,4 +896,4 @@ def test_abs_maximize_no_bound_raises(packdb_cli):
         MAXIMIZE SUM(ABS(x - l_quantity))
     """
     with pytest.raises(Exception, match="finite bound"):
-        packdb_cli.execute(sql)
+        decidb_cli.execute(sql)

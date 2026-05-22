@@ -27,7 +27,7 @@ class ReadStream;
 using std::move;
 #endif
 
-//! PackDB's constants
+//! DecidB's constants
 extern const std::vector<string> DECIDE_VARIABLE_TYPES;
 bool IsIntegerTypeVariable(string var_type); 
 

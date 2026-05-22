@@ -2,12 +2,12 @@
 
 ## Overview
 
-The model builder transforms the solver-agnostic `SolverInput` (evaluated constraints with numeric coefficients) into a `SolverModel` (flat variable arrays + constraint list in COO format + optional Q matrix for QP). This is the bridge between PackDB's domain model and the generic optimization formulation that any solver backend can consume.
+The model builder transforms the solver-agnostic `SolverInput` (evaluated constraints with numeric coefficients) into a `SolverModel` (flat variable arrays + constraint list in COO format + optional Q matrix for QP). This is the bridge between DecidB's domain model and the generic optimization formulation that any solver backend can consume.
 
 The core logic lives in `SolverModel::Build()`, a static method that takes a `SolverInput` (by non-const reference, so raw global constraints can be moved rather than copied) and a pre-built `VarIndexer`, and returns a fully constructed `SolverModel`. The `VarIndexer` is constructed once in `PhysicalDecide::Finalize()` and threaded through both `SolveModel()` and `Build()` to avoid duplicate construction (see `01_pipeline/03_execution.md`).
 
-**Key Source File**: `src/packdb/utility/ilp_model_builder.cpp`
-**Headers**: `src/include/duckdb/packdb/ilp_model.hpp`, `src/include/duckdb/packdb/solver_input.hpp`
+**Key Source File**: `src/decidb/utility/ilp_model_builder.cpp`
+**Headers**: `src/include/duckdb/decidb/ilp_model.hpp`, `src/include/duckdb/decidb/solver_input.hpp`
 
 ## Variable Setup
 

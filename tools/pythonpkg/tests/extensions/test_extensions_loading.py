@@ -1,7 +1,7 @@
 import os
 import platform
 
-import packdb
+import decidb
 from pytest import raises
 import pytest
 
@@ -22,13 +22,13 @@ def test_extension_loading(require):
 
 
 def test_install_non_existent_extension():
-    conn = packdb.connect()
+    conn = decidb.connect()
     conn.execute("set custom_extension_repository = 'http://example.com'")
 
-    with raises(packdb.IOException) as exc:
+    with raises(decidb.IOException) as exc:
         conn.install_extension('non-existent')
 
-        if not isinstance(exc, packdb.HTTPException):
+        if not isinstance(exc, decidb.HTTPException):
             pytest.skip(reason='This test does not throw an HTTPException, only an IOException')
         value = exc.value
 
@@ -40,20 +40,20 @@ def test_install_non_existent_extension():
 
 def test_install_misuse_errors(duckdb_cursor):
     with pytest.raises(
-        packdb.InvalidInputException,
+        decidb.InvalidInputException,
         match="Both 'repository' and 'repository_url' are set which is not allowed, please pick one or the other",
     ):
         duckdb_cursor.install_extension('name', repository='hello', repository_url='hello.com')
 
     with pytest.raises(
-        packdb.InvalidInputException, match="The provided 'repository' or 'repository_url' can not be empty!"
+        decidb.InvalidInputException, match="The provided 'repository' or 'repository_url' can not be empty!"
     ):
         duckdb_cursor.install_extension('name', repository_url='')
 
     with pytest.raises(
-        packdb.InvalidInputException, match="The provided 'repository' or 'repository_url' can not be empty!"
+        decidb.InvalidInputException, match="The provided 'repository' or 'repository_url' can not be empty!"
     ):
         duckdb_cursor.install_extension('name', repository='')
 
-    with pytest.raises(packdb.InvalidInputException, match="The provided 'version' can not be empty!"):
+    with pytest.raises(decidb.InvalidInputException, match="The provided 'version' can not be empty!"):
         duckdb_cursor.install_extension('name', version='')

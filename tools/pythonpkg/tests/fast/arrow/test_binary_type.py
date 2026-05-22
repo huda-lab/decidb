@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 
 try:
@@ -24,18 +24,18 @@ class TestArrowBinary(object):
 
         # Fixed Size Binary
         arrow_table = create_binary_table(pa.binary(3))
-        rel = packdb.from_arrow(arrow_table)
+        rel = decidb.from_arrow(arrow_table)
         res = rel.execute().fetchall()
         assert res == [(b"foo",), (b"bar",), (b"baz",)]
 
         # Normal Binary
         arrow_table = create_binary_table(pa.binary())
-        rel = packdb.from_arrow(arrow_table)
+        rel = decidb.from_arrow(arrow_table)
         res = rel.execute().fetchall()
         assert res == [(b"foo",), (b"bar",), (b"baz",)]
 
         # Large Binary
         arrow_table = create_binary_table(pa.large_binary())
-        rel = packdb.from_arrow(arrow_table)
+        rel = decidb.from_arrow(arrow_table)
         res = rel.execute().fetchall()
         assert res == [(b"foo",), (b"bar",), (b"baz",)]

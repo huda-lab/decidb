@@ -71,4 +71,4 @@ SUCH THAT NORM(new_val - target) <= budget
 
 ## SDP Boundary Note
 
-Semi-definite programming (SDP) is **not planned**. Neither Gurobi nor HiGHS is an SDP solver. This is noted here as an explicit boundary of PackDB's intended expressiveness — PackDB targets the LP/ILP/MILP/QP/MIQP family, not the broader conic programming hierarchy.
+Semi-definite programming (SDP) is **not planned**. Neither Gurobi nor HiGHS is an SDP solver. This is noted here as an explicit boundary of DecidB's intended expressiveness — DecidB targets the LP/ILP/MILP/QP/MIQP family, not the broader conic programming hierarchy.

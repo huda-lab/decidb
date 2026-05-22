@@ -1,30 +1,30 @@
-import packdb
+import decidb
 import pytest
 import datetime
 
 
 class TestPythonResult(object):
     def test_result_closed(self, duckdb_cursor):
-        connection = packdb.connect('')
+        connection = decidb.connect('')
         cursor = connection.cursor()
         cursor.execute('CREATE TABLE integers (i integer)')
         cursor.execute('INSERT INTO integers VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(NULL)')
         rel = connection.table("integers")
         res = rel.aggregate("sum(i)").execute()
         res.close()
-        with pytest.raises(packdb.InvalidInputException, match='result closed'):
+        with pytest.raises(decidb.InvalidInputException, match='result closed'):
             res.fetchone()
-        with pytest.raises(packdb.InvalidInputException, match='result closed'):
+        with pytest.raises(decidb.InvalidInputException, match='result closed'):
             res.fetchall()
-        with pytest.raises(packdb.InvalidInputException, match='result closed'):
+        with pytest.raises(decidb.InvalidInputException, match='result closed'):
             res.fetchnumpy()
-        with pytest.raises(packdb.InvalidInputException, match='There is no query result'):
+        with pytest.raises(decidb.InvalidInputException, match='There is no query result'):
             res.fetch_arrow_table()
-        with pytest.raises(packdb.InvalidInputException, match='There is no query result'):
+        with pytest.raises(decidb.InvalidInputException, match='There is no query result'):
             res.fetch_arrow_reader(1)
 
     def test_result_describe_types(self, duckdb_cursor):
-        connection = packdb.connect('')
+        connection = decidb.connect('')
         cursor = connection.cursor()
         cursor.execute('CREATE TABLE test (i bool, j TIME, k VARCHAR)')
         cursor.execute("INSERT INTO test VALUES (TRUE, '01:01:01', 'bla' )")
@@ -37,7 +37,7 @@ class TestPythonResult(object):
         ]
 
     def test_result_timestamps(self, duckdb_cursor):
-        connection = packdb.connect('')
+        connection = decidb.connect('')
         cursor = connection.cursor()
         cursor.execute(
             'CREATE TABLE IF NOT EXISTS timestamps (sec TIMESTAMP_S, milli TIMESTAMP_MS,micro TIMESTAMP_US, nano TIMESTAMP_NS );'
@@ -57,7 +57,7 @@ class TestPythonResult(object):
         ]
 
     def test_result_interval(self):
-        connection = packdb.connect()
+        connection = decidb.connect()
         cursor = connection.cursor()
         cursor.execute('CREATE TABLE IF NOT EXISTS intervals (ivals INTERVAL)')
         cursor.execute("INSERT INTO intervals VALUES ('1 day'), ('2 second'), ('1 microsecond')")
@@ -72,6 +72,6 @@ class TestPythonResult(object):
         ]
 
     def test_description_uuid(self):
-        connection = packdb.connect()
+        connection = decidb.connect()
         connection.execute("select uuid();")
         connection.description

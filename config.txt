@@ -1,6 +1,6 @@
-[packdb]
+[decidb]
 build_mode = release
-db_file = packdb.db
+db_file = decidb.db
 
 [tpch]
 scale_factor = 1.0

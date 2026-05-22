@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <script>
-  (function(){var t=localStorage.getItem('packdb-theme')||'light';
+  (function(){var t=localStorage.getItem('decidb-theme')||'light';
   document.documentElement.setAttribute('data-theme',t)})();
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Get started with PackDB - Download or build the standalone database and run your first optimization query in minutes.">
-  <meta name="keywords" content="PackDB, DuckDB, SQL, optimization, installation, tutorial, getting started">
-  <title>Getting Started - PackDB</title>
+  <meta name="description" content="Get started with DecidB - Download or build the standalone database and run your first optimization query in minutes.">
+  <meta name="keywords" content="DecidB, DuckDB, SQL, optimization, installation, tutorial, getting started">
+  <title>Getting Started - DecidB</title>
 
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
@@ -62,7 +62,7 @@
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="PackDB" class="h-8 logo-img">
+        <img src="assets/images/logo.svg" alt="DecidB" class="h-8 logo-img">
         <div class="hidden sm:block">
           <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
@@ -79,7 +79,7 @@
 
       <!-- CTA Buttons -->
       <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
            class="btn btn-secondary text-sm">
           <i data-lucide="github" class="w-4 h-4"></i>
           GitHub
@@ -111,7 +111,7 @@
         <a href="examples.html" class="block py-2 nav-link">Examples</a>
         <a href="about.html" class="block py-2 nav-link">About</a>
         <hr class="border-bdcolor">
-        <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer"
+        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
            class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
           <i data-lucide="github" class="w-5 h-5"></i>
           GitHub
@@ -143,10 +143,10 @@
 
         <div class="max-w-4xl">
           <h1 class="text-4xl md:text-5xl text-fg mb-4">
-            Getting Started with PackDB
+            Getting Started with DecidB
           </h1>
           <p class="text-xl text-fg-muted">
-            Install PackDB and run your first optimization query.
+            Install DecidB and run your first optimization query.
           </p>
         </div>
       </div>
@@ -194,7 +194,7 @@
               <!-- Binary Users -->
               <div class="callout callout-info mb-6">
                 <strong>Binary Downloads (Recommended)</strong>
-                <p class="text-sm mt-1">No prerequisites. PackDB binaries are self-contained.</p>
+                <p class="text-sm mt-1">No prerequisites. DecidB binaries are self-contained.</p>
               </div>
 
               <!-- Build from Source -->
@@ -220,7 +220,7 @@
 
               <div class="callout callout-warning">
                 <strong>Development Status</strong>
-                <p class="text-sm mt-1">PackDB is in active development. The <code>hatim</code> branch contains the stable prototype.</p>
+                <p class="text-sm mt-1">DecidB is in active development. The <code>hatim</code> branch contains the stable prototype.</p>
               </div>
             </section>
 
@@ -263,17 +263,17 @@
                           <tr class="border-t border-bdcolor">
                             <td class="px-4 py-3 font-medium text-fg">Linux x86-64</td>
                             <td class="px-4 py-3 text-fg-muted">Ubuntu 18.04+, CentOS 7+</td>
-                            <td class="px-4 py-3"><code class="text-fg-muted">packdb_cli-linux-amd64.zip</code></td>
+                            <td class="px-4 py-3"><code class="text-fg-muted">decidb_cli-linux-amd64.zip</code></td>
                           </tr>
                           <tr class="border-t border-bdcolor">
                             <td class="px-4 py-3 font-medium text-fg">macOS Universal</td>
                             <td class="px-4 py-3 text-fg-muted">macOS 11.0+</td>
-                            <td class="px-4 py-3"><code class="text-fg-muted">packdb_cli-osx-universal.zip</code></td>
+                            <td class="px-4 py-3"><code class="text-fg-muted">decidb_cli-osx-universal.zip</code></td>
                           </tr>
                           <tr class="border-t border-bdcolor">
                             <td class="px-4 py-3 font-medium text-fg">Windows x64</td>
                             <td class="px-4 py-3 text-fg-muted">Windows 10+</td>
-                            <td class="px-4 py-3"><code class="text-fg-muted">packdb_cli-windows-amd64.zip</code></td>
+                            <td class="px-4 py-3"><code class="text-fg-muted">decidb_cli-windows-amd64.zip</code></td>
                           </tr>
                         </tbody>
                       </table>
@@ -286,7 +286,7 @@
                   <!-- Step 2: Download -->
                   <div class="mb-8">
                     <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Download from GitHub Releases</h3>
-                    <a href="https://github.com/huda-lab/packdb/releases/latest" target="_blank" rel="noopener noreferrer"
+                    <a href="https://github.com/huda-lab/decidb/releases/latest" target="_blank" rel="noopener noreferrer"
                        class="inline-flex items-center gap-2 btn btn-primary mb-4">
                       <i data-lucide="external-link" class="w-4 h-4"></i>
                       Latest Release
@@ -312,13 +312,13 @@
                           </button>
                         </div>
                         <pre class="language-bash"><code id="code-extract-unix"># Extract the downloaded file (adjust filename for your platform)
-unzip packdb_cli-linux-amd64.zip
+unzip decidb_cli-linux-amd64.zip
 
 # Make executable
-chmod +x packdb
+chmod +x decidb
 
 # Verify installation
-./packdb --version</code></pre>
+./decidb --version</code></pre>
                       </div>
                     </div>
 
@@ -334,10 +334,10 @@ chmod +x packdb
                           </button>
                         </div>
                         <pre class="language-bash"><code id="code-extract-win"># Extract ZIP file using File Explorer or:
-Expand-Archive packdb_cli-windows-amd64.zip -DestinationPath .
+Expand-Archive decidb_cli-windows-amd64.zip -DestinationPath .
 
 # Verify installation
-.\packdb.exe --version</code></pre>
+.\decidb.exe --version</code></pre>
                       </div>
                     </div>
                   </div>
@@ -361,7 +361,7 @@ Expand-Archive packdb_cli-windows-amd64.zip -DestinationPath .
                         </button>
                       </div>
                       <pre class="language-bash"><code id="code-test-binary"># Test basic query
-./packdb -c "SELECT 'PackDB is ready!' as message;"</code></pre>
+./decidb -c "SELECT 'DecidB is ready!' as message;"</code></pre>
                     </div>
                   </div>
                 </div>
@@ -379,8 +379,8 @@ Expand-Archive packdb_cli-windows-amd64.zip -DestinationPath .
                           Copy
                         </button>
                       </div>
-                      <pre class="language-bash"><code id="code-clone">git clone https://github.com/huda-lab/packdb.git
-cd packdb
+                      <pre class="language-bash"><code id="code-clone">git clone https://github.com/huda-lab/decidb.git
+cd decidb
 git checkout hatim</code></pre>
                     </div>
                   </div>
@@ -436,10 +436,10 @@ ninja -C build/release</code></pre>
                           </button>
                         </div>
                         <pre class="language-bash"><code id="code-verify-unix"># Verify installation
-./build/release/packdb --version
+./build/release/decidb --version
 
 # Test basic query
-./build/release/packdb -c "SELECT 'PackDB is ready!' as message;"</code></pre>
+./build/release/decidb -c "SELECT 'DecidB is ready!' as message;"</code></pre>
                       </div>
                     </div>
 
@@ -455,10 +455,10 @@ ninja -C build/release</code></pre>
                           </button>
                         </div>
                         <pre class="language-bash"><code id="code-verify-win"># Verify installation
-.\build\release\packdb.exe --version
+.\build\release\decidb.exe --version
 
 # Test basic query
-.\build\release\packdb.exe -c "SELECT 'PackDB is ready!' as message;"</code></pre>
+.\build\release\decidb.exe -c "SELECT 'DecidB is ready!' as message;"</code></pre>
                       </div>
                     </div>
                   </div>
@@ -475,10 +475,10 @@ ninja -C build/release</code></pre>
                       <div class="code-header">
                         <span class="language-label">Bash</span>
                       </div>
-                      <pre class="language-bash"><code>pip install packdb</code></pre>
+                      <pre class="language-bash"><code>pip install decidb</code></pre>
                     </div>
                     <p class="text-sm text-fg-subtle mt-4">
-                      <a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-fg-muted hover:underline">
+                      <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="text-fg-muted hover:underline">
                         Watch the GitHub repo
                       </a>
                       for updates.
@@ -500,9 +500,9 @@ ninja -C build/release</code></pre>
                 A classic knapsack problem: select items to maximize value within a weight limit.
               </p>
 
-              <!-- Start PackDB -->
+              <!-- Start DecidB -->
               <div class="mb-8">
-                <h3 class="text-xl font-semibold text-fg mb-4">Start PackDB</h3>
+                <h3 class="text-xl font-semibold text-fg mb-4">Start DecidB</h3>
                 <div class="code-block">
                   <div class="code-header">
                     <span class="language-label">Bash</span>
@@ -511,18 +511,18 @@ ninja -C build/release</code></pre>
                       Copy
                     </button>
                   </div>
-                  <pre class="language-bash"><code id="code-start"># Start PackDB with a new database
-./packdb my_database.db</code></pre>
+                  <pre class="language-bash"><code id="code-start"># Start DecidB with a new database
+./decidb my_database.db</code></pre>
                 </div>
                 <p class="text-sm text-fg-subtle mt-2">
-                  This opens an interactive SQL shell. You can also use <code class="bg-canvas-inset px-1 rounded">./packdb</code> without a filename for an in-memory database.
+                  This opens an interactive SQL shell. You can also use <code class="bg-canvas-inset px-1 rounded">./decidb</code> without a filename for an in-memory database.
                 </p>
               </div>
 
               <!-- Step 1: Create Sample Data -->
               <div class="mb-8">
                 <h3 class="text-xl font-semibold text-fg mb-4">Create Sample Data</h3>
-                <p class="text-fg-muted mb-4">In the PackDB shell, run:</p>
+                <p class="text-fg-muted mb-4">In the DecidB shell, run:</p>
                 <div class="code-block">
                   <div class="code-header">
                     <span class="language-label">SQL</span>
@@ -659,10 +659,10 @@ MAXIMIZE SUM(x * value);</code></pre>
                     </button>
                   </div>
                   <pre class="language-bash"><code id="code-oneliner"># Run a query file
-./packdb my_database.db -f query.sql
+./decidb my_database.db -f query.sql
 
 # Or execute inline
-./packdb my_database.db -c "SELECT * FROM Items;"</code></pre>
+./decidb my_database.db -c "SELECT * FROM Items;"</code></pre>
                 </div>
               </div>
             </section>
@@ -681,7 +681,7 @@ MAXIMIZE SUM(x * value);</code></pre>
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="assets/images/logo.svg" alt="PackDB" class="h-8 mb-4 logo-img">
+          <img src="assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
           <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
@@ -696,8 +696,8 @@ MAXIMIZE SUM(x * value);</code></pre>
         <div>
           <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
           <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/packdb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/packdb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
+            <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
+            <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
             <li><a href="about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
           </ul>
         </div>

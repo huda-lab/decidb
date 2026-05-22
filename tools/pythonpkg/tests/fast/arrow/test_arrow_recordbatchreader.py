@@ -1,4 +1,4 @@
-import packdb
+import decidb
 import os
 import pytest
 
@@ -11,7 +11,7 @@ np = pytest.importorskip("numpy")
 class TestArrowRecordBatchReader(object):
     def test_parallel_reader(self, duckdb_cursor):
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
 
         parquet_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'userdata1.parquet')
@@ -40,7 +40,7 @@ class TestArrowRecordBatchReader(object):
 
     def test_parallel_reader_replacement_scans(self, duckdb_cursor):
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
 
         parquet_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'userdata1.parquet')
@@ -72,7 +72,7 @@ class TestArrowRecordBatchReader(object):
 
     def test_parallel_reader_register(self, duckdb_cursor):
 
-        duckdb_conn = packdb.connect()
+        duckdb_conn = decidb.connect()
         duckdb_conn.execute("PRAGMA threads=4")
 
         parquet_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'userdata1.parquet')
@@ -120,7 +120,7 @@ class TestArrowRecordBatchReader(object):
         batches = [r for r in userdata_parquet_dataset.to_batches()]
         reader = pyarrow.dataset.Scanner.from_batches(batches, schema=userdata_parquet_dataset.schema).to_reader()
 
-        rel = packdb.from_arrow(reader)
+        rel = decidb.from_arrow(reader)
 
         assert (
             rel.filter("first_name=\'Jose\' and salary > 134708.82").aggregate('count(*)').execute().fetchone()[0] == 12

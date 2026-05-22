@@ -1,13 +1,13 @@
-import packdb
+import decidb
 import pytest
 
 pa = pytest.importorskip("pyarrow")
-from packdb.typing import *
+from decidb.typing import *
 
 
 class TestArrowBufferSize(object):
     def test_arrow_buffer_size(self):
-        con = packdb.connect()
+        con = decidb.connect()
 
         # All small string
         res = con.query("select 'bla'").arrow()
@@ -33,7 +33,7 @@ class TestArrowBufferSize(object):
         def just_return(x):
             return x
 
-        con = packdb.connect()
+        con = decidb.connect()
         con.create_function('just_return', just_return, [VARCHAR], VARCHAR, type='arrow')
 
         res = con.query("select just_return('bla')").arrow()

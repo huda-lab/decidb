@@ -5116,7 +5116,7 @@ int SQLITE_CDECL wmain(int argc, wchar_t **wargv) {
 			} else if ((zHome = find_home_dir(0)) != 0) {
 				nHistory = ShellState::StringLength(zHome) + 20;
 				if ((zHistory = (char *)malloc(nHistory)) != 0) {
-					sqlite3_snprintf(nHistory, zHistory, "%s/.packdb_history", zHome);
+					sqlite3_snprintf(nHistory, zHistory, "%s/.decidb_history", zHome);
 				}
 			}
 			if (zHistory) {

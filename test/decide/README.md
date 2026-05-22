@@ -1,6 +1,6 @@
 # DECIDE Test Framework
 
-Pytest-based testing for PackDB's DECIDE clause. Each correctness test has a
+Pytest-based testing for DecidB's DECIDE clause. Each correctness test has a
 hand-written Python oracle that builds an ILP model using gurobipy directly —
 no SQL parsing in the oracle. Oracle results are cached on disk so the solver
 only runs when a test or the database changes.
@@ -33,12 +33,12 @@ source test/decide/.venv/bin/activate
 pip install -r test/decide/requirements.txt
 # gurobipy requires a valid Gurobi license; run_tests.sh pre-flights this.
 
-# Ensure packdb executable + packdb.db exist
-make                   # build PackDB executable (build/release/packdb)
-# packdb.db should already exist; if not, generate TPC-H data via PackDB
+# Ensure decidb executable + decidb.db exist
+make                   # build DecidB executable (build/release/decidb)
+# decidb.db should already exist; if not, generate TPC-H data via DecidB
 ```
 
-> **Note:** The PackDB Python package (`tools/pythonpkg`) is **not** required.
+> **Note:** The DecidB Python package (`tools/pythonpkg`) is **not** required.
 > DECIDE queries run via the native CLI executable, and oracle data fetching
 > uses vanilla `duckdb` with a separately generated TPC-H database.
 
@@ -171,7 +171,7 @@ These select across multiple files:
 
 ## Solution Comparison
 
-Each correctness test compares PackDB output against the oracle at two levels:
+Each correctness test compares DecidB output against the oracle at two levels:
 
 1. **Objective value** — the total objective must match within tolerance (1e-4).
 2. **Decision variable vector** — both sides are sorted by all non-decision
@@ -185,7 +185,7 @@ The comparison produces a status:
 | `optimal` | Objective matches but at least one assignment differs (alternate optimal) |
 
 Both the status and the full decide vector are stored in the perf JSON and
-oracle cache. Both PackDB (via dynamic-loaded libgurobi in the CLI) and the
+oracle cache. Both DecidB (via dynamic-loaded libgurobi in the CLI) and the
 oracle (gurobipy) use Gurobi. Most tests report `identical`; the `optimal`
 status appears when the problem has multiple optima and the two Gurobi runs
 pick different ones — that is not a correctness failure, it's an alternate
@@ -207,7 +207,7 @@ Invalidation:
   Changing a query, constraint, or any logic in the test invalidates only that
   entry.
 - **Global**: the database file's size and modification time. Rebuilding
-  `packdb.db` invalidates the entire cache.
+  `decidb.db` invalidates the entire cache.
 - **GC**: stale entries (deleted/renamed tests) are pruned automatically on
   full (unfiltered) test runs.
 
@@ -221,7 +221,7 @@ rm test/decide/results/oracle_cache.json
 
 1. Choose the appropriate test file based on the primary feature being tested
 2. Follow the existing pattern:
-   - Run the DECIDE query via `packdb_cli` (native executable, subprocess)
+   - Run the DECIDE query via `decidb_cli` (native executable, subprocess)
    - Fetch the same data via `duckdb_conn` (vanilla duckdb, plain SQL, no DECIDE)
    - Build an oracle model using `oracle_solver`
    - Compare with `compare_solutions` (returns `ComparisonResult` with status and vectors)
@@ -240,7 +240,7 @@ the comparison status (`identical`/`optimal`), and the full decide vector.
 ```
 test/decide/
 ├── conftest.py          # Fixtures (CLI wrapper, duckdb conn, solver, cache, perf)
-├── packdb_cli.py        # Subprocess wrapper for build/release/packdb executable
+├── decidb_cli.py        # Subprocess wrapper for build/release/decidb executable
 ├── oracle_cache.py      # Oracle result cache + CachedOracleSolver wrapper
 ├── solver/              # Gurobi-only oracle solver abstraction
 ├── comparison/          # Solution comparison (objective + variable vector)
@@ -256,11 +256,11 @@ test/decide/
 
 ```
 ┌─────────────────────────────────┐    ┌──────────────────────────────────┐
-│  PackDB (DECIDE queries)        │    │  Oracle (data fetching + ILP)    │
+│  DecidB (DECIDE queries)        │    │  Oracle (data fetching + ILP)    │
 │                                 │    │                                  │
-│  build/release/packdb (CLI)     │    │  vanilla duckdb (Python package) │
+│  build/release/decidb (CLI)     │    │  vanilla duckdb (Python package) │
 │  ↕ subprocess                   │    │  ↕ in-process                    │
-│  packdb.db (PackDB format)      │    │  _tpch_oracle.duckdb (vanilla)   │
+│  decidb.db (DecidB format)      │    │  _tpch_oracle.duckdb (vanilla)   │
 │  solver: Gurobi (dlopen libgrb) │    │  solver: gurobipy                │
 └─────────────────────────────────┘    └──────────────────────────────────┘
          │                                        │
@@ -269,4 +269,4 @@ test/decide/
 
 Both databases contain identical TPC-H data (same deterministic dbgen
 algorithm and scale factor).  The oracle is completely independent of
-PackDB — no `import packdb` anywhere in the test code.
+DecidB — no `import decidb` anywhere in the test code.

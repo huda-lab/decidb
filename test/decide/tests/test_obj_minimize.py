@@ -17,7 +17,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_q09_minimize_cost(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_q09_minimize_cost(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Minimize cost: select >= 10 suppliers, minimize total acctbal."""
     # Uses nationkey <= 5 to ensure enough suppliers (20) for the >= 10 constraint.
     # The original query used nationkey = 5, but that only has 3 suppliers at SF-0.01.
@@ -30,8 +30,8 @@ def test_q09_minimize_cost(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
         MINIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(s_suppkey AS BIGINT),
@@ -59,12 +59,12 @@ def test_q09_minimize_cost(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("s_acctbal")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("s_acctbal")])},
     )
 
     perf_tracker.record(
-        "q09_minimize_cost", packdb_time, build_time,
+        "q09_minimize_cost", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -76,7 +76,7 @@ def test_q09_minimize_cost(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_min_cost_supplier(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_min_cost_supplier(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Minimize supply cost: need >= 1000 total availqty."""
     sql = """
         SELECT x, ps_partkey, ps_suppkey, ps_supplycost, ps_availqty
@@ -87,8 +87,8 @@ def test_min_cost_supplier(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
         MINIMIZE SUM(x * ps_supplycost)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(ps_partkey AS BIGINT),
@@ -118,12 +118,12 @@ def test_min_cost_supplier(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[packdb_cols.index("ps_supplycost")])},
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("ps_supplycost")])},
     )
 
     perf_tracker.record(
-        "min_cost_supplier", packdb_time, build_time,
+        "min_cost_supplier", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
@@ -135,7 +135,7 @@ def test_min_cost_supplier(packdb_cli, duckdb_conn, oracle_solver, perf_tracker)
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
-def test_minimize_count(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_minimize_count(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """MINIMIZE SUM(x) — select fewest items meeting a threshold."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -146,8 +146,8 @@ def test_minimize_count(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
         MINIMIZE SUM(x)
     """
     t0 = time.perf_counter()
-    packdb_result, packdb_cols = packdb_cli.execute(sql)
-    packdb_time = time.perf_counter() - t0
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute("""
         SELECT CAST(l_orderkey AS BIGINT),
@@ -175,12 +175,12 @@ def test_minimize_count(packdb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
 
     cmp = compare_solutions(
-        packdb_result, packdb_cols, result, data, ["x"],
+        decidb_result, decidb_cols, result, data, ["x"],
         coeff_fn=lambda row: {"x": 1.0},
     )
 
     perf_tracker.record(
-        "minimize_count", packdb_time, build_time,
+        "minimize_count", decidb_time, build_time,
         result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status,
