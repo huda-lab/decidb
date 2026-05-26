@@ -267,15 +267,7 @@
                 <p class="text-sm text-fg-muted">Co-PI, Package Queries</p>
               </div>
               <div class="py-3 border-b border-bdcolor-muted">
-                <p class="font-semibold text-fg">Matteo Brucato</p>
-                <p class="text-sm text-fg-muted">Researcher, Package Queries</p>
-              </div>
-              <div class="py-3 border-b border-bdcolor-muted">
                 <p class="font-semibold text-fg">Peter J. Haas</p>
-                <p class="text-sm text-fg-muted">Researcher, Scalable Package Queries</p>
-              </div>
-              <div class="py-3 border-b border-bdcolor-muted">
-                <p class="font-semibold text-fg">Pengyu Wang</p>
                 <p class="text-sm text-fg-muted">Researcher, Scalable Package Queries</p>
               </div>
             </div>
@@ -330,11 +322,21 @@
                 <li class="flex items-baseline gap-3">
                   <span class="text-accent">&bull;</span>
                   <div>
+                    <a href="https://www.gurobi.com/" target="_blank" rel="noopener noreferrer"
+                       class="font-semibold text-accent hover:text-accent inline-flex items-center gap-1">
+                      Gurobi <i data-lucide="external-link" class="w-3 h-3"></i>
+                    </a>
+                    <span class="text-sm text-fg-muted"> &mdash; Primary MILP/QP/QCQP solver, auto-detected at runtime (commercial; recommended for performance)</span>
+                  </div>
+                </li>
+                <li class="flex items-baseline gap-3">
+                  <span class="text-accent">&bull;</span>
+                  <div>
                     <a href="https://highs.dev/" target="_blank" rel="noopener noreferrer"
                        class="font-semibold text-accent hover:text-accent inline-flex items-center gap-1">
                       HiGHS <i data-lucide="external-link" class="w-3 h-3"></i>
                     </a>
-                    <span class="text-sm text-fg-muted"> &mdash; High-performance LP/MIP solver (bundled)</span>
+                    <span class="text-sm text-fg-muted"> &mdash; Bundled open-source LP/MIP solver, used as fallback when Gurobi is unavailable</span>
                   </div>
                 </li>
                 <li class="flex items-baseline gap-3">
@@ -360,7 +362,7 @@
                 </div>
                 <div class="py-2 border-b border-bdcolor-muted">
                   <span class="font-semibold text-fg">Branch:</span>
-                  <span class="text-fg-muted"> <code>hatim</code> (stable)</span>
+                  <span class="text-fg-muted"> <code>master</code> (working)</span>
                 </div>
                 <div class="py-2 border-b border-bdcolor-muted">
                   <span class="font-semibold text-fg">Test Coverage:</span>
@@ -368,7 +370,7 @@
                 </div>
                 <div class="py-2 border-b border-bdcolor-muted">
                   <span class="font-semibold text-fg">Target Scale:</span>
-                  <span class="text-fg-muted"> ~10K rows (exact solving)</span>
+                  <span class="text-fg-muted"> ~1M rows (exact solving with Gurobi)</span>
                 </div>
               </div>
             </div>
@@ -381,28 +383,21 @@
                   <span class="text-accent mt-0.5">&bull;</span>
                   <div>
                     <span class="font-semibold text-fg">Sketch-Refine Algorithm</span>
-                    <p class="text-sm text-fg-muted">Scale to million-row datasets with bounded approximation error</p>
+                    <p class="text-sm text-fg-muted">Scale beyond exact solving to very large datasets with bounded approximation error</p>
                   </div>
                 </li>
                 <li class="flex items-start gap-3">
                   <span class="text-accent mt-0.5">&bull;</span>
                   <div>
-                    <span class="font-semibold text-fg">Correlated Subqueries</span>
-                    <p class="text-sm text-fg-muted">Support data-dependent constraint bounds via query unnesting</p>
+                    <span class="font-semibold text-fg">Python Bindings</span>
+                    <p class="text-sm text-fg-muted"><code>pip install decidb</code> &mdash; in-process Python package for embedding optimization queries in data pipelines</p>
                   </div>
                 </li>
                 <li class="flex items-start gap-3">
                   <span class="text-accent mt-0.5">&bull;</span>
                   <div>
-                    <span class="font-semibold text-fg">Automatic Linearization</span>
-                    <p class="text-sm text-fg-muted">Automatically reformulate common non-linear patterns into linear equivalents</p>
-                  </div>
-                </li>
-                <li class="flex items-start gap-3">
-                  <span class="text-accent mt-0.5">&bull;</span>
-                  <div>
-                    <span class="font-semibold text-fg">Performance Benchmarking</span>
-                    <p class="text-sm text-fg-muted">Comprehensive benchmarks and solver-level optimizations</p>
+                    <span class="font-semibold text-fg">Broader Non-Linear Coverage</span>
+                    <p class="text-sm text-fg-muted">Extend automatic linearization beyond the current ABS, MIN/MAX, <code>&lt;&gt;</code>, <code>IN</code>, and McCormick bilinear forms; full QCQP/SOCP on HiGHS</p>
                   </div>
                 </li>
               </ul>
@@ -426,7 +421,7 @@
         <div>
           <img src="assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
+          <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
         <div>
           <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
@@ -454,7 +449,7 @@
       </div>
 
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
       </div>
     </div>
   </footer>

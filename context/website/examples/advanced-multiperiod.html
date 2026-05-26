@@ -102,9 +102,8 @@ INSERT INTO Periods VALUES
       <div class="code-block">
         <pre class="language-sql"><code>SELECT period, demand, production_cost, holding_cost, produce, inventory
 FROM Periods
-DECIDE produce, inventory
+DECIDE produce IS INTEGER, inventory IS INTEGER
 SUCH THAT
-    produce IS INTEGER AND inventory IS INTEGER AND
     inventory >= 0 AND
     inventory = COALESCE(LAG(inventory) OVER (ORDER BY period), 0)
                 + produce - demand AND
@@ -119,7 +118,7 @@ MINIMIZE SUM(produce * production_cost + inventory * holding_cost);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE produce, inventory</code> — Two integer decision variables per row: how much to produce and how much inventory to carry.</div>
+          <div><code>DECIDE produce IS INTEGER, inventory IS INTEGER</code> — Two integer decision variables per row: how much to produce and how much inventory to carry.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>
@@ -185,7 +184,7 @@ MINIMIZE SUM(produce * production_cost + inventory * holding_cost);</code></pre>
         <div>
           <img src="../assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
+          <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
         <div>
           <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
@@ -212,7 +211,7 @@ MINIMIZE SUM(produce * production_cost + inventory * holding_cost);</code></pre>
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
       </div>
     </div>
   </footer>

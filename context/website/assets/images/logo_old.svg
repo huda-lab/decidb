@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50" width="200" height="50">
+  <defs>
+    <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e40af;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Database icon -->
+  <g transform="translate(5, 5)">
+    <!-- Top ellipse -->
+    <ellipse cx="20" cy="8" rx="16" ry="6" fill="url(#logoGradient)" />
+
+    <!-- Middle body -->
+    <path d="M4 8 v12 a16 6 0 0 0 32 0 v-12" fill="url(#logoGradient)" />
+
+    <!-- Middle line -->
+    <ellipse cx="20" cy="20" rx="16" ry="6" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.5" />
+
+    <!-- Bottom ellipse -->
+    <ellipse cx="20" cy="32" rx="16" ry="6" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.3" />
+
+    <!-- Optimization symbol (checkmark/plus) -->
+    <circle cx="30" cy="20" r="8" fill="#059669" />
+    <path d="M26 20 l3 3 l5 -6" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <!-- Text: DecidB -->
+  <text x="55" y="32" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="700" fill="#1e40af">
+    Pack<tspan fill="#059669">DB</tspan>
+  </text>
+</svg>

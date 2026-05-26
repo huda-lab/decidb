@@ -78,7 +78,7 @@
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        A project manager needs to assign workers to tasks. Each worker-task pair has a skill match score and an hours requirement. Each worker can be assigned to at most one task, and each task must be assigned to exactly one worker. The goal is to maximize total skill match. This example demonstrates multiple decision variables (x for assignment, y for hours) and uses the PER clause for grouped constraints — a planned DecidB feature for per-group aggregation.
+        A project manager needs to assign workers to tasks. Each worker-task pair has a skill match score and an hours requirement. Each worker can be assigned to at most one task, and each task must be assigned to exactly one worker. The goal is to maximize total skill match. This example demonstrates multiple decision variables (x for assignment, y for hours) and uses the PER clause for grouped constraints.
       </p>
     </section>
 
@@ -101,15 +101,13 @@ INSERT INTO Assignments VALUES
       <div class="code-block">
         <pre class="language-sql"><code>SELECT worker_id, task_id, skill_match, hours, x as assigned, y as hours_allocated
 FROM Assignments
-DECIDE x, y
+DECIDE x IS BOOLEAN, y IS INTEGER
 SUCH THAT
-    x IS BINARY AND y IS INTEGER AND
     y = x * hours AND
     SUM(x) PER worker_id <= 1 AND
     SUM(x) PER task_id = 1
 MAXIMIZE SUM(x * skill_match);</code></pre>
       </div>
-      <p class="text-sm text-fg-subtle italic mt-3">Note: PER (grouped constraints) is a planned feature — coming soon.</p>
     </section>
 
     <section class="example-section">
@@ -117,7 +115,7 @@ MAXIMIZE SUM(x * skill_match);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE x, y</code> — Two decision variables per row: x (binary assignment) and y (integer hours).</div>
+          <div><code>DECIDE x IS BOOLEAN, y IS INTEGER</code> — Two decision variables per row: x (binary assignment) and y (integer hours).</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>
@@ -186,7 +184,7 @@ MAXIMIZE SUM(x * skill_match);</code></pre>
         <div>
           <img src="../assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
+          <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
         <div>
           <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
@@ -213,7 +211,7 @@ MAXIMIZE SUM(x * skill_match);</code></pre>
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
       </div>
     </div>
   </footer>

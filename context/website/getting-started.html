@@ -206,6 +206,7 @@
                   <li><strong>Python:</strong> Version 3.7+ (parser generation)</li>
                   <li><strong>Git:</strong> For cloning the repository</li>
                   <li><strong>Make or Ninja:</strong> Build system</li>
+                  <li><strong>Gurobi (optional):</strong> Auto-detected at build time. If installed, Gurobi is used as the primary solver; otherwise the bundled HiGHS solver is used.</li>
                 </ul>
               </div>
 
@@ -220,7 +221,7 @@
 
               <div class="callout callout-warning">
                 <strong>Development Status</strong>
-                <p class="text-sm mt-1">DecidB is in active development. The <code>hatim</code> branch contains the stable prototype.</p>
+                <p class="text-sm mt-1">DecidB is in active development. The <code>master</code> branch contains the working prototype.</p>
               </div>
             </section>
 
@@ -560,9 +561,8 @@ INSERT INTO Items VALUES
                   <pre class="language-sql"><code id="code-query">SELECT id, value, weight, x
 FROM Items
 WHERE category = 'electronics'
-DECIDE x
+DECIDE x IS BOOLEAN
 SUCH THAT
-    x IS BINARY,
     SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);</code></pre>
                 </div>
@@ -582,15 +582,15 @@ MAXIMIZE SUM(x * value);</code></pre>
                   <li class="flex gap-4">
                     <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">2</span>
                     <div>
-                      <code class="text-fg">DECIDE x</code>
-                      <span class="text-fg-muted"> &mdash; Creates a variable <code>x</code> for each remaining row.</span>
+                      <code class="text-fg">DECIDE x IS BOOLEAN</code>
+                      <span class="text-fg-muted"> &mdash; Creates a binary (0/1) variable <code>x</code> for each remaining row.</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
                     <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">3</span>
                     <div>
-                      <code class="text-fg">SUCH THAT x IS BINARY, SUM(x * weight) &lt;= 50</code>
-                      <span class="text-fg-muted"> &mdash; Each <code>x</code> is 0 or 1, and the total weight of selected items cannot exceed 50.</span>
+                      <code class="text-fg">SUCH THAT SUM(x * weight) &lt;= 50</code>
+                      <span class="text-fg-muted"> &mdash; The total weight of selected items cannot exceed 50.</span>
                     </div>
                   </li>
                   <li class="flex gap-4">
@@ -683,7 +683,7 @@ MAXIMIZE SUM(x * value);</code></pre>
         <div>
           <img src="assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-fg-subtle">&copy; 2025 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
+          <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>
         <div>
           <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
@@ -710,7 +710,7 @@ MAXIMIZE SUM(x * value);</code></pre>
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2025 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built with DuckDB and HiGHS</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
       </div>
     </div>
   </footer>
