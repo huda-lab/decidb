@@ -352,24 +352,73 @@
             <a href="examples/advanced-scheduling.html" class="text-accent hover:text-accent font-medium text-sm flex items-center gap-1">View Example <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
           </article>
 
-          <!-- Example Card: Multi-Period Planning -->
+          <!-- Example Card: Feasibility -->
+          <article data-category="basic" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-canvas-subtle border border-bdcolor">
+            <div class="flex items-start justify-between mb-4">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center bg-accent-tint">
+                <i data-lucide="check-circle" class="w-6 h-6 text-accent"></i>
+              </div>
+              <span class="badge badge-basic">Basic</span>
+            </div>
+            <h3 class="text-xl font-semibold text-fg mb-2">Feasibility: Constraint Satisfaction</h3>
+            <p class="text-fg-muted text-sm mb-4">
+              Find a valid shift assignment with no objective. Demonstrates that DecidB solves constraint satisfaction problems, not just optimization.
+            </p>
+            <div class="flex flex-wrap gap-2 mb-4">
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Feasibility Mode</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">No Objective</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">PER</span>
+            </div>
+            <a href="examples/basic-feasibility.html" class="text-accent hover:text-accent font-medium text-sm flex items-center gap-1">
+              View Example
+              <i data-lucide="arrow-right" class="w-4 h-4"></i>
+            </a>
+          </article>
+
+          <!-- Example Card: Per-Group Limits -->
+          <article data-category="intermediate" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-canvas-subtle border border-bdcolor">
+            <div class="flex items-start justify-between mb-4">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center bg-accent-tint">
+                <i data-lucide="bar-chart-2" class="w-6 h-6 text-accent"></i>
+              </div>
+              <span class="badge badge-intermediate">Intermediate</span>
+            </div>
+            <h3 class="text-xl font-semibold text-fg mb-2">Per-Group Limits</h3>
+            <p class="text-fg-muted text-sm mb-4">
+              Enforce a separate constraint per department using PER, generating one constraint per distinct column value without hardcoding any group names.
+            </p>
+            <div class="flex flex-wrap gap-2 mb-4">
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">PER Keyword</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Group Constraints</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">MAXIMIZE</span>
+            </div>
+            <a href="examples/intermediate-per.html" class="text-accent hover:text-accent font-medium text-sm flex items-center gap-1">
+              View Example
+              <i data-lucide="arrow-right" class="w-4 h-4"></i>
+            </a>
+          </article>
+
+          <!-- Example Card: Table-Scoped Variables -->
           <article data-category="advanced" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-canvas-subtle border border-bdcolor">
             <div class="flex items-start justify-between mb-4">
               <div class="w-12 h-12 rounded-xl flex items-center justify-center bg-accent-tint">
-                <i data-lucide="layers" class="w-6 h-6 text-accent"></i>
+                <i data-lucide="link" class="w-6 h-6 text-accent"></i>
               </div>
               <span class="badge badge-advanced">Advanced</span>
             </div>
-            <h3 class="text-xl font-semibold text-fg mb-2">Multi-Period Planning</h3>
+            <h3 class="text-xl font-semibold text-fg mb-2">Table-Scoped Variables</h3>
             <p class="text-fg-muted text-sm mb-4">
-              Plan production across multiple time periods with inventory and complex expressions.
+              Make one decision per entity across a join using DECIDE Table.var, ensuring consistent retain/release choices even when a nurse appears in many shift rows.
             </p>
             <div class="flex flex-wrap gap-2 mb-4">
-              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Multiple Variables</span>
-              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Complex Expressions</span>
-              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Linearized Ratios</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">DECIDE Table.var</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">JOIN</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Entity Consistency</span>
             </div>
-            <a href="examples/advanced-multiperiod.html" class="text-accent hover:text-accent font-medium text-sm flex items-center gap-1">View Example <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+            <a href="examples/advanced-table-scoped.html" class="text-accent hover:text-accent font-medium text-sm flex items-center gap-1">
+              View Example
+              <i data-lucide="arrow-right" class="w-4 h-4"></i>
+            </a>
           </article>
 
         </div>

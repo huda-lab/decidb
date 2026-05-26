@@ -165,10 +165,26 @@ MAXIMIZE SUM(x * priority);</code></pre>
               <td class="selected-row">1</td>
             </tr>
             <tr>
+              <td>2</td>
+              <td>Item Beta</td>
+              <td>2</td>
+              <td>25</td>
+              <td>A</td>
+              <td>0</td>
+            </tr>
+            <tr>
               <td>3</td>
               <td>Item Gamma</td>
               <td>4</td>
               <td>20</td>
+              <td>B</td>
+              <td class="selected-row">1</td>
+            </tr>
+            <tr>
+              <td>6</td>
+              <td>Item Zeta</td>
+              <td>3</td>
+              <td>40</td>
               <td>B</td>
               <td class="selected-row">1</td>
             </tr>
@@ -188,13 +204,13 @@ MAXIMIZE SUM(x * priority);</code></pre>
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        After WHERE filtering removes Item Delta (category D), five items remain. The solver selects Alpha (priority 5, weight 15), Gamma (priority 4, weight 20), and Epsilon (priority 5, weight 10) for a total priority of 14 and total weight of 45. Item Beta (priority 2) and Zeta (priority 3) were excluded because their lower priorities make them less valuable, and adding Zeta (weight 40) would bring the total to 85 without meaningfully increasing priority compared to the selected set.
+        After WHERE filtering removes Item Delta (category D), five items remain. The solver selects Alpha (priority 5, weight 15), Gamma (priority 4, weight 20), Zeta (priority 3, weight 40), and Epsilon (priority 5, weight 10) for a total priority of 17 and total weight of 85 &mdash; under the 100-unit limit. Item Beta is the only one excluded: its priority of 2 is the lowest of the candidates, and adding it would push the weight to 110, violating the constraint.
       </div>
     </section>
 
     <div class="flex justify-between pt-8 border-t border-bdcolor">
       <a href="basic-production.html" class="text-accent hover:text-accent">&larr; Production Planning</a>
-      <a href="intermediate-diet.html" class="text-accent hover:text-accent">Next: Diet Planning &rarr;</a>
+      <a href="basic-feasibility.html" class="text-accent hover:text-accent">Next: Feasibility &rarr;</a>
     </div>
   </main>
 

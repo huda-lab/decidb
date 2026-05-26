@@ -104,8 +104,8 @@ FROM Assignments
 DECIDE x IS BOOLEAN, y IS INTEGER
 SUCH THAT
     y = x * hours AND
-    SUM(x) PER worker_id <= 1 AND
-    SUM(x) PER task_id = 1
+    SUM(x) <= 1 PER worker_id AND
+    SUM(x) = 1 PER task_id
 MAXIMIZE SUM(x * skill_match);</code></pre>
       </div>
     </section>
@@ -123,11 +123,11 @@ MAXIMIZE SUM(x * skill_match);</code></pre>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>SUM(x) PER worker_id &lt;= 1</code> — Each worker is assigned to at most one task.</div>
+          <div><code>SUM(x) &lt;= 1 PER worker_id</code> — Each worker is assigned to at most one task.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>
-          <div><code>SUM(x) PER task_id = 1</code> — Each task is assigned to exactly one worker.</div>
+          <div><code>SUM(x) = 1 PER task_id</code> — Each task is assigned to exactly one worker.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">5</span>

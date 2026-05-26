@@ -7,7 +7,7 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dynamic Constraints - DecidB Examples</title>
+  <title>Per-Group Limits - DecidB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -28,6 +28,7 @@
 </head>
 <body class="min-h-screen">
 
+  <!-- Header -->
   <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <a href="../index.html" class="flex items-center space-x-2">
@@ -55,133 +56,139 @@
     </nav>
   </header>
 
+  <!-- Main Content -->
   <main class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
+    <!-- Breadcrumb -->
     <div class="breadcrumb mb-8">
       <a href="../examples.html">Examples</a>
       <span class="separator">/</span>
-      <span>Dynamic Constraints</span>
+      <span>Per-Group Limits</span>
     </div>
 
+    <!-- Title -->
     <div class="mb-10">
       <div class="flex items-center gap-3 mb-3">
-        <h1 class="text-4xl text-fg">Dynamic Constraints</h1>
+        <h1 class="text-4xl text-fg">Per-Group Limits</h1>
         <span class="badge badge-intermediate">Intermediate</span>
       </div>
       <div class="flex flex-wrap gap-2">
-        <span class="badge badge-tag">Scalar Subquery</span>
-        <span class="badge badge-tag">WHEN Conditional</span>
-        <span class="badge badge-tag">Dynamic Bounds</span>
+        <span class="badge badge-tag">PER Keyword</span>
+        <span class="badge badge-tag">Group Constraints</span>
+        <span class="badge badge-tag">Boolean Variables</span>
+        <span class="badge badge-tag">MAXIMIZE</span>
       </div>
     </div>
 
+    <!-- The Problem -->
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        An inventory manager selects items for a display, but the rules come from a configuration table — the maximum number of items and the budget are stored externally rather than hard-coded. Additionally, category-specific rules apply: at least 2 items from category A and at most 3 from category B. This example shows how DecidB constraints can reference scalar subqueries (for dynamic bounds) and use CASE expressions (for category-level counting).
+        A company is selecting employees for promotion this cycle. Two rules apply: each department may have at most 2 promotions (to keep things fair across teams), and the company-wide total is capped at 4 promotions. The goal is to maximize the combined performance score of promoted employees. Without the <code>PER</code> keyword, enforcing the per-department rule would require writing one explicit constraint per department name &mdash; impractical when departments are determined by data. <code>PER</code> generates one constraint per distinct column value automatically.
       </p>
     </section>
 
+    <!-- Sample Data -->
     <section class="example-section">
       <div class="example-section-label">SAMPLE DATA</div>
       <div class="code-block">
-        <pre class="language-sql"><code>CREATE TABLE Config (id INTEGER, max_items INTEGER, budget INTEGER);
-INSERT INTO Config VALUES (1, 5, 600);
-
-CREATE TABLE Items (
-    item_id INTEGER, name VARCHAR, category VARCHAR, value INTEGER
+        <pre class="language-sql"><code>CREATE TABLE employees (
+    id INTEGER, name VARCHAR,
+    department VARCHAR, performance_score REAL
 );
-INSERT INTO Items VALUES
-    (1, 'Premium Item A1', 'A', 150), (2, 'Premium Item A2', 'A', 140),
-    (3, 'Premium Item A3', 'A', 100), (4, 'Standard Item B0', 'B', 130),
-    (5, 'Standard Item B1', 'B', 120), (6, 'Standard Item B2', 'B', 110),
-    (7, 'Standard Item B3', 'B', 90), (8, 'Basic Item C1', 'C', 80),
-    (9, 'Basic Item C2', 'C', 70);</code></pre>
+INSERT INTO employees VALUES
+    (1, 'Alice', 'Engineering', 9.5),
+    (2, 'Bob',   'Engineering', 9.4),
+    (3, 'Carol', 'Engineering', 9.3),
+    (4, 'Dave',  'Marketing',   8.9),
+    (5, 'Eve',   'Marketing',   8.7),
+    (6, 'Frank', 'Marketing',   7.4),
+    (7, 'Grace', 'Finance',     8.6),
+    (8, 'Hank',  'Finance',     8.5);</code></pre>
       </div>
     </section>
 
+    <!-- The Query -->
     <section class="example-section">
       <div class="example-section-label">THE QUERY</div>
       <div class="code-block">
-        <pre class="language-sql"><code>SELECT item_id, name, category, value, x as selected
-FROM Items
-DECIDE x IS BOOLEAN
+        <pre class="language-sql"><code>SELECT name, department, performance_score, promoted
+FROM employees
+DECIDE promoted IS BOOLEAN
 SUCH THAT
-    SUM(x) <= (SELECT max_items FROM Config WHERE id = 1) AND
-    SUM(x) >= 2 WHEN category = 'A' AND
-    SUM(x) <= 3 WHEN category = 'B' AND
-    SUM(x * value) <= (SELECT budget FROM Config WHERE id = 1)
-MAXIMIZE SUM(x * value);</code></pre>
+    SUM(promoted) <= 2 PER department AND
+    SUM(promoted) <= 4
+MAXIMIZE SUM(promoted * performance_score);</code></pre>
       </div>
     </section>
 
+    <!-- Query Breakdown -->
     <section class="example-section">
       <div class="example-section-label">QUERY BREAKDOWN</div>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>SUM(x) &lt;= (SELECT max_items FROM Config WHERE id = 1)</code> — Total selected items cannot exceed the limit from the Config table (5 in this case).</div>
+          <div><code>DECIDE promoted IS BOOLEAN</code> &mdash; One binary variable per employee. promoted=1 means selected for promotion.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>
-          <div><code>SUM(x) &gt;= 2 WHEN category = 'A'</code> — At least 2 items from category A must be selected. The postfix <code>WHEN</code> filters which rows the aggregate sums over, so only category-A rows contribute to this count.</div>
+          <div><code>SUM(promoted) &lt;= 2 PER department</code> &mdash; DecidB finds all distinct values of <code>department</code> in the data and emits one constraint for each: Engineering &le;2, Marketing &le;2, Finance &le;2. The number of departments is determined at query execution time, not at write time.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>SUM(x) &lt;= 3 WHEN category = 'B'</code> — At most 3 items from category B.</div>
+          <div><code>SUM(promoted) &lt;= 4</code> &mdash; A global cap across all departments. Combined with the per-department cap, this forces real trade-offs.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>
-          <div><code>SUM(x * value) &lt;= (SELECT budget FROM Config WHERE id = 1)</code> — Total value within budget (600).</div>
-        </div>
-        <div class="query-annotation">
-          <span class="annotation-marker">5</span>
-          <div><code>MAXIMIZE SUM(x * value)</code> — Maximize the total value of selected items.</div>
+          <div><code>MAXIMIZE SUM(promoted * performance_score)</code> &mdash; Pick the highest-scoring combination that satisfies both the per-department and global caps.</div>
         </div>
       </div>
     </section>
 
+    <!-- Result -->
     <section class="example-section">
       <div class="example-section-label">RESULT</div>
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
-              <th>item_id</th>
+              <th>id</th>
               <th>name</th>
-              <th>category</th>
-              <th>value</th>
-              <th>selected</th>
+              <th>department</th>
+              <th>performance_score</th>
+              <th>promoted</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>1</td><td>Premium Item A1</td><td>A</td><td>150</td><td class="selected-row">1</td></tr>
-            <tr><td>2</td><td>Premium Item A2</td><td>A</td><td>140</td><td class="selected-row">1</td></tr>
-            <tr><td>3</td><td>Premium Item A3</td><td>A</td><td>100</td><td class="selected-row">1</td></tr>
-            <tr><td>4</td><td>Standard Item B0</td><td>B</td><td>130</td><td class="selected-row">1</td></tr>
-            <tr><td>5</td><td>Standard Item B1</td><td>B</td><td>120</td><td>0</td></tr>
-            <tr><td>6</td><td>Standard Item B2</td><td>B</td><td>110</td><td>0</td></tr>
-            <tr><td>7</td><td>Standard Item B3</td><td>B</td><td>90</td><td>0</td></tr>
-            <tr><td>8</td><td>Basic Item C1</td><td>C</td><td>80</td><td class="selected-row">1</td></tr>
-            <tr><td>9</td><td>Basic Item C2</td><td>C</td><td>70</td><td>0</td></tr>
+            <tr><td>1</td><td>Alice</td><td>Engineering</td><td>9.5</td><td class="selected-row">1</td></tr>
+            <tr><td>2</td><td>Bob</td><td>Engineering</td><td>9.4</td><td class="selected-row">1</td></tr>
+            <tr><td>3</td><td>Carol</td><td>Engineering</td><td>9.3</td><td>0</td></tr>
+            <tr><td>4</td><td>Dave</td><td>Marketing</td><td>8.9</td><td class="selected-row">1</td></tr>
+            <tr><td>5</td><td>Eve</td><td>Marketing</td><td>8.7</td><td class="selected-row">1</td></tr>
+            <tr><td>6</td><td>Frank</td><td>Marketing</td><td>7.4</td><td>0</td></tr>
+            <tr><td>7</td><td>Grace</td><td>Finance</td><td>8.6</td><td>0</td></tr>
+            <tr><td>8</td><td>Hank</td><td>Finance</td><td>8.5</td><td>0</td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
+    <!-- Interpretation -->
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        The solver selects 5 items totaling exactly 600 (the budget limit): three from category A (Premium A1 at 150, A2 at 140, A3 at 100), one from category B (Standard B0 at 130), and one from category C (Basic C1 at 80). This satisfies the minimum 2 category-A items and stays well within the maximum 3 category-B items. There are several alternative selections that also reach 600 (e.g. A1+A2+B1+B2+C1) — the solver returns one optimum among them. The key feature here is that the constraints reference the Config table dynamically: changing the budget or max_items in Config would change the optimal selection without modifying the query.
+        The solver promotes Alice (9.5), Bob (9.4), Dave (8.9), and Eve (8.7) for a combined score of 36.5. The PER constraint forces a real trade-off: without the department cap, the pure top-4 by score would be Alice, Bob, Carol, and Dave &mdash; three engineers and one marketer &mdash; scoring 37.1. But <code>SUM(promoted) &lt;= 2 PER department</code> caps Engineering at two slots, so Carol (the third-best engineer) is excluded; Eve fills the freed slot as the next-best Marketing candidate. Finance is not represented at all because all four global slots were consumed by Engineering and Marketing. This illustrates how <code>PER</code> turns a single constraint template into data-driven per-group rules.
       </div>
     </section>
 
+    <!-- Navigation -->
     <div class="flex justify-between pt-8 border-t border-bdcolor">
-      <a href="intermediate-assignment.html" class="text-accent hover:text-accent">&larr; Task Assignment</a>
-      <a href="intermediate-per.html" class="text-accent hover:text-accent">Next: Per-Group Limits &rarr;</a>
+      <a href="intermediate-dynamic.html" class="text-accent hover:text-accent">&larr; Dynamic Constraints</a>
+      <a href="advanced-portfolio.html" class="text-accent hover:text-accent">Next: Portfolio Optimization &rarr;</a>
     </div>
   </main>
 
+  <!-- Footer -->
   <footer class="bg-canvas text-fg-muted border-t border-bdcolor">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">

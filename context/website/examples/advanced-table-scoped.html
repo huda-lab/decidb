@@ -7,7 +7,7 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dynamic Constraints - DecidB Examples</title>
+  <title>Table-Scoped Variables - DecidB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -28,6 +28,7 @@
 </head>
 <body class="min-h-screen">
 
+  <!-- Header -->
   <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <a href="../index.html" class="flex items-center space-x-2">
@@ -55,133 +56,144 @@
     </nav>
   </header>
 
+  <!-- Main Content -->
   <main class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
+    <!-- Breadcrumb -->
     <div class="breadcrumb mb-8">
       <a href="../examples.html">Examples</a>
       <span class="separator">/</span>
-      <span>Dynamic Constraints</span>
+      <span>Table-Scoped Variables</span>
     </div>
 
+    <!-- Title -->
     <div class="mb-10">
       <div class="flex items-center gap-3 mb-3">
-        <h1 class="text-4xl text-fg">Dynamic Constraints</h1>
-        <span class="badge badge-intermediate">Intermediate</span>
+        <h1 class="text-4xl text-fg">Table-Scoped Variables</h1>
+        <span class="badge badge-advanced">Advanced</span>
       </div>
       <div class="flex flex-wrap gap-2">
-        <span class="badge badge-tag">Scalar Subquery</span>
-        <span class="badge badge-tag">WHEN Conditional</span>
-        <span class="badge badge-tag">Dynamic Bounds</span>
+        <span class="badge badge-tag">DECIDE Table.var</span>
+        <span class="badge badge-tag">JOIN</span>
+        <span class="badge badge-tag">Entity Consistency</span>
+        <span class="badge badge-tag">MAXIMIZE</span>
       </div>
     </div>
 
+    <!-- The Problem -->
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        An inventory manager selects items for a display, but the rules come from a configuration table — the maximum number of items and the budget are stored externally rather than hard-coded. Additionally, category-specific rules apply: at least 2 items from category A and at most 3 from category B. This example shows how DecidB constraints can reference scalar subqueries (for dynamic bounds) and use CASE expressions (for category-level counting).
+        A hospital is restructuring its nursing staff and needs to decide which nurses to retain. Each nurse is scheduled for multiple shifts, and joining <code>nurses</code> with <code>shifts</code> produces one result row per nurse&ndash;shift combination. The decision, however, is per nurse &mdash; you either keep a nurse for all their shifts or release them entirely. Without table-scoped variables, DecidB would create one independent binary variable per result row, allowing inconsistent decisions like "retain Alice for Monday but not Tuesday." The <code>n.</code> prefix in <code>DECIDE n.keepN IS BOOLEAN</code> tells DecidB to create exactly one variable per unique nurse, shared across all rows that originate from that nurse.
       </p>
     </section>
 
+    <!-- Sample Data -->
     <section class="example-section">
       <div class="example-section-label">SAMPLE DATA</div>
       <div class="code-block">
-        <pre class="language-sql"><code>CREATE TABLE Config (id INTEGER, max_items INTEGER, budget INTEGER);
-INSERT INTO Config VALUES (1, 5, 600);
-
-CREATE TABLE Items (
-    item_id INTEGER, name VARCHAR, category VARCHAR, value INTEGER
+        <pre class="language-sql"><code>CREATE TABLE nurses (
+    id INTEGER, name VARCHAR, hourly_rate REAL
 );
-INSERT INTO Items VALUES
-    (1, 'Premium Item A1', 'A', 150), (2, 'Premium Item A2', 'A', 140),
-    (3, 'Premium Item A3', 'A', 100), (4, 'Standard Item B0', 'B', 130),
-    (5, 'Standard Item B1', 'B', 120), (6, 'Standard Item B2', 'B', 110),
-    (7, 'Standard Item B3', 'B', 90), (8, 'Basic Item C1', 'C', 80),
-    (9, 'Basic Item C2', 'C', 70);</code></pre>
+CREATE TABLE shifts (
+    shift_id INTEGER, nurse_id INTEGER,
+    shift_date VARCHAR, hours INTEGER
+);
+
+INSERT INTO nurses VALUES
+    (1, 'Alice', 45.0),
+    (2, 'Bob',   38.0),
+    (3, 'Carol', 52.0),
+    (4, 'Dan',   41.0);
+
+INSERT INTO shifts VALUES
+    (101, 1, '2026-06-01',  8),
+    (102, 1, '2026-06-02', 10),
+    (103, 2, '2026-06-01',  8),
+    (104, 2, '2026-06-03',  6),
+    (105, 3, '2026-06-02',  8),
+    (106, 3, '2026-06-03', 12),
+    (107, 4, '2026-06-01',  4),
+    (108, 4, '2026-06-02',  8);</code></pre>
       </div>
     </section>
 
+    <!-- The Query -->
     <section class="example-section">
       <div class="example-section-label">THE QUERY</div>
       <div class="code-block">
-        <pre class="language-sql"><code>SELECT item_id, name, category, value, x as selected
-FROM Items
-DECIDE x IS BOOLEAN
+        <pre class="language-sql"><code>SELECT n.name, s.shift_date, s.hours, keepN AS retained
+FROM nurses n
+JOIN shifts s ON n.id = s.nurse_id
+DECIDE n.keepN IS BOOLEAN
 SUCH THAT
-    SUM(x) <= (SELECT max_items FROM Config WHERE id = 1) AND
-    SUM(x) >= 2 WHEN category = 'A' AND
-    SUM(x) <= 3 WHEN category = 'B' AND
-    SUM(x * value) <= (SELECT budget FROM Config WHERE id = 1)
-MAXIMIZE SUM(x * value);</code></pre>
+    SUM(keepN * s.hours * n.hourly_rate) <= 1200
+MAXIMIZE SUM(keepN * s.hours);</code></pre>
       </div>
     </section>
 
+    <!-- Query Breakdown -->
     <section class="example-section">
       <div class="example-section-label">QUERY BREAKDOWN</div>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>SUM(x) &lt;= (SELECT max_items FROM Config WHERE id = 1)</code> — Total selected items cannot exceed the limit from the Config table (5 in this case).</div>
+          <div><code>DECIDE n.keepN IS BOOLEAN</code> &mdash; The <code>n.</code> prefix makes this a <em>table-scoped</em> variable. DecidB creates one binary variable per unique nurse in the <code>nurses</code> table (4 variables total), not one per result row (8 rows). All join rows originating from the same nurse share the same <code>keepN</code> value.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>
-          <div><code>SUM(x) &gt;= 2 WHEN category = 'A'</code> — At least 2 items from category A must be selected. The postfix <code>WHEN</code> filters which rows the aggregate sums over, so only category-A rows contribute to this count.</div>
+          <div><code>SUM(keepN * s.hours * n.hourly_rate) &lt;= 1200</code> &mdash; Total payroll budget. Summing over all 8 rows, each retained nurse contributes their total hours &times; rate across all their shifts. Alice: 18h &times; $45 = $810; Bob: 14h &times; $38 = $532; Carol: 20h &times; $52 = $1,040; Dan: 12h &times; $41 = $492.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>SUM(x) &lt;= 3 WHEN category = 'B'</code> — At most 3 items from category B.</div>
-        </div>
-        <div class="query-annotation">
-          <span class="annotation-marker">4</span>
-          <div><code>SUM(x * value) &lt;= (SELECT budget FROM Config WHERE id = 1)</code> — Total value within budget (600).</div>
-        </div>
-        <div class="query-annotation">
-          <span class="annotation-marker">5</span>
-          <div><code>MAXIMIZE SUM(x * value)</code> — Maximize the total value of selected items.</div>
+          <div><code>MAXIMIZE SUM(keepN * s.hours)</code> &mdash; Maximize total staffed hours across all retained nurses and their shifts. More hours means better patient coverage.</div>
         </div>
       </div>
     </section>
 
+    <!-- Result -->
     <section class="example-section">
       <div class="example-section-label">RESULT</div>
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
-              <th>item_id</th>
               <th>name</th>
-              <th>category</th>
-              <th>value</th>
-              <th>selected</th>
+              <th>shift_date</th>
+              <th>hours</th>
+              <th>retained</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>1</td><td>Premium Item A1</td><td>A</td><td>150</td><td class="selected-row">1</td></tr>
-            <tr><td>2</td><td>Premium Item A2</td><td>A</td><td>140</td><td class="selected-row">1</td></tr>
-            <tr><td>3</td><td>Premium Item A3</td><td>A</td><td>100</td><td class="selected-row">1</td></tr>
-            <tr><td>4</td><td>Standard Item B0</td><td>B</td><td>130</td><td class="selected-row">1</td></tr>
-            <tr><td>5</td><td>Standard Item B1</td><td>B</td><td>120</td><td>0</td></tr>
-            <tr><td>6</td><td>Standard Item B2</td><td>B</td><td>110</td><td>0</td></tr>
-            <tr><td>7</td><td>Standard Item B3</td><td>B</td><td>90</td><td>0</td></tr>
-            <tr><td>8</td><td>Basic Item C1</td><td>C</td><td>80</td><td class="selected-row">1</td></tr>
-            <tr><td>9</td><td>Basic Item C2</td><td>C</td><td>70</td><td>0</td></tr>
+            <tr><td>Alice</td><td>2026-06-01</td><td>8</td><td>0</td></tr>
+            <tr><td>Alice</td><td>2026-06-02</td><td>10</td><td>0</td></tr>
+            <tr><td>Bob</td><td>2026-06-01</td><td>8</td><td class="selected-row">1</td></tr>
+            <tr><td>Bob</td><td>2026-06-03</td><td>6</td><td class="selected-row">1</td></tr>
+            <tr><td>Carol</td><td>2026-06-02</td><td>8</td><td>0</td></tr>
+            <tr><td>Carol</td><td>2026-06-03</td><td>12</td><td>0</td></tr>
+            <tr><td>Dan</td><td>2026-06-01</td><td>4</td><td class="selected-row">1</td></tr>
+            <tr><td>Dan</td><td>2026-06-02</td><td>8</td><td class="selected-row">1</td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
+    <!-- Interpretation -->
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        The solver selects 5 items totaling exactly 600 (the budget limit): three from category A (Premium A1 at 150, A2 at 140, A3 at 100), one from category B (Standard B0 at 130), and one from category C (Basic C1 at 80). This satisfies the minimum 2 category-A items and stays well within the maximum 3 category-B items. There are several alternative selections that also reach 600 (e.g. A1+A2+B1+B2+C1) — the solver returns one optimum among them. The key feature here is that the constraints reference the Config table dynamically: changing the budget or max_items in Config would change the optimal selection without modifying the query.
+        The solver retains Bob (14h, $532) and Dan (12h, $492) for a combined payroll of $1,024 &mdash; within the $1,200 budget &mdash; covering 26 total hours. Alice ($810) and Carol ($1,040) alone exhaust most of the budget, leaving no room to add a second nurse; neither combination of Alice or Carol with another nurse fits. Notice that Bob appears in two rows and has <code>retained=1</code> on both, and Dan likewise. This is table-scoped semantics in action: one <code>keepN</code> variable is shared across all shift rows for a given nurse, guaranteeing a consistent retain/release decision. Without the <code>n.</code> prefix, the solver would create 8 independent variables and could freely assign <code>keepN=1</code> to Bob&rsquo;s Monday shift and <code>keepN=0</code> to his Wednesday shift &mdash; a meaningless half-retain that this formulation prevents.
       </div>
     </section>
 
+    <!-- Navigation -->
     <div class="flex justify-between pt-8 border-t border-bdcolor">
-      <a href="intermediate-assignment.html" class="text-accent hover:text-accent">&larr; Task Assignment</a>
-      <a href="intermediate-per.html" class="text-accent hover:text-accent">Next: Per-Group Limits &rarr;</a>
+      <a href="advanced-scheduling.html" class="text-accent hover:text-accent">&larr; Resource Scheduling</a>
+      <a href="../examples.html" class="text-accent hover:text-accent">Back to Examples &rarr;</a>
     </div>
   </main>
 
+  <!-- Footer -->
   <footer class="bg-canvas text-fg-muted border-t border-bdcolor">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">

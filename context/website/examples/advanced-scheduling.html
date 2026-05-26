@@ -118,8 +118,8 @@ WHERE s.start_time BETWEEN '09:00' AND '17:00'
   AND r.skill_level >= s.required_level
 DECIDE x IS BOOLEAN
 SUCH THAT
-    SUM(x) PER r.resource_id <= 3 AND
-    SUM(x) PER s.slot_id = 1
+    SUM(x) <= 3 PER resource_id AND
+    SUM(x) = 1 PER slot_id
 MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
       </div>
     </section>
@@ -137,11 +137,11 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>SUM(x) PER r.resource_id &lt;= 3</code> — Each resource is assigned to at most 3 slots.</div>
+          <div><code>SUM(x) &lt;= 3 PER resource_id</code> — Each resource is assigned to at most 3 slots. <code>PER</code> takes unqualified column names; the join key is unambiguous because <code>resource_id</code> only exists on the Resources side.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>
-          <div><code>SUM(x) PER s.slot_id = 1</code> — Each slot is filled by exactly one resource.</div>
+          <div><code>SUM(x) = 1 PER slot_id</code> — Each slot is filled by exactly one resource.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">5</span>
@@ -167,8 +167,11 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
           </thead>
           <tbody>
             <tr><td>Alice</td><td>1</td><td>09:00</td><td>Monday</td><td>0.95</td><td>10</td><td class="selected-row">1</td></tr>
+            <tr><td>Alice</td><td>2</td><td>10:00</td><td>Monday</td><td>0.95</td><td>8</td><td class="selected-row">1</td></tr>
             <tr><td>Alice</td><td>3</td><td>11:00</td><td>Monday</td><td>0.95</td><td>9</td><td class="selected-row">1</td></tr>
-            <tr><td>Bob</td><td>2</td><td>10:00</td><td>Monday</td><td>0.88</td><td>8</td><td class="selected-row">1</td></tr>
+            <tr><td>Bob</td><td>1</td><td>09:00</td><td>Monday</td><td>0.88</td><td>10</td><td>0</td></tr>
+            <tr><td>Bob</td><td>2</td><td>10:00</td><td>Monday</td><td>0.88</td><td>8</td><td>0</td></tr>
+            <tr><td>Bob</td><td>3</td><td>11:00</td><td>Monday</td><td>0.88</td><td>9</td><td>0</td></tr>
             <tr><td>Carol</td><td>4</td><td>13:00</td><td>Tuesday</td><td>0.92</td><td>10</td><td class="selected-row">1</td></tr>
           </tbody>
         </table>
@@ -178,13 +181,13 @@ MAXIMIZE SUM(x * r.efficiency * s.priority);</code></pre>
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        Alice (efficiency 0.95) gets the two highest-priority Monday slots (10 and 9), Bob (0.88) fills the remaining Monday slot (priority 8), and Carol (0.92) covers the Tuesday slot (priority 10). The total score is (0.95&times;10) + (0.95&times;9) + (0.88&times;8) + (0.92&times;10) = 9.5 + 8.55 + 7.04 + 9.2 = 34.29. The JOIN and WHERE clauses ensure feasibility before optimization begins — Carol can't be assigned to Monday slots, and no one with insufficient skill level is considered.
+        Alice (efficiency 0.95) takes all three Monday slots — she has higher efficiency than Bob (0.88), so every Monday slot is more valuable when assigned to her. The 3-slots-per-resource cap is exactly binding for Alice; Bob is left unassigned. Carol (0.92) covers the only Tuesday slot. Total score is 0.95&times;(10 + 8 + 9) + 0.92&times;10 = 25.65 + 9.2 = <strong>34.85</strong>. The JOIN and WHERE clauses do the feasibility filtering up front: Carol can't be considered for Monday slots (wrong day), and any candidate with insufficient skill level is dropped before the optimizer ever sees them. To force a more balanced assignment (e.g., give Bob a shot), you would tighten the per-resource cap from 3 down to 2.
       </div>
     </section>
 
     <div class="flex justify-between pt-8 border-t border-bdcolor">
       <a href="advanced-portfolio.html" class="text-accent hover:text-accent">&larr; Portfolio Optimization</a>
-      <a href="advanced-multiperiod.html" class="text-accent hover:text-accent">Next: Multi-Period Planning &rarr;</a>
+      <a href="advanced-table-scoped.html" class="text-accent hover:text-accent">Next: Table-Scoped Variables &rarr;</a>
     </div>
   </main>
 

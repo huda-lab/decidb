@@ -70,7 +70,7 @@
       </div>
       <div class="flex flex-wrap gap-2">
         <span class="badge badge-tag">Scalar Subquery</span>
-        <span class="badge badge-tag">CASE Expression</span>
+        <span class="badge badge-tag">PER Keyword</span>
         <span class="badge badge-tag">Complex Coefficients</span>
       </div>
     </div>
@@ -78,7 +78,7 @@
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        An investment manager builds a portfolio from a universe of stocks. The budget comes from a configuration table. Each asset has an expected return, a risk score, a minimum investment amount, and belongs to a sector. The portfolio must include at least 5 assets, stay within a total risk budget of 300 points, and have no more than 2 assets per sector (diversification). The objective maximizes expected dollar return, computed as return percentage &times; investment amount. This combines scalar subqueries, CASE expressions for per-sector limits, and complex objective coefficients.
+        An investment manager builds a portfolio from a universe of stocks. The budget comes from a configuration table. Each asset has an expected return, a risk score, a minimum investment amount, and belongs to a sector. The portfolio must include at least 5 assets, stay within a total risk budget of 300 points, and have no more than 2 assets per sector (diversification). The objective maximizes expected dollar return, computed as return percentage &times; investment amount. This combines scalar subqueries, the <code>PER</code> keyword for per-sector limits, and complex objective coefficients.
       </p>
     </section>
 
@@ -115,11 +115,7 @@ SUCH THAT
     SUM(x * min_investment) <= (SELECT value FROM Config WHERE name = 'budget') AND
     SUM(x * risk_score) <= 300 AND
     SUM(x) >= 5 AND
-    SUM(x * CASE WHEN sector = 'Technology' THEN 1 ELSE 0 END) <= 2 AND
-    SUM(x * CASE WHEN sector = 'Healthcare' THEN 1 ELSE 0 END) <= 2 AND
-    SUM(x * CASE WHEN sector = 'Finance' THEN 1 ELSE 0 END) <= 2 AND
-    SUM(x * CASE WHEN sector = 'Energy' THEN 1 ELSE 0 END) <= 2 AND
-    SUM(x * CASE WHEN sector = 'Consumer' THEN 1 ELSE 0 END) <= 2
+    SUM(x) <= 2 PER sector
 MAXIMIZE SUM(x * expected_return * min_investment / 100);</code></pre>
       </div>
     </section>
@@ -141,7 +137,7 @@ MAXIMIZE SUM(x * expected_return * min_investment / 100);</code></pre>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>
-          <div><code>SUM(x * CASE WHEN sector = '...' THEN 1 ELSE 0 END) &lt;= 2</code> — At most 2 assets per sector.</div>
+          <div><code>SUM(x) &lt;= 2 PER sector</code> — At most 2 assets per sector. The <code>PER</code> keyword emits one constraint for each distinct value of <code>sector</code> in the data, so you don't have to list Technology, Healthcare, Finance, Energy, Consumer individually — adding a new sector to the table needs no query change.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">5</span>
@@ -167,14 +163,14 @@ MAXIMIZE SUM(x * expected_return * min_investment / 100);</code></pre>
           </thead>
           <tbody>
             <tr><td>MSFT</td><td>Microsoft</td><td>Technology</td><td>11.2%</td><td>55</td><td>$5,000</td><td class="selected-row">1</td></tr>
-            <tr><td>AAPL</td><td>Apple</td><td>Technology</td><td>10.5%</td><td>60</td><td>$6,000</td><td>0</td></tr>
+            <tr><td>AAPL</td><td>Apple</td><td>Technology</td><td>10.5%</td><td>60</td><td>$6,000</td><td class="selected-row">1</td></tr>
             <tr><td>PFE</td><td>Pfizer</td><td>Healthcare</td><td>8.5%</td><td>35</td><td>$2,000</td><td class="selected-row">1</td></tr>
-            <tr><td>JNJ</td><td>J&amp;J</td><td>Healthcare</td><td>7.2%</td><td>25</td><td>$3,000</td><td>0</td></tr>
+            <tr><td>JNJ</td><td>J&amp;J</td><td>Healthcare</td><td>7.2%</td><td>25</td><td>$3,000</td><td class="selected-row">1</td></tr>
             <tr><td>JPM</td><td>JP Morgan</td><td>Finance</td><td>9.2%</td><td>50</td><td>$4,000</td><td class="selected-row">1</td></tr>
             <tr><td>BAC</td><td>Bank of America</td><td>Finance</td><td>10.1%</td><td>55</td><td>$3,000</td><td class="selected-row">1</td></tr>
             <tr><td>XOM</td><td>Exxon</td><td>Energy</td><td>8.0%</td><td>45</td><td>$3,000</td><td>0</td></tr>
             <tr><td>PG</td><td>P&amp;G</td><td>Consumer</td><td>6.5%</td><td>20</td><td>$2,000</td><td class="selected-row">1</td></tr>
-            <tr><td>KO</td><td>Coca-Cola</td><td>Consumer</td><td>5.8%</td><td>15</td><td>$2,000</td><td class="selected-row">1</td></tr>
+            <tr><td>KO</td><td>Coca-Cola</td><td>Consumer</td><td>5.8%</td><td>15</td><td>$2,000</td><td>0</td></tr>
           </tbody>
         </table>
       </div>
@@ -183,7 +179,7 @@ MAXIMIZE SUM(x * expected_return * min_investment / 100);</code></pre>
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        The portfolio includes 6 assets across 4 sectors: Microsoft ($5,000), Pfizer ($2,000), JP Morgan ($4,000), Bank of America ($3,000), Procter &amp; Gamble ($2,000), and Coca-Cola ($2,000) — totaling $18,000 under the $25,000 budget. Total risk is 230 (&le;300). The solver picks high-return assets (MSFT at 11.2%, BAC at 10.1%, JPM at 9.2%) balanced with low-risk consumer stocks (PG, KO) to stay within the risk budget. Apple was excluded despite its strong return because its high investment ($6,000) and risk score (60) made room for more diversified picks.
+        The portfolio includes 7 assets spanning 4 of the 5 sectors: Microsoft ($5,000), Apple ($6,000), Pfizer ($2,000), J&amp;J ($3,000), JP Morgan ($4,000), Bank of America ($3,000), and Procter &amp; Gamble ($2,000). Total investment is exactly $25,000 (the full budget) and total risk is exactly 300 (the cap) — both constraints are binding. Expected dollar return is $2,377. The two-per-sector cap is binding for Technology (MSFT + AAPL), Healthcare (PFE + JNJ), and Finance (JPM + BAC); Consumer fills with PG only, and Energy is left out because Exxon's risk score (45) consumes too much of the risk budget. Coca-Cola is excluded over P&amp;G because P&amp;G has a higher expected return.
       </div>
     </section>
 

@@ -123,3 +123,129 @@ Either way, update `tests/test_error_time_limit.py` to drive the limit through w
 
 - One test failure in `make decide-test` (547 passed, 1 failed, 1 skipped as of this writing).
 - Any user dropping a `gurobi.env` with a tighter `TimeLimit` or other limit-style parameters that DecidB also re-sets (currently only `OutputFlag`, `TimeLimit`, `NonConvex`) silently has their override discarded — minor footgun for power users.
+
+---
+
+## `CASE WHEN` Inside DECIDE Clause Crashes With Internal Error + Stack Trace
+
+**Priority: Low** (workarounds exist via `WHEN` postfix and `PER`; no correctness risk, only UX)
+
+### Symptom
+
+Any DECIDE query whose `SUCH THAT` or objective contains a `CASE` expression aborts with an `INTERNAL Error` and a ~20-frame C++ stack trace, instead of a clean user-facing rejection:
+
+```
+INTERNAL Error: ToSymbolic: Unsupported expression class: CASE
+
+Stack Trace:
+0  duckdb::Exception::Exception(...)
+1  duckdb::InternalException::InternalException(...)
+...
+3  duckdb::ToSymbolicRecursive(...)
+...
+This error signals an assertion failure within DuckDB. ...
+```
+
+### Reproduction
+
+```sql
+CREATE TABLE Items (item_id INTEGER, category VARCHAR, value INTEGER);
+INSERT INTO Items VALUES (1, 'A', 100), (2, 'B', 50);
+
+SELECT item_id, x AS selected
+FROM Items
+DECIDE x IS BOOLEAN
+SUCH THAT SUM(x * CASE WHEN category = 'A' THEN 1 ELSE 0 END) >= 1
+MAXIMIZE SUM(x * value);
+```
+
+Same crash if `CASE` appears in the objective rather than a constraint.
+
+### What is known
+
+- The crash is thrown by `ToSymbolicRecursive` in `src/decidb/symbolic/decide_symbolic.cpp` when it falls through to the unsupported-`ExpressionClass` default arm.
+- `CASE` is `ExpressionClass::CASE`; the symbolic layer never grew a translation arm for it. Other unsupported classes (window functions) are caught earlier in the binder and return a clean `Binder Error`, so the contrast is jarring.
+- Equivalent semantics ARE expressible — both these formulations work:
+  - Postfix `WHEN`: `SUM(x) >= 1 WHEN category = 'A'`
+  - `PER` grouping: `SUM(x) <= 2 PER sector` (one constraint per distinct value)
+- Two website examples (`intermediate-dynamic`, `advanced-portfolio`) were originally written with `CASE WHEN` and triggered this crash; they have been rewritten to use `WHEN` / `PER`.
+
+### Ruled out
+
+- Not specific to the `WHEN/THEN/ELSE` form vs. `CASE expr WHEN val THEN ...` — both classes hit the same default arm.
+- Not specific to constraints; the same crash happens inside `MAXIMIZE` / `MINIMIZE` expressions.
+
+### Where to look next
+
+1. `src/decidb/symbolic/decide_symbolic.cpp` `ToSymbolicRecursive`: change the default arm (currently throwing `InternalException`) to throw `InvalidInputException("CASE expressions are not supported inside DECIDE constraints/objectives — use postfix WHEN or PER to express conditional logic")` when the class is `CASE` specifically. Other unsupported classes can keep the internal-error path or be enumerated similarly.
+2. Optionally add a one-paragraph note in `context/descriptions/03_expressivity/` (the conditional-expression doc) and in `context/website/documentation.html` near the `WHEN` syntax block, calling out that `CASE` is rejected on purpose and pointing to the supported alternatives.
+3. Consider whether to translate `CASE WHEN cond THEN a ELSE b END` to a linearized form when `cond` is a row-level (data-only) predicate and `a`/`b` are linear-in-decision-variables — this would let the natural SQL form just work, at the cost of widening the symbolic surface. The minimal fix (clean error) is sufficient until there's user demand for that lift.
+
+### Impact
+
+- New users familiar with SQL who write `CASE WHEN ...` inside DECIDE see a C++ stack trace, which looks like a decidb bug rather than an unsupported feature. Several worked examples on the website were written this way and silently crashed.
+- No correctness risk: the query never produces a result, so users can't act on bad output.
+
+---
+
+## `PER table.column` (Qualified Column Reference) Fails To Parse
+
+**Priority: Low** (workaround: drop the qualifier; only matters inside JOIN-based DECIDE queries)
+
+### Symptom
+
+The `PER` clause rejects table-qualified column references with a parser error pointing at the dot:
+
+```
+Parser Error: syntax error at or near "."
+
+LINE 9:     SUM(x) <= 3 PER r.resource_id AND
+                             ^
+```
+
+Unqualified column names parse and execute correctly, even in JOIN queries where the column lives on a specific side.
+
+### Reproduction
+
+```sql
+CREATE TABLE Resources (resource_id INTEGER, name VARCHAR, available_day VARCHAR);
+CREATE TABLE Slots (slot_id INTEGER, day VARCHAR);
+INSERT INTO Resources VALUES (1, 'Alice', 'Mon'), (2, 'Bob', 'Mon');
+INSERT INTO Slots VALUES (10, 'Mon'), (11, 'Mon');
+
+-- FAILS:
+SELECT r.resource_id, s.slot_id, x
+FROM Resources r JOIN Slots s ON r.available_day = s.day
+DECIDE x IS BOOLEAN
+SUCH THAT SUM(x) <= 3 PER r.resource_id AND
+          SUM(x) = 1 PER s.slot_id;
+
+-- WORKS (same semantics, no table qualifiers):
+SELECT r.resource_id, s.slot_id, x
+FROM Resources r JOIN Slots s ON r.available_day = s.day
+DECIDE x IS BOOLEAN
+SUCH THAT SUM(x) <= 3 PER resource_id AND
+          SUM(x) = 1 PER slot_id;
+```
+
+### What is known
+
+- The PER rule in the grammar accepts only a bare identifier (or parenthesized list of bare identifiers), not a full `ColumnRef`/qualified-name production. The error is at parse time, not bind time — the parser never builds an AST node for `PER r.resource_id`.
+- This is inconsistent with the rest of SQL: `SELECT r.resource_id FROM ...`, `GROUP BY r.resource_id`, `ORDER BY r.resource_id`, and `WHERE r.resource_id = 1` all accept the qualified form.
+- The `advanced-scheduling` website example originally used `PER r.resource_id` and `PER s.slot_id` and was unrunnable until rewritten with unqualified names.
+
+### Ruled out
+
+- Not an ambiguity issue: in the failing repro the join column names `resource_id` and `slot_id` are unambiguous (each lives on exactly one side). The parser fails before any name resolution runs.
+- Not a `(col1, col2)` issue: the parenthesized multi-column form has the same restriction. `PER (r.resource_id, s.slot_id)` also fails to parse.
+
+### Where to look next
+
+1. `third_party/libpg_query/grammar/statements/select.y`: locate the `PER` rule (referenced in the catalog-views bug entry above as around lines 232–335 and 2914) and replace the bare-identifier production with a `ColumnRef` production (or whichever non-terminal `GROUP BY` uses for its column list — that's the obvious analogue).
+2. Regenerate the parser (`make grammar-build`) and verify both single-column and parenthesized multi-column qualified forms parse.
+3. Add a `PER table.column` test under `test/decide/` (the `PER` test directory).
+
+### Impact
+
+- JOIN-heavy DECIDE queries are the natural place to want qualifier disambiguation, and they're exactly where users hit this. Workaround is a 5-second fix once you know the rule, but the parser error message (`syntax error at or near "."`) doesn't suggest the fix.
+- Documentation impact: the syntax reference (`context/descriptions/00_project_overview/syntax_reference.md` §7) implies "any column name" works with PER without stating the qualifier restriction.

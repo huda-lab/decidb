@@ -7,7 +7,7 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Multi-Period Planning - DecidB Examples</title>
+  <title>Feasibility: Constraint Satisfaction - DecidB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -28,6 +28,7 @@
 </head>
 <body class="min-h-screen">
 
+  <!-- Header -->
   <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <a href="../index.html" class="flex items-center space-x-2">
@@ -55,129 +56,140 @@
     </nav>
   </header>
 
+  <!-- Main Content -->
   <main class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
+    <!-- Breadcrumb -->
     <div class="breadcrumb mb-8">
       <a href="../examples.html">Examples</a>
       <span class="separator">/</span>
-      <span>Multi-Period Planning</span>
+      <span>Feasibility: Constraint Satisfaction</span>
     </div>
 
+    <!-- Title -->
     <div class="mb-10">
       <div class="flex items-center gap-3 mb-3">
-        <h1 class="text-4xl text-fg">Multi-Period Planning</h1>
-        <span class="badge badge-advanced">Advanced</span>
+        <h1 class="text-4xl text-fg">Feasibility: Constraint Satisfaction</h1>
+        <span class="badge badge-basic">Basic</span>
       </div>
       <div class="flex flex-wrap gap-2">
-        <span class="badge badge-tag">Multiple Integer Variables</span>
-        <span class="badge badge-tag">Window Functions</span>
-        <span class="badge badge-tag">Inventory Balance</span>
+        <span class="badge badge-tag">Feasibility Mode</span>
+        <span class="badge badge-tag">No Objective</span>
+        <span class="badge badge-tag">Boolean Variables</span>
+        <span class="badge badge-tag">PER</span>
       </div>
     </div>
 
+    <!-- The Problem -->
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        A manufacturer plans production across 4 time periods with varying demand. Each period has a production cost, a per-unit holding cost for inventory, and a maximum production capacity. The key constraint is inventory balance: ending inventory in each period equals starting inventory plus production minus demand. The goal is to minimize total production and holding costs. This example shows integer decision variables (produce and inventory) with window function-based constraints (LAG for previous period's inventory).
+        A hospital needs to cover three daily shifts (Morning, Afternoon, Night) using a pool of four nurses. The rules are simple: every shift must have at least one nurse, and no nurse can work more than one shift per day. There is no score to maximize or cost to minimize &mdash; the goal is just to find <em>any</em> valid schedule that satisfies all constraints. This is a <strong>feasibility problem</strong>: omitting the objective clause tells DecidB to return the first satisfying assignment it finds.
       </p>
     </section>
 
+    <!-- Sample Data -->
     <section class="example-section">
       <div class="example-section-label">SAMPLE DATA</div>
       <div class="code-block">
-        <pre class="language-sql"><code>CREATE TABLE Periods (
-    period INTEGER, demand INTEGER, production_cost INTEGER,
-    holding_cost INTEGER, max_capacity INTEGER
+        <pre class="language-sql"><code>CREATE TABLE assignments (
+    nurse_id INTEGER, nurse_name VARCHAR,
+    shift_id INTEGER, shift_name VARCHAR
 );
-INSERT INTO Periods VALUES
-    (1, 100, 10, 2, 200),
-    (2, 150, 10, 2, 200),
-    (3, 120, 10, 2, 200),
-    (4, 180, 10, 2, 200);</code></pre>
+INSERT INTO assignments VALUES
+    (1, 'Alice', 1, 'Morning'),
+    (1, 'Alice', 2, 'Afternoon'),
+    (1, 'Alice', 3, 'Night'),
+    (2, 'Bob',   1, 'Morning'),
+    (2, 'Bob',   2, 'Afternoon'),
+    (2, 'Bob',   3, 'Night'),
+    (3, 'Carol', 1, 'Morning'),
+    (3, 'Carol', 2, 'Afternoon'),
+    (4, 'Dan',   2, 'Afternoon'),
+    (4, 'Dan',   3, 'Night');</code></pre>
       </div>
     </section>
 
+    <!-- The Query -->
     <section class="example-section">
       <div class="example-section-label">THE QUERY</div>
       <div class="code-block">
-        <pre class="language-sql"><code>SELECT period, demand, production_cost, holding_cost, produce, inventory
-FROM Periods
-DECIDE produce IS INTEGER, inventory IS INTEGER
+        <pre class="language-sql"><code>SELECT nurse_name, shift_name, assigned
+FROM assignments
+DECIDE assigned IS BOOLEAN
 SUCH THAT
-    inventory >= 0 AND
-    inventory = COALESCE(LAG(inventory) OVER (ORDER BY period), 0)
-                + produce - demand AND
-    produce <= max_capacity AND
-    SUM(inventory) <= 0.2 * SUM(produce)
-MINIMIZE SUM(produce * production_cost + inventory * holding_cost);</code></pre>
+    SUM(assigned) >= 1 PER shift_id AND
+    SUM(assigned) <= 1 PER nurse_id;</code></pre>
       </div>
     </section>
 
+    <!-- Query Breakdown -->
     <section class="example-section">
       <div class="example-section-label">QUERY BREAKDOWN</div>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE produce IS INTEGER, inventory IS INTEGER</code> — Two integer decision variables per row: how much to produce and how much inventory to carry.</div>
+          <div><code>DECIDE assigned IS BOOLEAN</code> &mdash; One binary variable per row. Each row represents one nurse&ndash;shift pair; assigned=1 means "this nurse works this shift".</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>
-          <div><code>inventory &gt;= 0</code> — Inventory cannot go negative.</div>
+          <div><code>SUM(assigned) &gt;= 1 PER shift_id</code> &mdash; For each distinct shift, at least one nurse must be assigned. The <code>PER</code> keyword generates one copy of this constraint per distinct value of <code>shift_id</code> &mdash; no hardcoded shift IDs needed.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>inventory = COALESCE(LAG(inventory) OVER (ORDER BY period), 0) + produce - demand</code> — Inventory balance: each period's ending inventory = previous inventory + production - demand. COALESCE handles period 1 (no previous inventory).</div>
+          <div><code>SUM(assigned) &lt;= 1 PER nurse_id</code> &mdash; Each nurse works at most one shift. Again, one constraint per distinct nurse ID, derived from the data.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>
-          <div><code>produce &lt;= max_capacity</code> — Production limited by factory capacity.</div>
-        </div>
-        <div class="query-annotation">
-          <span class="annotation-marker">5</span>
-          <div><code>SUM(inventory) &lt;= 0.2 * SUM(produce)</code> — Total inventory held across all periods cannot exceed 20% of total production (lean manufacturing constraint).</div>
-        </div>
-        <div class="query-annotation">
-          <span class="annotation-marker">6</span>
-          <div><code>MINIMIZE SUM(produce * production_cost + inventory * holding_cost)</code> — Minimize combined production and holding costs.</div>
+          <div>No <code>MAXIMIZE</code> or <code>MINIMIZE</code> &mdash; This is a feasibility query. DecidB finds any valid assignment and returns it. If no assignment satisfies all constraints, the query reports infeasibility.</div>
         </div>
       </div>
     </section>
 
+    <!-- Result -->
     <section class="example-section">
       <div class="example-section-label">RESULT</div>
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
-              <th>period</th>
-              <th>demand</th>
-              <th>produce</th>
-              <th>inventory</th>
+              <th>nurse_name</th>
+              <th>shift_name</th>
+              <th>assigned</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>1</td><td>100</td><td class="selected-row">120</td><td>20</td></tr>
-            <tr><td>2</td><td>150</td><td class="selected-row">140</td><td>10</td></tr>
-            <tr><td>3</td><td>120</td><td class="selected-row">110</td><td>0</td></tr>
-            <tr><td>4</td><td>180</td><td class="selected-row">180</td><td>0</td></tr>
+            <tr><td>Alice</td><td>Morning</td><td class="selected-row">1</td></tr>
+            <tr><td>Alice</td><td>Afternoon</td><td>0</td></tr>
+            <tr><td>Alice</td><td>Night</td><td>0</td></tr>
+            <tr><td>Bob</td><td>Morning</td><td>0</td></tr>
+            <tr><td>Bob</td><td>Afternoon</td><td>0</td></tr>
+            <tr><td>Bob</td><td>Night</td><td class="selected-row">1</td></tr>
+            <tr><td>Carol</td><td>Morning</td><td>0</td></tr>
+            <tr><td>Carol</td><td>Afternoon</td><td class="selected-row">1</td></tr>
+            <tr><td>Dan</td><td>Afternoon</td><td>0</td></tr>
+            <tr><td>Dan</td><td>Night</td><td>0</td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
+    <!-- Interpretation -->
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        The solver slightly overproduces in periods 1 and 2 (120 and 140 vs demand of 100 and 150), building small inventory buffers of 20 and 10 units. By period 3, inventory drops to 0, and period 4 produces exactly its demand (180). Total production cost: (120+140+110+180)&times;10 = $5,500. Total holding cost: (20+10+0+0)&times;2 = $60. Grand total: $5,560. The lean manufacturing constraint (total inventory &le; 20% of total production = 110) is satisfied with total inventory of 30.
+        DecidB found a valid schedule: Alice covers Morning, Carol covers Afternoon, and Bob covers Night. Dan is not assigned. Every shift has exactly one nurse (&ge;1 PER shift), and no nurse works more than one shift (&le;1 PER nurse). Because there is no objective, DecidB returns the first feasible assignment it finds &mdash; not the "best" one. To optimize among valid schedules (e.g., maximize total seniority), simply add a <code>MAXIMIZE</code> clause.
       </div>
     </section>
 
+    <!-- Navigation -->
     <div class="flex justify-between pt-8 border-t border-bdcolor">
-      <a href="advanced-scheduling.html" class="text-accent hover:text-accent">&larr; Resource Scheduling</a>
-      <a href="../examples.html" class="text-accent hover:text-accent">Back to Examples &rarr;</a>
+      <a href="basic-filtering.html" class="text-accent hover:text-accent">&larr; Item Filtering</a>
+      <a href="intermediate-diet.html" class="text-accent hover:text-accent">Next: Diet Planning &rarr;</a>
     </div>
   </main>
 
+  <!-- Footer -->
   <footer class="bg-canvas text-fg-muted border-t border-bdcolor">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
