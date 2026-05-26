@@ -673,6 +673,13 @@ td.selected-row {
 /* ============================================
    Installation Tabs (Getting Started page)
    ============================================ */
+/* Active state for example filter buttons — uses direct CSS vars to avoid
+   Tailwind CDN's rgb() decomposition which breaks on hex custom properties */
+.filter-btn-active {
+  background-color: var(--color-success-emphasis);
+  color: white;
+}
+
 .install-tab {
   transition: all var(--transition-fast);
   background-color: var(--color-canvas-subtle);

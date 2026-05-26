@@ -343,11 +343,11 @@
 
         // Update active button
         filterButtons.forEach(function(btn) {
-          btn.classList.remove('active', 'bg-success', 'text-white');
-          btn.classList.add('bg-canvas-subtle', 'text-fg-muted');
+          btn.classList.remove('active', 'filter-btn-active');
+          btn.classList.add('bg-canvas-inset', 'text-fg-muted');
         });
-        this.classList.add('active', 'bg-success', 'text-white');
-        this.classList.remove('bg-canvas-subtle', 'text-fg-muted');
+        this.classList.add('active', 'filter-btn-active');
+        this.classList.remove('bg-canvas-inset', 'text-fg-muted');
 
         // Filter cards
         exampleCards.forEach(function(card) {
