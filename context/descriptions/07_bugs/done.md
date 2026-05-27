@@ -412,3 +412,68 @@ The `default:` arms remain in place (now reserved for genuine internal class dri
 - Binder-layer arm: `src/planner/expression_binder/decide_binder.cpp` (`ValidateSumArgumentInternal`, `case ExpressionClass::CASE` before the catch-all default).
 - Tests: `test/decide/tests/test_error_case_expression.py` (`TestCaseExpressionRejection`).
 - Doc: `03_expressivity/when/done.md` ("Rejection of inline CASE inside DECIDE" subsection under "WHEN vs SQL CASE WHEN").
+
+---
+
+## `gurobi.env` `TimeLimit` Was Silently Clobbered By A Hard-Coded 300s
+
+### Symptom
+
+`make decide-test` failed `tests/test_error_time_limit.py::test_time_limit_surfaces_friendly_error`:
+
+```
+FAILED tests/test_error_time_limit.py::test_time_limit_surfaces_friendly_error
+subprocess.TimeoutExpired: Command '[...decidb ... MINIMIZE SUM(POWER(qty - 2, 2))]'
+  timed out after 30 seconds
+```
+
+The test dropped a `gurobi.env` containing `TimeLimit 1` in the working directory and expected a symmetric MIQP to terminate within ~1s with the friendly "exceeded time limit" message. Instead the decidb subprocess ran past the 30s `subprocess.run(timeout=30)` cap, was SIGKILL'd, and produced no output for the assertion to match.
+
+Beyond the test failure, any user dropping a tighter `TimeLimit` (or other limit-style parameters that DecidB also re-set after Gurobi auto-loaded `gurobi.env`) had their override silently discarded — a footgun for power users.
+
+### Root cause
+
+`src/decidb/gurobi/gurobi_solver.cpp` ran:
+
+```cpp
+api.setdblparam(guard.env, "TimeLimit", 300.0);
+```
+
+unconditionally *after* `emptyenv_internal` — the call where Gurobi auto-reads `gurobi.env`. So any `TimeLimit` in the env file was overwritten by the hard-coded 300s before `startenv`, and the 1s budget the test relied on never fired.
+
+The friendly-error branch (`status == GRB_TIME_LIMIT` → "DECIDE optimization exceeded time limit.") was wired correctly; it just was never reachable in a 30s window with the limit pinned at 300s.
+
+### Fix
+
+Replaced the hard-coded `300.0` with a value read from a new `DECIDB_TIME_LIMIT` env var (seconds, double), defaulting to 300.0 when the env var is absent, empty, unparseable, or non-positive. The env var sits alongside the existing `DECIDB_FORCE_SOLVER` knob and is the supported override mechanism going forward.
+
+```cpp
+double time_limit = 300.0;
+if (const char *env_limit = std::getenv("DECIDB_TIME_LIMIT")) {
+    try {
+        double parsed = std::stod(env_limit);
+        if (parsed > 0.0) {
+            time_limit = parsed;
+        }
+    } catch (...) {
+        // Ignore unparseable values; keep the default.
+    }
+}
+api.setdblparam(guard.env, "TimeLimit", time_limit);
+```
+
+`std::stod` is wrapped in a try/catch so non-numeric values don't bubble up; non-positive values are rejected because they're nonsensical as a time budget.
+
+The test (`test/decide/tests/test_error_time_limit.py`) was rewritten as a `TestTimeLimit` class with 7 parameterized cases covering: env-var-surfaces-friendly-error, default-doesn't-break-normal-queries, four garbage-value cases that must fall back silently, and a 0.5s value on the pathological MIQP that catches off-by-orders-of-magnitude parsing bugs.
+
+### Verification
+
+- `make decide-test` — `test_error_time_limit.py` passes all 7 cases (Gurobi-only; skips when Gurobi is unavailable). No regressions in the rest of the suite.
+- Manual repro: `DECIDB_FORCE_SOLVER=gurobi DECIDB_TIME_LIMIT=1 build/release/decidb decidb.db -readonly -c "<symmetric MIQP>"` terminates in ~1s with "DECIDE optimization exceeded time limit." Without the env var, normal queries still complete under the 300s default.
+
+### Code pointers
+
+- Env-var read + override: `src/decidb/gurobi/gurobi_solver.cpp` (in `GurobiSolver::Solve`, just after `emptyenv_internal`).
+- Friendly-error branch (unchanged): same file (`status == GRB_TIME_LIMIT`).
+- Constant: `src/decidb/gurobi/gurobi_loader.hpp` (`GRB_TIME_LIMIT = 9`, must match Gurobi's `gurobi_c.h`).
+- Tests: `test/decide/tests/test_error_time_limit.py` (`TestTimeLimit`).

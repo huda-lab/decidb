@@ -4,6 +4,8 @@
 #include "gurobi_loader.hpp"
 
 #include <cmath>
+#include <cstdlib>
+#include <string>
 
 namespace duckdb {
 
@@ -62,9 +64,21 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
     }
     api.setintparam(guard.env, "OutputFlag", 0);
     // Cap solve time so a hard MIQP/QCQP doesn't hang the session indefinitely.
-    // 300s is generous for typical workloads; truly hard problems return the best
-    // feasible solution found so far (handled by the GRB_TIME_LIMIT branch below).
-    api.setdblparam(guard.env, "TimeLimit", 300.0);
+    // 300s is generous for typical workloads; overridable via DECIDB_TIME_LIMIT
+    // (seconds, double). Truly hard problems return the best feasible solution
+    // found so far (handled by the GRB_TIME_LIMIT branch below).
+    double time_limit = 300.0;
+    if (const char *env_limit = std::getenv("DECIDB_TIME_LIMIT")) {
+        try {
+            double parsed = std::stod(env_limit);
+            if (parsed > 0.0) {
+                time_limit = parsed;
+            }
+        } catch (...) {
+            // Ignore unparseable values; keep the default.
+        }
+    }
+    api.setdblparam(guard.env, "TimeLimit", time_limit);
     // Enable non-convex QP solving via spatial branching when needed
     if (ilp.nonconvex_quadratic) {
         api.setintparam(guard.env, "NonConvex", 2);
