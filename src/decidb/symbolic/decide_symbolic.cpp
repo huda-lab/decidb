@@ -436,9 +436,17 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
             ctx.subquery_map[placeholder] = expr.Copy();
             return Symbolic(placeholder);
         }
-        
+
+        case ExpressionClass::CASE:
+            throw InvalidInputException(
+                "CASE expressions are not supported inside DECIDE constraints or "
+                "objectives. Use postfix WHEN to gate on a row predicate "
+                "(e.g. `SUM(x) >= 1 WHEN category = 'A'`), PER to partition by "
+                "a column, or a CTE/subquery to pre-compute conditional values "
+                "before the DECIDE clause.");
+
         default:
-            throw InternalException("ToSymbolic: Unsupported expression class: %s", 
+            throw InternalException("ToSymbolic: Unsupported expression class: %s",
                 EnumUtil::ToString(expr.GetExpressionClass()));
     }
 }

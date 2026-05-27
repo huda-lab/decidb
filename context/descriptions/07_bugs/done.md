@@ -362,3 +362,53 @@ WHEN/PER on the original constraint are unaffected — the per-row Big-M envelop
 - Big-M emission (unchanged code path, broadened context): `src/execution/operator/decide/physical_decide.cpp` (search for `abs_maximize_links`).
 - Tag constant: `src/include/duckdb/common/enums/decide.hpp` (`ABS_NEEDS_BIGM_TAG`).
 - Doc: `03_expressivity/sql_functions/done.md` (Path A / Path B classification).
+
+---
+
+## `CASE WHEN` Inside DECIDE Crashed With Internal Error + C++ Stack Trace
+
+### Symptom
+
+Any DECIDE query whose `SUCH THAT` or objective contained a SQL `CASE` expression aborted with an `INTERNAL Error` and a ~20-frame C++ stack trace, instead of a clean user-facing rejection:
+
+```
+INTERNAL Error: ToSymbolic: Unsupported expression class: CASE
+
+Stack Trace:
+0  duckdb::Exception::Exception(...)
+1  duckdb::InternalException::InternalException(...)
+...
+3  duckdb::ToSymbolicRecursive(...)
+```
+
+Two distinct code paths were involved:
+- CASE wrapped by `SUM` (or any aggregate) inside an objective/constraint hit `ValidateSumArgumentInternal` in `decide_binder.cpp`, which produced a `Binder Error: Unsupported expression of type ExpressionClass::CASE inside DECIDE SUM expression` — clean rejection, but uninformative.
+- CASE elsewhere (e.g. inside a comparison or arithmetic outside an aggregate) fell through to `ToSymbolicRecursive`'s default arm, which threw `InternalException` with the C++ stack trace shown above.
+
+### Root cause
+
+`ToSymbolicRecursive` in `src/decidb/symbolic/decide_symbolic.cpp` dispatched on `ExpressionClass` with arms for `CONSTANT`, `COLUMN_REF`, `OPERATOR`, `CAST`, `COMPARISON`, `BETWEEN`, `CONJUNCTION`, `FUNCTION`, and `SUBQUERY`. There was no arm for `CASE`, so it hit the catch-all `default:` that throws `InternalException` (intended for genuine internal class drift, not user-facing rejection).
+
+Even where the binder did catch CASE first, the message (`"Unsupported expression of type ExpressionClass::CASE inside DECIDE SUM expression"`) did not point users to the supported alternatives.
+
+### Fix
+
+Two co-ordinated changes so both rejection paths surface the same friendly, actionable message:
+
+1. **`src/decidb/symbolic/decide_symbolic.cpp`** — added an explicit `case ExpressionClass::CASE` arm in `ToSymbolicRecursive` before the catch-all `default:`. It throws `InvalidInputException` (not `InternalException`) with a message naming the supported alternatives:
+   > CASE expressions are not supported inside DECIDE constraints or objectives. Use postfix WHEN to gate on a row predicate (e.g. `SUM(x) >= 1 WHEN category = 'A'`), PER to partition by a column, or a CTE/subquery to pre-compute conditional values before the DECIDE clause.
+2. **`src/planner/expression_binder/decide_binder.cpp`** (`ValidateSumArgumentInternal`) — added a `case ExpressionClass::CASE` ahead of the generic default arm with the same friendly message, so CASE inside `SUM`/`MIN`/`MAX`/`AVG` surfaces the same wording.
+
+The `default:` arms remain in place (now reserved for genuine internal class drift).
+
+### Verification
+
+- `make decide-test` — 10 new cases in `test/decide/tests/test_error_case_expression.py` exercise every surface area: SUCH THAT, MAXIMIZE, MINIMIZE, searched-vs-simple CASE, bare-SUM-of-CASE, AVG/MIN/MAX wrappers (parameterized), PER-wrapped CASE, plus an explicit no-stack-trace assertion (`INTERNAL Error`, `Stack Trace`, `ToSymbolicRecursive`, `assertion failure` must all be absent from the output).
+- Manual repro from the bug doc (`SUM(x * CASE WHEN category = 'A' THEN 1 ELSE 0 END) >= 1`) now produces a single-line friendly error with no stack trace.
+
+### Code pointers
+
+- Symbolic-layer arm: `src/decidb/symbolic/decide_symbolic.cpp` (`ToSymbolicRecursive`, the `case ExpressionClass::CASE` insertion before `default:`).
+- Binder-layer arm: `src/planner/expression_binder/decide_binder.cpp` (`ValidateSumArgumentInternal`, `case ExpressionClass::CASE` before the catch-all default).
+- Tests: `test/decide/tests/test_error_case_expression.py` (`TestCaseExpressionRejection`).
+- Doc: `03_expressivity/when/done.md` ("Rejection of inline CASE inside DECIDE" subsection under "WHEN vs SQL CASE WHEN").

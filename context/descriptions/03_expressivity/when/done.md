@@ -323,6 +323,10 @@ SUCH THAT
 
 Decomposing into multiple WHEN constraints fails here because the conditions overlap (e.g., a 3-bed apartment in zipcode 10003). SQL `CASE WHEN` evaluates top-to-bottom and returns the first match, giving the correct priority semantics. Pre-computing it as a column preserves that behavior.
 
+### Rejection of inline CASE inside DECIDE
+
+A `CASE` expression placed directly inside a DECIDE constraint or objective is rejected with a friendly user-facing error that points to the supported alternatives (postfix `WHEN`, `PER`, CTE pre-computation). Both the binder path (CASE inside `SUM`/`MIN`/`MAX`/`AVG`) and the symbolic-translation path (CASE elsewhere in a constraint or objective) surface the same message — no stack trace, no internal-error wording. See `src/planner/expression_binder/decide_binder.cpp` (`ValidateSumArgumentInternal`) and `src/decidb/symbolic/decide_symbolic.cpp` (`ToSymbolicRecursive`).
+
 ### Summary
 
 | Need | Use |
