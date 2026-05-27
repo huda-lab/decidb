@@ -51,7 +51,13 @@ SUCH THAT SUM(x * hours) <= 40 PER empID
 
 -- One constraint per distinct (empID, department) combination
 SUCH THAT SUM(x * hours) <= 40 PER (empID, department)
+
+-- Qualified column references — useful in JOIN queries
+SUCH THAT SUM(x * hours) <= 40 PER e.empID
+SUCH THAT SUM(x * hours) <= 40 PER (e.empID, d.dept_id)
 ```
+
+`PER` accepts both bare identifiers and `table.column` (or `alias.column`) qualified references. The qualifier is purely syntactic — qualified and unqualified PER produce identical solutions when the unqualified form is unambiguous. Mixed forms (`PER (empID, d.dept_id)`) are accepted. The grammar uses `columnref_opt_indirection` (the same production SELECT/WHERE/GROUP BY use), so any column-reference shape valid in those clauses is valid in PER.
 
 ### Semantics
 

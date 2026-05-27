@@ -477,3 +477,52 @@ The test (`test/decide/tests/test_error_time_limit.py`) was rewritten as a `Test
 - Friendly-error branch (unchanged): same file (`status == GRB_TIME_LIMIT`).
 - Constant: `src/decidb/gurobi/gurobi_loader.hpp` (`GRB_TIME_LIMIT = 9`, must match Gurobi's `gurobi_c.h`).
 - Tests: `test/decide/tests/test_error_time_limit.py` (`TestTimeLimit`).
+
+---
+
+## `PER table.column` (Qualified Column Reference) Failed To Parse
+
+### Symptom
+
+The `PER` clause rejected table-qualified column references with a parser error pointing at the dot:
+
+```
+Parser Error: syntax error at or near "."
+
+LINE 9:     SUM(x) <= 3 PER r.resource_id AND
+                             ^
+```
+
+Unqualified column names parsed and executed correctly, including in JOIN queries where the column lived on a specific side. The inconsistency with the rest of SQL (`SELECT`, `GROUP BY`, `ORDER BY`, `WHERE` all accept the qualified form) made the failure surprising — the workaround (drop the qualifier) was unobvious from the error message.
+
+### Root cause
+
+In `third_party/libpg_query/grammar/statements/select.y`, the four single-column PER rule arms (lines 238, 259, 316, 337) used the `columnref` non-terminal, which accepts only `ColId` — a bare unqualified identifier. The multi-column form `PER '(' columnrefList ')'` had the same restriction because `columnrefList` was itself built over `columnref`.
+
+`columnref` was used nowhere else in the grammar — only by the DecidB PER/WHEN rules — so the restriction was effectively a DecidB-specific limitation that diverged from the rest of DuckDB's SQL surface.
+
+The C++ transformer (`src/parser/transform/expression/transform_operator.cpp`, the `PG_AEXPR_PER_CONSTRAINT` arm) was already general — it called `TransformExpression(...)` on the right side, which handles both bare and qualified `ColumnRef` AST nodes identically. Only the grammar needed to change.
+
+### Fix
+
+Swapped `columnref` for `columnref_opt_indirection` in the PER rule arms and inside `columnrefList`:
+
+- `columnref_opt_indirection` (already defined at `select.y:4002`) accepts `ColId` and `ColId indirection`, producing a properly-qualified `ColumnRef` node. This is the same production used elsewhere in DuckDB SQL (e.g. `d_expr` at line 2933 of `select.y`).
+- The original `columnref` rule is left in place but becomes unused — keeping it is harmless and deleting it is a separate cleanup if it ever matters.
+
+`a_expr` (the GROUP BY production) was explicitly rejected: PER appears mid-statement followed by `AND`, `,`, `MAXIMIZE`, etc., and `a_expr` would have created shift/reduce ambiguity — `PER r.resource_id AND ...` could parse `r.resource_id AND ...` as one boolean. `columnref_opt_indirection` is restrictive enough to avoid that ambiguity while covering the use case the bug actually asks for.
+
+Regenerated parser via `make grammar-build`.
+
+### Verification
+
+- `make decide-test` — 8 new cases in `test/decide/tests/test_per_qualified.py`: single-column qualified in constraint (with oracle comparison), multi-column all-qualified, multi-column mixed qualified+bare, qualified-equivalent-to-unqualified semantic check, qualifier with table alias, WHEN+PER+qualifier, objective-side qualified, and an unknown-qualifier clean-error case. All existing PER tests (`test_per_clause.py`, `test_per_multi_column.py`, `test_per_objective.py`, `test_per_interactions.py`) still pass.
+- Manual repro from the bug doc (`SUM(x) <= 3 PER r.resource_id AND SUM(x) = 1 PER s.slot_id` on a JOIN-based DECIDE) now parses and produces a valid solution.
+
+### Code pointers
+
+- Grammar: `third_party/libpg_query/grammar/statements/select.y` (PER arms in `decide_objective_item` and `decide_constraint_item`; `columnrefList` rule).
+- Generated parser (regenerated, do not hand-edit): `third_party/libpg_query/src_backend_parser_gram.cpp`.
+- Transformer (unchanged, already general): `src/parser/transform/expression/transform_operator.cpp` (`PG_AEXPR_PER_CONSTRAINT` arm).
+- Tests: `test/decide/tests/test_per_qualified.py`.
+- Doc: `03_expressivity/per/done.md` ("Examples" subsection); `00_project_overview/syntax_reference.md` §7.

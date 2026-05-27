@@ -235,7 +235,7 @@ decide_when_condition:
 		;
 
 decide_objective_item:
-			a_expr WHEN b_expr PER columnref
+			a_expr WHEN b_expr PER columnref_opt_indirection
 				{
 					/* DecidB: objective WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -256,7 +256,7 @@ decide_objective_item:
 					/* DecidB: objective WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
-			| a_expr PER columnref
+			| a_expr PER columnref_opt_indirection
 				{
 					/* DecidB: objective PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
@@ -313,7 +313,7 @@ decide_constraint_list:
 		;
 
 decide_constraint_item:
-			a_expr WHEN b_expr PER columnref
+			a_expr WHEN b_expr PER columnref_opt_indirection
 				{
 					/* DecidB: constraint WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -334,7 +334,7 @@ decide_constraint_item:
 					/* DecidB: constraint WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
-			| a_expr PER columnref
+			| a_expr PER columnref_opt_indirection
 				{
 					/* DecidB: constraint PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
@@ -3989,8 +3989,8 @@ case_arg:	a_expr									{ $$ = $1; }
 		;
 
 columnrefList:
-			columnref								{ $$ = list_make1($1); }
-			| columnrefList ',' columnref				{ $$ = lappend($1, $3); }
+			columnref_opt_indirection								{ $$ = list_make1($1); }
+			| columnrefList ',' columnref_opt_indirection				{ $$ = lappend($1, $3); }
 		;
 
 columnref: ColId

@@ -200,6 +200,8 @@ SUCH THAT
     SUM(x * hours) <= 40 PER (empID, department)
 ```
 
+Column references in `PER` can be either bare (`PER empID`) or qualified by table name / alias (`PER employees.empID`, `PER e.empID`). Qualified and unqualified forms are equivalent; the qualifier is purely syntactic disambiguation, useful for JOIN queries where the grouping column would otherwise be ambiguous. Mixed forms (`PER (empID, dept.id)`) are accepted.
+
 ### 7.1 PER + WHEN Composition
 
 WHEN filters rows first, then PER groups the remaining rows:
