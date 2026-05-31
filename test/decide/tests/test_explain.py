@@ -219,6 +219,40 @@ def test_explain_when_and_per(decidb_cli):
     """
     out = _explain(decidb_cli, sql)
     assert "PER" in out, f"PER missing from EXPLAIN:\n{out}"
+    # The objective carries the only WHEN here; it must render as a postfix
+    # suffix. Before the objective/constraint rendering was unified, an
+    # objective WHEN leaked out as "(... AND ...)" and no WHEN appeared at all.
+    assert "WHEN" in out, f"objective WHEN missing from EXPLAIN:\n{out}"
+
+
+# ===================================================================
+# WHEN on the objective (rendered symmetrically with constraints)
+# ===================================================================
+
+@pytest.mark.explain
+@pytest.mark.when_constraint
+def test_explain_objective_when_postfix(decidb_cli):
+    """An objective WHEN renders as a postfix suffix, not the generic
+    conjunction form "(<obj> AND <cond>)".
+
+    The objective and constraint EXPLAIN rows share one tagged-expression
+    renderer. The single constraint here has no AND/WHEN of its own, so the
+    only conditional is on the objective: WHEN must appear and no spurious
+    " AND " (from a leaked conjunction) may appear anywhere in the output.
+    """
+    sql = """
+        SELECT l_orderkey, l_extendedprice, l_returnflag, x
+        FROM lineitem WHERE l_orderkey < 100
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <= 20
+        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+    """
+    out = _explain(decidb_cli, sql)
+    assert "WHEN" in out, f"objective WHEN missing from EXPLAIN:\n{out}"
+    assert " AND " not in out, (
+        "objective WHEN leaked as a conjunction '(... AND ...)' instead of a "
+        f"postfix ' WHEN ' suffix:\n{out}"
+    )
 
 
 # ===================================================================

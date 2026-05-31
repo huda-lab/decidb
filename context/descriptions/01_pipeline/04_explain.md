@@ -17,8 +17,10 @@ Both the `LogicalDecide` and `PhysicalDecide` operators override `GetName()` and
 The DECIDE node displays three sections:
 
 1. **Variables** — user-declared decision variables (auxiliary variables are excluded)
-2. **Objective** — `MAXIMIZE` or `MINIMIZE` followed by the objective expression
+2. **Objective** — `MAXIMIZE` or `MINIMIZE` followed by the objective expression, with WHEN/PER suffixes rendered the same way as constraints
 3. **Constraints** — individual constraints, each on its own line, with WHEN/PER suffixes
+
+The Objective and Constraints rows share **one** tagged-expression renderer, so an objective WHEN/PER prints symmetrically with a constraint WHEN/PER — e.g. `MAXIMIZE sum(x * price) WHEN (returnflag = 'R')`. (Earlier these diverged: the objective called `GetName()` directly on the wrapper, which short-circuited on its alias and leaked the raw internal tag `__when_constraint__` into the output.)
 
 Example output for a basic knapsack query:
 
@@ -51,7 +53,7 @@ Example output for a basic knapsack query:
 
 ## AND-Tree Splitting
 
-DuckDB binds multiple `SUCH THAT` constraints into a single `BoundConjunctionExpression` (AND-tree). Printing the root expression as one string would produce an unreadable single line. Instead, a recursive `CollectConstraintStrings` function traverses the tree:
+DuckDB binds multiple `SUCH THAT` constraints into a single `BoundConjunctionExpression` (AND-tree). Printing the root expression as one string would produce an unreadable single line. Instead, a recursive `CollectTaggedExpressionStrings` function traverses the tree:
 
 1. **AND nodes** — recurse into each child
 2. **WHEN wrappers** (`alias == WHEN_CONSTRAINT_TAG`) — extract the condition from `children[1]`, recurse into `children[0]`, and append ` WHEN <condition>` to each leaf
@@ -63,6 +65,8 @@ This produces one line per constraint with WHEN/PER suffixes, e.g.:
 ```
 (sum(x * weight) <= 50.0) WHEN (returnflag = 'R') PER department
 ```
+
+The **objective** is rendered through the same `CollectTaggedExpressionStrings` walker rather than a direct `GetName()` call. An objective is also a WHEN/PER-tagged `BoundConjunctionExpression` when conditional, so reusing the walker peels those wrappers into postfix suffixes identically — keeping the Objective and Constraints rows symmetric. Calling `GetName()` directly on the wrapper would instead return its alias (the raw `__when_constraint__` tag), because `GetName()` short-circuits to the alias when one is set.
 
 ---
 
@@ -92,17 +96,16 @@ DECIDE does not override `EstimateCardinality`. The default behavior propagates 
 
 ### Logical Layer
 
-- **`GetName()` / `ParamsToString()`**: `src/planner/operator/logical_decide.cpp`
-- **`CollectConstraintStrings()`**: `src/planner/operator/logical_decide.cpp` — recursive AND-tree walker that produces one string per constraint with WHEN/PER suffixes
+- **`GetName()` / `ParamsToString()`**: `src/planner/operator/logical_decide.cpp` — `ParamsToString()` renders both the Objective and Constraints rows through `CollectTaggedExpressionStrings`
+- **`CollectTaggedExpressionStrings()`**: `src/planner/operator/logical_decide.cpp` — recursive tagged-expression walker that produces one string per constraint (or the single objective string) with WHEN/PER suffixes
 - **Declaration**: `src/include/duckdb/planner/operator/logical_decide.hpp`
 
 ### Physical Layer
 
-- **`GetName()` / `ParamsToString()`**: `src/execution/operator/decide/physical_decide.cpp`
-- **`CollectConstraintStringsPhysical()`**: `src/execution/operator/decide/physical_decide.cpp` — physical-layer variant using `BoundExpression` types
+- **`GetName()` / `ParamsToString()`**: `src/execution/operator/decide/physical_decide.cpp` — duplicates the logical-layer rendering (both Objective and Constraints route through the walker); the default `physical_only` EXPLAIN uses this path
+- **`CollectTaggedExpressionStringsPhysical()`**: `src/execution/operator/decide/physical_decide.cpp` — physical-layer variant of the same walker
 - **Declaration**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
 
 ### Tests
 
-- **C++ sqllogictest**: `test/sql/decide_explain.test` — 30+ regex-based checks covering all EXPLAIN formats on inline data
-- **Python pytest (TPC-H)**: `test/decide/tests/test_explain.py` — 21 tests covering EXPLAIN on real TPC-H tables with WHEN/PER edge cases
+- **Python pytest (TPC-H)**: `test/decide/tests/test_explain.py` — 22 tests covering EXPLAIN on real TPC-H tables with WHEN/PER edge cases, including `test_explain_objective_when_postfix` which pins the objective-WHEN suffix rendering

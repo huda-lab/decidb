@@ -1015,7 +1015,7 @@ string PhysicalDecide::GetName() const {
 	return "DECIDE";
 }
 
-static void CollectConstraintStringsPhysical(const Expression &expr, vector<string> &out) {
+static void CollectTaggedExpressionStringsPhysical(const Expression &expr, vector<string> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
@@ -1027,7 +1027,7 @@ static void CollectConstraintStringsPhysical(const Expression &expr, vector<stri
 				per_suffix += conj.children[i]->GetName();
 			}
 			vector<string> inner;
-			CollectConstraintStringsPhysical(*conj.children[0], inner);
+			CollectTaggedExpressionStringsPhysical(*conj.children[0], inner);
 			for (auto &s : inner) {
 				out.push_back(s + per_suffix);
 			}
@@ -1036,14 +1036,14 @@ static void CollectConstraintStringsPhysical(const Expression &expr, vector<stri
 		if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
 			string when_suffix = " WHEN " + conj.children[1]->GetName();
 			vector<string> inner;
-			CollectConstraintStringsPhysical(*conj.children[0], inner);
+			CollectTaggedExpressionStringsPhysical(*conj.children[0], inner);
 			for (auto &s : inner) {
 				out.push_back(s + when_suffix);
 			}
 			return;
 		}
 		for (auto &child : conj.children) {
-			CollectConstraintStringsPhysical(*child, out);
+			CollectTaggedExpressionStringsPhysical(*child, out);
 		}
 		return;
 	}
@@ -1064,8 +1064,18 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	result["Variables"] = vars_info;
 
 	if (decide_objective) {
+		// Render through the same tagged-expression walker as constraints so
+		// WHEN/PER wrappers print as postfix suffixes (e.g. "SUM(x) WHEN c")
+		// rather than the raw internal tag or a generic conjunction form.
 		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
-		obj_info += decide_objective->GetName();
+		vector<string> objective_strs;
+		CollectTaggedExpressionStringsPhysical(*decide_objective, objective_strs);
+		for (idx_t i = 0; i < objective_strs.size(); i++) {
+			if (i > 0) {
+				obj_info += "\n";
+			}
+			obj_info += objective_strs[i];
+		}
 		result["Objective"] = obj_info;
 	} else {
 		result["Objective"] = "FEASIBILITY";
@@ -1073,7 +1083,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 
 	if (decide_constraints) {
 		vector<string> constraint_strs;
-		CollectConstraintStringsPhysical(*decide_constraints, constraint_strs);
+		CollectTaggedExpressionStringsPhysical(*decide_constraints, constraint_strs);
 		string constraints_info;
 		for (idx_t i = 0; i < constraint_strs.size(); i++) {
 			if (i > 0) {

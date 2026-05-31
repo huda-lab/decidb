@@ -181,9 +181,10 @@ protected:
     vector<idx_t> GetTableIndex() const override;
 
 private:
-    //! Recursively collect individual constraints from the AND-tree expression,
-    //! unwrapping WHEN/PER wrappers for display
-    static void CollectConstraintStrings(const Expression &expr, vector<string> &out);
+    //! Recursively render a tagged expression (constraint AND-tree or objective),
+    //! unwrapping WHEN/PER wrappers into postfix suffixes for display. Used for
+    //! both the Constraints and Objective EXPLAIN rows so they render symmetrically.
+    static void CollectTaggedExpressionStrings(const Expression &expr, vector<string> &out);
 };
 
 } // namespace duckdb

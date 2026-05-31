@@ -48,7 +48,7 @@ string LogicalDecide::GetName() const {
 	return "DECIDE";
 }
 
-void LogicalDecide::CollectConstraintStrings(const Expression &expr, vector<string> &out) {
+void LogicalDecide::CollectTaggedExpressionStrings(const Expression &expr, vector<string> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
@@ -62,7 +62,7 @@ void LogicalDecide::CollectConstraintStrings(const Expression &expr, vector<stri
 			}
 			// Recurse into child[0]; append PER suffix to each leaf
 			vector<string> inner;
-			CollectConstraintStrings(*conj.children[0], inner);
+			CollectTaggedExpressionStrings(*conj.children[0], inner);
 			for (auto &s : inner) {
 				out.push_back(s + per_suffix);
 			}
@@ -72,7 +72,7 @@ void LogicalDecide::CollectConstraintStrings(const Expression &expr, vector<stri
 			// WHEN wrapper: child[0] is the constraint, child[1] is the condition
 			string when_suffix = " WHEN " + conj.children[1]->GetName();
 			vector<string> inner;
-			CollectConstraintStrings(*conj.children[0], inner);
+			CollectTaggedExpressionStrings(*conj.children[0], inner);
 			for (auto &s : inner) {
 				out.push_back(s + when_suffix);
 			}
@@ -80,7 +80,7 @@ void LogicalDecide::CollectConstraintStrings(const Expression &expr, vector<stri
 		}
 		// Regular AND conjunction: recurse on each child
 		for (auto &child : conj.children) {
-			CollectConstraintStrings(*child, out);
+			CollectTaggedExpressionStrings(*child, out);
 		}
 		return;
 	}
@@ -102,10 +102,19 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	}
 	result["Variables"] = vars_info;
 
-	// Objective
+	// Objective: render through the same tagged-expression walker as constraints so
+	// WHEN/PER wrappers print as postfix suffixes (e.g. "SUM(x) WHEN c") rather than
+	// the generic conjunction form "(SUM(x) AND c)".
 	if (decide_objective) {
 		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
-		obj_info += decide_objective->GetName();
+		vector<string> objective_strs;
+		CollectTaggedExpressionStrings(*decide_objective, objective_strs);
+		for (idx_t i = 0; i < objective_strs.size(); i++) {
+			if (i > 0) {
+				obj_info += "\n";
+			}
+			obj_info += objective_strs[i];
+		}
 		result["Objective"] = obj_info;
 	} else {
 		result["Objective"] = "FEASIBILITY";
@@ -114,7 +123,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	// Constraints: walk the AND-tree and collect individual constraints
 	if (decide_constraints) {
 		vector<string> constraint_strs;
-		CollectConstraintStrings(*decide_constraints, constraint_strs);
+		CollectTaggedExpressionStrings(*decide_constraints, constraint_strs);
 		string constraints_info;
 		for (idx_t i = 0; i < constraint_strs.size(); i++) {
 			if (i > 0) {
