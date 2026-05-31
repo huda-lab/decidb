@@ -235,7 +235,7 @@ decide_when_condition:
 		;
 
 decide_objective_item:
-			a_expr WHEN b_expr PER columnref_opt_indirection
+			a_expr WHEN_DECIDE b_expr PER columnref_opt_indirection
 				{
 					/* DecidB: objective WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -243,7 +243,7 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
-			| a_expr WHEN b_expr PER '(' columnrefList ')'
+			| a_expr WHEN_DECIDE b_expr PER '(' columnrefList ')'
 				{
 					/* DecidB: objective WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -251,7 +251,7 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
 				}
-			| a_expr WHEN b_expr
+			| a_expr WHEN_DECIDE b_expr
 				{
 					/* DecidB: objective WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
@@ -276,6 +276,7 @@ decide_clause:
 			DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list MAXIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
+                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
                     n->variables = $2;
                     n->constraints = $5;
                     n->sense = PG_OBJ_MAXIMIZE;
@@ -285,6 +286,7 @@ decide_clause:
 			| DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list MINIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
+                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
                     n->variables = $2;
                     n->constraints = $5;
                     n->sense = PG_OBJ_MINIMIZE;
@@ -294,6 +296,7 @@ decide_clause:
 			| DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
+                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
                     n->variables = $2;
                     n->constraints = $5;
                     n->sense = PG_OBJ_FEASIBILITY;
@@ -313,7 +316,7 @@ decide_constraint_list:
 		;
 
 decide_constraint_item:
-			a_expr WHEN b_expr PER columnref_opt_indirection
+			a_expr WHEN_DECIDE b_expr PER columnref_opt_indirection
 				{
 					/* DecidB: constraint WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -321,7 +324,7 @@ decide_constraint_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
-			| a_expr WHEN b_expr PER '(' columnrefList ')'
+			| a_expr WHEN_DECIDE b_expr PER '(' columnrefList ')'
 				{
 					/* DecidB: constraint WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -329,7 +332,7 @@ decide_constraint_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
 				}
-			| a_expr WHEN b_expr
+			| a_expr WHEN_DECIDE b_expr
 				{
 					/* DecidB: constraint WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
@@ -2911,7 +2914,7 @@ b_expr:		c_expr
  * ambiguity to the b_expr syntax.
  */
 c_expr:		d_expr
-			| func_application WHEN decide_when_condition	%prec POSTFIXOP
+			| func_application WHEN_DECIDE decide_when_condition	%prec POSTFIXOP
 				{
 					/* DecidB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);

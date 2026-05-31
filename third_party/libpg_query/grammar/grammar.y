@@ -4,8 +4,14 @@
 #line 5 "third_party/libpg_query/grammar/grammar.y"
 %pure-parser
 /* %expect 4:
- * 3 inherited shift/reduce conflicts from DuckDB's PostgreSQL-derived grammar.
- * 1 from aggregate-local WHEN in DECIDE (func_application WHEN decide_when_condition in c_expr).
+ * 2 inherited shift/reduce conflicts from DuckDB's PostgreSQL-derived grammar
+ *   (postfix-operator states a_expr/b_expr qual_Op).
+ * 1 from the DECIDE constraint/objective WHEN_DECIDE (decide_constraint_item:
+ *   a_expr . WHEN_DECIDE ...), resolved by shift; confined to DECIDE context.
+ * 1 from the aggregate-local WHEN_DECIDE atom (c_expr: func_application .
+ *   WHEN_DECIDE ...). Both DECIDE conflicts are keyed on WHEN_DECIDE, a token
+ *   base_yylex() only emits inside a DECIDE clause, so they cannot fire for
+ *   ordinary SQL — see src_backend_parser_parser.cpp.
  */
 %expect 4
 %name-prefix="base_yy"
@@ -106,6 +112,10 @@
  * NULLS_LA and WITH_LA are needed to make the grammar LALR(1).
  */
 %token		NOT_LA NULLS_LA WITH_LA
+/* DecidB: WHEN_DECIDE is a context-sensitive token. The base_yylex() filter emits
+ * it in place of WHEN while inside a DECIDE clause, so the DECIDE WHEN never
+ * reaches the global expression grammar. Never produced by the keyword table. */
+%token		WHEN_DECIDE
 
 
 /* Precedence: lowest to highest */

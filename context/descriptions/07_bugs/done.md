@@ -4,6 +4,58 @@ Log of bugs that were discovered and resolved. Kept for history; active bugs liv
 
 ---
 
+## `func_application WHEN` in global `c_expr` corrupted parsing of ordinary function calls
+
+### Symptom
+
+Two failure modes, one cause, both `Parser Error: syntax error at or near "then"`:
+
+1. Catalog introspection (`duckdb_tables()`, `information_schema.*`, `pg_catalog.*`, `SHOW TABLES`, `DESCRIBE`, `sqlite_master`) failed at bind time.
+2. Any call to a function name **not registered** in the catalog failed to parse (`SELECT foo()`, internal helpers like `format_pg_type`, simple `CASE func() WHEN … THEN`).
+
+User DECIDE queries were unaffected in practice (they only call registered aggregates `SUM`/`MIN`/`MAX`/`AVG`/`POWER`), which is why CI stayed green — a coverage gap.
+
+### Root cause
+
+The DECIDE aggregate-local WHEN feature put `func_application WHEN decide_when_condition` in the **global** `c_expr` non-terminal. Because `c_expr` is the shared atom of every SQL expression, this created a shift/reduce conflict just after any `func_application` (`WHEN`-shift vs the nullable `within_group_clause`-reduce — Bison state 1135), silenced by `%expect 4`. The "near then" text is a Bison artifact; the catalog-dependence is real function-name-aware parse behavior in DuckDB (proven by macro-ordering: `CREATE MACRO foo …` must precede `SELECT foo(...)` for it to parse).
+
+### Ruled out during investigation
+
+- **Precedence tweak** — bare `foo()` fails with no `WHEN` present, so there is no resolution to re-prioritize.
+- **Attach WHEN to a completed `func_expr`** — conflict moved but `foo()` still failed; any `<function> WHEN …` reachable from global expression grammar corrupts the generic path.
+- **Bare removal from `c_expr`** — fixes the bug but breaks 35 aggregate-local-WHEN tests (necessary, not sufficient).
+- **Full grammar mirror reusing shared leaves** — 249 reduce/reduce conflicts from unit-production aliasing; a deep self-contained mirror would be ~800–1200 lines.
+
+### Fix (context-sensitive `WHEN_DECIDE` token)
+
+Make WHEN inside a DECIDE clause lex as a distinct token, so the DECIDE WHEN never reaches the global grammar:
+
+- New `%token WHEN_DECIDE` (`grammar/grammar.y`); the DECIDE productions (`c_expr` aggregate-local atom, `decide_constraint_item`/`decide_objective_item`) use `WHEN_DECIDE` instead of `WHEN` (`grammar/statements/select.y`).
+- A scanner-state flag `in_decide_clause` (+ `decide_case_depth`) in `base_yy_extra_type` (`include/parser/gramparse.hpp`). `base_yylex` (`src_backend_parser_parser.cpp`) sets the flag on the `DECIDE` token, and while set rewrites `WHEN`→`WHEN_DECIDE` — **except** inside a `CASE…END` (depth > 0), so CASE-in-DECIDE still parses and is rejected with the friendly binder error rather than a parser crash. The `decide_clause` grammar action clears the flag.
+
+The state-1135 conflict still exists but is now keyed on `WHEN_DECIDE`, which the lexer never emits outside a DECIDE clause — so ordinary function calls hit `$default reduce` and parse normally. Conflict count stays 4 (`%expect 4` unchanged).
+
+### Why this shape
+
+It expresses the intent directly ("WHEN is special only inside DECIDE"), needs no grammar duplication, eliminates the collision by construction, leaves the feature's AST identical (all 58 WHEN tests pass, asymmetry preserved), and reuses the codebase's existing context-token mechanism (`NOT_LA`/`WITH_LA`/`NULLS_LA` in the same `base_yylex` filter).
+
+### Known limitation
+
+`in_decide_clause` is a single `bool`, not a depth counter, so **nested DECIDE clauses** (a DECIDE inside a subquery that is itself inside another DECIDE) are not handled — the inner `decide_clause` action would clear the flag prematurely. This shape is unsupported semantically today, so the single flag suffices; if nested DECIDE is ever added, promote the flag to a depth counter. See `context/descriptions/03_expressivity/when/done.md` ("How DECIDE `WHEN` is tokenized").
+
+### Regression guard
+
+`test/decide/tests/test_parser_catalog_introspection.py` — catalog views and unregistered/user-defined function calls must parse (the coverage gap that let this slip past CI).
+
+### Code pointers
+
+- `third_party/libpg_query/grammar/grammar.y` — `%token WHEN_DECIDE`, `%expect` comment.
+- `third_party/libpg_query/grammar/statements/select.y` — `WHEN_DECIDE` in DECIDE productions; flag-clear in `decide_clause`.
+- `third_party/libpg_query/include/parser/gramparse.hpp` — `in_decide_clause`, `decide_case_depth`.
+- `third_party/libpg_query/src_backend_parser_parser.cpp` — `base_yylex` rewrite + `raw_parser`/`tokenize` init.
+
+---
+
 ## Table-Scoped DECIDE Variables Cannot Be Projected as `Table.var` In The SELECT List (and per-row LHS)
 
 ### Symptom

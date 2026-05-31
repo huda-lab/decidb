@@ -45,6 +45,23 @@ typedef struct base_yy_extra_type {
 	char lookahead_hold_char;      /* to be put back at *lookahead_end */
 
 	/*
+	 * DecidB: true while lexing inside a DECIDE clause. Set when base_yylex()
+	 * returns the DECIDE token; cleared by the decide_clause grammar action.
+	 * While set, base_yylex() rewrites WHEN -> WHEN_DECIDE so the DECIDE WHEN
+	 * is a distinct token that can't collide with CASE ... WHEN ... or pollute
+	 * the global expression grammar.
+	 */
+	bool in_decide_clause;
+
+	/*
+	 * DecidB: CASE...END nesting depth while inside a DECIDE clause. WHEN is
+	 * only rewritten to WHEN_DECIDE at depth 0; a WHEN belonging to a CASE
+	 * inside a DECIDE expression must stay a normal WHEN so the CASE parses
+	 * (and is then rejected by the binder with a friendly error).
+	 */
+	int decide_case_depth;
+
+	/*
 	 * State variables that belong to the grammar.
 	 */
 	PGList *parsetree; /* final parse result is delivered here */

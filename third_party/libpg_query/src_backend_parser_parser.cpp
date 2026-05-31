@@ -52,6 +52,8 @@ PGList *raw_parser(const char *str) {
 
 	/* base_yylex() only needs this much initialization */
 	yyextra.have_lookahead = false;
+	yyextra.in_decide_clause = false;
+	yyextra.decide_case_depth = 0;
 
 	/* initialize the bison parser */
 	parser_init(&yyextra);
@@ -107,6 +109,8 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
 	std::vector<PGSimplifiedToken> result;
 	yyscanner = scanner_init(str, &yyextra.core_yy_extra, ScanKeywords, NumScanKeywords);
 	yyextra.have_lookahead = false;
+	yyextra.in_decide_clause = false;
+	yyextra.decide_case_depth = 0;
 
 	while(true) {
 		YYSTYPE type;
@@ -196,6 +200,32 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		yyextra->have_lookahead = false;
 	} else
 		cur_token = core_yylex(&(lvalp->core_yystype), llocp, yyscanner);
+
+	/*
+	 * DecidB: track whether we are lexing inside a DECIDE clause, and while we
+	 * are, emit the clause's WHEN as the distinct WHEN_DECIDE token. This keeps
+	 * the DECIDE aggregate-local / constraint WHEN out of the global expression
+	 * grammar (where WHEN after a function call collided with WITHIN GROUP and
+	 * corrupted ordinary function-call parsing). The flag is cleared by the
+	 * decide_clause grammar action. No lookahead is needed for this decision.
+	 */
+	if (cur_token == DECIDE) {
+		yyextra->in_decide_clause = true;
+		yyextra->decide_case_depth = 0;
+	} else if (yyextra->in_decide_clause) {
+		/*
+		 * Keep WHENs that belong to a CASE...END as ordinary WHEN so the CASE
+		 * still parses (DecidB rejects CASE-in-DECIDE later, with a friendly
+		 * error). Only a bare DECIDE WHEN (depth 0) becomes WHEN_DECIDE.
+		 */
+		if (cur_token == CASE)
+			yyextra->decide_case_depth++;
+		else if (cur_token == END_P) {
+			if (yyextra->decide_case_depth > 0)
+				yyextra->decide_case_depth--;
+		} else if (cur_token == WHEN && yyextra->decide_case_depth == 0)
+			return WHEN_DECIDE;
+	}
 
 	/*
 	 * If this token isn't one that requires lookahead, just return it.  If it

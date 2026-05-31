@@ -546,8 +546,9 @@
      NOT_LA = 762,
      NULLS_LA = 763,
      WITH_LA = 764,
-     POSTFIXOP = 765,
-     UMINUS = 766
+     WHEN_DECIDE = 765,
+     POSTFIXOP = 766,
+     UMINUS = 767
    };
 #endif
 /* Tokens.  */
@@ -1058,8 +1059,9 @@
 #define NOT_LA 762
 #define NULLS_LA 763
 #define WITH_LA 764
-#define POSTFIXOP 765
-#define UMINUS 766
+#define WHEN_DECIDE 765
+#define POSTFIXOP 766
+#define UMINUS 767
 
 
 
@@ -1118,7 +1120,7 @@ typedef union YYSTYPE
 	PGTransactionStmtType transactiontype;
 }
 /* Line 1529 of yacc.c.  */
-#line 1122 "third_party/libpg_query/grammar/grammar_out.hpp"
+#line 1124 "third_party/libpg_query/grammar/grammar_out.hpp"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

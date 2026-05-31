@@ -327,6 +327,14 @@ Decomposing into multiple WHEN constraints fails here because the conditions ove
 
 A `CASE` expression placed directly inside a DECIDE constraint or objective is rejected with a friendly user-facing error that points to the supported alternatives (postfix `WHEN`, `PER`, CTE pre-computation). Both the binder path (CASE inside `SUM`/`MIN`/`MAX`/`AVG`) and the symbolic-translation path (CASE elsewhere in a constraint or objective) surface the same message — no stack trace, no internal-error wording. See `src/planner/expression_binder/decide_binder.cpp` (`ValidateSumArgumentInternal`) and `src/decidb/symbolic/decide_symbolic.cpp` (`ToSymbolicRecursive`).
 
+### How DECIDE `WHEN` is tokenized (`WHEN_DECIDE`)
+
+The DECIDE `WHEN` keyword is lexed as a **distinct token `WHEN_DECIDE`**, separate from the `WHEN` used by SQL `CASE … WHEN … THEN`. The scanner filter `base_yylex` (`third_party/libpg_query/src_backend_parser_parser.cpp`) sets an `in_decide_clause` flag when it returns the `DECIDE` token (cleared by the `decide_clause` grammar action) and, while set, rewrites `WHEN` → `WHEN_DECIDE`. The DECIDE grammar productions (`c_expr` aggregate-local atom, `decide_constraint_item`, `decide_objective_item` in `grammar/statements/select.y`) reference `WHEN_DECIDE`, so the DECIDE WHEN never enters the global expression grammar — which previously corrupted ordinary function-call parsing (see `context/descriptions/07_bugs/done.md`).
+
+The rewrite is suppressed inside a `CASE … END` (tracked by `decide_case_depth`), so a `CASE` written inside a DECIDE expression still parses with ordinary `WHEN` and is then rejected by the binder with the friendly error above — rather than failing with a raw parser syntax error.
+
+**Known limitation — nested DECIDE clauses.** `in_decide_clause` is a single `bool`, not a depth counter. A DECIDE clause nested inside a subquery that is itself inside another DECIDE clause would have the inner `decide_clause` action clear the flag prematurely, so a subsequent outer `WHEN` would lex as ordinary `WHEN` (and the outer aggregate-local/constraint WHEN would fail to parse). This shape is not currently supported semantically and no test exercises it, so the single flag is sufficient today. If nested DECIDE is ever introduced, promote `in_decide_clause` to a depth counter (incremented on the `DECIDE` token, decremented in the `decide_clause` action) — mirroring how `decide_case_depth` already handles CASE nesting.
+
 ### Summary
 
 | Need | Use |
