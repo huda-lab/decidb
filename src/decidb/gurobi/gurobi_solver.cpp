@@ -1,7 +1,7 @@
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/common/exception.hpp"
-#include "gurobi_loader.hpp"
+#include "duckdb/decidb/gurobi/gurobi_loader.hpp"
 
 #include <cmath>
 #include <cstdlib>

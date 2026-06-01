@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gurobi_loader.hpp"
+#include "duckdb/decidb/gurobi/gurobi_loader.hpp"
 
 #include <cstdlib>
 #include <cstring>
