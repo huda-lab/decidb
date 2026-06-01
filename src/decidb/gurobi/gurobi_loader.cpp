@@ -1,19 +1,37 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// gurobi_loader.cpp — Runtime dynamic loading of Gurobi via dlopen/dlsym
+// gurobi_loader.cpp — Runtime dynamic loading of the Gurobi C API
+//
+// POSIX (Linux/macOS): dlopen/dlsym + opendir/readdir.
+// Windows:             LoadLibraryEx/GetProcAddress + FindFirstFile/FindNextFile.
+//
+// The high-level search/resolve logic is shared; only the platform primitives
+// and the well-known install locations differ per OS.
 //
 //===----------------------------------------------------------------------===//
 
 #include "duckdb/decidb/gurobi/gurobi_loader.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <dirent.h>
-#include <dlfcn.h>
 #include <mutex>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <dlfcn.h>
+#endif
 
 namespace duckdb {
 
@@ -26,30 +44,121 @@ static bool g_loaded = false;
 static GurobiAPI g_api = {};
 
 //===----------------------------------------------------------------------===//
+// Platform abstraction
+//
+// Handles are stored as opaque void* on every platform (HMODULE is a pointer).
+//===----------------------------------------------------------------------===//
+
+#ifdef _WIN32
+static constexpr char PATH_SEP = '\\';
+
+//! Open a shared library by full path or bare name. Returns a handle or nullptr.
+static void *TryOpen(const char *path) {
+	// LOAD_WITH_ALTERED_SEARCH_PATH: when `path` is fully qualified, search its
+	// own directory for dependent DLLs. Ignored for bare names (which use PATH).
+	return reinterpret_cast<void *>(LoadLibraryExA(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH));
+}
+
+//! Resolve a symbol from an open handle.
+static void *GetSym(void *handle, const char *name) {
+	FARPROC proc = GetProcAddress(reinterpret_cast<HMODULE>(handle), name);
+	return reinterpret_cast<void *>(proc);
+}
+
+//! Close an open handle.
+static void CloseLib(void *handle) {
+	FreeLibrary(reinterpret_cast<HMODULE>(handle));
+}
+
+//! True if `name` is the Gurobi C API DLL (gurobiXYZ.dll) — not the JNI, C++,
+//! or *_light variants. We require a digit right after "gurobi" so we match
+//! gurobi130.dll but skip GurobiJni130.dll and gurobi_c++md.lib.
+static bool IsGurobiLib(const char *name) {
+	if (_strnicmp(name, "gurobi", 6) != 0) {
+		return false;
+	}
+	if (name[6] < '0' || name[6] > '9') {
+		return false;
+	}
+	size_t len = strlen(name);
+	return len > 4 && _stricmp(name + len - 4, ".dll") == 0;
+}
+#else
+static constexpr char PATH_SEP = '/';
+
+static void *TryOpen(const char *path) {
+	return dlopen(path, RTLD_LAZY);
+}
+
+static void *GetSym(void *handle, const char *name) {
+	return dlsym(handle, name);
+}
+
+static void CloseLib(void *handle) {
+	dlclose(handle);
+}
+
+//! True if `name` is the Gurobi C API shared object (libgurobi*.so / .dylib),
+//! excluding the *_light reduced-functionality variant.
+static bool IsGurobiLib(const char *name) {
+	if (strncmp(name, "libgurobi", 9) != 0) {
+		return false;
+	}
+	if (strstr(name, "_light")) {
+		return false;
+	}
+	return strstr(name, ".so") || strstr(name, ".dylib");
+}
+#endif
+
+//! List a directory's entries (filenames only, no path). Empty vector on failure.
+static std::vector<std::string> ListDir(const std::string &dir) {
+	std::vector<std::string> names;
+#ifdef _WIN32
+	std::string pattern = dir + PATH_SEP + "*";
+	WIN32_FIND_DATAA fd;
+	HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+	if (h == INVALID_HANDLE_VALUE) {
+		return names;
+	}
+	do {
+		names.emplace_back(fd.cFileName);
+	} while (FindNextFileA(h, &fd));
+	FindClose(h);
+#else
+	DIR *d = opendir(dir.c_str());
+	if (!d) {
+		return names;
+	}
+	struct dirent *entry;
+	while ((entry = readdir(d)) != nullptr) {
+		names.emplace_back(entry->d_name);
+	}
+	closedir(d);
+#endif
+	return names;
+}
+
+//===----------------------------------------------------------------------===//
 // Helpers
 //===----------------------------------------------------------------------===//
 
-//! Try to extract version from a library name like "libgurobi130.so" → (13, 0, 0)
-//! or "libgurobi.so.13.0.1" → (13, 0, 1). Returns false if unparseable.
+//! Extract version from a library name: "libgurobi130.so" / "gurobi130.dll" →
+//! (13, 0, 0), or "libgurobi.so.13.0.1" → (13, 0, 1). Returns false if
+//! unparseable (callers fall back to version 0.0.0).
 static bool ExtractVersion(const char *name, int &major, int &minor, int &tech) {
-	// Pattern 1: libgurobiXYZ.so (e.g., libgurobi130.so)
-	const char *p = strstr(name, "libgurobi");
+	// Pattern 1: [lib]gurobiXYZ.{so,dylib,dll}  (e.g., libgurobi130.so, gurobi130.dll)
+	const char *p = strstr(name, "gurobi");
 	if (p) {
-		p += 9; // skip "libgurobi"
-		// Skip non-digit prefix (e.g., "_light")
+		p += 6; // skip "gurobi"
 		if (*p >= '0' && *p <= '9') {
 			int ver = 0;
 			while (*p >= '0' && *p <= '9') {
 				ver = ver * 10 + (*p - '0');
 				p++;
 			}
-			if (ver >= 100) {
-				// e.g., 130 → 13.0, 1201 → 12.0.1
-				major = ver / 10;
-				minor = ver % 10;
-				tech = 0;
-				return true;
-			} else if (ver >= 10) {
+			if (ver >= 10) {
+				// e.g., 130 → 13.0, 95 → 9.5
 				major = ver / 10;
 				minor = ver % 10;
 				tech = 0;
@@ -67,25 +176,6 @@ static bool ExtractVersion(const char *name, int &major, int &minor, int &tech) 
 		}
 	}
 
-	// Pattern 3: libgurobiXYZ.dylib (macOS)
-	p = strstr(name, "libgurobi");
-	if (p && strstr(name, ".dylib")) {
-		p += 9; // skip "libgurobi"
-		if (*p >= '0' && *p <= '9') {
-			int ver = 0;
-			while (*p >= '0' && *p <= '9') {
-				ver = ver * 10 + (*p - '0');
-				p++;
-			}
-			if (ver >= 10) {
-				major = ver / 10;
-				minor = ver % 10;
-				tech = 0;
-				return true;
-			}
-		}
-	}
-
 	// Default: unknown version
 	major = 0;
 	minor = 0;
@@ -93,50 +183,28 @@ static bool ExtractVersion(const char *name, int &major, int &minor, int &tech) 
 	return false;
 }
 
-//! Try to dlopen a specific path. Returns handle or nullptr.
-static void *TryOpen(const char *path) {
-	return dlopen(path, RTLD_LAZY);
-}
-
-//! Search a directory for libgurobi*.so or libgurobi*.dylib files.
-//! Also fills version_str with the matched filename for version extraction.
+//! Search a directory for the Gurobi C API library and open the first match.
+//! Fills `matched_name` with the filename (for version extraction).
 static void *SearchDir(const std::string &dir, std::string &matched_name) {
-	DIR *d = opendir(dir.c_str());
-	if (!d) {
-		return nullptr;
-	}
-	void *handle = nullptr;
-	struct dirent *entry;
-	while ((entry = readdir(d)) != nullptr) {
-		const char *name = entry->d_name;
-		// Match libgurobi* but skip libgurobi_light and libgurobiXX_light
-		if (strncmp(name, "libgurobi", 9) != 0) {
+	for (const auto &name : ListDir(dir)) {
+		if (!IsGurobiLib(name.c_str())) {
 			continue;
 		}
-		if (strstr(name, "_light")) {
-			continue;
-		}
-		// Must contain ".so" or ".dylib"
-		if (!strstr(name, ".so") && !strstr(name, ".dylib")) {
-			continue;
-		}
-		std::string full_path = dir + "/" + name;
-		handle = TryOpen(full_path.c_str());
+		void *handle = TryOpen((dir + PATH_SEP + name).c_str());
 		if (handle) {
 			matched_name = name;
-			break;
+			return handle;
 		}
 	}
-	closedir(d);
-	return handle;
+	return nullptr;
 }
 
-//! Resolve all 13 function pointers from the loaded library.
-//! Returns true if ALL symbols were found.
+//! Resolve all required function pointers from the loaded library.
+//! Returns true only if ALL required symbols were found.
 static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	// Helper macro for cleaner symbol resolution
-	#define LOAD_SYM(field, sym_name)                                         \
-		api.field = reinterpret_cast<decltype(api.field)>(dlsym(handle, sym_name)); \
+	#define LOAD_SYM(field, sym_name)                                              \
+		api.field = reinterpret_cast<decltype(api.field)>(GetSym(handle, sym_name)); \
 		if (!api.field) return false;
 
 	LOAD_SYM(emptyenv_internal, "GRBemptyenvinternal")
@@ -157,7 +225,7 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	#undef LOAD_SYM
 
 	// Optional: GRBaddqconstr (quadratic constraints, available in Gurobi 5.0+)
-	api.addqconstr = reinterpret_cast<decltype(api.addqconstr)>(dlsym(handle, "GRBaddqconstr"));
+	api.addqconstr = reinterpret_cast<decltype(api.addqconstr)>(GetSym(handle, "GRBaddqconstr"));
 	// Not required — bilinear constraints will error if this is missing and needed
 
 	return true;
@@ -171,21 +239,29 @@ static void DoLoad() {
 	void *handle = nullptr;
 	std::string matched_name;
 
-	// 1. Try $GUROBI_HOME/lib/
+	// 1. $GUROBI_HOME — DLLs live in bin\ on Windows, lib/ on POSIX.
 	const char *gurobi_home = getenv("GUROBI_HOME");
 	if (gurobi_home && gurobi_home[0]) {
-		std::string lib_dir = std::string(gurobi_home) + "/lib";
-		handle = SearchDir(lib_dir, matched_name);
+#ifdef _WIN32
+		handle = SearchDir(std::string(gurobi_home) + "\\bin", matched_name);
+#else
+		handle = SearchDir(std::string(gurobi_home) + "/lib", matched_name);
+#endif
 	}
 
-	// 2. Try well-known versioned names via system search paths (LD_LIBRARY_PATH/DYLD_LIBRARY_PATH etc.)
+	// 2. Well-known versioned names via the system library search path
+	//    (PATH on Windows, LD_LIBRARY_PATH / DYLD_LIBRARY_PATH on POSIX).
 	if (!handle) {
 		static const char *candidates[] = {
-			"libgurobi130.so", "libgurobi120.so", "libgurobi110.so",
-			"libgurobi100.so", "libgurobi95.so",  "libgurobi.so",
-#ifdef __APPLE__
+#ifdef _WIN32
+			"gurobi130.dll", "gurobi120.dll", "gurobi110.dll",
+			"gurobi100.dll", "gurobi95.dll",
+#elif defined(__APPLE__)
 			"libgurobi130.dylib", "libgurobi120.dylib", "libgurobi110.dylib",
 			"libgurobi100.dylib", "libgurobi95.dylib",  "libgurobi.dylib",
+#else
+			"libgurobi130.so", "libgurobi120.so", "libgurobi110.so",
+			"libgurobi100.so", "libgurobi95.so",  "libgurobi.so",
 #endif
 			nullptr
 		};
@@ -198,78 +274,77 @@ static void DoLoad() {
 		}
 	}
 
-	// 3. Try common install locations
+	// 3. Common install locations
 	if (!handle) {
+#ifdef _WIN32
+		// Windows: C:\gurobiXXX\win64\bin  (installer's default layout)
+		for (const auto &entry : ListDir("C:\\")) {
+			if (_strnicmp(entry.c_str(), "gurobi", 6) != 0) {
+				continue;
+			}
+			handle = SearchDir("C:\\" + entry + "\\win64\\bin", matched_name);
+			if (handle) {
+				break;
+			}
+			handle = SearchDir("C:\\" + entry + "\\win32\\bin", matched_name);
+			if (handle) {
+				break;
+			}
+		}
+#elif defined(__APPLE__)
+		// macOS: ~/gurobiXXXX/macos_universal2/lib, /Library/gurobi*/..., /usr/local/lib
 		const char *home = getenv("HOME");
-#ifdef __APPLE__
-		// macOS: ~/gurobiXXXX/macos_universal2/lib/
 		if (home && home[0]) {
 			std::string home_str(home);
-			DIR *d = opendir(home_str.c_str());
-			if (d) {
-				struct dirent *entry;
-				while ((entry = readdir(d)) != nullptr) {
-					if (strncmp(entry->d_name, "gurobi", 6) == 0) {
-						std::string lib_dir = home_str + "/" + entry->d_name + "/macos_universal2/lib";
-						handle = SearchDir(lib_dir, matched_name);
-						if (handle) break;
-					}
+			for (const auto &entry : ListDir(home_str)) {
+				if (strncmp(entry.c_str(), "gurobi", 6) != 0) {
+					continue;
 				}
-				closedir(d);
-			}
-		}
-#else
-		// Linux: ~/gurobiXXXX/linux64/lib/
-		if (home && home[0]) {
-			std::string home_str(home);
-			DIR *d = opendir(home_str.c_str());
-			if (d) {
-				struct dirent *entry;
-				while ((entry = readdir(d)) != nullptr) {
-					if (strncmp(entry->d_name, "gurobi", 6) == 0) {
-						std::string lib_dir = home_str + "/" + entry->d_name + "/linux64/lib";
-						handle = SearchDir(lib_dir, matched_name);
-						if (handle) break;
-					}
-				}
-				closedir(d);
-			}
-		}
-#endif
-	}
-
-	if (!handle) {
-#ifdef __APPLE__
-		// 4a. macOS: /Library/gurobiXXXX/macos_universal2/lib/
-		DIR *d = opendir("/Library");
-		if (d) {
-			struct dirent *entry;
-			while ((entry = readdir(d)) != nullptr) {
-				if (strncmp(entry->d_name, "gurobi", 6) == 0) {
-					std::string lib_dir = std::string("/Library/") + entry->d_name + "/macos_universal2/lib";
-					handle = SearchDir(lib_dir, matched_name);
-					if (handle) break;
+				handle = SearchDir(home_str + "/" + entry + "/macos_universal2/lib", matched_name);
+				if (handle) {
+					break;
 				}
 			}
-			closedir(d);
 		}
-		// 4b. macOS: /usr/local/lib/
+		if (!handle) {
+			for (const auto &entry : ListDir("/Library")) {
+				if (strncmp(entry.c_str(), "gurobi", 6) != 0) {
+					continue;
+				}
+				handle = SearchDir("/Library/" + entry + "/macos_universal2/lib", matched_name);
+				if (handle) {
+					break;
+				}
+			}
+		}
 		if (!handle) {
 			handle = SearchDir("/usr/local/lib", matched_name);
 		}
 #else
-		// 4. Linux: /opt/gurobi*/linux64/lib/
-		DIR *d = opendir("/opt");
-		if (d) {
-			struct dirent *entry;
-			while ((entry = readdir(d)) != nullptr) {
-				if (strncmp(entry->d_name, "gurobi", 6) == 0) {
-					std::string lib_dir = std::string("/opt/") + entry->d_name + "/linux64/lib";
-					handle = SearchDir(lib_dir, matched_name);
-					if (handle) break;
+		// Linux: ~/gurobiXXXX/linux64/lib, /opt/gurobi*/linux64/lib
+		const char *home = getenv("HOME");
+		if (home && home[0]) {
+			std::string home_str(home);
+			for (const auto &entry : ListDir(home_str)) {
+				if (strncmp(entry.c_str(), "gurobi", 6) != 0) {
+					continue;
+				}
+				handle = SearchDir(home_str + "/" + entry + "/linux64/lib", matched_name);
+				if (handle) {
+					break;
 				}
 			}
-			closedir(d);
+		}
+		if (!handle) {
+			for (const auto &entry : ListDir("/opt")) {
+				if (strncmp(entry.c_str(), "gurobi", 6) != 0) {
+					continue;
+				}
+				handle = SearchDir("/opt/" + entry + "/linux64/lib", matched_name);
+				if (handle) {
+					break;
+				}
+			}
 		}
 #endif
 	}
@@ -281,7 +356,7 @@ static void DoLoad() {
 	// Resolve all symbols
 	GurobiAPI api = {};
 	if (!ResolveSymbols(handle, api)) {
-		dlclose(handle);
+		CloseLib(handle);
 		return; // Incomplete library
 	}
 
@@ -290,7 +365,8 @@ static void DoLoad() {
 
 	g_api = api;
 	g_loaded = true;
-	// Note: we intentionally never dlclose — the library stays loaded for the process lifetime
+	// Note: we intentionally never close the handle — the library stays loaded
+	// for the process lifetime.
 }
 
 //===----------------------------------------------------------------------===//

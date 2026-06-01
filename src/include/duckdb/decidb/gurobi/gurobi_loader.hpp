@@ -1,10 +1,11 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// gurobi_loader.hpp — Runtime dynamic loading of the Gurobi C API via dlopen
+// gurobi_loader.hpp — Runtime dynamic loading of the Gurobi C API
 //
-// Allows a single binary to use Gurobi when available and fall back to HiGHS
-// otherwise, without requiring Gurobi headers or library at build time.
+// Loads Gurobi at runtime (dlopen on POSIX, LoadLibrary on Windows) so a single
+// binary can use Gurobi when available and fall back to HiGHS otherwise, without
+// requiring Gurobi headers or library at build time.
 //
 //===----------------------------------------------------------------------===//
 

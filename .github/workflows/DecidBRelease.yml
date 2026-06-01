@@ -151,7 +151,7 @@ jobs:
   windows-x64:
     if: contains(inputs.platforms, 'windows')
     name: Windows x64 Build
-    runs-on: windows-2019
+    runs-on: windows-2022
 
     steps:
       - name: Checkout Code
@@ -176,7 +176,7 @@ jobs:
       - name: Build
         shell: cmd
         run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1 -DOVERRIDE_GIT_DESCRIBE="${{ inputs.version }}"
           ninja -C build/release
 
