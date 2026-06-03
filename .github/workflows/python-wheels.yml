@@ -7,11 +7,15 @@ on:
         description: 'Release version (e.g., v0.1.0)'
         required: true
         type: string
-      publish_to_pypi:
-        description: 'Publish to PyPI'
-        required: false
-        default: false
-        type: boolean
+      publish_target:
+        description: 'Publish built wheels to (none = build only, for testing)'
+        required: true
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - testpypi
+          - pypi
   release:
     types: [published]
 
@@ -127,11 +131,40 @@ jobs:
           path: tools/pythonpkg/dist/*.tar.gz
           retention-days: 7
 
+  # Manual dry-run target: dispatch with publish_target=testpypi to validate the
+  # whole pipeline against test.pypi.org without burning a real PyPI version.
+  publish_testpypi:
+    name: Publish to TestPyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_target == 'testpypi'
+    environment: testpypi
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          repository-url: https://test.pypi.org/legacy/
+
+  # Production publish: fires automatically when a GitHub release is published
+  # (the draft→publish gate), or manually via publish_target=pypi.
   publish_pypi:
     name: Publish to PyPI
     needs: [build_wheels, build_sdist]
     runs-on: ubuntu-22.04
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi)
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'pypi')
     environment: pypi
     permissions:
       id-token: write
@@ -150,3 +183,27 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  # On a published release, attach the wheels + sdist to the GitHub release page
+  # (alongside the CLI binaries that DecidBRelease.yml already attached).
+  attach_to_release:
+    name: Attach wheels to GitHub release
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload wheels + sdist to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" dist/* \
+            --repo "${{ github.repository }}" --clobber

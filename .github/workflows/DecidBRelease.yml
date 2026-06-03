@@ -234,7 +234,18 @@ jobs:
 
           DecidB is a fork of DuckDB that adds package query optimization through a DECIDE clause.
 
-          ## Downloads
+          ## Install via pip
+
+          The Python package is published to PyPI when this release is published:
+
+          ```bash
+          pip install decidb
+          ```
+
+          Wheels (Linux / macOS / Windows, Python 3.11–3.13) and the source distribution
+          are also attached to this release below.
+
+          ## Downloads (CLI)
 
           Choose the appropriate package for your platform:
 
