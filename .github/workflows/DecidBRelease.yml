@@ -315,13 +315,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          # Create the release as DRAFT
+          # Create the release as a DRAFT, pinned to the exact commit that was
+          # built (--target). No "|| true": if the tag/release already exists we
+          # want a loud failure, not a stale release left silently in place.
           gh release create ${{ inputs.version }} \
             --repo ${{ github.repository }} \
+            --target ${{ github.sha }} \
             --title "DecidB ${{ inputs.version }}" \
             --notes-file release_notes.md \
             --draft \
-            artifacts/**/*.zip artifacts/**/*.gz || true
+            artifacts/**/*.zip artifacts/**/*.gz
 
-          echo "::notice::Release created at https://github.com/${{ github.repository }}/releases/tag/${{ inputs.version }}"
-          echo "::notice::Release is in DRAFT mode - review and publish manually at the URL above"
+          echo "::notice::Draft release created at https://github.com/${{ github.repository }}/releases — review and publish manually"
