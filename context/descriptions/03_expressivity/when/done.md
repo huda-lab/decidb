@@ -192,7 +192,7 @@ A constraint or objective without `WHEN` applies to all rows.
 
 ### Expression-level and Aggregate-local WHEN Do Not Mix
 
-DecidB rejects a constraint or objective that contains both a whole-expression `WHEN` and one or more aggregate-local `WHEN` filters:
+DeciDB rejects a constraint or objective that contains both a whole-expression `WHEN` and one or more aggregate-local `WHEN` filters:
 
 ```sql
 -- ERROR: expression-level WHEN and aggregate-local WHEN in same constraint
@@ -258,7 +258,7 @@ MAXIMIZE SUM(x * value) WHEN region = 'US'
 
 ## Note: WHEN vs SQL CASE WHEN
 
-DecidB's `WHEN` is a **row filter** — it controls whether a constraint or objective *applies* to a row. SQL's `CASE WHEN` is a **value expression** — it produces different values conditionally. These serve different purposes and are not interchangeable.
+DeciDB's `WHEN` is a **row filter** — it controls whether a constraint or objective *applies* to a row. SQL's `CASE WHEN` is a **value expression** — it produces different values conditionally. These serve different purposes and are not interchangeable.
 
 When you need **conditional coefficients or bounds** (different values per row based on conditions), use a CTE or subquery to pre-compute the value, then reference the resulting column inside DECIDE. This avoids any need to support `CASE WHEN` within the DECIDE clause itself.
 

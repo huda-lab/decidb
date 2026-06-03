@@ -1,6 +1,6 @@
 # Performance Benchmarking
 
-This document describes the benchmarking infrastructure for measuring DecidB DECIDE query performance.
+This document describes the benchmarking infrastructure for measuring DeciDB DECIDE query performance.
 
 ## Overview
 
@@ -64,7 +64,7 @@ DECIDB_BENCH: total_constraints=5       # per-row + global constraints
 DECIDB_BENCH: num_rows=9965
 ```
 
-The Python runner parses these lines and includes them in the result JSON. It wraps DecidB with `/usr/bin/time`; on macOS it uses `time -l` when available for RSS, and falls back to `time -p` when sandbox restrictions prevent resource collection.
+The Python runner parses these lines and includes them in the result JSON. It wraps DeciDB with `/usr/bin/time`; on macOS it uses `time -l` when available for RSS, and falls back to `time -p` when sandbox restrictions prevent resource collection.
 
 **Source locations:**
 - `src/execution/operator/decide/physical_decide.cpp` - model_construction_ms, solver_ms, total_variables, total_constraints, num_rows

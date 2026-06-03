@@ -7,9 +7,9 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Get started with DecidB - Download or build the standalone database and run your first optimization query in minutes.">
-  <meta name="keywords" content="DecidB, DuckDB, SQL, optimization, installation, tutorial, getting started">
-  <title>Getting Started - DecidB</title>
+  <meta name="description" content="Get started with DeciDB - Download or build the standalone database and run your first optimization query in minutes.">
+  <meta name="keywords" content="DeciDB, DuckDB, SQL, optimization, installation, tutorial, getting started">
+  <title>Getting Started - DeciDB</title>
 
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
@@ -62,7 +62,7 @@
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="DecidB" class="h-8 logo-img">
+        <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 logo-img">
         <div class="hidden sm:block">
           <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
@@ -143,10 +143,10 @@
 
         <div class="max-w-4xl">
           <h1 class="text-4xl md:text-5xl text-fg mb-4">
-            Getting Started with DecidB
+            Getting Started with DeciDB
           </h1>
           <p class="text-xl text-fg-muted">
-            Install DecidB and run your first optimization query.
+            Install DeciDB and run your first optimization query.
           </p>
         </div>
       </div>
@@ -194,7 +194,7 @@
               <!-- Binary Users -->
               <div class="callout callout-info mb-6">
                 <strong>Binary Downloads (Recommended)</strong>
-                <p class="text-sm mt-1">No prerequisites. DecidB binaries are self-contained.</p>
+                <p class="text-sm mt-1">No prerequisites. DeciDB binaries are self-contained.</p>
               </div>
 
               <!-- Build from Source -->
@@ -221,7 +221,7 @@
 
               <div class="callout callout-warning">
                 <strong>Development Status</strong>
-                <p class="text-sm mt-1">DecidB is in active development. The <code>master</code> branch contains the working prototype.</p>
+                <p class="text-sm mt-1">DeciDB is in active development. The <code>master</code> branch contains the working prototype.</p>
               </div>
             </section>
 
@@ -362,7 +362,7 @@ Expand-Archive decidb_cli-windows-amd64.zip -DestinationPath .
                         </button>
                       </div>
                       <pre class="language-bash"><code id="code-test-binary"># Test basic query
-./decidb -c "SELECT 'DecidB is ready!' as message;"</code></pre>
+./decidb -c "SELECT 'DeciDB is ready!' as message;"</code></pre>
                     </div>
                   </div>
                 </div>
@@ -439,7 +439,7 @@ ninja -C build/release</code></pre>
 ./build/release/decidb --version
 
 # Test basic query
-./build/release/decidb -c "SELECT 'DecidB is ready!' as message;"</code></pre>
+./build/release/decidb -c "SELECT 'DeciDB is ready!' as message;"</code></pre>
                       </div>
                     </div>
 
@@ -458,7 +458,7 @@ ninja -C build/release</code></pre>
 .\build\release\decidb.exe --version
 
 # Test basic query
-.\build\release\decidb.exe -c "SELECT 'DecidB is ready!' as message;"</code></pre>
+.\build\release\decidb.exe -c "SELECT 'DeciDB is ready!' as message;"</code></pre>
                       </div>
                     </div>
                   </div>
@@ -500,9 +500,9 @@ ninja -C build/release</code></pre>
                 A classic knapsack problem: select items to maximize value within a weight limit.
               </p>
 
-              <!-- Start DecidB -->
+              <!-- Start DeciDB -->
               <div class="mb-8">
-                <h3 class="text-xl font-semibold text-fg mb-4">Start DecidB</h3>
+                <h3 class="text-xl font-semibold text-fg mb-4">Start DeciDB</h3>
                 <div class="code-block">
                   <div class="code-header">
                     <span class="language-label">Bash</span>
@@ -511,7 +511,7 @@ ninja -C build/release</code></pre>
                       Copy
                     </button>
                   </div>
-                  <pre class="language-bash"><code id="code-start"># Start DecidB with a new database
+                  <pre class="language-bash"><code id="code-start"># Start DeciDB with a new database
 ./decidb my_database.db</code></pre>
                 </div>
                 <p class="text-sm text-fg-subtle mt-2">
@@ -522,7 +522,7 @@ ninja -C build/release</code></pre>
               <!-- Step 1: Create Sample Data -->
               <div class="mb-8">
                 <h3 class="text-xl font-semibold text-fg mb-4">Create Sample Data</h3>
-                <p class="text-fg-muted mb-4">In the DecidB shell, run:</p>
+                <p class="text-fg-muted mb-4">In the DeciDB shell, run:</p>
                 <div class="code-block">
                   <div class="code-header">
                     <span class="language-label">SQL</span>
@@ -680,7 +680,7 @@ MAXIMIZE SUM(x * value);</code></pre>
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
+          <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
           <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>

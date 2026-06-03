@@ -1,5 +1,5 @@
 /**
- * DecidB Website - Main JavaScript
+ * DeciDB Website - Main JavaScript
  * Handles navigation, code copying, scroll spy, and interactive elements
  */
 
@@ -388,7 +388,7 @@
   // ============================================
   function initPrism() {
     if (typeof Prism !== 'undefined') {
-      // Extend SQL grammar with DecidB-specific clause keywords so that
+      // Extend SQL grammar with DeciDB-specific clause keywords so that
       // DECIDE, SUCH THAT, MAXIMIZE, and MINIMIZE are highlighted just like
       // standard SQL clauses (SELECT, FROM, WHERE, etc.).
       if (Prism.languages.sql) {
@@ -431,7 +431,7 @@
     initMermaid();
     initPrism();
 
-    console.log('DecidB website initialized');
+    console.log('DeciDB website initialized');
   });
 
 })();

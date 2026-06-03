@@ -1,8 +1,8 @@
 # Oracle-Based DECIDE Testing Framework
 
-Pytest-based differential testing framework that validates DecidB's DECIDE clause
+Pytest-based differential testing framework that validates DeciDB's DECIDE clause
 by comparing its output against hand-written ILP models formulated in
-**gurobipy** (no SQL parsing on the oracle side, no dependence on DecidB's own
+**gurobipy** (no SQL parsing on the oracle side, no dependence on DeciDB's own
 solver or optimizer).
 
 Located at `test/decide/`.
@@ -13,7 +13,7 @@ Located at `test/decide/`.
 
 ```
                        ┌──────────────┐
-  DECIDE SQL ─────────►│   DecidB CLI │──► rows (variable values)
+  DECIDE SQL ─────────►│   DeciDB CLI │──► rows (variable values)
                        └──────────────┘
                               │
                               ▼
@@ -26,13 +26,13 @@ Located at `test/decide/`.
 ```
 
 Each correctness test:
-1. Runs a DECIDE query through the native DecidB CLI (`build/release/decidb`)
+1. Runs a DECIDE query through the native DeciDB CLI (`build/release/decidb`)
    via `decidb_cli.execute(sql)` and captures the output `(rows, cols)`.
 2. Fetches the same underlying data via `duckdb_conn` (vanilla `duckdb`
    against a separately-generated TPC-H database, `_tpch_oracle.duckdb`).
 3. Builds an equivalent ILP in gurobipy via the `oracle_solver` fixture.
 4. Solves it.
-5. Calls `compare_solutions` which checks (a) that DecidB's objective
+5. Calls `compare_solutions` which checks (a) that DeciDB's objective
    (computed from its variable values) matches the oracle's `objective_value`
    within tolerance and (b) that the decision-variable vector matches row
    by row. The returned `ComparisonResult.status` is `"identical"` when both
@@ -125,7 +125,7 @@ native implication that does not require a hand-picked Big-M.
 **`factory.py`** — `get_solver()` returns a `GurobiSolver`. If gurobipy is
 not installed or the Gurobi environment cannot start (missing/expired
 license), raises `ImportError` with a clear message. HiGHS is not a fallback
-on the oracle side; the separate DecidB CLI-side HiGHS backend documented
+on the oracle side; the separate DeciDB CLI-side HiGHS backend documented
 in `01_pipeline/03d_solver_backends.md` is unrelated.
 
 ### 3.2 Comparison (`comparison/compare.py`)
@@ -136,11 +136,11 @@ The modern API. Checks both the objective value and the decision-variable
 vector; prefer this for every new correctness test.
 
 - For linear objectives, pass `coeff_fn(row) -> {var_name: coefficient}`. The
-  DecidB objective is computed as `Σ (row[var] × coeff_fn(row)[var])` over
+  DeciDB objective is computed as `Σ (row[var] × coeff_fn(row)[var])` over
   rows × variables.
 - For non-linear objectives (QP/QCQP), pass
   `decidb_objective_fn(rows, cols) -> float` which evaluates the objective
-  directly on DecidB's variable values — e.g. for
+  directly on DeciDB's variable values — e.g. for
   `MINIMIZE SUM(POWER(x - t, 2))` compute `Σ (x_i - t_i)²` from the rows.
   When the oracle uses `set_quadratic_objective` without a `constant`, the
   oracle's reported `objective_value` omits the `Σ t_i²` term; the
@@ -162,7 +162,7 @@ to absorb Gurobi's feasibility tolerance — see
 for backward compatibility. New tests should not use it.
 
 **`assert_infeasible(decidb_cli, sql)`** — Asserts that the SQL produces an
-`infeasible`/`unbounded` error from DecidB. Compose it with an independent
+`infeasible`/`unbounded` error from DeciDB. Compose it with an independent
 gurobipy check (see §3.6) to cross-verify on the oracle side.
 
 ### 3.3 Fixtures (`conftest.py`)
@@ -177,7 +177,7 @@ gurobipy check (see §3.6) to cross-verify on the oracle side.
 | `oracle_solver` | function | `CachedOracleSolver` wrapping a `GurobiSolver`; per-test so the cache can disambiguate multiple models per test |
 | `perf_tracker` | session | Collects timing; writes JSON + prints table on teardown |
 
-DecidB and the oracle use two separate databases (`decidb.db` and
+DeciDB and the oracle use two separate databases (`decidb.db` and
 `_tpch_oracle.duckdb`) generated with the same deterministic `dbgen`
 algorithm at the same scale factor, so the data is identical. The oracle
 side never touches the `decidb` Python package.
@@ -238,31 +238,31 @@ assert oracle_solver.solve().status in (
 )
 ```
 
-This guards against DecidB falsely reporting infeasibility on a feasible
+This guards against DeciDB falsely reporting infeasibility on a feasible
 problem (or vice versa). See `tests/test_error_infeasible.py` for the
 canonical pattern.
 
 ### 3.7 Independent semantics, not Big-M mirrors
 
-For discrete constructs that DecidB rewrites into Big-M linear programs
+For discrete constructs that DeciDB rewrites into Big-M linear programs
 (`<>`, IN, etc.), the oracle should encode the **semantics
-natively using Gurobi features** — not mirror DecidB's Big-M reformulation.
+natively using Gurobi features** — not mirror DeciDB's Big-M reformulation.
 Mirroring only detects lockstep bugs (where both implementations agree on
-an incorrect rewrite); independent encoding catches DecidB encoding errors
+an incorrect rewrite); independent encoding catches DeciDB encoding errors
 too.
 
 Concretely:
 
 - **`<>`** — use `add_ne_indicator` (disjunctive branch indicator with native
-  implications). Do not mirror DecidB's `SUM + M·z <= rhs - 1 + M` / `SUM - M·z >= rhs + 1 - M`.
+  implications). Do not mirror DeciDB's `SUM + M·z <= rhs - 1 + M` / `SUM - M·z >= rhs + 1 - M`.
 - **IN (…)** — use `add_in_domain` (SOS1 with indicators). This one happens
-  to coincide with DecidB's bind-time rewrite; it's still the right oracle
+  to coincide with DeciDB's bind-time rewrite; it's still the right oracle
   shape because it's the canonical formulation, not a mirror.
 
 ### 3.8 Performance Tracking (`performance/`)
 
 Each correctness test calls `perf_tracker.record(...)` with:
-- DecidB wall-clock time, oracle build time, oracle solve time
+- DeciDB wall-clock time, oracle build time, oracle solve time
 - Problem dimensions (rows, variables, constraints)
 - Objective value and solver backend name
 
@@ -515,7 +515,7 @@ def test_my_new_query(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
 
-    # 2. Fetch the same data via vanilla duckdb (independent of DecidB).
+    # 2. Fetch the same data via vanilla duckdb (independent of DeciDB).
     data = duckdb_conn.execute("""
         SELECT CAST(col1 AS DOUBLE), CAST(col2 AS DOUBLE)
         FROM my_table WHERE some_filter
@@ -564,7 +564,7 @@ bilinear, MIN/MAX hard cases, nested aggregates), import helpers from
 For quadratic objectives / constraints, use
 `oracle_solver.set_quadratic_objective(linear, quadratic, sense)` and
 `oracle_solver.add_quadratic_constraint(linear, quadratic, sense, rhs)`.
-Pass `decidb_objective_fn` to `compare_solutions` since DecidB's objective
+Pass `decidb_objective_fn` to `compare_solutions` since DeciDB's objective
 cannot be recovered via a linear `coeff_fn`.
 
 ### Step 3: Run
@@ -599,7 +599,7 @@ bash run_tests.sh -k "test_my_new_query" -v
    the connection's `search_path`. Tables must be fully qualified
    (e.g. `tpch.customer`).
 
-6. **Oracle side is fully independent of DecidB.** `duckdb_conn` uses vanilla
+6. **Oracle side is fully independent of DeciDB.** `duckdb_conn` uses vanilla
    `duckdb` against a separately-generated `_tpch_oracle.duckdb`; the
    `decidb` Python package is not imported anywhere in the test code. Both
    databases are seeded with the same deterministic `dbgen` scale factor
@@ -613,7 +613,7 @@ bash run_tests.sh -k "test_my_new_query" -v
 8. **Gurobi is mandatory on the oracle side.** If gurobipy isn't installed or
    no valid Gurobi license is available, `run_tests.sh` pre-flights the
    failure and exits with a clear error. There is no HiGHS fallback on the
-   oracle side; the DecidB CLI's HiGHS fallback (`01_pipeline/03d_solver_backends.md`)
+   oracle side; the DeciDB CLI's HiGHS fallback (`01_pipeline/03d_solver_backends.md`)
    is unrelated.
 
 9. **TPC-H scale factor sensitivity.** Tests are tuned for SF-0.01

@@ -1,10 +1,10 @@
 # Codebase Structure
 
-This document provides a detailed map of the DecidB implementation within the DuckDB source tree. It is intended to help developers (and LLMs) understand the physical organization of the code and the relationships between key classes.
+This document provides a detailed map of the DeciDB implementation within the DuckDB source tree. It is intended to help developers (and LLMs) understand the physical organization of the code and the relationships between key classes.
 
 ## 1. File Organization
 
-The DecidB extension is integrated across several layers of the DuckDB engine.
+The DeciDB extension is integrated across several layers of the DuckDB engine.
 
 ### 1.1 Include Headers (`src/include/duckdb/`)
 -   **Common Enums**:

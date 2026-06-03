@@ -1,7 +1,7 @@
 # Python Package (pip install)
 
 ## 1. Overview
-DecidB is distributed as a Python package named `decidb`. The package builds the entire C++ codebase (DuckDB core + DecidB extensions + HiGHS solver) from source into a single compiled `.so` extension module, then wraps it with Python bindings via pybind11.
+DeciDB is distributed as a Python package named `decidb`. The package builds the entire C++ codebase (DuckDB core + DeciDB extensions + HiGHS solver) from source into a single compiled `.so` extension module, then wraps it with Python bindings via pybind11.
 
 Key files:
 - `tools/pythonpkg/setup.py` — Main build logic
@@ -48,7 +48,7 @@ All extension source code lives locally in `extension/` (e.g., `extension/icu/`,
 
 The `duckdb_extension_config.cmake` file separately configures extensions for CMake-based builds (used by `BUILD_PYTHON=1`). Keep both in sync when adding/removing extensions.
 
-**Important**: DecidB does not have its own extension hosting server. Extensions that are not baked into the wheel cannot be auto-downloaded at runtime (DuckDB's `extensions.duckdb.org` does not host DecidB builds). Always bundle any required extensions in `setup.py`.
+**Important**: DeciDB does not have its own extension hosting server. Extensions that are not baked into the wheel cannot be auto-downloaded at runtime (DuckDB's `extensions.duckdb.org` does not host DeciDB builds). Always bundle any required extensions in `setup.py`.
 
 ## 4. HiGHS Integration in pip
 HiGHS is compiled directly into the wheel — there is no external dependency or system library required.
@@ -62,7 +62,7 @@ The installed `decidb` package contains:
 ```
 decidb/
 ├── __init__.py              # Re-exports everything from ._decidb
-├── _decidb.cpython-*.so     # The compiled C++ extension (DuckDB + DecidB + HiGHS)
+├── _decidb.cpython-*.so     # The compiled C++ extension (DuckDB + DeciDB + HiGHS)
 ├── functional/              # UDF type helpers
 ├── typing/                  # Type system wrappers
 ├── value/                   # Value type wrappers
@@ -73,9 +73,9 @@ decidb/
 
 The compiled `.so` is named `_decidb` (as `lib_name + '._decidb'` in setup.py, where `lib_name = 'decidb'`). All Python modules import from `decidb._decidb` (the `.so`) using `from ._decidb import ...`.
 
-## 6. DuckDB-to-DecidB Rename (Python Module Name)
+## 6. DuckDB-to-DeciDB Rename (Python Module Name)
 
-Since DecidB is a fork of DuckDB, the Python module was renamed from `duckdb` to `decidb`. This rename touches three layers:
+Since DeciDB is a fork of DuckDB, the Python module was renamed from `duckdb` to `decidb`. This rename touches three layers:
 
 ### 6.1 Python Layer
 - Package name in `setup.py`: `lib_name = 'decidb'`
@@ -237,7 +237,7 @@ With all extensions bundled and `pandas<3.0`:
 - **0 failed**
 
 ### Key Test Fixtures (`conftest.py`)
-- `duckdb_cursor` — Creates a fresh in-memory DecidB connection per test
+- `duckdb_cursor` — Creates a fresh in-memory DeciDB connection per test
 - `require` — Loads a DuckDB extension from build directory (for extension tests)
 - `spark` — Creates a Spark-compatible session (requires spark_namespace helpers)
 - `integers`, `timestamps` — Pre-populated table fixtures

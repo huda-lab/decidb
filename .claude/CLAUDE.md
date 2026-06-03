@@ -1,6 +1,6 @@
-# DecidB
+# DeciDB
 
-DecidB extends DuckDB with a DECIDE clause for in-database Integer Linear Programming.
+DeciDB extends DuckDB with a DECIDE clause for in-database Integer Linear Programming.
 See `context/descriptions/` for full documentation (start with `README.md` there).
 
 ## Build
@@ -34,7 +34,7 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q
 
 **Recording performance commits.** When a commit lands whose primary purpose is improving performance, the user runs the benchmark and then asks for a perf-log entry to be appended to `context/descriptions/06_performance/` (one file per batch, named `{NNN}_{baseline_commit}_{evaluated_commit}.md` where `NNN` is the next sequential log number — e.g., `002_9c3a53fb62_6bc8ae1412.md`). The entry should reference the commit hash, list the change set + hypothesis, and include measured deltas vs. the prior baseline (with both `benchmark/decide/results/<commit>.json` paths). The log is append-only — supersede entries by adding a new one, don't rewrite history. The perf-log lands as a follow-up commit after the user has measured; do not write it speculatively at code-commit time.
 
-## Key DecidB source paths
+## Key DeciDB source paths
 
 - Parser/Symbolic: `src/decidb/symbolic/decide_symbolic.cpp`
 - Binder: `src/planner/expression_binder/decide_binder.cpp`, `decide_constraints_binder.cpp`, `decide_objective_binder.cpp`
@@ -85,7 +85,7 @@ For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
 
 - **Follow DuckDB patterns first**: When adding a feature, find how DuckDB handles the analogous SQL case and mirror that approach. Don't invent new patterns when DuckDB already has one.
 - **Solver-agnostic**: Features must work with both Gurobi and HiGHS. Don't rely on solver-specific capabilities without a fallback path.
-- **Minimal DuckDB core modifications**: DecidB extends DuckDB; prefer adding new code over modifying core DuckDB files. The less we touch upstream, the easier version upgrades are.
+- **Minimal DuckDB core modifications**: DeciDB extends DuckDB; prefer adding new code over modifying core DuckDB files. The less we touch upstream, the easier version upgrades are.
 
 ## Demand Elegance (Balanced)
 
@@ -95,7 +95,7 @@ For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
 
 ## Conventions
 
-- DecidB code follows DuckDB coding conventions (CamelCase classes, snake_case methods)
+- DeciDB code follows DuckDB coding conventions (CamelCase classes, snake_case methods)
 - Libraries are named `libduckdb.*` internally for DuckDB API compatibility
 - The executable is named `decidb`
 - DECIDE clause keywords: DECIDE, SUCH THAT, MAXIMIZE, MINIMIZE, WHEN

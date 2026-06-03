@@ -18,7 +18,7 @@ Variables are declared as a comma-separated list with optional type annotations.
 
 ### `IS BOOLEAN`
 
-The variable takes values in {0, 1}. DecidB automatically adds lower bound (`x >= 0`) and upper bound (`x <= 1`) constraints.
+The variable takes values in {0, 1}. DeciDB automatically adds lower bound (`x >= 0`) and upper bound (`x <= 1`) constraints.
 
 ```sql
 DECIDE x IS BOOLEAN
@@ -101,7 +101,7 @@ Here `keepN` has one value per nurse entity, while `scheduleHours` has one value
 
 ## Linearity / Non-Linearity
 
-Linear expressions are always supported. DecidB additionally supports two classes of non-linear terms — bilinear (`x * y`) and quadratic (`x * x`, `POWER(x, 2)`) — via dedicated optimizer rewrites and solver paths:
+Linear expressions are always supported. DeciDB additionally supports two classes of non-linear terms — bilinear (`x * y`) and quadratic (`x * x`, `POWER(x, 2)`) — via dedicated optimizer rewrites and solver paths:
 
 | Expression | Status |
 |---|---|

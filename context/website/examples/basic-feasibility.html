@@ -7,7 +7,7 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Feasibility: Constraint Satisfaction - DecidB Examples</title>
+  <title>Feasibility: Constraint Satisfaction - DeciDB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -32,7 +32,7 @@
   <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <a href="../index.html" class="flex items-center space-x-2">
-        <img src="../assets/images/logo.svg" alt="DecidB" class="h-8 logo-img">
+        <img src="../assets/images/logo.svg" alt="DeciDB" class="h-8 logo-img">
         <div class="hidden sm:block">
           <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
@@ -84,7 +84,7 @@
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        A hospital needs to cover three daily shifts (Morning, Afternoon, Night) using a pool of four nurses. The rules are simple: every shift must have at least one nurse, and no nurse can work more than one shift per day. There is no score to maximize or cost to minimize &mdash; the goal is just to find <em>any</em> valid schedule that satisfies all constraints. This is a <strong>feasibility problem</strong>: omitting the objective clause tells DecidB to return the first satisfying assignment it finds.
+        A hospital needs to cover three daily shifts (Morning, Afternoon, Night) using a pool of four nurses. The rules are simple: every shift must have at least one nurse, and no nurse can work more than one shift per day. There is no score to maximize or cost to minimize &mdash; the goal is just to find <em>any</em> valid schedule that satisfies all constraints. This is a <strong>feasibility problem</strong>: omitting the objective clause tells DeciDB to return the first satisfying assignment it finds.
       </p>
     </section>
 
@@ -141,7 +141,7 @@ SUCH THAT
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>
-          <div>No <code>MAXIMIZE</code> or <code>MINIMIZE</code> &mdash; This is a feasibility query. DecidB finds any valid assignment and returns it. If no assignment satisfies all constraints, the query reports infeasibility.</div>
+          <div>No <code>MAXIMIZE</code> or <code>MINIMIZE</code> &mdash; This is a feasibility query. DeciDB finds any valid assignment and returns it. If no assignment satisfies all constraints, the query reports infeasibility.</div>
         </div>
       </div>
     </section>
@@ -178,7 +178,7 @@ SUCH THAT
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        DecidB found a valid schedule: Alice covers Morning, Carol covers Afternoon, and Bob covers Night. Dan is not assigned. Every shift has exactly one nurse (&ge;1 PER shift), and no nurse works more than one shift (&le;1 PER nurse). Because there is no objective, DecidB returns the first feasible assignment it finds &mdash; not the "best" one. To optimize among valid schedules (e.g., maximize total seniority), simply add a <code>MAXIMIZE</code> clause.
+        DeciDB found a valid schedule: Alice covers Morning, Carol covers Afternoon, and Bob covers Night. Dan is not assigned. Every shift has exactly one nurse (&ge;1 PER shift), and no nurse works more than one shift (&le;1 PER nurse). Because there is no objective, DeciDB returns the first feasible assignment it finds &mdash; not the "best" one. To optimize among valid schedules (e.g., maximize total seniority), simply add a <code>MAXIMIZE</code> clause.
       </div>
     </section>
 
@@ -194,7 +194,7 @@ SUCH THAT
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="../assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
+          <img src="../assets/images/logo.svg" alt="DeciDB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
           <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>

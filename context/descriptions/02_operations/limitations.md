@@ -2,10 +2,10 @@
 
 ## 1. Current Limitations
 
-While DecidB demonstrates the feasibility of in-database optimization, the current implementation has specific constraints:
+While DeciDB demonstrates the feasibility of in-database optimization, the current implementation has specific constraints:
 
 ### 1.1 Constraint and Objective Forms
-DecidB supports **LP**, **ILP**, **MILP**, **QP**, **MIQP**, **QCQP**, bilinear, and feasibility problem classes (see `03_expressivity/problem_types/done.md` for the full taxonomy).
+DeciDB supports **LP**, **ILP**, **MILP**, **QP**, **MIQP**, **QCQP**, bilinear, and feasibility problem classes (see `03_expressivity/problem_types/done.md` for the full taxonomy).
 -   **Constraints** may be linear ($\sum c_i x_i \le K$), bilinear (`x * y`), or quadratic (`POWER(expr, 2)`). Bilinear and quadratic constraints require Gurobi (HiGHS rejects).
 -   **Objectives** may be linear ($\max \sum c_i x_i$), quadratic (`MINIMIZE SUM(POWER(linear_expr, 2))`), bilinear, or omitted (feasibility).
 -   **Remaining limitation**: Higher-order nonlinearities (cubic, etc.) are not supported — only linear, bilinear, and degree-2 quadratic forms are allowed.

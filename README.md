@@ -1,6 +1,6 @@
 ### Optimization, Native in SQL
 
-DecidB extends DuckDB with declarative optimization.  
+DeciDB extends DuckDB with declarative optimization.  
 Select optimal subsets of data with constraints and objectives — no external tools required.
 
   
@@ -22,7 +22,7 @@ SUCH THAT
 MAXIMIZE SUM(x * value);
 ```
 
-## Why DecidB?
+## Why DeciDB?
 
 - **Native SQL** — Express optimization as a SQL extension. No context switching between your database and an external solver.
 - **Zero Data Movement** — Solve directly on database buffers. No export/import overhead.
@@ -54,7 +54,7 @@ For the full syntax specification, see `[context/descriptions/00_project_overvie
 
 ## Building from Source
 
-DecidB requires [CMake](https://cmake.org), Python3, and a C++11 compliant compiler.
+DeciDB requires [CMake](https://cmake.org), Python3, and a C++11 compliant compiler.
 
 ```bash
 make release
@@ -76,7 +76,7 @@ Tests are located in `[test/decide/](test/decide/)`.
 
 ## Example Problem Domains
 
-DecidB can express a wide range of optimization problems directly in SQL:
+DeciDB can express a wide range of optimization problems directly in SQL:
 
 - **Knapsack / Packing** — Maximize value within weight or budget limits
 - **Diet / Nutrition** — Meet nutritional targets while minimizing cost
@@ -100,7 +100,7 @@ Key areas:
 
 ## Research
 
-DecidB is developed by the [HUDA Lab](https://huda-lab.github.io/) (NYU Abu Dhabi), and UMass Amherst.
+DeciDB is developed by the [HUDA Lab](https://huda-lab.github.io/) (NYU Abu Dhabi), and UMass Amherst.
 
 **Foundation papers:**
 
@@ -112,4 +112,4 @@ Contact: [huda-lab@nyu.edu](mailto:huda-lab@nyu.edu)
 
 ## License
 
-DecidB is released under the MIT License. See [LICENSE](LICENSE) for details.
+DeciDB is released under the MIT License. See [LICENSE](LICENSE) for details.

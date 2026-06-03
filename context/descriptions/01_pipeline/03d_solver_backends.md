@@ -2,7 +2,7 @@
 
 ## Overview
 
-DecidB uses a solver facade pattern. The `SolveModel()` function in `ilp_solver.cpp` builds a `SolverModel` from the `SolverInput`, then dispatches to the selected backend. It supports a test override (`DECIDB_FORCE_SOLVER=highs|gurobi`) before the default auto-selection:
+DeciDB uses a solver facade pattern. The `SolveModel()` function in `ilp_solver.cpp` builds a `SolverModel` from the `SolverInput`, then dispatches to the selected backend. It supports a test override (`DECIDB_FORCE_SOLVER=highs|gurobi`) before the default auto-selection:
 
 ```cpp
 vector<double> SolveModel(SolverInput &input, const VarIndexer &indexer) {
@@ -35,7 +35,7 @@ vector<double> SolveModel(SolverInput &input, const VarIndexer &indexer) {
 ## Solver Selection
 
 - If `DECIDB_FORCE_SOLVER=highs` or `DECIDB_FORCE_SOLVER=gurobi` is set, that backend is used first (unknown values are ignored and fall back to normal auto-selection).
-- If `GurobiSolver::IsAvailable()` returns true, Gurobi is used. **Gurobi is the primary solver** and is strongly recommended — empirical benchmarking has shown it to be significantly faster than HiGHS for DecidB workloads.
+- If `GurobiSolver::IsAvailable()` returns true, Gurobi is used. **Gurobi is the primary solver** and is strongly recommended — empirical benchmarking has shown it to be significantly faster than HiGHS for DeciDB workloads.
 - Otherwise, HiGHS (via `DeterministicNaive`) is used as a fallback. HiGHS is substantially slower in practice and should only be used when a Gurobi license is unavailable.
 
 `GurobiSolver::IsAvailable()` performs a one-time lazy check (static local variable with lambda initialization): it attempts to create a Gurobi environment via `GRBloadenv()`. If compilation did not include Gurobi (`DECIDB_HAS_GUROBI` not defined), it always returns false.
@@ -78,7 +78,7 @@ Solution values are extracted via `GRBgetdblattrarray(GRB_DBL_ATTR_X, ...)` into
 
 ## HiGHS Backend
 
-> **Note**: HiGHS is retained as an open-source fallback for environments without a Gurobi license. Empirical benchmarking has shown it to be significantly slower than Gurobi for DecidB workloads. It is not recommended for production use.
+> **Note**: HiGHS is retained as an open-source fallback for environments without a Gurobi license. Empirical benchmarking has shown it to be significantly slower than Gurobi for DeciDB workloads. It is not recommended for production use.
 
 Uses HiGHS's **C++ API** (`Highs.h`). Despite the class name `DeterministicNaive`, this is a full-featured MIP solver.
 

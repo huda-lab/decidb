@@ -1,16 +1,16 @@
-# DecidB: Package Query Extension for DuckDB
+# DeciDB: In-Database Constrained Optimization for DuckDB
 
 ## 1. Introduction
 
 ### 1.1 Problem Statement
 
-Standard Database Management Systems (DBMS) are excellent at retrieving and aggregating data but lack native support for combinatorial optimization problems. Users often need to select a subset of items (a "package") that satisfies various constraints while optimizing an objective function (e.g., "Select a meal plan with max protein but under 2000 calories" or "Choose a team of engineers within budget"). Typically, this requires extracting data to an external solver, which is inefficient and complex to maintain.
+Standard Database Management Systems (DBMS) are excellent at retrieving and aggregating data but lack native support for combinatorial optimization problems. Users often need to make decisions over their data — for example, selecting a subset of items that satisfies various constraints while optimizing an objective function (e.g., "Select a meal plan with max protein but under 2000 calories" or "Choose a team of engineers within budget"). Typically, this requires extracting data to an external solver, which is inefficient and complex to maintain.
 
-### 1.2 Solution: DecidB
+### 1.2 Solution: DeciDB
 
-DecidB extends DuckDB with native support for **Package Queries**. It introduces a declarative `DECIDE` clause to SQL, allowing users to express these optimization problems directly within the query language. DecidB handles the translation of these high-level requirements into an Integer Linear Programming (ILP) model, solves it using an embedded solver, and returns the optimal package as standard relational tables.
+DeciDB extends DuckDB with native support for **constrained optimization (COP)**. It introduces a declarative `DECIDE` clause to SQL, allowing users to express these optimization problems directly within the query language. DeciDB handles the translation of these high-level requirements into an Integer Linear Programming (ILP) model, solves it using an embedded solver, and returns the optimal solution as standard relational tables.
 
-**Solver Strategy**: DecidB uses **Gurobi** as its primary solver. Empirical benchmarking has shown Gurobi to be significantly faster than alternatives for DecidB workloads. **HiGHS** (open-source) is bundled as a fallback for environments without a Gurobi license, but it is substantially slower in practice and not recommended for production use.
+**Solver Strategy**: DeciDB uses **Gurobi** as its primary solver. Empirical benchmarking has shown Gurobi to be significantly faster than alternatives for DeciDB workloads. **HiGHS** (open-source) is bundled as a fallback for environments without a Gurobi license, but it is substantially slower in practice and not recommended for production use.
 
 ## 2. Project Goals
 
@@ -40,7 +40,7 @@ SUCH THAT constraint_list
 
 ## 4. System Overview
 
-DecidB modifies the standard query processing pipeline:
+DeciDB modifies the standard query processing pipeline:
 
 1.  **Parser**: Recognizes the new keywords and builds a symbolic representation.
 2.  **Binder**: Validates variable scopes, types, and mathematical properties (linearity).

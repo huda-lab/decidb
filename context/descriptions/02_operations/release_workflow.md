@@ -1,6 +1,6 @@
 # GitHub Actions Release Workflow
 
-This document describes the `DecidBRelease.yml` GitHub Actions workflow that builds release binaries for DecidB across Windows, Linux, and macOS platforms.
+This document describes the `DecidBRelease.yml` GitHub Actions workflow that builds release binaries for DeciDB across Windows, Linux, and macOS platforms.
 
 ## Overview
 
@@ -152,7 +152,7 @@ Release/decidb.exe --version
 3. **Create draft release** using GitHub CLI:
    ```bash
    gh release create ${version} \
-     --title "DecidB ${version}" \
+     --title "DeciDB ${version}" \
      --notes-file release_notes.md \
      --draft \
      artifacts/**/*.zip artifacts/**/*.gz
@@ -182,7 +182,7 @@ All uploaded artifacts are retained for **7 days** (`retention-days: 7`).
 ## How to Trigger the Workflow
 
 1. Go to the repository's **Actions** tab
-2. Select **DecidB Release Build** from the workflow list
+2. Select **DeciDB Release Build** from the workflow list
 3. Click **Run workflow**
 4. Fill in the inputs:
    - **version**: e.g., `v0.1.0-beta`
@@ -314,14 +314,14 @@ symbolic/sum.h:422: warning: if statement has empty body
 
 These are cosmetic issues in the third-party SymbolicC++ library.
 
-### DecidB-Specific Warnings (macOS)
+### DeciDB-Specific Warnings (macOS)
 
 ```
 decide_binder.hpp:42: warning: 'BindAggregate' overrides but is not marked 'override'
 logical_operator_type.cpp:10: warning: enumeration value 'LOGICAL_DECIDE' not handled in switch
 ```
 
-These are minor code style issues in the DecidB extensions that don't affect functionality.
+These are minor code style issues in the DeciDB extensions that don't affect functionality.
 
 ---
 

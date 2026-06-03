@@ -47,7 +47,7 @@ The binder walks the expression tree and flags an error if it encounters a multi
 
 ### 3.2 Subquery Handling
 
-DecidB supports both **uncorrelated and correlated scalar subqueries** in constraints.
+DeciDB supports both **uncorrelated and correlated scalar subqueries** in constraints.
 
 - Example (uncorrelated): `SUM(x) <= (SELECT COUNT(*) FROM Drivers)`
 - Example (correlated): `x <= (SELECT budget FROM Depts WHERE Depts.id = items.dept_id)`

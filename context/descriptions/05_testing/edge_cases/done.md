@@ -61,7 +61,7 @@ Tests live in:
 The oracle always picks Gurobi (gurobipy required; oracle fixtures skip if
 unavailable). The `_expect_gurobi` decorator in QP/bilinear tests accepts the
 rejection message on HiGHS-only hosts. The `DECIDB_FORCE_SOLVER` env var pins
-DecidB's backend for specific tests via the `decidb_cli_highs` and
+DeciDB's backend for specific tests via the `decidb_cli_highs` and
 `decidb_cli_gurobi` fixtures.
 
 | Scenario | Where | Oracle |

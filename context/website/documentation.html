@@ -7,9 +7,9 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="DecidB Documentation - Complete syntax reference for the DECIDE clause, constraints, objectives, and best practices.">
-  <meta name="keywords" content="DecidB, DuckDB, SQL, documentation, syntax, DECIDE, constraints, optimization">
-  <title>Documentation - DecidB</title>
+  <meta name="description" content="DeciDB Documentation - Complete syntax reference for the DECIDE clause, constraints, objectives, and best practices.">
+  <meta name="keywords" content="DeciDB, DuckDB, SQL, documentation, syntax, DECIDE, constraints, optimization">
+  <title>Documentation - DeciDB</title>
 
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
@@ -62,7 +62,7 @@
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <!-- Logo -->
       <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="DecidB" class="h-8 logo-img">
+        <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 logo-img">
         <div class="hidden sm:block">
           <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
         </div>
@@ -143,7 +143,7 @@
 
         <div class="max-w-4xl">
           <h1 class="text-4xl md:text-5xl text-fg mb-4">
-            DecidB Documentation
+            DeciDB Documentation
           </h1>
           <p class="text-xl text-fg-muted">
             Complete reference for writing optimization queries with the DECIDE clause.
@@ -185,7 +185,7 @@
               <h2 class="text-3xl text-fg mb-6">Syntax Overview</h2>
 
               <p class="text-fg-muted mb-6">
-                DecidB adds a <code>DECIDE</code> clause to standard SQL. You declare decision variables, define constraints with <code>SUCH THAT</code>, and optionally set an objective with <code>MAXIMIZE</code> or <code>MINIMIZE</code>. DecidB solves the optimization problem and returns every candidate row with the optimal variable values filled in.
+                DeciDB adds a <code>DECIDE</code> clause to standard SQL. You declare decision variables, define constraints with <code>SUCH THAT</code>, and optionally set an objective with <code>MAXIMIZE</code> or <code>MINIMIZE</code>. DeciDB solves the optimization problem and returns every candidate row with the optimal variable values filled in.
               </p>
 
               <h3 class="text-xl font-semibold text-fg mb-4">Complete Syntax</h3>
@@ -208,7 +208,7 @@ SUCH THAT
 
               <h3 class="text-xl font-semibold text-fg mb-4">Execution Order</h3>
               <p class="text-fg-muted mb-4">
-                DecidB processes your query in this order:
+                DeciDB processes your query in this order:
               </p>
               <ol class="space-y-3 mb-6">
                 <li class="flex gap-4">
@@ -787,7 +787,7 @@ MAXIMIZE SUM(-POWER(x - target, 2))</code></pre>
               <!-- Bilinear objectives -->
               <h3 class="text-xl font-semibold text-fg mb-4">Bilinear Objectives</h3>
               <p class="text-fg-muted mb-4">
-                Products of two different decision variables (<code>x * y</code>) are allowed in objectives. When one factor is <code>IS BOOLEAN</code>, DecidB applies an exact McCormick linearization that works with both solvers (requires a finite upper bound on the other factor). General bilinear products between non-Boolean variables are Gurobi only.
+                Products of two different decision variables (<code>x * y</code>) are allowed in objectives. When one factor is <code>IS BOOLEAN</code>, DeciDB applies an exact McCormick linearization that works with both solvers (requires a finite upper bound on the other factor). General bilinear products between non-Boolean variables are Gurobi only.
               </p>
               <div class="code-block mb-8">
                 <div class="code-header">
@@ -886,7 +886,7 @@ SUCH THAT
             <section id="solver-selection" class="mb-20">
               <h2 class="text-3xl text-fg mb-6">Solver Selection</h2>
               <p class="text-fg-muted mb-6">
-                DecidB ships with two solvers and picks one at runtime. <strong>Gurobi</strong> is the primary backend: when a Gurobi installation is detected on your system, it is used automatically. <strong>HiGHS</strong> is the bundled open-source fallback and is used when Gurobi is unavailable. Gurobi is significantly faster in practice and supports a broader feature set; HiGHS is convenient because nothing extra is needed to run a query, but it is not recommended for production workloads.
+                DeciDB ships with two solvers and picks one at runtime. <strong>Gurobi</strong> is the primary backend: when a Gurobi installation is detected on your system, it is used automatically. <strong>HiGHS</strong> is the bundled open-source fallback and is used when Gurobi is unavailable. Gurobi is significantly faster in practice and supports a broader feature set; HiGHS is convenient because nothing extra is needed to run a query, but it is not recommended for production workloads.
               </p>
 
               <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden mb-8">
@@ -1081,7 +1081,7 @@ MAXIMIZE SUM(x * p.profit);</code></pre>
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div>
-          <img src="assets/images/logo.svg" alt="DecidB" class="h-8 mb-4 logo-img">
+          <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 mb-4 logo-img">
           <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
           <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
         </div>

@@ -1,6 +1,6 @@
 # /bench — Build, Benchmark, Analyze
 
-Automates the DecidB optimization loop: build → benchmark → view → analyze → suggest.
+Automates the DeciDB optimization loop: build → benchmark → view → analyze → suggest.
 
 ## Arguments
 

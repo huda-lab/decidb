@@ -1,6 +1,6 @@
 # /learn — ELI5 Feature & Concept Explainer
 
-Explains how a DecidB feature or concept works — the mental model, not just the code. Use this when you want to understand something without reading through source files yourself.
+Explains how a DeciDB feature or concept works — the mental model, not just the code. Use this when you want to understand something without reading through source files yourself.
 
 ## Arguments
 

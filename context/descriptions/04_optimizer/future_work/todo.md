@@ -1,6 +1,6 @@
 # Future Work — Todo
 
-Secondary and research-stage optimization ideas. These are lower priority than the three capstone areas (matrix efficiency, partition-solve, rewrite passes) but represent valuable directions for scaling DecidB to larger datasets and more complex queries.
+Secondary and research-stage optimization ideas. These are lower priority than the three capstone areas (matrix efficiency, partition-solve, rewrite passes) but represent valuable directions for scaling DeciDB to larger datasets and more complex queries.
 
 ---
 
@@ -54,7 +54,7 @@ Both HiGHS and Gurobi support LP solving natively — this requires building the
 
 Strengthen constraints to reduce the LP feasible region closer to the integer hull. Example: `2x + 3y <= 7` with integer x, y can be tightened to `x + y <= 2`.
 
-**Note**: Modern solvers (Gurobi, HiGHS) already generate cutting planes internally. DecidB-level cuts would only help if we can exploit problem structure the solver can't see (e.g., DECIDE-specific semantics).
+**Note**: Modern solvers (Gurobi, HiGHS) already generate cutting planes internally. DeciDB-level cuts would only help if we can exploit problem structure the solver can't see (e.g., DECIDE-specific semantics).
 
 ---
 

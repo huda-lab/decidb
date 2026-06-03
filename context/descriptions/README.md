@@ -1,6 +1,6 @@
-# DecidB Documentation Index
+# DeciDB Documentation Index
 
-This folder contains all internal documentation for the DecidB project. It is
+This folder contains all internal documentation for the DeciDB project. It is
 structured for quick navigation by both AI agents and human developers.
 
 ---
@@ -20,20 +20,20 @@ This makes it trivial to determine what exists vs. what needs building.
 
 | Folder                 | Contains                                                                                                           | Start here if...                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `00_project_overview/` | What DecidB is, the theory behind it, and the DECIDE syntax reference                                              | You are new to the project or need to understand what queries are valid       |
+| `00_project_overview/` | What DeciDB is, the theory behind it, and the DECIDE syntax reference                                              | You are new to the project or need to understand what queries are valid       |
 | `01_pipeline/`         | The query processing pipeline: architecture, each stage in order, source-code map, and a concrete end-to-end trace | You are working on or debugging any part of the DECIDE query path             |
 | `02_operations/`       | Testing methodology, release workflow, benchmarking, pip packaging, and known limitations                           | You need to run tests, cut a release, benchmark performance, build the pip wheel, or check whether a feature is supported |
 | `03_expressivity/`     | DECIQL keyword reference — each keyword is a subfolder with done.md/todo.md. Also includes `problem_types/` for LP/ILP/QP classification. | You want to know if a construct is valid, or are implementing a new keyword   |
 | `04_optimizer/`        | COP optimizer strategies — each area is a subfolder with done.md/todo.md                                           | You are designing or implementing optimizer features                          |
 | `05_testing/`          | Test coverage tracking — which scenarios are oracle-verified vs. feasibility-only, and what gaps remain            | You are adding tests, auditing coverage, or debugging a suspected correctness regression |
-| `06_performance/`      | Append-only log of performance optimizations applied to DecidB. One file per optimization batch, dated, with hypothesis + measured outcome. | You want to know what's already been tried, or you're about to commit a perf change and need to record it |
+| `06_performance/`      | Append-only log of performance optimizations applied to DeciDB. One file per optimization batch, dated, with hypothesis + measured outcome. | You want to know what's already been tried, or you're about to commit a perf change and need to record it |
 | `07_bugs/`             | Known open bugs with symptoms, reproductions, and what has been ruled out                                          | You hit an unexpected error or are looking for a starting point to fix something broken  |
 
 ---
 
 ## Recommended Reading Order (Starting From Scratch)
 
-1. `00_project_overview/project_description.md` — What DecidB is and why it exists.
+1. `00_project_overview/project_description.md` — What DeciDB is and why it exists.
 2. `00_project_overview/syntax_reference.md` — What you can write in a DECIDE clause.
 3. `01_pipeline/architecture.md` — How the system is structured and what the stages are.
 4. `01_pipeline/trace_life_of_a_query.md` — A concrete example walking through every stage.
@@ -60,7 +60,7 @@ are about to modify source code and need to know where things live on disk.
 | — Solver Backends      | Gurobi (preferred) / HiGHS (fallback) dispatch                           | `01_pipeline/03d_solver_backends.md` | `ilp_solver.cpp`, `gurobi_solver.cpp`, `deterministic_naive.cpp`            |
 | — Result Projection    | Projects solution values onto rows with type-specific casting             | `01_pipeline/03e_result_projection.md` | `physical_decide.cpp` (GetData)                                           |
 | EXPLAIN                | EXPLAIN / EXPLAIN ANALYZE / FORMAT JSON output for DECIDE operator        | `01_pipeline/04_explain.md`            | `logical_decide.cpp`, `physical_decide.cpp`, `serialize_logical_operator.cpp` |
-| Code Structure         | File organization, class hierarchy, key methods map                       | `01_pipeline/code_structure.md`        | All DecidB source files                                                            |
+| Code Structure         | File organization, class hierarchy, key methods map                       | `01_pipeline/code_structure.md`        | All DeciDB source files                                                            |
 
 > **Note**: Algebraic rewrites (AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators) are performed by `DecideOptimizer` — see `04_optimizer/rewrite_passes/done.md`. The binder validates and binds expressions; the optimizer transforms them.
 

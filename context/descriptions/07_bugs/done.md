@@ -121,13 +121,13 @@ Invalid Input Error: DECIDE optimization failed with Gurobi status 9.
 The optimization could not find a solution.
 ```
 
-…even when Gurobi's own log reported `Solution count 4: -90 -62 -60 180` and a finite best objective. DecidB simply never surfaced the incumbent.
+…even when Gurobi's own log reported `Solution count 4: -90 -62 -60 180` and a finite best objective. DeciDB simply never surfaced the incumbent.
 
 ### Root cause
 
 Two compounding bugs in `src/decidb/gurobi/gurobi_loader.hpp`:
 
-1. **Wrong status constants.** DecidB defined `GRB_TIME_LIMIT = 7` and `GRB_ITERATION_LIMIT = 8`, but Gurobi's actual values are `ITERATION_LIMIT = 7`, `NODE_LIMIT = 8`, `TIME_LIMIT = 9`. So when Gurobi returned `status == 9`, the time-limit branch in `gurobi_solver.cpp` never matched, the SolCount-check was skipped, and the fallthrough else-branch threw "no solution found with status %d" — the `9` in the user-visible error was the give-away.
+1. **Wrong status constants.** DeciDB defined `GRB_TIME_LIMIT = 7` and `GRB_ITERATION_LIMIT = 8`, but Gurobi's actual values are `ITERATION_LIMIT = 7`, `NODE_LIMIT = 8`, `TIME_LIMIT = 9`. So when Gurobi returned `status == 9`, the time-limit branch in `gurobi_solver.cpp` never matched, the SolCount-check was skipped, and the fallthrough else-branch threw "no solution found with status %d" — the `9` in the user-visible error was the give-away.
 2. **Narrow accept-incumbent branch.** Even with the correct constants, only `GRB_TIME_LIMIT` was being treated as "may carry a feasible solution"; `NODE_LIMIT`, `SOLUTION_LIMIT`, `INTERRUPTED`, `SUBOPTIMAL` (all of which can also leave an incumbent in the pool) all went to the throw path.
 
 ### Fix
@@ -195,7 +195,7 @@ Two independent root causes, both surfacing through the same connection-poisonin
 ### Fix
 
 1. **Tighten the bind-time check.** `decide_objective_binder.cpp:GetExpressionType` now distinguishes the additive composition path (`+`/`-`/`*`) — which legitimately mixes scalar arithmetic with aggregates — from non-additive wrappers (`POWER`, `SQRT`, `LOG`, etc.) that wrap an aggregate. The latter is rejected at bind time with a message pointing the user at `SUM(POWER(expr, 2))`.
-2. **Convert the relevant throw sites to `InvalidInputException`.** All of `gurobi_solver.cpp`'s submit-time failures (`addconstr`, `addqconstr`, `addqpterms`, `optimize`) and `physical_decide.cpp`'s non-aggregate-term / non-SUM rejections now raise `InvalidInputException`, so a malformed query rejects only itself instead of poisoning the connection. `InternalException` is preserved for genuine DecidB invariant violations (Gurobi env/license setup, NaN/Inf in extracted solution).
+2. **Convert the relevant throw sites to `InvalidInputException`.** All of `gurobi_solver.cpp`'s submit-time failures (`addconstr`, `addqconstr`, `addqpterms`, `optimize`) and `physical_decide.cpp`'s non-aggregate-term / non-SUM rejections now raise `InvalidInputException`, so a malformed query rejects only itself instead of poisoning the connection. `InternalException` is preserved for genuine DeciDB invariant violations (Gurobi env/license setup, NaN/Inf in extracted solution).
 
 ### Verification
 
@@ -383,7 +383,7 @@ Three coordinated changes:
 
 ### Symptom
 
-Earlier: DecidB's ABS rewrite was a pure lower-envelope (`aux >= e`, `aux >= -e`), forcing only `aux >= |e|`. For constraint shapes that did not upper-bound `aux` — `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, `ABS(...) BETWEEN`, ABS on both sides of a comparison, and the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`) — the solver could satisfy the constraint by inflating `aux` above `|e|`, silently producing infeasible-relative-to-the-original-predicate solutions reported as feasible.
+Earlier: DeciDB's ABS rewrite was a pure lower-envelope (`aux >= e`, `aux >= -e`), forcing only `aux >= |e|`. For constraint shapes that did not upper-bound `aux` — `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, `ABS(...) BETWEEN`, ABS on both sides of a comparison, and the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`) — the solver could satisfy the constraint by inflating `aux` above `|e|`, silently producing infeasible-relative-to-the-original-predicate solutions reported as feasible.
 
 The earlier fix (a bind-time soundness gate, `ValidateAbsConstraintDirection`) rejected these shapes at bind time. Correct, but conservative: it reduced the supported surface and forced users to manually reformulate.
 
@@ -481,7 +481,7 @@ subprocess.TimeoutExpired: Command '[...decidb ... MINIMIZE SUM(POWER(qty - 2, 2
 
 The test dropped a `gurobi.env` containing `TimeLimit 1` in the working directory and expected a symmetric MIQP to terminate within ~1s with the friendly "exceeded time limit" message. Instead the decidb subprocess ran past the 30s `subprocess.run(timeout=30)` cap, was SIGKILL'd, and produced no output for the assertion to match.
 
-Beyond the test failure, any user dropping a tighter `TimeLimit` (or other limit-style parameters that DecidB also re-set after Gurobi auto-loaded `gurobi.env`) had their override silently discarded — a footgun for power users.
+Beyond the test failure, any user dropping a tighter `TimeLimit` (or other limit-style parameters that DeciDB also re-set after Gurobi auto-loaded `gurobi.env`) had their override silently discarded — a footgun for power users.
 
 ### Root cause
 
@@ -551,7 +551,7 @@ Unqualified column names parsed and executed correctly, including in JOIN querie
 
 In `third_party/libpg_query/grammar/statements/select.y`, the four single-column PER rule arms (lines 238, 259, 316, 337) used the `columnref` non-terminal, which accepts only `ColId` — a bare unqualified identifier. The multi-column form `PER '(' columnrefList ')'` had the same restriction because `columnrefList` was itself built over `columnref`.
 
-`columnref` was used nowhere else in the grammar — only by the DecidB PER/WHEN rules — so the restriction was effectively a DecidB-specific limitation that diverged from the rest of DuckDB's SQL surface.
+`columnref` was used nowhere else in the grammar — only by the DeciDB PER/WHEN rules — so the restriction was effectively a DeciDB-specific limitation that diverged from the rest of DuckDB's SQL surface.
 
 The C++ transformer (`src/parser/transform/expression/transform_operator.cpp`, the `PG_AEXPR_PER_CONSTRAINT` arm) was already general — it called `TransformExpression(...)` on the right side, which handles both bare and qualified `ColumnRef` AST nodes identically. Only the grammar needed to change.
 

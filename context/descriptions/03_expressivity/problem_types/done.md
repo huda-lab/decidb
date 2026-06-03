@@ -1,6 +1,6 @@
 # Problem Types — Implemented Features
 
-DecidB can express several classes of mathematical optimization problems. The problem class is determined automatically by the combination of variable types declared in `DECIDE` and the form of the objective expression. This page catalogs the supported problem classes from a mathematical optimization perspective — for syntax details, see the per-keyword done.md files.
+DeciDB can express several classes of mathematical optimization problems. The problem class is determined automatically by the combination of variable types declared in `DECIDE` and the form of the objective expression. This page catalogs the supported problem classes from a mathematical optimization perspective — for syntax details, see the per-keyword done.md files.
 
 ---
 
@@ -196,7 +196,7 @@ Composes with WHEN, PER, and linear constraints. Multiple quadratic constraints 
 
 ## How Problem Class Is Determined
 
-The user does not declare a problem class. DecidB infers it from the variable types and objective form:
+The user does not declare a problem class. DeciDB infers it from the variable types and objective form:
 
 | Variable Types | Objective | Problem Class |
 |---|---|---|
@@ -297,7 +297,7 @@ All variable types have a default lower bound of 0:
 - INTEGER: [0, 1e30]
 - REAL: [0, 1e30]
 
-DecidB cannot currently express problems requiring negative variable values (see [todo.md](todo.md)).
+DeciDB cannot currently express problems requiring negative variable values (see [todo.md](todo.md)).
 
 ### Big-M Linearization Is Transparent
 

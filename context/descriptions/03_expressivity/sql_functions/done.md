@@ -30,7 +30,7 @@ SUCH THAT SUM(x * weight) <= 50
 - WHEN+PER: N = count of WHEN-matching rows per group
 - Aggregate-local WHEN: N = count of rows matching that aggregate-local filter, within each PER group if PER is present
 
-**Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` uses the same optimal assignment as `SUM(expr)` when there is one global denominator. In mixed additive aggregate expressions, DecidB preserves AVG scaling per term so `AVG(a) + SUM(b)` is not treated as `SUM(a) + SUM(b)`.
+**Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` uses the same optimal assignment as `SUM(expr)` when there is one global denominator. In mixed additive aggregate expressions, DeciDB preserves AVG scaling per term so `AVG(a) + SUM(b)` is not treated as `SUM(a) + SUM(b)`.
 
 **Objectives (nested PER)**: `OUTER(AVG(expr)) PER col` is fully supported. Inner AVG scales each row's coefficient by `1/n_g` (group size), producing true per-group averages. Outer AVG maps to SUM (dividing by constant G). See [maximize_minimize/done.md](../maximize_minimize/done.md).
 
@@ -43,7 +43,7 @@ SUCH THAT AVG(x * hours) <= 8 PER emp   -- per-group average
 MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
 ```
 
-**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so DecidB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead.
+**Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so DeciDB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead.
 
 **Tests**: `test/decide/tests/test_avg.py` — 11 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOLEAN, INTEGER, non-linear rejection, `<>` with and without WHEN, and no-decide-var passthrough.
 

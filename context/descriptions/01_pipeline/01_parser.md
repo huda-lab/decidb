@@ -9,7 +9,7 @@ The Parser and Symbolic Layer is the entry point for the `DECIDE` clause. Its pr
 
 > **Note on IN/BETWEEN**: `IN` and `BETWEEN` are handled as symbolic predicate types during parsing. The symbolic layer passes them through unchanged — they are validated or rewritten at the binder stage, not during normalization. `IN` on decision variables is supported via `RewriteInDomain()` in `bind_select_node.cpp`, which rewrites `x IN (v1, ..., vK)` into K binary indicator variables with cardinality and linking constraints. `IN` on aggregates (e.g., `SUM(x) IN (...)`) remains unsupported.
 
-DecidB integrates `SymbolicC++` to perform algebraic manipulations. The translation pipeline is as follows:
+DeciDB integrates `SymbolicC++` to perform algebraic manipulations. The translation pipeline is as follows:
 
 1.  **DuckDB to Symbolic**: The `ToSymbolicRecursive` function traverses the DuckDB `ParsedExpression` tree.
     -   `ColumnRef` (decision variable) $\rightarrow$ `Symbolic Variable`

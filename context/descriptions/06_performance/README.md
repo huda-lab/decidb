@@ -1,6 +1,6 @@
 # Performance Optimization Log
 
-Append-only record of performance optimizations applied to DecidB. Each entry describes the change set, the hypothesis, and the measured outcome on the standard `benchmark/decide` suite.
+Append-only record of performance optimizations applied to DeciDB. Each entry describes the change set, the hypothesis, and the measured outcome on the standard `benchmark/decide` suite.
 
 The intent is to keep an honest, dated trail so future work can:
 - See what has already been tried (and not re-do it)

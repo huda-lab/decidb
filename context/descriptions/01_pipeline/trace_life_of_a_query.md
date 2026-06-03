@@ -1,6 +1,6 @@
 # Life of a Query: The "Knapsack" Trace
 
-This document provides a low-level execution trace of a characteristic Package Query. It shows exactly how data transforms from SQL source to Final Result.
+This document provides a low-level execution trace of a characteristic decision query. It shows exactly how data transforms from SQL source to Final Result.
 
 ## 1. The Input Query
 

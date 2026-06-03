@@ -44,14 +44,14 @@ When planning test work from scratch, start with the HIGH-risk gaps across all
 
 ## Coverage quality levels
 
-- **oracle** (✓) — DecidB output is compared against an independently-formulated gurobipy ILP via `compare_solutions`. The comparison checks both the objective value and the decision-variable vector, returning `identical` (same vector) or `optimal` (alternate optimum at the same objective). Catches silent optimality bugs — wrong coefficients, wrong constraint direction, rewrite errors, Big-M encoding bugs.
+- **oracle** (✓) — DeciDB output is compared against an independently-formulated gurobipy ILP via `compare_solutions`. The comparison checks both the objective value and the decision-variable vector, returning `identical` (same vector) or `optimal` (alternate optimum at the same objective). Catches silent optimality bugs — wrong coefficients, wrong constraint direction, rewrite errors, Big-M encoding bugs.
 - **constraint only** — Legacy tier. Test checks that constraints are satisfied and the result is non-empty, but does not verify optimality. Can miss bugs where the solver produces a valid but suboptimal solution due to incorrect formulation. Acceptable only for pure feasibility queries (no objective); new correctness tests must use **oracle**.
 - **xfail** — Known defect or feature not yet implemented. Test is kept to auto-detect when fixed.
 - **error test** — Verifies that an invalid query is rejected with the right error message.
 
 ### Forbidden: analytical / hand-computed closed-form assertions
 
-Asserting hand-computed expected variable assignments (e.g. `expected = {1: 10.0, 2: 20.0, 3: 30.0}`) is **not a valid oracle**. Analytical checks only verify the instance the author thought through; an encoding bug that coincides with the expected answer passes silently. Every correctness test must formulate the same problem independently in gurobipy via `oracle_solver` and compare via `compare_solutions`. For non-linear objectives (QP/QCQP), pass `decidb_objective_fn` to `compare_solutions` to evaluate the objective on DecidB's variable values. See `02_operations/oracle.md` for the canonical pattern and `tests/_oracle_helpers.py` for shared primitives.
+Asserting hand-computed expected variable assignments (e.g. `expected = {1: 10.0, 2: 20.0, 3: 30.0}`) is **not a valid oracle**. Analytical checks only verify the instance the author thought through; an encoding bug that coincides with the expected answer passes silently. Every correctness test must formulate the same problem independently in gurobipy via `oracle_solver` and compare via `compare_solutions`. For non-linear objectives (QP/QCQP), pass `decidb_objective_fn` to `compare_solutions` to evaluate the objective on DeciDB's variable values. See `02_operations/oracle.md` for the canonical pattern and `tests/_oracle_helpers.py` for shared primitives.
 
 ## Risk priorities for gaps
 

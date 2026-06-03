@@ -1,6 +1,6 @@
 # DECIDE Test Framework
 
-Pytest-based testing for DecidB's DECIDE clause. Each correctness test has a
+Pytest-based testing for DeciDB's DECIDE clause. Each correctness test has a
 hand-written Python oracle that builds an ILP model using gurobipy directly —
 no SQL parsing in the oracle. Oracle results are cached on disk so the solver
 only runs when a test or the database changes.
@@ -34,11 +34,11 @@ pip install -r test/decide/requirements.txt
 # gurobipy requires a valid Gurobi license; run_tests.sh pre-flights this.
 
 # Ensure decidb executable + decidb.db exist
-make                   # build DecidB executable (build/release/decidb)
-# decidb.db should already exist; if not, generate TPC-H data via DecidB
+make                   # build DeciDB executable (build/release/decidb)
+# decidb.db should already exist; if not, generate TPC-H data via DeciDB
 ```
 
-> **Note:** The DecidB Python package (`tools/pythonpkg`) is **not** required.
+> **Note:** The DeciDB Python package (`tools/pythonpkg`) is **not** required.
 > DECIDE queries run via the native CLI executable, and oracle data fetching
 > uses vanilla `duckdb` with a separately generated TPC-H database.
 
@@ -171,7 +171,7 @@ These select across multiple files:
 
 ## Solution Comparison
 
-Each correctness test compares DecidB output against the oracle at two levels:
+Each correctness test compares DeciDB output against the oracle at two levels:
 
 1. **Objective value** — the total objective must match within tolerance (1e-4).
 2. **Decision variable vector** — both sides are sorted by all non-decision
@@ -185,7 +185,7 @@ The comparison produces a status:
 | `optimal` | Objective matches but at least one assignment differs (alternate optimal) |
 
 Both the status and the full decide vector are stored in the perf JSON and
-oracle cache. Both DecidB (via dynamic-loaded libgurobi in the CLI) and the
+oracle cache. Both DeciDB (via dynamic-loaded libgurobi in the CLI) and the
 oracle (gurobipy) use Gurobi. Most tests report `identical`; the `optimal`
 status appears when the problem has multiple optima and the two Gurobi runs
 pick different ones — that is not a correctness failure, it's an alternate
@@ -256,11 +256,11 @@ test/decide/
 
 ```
 ┌─────────────────────────────────┐    ┌──────────────────────────────────┐
-│  DecidB (DECIDE queries)        │    │  Oracle (data fetching + ILP)    │
+│  DeciDB (DECIDE queries)        │    │  Oracle (data fetching + ILP)    │
 │                                 │    │                                  │
 │  build/release/decidb (CLI)     │    │  vanilla duckdb (Python package) │
 │  ↕ subprocess                   │    │  ↕ in-process                    │
-│  decidb.db (DecidB format)      │    │  _tpch_oracle.duckdb (vanilla)   │
+│  decidb.db (DeciDB format)      │    │  _tpch_oracle.duckdb (vanilla)   │
 │  solver: Gurobi (dlopen libgrb) │    │  solver: gurobipy                │
 └─────────────────────────────────┘    └──────────────────────────────────┘
          │                                        │
@@ -269,4 +269,4 @@ test/decide/
 
 Both databases contain identical TPC-H data (same deterministic dbgen
 algorithm and scale factor).  The oracle is completely independent of
-DecidB — no `import decidb` anywhere in the test code.
+DeciDB — no `import decidb` anywhere in the test code.

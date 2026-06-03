@@ -1,8 +1,8 @@
-# DecidB
+# DeciDB
 
 **Optimization, Native in SQL**
 
-DecidB extends SQL with the `DECIDE` clause for declarative in-database optimization. Express Integer Linear Programming (ILP) problems directly in SQL — no external solvers, no data export, no context switching.
+DeciDB extends SQL with the `DECIDE` clause for declarative in-database optimization. Express Integer Linear Programming (ILP) problems directly in SQL — no external solvers, no data export, no context switching.
 
 A research project by [HUDA Lab](https://huda-lab.github.io/) at NYU Abu Dhabi.
 
@@ -22,7 +22,7 @@ prob.solve()
 # ... then map results back to database
 ```
 
-**With DecidB** — one SQL query:
+**With DeciDB** — one SQL query:
 
 ```sql
 SELECT id, value, weight, x
@@ -71,7 +71,7 @@ print(result)
 
 ## The DECIDE Clause
 
-DecidB adds the `DECIDE` clause to standard SQL:
+DeciDB adds the `DECIDE` clause to standard SQL:
 
 ```sql
 SELECT columns
@@ -129,7 +129,7 @@ All expressions involving decision variables must be **linear**.
 
 ## Research
 
-DecidB builds on the **Package Queries** framework:
+DeciDB builds on a decade of research into **in-database constrained optimization**:
 
 - *Scalable Package Queries in Relational Database Systems* — Brucato, Abouzied, Meliou (VLDB 2016)
 - *Scalable Computation of High-Order Optimization Queries* — Brucato, Abouzied, Meliou (CACM 2019)
