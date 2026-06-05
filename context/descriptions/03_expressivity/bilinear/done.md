@@ -10,7 +10,11 @@ Products of two different DECIDE variables are supported in both objectives and 
 
 When one factor is declared `IS BOOLEAN`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
 
-**Requires**: A finite upper bound on the non-Boolean variable (`x <= K`).
+**Requires**: A finite upper bound on the non-Boolean variable. This may be given
+explicitly (`x <= K`) **or inferred** by implied-bound propagation from a
+non-negative `<=`/`=` constraint such as `SUM(x) <= K` (which implies `x <= K`).
+Only when no finite bound can be derived does DeciDB reject with the "finite upper
+bound" error. See `../../04_optimizer/matrix_efficiency/done.md`.
 
 **Bool x Bool** uses simpler AND-linearization (no Big-M needed). The auxiliary `w` satisfies `w = min(b1, b2)`, i.e., logical AND.
 

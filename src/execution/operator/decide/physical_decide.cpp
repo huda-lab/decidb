@@ -2160,6 +2160,203 @@ SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, Operato
     return SinkCombineResultType::FINISHED;
 }
 
+// --- Data-driven Big-M support ---------------------------------------------
+// A Big-M linearization toggles a constraint on/off via a binary indicator. The
+// constant M must be at least the reachable magnitude of the constraint's
+// left-hand expression: too small silently distorts the feasible region (wrong
+// answer), too large degrades numerical stability. We therefore derive M from
+// the actual variable bounds and per-row coefficient data instead of a fixed
+// constant, mirroring the long-standing ABS-maximize path.
+
+//! Worst-case absolute contribution of row `r`'s decision variables:
+//! sum over terms of |coef[t][r]| * max(|lb|,|ub|). Constant terms
+//! (var == INVALID_INDEX, folded into the RHS by callers) are skipped. If any
+//! contributing variable lacks a finite bound, `has_unbounded` is set and that
+//! term is omitted so the caller can apply a conservative fallback.
+static double DecideRowTermRange(const vector<idx_t> &variable_indices,
+                                 const vector<CoefficientColumn> &row_coefficients,
+                                 idx_t row, const vector<double> &lower_bounds,
+                                 const vector<double> &upper_bounds,
+                                 bool &has_unbounded,
+                                 idx_t skip_idx = DConstants::INVALID_INDEX) {
+    double sum = 0.0;
+    for (idx_t t = 0; t < variable_indices.size(); t++) {
+        idx_t v = variable_indices[t];
+        if (v == DConstants::INVALID_INDEX || v == skip_idx) {
+            continue;
+        }
+        double coef = std::abs(row_coefficients[t].Get(row));
+        if (coef < 1e-15) {
+            continue;
+        }
+        double lb = lower_bounds[v];
+        double ub = upper_bounds[v];
+        if (ub >= 1e20 || lb <= -1e20) {
+            has_unbounded = true;
+            continue;
+        }
+        sum += coef * std::max(std::abs(lb), std::abs(ub));
+    }
+    return sum;
+}
+
+//! Legacy fixed Big-M, retained only as a non-strict fallback for genuinely
+//! unbounded variables (no query is rejected; behavior matches the prior code).
+static constexpr double DECIDE_BIGM_FALLBACK = 1e6;
+
+//! Tight scalar Big-M for a per-row indicator constraint: the maximum over
+//! active rows of |rhs[r]| + (worst-case row contribution), plus a 1-unit margin
+//! that covers the integer-step band of the `<>` rewrite (harmless slack for the
+//! MIN/MAX rewrites). When every contributing variable is bounded this is exact
+//! and typically far below 1e6; otherwise we keep the 1e6 floor.
+static double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
+                                    const vector<double> &lower_bounds,
+                                    const vector<double> &upper_bounds,
+                                    idx_t num_rows) {
+    bool has_unbounded = false;
+    double M = 0.0;
+    bool uniform_rhs = ec.rhs_values.IsUniform();
+    double uniform_rhs_mag = uniform_rhs ? std::abs(ec.rhs_values.UniformValue()) : 0.0;
+    for (idx_t r = 0; r < num_rows; r++) {
+        if (!ec.row_group_ids.empty() &&
+            ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        double rhs_mag = uniform_rhs ? uniform_rhs_mag : std::abs(ec.rhs_values.Get(r));
+        double range = rhs_mag + DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
+                                                    r, lower_bounds, upper_bounds, has_unbounded);
+        M = std::max(M, range);
+    }
+    M += 1.0;
+    if (has_unbounded) {
+        M = std::max(M, DECIDE_BIGM_FALLBACK);
+    }
+    return M;
+}
+
+//! Data-driven implied-bound propagation. For a non-negative `<=`/`=` constraint
+//! Sum_t a_t x_t (<=|=) K with a_t >= 0 and x_t >= 0, each variable instance
+//! satisfies x <= K / a (the other non-negative terms only help), so a sound
+//! shared upper bound is max over the variable's positive-coefficient rows of
+//! K_r / a_r. This converts many declared-unbounded variables into bounded ones,
+//! enabling a finite, correct, tighter Big-M. Only provably-implied bounds are
+//! applied, so the feasible region — and the optimum — are unchanged.
+//!
+//! Single pass (not a fixpoint): a bound derived for one variable is not fed back
+//! to tighten others in the same sweep. This is sound — it only leaves some
+//! tightness on the table for chained implications — and avoids iterating to
+//! convergence over potentially many constraints.
+static void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints,
+                                         vector<double> &lower_bounds,
+                                         vector<double> &upper_bounds, idx_t num_rows) {
+    for (auto &ec : constraints) {
+        if (ec.comparison_type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
+            ec.comparison_type != ExpressionType::COMPARE_EQUAL) {
+            continue;
+        }
+        if (!ec.bilinear_terms.empty() || ec.has_quadratic) {
+            continue;
+        }
+        if (ec.minmax_indicator_idx != DConstants::INVALID_INDEX ||
+            ec.ne_indicator_idx != DConstants::INVALID_INDEX ||
+            ec.abs_y_idx != DConstants::INVALID_INDEX) {
+            continue;
+        }
+        // WHEN-conditional constraints apply to only a subset of rows, but the
+        // bound we derive is shared across ALL of a variable's rows. Deriving it
+        // from the active subset would wrongly bound the excluded (WHEN-false)
+        // rows, which carry no such constraint. Skip any constraint that has
+        // excluded rows.
+        bool has_excluded = false;
+        for (idx_t gid : ec.row_group_ids) {
+            if (gid == DConstants::INVALID_INDEX) {
+                has_excluded = true;
+                break;
+            }
+        }
+        if (has_excluded) {
+            continue;
+        }
+        // Soundness requires every term to be non-negative — both the variable
+        // lower bounds (x >= 0) AND the coefficients (a >= 0) — so that dropping
+        // the other terms to derive x_t <= K/a_t is valid. Constraints with any
+        // negative coefficient (e.g. the IN/ABS rewrites such as x - z1 - 3*z2 = 0)
+        // must be skipped: dropping a negative term would wrongly tighten the
+        // bound and cut feasible points (or make the model infeasible).
+        bool nonneg = true;
+        for (idx_t v : ec.variable_indices) {
+            if (v != DConstants::INVALID_INDEX && lower_bounds[v] < 0.0) {
+                nonneg = false;
+                break;
+            }
+        }
+        for (idx_t t = 0; nonneg && t < ec.row_coefficients.size(); t++) {
+            const auto &col = ec.row_coefficients[t];
+            if (col.IsUniform()) {
+                // Scalar column: one value covers every row.
+                if (col.UniformValue() < -1e-15) {
+                    nonneg = false;
+                }
+                continue;
+            }
+            for (idx_t r = 0; r < num_rows; r++) {
+                if (!ec.row_group_ids.empty() &&
+                    ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+                    continue;
+                }
+                if (col.Get(r) < -1e-15) {
+                    nonneg = false;
+                    break;
+                }
+            }
+        }
+        if (!nonneg) {
+            continue;
+        }
+        bool uniform_rhs = ec.rhs_values.IsUniform();
+        for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+            idx_t v = ec.variable_indices[t];
+            if (v == DConstants::INVALID_INDEX) {
+                continue;
+            }
+            const auto &col = ec.row_coefficients[t];
+            double bound = 0.0;
+            // The shared bound ub_x applies to EVERY row instance of x. A row
+            // bounds x only if it is active (not WHEN-excluded) AND x has a
+            // non-zero coefficient there. WHEN-excluded rows show up as a zero
+            // coefficient (not always as a row_group_ids marker), so if ANY row
+            // leaves x_r unconstrained we cannot use this constraint to bound the
+            // shared variable — doing so would cap the unconstrained rows.
+            // Two benign degenerate edges, both sound and intentionally left as-is:
+            //  - num_rows == 0: the loop never runs, every_row_constrained stays
+            //    true and bound stays 0, so ub may be pinned to 0 — harmless,
+            //    because with no rows there are no instances of x to bind.
+            //  - a tiny positive coefficient (a just above 1e-15): K/a is a huge
+            //    but still-VALID upper bound; it merely re-inflates M and loosens
+            //    the relaxation. Degenerate input, sound, not worth special-casing.
+            bool every_row_constrained = true;
+            for (idx_t r = 0; r < num_rows; r++) {
+                bool excluded = !ec.row_group_ids.empty() &&
+                                ec.row_group_ids[r] == DConstants::INVALID_INDEX;
+                double a = col.Get(r);
+                if (excluded || a <= 1e-15) {
+                    every_row_constrained = false;
+                    break;
+                }
+                double k = uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
+                if (k < 0.0) {
+                    every_row_constrained = false;
+                    break;
+                }
+                bound = std::max(bound, k / a);
+            }
+            if (every_row_constrained && bound < upper_bounds[v] && bound >= lower_bounds[v]) {
+                upper_bounds[v] = bound;
+            }
+        }
+    }
+}
+
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
     bool bench = std::getenv("DECIDB_BENCH") != nullptr;
@@ -3119,6 +3316,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     solver_input.lower_bounds = gstate.absorbed_lower_bounds;
     solver_input.upper_bounds = gstate.absorbed_upper_bounds;
 
+    // Data-driven implied-bound propagation: derive finite upper bounds for
+    // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
+    // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
+    // Only provably-implied bounds are applied; the feasible region is unchanged.
+    DecidePropagateImpliedBounds(gstate.evaluated_constraints, solver_input.lower_bounds,
+                                 solver_input.upper_bounds, num_rows);
+
     // Generate Big-M constraints for MIN/MAX indicator variables
     // For hard cases where MIN/MAX was rewritten to SUM by the optimizer:
     //   MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M, and SUM(y) >= 1
@@ -3140,20 +3344,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // (var_idx == INVALID_INDEX) — they have no associated variable
             // bound; their contribution will be folded into the RHS by the
             // per-row constraint emitter.
-            double M = 1e6;
-            for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-                idx_t var_idx = ec.variable_indices[t];
-                if (var_idx == DConstants::INVALID_INDEX) continue;
-                double ub = solver_input.upper_bounds[var_idx];
-                if (ub < 1e20) {
-                    double max_coef = 0.0;
-                    auto &col = ec.row_coefficients[t];
-                    for (idx_t r = 0; r < col.Size(); r++) {
-                        max_coef = std::max(max_coef, std::abs(col.Get(r)));
-                    }
-                    M = std::max(M, max_coef * ub);
-                }
-            }
+            double M = DecideTightPerRowBigM(ec, solver_input.lower_bounds,
+                                             solver_input.upper_bounds, num_rows);
 
             auto BuildShiftedRhs = [&](double shift) {
                 if (ec.rhs_values.IsUniform()) {
@@ -3233,7 +3425,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //   aggregate constraint building path (unified path with row_group_ids).
     struct DeferredAggregateNE {
         EvaluatedConstraint original;
-        double big_M;
     };
     vector<DeferredAggregateNE> deferred_ne_aggregate;
 
@@ -3273,37 +3464,22 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         "The integer-step rewrite (x <> K → x <= K-1 OR x >= K+1) "
                         "would cut continuous feasible points in the band (K-1, K+1).");
                 }
-                // Compute M from variable bounds (only consider active rows)
-                double M = 1e6; // default
-                for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-                    idx_t var_idx = ec.variable_indices[t];
-                    double ub = solver_input.upper_bounds[var_idx];
-                    if (ub < 1e20) {
-                        double max_coef = 0.0;
-                        auto &col = ec.row_coefficients[t];
-                        for (idx_t r = 0; r < col.Size(); r++) {
-                            if (!ec.row_group_ids.empty() &&
-                                ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-                                continue;
-                            }
-                            max_coef = std::max(max_coef, std::abs(col.Get(r)));
-                        }
-                        M = std::max(M, max_coef * ub);
-                    }
-                }
-
                 if (ec.lhs_is_aggregate) {
                     // Aggregate NE: defer to after var_indexer is built.
-                    // Will be expanded with a single global z per group.
+                    // Will be expanded with a single global z per group, and the
+                    // per-group Big-M is computed there from each group's SUMMED
+                    // range (a single per-row bound would be far too small).
                     // The per-group integer-RHS check (for AVG <> where the
                     // rescaled K*N_g may or may not be integer) lives in the
                     // deferred expansion below; we don't filter here.
                     DeferredAggregateNE deferred;
                     deferred.original = ec; // copy before the loop moves on
-                    deferred.big_M = M;
                     deferred_ne_aggregate.push_back(std::move(deferred));
                     // Don't add to new_constraints — handled via global_constraints later
                 } else {
+                    // Tight data-driven per-row Big-M for the inline NE expansion.
+                    double M = DecideTightPerRowBigM(ec, solver_input.lower_bounds,
+                                                     solver_input.upper_bounds, num_rows);
                     // Per-row NE: expand inline with row-scoped indicator variable.
                     //
                     // Integer-valued RHS guard. If RHS is uniform and non-integer,
@@ -3479,31 +3655,41 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             const auto &c1 = gstate.evaluated_constraints[it->second.c1];
             const auto &c2 = gstate.evaluated_constraints[it->second.c2];
 
-            // Compute M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|).
-            // This upper-bounds |inner| across all rows and variable values.
+            // Compute M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|),
+            // reusing the shared per-row range helper (skipping the aux term). This
+            // upper-bounds |inner| across all rows and variable values. Unlike the
+            // indicator sites, ABS-maximize is STRICT: if no finite bound can be
+            // derived for a contributing variable, there is no valid M, so we throw
+            // rather than fall back. (Implied-bound propagation may have already
+            // supplied a bound, in which case this succeeds.)
+            bool abs_unbounded = false;
             double M = 0.0;
             for (idx_t r = 0; r < num_rows; r++) {
-                double row_bound = std::abs(c1.rhs_values.Get(r));
-                for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
-                    if (c1.variable_indices[t] == link.aux_idx) {
-                        continue;
-                    }
-                    double lb = solver_input.lower_bounds[c1.variable_indices[t]];
-                    double ub = solver_input.upper_bounds[c1.variable_indices[t]];
-                    if (ub >= 1e20 || lb <= -1e20) {
-                        throw InvalidInputException(
-                            "ABS over decision variable requires a finite bound on '%s' "
-                            "for the Big-M sign-indicator linearization. Add constraints "
-                            "'%s >= <lower>' and '%s <= <upper>'. (Triggered by "
-                            "MAXIMIZE SUM(ABS(...)) or by a hard-direction ABS constraint "
-                            "such as ABS(...) >= K or ABS(...) = K.)",
-                            decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias,
-                            decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias,
-                            decide_variables[c1.variable_indices[t]]->Cast<BoundColumnRefExpression>().alias);
-                    }
-                    row_bound += std::abs(c1.row_coefficients[t].Get(r)) * std::max(std::abs(lb), std::abs(ub));
-                }
+                double row_bound = std::abs(c1.rhs_values.Get(r)) +
+                                   DecideRowTermRange(c1.variable_indices, c1.row_coefficients, r,
+                                                      solver_input.lower_bounds, solver_input.upper_bounds,
+                                                      abs_unbounded, link.aux_idx);
                 M = std::max(M, row_bound);
+            }
+            if (abs_unbounded) {
+                // Locate an offending variable to name in the error.
+                idx_t bad = DConstants::INVALID_INDEX;
+                for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
+                    idx_t v = c1.variable_indices[t];
+                    if (v == DConstants::INVALID_INDEX || v == link.aux_idx) continue;
+                    if (solver_input.upper_bounds[v] >= 1e20 || solver_input.lower_bounds[v] <= -1e20) {
+                        bad = v;
+                        break;
+                    }
+                }
+                const char *name = decide_variables[bad]->Cast<BoundColumnRefExpression>().alias.c_str();
+                throw InvalidInputException(
+                    "ABS over decision variable requires a finite bound on '%s' "
+                    "for the Big-M sign-indicator linearization. Add constraints "
+                    "'%s >= <lower>' and '%s <= <upper>'. (Triggered by "
+                    "MAXIMIZE SUM(ABS(...)) or by a hard-direction ABS constraint "
+                    "such as ABS(...) >= K or ABS(...) = K.)",
+                    name, name, name);
             }
             double two_M = 2.0 * M;
 
@@ -3750,7 +3936,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     for (auto &deferred : deferred_ne_aggregate) {
         auto &ec = deferred.original;
-        double M = deferred.big_M;
         bool has_groups = !ec.row_group_ids.empty();
 
         // Build group → rows mapping. For grouped constraints reuse the CSR
@@ -3804,6 +3989,22 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // groups, so the model stays clean.
             if (std::abs(rhs - std::round(rhs)) >= 1e-9) {
                 continue;
+            }
+
+            // Tight per-group Big-M: the aggregate LHS ranges over the SUM of
+            // this group's rows, so M must cover the summed magnitude. A single
+            // per-row bound (the legacy behavior) is far too small at scale and
+            // would silently cap the aggregate.
+            bool grp_unbounded = false;
+            double grp_range = 0.0;
+            for (idx_t k = g_begin; k < g_end; k++) {
+                grp_range += DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
+                                                flat_rows[k], solver_input.lower_bounds,
+                                                solver_input.upper_bounds, grp_unbounded);
+            }
+            double M = grp_range + std::abs(rhs) + 1.0;
+            if (grp_unbounded) {
+                M = std::max(M, DECIDE_BIGM_FALLBACK);
             }
 
             // Allocate one global binary z for this group
@@ -3873,20 +4074,53 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         saved_obj_coefficients = solver_input.objective_coefficients;
     }
 
-    // Compute Big-M from variable bounds (shared by both paths)
+    // Big-M for the MIN/MAX objective auxiliaries. Unlike the per-row constraint
+    // sites (where M bounds an expression against a fixed RHS), these link an
+    // auxiliary variable z/z_g/w to the objective expression via
+    // (aux - expr) +/- M*y (>=|<=) +/- M. The deactivated branch must stay slack
+    // across the GLOBAL spread of (aux - expr): with the aux pinned inside the
+    // expression's reachable range, that worst case is
+    //   max_r exprmax_r  -  min_r exprmin_r
+    // where each row's exprmax/exprmin take the SIGN of every coefficient against
+    // the variable's [lb, ub]. This is the tight, data-driven value (the per-row
+    // range used elsewhere can under-estimate it when coefficient signs differ
+    // across rows). Falls back to the 1e6 floor only when a variable is unbounded.
     auto compute_big_m = [&]() -> double {
-        double M = 1e6;
-        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-            idx_t var = saved_obj_var_indices[t];
-            double ub = solver_input.upper_bounds[var];
-            if (ub < 1e20) {
-                double max_coef = 0.0;
-                auto &col = saved_obj_coefficients[t];
-                for (idx_t r = 0; r < col.Size(); r++) {
-                    max_coef = std::max(max_coef, std::abs(col.Get(r)));
+        bool unbounded = false;
+        double global_max = 0.0; // x = lb (>= 0) is always reachable, giving expr-contribution 0
+        double global_min = 0.0;
+        for (idx_t r = 0; r < num_rows; r++) {
+            double row_max = 0.0;
+            double row_min = 0.0;
+            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                idx_t v = saved_obj_var_indices[t];
+                if (v == DConstants::INVALID_INDEX) {
+                    continue;
                 }
-                M = std::max(M, max_coef * ub);
+                double c = saved_obj_coefficients[t].Get(r);
+                if (std::abs(c) < 1e-15) {
+                    continue;
+                }
+                double lb = solver_input.lower_bounds[v];
+                double ub = solver_input.upper_bounds[v];
+                if (ub >= 1e20 || lb <= -1e20) {
+                    unbounded = true;
+                    continue;
+                }
+                if (c > 0.0) {
+                    row_max += c * ub;
+                    row_min += c * lb;
+                } else {
+                    row_max += c * lb;
+                    row_min += c * ub;
+                }
             }
+            global_max = std::max(global_max, row_max);
+            global_min = std::min(global_min, row_min);
+        }
+        double M = global_max - global_min;
+        if (unbounded) {
+            M = std::max(M, DECIDE_BIGM_FALLBACK);
         }
         return M;
     };
@@ -4101,7 +4335,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     solver_input.global_upper_bounds.push_back(1.0);
                     solver_input.global_obj_coeffs.push_back(0.0);
                 }
-                // Big-M for outer: use a large value (z_g's are bounded by inner M)
+                // Outer Big-M: compute_big_m() returns the global spread of the
+                // objective expression (max_r exprmax - min_r exprmin), which bounds
+                // the spread of (w - z_g) since each z_g lies within that range.
                 double M_outer = compute_big_m();
                 for (idx_t g = 0; g < K; g++) {
                     SolverInput::RawConstraint rc;
@@ -4201,7 +4437,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
             } else {
                 // Hard outer: indicators over K groups
-                double M_outer = compute_big_m() * num_rows; // group sums can be large
+                // Outer Big-M over group SUMS: a group sum spans at most num_rows
+                // times the per-row spread, so the global spread (compute_big_m())
+                // scaled by num_rows bounds the spread of (w - group_sum).
+                double M_outer = compute_big_m() * num_rows;
                 idx_t first_u = w_idx + 1;
                 solver_input.num_global_vars += K;
                 for (idx_t g = 0; g < K; g++) {

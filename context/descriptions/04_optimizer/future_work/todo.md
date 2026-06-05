@@ -117,13 +117,17 @@ Currently solver selection is static (Gurobi > HiGHS). A cost-based approach wou
 
 ## 11. Bound Tightening
 
-**Priority**: Low (depends on binder-to-optimizer migration)
+**Status**: A first version is **implemented** at execution time —
+`DecidePropagateImpliedBounds` derives finite upper bounds from non-negative
+`<=`/`=` constraints (the knapsack/budget pattern) and feeds them into the
+Big-M / McCormick formulations. See `../matrix_efficiency/done.md`. The
+remaining work below generalizes it.
 
 Derive tighter variable bounds from constraint interactions. If constraints collectively force a variable into a narrower range than its declared type allows, pass the tighter bounds to the solver.
 
 **Example**: If `x IS INTEGER` (default bounds [0, +inf)) but constraints imply `x <= 5`, set the upper bound to 5. Tighter bounds improve solver performance and Big-M quality.
 
-**Dependency**: Requires expression analysis to be in the optimizer (binder-to-optimizer migration).
+**Remaining**: handle negative coefficients / general sign patterns (the current pass requires all-non-negative terms), iterate to a fixpoint (chained implications), and migrate the analysis into the optimizer (binder-to-optimizer migration) so it composes with other rewrites.
 
 ---
 

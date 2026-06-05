@@ -22,7 +22,7 @@ This folder documents the optimization strategies for Constrained Optimization P
 | Folder | done.md | todo.md |
 |--------|---------|---------|
 | [existing_optimizations/](existing_optimizations/) | WHERE filtering, WHEN zeroing, solver selection, binder algebraic rewrites (AVG/ABS/MIN/MAX/`<>`/IN), DecideOptimizer pass | *(none — reference only)* |
-| [matrix_efficiency/](matrix_efficiency/) | No matrix-level optimizations yet | Constraint-to-bound conversion, solver time limit |
+| [matrix_efficiency/](matrix_efficiency/) | Data-driven Big-M + implied-bound propagation | Constraint-to-bound conversion, solver time limit |
 | [partition_solve/](partition_solve/) | `row_group_ids` foundation from PER | PER decomposition into K independent ILPs |
 | [rewrite_passes/](rewrite_passes/) | Current binder + optimizer rewrite locations | Push-down, pull-out, binder-to-optimizer migration |
 | [future_work/](future_work/) | *(none)* | Skyband, Progressive Shading, LGS, LP relaxation, cuts, symmetry breaking, softening, hardening, incremental reasoning, cost-based selection, bound tightening |

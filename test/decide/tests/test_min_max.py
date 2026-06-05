@@ -506,6 +506,63 @@ def test_max_constraint_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_t
 # ============================================================================
 
 @pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_maximize_max_mixed_sign_coefficient(decidb_cli):
+    """MAXIMIZE MAX(c*x) where c flips sign across rows — exercises the objective
+    Big-M GLOBAL spread, the gap a per-row magnitude would miss.
+
+    Row 1 has c=+1, row 2 has c=-1 with x pinned to 10. The expression reaches
+    +10 (row 1, x=10) and -10 (row 2), so the auxiliary-linking Big-M must cover
+    a spread of 20; a value derived from a single row's range (10) would wrongly
+    cap the optimum. True optimum: MAX(c*x) = 10 (set x=10 on the +1 row).
+    """
+    sql = """
+        WITH data AS (
+            SELECT 1 AS id, 1.0 AS c UNION ALL
+            SELECT 2 AS id, -1.0 AS c
+        )
+        SELECT id, c, x
+        FROM data
+        DECIDE x IS INTEGER
+        SUCH THAT x <= 10 AND x >= 10 WHEN c < 0
+        MAXIMIZE MAX(c * x)
+    """
+    rows, cols = decidb_cli.execute(sql)
+    ci = {name: i for i, name in enumerate(cols)}
+    obj = max(float(r[ci["c"]]) * float(r[ci["x"]]) for r in rows)
+    assert abs(obj - 10.0) <= 1e-6, f"expected MAX(c*x)=10, got {obj}"
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_maximize_max_max_per_mixed_sign(decidb_cli):
+    """Nested MAXIMIZE MAX(MAX(c*x)) PER g with c flipping sign across rows —
+    drives the nested inner + outer hard Big-M paths (not just the flat path)
+    with a mixed-sign expression, exercising the objective global-spread M.
+    c*x reaches +10 and -10, so the linking M must cover a spread of 20.
+    Optimum: MAX over all rows of c*x = 10 (set x=10 on a +1 row)."""
+    sql = """
+        WITH data AS (
+            SELECT 'A' AS g, 1.0 AS c UNION ALL
+            SELECT 'A', -1.0 UNION ALL
+            SELECT 'B', 1.0 UNION ALL
+            SELECT 'B', -1.0
+        )
+        SELECT g, c, x
+        FROM data
+        DECIDE x IS INTEGER
+        SUCH THAT x <= 10 AND x >= 10 WHEN c < 0
+        MAXIMIZE MAX(MAX(c * x)) PER g
+    """
+    rows, cols = decidb_cli.execute(sql)
+    ci = {name: i for i, name in enumerate(cols)}
+    obj = max(float(r[ci["c"]]) * float(r[ci["x"]]) for r in rows)
+    assert abs(obj - 10.0) <= 1e-6, f"expected MAX(MAX(c*x))=10, got {obj}"
+
+
+@pytest.mark.min_max
 @pytest.mark.var_boolean
 @pytest.mark.obj_maximize
 @pytest.mark.when_objective

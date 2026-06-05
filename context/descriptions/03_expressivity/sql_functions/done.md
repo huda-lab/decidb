@@ -153,7 +153,7 @@ The lower-envelope alone forces `d >= |expr|`. To pin `d` to exactly `|expr|`, o
 - `d <= expr  + 2M·(1−y)`  (active when `y=1`, selecting the positive branch)
 - `d <= −expr + 2M·y`      (active when `y=0`, selecting the negative branch)
 
-Combined with the lower envelope, these force `d = |expr|` exactly regardless of constraint direction. `M` is computed at execution time from the bounds of variables in `expr` — **all DECIDE variables referenced inside `ABS(expr)` must have finite bounds** when Path B is used (Path A queries don't need bounds because the constraint itself bounds `d`).
+Combined with the lower envelope, these force `d = |expr|` exactly regardless of constraint direction. `M` is computed at execution time from the bounds of variables in `expr` — when Path B is used, **every DECIDE variable referenced inside `ABS(expr)` must have a finite bound, either declared or inferred** by implied-bound propagation (e.g. `SUM(x) = K` implies `x <= K`; see `../../04_optimizer/matrix_efficiency/done.md`). Only when no bound can be derived is the query rejected. (Path A queries don't need bounds because the constraint itself bounds `d`.)
 
 The classifier (`TagAbsConstraintsForBigM` in `decide_optimizer.cpp`) walks the constraint tree once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. WHEN/PER wrappers don't change classification — the per-row Big-M envelope is unconditional, and the WHEN/PER filter only affects which rows participate in the outer aggregate or constraint.
 
@@ -168,7 +168,7 @@ For `MAXIMIZE SUM(ABS(expr))`, the lower-envelope alone is unsound: `d` has no c
 - `d <= expr  + 2M·(1−y)`  (upper-bound when `y=1` selects the positive branch)
 - `d <= −expr + 2M·y`      (upper-bound when `y=0` selects the negative branch)
 
-`M` is computed at execution time from the variable bounds involved in `expr`: `M = max_r(|rhs[r]| + Σ |coeff[t][r]| · max(|lb_t|, |ub_t|))` over all non-aux terms. **All DECIDE variables referenced inside `ABS(expr)` must have finite bounds** — if any variable lacks a bound (lb ≤ −1e20 or ub ≥ 1e20), an `InvalidInputException` is raised naming the unbounded variable.
+`M` is computed at execution time from the variable bounds involved in `expr`: `M = max_r(|rhs[r]| + Σ |coeff[t][r]| · max(|lb_t|, |ub_t|))` over all non-aux terms (this shares `DecideRowTermRange` with the other Big-M sites). **All DECIDE variables referenced inside `ABS(expr)` must have finite bounds** — declared or inferred by implied-bound propagation. Only if a variable still lacks a bound (lb ≤ −1e20 or ub ≥ 1e20) is an `InvalidInputException` raised naming the unbounded variable.
 
 ```sql
 -- MINIMIZE: lower-envelope, no extra variables needed

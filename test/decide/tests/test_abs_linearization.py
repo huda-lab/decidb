@@ -11,7 +11,8 @@ Covers:
   - test_abs_no_decide_var: ABS without decide variable (regular SQL)
   - test_abs_mixed_vars: BOOLEAN + REAL with ABS on REAL only
   - test_abs_maximize_objective_basic: MAXIMIZE SUM(ABS(x - col)) with Big-M fix
-  - test_abs_maximize_no_bound_raises: MAXIMIZE SUM(ABS(x - col)) without upper bound raises
+  - test_abs_maximize_bound_inferred_from_sum: MAXIMIZE SUM(ABS(x - col)) with no
+    explicit bound but SUM(x)=K; the bound is inferred from the constraint so it solves
 """
 
 import time
@@ -880,12 +881,17 @@ def test_abs_maximize_objective_basic(decidb_cli, duckdb_conn, oracle_solver, pe
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_abs_maximize_no_bound_raises(decidb_cli):
-    """MAXIMIZE SUM(ABS(x - l_quantity)) without an upper bound on x must raise.
+def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn):
+    """MAXIMIZE SUM(ABS(x - l_quantity)) with no explicit bound but SUM(x) = 100.
 
-    The Big-M computation requires a finite upper bound on the decision variable
-    to pin aux = |inner|. Without it, there is no valid M and DecidB must raise
-    an InvalidInputException naming the unbounded variable.
+    x has no declared upper bound, but SUM(x) = 100 with x >= 0 implies x <= 100.
+    Implied-bound propagation derives that bound, so the ABS-maximize sign-indicator
+    Big-M is finite and the query solves — it no longer needs an explicit bound
+    (the previous behavior was to reject this query with a "finite bound" error).
+
+    Ground truth (analytical): maximizing the convex SUM|x_i - q_i| over the simplex
+    {SUM(x) = 100, x >= 0} is attained at a vertex (all 100 on one row, rest 0), so
+    the optimum is 100 + SUM(q) - 2*min(q) (every q_i < 100 for l_orderkey <= 3).
     """
     sql = """
         SELECT l_quantity, x
@@ -895,5 +901,17 @@ def test_abs_maximize_no_bound_raises(decidb_cli):
         SUCH THAT SUM(x) = 100
         MAXIMIZE SUM(ABS(x - l_quantity))
     """
-    with pytest.raises(Exception, match="finite bound"):
-        decidb_cli.execute(sql)
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+
+    qtys = [
+        r[0]
+        for r in duckdb_conn.execute(
+            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3"
+        ).fetchall()
+    ]
+    expected = 100.0 + sum(qtys) - 2.0 * min(qtys)
+
+    decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "x", "l_quantity")
+    assert abs(decidb_obj - expected) <= 1e-4, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, expected={expected:.6f}"
+    )

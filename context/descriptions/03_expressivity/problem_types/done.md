@@ -117,7 +117,7 @@ Optimum of `SUM(POWER(x - t, 2) + c * x)` with no other binding constraints is `
 
 When one factor in a product of two different DECIDE variables is declared `IS BOOLEAN`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
 
-**Requires**: A finite upper bound on the non-Boolean variable (`x <= K`). Bool×Bool uses simpler AND-linearization (no Big-M needed).
+**Requires**: A finite upper bound on the non-Boolean variable — explicit (`x <= K`) or inferred via implied-bound propagation from a non-negative constraint like `SUM(x) <= K` (see `../../04_optimizer/matrix_efficiency/done.md`). Bool×Bool uses simpler AND-linearization (no Big-M needed).
 
 ```sql
 -- Boolean x Real objective (both solvers)
@@ -265,7 +265,7 @@ The following are rejected:
 
 Products of two different DECIDE variables in objectives:
 
-- **Boolean × anything** (`SUM(b * x)`): McCormick linearization produces an equivalent MILP. Both solvers. Requires a finite upper bound on the non-Boolean variable. Bool×Bool uses simpler AND-linearization (no Big-M).
+- **Boolean × anything** (`SUM(b * x)`): McCormick linearization produces an equivalent MILP. Both solvers. Requires a finite upper bound on the non-Boolean variable (explicit or inferred via implied-bound propagation). Bool×Bool uses simpler AND-linearization (no Big-M).
 - **General non-convex** (`SUM(x * y)` where neither is Boolean): Off-diagonal Q matrix entries (always indefinite). Gurobi only (NonConvex=2). HiGHS rejects.
 - **Mixed objectives**: Linear + bilinear (`SUM(cost + b*x)`), bilinear + quadratic (`SUM(POWER(x-t,2) + b*x)`), and data coefficients (`SUM(profit * b * x)`) are all supported.
 

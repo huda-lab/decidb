@@ -116,7 +116,7 @@ SUCH THAT (x - t) * (x - t) <= K
   - `MAXIMIZE SUM(POWER(expr, 2))` is non-convex (Gurobi only, via NonConvex=2).
   - Gurobi supports both continuous QP and mixed-integer QP (MIQP). HiGHS supports continuous QP only — integer/boolean variables with quadratic objectives require Gurobi.
 - **Bilinear objectives and constraints (`x * y`)**: Products of two different DECIDE variables are supported in both objectives and constraints. Two categories:
-  - **Boolean x anything** (McCormick linearization): When one factor is `IS BOOLEAN`, the product is exactly linearized. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable (`x <= K`). Bool x Bool uses simpler AND-linearization (no Big-M).
+  - **Boolean x anything** (McCormick linearization): When one factor is `IS BOOLEAN`, the product is exactly linearized. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable — given explicitly (`x <= K`) or inferred by implied-bound propagation from a non-negative constraint like `SUM(x) <= K`. Bool x Bool uses simpler AND-linearization (no Big-M).
   - **General non-convex** (`Real*Real`, `Int*Int`, `Int*Real`): Produces indefinite Q matrix. Objectives: Gurobi only (NonConvex=2). Constraints: Gurobi only (via quadratic constraints). HiGHS rejects with clear errors.
   - Data coefficients are supported: `SUM(profit * b * x)`.
   - Composes with WHEN: `SUM(b * x) WHEN condition`.
