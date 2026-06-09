@@ -123,8 +123,8 @@ See `.claude/lessons.md` for corrections and gotchas discovered during developme
    - Methodology: `context/descriptions/02_operations/benchmarking.md`
    - History of applied optimizations + outcomes: `context/descriptions/06_performance/`
 2. **Expressivity**: See `context/descriptions/03_expressivity/` (each keyword has `done.md`/`todo.md`)
-3. **Optimizer**: Big-M reformulation, push-down / pull-out rewrites
-   - See `context/descriptions/04_optimizer/` (each strategy area has `done.md`/`todo.md`)
+3. **Optimizer**: matrix efficiency, algebraic rewrites (Big-M reformulation, push-down / pull-out)
+   - See `context/descriptions/04_optimizer/` (each strategy area has `done.md`/`todo.md`; start with its `README.md`)
 
 ## Documentation
 

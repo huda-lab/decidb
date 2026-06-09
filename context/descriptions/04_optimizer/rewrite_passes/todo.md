@@ -1,6 +1,6 @@
 # Rewrite Passes — Todo
 
-New optimizer-level rewrites and migration of existing binder rewrites into the optimizer framework.
+New optimizer-level rewrites. (The migration of the existing algebraic rewrites from the binder into the optimizer is complete — see `done.md`.)
 
 ---
 

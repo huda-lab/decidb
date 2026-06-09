@@ -181,10 +181,9 @@ Here `PER weak_label` generates one coverage constraint per distinct label class
 
 ## Scaling Considerations
 
-The number of generated constraints equals `|distinct_values| x |PER_constraints|`. For large relations this can produce O(|D|) constraints (one per tuple in the worst case). This is a key motivation for the optimizer's partition-solve strategy (see [../../04_optimizer/partition_solve/todo.md](../../04_optimizer/partition_solve/todo.md)).
+The number of generated constraints equals `|distinct_values| x |PER_constraints|`. For large relations this can produce O(|D|) constraints (one per tuple in the worst case). This motivates the optimizer's matrix-efficiency work on high-cardinality PER columns (see [../../04_optimizer/matrix_efficiency/todo.md](../../04_optimizer/matrix_efficiency/todo.md)).
 
 **Mitigation strategies** (future optimizer work):
-- **Partition-solve**: When all constraints and objective share the same PER column and there are no global constraints, decompose into K independent ILPs — see [../../04_optimizer/partition_solve/todo.md](../../04_optimizer/partition_solve/todo.md)
 - **Constraint-to-bound conversion**: Detect PER constraints that are equivalent to simple variable bounds
 - **Skyband pruning**: Eliminate dominated tuples before generating constraints
 - **Drop-solve-validate-refine loop**: Generate a subset of constraints, solve, check if dropped constraints are violated, and iteratively refine

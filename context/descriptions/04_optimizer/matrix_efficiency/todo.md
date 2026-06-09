@@ -26,23 +26,16 @@ Optimizations that make the ILP matrix smaller, tighter, or safer to solve.
 
 ---
 
-## 2. Solver Time Limit
+## 2. HiGHS Time Limit
 
-**Priority**: High
+**Priority**: Medium
 
-**Motivation**: Currently neither Gurobi nor HiGHS backend configures a timeout. Both run with library defaults (no explicit time bound). For large ILPs, this means a query can hang indefinitely. A configurable timeout ensures queries return within a predictable time, potentially with a sub-optimal but feasible solution.
-
-**Current state**: `adaptive_processing/done.md` (old docs) previously incorrectly stated a 60-second default was implemented. **Verified as inaccurate** — no timeout is set in either backend.
+**Motivation**: The Gurobi backend now caps solve time (see `done.md` — 300s default, overridable via `DECIDB_TIME_LIMIT`). The HiGHS backend recognizes the `kTimeLimit` status when reporting results, but does not set an explicit `time_limit` option, so it runs with the HiGHS default (effectively unbounded). A hard problem on the HiGHS fallback path can still hang the session.
 
 **Implementation**:
-- Gurobi: `GRBsetdblparam(env, GRB_DBL_PAR_TIMELIMIT, seconds)` before `GRBoptimize()`
 - HiGHS: `highs.setOptionValue("time_limit", seconds)` before `highs.run()`
-- Configurable via DuckDB SET variable: `SET decide_timeout = 60` (seconds)
-- Pass timeout value through `SolverInput` to solver backends
-- Default: 60 seconds (matches typical interactive query expectations)
-- Both solvers return the best feasible solution found when timeout is reached (with a status indicating optimality was not proven)
+- Read the same `DECIDB_TIME_LIMIT` env override the Gurobi backend uses, so both backends share one knob and one default
+- HiGHS already returns the best feasible solution on `kTimeLimit`; only the option needs to be set
 
 **Code locations to modify**:
-- `src/decidb/gurobi/gurobi_solver.cpp` — add `GRBsetdblparam` call
-- `src/decidb/naive/deterministic_naive.cpp` — add `highs.setOptionValue("time_limit", ...)` call
-- `src/execution/operator/decide/physical_decide.cpp` — read SET variable, pass to `SolverInput`
+- `src/decidb/naive/deterministic_naive.cpp` — add `highs.setOptionValue("time_limit", ...)` call alongside the existing `log_to_console` setup

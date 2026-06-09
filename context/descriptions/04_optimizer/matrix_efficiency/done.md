@@ -76,5 +76,24 @@ targeted tests in `test_implied_bounds.py`, `test_min_max.py`
 (`test_maximize_max_mixed_sign_coefficient`, `test_maximize_max_max_per_mixed_sign`),
 and `test_abs_linearization.py` (`test_abs_maximize_bound_inferred_from_sum`).
 
-The optimizations in this area aim to make the ILP smaller and safer to solve —
-fewer constraints, tighter bounds, and configurable time limits.
+---
+
+## Solver Time Limit (Gurobi)
+
+The Gurobi backend caps solve time so a hard MIQP/QCQP cannot hang the session indefinitely.
+
+- **Default**: 300 seconds, applied via `TimeLimit` on the Gurobi environment before `startenv`.
+- **Override**: the `DECIDB_TIME_LIMIT` environment variable (seconds, a positive double). Unparseable or non-positive values are ignored and the default is kept.
+- **On timeout**: Gurobi returns the best feasible incumbent found so far; the `GRB_TIME_LIMIT` status branch in the result handler surfaces it rather than failing silently.
+
+**Code pointer**: `src/decidb/gurobi/gurobi_solver.cpp` (`GurobiSolver::Solve`, environment setup — the `TimeLimit` / `DECIDB_TIME_LIMIT` block, and the `GRB_TIME_LIMIT` status branch).
+
+The HiGHS fallback recognizes the `kTimeLimit` status when reporting results but does not yet set an explicit limit — see `todo.md`.
+
+---
+
+## Matrix Reduction
+
+Beyond the implied-bound propagation above, no matrix-level structural optimizations (constraint-to-bound conversion, row pruning) are implemented yet. The constraint matrix assembled by `SolverModel::Build()` is passed as-is to the solver. Both Gurobi and HiGHS perform their own internal presolve (variable fixing, constraint reduction, bound propagation), but DeciDB does not otherwise exploit problem structure to shrink the matrix before handing it off.
+
+The optimizations in `todo.md` aim to make the ILP smaller and tighter before the solver sees it — fewer constraints and tighter bounds.

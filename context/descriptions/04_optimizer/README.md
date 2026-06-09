@@ -11,9 +11,8 @@ This folder documents the optimization strategies for Constrained Optimization P
 
 | Priority | Area | Folder | Goal |
 |----------|------|--------|------|
-| 1 | Matrix efficiency | [matrix_efficiency/](matrix_efficiency/) | Make ILPs smaller and safer (bound conversion, solver timeout) |
-| 2 | Partition-solve | [partition_solve/](partition_solve/) | Decompose PER queries into independent sub-ILPs |
-| 3 | Rewrite passes | [rewrite_passes/](rewrite_passes/) | Push-down, pull-out, migrate binder rewrites to optimizer |
+| 1 | Matrix efficiency | [matrix_efficiency/](matrix_efficiency/) | Make ILPs smaller and safer (bound conversion, HiGHS timeout) |
+| 2 | Rewrite passes | [rewrite_passes/](rewrite_passes/) | Push-down and pull-out rewrites |
 
 ---
 
@@ -21,10 +20,9 @@ This folder documents the optimization strategies for Constrained Optimization P
 
 | Folder | done.md | todo.md |
 |--------|---------|---------|
-| [existing_optimizations/](existing_optimizations/) | WHERE filtering, WHEN zeroing, solver selection, binder algebraic rewrites (AVG/ABS/MIN/MAX/`<>`/IN), DecideOptimizer pass | *(none — reference only)* |
-| [matrix_efficiency/](matrix_efficiency/) | Data-driven Big-M + implied-bound propagation | Constraint-to-bound conversion, solver time limit |
-| [partition_solve/](partition_solve/) | `row_group_ids` foundation from PER | PER decomposition into K independent ILPs |
-| [rewrite_passes/](rewrite_passes/) | Current binder + optimizer rewrite locations | Push-down, pull-out, binder-to-optimizer migration |
+| [existing_optimizations/](existing_optimizations/) | WHERE filtering, WHEN zeroing, solver selection, Gurobi time limit, algebraic rewrites (AVG/ABS/MIN/MAX/`<>`/bilinear/IN) | *(none — reference only)* |
+| [matrix_efficiency/](matrix_efficiency/) | Data-driven Big-M + implied-bound propagation, Gurobi solver time limit | Constraint-to-bound conversion, HiGHS time limit |
+| [rewrite_passes/](rewrite_passes/) | Algebraic rewrites in the DecideOptimizer pass | Push-down, pull-out |
 | [future_work/](future_work/) | *(none)* | Skyband, Progressive Shading, LGS, LP relaxation, cuts, symmetry breaking, softening, hardening, incremental reasoning, cost-based selection, bound tightening |
 
 ---
@@ -38,16 +36,17 @@ This folder documents the optimization strategies for Constrained Optimization P
 | Solver selection (Gurobi/HiGHS fallback) | **Implemented** | `../01_pipeline/03d_solver_backends.md` |
 | AVG → SUM rewrite | **Implemented** | `rewrite_passes/done.md` |
 | ABS linearization | **Implemented** | `rewrite_passes/done.md` |
+| Bilinear McCormick linearization | **Implemented** | `rewrite_passes/done.md` |
 | MIN/MAX linearization (easy + hard) | **Implemented** | `rewrite_passes/done.md` |
 | `<>` disjunction rewrite | **Implemented** | `rewrite_passes/done.md` |
-| IN on decision variables | **Implemented** | `rewrite_passes/done.md` |
+| IN on decision variables | **Implemented** | `existing_optimizations/done.md` (symbolic phase) |
 | DecideOptimizer pass | **Implemented** | `rewrite_passes/done.md` |
+| Data-driven Big-M + implied-bound propagation | **Implemented** | `matrix_efficiency/done.md` |
+| Solver time limit (Gurobi) | **Implemented** | `matrix_efficiency/done.md` |
+| Solver time limit (HiGHS) | **Planned** | `matrix_efficiency/todo.md` |
 | Constraint-to-bound conversion | **Planned** | `matrix_efficiency/todo.md` |
-| Solver time limit | **Planned** | `matrix_efficiency/todo.md` |
-| Partition-solve (PER decomposition) | **Planned** (foundation ready) | `partition_solve/todo.md` |
 | Constraint push-down | **Planned** | `rewrite_passes/todo.md` |
 | Constraint pull-out | **Planned** | `rewrite_passes/todo.md` |
-| Binder-to-optimizer migration | **Implemented** | `rewrite_passes/done.md` |
 | Skyband indexing | **Future** | `future_work/todo.md` |
 | Progressive Shading | **Future** | `future_work/todo.md` |
 | LP relaxation + rounding | **Future** | `future_work/todo.md` |
