@@ -1,15 +1,15 @@
 # DeciDB
 
-DeciDB extends DuckDB with a DECIDE clause for in-database Integer Linear Programming.
+DeciDB extends DuckDB with a DECIDE clause for in-database Constrained Optimization Problems.
 See `context/descriptions/` for full documentation (start with `README.md` there).
 
 ## Build
 
 ```bash
-make release                         # Linux release build
+make release                         # Release build
 ```
 
-Build output: `build/release/decidb` (CLI), `build/release/src/libduckdb.so`
+Build output: `build/release/decidb` (CLI), `build/release/src/libduckdb.dylib` (macOS) / `libduckdb.so` (Linux)
 
 ## Test
 
@@ -22,13 +22,13 @@ Tests are in `test/decide/`.
 ## Benchmark
 
 ```bash
-make decide-bench-setup                # Generate TPC-H databases (small/medium/large)
+make decide-bench-setup                # Generate TPC-H databases (medium/large)
 make decide-bench                      # Run all queries × all sizes (with stage timers)
 make decide-bench-manual               # Run custom query from queries/manual.sql
 make decide-view                       # View latest results (colored stage bars)
 ```
 
-Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q1,Q3 --compare`
+Selective: `python3 benchmark/decide/run_benchmarks.py --sizes medium --queries Q1,Q3 --compare`
 
 **Optimization loop**: Use `/bench` to automate build → benchmark (medium) → analyze stages → suggest next optimization. Full docs: `context/descriptions/02_operations/benchmarking.md`.
 
@@ -44,42 +44,12 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes small --queries Q
 - Solver integration: `src/decidb/utility/ilp_model_builder.cpp` (SolverInput → SolverModel, VarIndexer, quadratic constraint emission), `src/decidb/utility/ilp_solver.cpp` (facade), `src/decidb/gurobi/gurobi_solver.cpp` (Gurobi backend), `src/decidb/naive/deterministic_naive.cpp` (HiGHS backend)
 - Headers: `src/include/duckdb/` (see `common/enums/decide.hpp`, `planner/operator/logical_decide.hpp`, `optimizer/decide_optimizer.hpp`, `decidb/solver_input.hpp`, `decidb/ilp_model.hpp`, etc.)
 
-## DECIDE Syntax (Quick Reference)
+## DECIDE Syntax
 
-```sql
-SELECT select_list
-FROM table_expression
-[WHERE ...]
-DECIDE [Table.]variable_name [IS type] [, ...]
-SUCH THAT constraint [AND constraint ...]
-[MAXIMIZE | MINIMIZE] SUM|MIN|MAX(linear_expression)
-[MINIMIZE] SUM(POWER(linear_expression, 2))  -- convex QP
-[MAXIMIZE] SUM(-POWER(linear_expression, 2)) -- concave QP (both solvers)
-[MAXIMIZE] SUM(POWER(linear_expression, 2))  -- non-convex QP (Gurobi only)
-[MAXIMIZE|MINIMIZE] SUM(bool_var * other_var) -- bilinear, McCormick (both solvers)
-[MAXIMIZE|MINIMIZE] SUM(var_a * var_b)        -- bilinear, non-convex (Gurobi only)
-```
+Full syntax specification (clause shapes, variable types, constraints, WHEN/PER, MIN/MAX linearization, QP, bilinear): `context/descriptions/00_project_overview/syntax_reference.md`
+Keyword-by-keyword feature status: `context/descriptions/03_expressivity/` (each keyword has `done.md`/`todo.md`)
 
-- Variable types: `IS BOOLEAN` (0/1), `IS INTEGER` (default, non-negative), `IS REAL` (continuous, non-negative)
-- **Table-scoped variables**: `DECIDE Table.var IS TYPE` — one variable per unique entity in the source table instead of one per result row. All result rows from the same entity share the same variable value. Reduces solver variable count from `num_rows` to `num_entities`. Table qualifier must match an alias or table name in the FROM clause. Mixed queries can have both row-scoped and table-scoped variables.
-- Constraints: linear expressions with `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, `IN` (all operators supported on both per-row and aggregate constraints; `IN` on aggregates not supported)
-- Conditional: `expression WHEN condition` (postfix, on constraints and objectives)
-- Grouping: `SUM(expr) op rhs PER column` or `PER (col1, col2, ...)` (one constraint per distinct value/combination). Empty groups (WHEN filters out all rows in a group) are skipped.
-- `SUM()` aggregate supported over decision variables; `AVG(expr)` supported (rewritten to SUM with RHS scaling by row count at execution time)
-- `MIN(expr)` / `MAX(expr)` supported in constraints and objectives via linearization:
-  - **Easy cases** (no Big-M): `MAX(expr) <= K` → per-row `expr <= K`; `MIN(expr) >= K` → per-row `expr >= K`. The aggregate is simply stripped because bounding every row individually is equivalent.
-  - **Hard cases** (Big-M indicators): `MAX(expr) >= K`, `MIN(expr) <= K`, equality. These require a binary indicator variable per row because "at least one row satisfies" is a disjunctive constraint that can't be expressed linearly without Big-M.
-  - **Easy objectives**: `MINIMIZE MAX(expr)`, `MAXIMIZE MIN(expr)` → global auxiliary variable `z` with per-row linking constraints (`z >= expr_i` or `z <= expr_i`).
-  - **Hard objectives**: `MAXIMIZE MAX(expr)`, `MINIMIZE MIN(expr)` → global `z` + per-row binary indicators + `SUM(y) >= 1`, because finding the row that achieves the optimum requires indicator selection.
-- **PER on objectives**: Nested aggregate syntax `OUTER(INNER(expr)) PER col` where OUTER/INNER ∈ {SUM, MIN, MAX, AVG}. AVG as outer maps to SUM (constant divisor). AVG as inner scales coefficients by `1/n_g` (group size) — NOT equivalent to SUM when groups have different sizes. Flat `SUM/AVG + PER` is a no-op; flat `MIN/MAX + PER` is an error (ambiguous). Two-level ILP formulation: inner creates per-group auxiliaries, outer creates global auxiliary. Easy/hard classification applies at each level independently.
-- **Quadratic objectives (QP)**: Three syntax forms: `POWER(expr, 2)`, `expr ** 2`, `(expr) * (expr)`. Negated forms also supported: `-POWER(expr, 2)`, `(-1) * POWER(expr, 2)`. MINIMIZE with PSD Q and MAXIMIZE with NSD Q are convex (both solvers). MAXIMIZE with PSD Q is non-convex (Gurobi only, via NonConvex=2). Gurobi supports MIQP; HiGHS supports continuous convex QP only. Linear terms may be mixed into the same objective as a quadratic term — `SUM(POWER(x - t, 2) + c * x)` and `SUM(POWER(x - t, 2)) + SUM(c * x)` are equivalent; linear coefficients populate the c vector while the POWER populates Q. Only one quadratic group (single POWER / self-product) per objective is supported; multiple groups (e.g., `SUM(POWER(x,2)) + SUM(POWER(y,2))`) are rejected.
-- **Bilinear terms (`x * y`)**: Product of two different DECIDE variables supported in objectives and constraints. Each factor must be linear in decision variables — shapes like `x * POWER(y, 2)` (degree 3), `POWER(x, 2) * POWER(y, 2)` (degree 4), or `POWER(POWER(x, 2), 2)` are rejected with `InvalidInputException`; only total degree ≤ 2 is supported. Two categories:
-  - **Boolean × anything** (linearizable): When one factor is Boolean, McCormick envelopes produce exact MILP reformulation. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable. Bool×Bool uses simpler AND-linearization (no Big-M).
-  - **General (non-convex)**: Real×Real, Int×Int, Int×Real produce indefinite Q matrix (off-diagonal entries). Objectives: Gurobi only (NonConvex=2). Constraints: Gurobi only (via `GRBaddqconstr`). HiGHS rejects with clear error.
-- Constraints support both linear and bilinear terms, plus quadratic self-product terms (e.g. `SUM(POWER(x, 2)) <= K`, Gurobi-only via `GRBaddqconstr`). Objectives can be linear, quadratic (POWER), bilinear, or mixed.
-
-For full syntax details: `context/descriptions/00_project_overview/syntax_reference.md`
-For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
+**Read the syntax reference before working on DECIDE semantics, formulations, or tests** — do not rely on recalled syntax.
 
 ## Core Principles
 
@@ -92,6 +62,18 @@ For keyword-by-keyword reference: `context/descriptions/03_expressivity/`
 - For non-trivial changes: pause and ask "is there a more elegant way?" before presenting
 - If a fix feels hacky: step back and implement the elegant solution
 - Skip this for simple, obvious fixes — don't over-engineer
+
+## Issue Logging (Opportunistic)
+
+While working on any task, if you spot a potential bug or code-quality issue along the way:
+
+1. **Log it** in `context/descriptions/07_issues/`:
+   - Bug (wrong results, crash, unsound formulation) → `bugs/todo.md`
+   - Code quality (duplication, dead code, fragile pattern, unclear naming, missing tests) → `code_quality/todo.md`
+   - Entry: short title, location (`file:line`), what's wrong, why it matters, date + task during which it was discovered.
+2. **Triage by relevance to the current task**:
+   - Could affect the current task (its correctness, results, or tests it depends on): flag it to the user, PAUSE the task, and wait for the user to resolve it and say continue.
+   - Irrelevant to the current task: log the entry and keep working without interruption; mention it briefly in the final summary.
 
 ## Conventions
 

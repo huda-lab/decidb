@@ -4,7 +4,7 @@
 
 ### Oracle tests for hard-direction ABS (Big-M sign-indicator path)
 
-When the proper Big-M fix landed (see `07_bugs/done.md` → "ABS Hard-Direction Constraints — Proper Big-M Fix"), C33–C37 in `stress_queries/01_constraints.sql` were added as smoke coverage for `ABS >= K`, `ABS = K`, `MIN(ABS) >= K`, `SUM(ABS) >= K`, and `ABS BETWEEN`. These exercise the new code path on real data but don't oracle-verify the optimum against an independent computation.
+When the proper Big-M fix landed (see `07_issues/bugs/done.md` → "ABS Hard-Direction Constraints — Proper Big-M Fix"), C33–C37 in `stress_queries/01_constraints.sql` were added as smoke coverage for `ABS >= K`, `ABS = K`, `MIN(ABS) >= K`, `SUM(ABS) >= K`, and `ABS BETWEEN`. These exercise the new code path on real data but don't oracle-verify the optimum against an independent computation.
 
 `test/decide/tests/test_abs_linearization.py` should grow oracle-verified positive tests for each Path-B shape:
 

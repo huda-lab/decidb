@@ -55,34 +55,24 @@ Constant offsets in the objective (e.g., `MAX SUM(x * p + 10)`) are dropped from
 
 ### 3.3 Normalizer Path Architecture
 
-The unified canonical form above describes the *output* of normalization. The *implementation* is split across four mutually-exclusive paths in `NormalizeComparisonExpr`. Each exists because the SymEngine-backed default path is destructive for an LHS class that carries DECIDE-specific structural tags SymEngine doesn't understand. The paths are guarded by `if (...) return cmp.Copy()` early returns and run in this order — first match wins:
+The unified canonical form above describes the *output* of normalization. The *implementation* is split across four mutually-exclusive paths in `NormalizeComparisonExpr`. The bypasses exist because the SymEngine-backed default path is destructive for any LHS carrying DECIDE-specific structural tags SymEngine doesn't understand. Dispatch order in the code — first match wins:
 
 | # | Path | LHS shape | Why SymEngine breaks it | Downstream consumer |
 |---|---|---|---|---|
-| 1 | Quadratic LHS bypass | `SUM(POWER(linear, 2))`, `SUM((expr)*(expr))` with same vars | `.expand()` would distribute the square and lose the recognizable `POWER(linear, 2)` pattern | QP extractor in `physical_decide.cpp::DetectQuadraticPattern` |
-| 2 | Bilinear LHS bypass | `SUM(x * y)` with disjoint decide vars | `.expand()` would distribute and reorder factors; McCormick extractor matches on specific tree shapes | Bilinear path in `physical_decide.cpp` |
-| 3 | Composed MIN/MAX bypass | `SUM(...) + MIN(...)`, `SUM(...) + MAX(...)` etc. | SymEngine has no MIN/MAX semantics — it would treat them as opaque function symbols and combine incorrectly with surrounding additive terms | `RewriteComposedMinMaxInConstraint` in the optimizer |
-| 4 | Aggregate-local WHEN path | LHS contains `SUM(...) WHEN c` (or AVG/MIN/MAX WHEN) | SymEngine has no WHEN semantics — it would absorb the WHEN tag as opaque, then expand around it, scrambling which terms the per-aggregate filter applies to | Per-row aggregate-LHS extractor (after parsed-level rewrite, see below) |
-| 5 | **Default path** | Plain linear LHS | n/a (this is what SymEngine handles cleanly) | Per-row aggregate-LHS extractor |
+| 1 | Aggregate-local WHEN path | LHS contains `SUM(...) WHEN c` (or AVG/MIN/MAX WHEN) | SymEngine would absorb the WHEN tag as opaque, then expand around it, scrambling which terms the per-aggregate filter applies to | Per-row aggregate-LHS extractor (after parsed-level rewrite, see below) |
+| 2 | Quadratic LHS bypass | `SUM(POWER(linear, 2))`, `SUM((expr)*(expr))` with same vars | `.expand()` would distribute the square and lose the recognizable `POWER(linear, 2)` pattern | QP extractor in `physical_decide.cpp::DetectQuadraticPattern` |
+| 3 | Composed MIN/MAX bypass | `SUM(...) + MIN(...)`, `SUM(...) + MAX(...)` etc. | SymEngine has no MIN/MAX semantics — it would combine the opaque aggregate incorrectly with surrounding additive terms | `RewriteComposedMinMaxInConstraint` in the optimizer |
+| 4 | **Default path** | Plain linear LHS | n/a (this is what SymEngine handles cleanly) | Per-row aggregate-LHS extractor |
 
-**Path 4 isn't a true bypass** — it does its own parsed-level rewrite instead of falling through unchanged:
+(There is no separate bilinear bypass: bare `SUM(x * y)` survives the default path; WHEN-tagged bilinear shapes are preserved by path 1.)
 
-1. `CopyAndFoldConstantsIntoWhenAggregates` recursively rewrites `K * (SUM(...) WHEN c)` and `(SUM(...) WHEN c) / K` into `WHEN(SUM(K*x), c)` (and `WHEN(SUM(x/K), c)`) so the extractor sees a bare WHEN-tagged aggregate.
-2. `DecomposeAdditiveAtParsed` walks the LHS through `+`, binary `-`, unary `-`, CAST. Sign-tracks. Pure-numeric leaves accumulate into `lhs_offset`; everything else becomes a sign-tagged structural term.
-3. `BuildAdditiveExpressionFromTerms` rebuilds the LHS without the constants.
-4. Returns `LHS_struct OP (RHS - lhs_offset)`. The QP/bilinear/composed-MIN structures inside the WHEN-tagged aggregates pass through untouched, so a WHEN-bearing LHS that *also* contains POWER or `x*y` is handled correctly even though path 4 fires before paths 1/2 would have.
+**Path 1 isn't a true bypass** — it does its own parsed-level rewrite: fold constant scalars into the WHEN-tagged aggregates (`K * (SUM(x) WHEN c)` → `WHEN(SUM(K*x), c)`, division likewise), decompose the LHS additively, peel pure-numeric leaves into a single offset, rebuild the LHS from the structural terms, and return `LHS_struct OP (RHS - offset)`. QP/bilinear/composed-MIN structures inside WHEN-tagged aggregates pass through untouched, so a WHEN-bearing LHS that *also* contains POWER or `x*y` is handled correctly even though path 1 fires before paths 2/3 would have. Helpers: `CopyAndFoldConstantsIntoAggregates`, `DecomposeAdditiveAtParsed`, `BuildAdditiveExpressionFromTerms`.
 
-#### Safety invariant
+**Safety invariant**: The path conditions are **not disjoint** — practical queries can match multiple (e.g. `(SUM(POWER(x,2)) WHEN c) + 3 <= K`). First-match-wins is safe because each path is conservative: paths 2–3 return `cmp.Copy()` unchanged, and path 1 only rewrites recognized shapes, leaving everything else as opaque structural terms. Pinned by oracle-verified cross-product tests in `test/decide/tests/test_normalizer_path_interactions.py` (quadratic/bilinear/composed-MIN × WHEN × offset).
 
-The bypass conditions are **not disjoint** — practical queries can match multiple (e.g. `(SUM(POWER(x,2)) WHEN c) + 3 <= K` matches paths 1 and 4). The first-match-wins ordering is safe because each path is conservative: it preserves arbitrary leaf subtrees as opaque units when it doesn't recognize them. Paths 1–3 return `cmp.Copy()` (no rewrite at all); path 4 only rewrites recognized shapes (constant additive offsets, `K * WHEN`, `WHEN / K`) and leaves everything else as opaque structural terms.
+**Refactor tripwire**: every bypass exists because SymEngine destroys structure the downstream pipeline needs. A new bypass is the signal to refactor to a single classification-driven normalizer (classify the LHS once, dispatch each leaf type to a dedicated handler), which would also eliminate the SymEngine dependency.
 
-This invariant is pinned down by oracle-verified cross-product integration tests in `test/decide/tests/test_normalizer_path_interactions.py` covering: quadratic + WHEN, quadratic + WHEN + offset, bilinear + WHEN, bilinear + WHEN + offset, and composed SUM + MIN + WHEN.
-
-#### Refactor tripwire
-
-The four-path structure is tolerable but smelly — every bypass exists because SymEngine destroys structure the downstream pipeline needs. A fifth bypass is the signal to refactor to a single classification-driven normalizer: classify the LHS once into `{ Constant, DataScalar, Aggregate, AggregateWithWhen, QpBase, BilinearProduct, PerRowVariable }`, then dispatch each leaf type to a dedicated handler in one walker. That refactor would also eliminate the SymEngine dependency, since its only remaining value-add (`expand()` distribution + `simplify()` like-term combination) is implementable with the same parsed-level walker that already powers paths 3 and 4.
-
-Until then, the architecture comment at the top of `src/decidb/symbolic/decide_symbolic.cpp` is the authoritative reference for the path ordering and helpers.
+The architecture comment at the top of `src/decidb/symbolic/decide_symbolic.cpp` is the authoritative reference for the paths and helpers.
 
 ## 4. Interaction with Binder
 The Binder receives this normalized tree. It no longer needs to perform algebraic rearrangement; it simply validates that the structure matches the expectation (linear sum on LHS, scalar on RHS) and binds the column references.

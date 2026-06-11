@@ -1,129 +1,27 @@
 # PER Keyword — Implemented Features
 
-## Motivation
+`PER` generates **one constraint per data-driven group** (one per distinct value/combination of the named column(s)) — groups the user can't enumerate when writing the query. `SUM(new_hours) <= 40 PER empID` is semantically equivalent to writing `SUM(new_hours) <= 40 WHEN empID = 'E001' AND … ` once per distinct `empID`.
 
-Many data manipulation tasks require **one constraint per data-driven group** — but the groups are not known when the query is written. Without `PER`, users must write one explicit constraint per group, which is impractical when groups are determined by the data.
-
-**Example — per-employee workload cap**: Each employee must work at most 40 hours/week. Without `PER`:
-
-```sql
--- Impractical without PER:
-SUCH THAT
-    SUM(new_hours) <= 40 WHEN empID = 'E001' AND
-    SUM(new_hours) <= 40 WHEN empID = 'E002' AND
-    ...   -- one per employee (unknown count)
-```
-
-With `PER`:
-
-```sql
-SUCH THAT
-    SUM(new_hours) <= 40 PER empID
-```
+**Syntax and basic semantics** (single/multi-column form, qualified references, WHEN+PER ordering, nested-aggregate objectives, restrictions): see `../../00_project_overview/syntax_reference.md` §7. This doc covers implementation semantics and architecture.
 
 ---
 
-## Core PER on Constraints
+## Semantics beyond the syntax spec
 
-PER groups aggregate constraints by distinct column values. One ILP constraint is generated per distinct value of the PER column.
-
-### Syntax
-
-```sql
--- Constraint: single-column PER
-constraint_expression [WHEN condition] PER column
-
--- Constraint: multi-column PER
-constraint_expression [WHEN condition] PER (column1, column2, ...)
-
--- Objective: nested aggregate PER
-MAXIMIZE OUTER(INNER(...)) PER column
-MINIMIZE OUTER(INNER(...)) PER (column1, column2, ...)
-```
-
-Empty groups (groups where WHEN excludes every row) are skipped — no constraint is emitted.
-
-**Examples**:
-
-```sql
--- One constraint per distinct empID
-SUCH THAT SUM(x * hours) <= 40 PER empID
-
--- One constraint per distinct (empID, department) combination
-SUCH THAT SUM(x * hours) <= 40 PER (empID, department)
-
--- Qualified column references — useful in JOIN queries
-SUCH THAT SUM(x * hours) <= 40 PER e.empID
-SUCH THAT SUM(x * hours) <= 40 PER (e.empID, d.dept_id)
-```
-
-`PER` accepts both bare identifiers and `table.column` (or `alias.column`) qualified references. The qualifier is purely syntactic — qualified and unqualified PER produce identical solutions when the unqualified form is unambiguous. Mixed forms (`PER (empID, d.dept_id)`) are accepted. The grammar uses `columnref_opt_indirection` (the same production SELECT/WHERE/GROUP BY use), so any column-reference shape valid in those clauses is valid in PER.
-
-### Semantics
-
-`PER column` (or `PER (col1, col2, ...)`) causes the system to:
-1. Find all distinct values (or composite key combinations) of the PER column(s) in the input relation (after any `WHEN` filter).
-2. Generate one copy of the constraint for each distinct value/combination, applying it as an implicit filter.
-
-The constraint `SUM(new_hours) <= 40 PER empID` is semantically equivalent to:
-
-```sql
-SUM(new_hours) <= 40 WHEN empID = 'E001' AND
-SUM(new_hours) <= 40 WHEN empID = 'E002' AND
-SUM(new_hours) <= 40 WHEN empID = 'E003' AND
-...
-```
-
-### WHEN + PER Composition
-
-Expression-level WHEN filters rows first, then PER groups the remaining rows:
-
-```sql
--- Per-employee constraint, but only for Directors
-SUCH THAT SUM(x * hours) <= 30 WHEN title = 'Director' PER empID
-```
-
-**Execution order**: WHEN (filter) → PER (partition → generate one constraint per group).
-
-Aggregate-local WHEN also composes with PER. Local filters are applied per aggregate term, then PER groups rows that participate in at least one local term:
-
-```sql
-SUCH THAT
-    SUM(x * hours) WHEN weekday + SUM(x * overtime) WHEN weekend <= 40 PER empID
-```
-
-### PER on Objective — Nested Aggregate Syntax
-
-PER on objectives is fully implemented using nested aggregate syntax: `OUTER(INNER(expr)) PER col`, where `OUTER` and `INNER` are each one of `SUM`, `MIN`, `MAX`, or `AVG`. `AVG` as outer is equivalent to `SUM` for optimization (divides by constant G). `AVG` as inner scales each row's coefficient by `1/n_g` (the group size), which is meaningful when groups have different sizes.
-
-```sql
-MINIMIZE SUM(MAX(x * cost)) PER department     -- minimize sum of per-dept max costs
-MAXIMIZE MIN(SUM(x * profit)) PER region       -- maximize the worst-performing region
-MINIMIZE MAX(SUM(x * hours)) PER empID          -- minimize the peak workload
-MINIMIZE SUM(AVG(x * cost)) PER department     -- minimize sum of per-dept average costs
-MINIMIZE MAX(AVG(x * hours)) PER empID          -- minimize worst per-employee average
-```
-
-**Flat aggregate + PER behavior**:
-- `SUM(expr) PER col` or `AVG(expr) PER col`: Accepted as a no-op (global sum of per-group sums equals the global sum).
-- `MIN(expr) PER col` or `MAX(expr) PER col` (flat, no nested aggregate): **Error** — ambiguous semantics. The nested form is required.
-
-The formulation uses two levels of auxiliary variables: inner (per-group) and outer (across-group), each with easy/hard classification. See [../maximize_minimize/done.md](../maximize_minimize/done.md) for the full formulation details.
-
-**Zero-coefficient row pre-filter (PATH B inner MIN/MAX, both easy and hard)**: A row whose every term coefficient is zero contributes a vacuous `z_g op 0` linking row in the easy branch and an unnecessary indicator binary plus Big-M row in the hard branch. The inner formulation now builds a per-group active-rows CSR (mirroring PATH A's flat pre-filter) and emits constraints only for rows that have at least one nonzero coefficient. For groups with no active rows, `z_g`'s bounds are pinned to `[0, 0]` directly — that preserves the original semantics, where the elided constraints combined with the outer optimization direction would have settled `z_g` at `0`. Outer-easy `MIN/MAX` over inner-`SUM` group sums applies the analogous group-level skip: groups with all-zero contribution don't emit a `w op 0` row, and if every group is identically zero, `w` is pinned to `0` directly.
-
----
-
-## Restrictions
-
-- **Aggregate-only**: PER requires an aggregate constraint, such as `SUM(...)`, `AVG(...)`, or an additive expression of aggregate terms. Per-row constraints produce a binder error.
-- **Column references only**: Each PER column must be a simple column reference, not an expression. DECIDE variables are not allowed.
-- **Constant RHS**: No row-varying RHS with PER.
+- **Grammar for column refs**: PER uses `columnref_opt_indirection` (the same production SELECT/WHERE/GROUP BY use), so any column-reference shape valid in those clauses is valid in PER. The qualifier is purely syntactic — qualified and unqualified PER produce identical solutions when the unqualified form is unambiguous.
+- **Empty groups** (WHEN excludes every row of a group) are skipped — no constraint is emitted. Only when *every* group is empty is the aggregate rejected (see `../when/done.md` → "Empty Row Sets").
+- **Aggregate-local WHEN composes with PER**: local filters are applied per aggregate term, then PER groups rows that participate in at least one local term:
+  ```sql
+  SUCH THAT SUM(x * hours) WHEN weekday + SUM(x * overtime) WHEN weekend <= 40 PER empID
+  ```
+- **Multi-column PER**: groups are distinct combinations of all PER column values; the composite key is built from per-row values with null-byte separation for collision-free hashing. `PER (col)` ≡ `PER col`.
 - **NULL handling**: NULL in any PER column excludes the row (`INVALID_INDEX`), matching SQL GROUP BY behavior.
 
-### Multi-column PER
+## PER on Objective — Implementation Notes
 
-Multi-column PER uses parenthesized column lists: `PER (col1, col2, ...)`. Groups are formed by distinct combinations of all PER column values. A composite key is built from the per-row values of all columns, using null-byte separation for collision-free hashing. `PER (col)` with a single column in parens is equivalent to `PER col`.
+The nested-aggregate objective `OUTER(INNER(expr)) PER col` uses two levels of auxiliary variables: inner (per-group) and outer (across-group), each with easy/hard classification — see [../maximize_minimize/done.md](../maximize_minimize/done.md).
+
+**Zero-coefficient row pre-filter (PATH B inner MIN/MAX, both easy and hard)**: A row whose every term coefficient is zero contributes a vacuous `z_g op 0` linking row in the easy branch and an unnecessary indicator binary plus Big-M row in the hard branch. The inner formulation builds a per-group active-rows CSR (mirroring PATH A's flat pre-filter) and emits constraints only for rows with at least one nonzero coefficient. For groups with no active rows, `z_g`'s bounds are pinned to `[0, 0]` directly — preserving the original semantics, where the elided constraints combined with the outer optimization direction would have settled `z_g` at `0`. Outer-easy `MIN/MAX` over inner-`SUM` group sums applies the analogous group-level skip: groups with all-zero contribution don't emit a `w op 0` row, and if every group is identically zero, `w` is pinned to `0` directly.
 
 ---
 
@@ -150,11 +48,10 @@ Aggregate-local WHEN is not represented as a standalone `row_group_ids` wrapper.
 
 ---
 
-## Use Cases
-
-### Per-Employee / Per-Group Resource Limits (Repair)
+## Use Case Example
 
 ```sql
+-- Per-employee workload repair with role-specific cap
 SELECT *
 FROM Employees E JOIN WeeklyPlan P ON E.empID = P.empID
 DECIDE new_hours IS INTEGER
@@ -164,29 +61,11 @@ SUCH THAT
 MINIMIZE SUM(ABS(new_hours - hours)) PER projectID
 ```
 
-### Per-Label Coverage (Active Learning / Selection)
-
-```sql
-SELECT * FROM Reviews
-DECIDE keep IS BOOLEAN
-SUCH THAT
-    SUM(keep * weak_label) >= 50 PER weak_label AND
-    SUM(keep) BETWEEN 200 AND 400
-MINIMIZE SUM(keep * confidence)
-```
-
-Here `PER weak_label` generates one coverage constraint per distinct label class, ensuring adequate representation.
-
 ---
 
 ## Scaling Considerations
 
-The number of generated constraints equals `|distinct_values| x |PER_constraints|`. For large relations this can produce O(|D|) constraints (one per tuple in the worst case). This motivates the optimizer's matrix-efficiency work on high-cardinality PER columns (see [../../04_optimizer/matrix_efficiency/todo.md](../../04_optimizer/matrix_efficiency/todo.md)).
-
-**Mitigation strategies** (future optimizer work):
-- **Constraint-to-bound conversion**: Detect PER constraints that are equivalent to simple variable bounds
-- **Skyband pruning**: Eliminate dominated tuples before generating constraints
-- **Drop-solve-validate-refine loop**: Generate a subset of constraints, solve, check if dropped constraints are violated, and iteratively refine
+The number of generated constraints equals `|distinct_values| x |PER_constraints|` — O(|D|) in the worst case. This motivates the optimizer's matrix-efficiency work on high-cardinality PER columns (see [../../04_optimizer/matrix_efficiency/todo.md](../../04_optimizer/matrix_efficiency/todo.md)): constraint-to-bound conversion, skyband pruning, drop-solve-validate-refine loops.
 
 ---
 

@@ -10,56 +10,25 @@ Tests live in:
 
 ### PER on constraints
 
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| Single-column PER with aggregate constraint | `test_per_clause.py` | ✓ |
-| Multi-column PER (2 columns) | `test_per_multi_column.py` | ✓ |
-| Multi-column PER (3 columns) | `test_per_multi_column.py` | ✓ |
-| PER with INTEGER variables | `test_per_clause.py` | ✓ |
-| PER + WHEN (combined) | `test_per_clause.py::test_per_combined_with_when`, `test_per_multi_column.py` | ✓ |
-| PER + `<>` | `test_per_clause.py::test_per_not_equal` | ✓ |
-| NULL group keys (excluded) | `test_per_clause.py::test_per_null_group_key` | ✓ |
-| Two PER constraints on different columns | `test_per_clause.py::test_per_different_grouping_columns` | ✓ |
-| WHEN filters out entire PER group | `test_per_multi_column.py::test_multi_column_per_when_eliminates_all_in_group` | ✓ |
-| PER + hard MAX(>=K) constraint (Big-M per group) | `test_per_interactions.py::test_per_max_geq_constraint` | ✓ |
-| PER + hard MIN(<=K) constraint (Big-M per group) | `test_per_interactions.py::test_per_min_leq_constraint` | ✓ |
-| PER + equality MAX(=K) constraint (easy + hard combined per group) | `test_per_interactions.py::test_per_max_eq_constraint` | ✓ |
-| PER + ABS in aggregate constraint (ABS aux per group) | `test_per_interactions.py::test_per_abs_aggregate` | ✓ |
-| Multi-variable (BOOLEAN + INTEGER) + PER | `test_per_interactions.py::test_per_multi_variable` | ✓ |
-| WHEN + PER + multi-variable — WHEN mask per group | `test_per_interactions.py::test_when_per_multi_variable` | ✓ |
-| QP objective + PER constraint | `test_per_interactions.py::test_qp_objective_per_constraint` | ✓ |
-| PER equality constraint (`SUM(x) = K PER col`, two-sided bounds per group) | `test_abs_linearization.py` | ✓ |
-| Feasibility (no objective) + PER | `test_edge_cases.py::test_feasibility_per` | ✓ |
-| Single-row PER groups (`|group| = 1` degenerate) | `test_per_interactions.py::test_per_single_row_groups` | ✓ |
-| Zero-coefficient PER group (one group's aggregate is vacuous) | `test_per_interactions.py::test_per_zero_coefficient_group` | ✓ |
-| NULL PER-key + WHEN mask (NULL bucket with WHEN→PER empty-skip) | `test_per_interactions.py::test_per_null_group_with_when` | ✓ |
-| Uncorrelated scalar subquery as PER constraint RHS | `test_cons_subquery.py::test_per_constraint_with_subquery_rhs` | ✓ |
+All oracle-verified:
+
+- **Basic** (`test_per_clause.py`, `test_per_multi_column.py`): single-column PER with aggregate constraint, multi-column PER (2 and 3 columns), INTEGER variables, PER + WHEN, PER + `<>`, NULL group keys (excluded), two PER constraints on different columns, WHEN filtering out an entire PER group.
+- **Auxiliary-variable interactions** (`test_per_interactions.py`): hard `MAX(>=K)` / hard `MIN(<=K)` (Big-M per group), equality `MAX(=K)` (easy + hard combined per group), ABS in aggregate constraint (ABS aux per group), multi-variable BOOLEAN + INTEGER, WHEN + PER + multi-variable (WHEN mask per group), QP objective + PER constraint.
+- **Degenerate / edge shapes**: single-row PER groups, zero-coefficient group (one group's aggregate vacuous), NULL PER-key + WHEN mask (NULL bucket with WHEN→PER empty-skip) — all `test_per_interactions.py`; PER equality constraint (two-sided bounds per group, `test_abs_linearization.py`); feasibility (no objective) + PER (`test_edge_cases.py`); uncorrelated scalar subquery as PER constraint RHS (`test_cons_subquery.py`).
 
 ### PER on objectives (nested aggregate syntax)
 
-All 16+ combinations of outer/inner ∈ {SUM, MIN, MAX, AVG} tested in `test_per_objective.py`:
-
-| Scenario | Test |
-|----------|------|
-| `SUM(SUM(...)) PER col` (no-op equivalence) | `test_sum_sum_per_noop` |
-| `MINIMIZE SUM(MAX(...)) PER col` | `test_minimize_sum_max_per` |
-| `MAXIMIZE SUM(MIN(...)) PER col` | `test_maximize_sum_min_per` |
-| `MAXIMIZE SUM(MAX(...)) PER col` (hard outer + easy inner) | `test_maximize_sum_max_per` |
-| `MINIMIZE SUM(MIN(...)) PER col` (hard outer + easy inner) | `test_minimize_sum_min_per` |
-| `MINIMIZE MAX(SUM(...)) PER col` | `test_minimize_max_sum_per` |
-| `MAXIMIZE MIN(SUM(...)) PER col` | `test_maximize_min_sum_per` |
-| `SUM(AVG(...)) PER col` with unequal groups | `test_sum_avg_per_unequal_groups` |
-| `MINIMIZE MAX(AVG(...)) PER col` | `test_minimize_max_avg_per` |
-| `MAXIMIZE MIN(AVG(...)) PER col` | `test_maximize_min_avg_per` |
-| Nested + WHEN: `SUM(MAX(...)) WHEN ... PER col` | `test_sum_max_when_per` |
-| Single-group degenerate case | `test_single_group` |
+All 16+ combinations of outer/inner ∈ {SUM, MIN, MAX, AVG} tested in
+`test_per_objective.py`: `SUM(SUM(...))` no-op equivalence, all
+`SUM(MAX/MIN)` and `MAX/MIN(SUM)` directions (including hard-outer +
+easy-inner shapes), `SUM(AVG)` with unequal groups, `MAX(AVG)` / `MIN(AVG)`,
+nested + WHEN (`SUM(MAX(...)) WHEN ... PER col`), and the single-group
+degenerate case.
 
 ### Error cases
 
-| Scenario | Where |
-|----------|-------|
-| Flat `MIN/MAX + PER` (ambiguous) rejected | `test_per_objective.py` |
-| `PER` on per-row constraint (`x <= 5 PER col`) rejected | `test_error_binder.py::TestBinderErrors::test_per_on_perrow_constraint_rejection` |
+- Flat `MIN/MAX + PER` (ambiguous) rejected — `test_per_objective.py`.
+- `PER` on per-row constraint (`x <= 5 PER col`) rejected — `test_error_binder.py::TestBinderErrors::test_per_on_perrow_constraint_rejection`.
 
 ## Feature interactions covered
 

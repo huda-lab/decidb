@@ -28,14 +28,3 @@ To handle "Big Data" optimization (millions of rows), future versions could inte
 
 ### 2.2 Incremental Optimization
 Currently, the entire dataset is materialized. Future work could explore "Interactive Optimization," where the user provides feedback on a solution, and the solver incrementally updates the result without re-building the entire model.
-
-## 3. Completed (Previously Future Work)
-
-### ~~3.1 Conditional Expressions (`WHEN` Keyword)~~
-Implemented. See `context/descriptions/03_expressivity/when/done.md`.
-
-### ~~3.2 Gurobi Solver Integration~~
-Implemented. See `context/descriptions/01_pipeline/03d_solver_backends.md`.
-
-### ~~3.3 Correlated Subquery Unnesting~~
-Implemented. Correlated subqueries in `SUCH THAT` constraints are unnested into joins before the DECIDE clause. See `test/decide/tests/test_cons_correlated_subquery.py`.

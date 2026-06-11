@@ -11,58 +11,18 @@ Note: table-scoped variables (`DECIDE Table.var`) have their own folder at
 
 ## Scenarios covered
 
-### IS BOOLEAN
+All oracle-verified:
 
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| 0/1 knapsack (classic) | `test_var_boolean.py::test_q01_knapsack_binary` | ✓ |
-| Knapsack variant with weight limit | `test_var_boolean.py::test_knapsack_lineitem` | ✓ |
-| Coverage across all constraint types | many files | ✓ |
-| MAXIMIZE / MINIMIZE objectives | many files | ✓ |
+- **IS BOOLEAN** (`test_var_boolean.py`, plus many files): classic 0/1 knapsack and a weight-limit variant; broad coverage across all constraint types and MAXIMIZE/MINIMIZE objectives via the rest of the suite.
+- **IS INTEGER** (`test_var_integer.py`, `test_cons_perrow.py`, `test_cons_mixed.py`, `test_cons_between.py`): default type (no annotation) and explicit `IS INTEGER`, per-row upper bound + aggregate, column-derived upper bound (`x <= ps_availqty`), BETWEEN with INTEGER.
+- **IS REAL** (`test_var_real.py`): basic LP (continuous MAXIMIZE), upper bound on REAL, mixed BOOLEAN + REAL, WHEN and PER on aggregate constraints, MINIMIZE (coefficient-sign path), forced non-integer optimum (readback sanity).
+- **Multiple variables** (`test_var_multi.py`, plus interactions elsewhere): two variables with separate constraints (BOOL + INTEGER), two boolean variables (cross-constraint), paired INTEGER + REAL (no BOOLEAN), three variables (BOOL + INTEGER + REAL), mixed BOOLEAN + REAL in the same SUM term and in the same query; mixed BOOLEAN + REAL with ABS (`test_abs_linearization.py`); BOOLEAN + INTEGER under PER grouping (`test_per_interactions.py`).
 
-### IS INTEGER
+### Error cases
 
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| Default type (no annotation) | `test_var_integer.py::test_simple_test` | ✓ |
-| Explicit `IS INTEGER` | `test_var_integer.py` | ✓ |
-| Per-row upper bound + aggregate | `test_cons_perrow.py::test_q07_row_wise_bounds` | ✓ |
-| Column-derived upper bound (`x <= ps_availqty`) | `test_cons_mixed.py::test_q02_integer_procurement` | ✓ |
-| BETWEEN with INTEGER | `test_cons_between.py::test_q10_logic_dependency` | ✓ |
-
-### IS REAL
-
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| Basic LP (continuous MAXIMIZE) | `test_var_real.py` | ✓ |
-| Upper bound on REAL | `test_var_real.py` | ✓ |
-| Mixed BOOLEAN + REAL | `test_var_real.py::test_real_mixed` | ✓ |
-| REAL + WHEN on aggregate constraint | `test_var_real.py` | ✓ |
-| REAL + PER on aggregate constraint | `test_var_real.py` | ✓ |
-| REAL + MINIMIZE (coefficient-sign path) | `test_var_real.py::test_real_minimize` | ✓ |
-| REAL with forced non-integer optimum (readback sanity) | `test_var_real.py::test_real_fractional_readback` | ✓ |
-
-### Multiple variables
-
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| Two variables with separate constraints (BOOL + INTEGER) | `test_var_multi.py::test_two_variables_separate_constraints` | ✓ |
-| Two boolean variables (cross-constraint) | `test_var_multi.py::test_two_boolean_variables` | ✓ |
-| Paired INTEGER + REAL (no BOOLEAN) | `test_var_multi.py::test_integer_real_paired` | ✓ |
-| Three variables (BOOL + INTEGER + REAL) | `test_var_multi.py::test_three_decide_variables` | ✓ |
-| Mixed BOOLEAN + REAL explicit in same SUM term | `test_var_multi.py::test_mixed_types_same_aggregate_term` | ✓ |
-| Mixed BOOLEAN + REAL in same query | `test_var_real.py::test_real_mixed` | ✓ |
-| Mixed BOOLEAN + REAL with ABS | `test_abs_linearization.py::test_abs_mixed_vars` | ✓ |
-| Two variables (BOOLEAN + INTEGER) under PER grouping | `test_per_interactions.py::test_per_multi_variable` | ✓ |
-
-## Error cases
-
-| Scenario | Where |
-|----------|-------|
-| Variable name conflicts with column | `test_error_binder.py::test_variable_conflicts_with_column` |
-| Duplicate DECIDE variable | `test_error_binder.py::test_duplicate_decide_variables` |
-| Unknown variable in constraint | `test_error_binder.py::test_unknown_variable_in_constraint` |
-| Unknown type annotation | `test_error_parser.py::test_missing_such_that` (related) |
+`test_error_binder.py`: variable name conflicts with column, duplicate DECIDE
+variable, unknown variable in constraint. Unknown type annotation is
+parser-level (`test_error_parser.py`).
 
 ## Feature interactions covered
 

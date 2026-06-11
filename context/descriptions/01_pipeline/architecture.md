@@ -4,14 +4,7 @@
 
 DeciDB is implemented as an extension to DuckDB. It leverages DuckDB's extensible parser and planner architecture to inject new query operators. The system follows a pipelined execution model where the `DECIDE` clause is treated as a specialized aggregation step that occurs after standard filtering and before final projection.
 
-### 1.1 Core Components
-
-*   **DuckDB Core**: Responsible for storage, transaction management, and executing the standard relational parts of the query (scans, joins, filters).
-*   **Symbolic Layer (Parser)**: Uses `SymbolicC++` to parse and normalize algebraic expressions within the `DECIDE` and `SUCH THAT` clauses. It converts user-friendly SQL expressions into a canonical form.
-*   **Binder**: Validates the mathematical properties of the optimization problem (e.g., linearity checks) and applies IN domain rewrites (`RewriteInDomain` in `bind_select_node.cpp`).
-*   **DecideOptimizer** (separate optimizer pass after binding): Applies algebraic rewrites (AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicator creation) that prepare expressions for the solver.
-*   **Execution Runtime**: A dedicated physical operator (`PhysicalDecide`) that acts as a bridge between the relational engine and the linear solver.
-*   **Solvers**: DeciDB uses **Gurobi** as its primary ILP solver — empirical benchmarking showed it to be significantly faster than HiGHS for DeciDB workloads. **HiGHS** (open-source, bundled) is retained as a fallback for environments without a Gurobi license, but is substantially slower in practice.
+For the component-by-component breakdown (symbolic layer, binders, DecideOptimizer, PhysicalDecide, solver backends) and file map, see `code_structure.md`. For a concrete end-to-end example, see `trace_life_of_a_query.md`.
 
 ## 2. Query Lifecycle
 
@@ -47,7 +40,7 @@ When the parser encounters a `DECIDE` clause, it invokes the Symbolic Layer. Thi
 3.  Separates row-varying coefficients (dependent on table columns) from decision variables.
 
 ### 3.2 Plan Generation
-The planner inserts a `LogicalDecide` operator into the query tree. Crucially, this operator is placed **above** the `VideoTable` (or any source table) and `Filter` operators. This ensures that the solver only considers rows that satisfy the `WHERE` clause, significantly reducing the problem size.
+The planner inserts a `LogicalDecide` operator into the query tree. Crucially, this operator is placed **above** the source-table scan and `Filter` operators. This ensures that the solver only considers rows that satisfy the `WHERE` clause, significantly reducing the problem size.
 
 ### 3.3 Physical Execution
 The `PhysicalDecide` operator works in a "stop-and-go" fashion (pipeline breaker):

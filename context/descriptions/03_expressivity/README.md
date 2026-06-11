@@ -2,7 +2,7 @@
 
 This folder documents the expressive power of the DECIQL language — the SQL extension at the heart of DeciDB. Each keyword/construct is a **subfolder** containing:
 
-- `done.md` — What is implemented today, with syntax, examples, and code pointers
+- `done.md` — What is implemented today: semantics, implementation notes, and code pointers (the canonical *syntax* spec is `../00_project_overview/syntax_reference.md`)
 - `todo.md` — What remains to be built, with design rationale and implementation suggestions
 
 ---
@@ -65,19 +65,7 @@ For a complete taxonomy of what mathematical optimization problem classes DeciDB
 
 ## Development Priorities
 
-All previously planned priorities are **done**:
-1. ~~**IS REAL variables**~~ — done
-2. ~~**AVG() aggregate**~~ — done (coefficient scaling)
-3. ~~**ABS()**~~ — done (linearized via auxiliary variables)
-4. ~~**`<>` and `IN` on decision variables**~~ — done (Big-M / auxiliary binary indicators)
-5. ~~**MIN() / MAX()**~~ — done (per-row + Big-M linearization)
-
-7. ~~**Multi-column PER**~~ — done (`PER (col1, col2, ...)` with composite keys)
-
-8. ~~**PER on objective**~~ — done (nested aggregate syntax with two-level auxiliary formulation)
-9. ~~**Correlated subqueries**~~ — done (delegated to DuckDB's standard decorrelation; per-row constraints + scalar-RHS aggregate constraints)
-
-**Remaining**:
+All previously planned expressivity priorities are implemented (see the status matrix above). **Remaining**:
 - **Row-varying RHS with PER** — see [per/todo.md](per/todo.md)
 
 ---

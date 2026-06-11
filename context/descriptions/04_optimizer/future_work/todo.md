@@ -1,6 +1,6 @@
 # Future Work — Todo
 
-Secondary and research-stage optimization ideas. These are lower priority than the two capstone areas (matrix efficiency, rewrite passes) but represent valuable directions for scaling DeciDB to larger datasets and more complex queries.
+Secondary and research-stage optimization ideas. These are lower priority than the two core areas (matrix efficiency, rewrite passes) but represent valuable directions for scaling DeciDB to larger datasets and more complex queries.
 
 ---
 

@@ -7,9 +7,9 @@ structured for quick navigation by both AI agents and human developers.
 
 ## Convention: done.md / todo.md
 
-In `03_expressivity/` and `04_optimizer/`, each feature area is a **subfolder** containing:
+In `03_expressivity/`, `04_optimizer/`, and `05_testing/`, each feature area is a **subfolder** containing:
 
-- **`done.md`** — What is implemented today: syntax, examples, and code pointers
+- **`done.md`** — What is implemented today: semantics, implementation notes, and code pointers
 - **`todo.md`** — What remains to be built: design rationale, implementation suggestions
 
 This makes it trivial to determine what exists vs. what needs building.
@@ -20,14 +20,14 @@ This makes it trivial to determine what exists vs. what needs building.
 
 | Folder                 | Contains                                                                                                           | Start here if...                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `00_project_overview/` | What DeciDB is, the theory behind it, and the DECIDE syntax reference                                              | You are new to the project or need to understand what queries are valid       |
+| `00_project_overview/` | What DeciDB is and the DECIDE syntax reference (the canonical syntax spec)                                         | You are new to the project or need to understand what queries are valid       |
 | `01_pipeline/`         | The query processing pipeline: architecture, each stage in order, source-code map, and a concrete end-to-end trace | You are working on or debugging any part of the DECIDE query path             |
 | `02_operations/`       | Testing methodology, release workflow, benchmarking, pip packaging, and known limitations                           | You need to run tests, cut a release, benchmark performance, build the pip wheel, or check whether a feature is supported |
 | `03_expressivity/`     | DECIQL keyword reference — each keyword is a subfolder with done.md/todo.md. Also includes `problem_types/` for LP/ILP/QP classification. | You want to know if a construct is valid, or are implementing a new keyword   |
 | `04_optimizer/`        | COP optimizer strategies — each area is a subfolder with done.md/todo.md                                           | You are designing or implementing optimizer features                          |
 | `05_testing/`          | Test coverage tracking — which scenarios are oracle-verified vs. feasibility-only, and what gaps remain            | You are adding tests, auditing coverage, or debugging a suspected correctness regression |
 | `06_performance/`      | Append-only log of performance optimizations applied to DeciDB. One file per optimization batch, dated, with hypothesis + measured outcome. | You want to know what's already been tried, or you're about to commit a perf change and need to record it |
-| `07_bugs/`             | Known open bugs with symptoms, reproductions, and what has been ruled out                                          | You hit an unexpected error or are looking for a starting point to fix something broken  |
+| `07_issues/`           | Issue tracking: `bugs/` (open bugs in `todo.md`, lessons from resolved bugs in `done.md`) and `code_quality/` (open code-quality issues in `todo.md`) | You hit an unexpected error, want the known traps before touching grammar/solver/linearization code, or are looking for logged cleanup work |
 
 ---
 
@@ -41,9 +41,8 @@ This makes it trivial to determine what exists vs. what needs building.
 6. For execution details, the sub-docs (`03a` through `03e`) break down each phase.
 7. `01_pipeline/04_explain.md` — EXPLAIN output, serialization, and profiling for the DECIDE operator.
 
-You do not need to read `00_project_overview/background_theory.md` unless you want the
-academic motivation. You do not need to read `01_pipeline/code_structure.md` unless you
-are about to modify source code and need to know where things live on disk.
+You do not need to read `01_pipeline/code_structure.md` unless you are about to modify
+source code and need to know where things live on disk.
 
 ---
 
@@ -66,15 +65,16 @@ are about to modify source code and need to know where things live on disk.
 
 ---
 
-## Note on Redundancy
+## Authoritative Sources (Anti-Redundancy Rule)
 
-A few topics appear in more than one file. Authoritative sources:
-
-- **DECIDE syntax** — `00_project_overview/syntax_reference.md` is the full spec.
-- **IS BOOLEAN / IS INTEGER** — `syntax_reference.md` defines what the user writes.
-  `02_binder.md` explains what the binder does with that declaration internally.
-- **Linearity constraint** — appears in theory, parser, binder, and syntax docs, each
-  scoped to that stage. The user-facing spec is in `syntax_reference.md`.
-- **Table-scoped variables** — `syntax_reference.md` defines the user syntax (`table.var IS type`).
-  `code_structure.md` Section 4 covers the key structs and code paths. `03b_coefficient_evaluation.md`
-  describes the entity mapping construction (Phase 1.5). `03c_model_building.md` covers VarIndexer.
+- **DECIDE syntax** — `00_project_overview/syntax_reference.md` is the canonical spec.
+  Feature docs in `03_expressivity/` deliberately do **not** restate syntax; they hold
+  semantics, implementation notes, and code pointers, with a pointer back to the spec.
+  When adding or changing syntax, update the spec first, then the feature doc.
+- **Linearization mechanics** (MIN/MAX easy/hard, ABS Path A/B, IN rewrite, AVG scaling) —
+  `03_expressivity/sql_functions/done.md`. Other docs reference it rather than restating.
+- **Stage-internal detail** — each `01_pipeline/` stage doc covers only its own stage;
+  `02_binder.md` explains what the binder does with a declaration, not what the user writes.
+- **Table-scoped variables** — syntax in `syntax_reference.md`; entity-mapping construction
+  in `03b_coefficient_evaluation.md`; VarIndexer in `03c_model_building.md`; structs in
+  `code_structure.md`.

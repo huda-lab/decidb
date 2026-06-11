@@ -1,7 +1,7 @@
 # ABS Linearization Test Coverage — Done
 
 Tests live in:
-- `test/decide/tests/test_abs_linearization.py` (9 tests)
+- `test/decide/tests/test_abs_linearization.py` (12 tests)
 - `test/decide/tests/test_per_interactions.py` — ABS in aggregate constraint with PER (per-group ABS aux)
 
 The ABS linearization is performed by `DecideOptimizer::RewriteAbs`. For each
@@ -16,23 +16,13 @@ Path-A / Path-B classification.
 
 ## Scenarios covered
 
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| ABS in objective (basic) | `test_abs_linearization.py` | ✓ |
-| ABS in objective with WHEN | `test_abs_linearization.py::test_abs_objective_with_when` | ✓ |
-| ABS in objective with PER (PER on separate SUM) | `test_abs_linearization.py::test_abs_objective_with_per` | ✓ |
-| ABS in per-row constraint, sound direction (`ABS(expr) <= K`) | `test_abs_linearization.py` | ✓ |
-| ABS in aggregate constraint, sound direction (`SUM(ABS(expr)) <= K`) | `test_abs_linearization.py` | ✓ |
-| ABS in aggregate constraint with WHEN (WHEN-masked aux sum) | `test_abs_linearization.py::test_abs_constraint_aggregate_with_when` | ✓ |
-| ABS in aggregate constraint with PER (per-group aux) | `test_per_interactions.py::test_per_abs_aggregate` | ✓ |
-| Multiple ABS terms in same expression | `test_abs_linearization.py` | ✓ |
-| ABS with no decide variable (passthrough) | `test_abs_linearization.py` | — |
-| ABS with mixed BOOLEAN + REAL variables | `test_abs_linearization.py::test_abs_mixed_vars` | ✓ |
-| Per-row ABS hard direction (`ABS(expr) >= K`) — Big-M | `stress_queries/01_constraints.sql` C33 | smoke |
-| ABS equality (`ABS(expr) = K`) — Big-M | `stress_queries/01_constraints.sql` C34 | smoke |
-| Aggregate hard via easy-MIN strip (`MIN(ABS) >= K`) — per-row Big-M | `stress_queries/01_constraints.sql` C35 | smoke |
-| Aggregate hard direction (`SUM(ABS) >= K`) — Big-M on each aux | `stress_queries/01_constraints.sql` C36 | smoke |
-| ABS in BETWEEN (`ABS(expr) BETWEEN a AND b`) — Big-M | `stress_queries/01_constraints.sql` C37 | smoke |
+- **Sound directions** (oracle-verified in `test_abs_linearization.py`): ABS in objective (basic, with WHEN, with PER on a separate SUM); per-row `ABS(expr) <= K`; aggregate `SUM(ABS(expr)) <= K` (plain and WHEN-masked aux sum); multiple ABS terms in one expression; mixed BOOLEAN + REAL variables (`test_abs_mixed_vars`); ABS with no DECIDE variable (passthrough, no oracle needed).
+- **PER interaction**: ABS in aggregate constraint with PER (per-group aux) — `test_per_interactions.py::test_per_abs_aggregate`, oracle-verified.
+- **Hard directions (Big-M)** — smoke only via `stress_queries/01_constraints.sql` C33–C37; oracle test gap, see todo:
+  - C33 per-row `ABS(expr) >= K`, C34 `ABS(expr) = K`
+  - C35 aggregate hard via easy-MIN strip (`MIN(ABS) >= K` → per-row Big-M)
+  - C36 aggregate `SUM(ABS) >= K` (Big-M on each aux)
+  - C37 `ABS(expr) BETWEEN a AND b`
 
 ## Feature interactions covered
 

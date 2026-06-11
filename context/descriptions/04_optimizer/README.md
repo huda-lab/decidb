@@ -7,7 +7,7 @@ This folder documents the optimization strategies for Constrained Optimization P
 
 ---
 
-## Capstone Priorities
+## Core Priorities
 
 | Priority | Area | Folder | Goal |
 |----------|------|--------|------|

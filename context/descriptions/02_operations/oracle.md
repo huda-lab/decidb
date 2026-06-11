@@ -320,168 +320,27 @@ an in-process binding.
 
 ---
 
-## 6. Correctness Test Reference
+## 6. Test Reference (by category)
 
-### 6.1 Variable Type Tests (`test_var_boolean.py`, `test_var_integer.py`)
+The test files in `test/decide/tests/` are the source of truth; this is only a
+map of the categories. Run `bash run_tests.sh -m <marker>` to select a category
+(markers in section 5).
 
-**test_q01_knapsack_binary** — Classic 0/1 knapsack on lineitem.
-```sql
-SELECT ... FROM lineitem WHERE l_orderkey < 100
-DECIDE x IS BOOLEAN
-SUCH THAT SUM(x * l_quantity) <= 100
-MAXIMIZE SUM(x * l_extendedprice)
-```
-Oracle: binary variables, one capacity constraint, maximize total price.
+**Correctness tests** (oracle-verified):
+- **Variable types** (`test_var_boolean.py`, `test_var_integer.py`) — 0/1 knapsack and bounded-integer variants on lineitem.
+- **Constraints** (`test_cons_aggregate.py`, `test_cons_perrow.py`, `test_cons_mixed.py`, `test_cons_between.py`, `test_cons_subquery.py`, `test_cons_multi.py`) — aggregate budgets, per-row bounds (constant and column-valued), BETWEEN, scalar-subquery RHS (resolved via plain SQL first), multi-constraint with joins.
+- **Objectives** (`test_obj_minimize.py`, `test_obj_complex_coeffs.py`) — MINIMIZE with `>=` covering constraints; multi-column coefficient arithmetic like `x * price * (1 - discount) * (1 + tax)` (oracle pre-computes the coefficient per row).
+- **SQL features** (`test_sql_joins.py`) — JOIN in FROM; oracle builds the model on the joined rows.
+- **Scale** (`test_large_scale.py`) — ~500- and ~2200-row instances; compare objective values and record timing.
 
-**test_knapsack_lineitem** — Variant with weight limit 500 on l_orderkey <= 200.
-
-**test_simple_test** — Default (INTEGER) variable type, bounded 0-10.
-```sql
-SELECT ... FROM lineitem WHERE l_orderkey <= 10
-DECIDE x
-SUCH THAT SUM(x * l_quantity) <= 500 AND x <= 10
-MAXIMIZE SUM(x * l_extendedprice)
-```
-Oracle: integer variables with upper bound 10, one aggregate constraint.
-
-### 6.2 Constraint Tests
-
-**test_q08_marketing_campaign** (`test_cons_aggregate.py`) — Boolean selection
-with budget constraint: `SUM(x * c_acctbal) <= 5000`.
-
-**test_order_selection** (`test_cons_aggregate.py`) — Select orders under weight
-limit: `SUM(x * o_totalprice) <= 50000`.
-
-**test_q07_row_wise_bounds** (`test_cons_perrow.py`) — Per-row + aggregate:
-```sql
-DECIDE x IS INTEGER
-SUCH THAT x <= 5 AND SUM(x * ps_supplycost) <= 1000
-MAXIMIZE SUM(x * ps_availqty)
-```
-Oracle: integer vars with `ub=5`, aggregate budget constraint.
-
-**test_q02_integer_procurement** (`test_cons_mixed.py`) — Per-row + aggregate:
-```sql
-DECIDE x IS INTEGER
-SUCH THAT x <= ps_availqty AND SUM(x * ps_supplycost) <= 5000
-MAXIMIZE SUM(x * ps_availqty)
-```
-Oracle: upper bound per variable from `ps_availqty` column.
-
-**test_q10_logic_dependency** (`test_cons_between.py`) — BETWEEN + multi-constraint:
-```sql
-DECIDE x IS INTEGER
-SUCH THAT x BETWEEN 0 AND 5
-  AND SUM(x) <= 100
-  AND SUM(x * l_extendedprice) <= 100000
-MAXIMIZE SUM(x * l_extendedprice * (1 - l_discount))
-```
-Oracle: variables bounded [0, 5], two aggregate constraints.
-
-**test_q04_subquery_rhs** (`test_cons_subquery.py`) — Subquery as constraint bound:
-```sql
-SUCH THAT SUM(x * o_totalprice) <= (SELECT AVG(c_acctbal) FROM tpch.customer WHERE c_nationkey = 10)
-```
-Oracle: resolves the subquery via plain SQL first, then uses the scalar value.
-
-**test_q06_multi_constraint** (`test_cons_multi.py`) — Two constraints with join:
-```sql
-FROM lineitem, orders WHERE l_orderkey = o_orderkey AND l_orderkey <= 50
-SUCH THAT SUM(x * l_quantity) <= 200 AND SUM(x * o_totalprice) <= 50000
-```
-Oracle: two aggregate constraints on different columns from joined data.
-
-### 6.3 Objective Tests
-
-**test_q09_minimize_cost** (`test_obj_minimize.py`) — Minimize selection:
-```sql
-FROM supplier WHERE s_nationkey <= 5
-DECIDE x IS BOOLEAN
-SUCH THAT SUM(x) >= 10
-MINIMIZE SUM(x * s_acctbal)
-```
-Oracle: select at least 10, minimize total acctbal.
-
-**test_min_cost_supplier** (`test_obj_minimize.py`) — Minimize cost to meet demand:
-```sql
-SUCH THAT SUM(x * ps_availqty) >= 1000
-MINIMIZE SUM(x * ps_supplycost)
-```
-
-**test_q03_complex_coeffs** (`test_obj_complex_coeffs.py`) — Multi-column arithmetic:
-```sql
-MAXIMIZE SUM(x * l_extendedprice * (1 - l_discount) * (1 + l_tax))
-```
-Oracle: pre-computes `price * (1 - discount) * (1 + tax)` per row.
-
-### 6.4 SQL Feature Tests
-
-**test_q05_join_decide** (`test_sql_joins.py`) — JOIN in FROM clause:
-```sql
-FROM orders, customer
-WHERE o_custkey = c_custkey AND c_nationkey = 10
-```
-Oracle: fetches joined result set, builds model on joined rows.
-
-### 6.5 Scale Tests (`test_large_scale.py`)
-
-**test_knapsack_large** — 501 rows (lineitem, orderkey <= 100).
-**test_order_selection_large** — 2204 rows (orders, orderkey <= 3000).
-
-Both compare objective values and record timing.
+**Error tests** (no oracle; assert exception type + message):
+- **Parser** (`test_error_parser.py`) — missing SUCH THAT / variable name / DECIDE keyword, empty constraint. Expect `decidb.ParserException`.
+- **Binder** (`test_error_binder.py`) — semantic rejections: name clashes, duplicate variables, undeclared variables, non-linear shapes, non-scalar RHS/BETWEEN/IN bounds, DECIDE vars on the wrong side, malformed objectives.
+- **Infeasibility** (`test_error_infeasible.py`) — contradictory bounds and aggregate constraints. Expect `decidb.InvalidInputException` matching "infeasible".
 
 ---
 
-## 7. Error Test Reference
-
-### 7.1 Parser Errors (`test_error_parser.py`) — 4 tests
-
-| Test | What it checks |
-|------|----------------|
-| `test_missing_such_that` | DECIDE without SUCH THAT |
-| `test_missing_variable_name` | DECIDE IS BOOLEAN (no name) |
-| `test_missing_decide_keyword` | SUCH THAT without DECIDE |
-| `test_empty_constraint` | SUCH THAT (empty) |
-
-All expect `decidb.ParserException`.
-
-### 7.2 Binder Errors (`test_error_binder.py`) — 16 tests
-
-| Test | Error |
-|------|-------|
-| `test_variable_conflicts_with_column` | Name clashes with existing column |
-| `test_duplicate_decide_variables` | Same variable declared twice |
-| `test_unknown_variable_in_constraint` | Undeclared var in IN list |
-| `test_is_null_unsupported` | IS NULL in SUCH THAT |
-| `test_sum_with_in_not_allowed` | SUM(x) IN (...) |
-| `test_non_decide_variable_in_constraint` | Regular column constrained |
-| `test_non_sum_function_in_constraint` | AVG(x) instead of SUM |
-| `test_no_decide_variable_in_sum` | SUM(col) without decide var |
-| `test_multiple_decide_variables_in_sum` | x*x is quadratic |
-| `test_nonlinear_decide_variables` | Non-linearity caught at execution |
-| `test_between_non_scalar` | SUM BETWEEN with non-scalar bound |
-| `test_decide_between_decide_variable` | DECIDE var in BETWEEN bounds |
-| `test_in_rhs_with_decide_variable` | DECIDE var in IN list values |
-| `test_sum_rhs_non_scalar` | SUM compared to non-scalar |
-| `test_decide_variable_rhs_with_decide` | Var compared to var |
-| `test_sum_equal_non_scalar` | SUM = non-scalar |
-| `test_objective_with_addition` | SUM(...)+3 in objective |
-| `test_objective_bare_column` | Bare column as objective |
-| `test_subquery_rhs_non_scalar` | Subquery referencing DECIDE var |
-
-### 7.3 Infeasibility Tests (`test_error_infeasible.py`) — 3 tests
-
-| Test | Contradiction |
-|------|---------------|
-| `test_contradictory_bounds` | x >= 10 AND x <= 5 |
-| `test_impossible_sum` | SUM(x) >= 1000, but only 6 boolean vars |
-| `test_conflicting_aggregate` | SUM(x) >= 100 AND SUM(x) <= 1 |
-
-All expect `decidb.InvalidInputException` matching "infeasible".
-
----
-
-## 8. Adding a New Test
+## 7. Adding a New Test
 
 ### Step 1: Choose the test file
 
@@ -575,7 +434,7 @@ bash run_tests.sh -k "test_my_new_query" -v
 
 ---
 
-## 9. Known Caveats
+## 8. Known Caveats
 
 1. **Absolute tolerance on large objectives.** Comparison uses `|decidb - oracle| <= 1e-4`.
    For objectives in the millions, a relative tolerance might be more appropriate.

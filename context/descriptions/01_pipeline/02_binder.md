@@ -79,41 +79,11 @@ Note: DuckDB's internal `LogicalType::INTEGER` is used for INTEGER and BOOLEAN d
 
 ## 5. `WHEN` Condition Validation
 
-### 5.1 WHEN on Constraints
+WHEN semantics, NULL handling, and restrictions live in `../03_expressivity/when/done.md`; the binder-side mechanics are:
 
-The `DecideConstraintsBinder` handles WHEN constraints via `BindWhenConstraint`:
-
-1. **Validation**: The WHEN condition (child[1]) is checked with `ExpressionContainsDecideVariable` — it must reference only table columns, not decision variables.
-2. **Constraint binding**: The constraint (child[0]) is bound through normal DECIDE constraint dispatch (linearity validation, etc.).
-3. **Condition binding**: The condition (child[1]) is bound using the base `ExpressionBinder` (via `binding_when_condition` flag), bypassing DECIDE-specific validation since the condition is a data filter, not an optimization constraint.
-4. **Output**: A tagged `BoundConjunctionExpression` with `alias = WHEN_CONSTRAINT_TAG` carries both the bound constraint and bound condition downstream to the execution layer.
-
-### 5.2 WHEN on Objective
-
-The `DecideObjectiveBinder` handles WHEN on the objective (`MAXIMIZE SUM(...) WHEN condition`) using the same pattern:
-
-1. **Detection**: The binder checks for a `FunctionExpression` with `function_name == WHEN_CONSTRAINT_TAG` at the top level.
-2. **Validation**: The WHEN condition must not reference decision variables.
-3. **Objective binding**: The objective (child[0]) is bound through normal objective binding (SUM validation, linearity check).
-4. **Condition binding**: The condition (child[1]) is bound via `ExpressionBinder` using the `binding_when_condition` flag bypass.
-5. **Output**: A tagged `BoundConjunctionExpression` with `alias = WHEN_CONSTRAINT_TAG`, identical in structure to the constraint WHEN output.
-
-### 5.3 Aggregate-local WHEN
-
-Aggregate-local `WHEN` uses the same parser tag (`WHEN_CONSTRAINT_TAG`) but is bound only when it appears nested inside a larger aggregate expression, for example:
-
-```sql
-SUM(x * weight) WHEN active + SUM(x * bonus) WHEN priority <= 100
-```
-
-`DecideBinder::BindLocalWhenAggregate()` handles this form:
-
-1. **Aggregate binding**: Child 0 is bound as a DECIDE aggregate (`SUM`, `AVG`, `MIN`, or `MAX` after normal validation).
-2. **Validation**: Child 1 must not reference decision variables.
-3. **Condition binding**: Child 1 is bound with the base `ExpressionBinder` and cast to BOOLEAN.
-4. **Output**: The condition is stored on the resulting `BoundAggregateExpression::filter`. Downstream physical analysis copies that filter onto each extracted term from that aggregate.
-
-The constraint and objective binders dispatch top-level `WHEN_CONSTRAINT_TAG` to expression-level WHEN binding, and nested `WHEN_CONSTRAINT_TAG` to aggregate-local binding. A global expression-level `WHEN` whose child already contains aggregate-local `WHEN` is rejected to avoid ambiguous double-filter semantics.
+- **Expression-level WHEN** (constraints via `DecideConstraintsBinder::BindWhenConstraint`, objectives via `DecideObjectiveBinder`): validate the condition with `ExpressionContainsDecideVariable` (table columns only), bind the constraint/objective through normal DECIDE dispatch, bind the condition with the base `ExpressionBinder` (`binding_when_condition` flag bypasses DECIDE validation — it's a data filter, not a constraint). Output: a tagged `BoundConjunctionExpression` with `alias = WHEN_CONSTRAINT_TAG` carrying both children downstream.
+- **Aggregate-local WHEN** (same parser tag, but nested inside a larger aggregate expression): `DecideBinder::BindLocalWhenAggregate()` binds child 0 as a DECIDE aggregate, validates child 1 (no decide vars), binds it as BOOLEAN, and stores it on `BoundAggregateExpression::filter`. Downstream physical analysis copies that filter onto each extracted term.
+- **Dispatch**: top-level `WHEN_CONSTRAINT_TAG` → expression-level binding; nested → aggregate-local. A global WHEN whose child already contains aggregate-local WHEN is rejected (ambiguous double-filter semantics).
 
 ### 5.4 PER Constraint Validation
 
@@ -124,25 +94,7 @@ The constraint and objective binders dispatch top-level `WHEN_CONSTRAINT_TAG` to
 
 ## 6. Rewrite Passes (Now in Optimizer)
 
-These algebraic rewrites have been migrated to `DecideOptimizer` in `src/optimizer/decide/decide_optimizer.cpp`. The binder validates and binds the relevant expressions (recognizing AVG, ABS, MIN, MAX as valid DECIDE aggregates/functions); the optimizer performs the algebraic transformations.
-
-### 6.1 AVG → SUM Rewrite
-
-- `AVG(expr)` is rewritten to `SUM(expr)` with a special tag (`AVG_REWRITE_TAG` alias).
-- At execution time, the model builder detects this tag and scales the RHS by the number of rows in each group, effectively converting `AVG(expr) <= K` into `SUM(expr) <= K * N`.
-- **Code**: `DecideOptimizer::RewriteAvgToSum` in `decide_optimizer.cpp`
-
-### 6.2 ABS Linearization
-
-- `ABS(expr)` where `expr` contains decision variables is linearized via auxiliary variables. Two paths depending on context:
-  - Always: creates an auxiliary REAL variable `__abs_aux_N__` and emits the lower envelope `aux >= expr` and `aux >= -expr` (forces `aux >= |expr|`). Replaces `ABS(expr)` with `aux`.
-  - **Path A (lower-envelope only)** — used when the surrounding context naturally pins `aux` down to `|expr|`: ABS in a `MINIMIZE` objective (solver pressure drives `aux` down) or in a constraint that upper-bounds `aux` (`ABS <= K`, `SUM(ABS) <= K`, etc.). No binary indicator allocated.
-  - **Path B (Big-M sign-indicator)** — used when `aux` is not naturally pinned: `MAXIMIZE` objective ABS, and constraint shapes that don't upper-bound `aux` (`ABS >= K`, `ABS = K`, `ABS <> K`, `ABS BETWEEN`, ABS on both sides of a comparison, and the analogous aggregate forms `SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`). Allocates a binary sign indicator `__abs_y_N__` and emits the Big-M upper envelope `aux <= expr + 2M(1-y)` and `aux <= -expr + 2M*y`, which combined with the lower envelope force `aux = |expr|` exactly.
-- Path classification: `TagAbsConstraintsForBigM` walks the constraint tree before `RewriteAbs` and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG` (set on `BoundFunctionExpression.alias`). `RewriteAbs` Phase 1 reads the tag, propagates `needs_bigm` to `AbsPairInfo`; Phase 2 allocates `y` for any pair where `needs_bigm || (in_objective && MAXIMIZE)`.
-- The binder binds ABS as a normal `BoundFunctionExpression`. The symbolic normalization layer treats ABS as an opaque placeholder (`__ABS_N__`) to preserve it through algebraic simplification. The optimizer handles all detection, aux var creation, and constraint generation.
-- **Code**: `DecideOptimizer::RewriteAbs` and `TagAbsConstraintsForBigM` in `decide_optimizer.cpp`. Tag constants `ABS_NEEDS_BIGM_TAG`, `ABS_UB_POS_TAG_PREFIX`, `ABS_UB_NEG_TAG_PREFIX` in `decide.hpp`. Full Path-A / Path-B table in `03_expressivity/sql_functions/done.md`.
-
-> **Note**: All rewrites in this section are now implemented in `DecideOptimizer`. The binder's role is limited to semantic validation and binding.
+The algebraic rewrites (AVG→SUM with `AVG_REWRITE_TAG`, ABS linearization with Path-A/Path-B classification, MIN/MAX classification, `<>` indicators, bilinear McCormick) live in `DecideOptimizer` (`src/optimizer/decide/decide_optimizer.cpp`) — see `../04_optimizer/rewrite_passes/done.md` for the inventory and `../03_expressivity/sql_functions/done.md` for per-function details. The binder's role is limited to semantic validation and binding: it recognizes AVG, ABS, MIN, MAX as valid DECIDE aggregates/functions and binds them as normal bound expressions (ABS passes through symbolic normalization as an opaque `__ABS_N__` placeholder); the optimizer performs all detection, auxiliary-variable creation, and constraint generation.
 
 ## 7. Auxiliary Variable Management
 

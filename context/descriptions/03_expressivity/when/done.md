@@ -4,55 +4,11 @@
 
 ---
 
-## Syntax
-
-```sql
--- On a constraint
-constraint_expression WHEN condition
-
--- On an objective
-MAXIMIZE SUM(...) WHEN condition
-MINIMIZE SUM(...) WHEN condition
-
--- On one aggregate term inside an additive aggregate expression
-SUM(expr1) WHEN condition1 + SUM(expr2) WHEN condition2 <= rhs
-MAXIMIZE SUM(expr1) WHEN condition1 + SUM(expr2) WHEN condition2
-```
-
-`WHEN` always appears *after* the main expression and *before* the `AND` separator.
+**Syntax and basic semantics** (constraint/objective/aggregate-local forms, row filtering vs. coefficient zeroing, parenthesization rules): see `../../00_project_overview/syntax_reference.md` §6. This doc covers the deeper semantics, edge cases, and implementation.
 
 ---
 
 ## Semantics
-
-### WHEN on Aggregate Constraints
-
-For aggregate constraints (those using `SUM`), `WHEN` filters which rows are included in the aggregate. Rows where the condition is false (or NULL) are excluded. The solver sees a standard linear inequality with coefficients zeroed out for non-matching rows.
-
-```sql
-SUM(x * weight) <= 50 WHEN category = 'electronics'
-```
-
-Equivalent formulation (for illustration):
-```sql
-SUM(CASE WHEN category = 'electronics' THEN x * weight ELSE 0 END) <= 50
-```
-
-### WHEN on Per-Row Constraints
-
-For constraints without an aggregate, `WHEN` causes the constraint to be *skipped entirely* for non-matching rows. No constraint is generated for those rows in the ILP.
-
-```sql
-x <= 1 WHEN status = 'active'    -- no constraint generated for inactive rows
-```
-
-### WHEN on Objective
-
-For the objective, `WHEN` zeros out the contribution of non-matching rows. The solver sees a standard dense objective vector with zeros for excluded rows.
-
-```sql
-MAXIMIZE SUM(x * profit) WHEN category = 'electronics'
-```
 
 ### WHEN with Not-Equal (`<>`) Constraints
 
@@ -74,37 +30,7 @@ Code pointer: deferred aggregate NE expansion in `physical_decide.cpp`, after th
 
 ### Aggregate-local WHEN
 
-Aggregate-local `WHEN` attaches to a single aggregate, not to the whole constraint or objective. This lets one expression use different row filters for different aggregate terms:
-
-```sql
-SUM(x * weight) WHEN category = 'electronics'
-  + SUM(x * weight) WHEN category = 'clothing' <= 80
-
-MAXIMIZE
-  SUM(x * profit) WHEN high_margin
-  + SUM(x * strategic_bonus) WHEN strategic_account
-```
-
-The two filters are independent. A row matching only `category = 'electronics'` contributes only to the first aggregate term; a row matching only `category = 'clothing'` contributes only to the second.
-
-This is intentionally separate from expression-level `WHEN`:
-
-```sql
--- One global filter on the whole constraint
-SUM(x * weight) + SUM(x * extra_weight) <= 80 WHEN active
-
--- Independent filters per aggregate term
-SUM(x * weight) WHEN active + SUM(x * extra_weight) WHEN expedited <= 80
-```
-
-Comparison predicates in aggregate-local conditions must be parenthesized:
-
-```sql
-SUM(x * weight) WHEN (category = 'electronics')
-  + SUM(x * weight) WHEN (category = 'clothing') <= 80
-```
-
-Without parentheses, existing expression-level objective syntax such as `MAXIMIZE SUM(x * profit) WHEN category = 'electronics'` is preserved as a whole-objective `WHEN`.
+Aggregate-local `WHEN` attaches to a single aggregate term (independent filters per term — see spec §6.3 for syntax). One subtlety: without parentheses around the condition, existing expression-level objective syntax such as `MAXIMIZE SUM(x * profit) WHEN category = 'electronics'` is preserved as a whole-objective `WHEN` (the symbolic layer reassociates it).
 
 ---
 
@@ -144,31 +70,7 @@ An empty aggregate has no well-defined value; check your WHEN clause.
 
 ## Rules and Restrictions
 
-### Conditions Must Reference Only Table Columns
-
-`WHEN` conditions may only reference columns from the input relation. Decision variables are **not allowed** in `WHEN` conditions.
-
-```sql
--- OK
-SUM(x * weight) <= 50 WHEN category = 'electronics'
-
--- ERROR: decision variable in WHEN condition
-SUM(x * weight) <= 50 WHEN x = 1
-```
-
-**Reason**: `WHEN` conditions are evaluated before the solver runs, to construct the coefficient matrix.
-
-### Compound Conditions Require Parentheses
-
-When a `WHEN` condition uses `AND` or `OR`, it must be wrapped in parentheses to avoid ambiguity with the `AND` constraint separator.
-
-```sql
--- Correct
-SUM(x * weight) <= 20 WHEN (category = 'A' AND status = 'active')
-
--- Incorrect: the parser treats AND as constraint separator
-SUM(x * weight) <= 20 WHEN category = 'A' AND status = 'active'
-```
+Basic rules (conditions reference table columns only — they're evaluated before the solver runs to build the coefficient matrix; compound `AND`/`OR` conditions require parentheses; no-WHEN means unconditional): see spec §6.4. Additional restrictions below.
 
 ### Unparenthesized `NOT`, Comparisons, and Arithmetic Are Rejected
 
@@ -185,10 +87,6 @@ SUM(x * v) WHEN (tier = 'high') <= 10
 ```
 
 See `../when/todo.md` for the grammar-asymmetry limitation (constraint-side error messages for this case are misleading).
-
-### Expressions Without WHEN Apply Unconditionally
-
-A constraint or objective without `WHEN` applies to all rows.
 
 ### Expression-level and Aggregate-local WHEN Do Not Mix
 
@@ -224,35 +122,6 @@ SUCH THAT SUM(x) + 3 <= 10 WHEN active
 Objectives get the same treatment as constraints: `MAXIMIZE (SUM(x) WHEN cond) + 3`, `MAXIMIZE 2 * (SUM(x) WHEN cond)`, and combinations like `MINIMIZE SUM(x) + SUM(y) WHEN c - 7` are all supported. Additive constants don't affect `argmax`/`argmin` so the peel drops them from the body (stored on `LogicalDecide.objective_constant_offset` for any future feature that reports the objective value); `K * AGG` and `AGG / K` fold the scalar into the aggregate body via the same rewrite used for constraints.
 
 > **Parser limitation (unchanged)**: writing `SUM(x) WHEN cond + 3 <= K` without parentheses around the condition is a plain `Parser Error` because aggregate-local `WHEN` binds tighter than `>`/`<=` per `POSTFIXOP` precedence, and `%nonassoc` comparisons can't chain. Use `SUM(x) WHEN (cond) + 3 <= K` (parens around the condition).
-
----
-
-## Examples
-
-```sql
--- Constraint: different weight limits per category
-SUCH THAT
-    SUM(x * weight) <= 50 WHEN category = 'electronics' AND
-    SUM(x * weight) <= 30 WHEN category = 'clothing' AND
-    x <= 1
-
--- Constraint: compound condition (parentheses required)
-SUCH THAT
-    SUM(x * weight) <= 20 WHEN (category = 'A' AND status = 'active')
-
--- Objective: only count electronics toward the objective
-MAXIMIZE SUM(x * profit) WHEN category = 'electronics'
-
--- Objective: independent aggregate-local filters
-MAXIMIZE
-    SUM(x * profit) WHEN high_margin +
-    SUM(x * bonus) WHEN strategic_account
-
--- Constraint + objective both using WHEN
-SUCH THAT
-    SUM(x * weight) <= 100 WHEN region = 'US'
-MAXIMIZE SUM(x * value) WHEN region = 'US'
-```
 
 ---
 
@@ -329,7 +198,7 @@ A `CASE` expression placed directly inside a DECIDE constraint or objective is r
 
 ### How DECIDE `WHEN` is tokenized (`WHEN_DECIDE`)
 
-The DECIDE `WHEN` keyword is lexed as a **distinct token `WHEN_DECIDE`**, separate from the `WHEN` used by SQL `CASE … WHEN … THEN`. The scanner filter `base_yylex` (`third_party/libpg_query/src_backend_parser_parser.cpp`) sets an `in_decide_clause` flag when it returns the `DECIDE` token (cleared by the `decide_clause` grammar action) and, while set, rewrites `WHEN` → `WHEN_DECIDE`. The DECIDE grammar productions (`c_expr` aggregate-local atom, `decide_constraint_item`, `decide_objective_item` in `grammar/statements/select.y`) reference `WHEN_DECIDE`, so the DECIDE WHEN never enters the global expression grammar — which previously corrupted ordinary function-call parsing (see `context/descriptions/07_bugs/done.md`).
+The DECIDE `WHEN` keyword is lexed as a **distinct token `WHEN_DECIDE`**, separate from the `WHEN` used by SQL `CASE … WHEN … THEN`. The scanner filter `base_yylex` (`third_party/libpg_query/src_backend_parser_parser.cpp`) sets an `in_decide_clause` flag when it returns the `DECIDE` token (cleared by the `decide_clause` grammar action) and, while set, rewrites `WHEN` → `WHEN_DECIDE`. The DECIDE grammar productions (`c_expr` aggregate-local atom, `decide_constraint_item`, `decide_objective_item` in `grammar/statements/select.y`) reference `WHEN_DECIDE`, so the DECIDE WHEN never enters the global expression grammar — which previously corrupted ordinary function-call parsing (see `context/descriptions/07_issues/bugs/done.md`).
 
 The rewrite is suppressed inside a `CASE … END` (tracked by `decide_case_depth`), so a `CASE` written inside a DECIDE expression still parses with ordinary `WHEN` and is then rejected by the binder with the friendly error above — rather than failing with a raw parser syntax error.
 

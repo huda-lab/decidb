@@ -7,33 +7,16 @@ Tests live in:
 
 ## Scenarios covered
 
-### Uncorrelated subqueries
+All oracle-verified:
 
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| Scalar subquery as constraint RHS | `test_cons_subquery.py::test_q04_subquery_rhs` | ✓ |
-| Aggregate subquery (AVG, SUM, etc.) | `test_cons_subquery.py` | ✓ |
-| Scalar subquery as PER constraint RHS (shared across all groups) | `test_cons_subquery.py::test_per_constraint_with_subquery_rhs` | ✓ |
-
-### Correlated subqueries
-
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| Correlated per-row bound | `test_cons_correlated_subquery.py::test_correlated_subquery_perrow_bound` | ✓ |
-| Correlated AVG subquery as per-row bound on IS REAL | `test_cons_correlated_subquery.py::test_correlated_subquery_is_real` | ✓ |
-| Correlated boolean gate | `test_cons_correlated_subquery.py::test_correlated_subquery_boolean_filter` | ✓ |
-| Correlated objective coefficients | `test_cons_correlated_subquery.py::test_correlated_subquery_objective` | ✓ |
-| Correlated + WHEN composition | `test_cons_correlated_subquery.py::test_correlated_subquery_when_composition` | ✓ |
-| NULL-producing correlated with COALESCE | `test_cons_correlated_subquery.py::test_correlated_subquery_null_coalesce` | ✓ |
+- **Uncorrelated** (`test_cons_subquery.py`): scalar subquery as constraint RHS, aggregate subquery (AVG, SUM, etc.), scalar subquery as PER constraint RHS (shared across all groups).
+- **Correlated** (`test_cons_correlated_subquery.py`): per-row bound, AVG subquery as per-row bound on IS REAL, boolean gate, objective coefficients, WHEN composition, NULL-producing correlated with COALESCE.
 
 ### Error cases
 
-| Scenario | Where |
-|----------|-------|
-| Correlated aggregate RHS non-scalar | `test_error_binder.py::test_sum_rhs_non_scalar` |
-| Correlated PER RHS non-scalar | `test_error_binder.py` |
-| Subquery referencing DECIDE variable (tight match) | `test_error_binder.py::test_subquery_rhs_non_scalar` |
-| Scalar subquery returns multiple rows | `test_error_binder.py::test_subquery_rhs_returns_multiple_rows` |
+`test_error_binder.py`: correlated aggregate RHS non-scalar, correlated PER
+RHS non-scalar, subquery referencing a DECIDE variable (tight match), scalar
+subquery returning multiple rows.
 
 ## Feature interactions covered
 

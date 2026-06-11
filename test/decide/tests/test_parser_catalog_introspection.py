@@ -7,7 +7,7 @@ every DuckDB default catalog view (`duckdb_tables`, `information_schema.*`,
 `pg_catalog.*`, ...) failed to parse with a bogus `syntax error at or near
 "then"`. It went unnoticed because no test ever selected a non-DECIDE function
 call or a catalog view. The fix confines the DECIDE WHEN to a context-sensitive
-`WHEN_DECIDE` token (see context/descriptions/07_bugs/done.md).
+`WHEN_DECIDE` token (see context/descriptions/07_issues/bugs/done.md).
 
 These tests pin the parser back to correct behavior: catalog introspection runs,
 and an unregistered function call reaches the *binder* (Catalog error) rather

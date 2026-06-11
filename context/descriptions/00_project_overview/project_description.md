@@ -1,48 +1,21 @@
 # DeciDB: In-Database Constrained Optimization for DuckDB
 
-## 1. Introduction
+## 1. Problem Statement: "Unbundling"
 
-### 1.1 Problem Statement
+Standard DBMSs are excellent at retrieving and aggregating data but lack native support for combinatorial optimization. Users who need to make decisions over their data (e.g., "select a meal plan with max protein but under 2000 calories") must extract data from the database, transport it to an external solver, and re-bundle results — creating latency, consistency risks, and engineering complexity. Data management (SQL) and decision logic (OR solvers) are *unbundled*.
 
-Standard Database Management Systems (DBMS) are excellent at retrieving and aggregating data but lack native support for combinatorial optimization problems. Users often need to make decisions over their data — for example, selecting a subset of items that satisfies various constraints while optimizing an objective function (e.g., "Select a meal plan with max protein but under 2000 calories" or "Choose a team of engineers within budget"). Typically, this requires extracting data to an external solver, which is inefficient and complex to maintain.
+A key contrast with standard SQL: `WHERE` applies predicates to *individual* tuples independently, while `DECIDE` applies constraints and objectives to the *collection* of decision variables. This generalizes prior work on package queries (Brucato et al.) — which returned a subset of tuples satisfying collective constraints — to decision variables of any type, not just subset selection.
 
-### 1.2 Solution: DeciDB
+## 2. Solution: DeciDB
 
-DeciDB extends DuckDB with native support for **constrained optimization (COP)**. It introduces a declarative `DECIDE` clause to SQL, allowing users to express these optimization problems directly within the query language. DeciDB handles the translation of these high-level requirements into an Integer Linear Programming (ILP) model, solves it using an embedded solver, and returns the optimal solution as standard relational tables.
+DeciDB extends DuckDB with native constrained optimization. A declarative `DECIDE` clause (syntax: see `syntax_reference.md`) lets users express optimization problems directly in SQL. DeciDB translates them into an Integer Linear Programming model (maximize **c**ᵀ**x** subject to A**x** ≤ **b**), solves it with an embedded solver, and returns the optimum as standard relational output. DuckDB's columnar, vectorized execution makes computing the model coefficients (**c**, A) over large datasets fast.
 
-**Solver Strategy**: DeciDB uses **Gurobi** as its primary solver. Empirical benchmarking has shown Gurobi to be significantly faster than alternatives for DeciDB workloads. **HiGHS** (open-source) is bundled as a fallback for environments without a Gurobi license, but it is substantially slower in practice and not recommended for production use.
+**Solver strategy**: **Gurobi** is the primary solver — empirically much faster on DeciDB workloads. **HiGHS** (open-source) is bundled as a fallback for environments without a Gurobi license, but it is substantially slower and not recommended for production use.
 
-## 2. Project Goals
+## 3. Design Goals
 
-1.  **Seamless Integration**: Extend SQL syntax naturally without breaking existing functionality.
-2.  **Performance**: Execute optimization queries efficiently by pushing constraints down and solving directly within the database engine.
-3.  **Usability**: Abstract away the complexities of mathematical modeling (ILP, solvers matrices) from the database user.
+1. **Seamless integration**: Extend SQL syntax naturally without breaking existing functionality.
+2. **Performance**: Solve directly within the database engine; minimize solver input size.
+3. **Usability**: Abstract away ILP modeling and solver matrices from the database user.
 
-## 3. The `DECIDE` Clause
-
-The core contribution is the new SQL syntax:
-
-```sql
-SELECT select_list
-FROM table_expression
-[WHERE ...]
-DECIDE variable [IS type] [, variable2 [IS type2] ...]
-SUCH THAT constraint_list
-[MAXIMIZE | MINIMIZE] objective_function
-```
-
-### 3.1 Key Components
-
-- **Decision Variables**: `DECIDE x IS INTEGER, y IS BOOLEAN` defines variables with their types representing the quantity or selection status of rows.
-- **Variable Types**: Specified in the DECIDE clause. `IS INTEGER` (default), `IS BOOLEAN` (0/1), or `IS REAL` (continuous, non-negative) enforces the domain.
-- **Constraints**: `SUM(x * cost) <= Budget` or `x <= 1` defines the bounds. Constraints must be linear.
-- **Objective**: `MAXIMIZE SUM(x * utility)` defines the goal. Supports linear objectives and convex quadratic objectives (`MINIMIZE SUM(POWER(expr, 2))`).
-
-## 4. System Overview
-
-DeciDB modifies the standard query processing pipeline:
-
-1.  **Parser**: Recognizes the new keywords and builds a symbolic representation.
-2.  **Binder**: Validates variable scopes, types, and mathematical properties (linearity).
-3.  **Planner**: Inserts a `LogicalDecide` operator into the query plan.
-4.  **Execution**: The `PhysicalDecide` operator materializes data, formulates the ILP model, invokes the solver (Gurobi as primary; HiGHS as a slow fallback if Gurobi is unavailable), and maps results back to the query output.
+For the pipeline architecture (parser → binder → planner → execution), see `../01_pipeline/architecture.md`.

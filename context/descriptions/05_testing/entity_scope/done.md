@@ -1,50 +1,27 @@
 # Entity-Scope Test Coverage — Done
 
-Tests live in `test/decide/tests/test_entity_scope.py`.
+Tests live in `test/decide/tests/test_entity_scope.py` (36 tests).
 
-Tests marked ✓ compare DeciDB's output against an independently-formulated
-gurobipy ILP via `compare_solutions` (objective + decision vector). Tests
-marked (constraint only) verify feasibility but not optimality — a legacy
-tier per `05_testing/README.md`; new tests in this area should move to
-oracle-verified.
+Oracle-verified tests compare DeciDB's output against an independently-formulated
+gurobipy ILP via `compare_solutions` (objective + decision vector). A few tests
+are constraint-only (verify feasibility but not optimality) — a legacy tier per
+`05_testing/README.md`; new tests in this area should move to oracle-verified.
 
-| Test | What it covers | Oracle |
-|------|---------------|--------|
-| `test_entity_scoped_nation_selection` | Basic BOOLEAN, MAXIMIZE SUM(keepN * acctbal), SUM constraint | ✓ |
-| `test_entity_scoped_consistency` | Tight SUM <= 5, entity consistency under pressure | ✓ |
-| `test_entity_scoped_integer` | IS INTEGER variable, per-row bound + aggregate bound | ✓ |
-| `test_entity_scoped_mixed_with_row_scoped` | VarIndexer three-block layout: entity + row-scoped coexist | ✓ |
-| `test_entity_scoped_with_when` | WHEN condition on constraint, entity-scoped | ✓ |
-| `test_entity_scoped_nonexistent_table` | Error: scoping to nonexistent table | — (error test) |
-| `test_entity_scoped_with_per` | PER grouping + entity-scoped, per-region oracle | ✓ |
-| `test_entity_scoped_with_max` | MAX(expr) <= K easy case, MIN/MAX linearization | ✓ |
-| `test_entity_scoped_with_avg` | AVG → SUM scaling with entity-scoped | ✓ |
-| `test_entity_scoped_when_per_triple` | WHEN + PER + entity-scoped triple interaction | ✓ |
-| `test_entity_scoped_ne_constraint` | NE (`<>`) Big-M rewrite + entity-scoped | constraint only |
-| `test_entity_scoped_max_hard_case` | MAX >= K hard case (Big-M) + entity-scoped | ✓ |
-| `test_entity_scoped_mixed_when_per` | All-four: entity + row-scoped + WHEN + PER | ✓ (Gurobi-only; fixture skips on HiGHS-only hosts) |
-| `test_entity_scoped_when_on_objective` | WHEN on objective + entity-scoped | ✓ |
-| `test_entity_scoped_multi_column_per` | Multi-column PER (region × segment) + entity-scoped | ✓ |
-| `test_entity_scoped_min_easy_case` | MIN >= K easy case + entity-scoped | ✓ |
-| `test_entity_scoped_avg_per` | AVG + PER + entity-scoped | ✓ |
-| `test_entity_scoped_ne_per` | NE + PER + entity-scoped, oracle via `add_ne_indicator` per region | ✓ |
-| `test_entity_scoped_between_constraint` | BETWEEN constraint + entity-scoped | constraint only |
-| `test_entity_scoped_two_tables` | Two entity-scoped vars from different tables (n + r) | ✓ |
-| `test_entity_scoped_var_in_when_condition_error` | Error: DECIDE var in WHEN condition | — (error test) |
-| `test_entity_scoped_when_entity_invisible` | WHEN filters all rows for some entities | ✓ |
-| `test_entity_scoped_equality_constraint` | Equality (=) constraint + entity-scoped | constraint only |
-| `test_entity_scoped_is_real` | IS REAL entity-scoped, single-table, DOUBLE readback | ✓ |
-| `test_entity_scoped_hard_min_max` | MIN <= K hard case + entity-scoped INTEGER | ✓ |
-| `test_entity_scoped_abs` | ABS linearization + entity-scoped (per-row aux → entity) | ✓ |
-| `test_entity_scoped_when_min_max_triple` | Entity-scoped + WHEN + hard MAX (triple interaction) | ✓ |
-| `test_entity_scoped_ne_oracle` | Entity-scoped + `<>` (NE) Big-M with objective verification | ✓ |
-| `test_row_scoped_vars_on_fanout_join` | Row-scoped (non-entity) vars on 1-to-many orders×lineitem JOIN — baseline contrast | ✓ |
-| `test_entity_scoped_subquery_per_three_way` | Scalar uncorrelated subquery RHS + PER + entity-scoped (three-way) | ✓ |
-| `test_entity_scoped_null_key` | NULL in entity-key column groups into a single shared entity | ✓ |
-| `test_entity_scoped_three_way_join_per_region` | customer × nation × region fan-out, entity variable on nation, PER on outer-table column | ✓ |
-| `test_entity_scoped_over_subquery_of_base_table` | Regression: `FROM (SELECT ... FROM base) t DECIDE t.x ...` — used to silently collapse to one entity because child bindings were read after CreatePlan moved projection expressions out (`plan_decide.cpp`) | ✓ |
-| `test_entity_scoped_over_cte_of_base_table` | Same regression shape via WITH-CTE | ✓ |
-| `test_entity_scoped_vs_per_null_semantics` | Side-by-side divergence: entity-scope collapses NULL keys into one shared entity; PER excludes NULL-keyed rows from groups (rows float free of the cap) | ✓ |
+## Scenarios covered
+
+Oracle-verified groups in `test_entity_scope.py`:
+
+- **Core**: basic BOOLEAN selection, tight-SUM entity consistency under pressure, IS INTEGER (per-row + aggregate bounds), IS REAL (single-table, DOUBLE readback), mixed entity- + row-scoped variables (VarIndexer three-block layout), two entity-scoped vars from different tables.
+- **WHEN / PER composition**: WHEN on constraint and on objective, single- and multi-column PER, WHEN + PER triple, WHEN filtering all rows for some entities.
+- **Aggregate interactions**: MAX/MIN easy and hard (Big-M) cases, hard MIN on entity-scoped INTEGER, entity + WHEN + hard MAX triple, ABS linearization (per-row aux → entity), AVG → SUM scaling (standalone and + PER), NE (`<>`) Big-M with objective verification, NE + PER (oracle via `add_ne_indicator` per region).
+- **Source shapes / NULL semantics**: scalar uncorrelated subquery RHS + PER + entity-scoped (three-way), three-table fan-out JOIN with entity variable on the inner table and PER on an outer-table column, NULL entity-key column grouping into a single shared entity, side-by-side entity-scope vs PER NULL-key divergence (entity-scope collapses NULL keys into one shared entity; PER excludes NULL-keyed rows from groups — rows float free of the cap), and a row-scoped baseline contrast on a 1-to-many orders×lineitem JOIN.
+
+Rows with unique caveats:
+
+- `test_entity_scoped_ne_constraint`, `test_entity_scoped_between_constraint`, `test_entity_scoped_equality_constraint` — constraint only (legacy tier).
+- `test_entity_scoped_mixed_when_per` — all-four interaction (entity + row-scoped + WHEN + PER), oracle-verified but Gurobi-only; fixture skips on HiGHS-only hosts.
+- `test_entity_scoped_nonexistent_table`, `test_entity_scoped_var_in_when_condition_error` — error tests (no oracle).
+- `test_entity_scoped_over_subquery_of_base_table` / `test_entity_scoped_over_cte_of_base_table` — regression: `FROM (SELECT ... FROM base) t DECIDE t.x ...` used to silently collapse to one entity because child bindings were read after CreatePlan moved projection expressions out (`plan_decide.cpp`); same shape via WITH-CTE.
 
 ## Feature interactions covered
 

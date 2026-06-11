@@ -5,25 +5,11 @@ Tests live in `test/decide/tests/test_avg.py` (11 tests) plus interactions in
 
 ## Scenarios covered
 
-| Scenario | Where | Oracle |
-|----------|-------|--------|
-| AVG in constraint (`AVG(x) op K`) | `test_avg.py` | ✓ |
-| AVG in objective (flat = SUM argmax) | `test_avg.py` | ✓ |
-| AVG + WHEN | `test_avg.py` | ✓ |
-| AVG + PER (per-group average) | `test_avg.py` | ✓ |
-| AVG + WHEN + PER | `test_avg.py` | ✓ |
-| AVG with BOOLEAN variables | `test_avg.py` | ✓ |
-| AVG with INTEGER variables | `test_avg.py` | ✓ |
-| AVG in bilinear constraint | `test_avg.py` | ✓ |
-| AVG(x) `<>` K (Big-M + RHS scaling) | `test_avg.py::test_avg_not_equal_boolean` | ✓ |
-| AVG(x) `<>` K + WHEN | `test_avg.py::test_avg_not_equal_with_when` | ✓ |
-| AVG with no decide variable (passthrough) | `test_avg.py` | — |
-| Aggregate-local WHEN on AVG | `test_aggregate_local_when.py` | ✓ |
-| Aggregate-local WHEN + AVG + PER | `test_aggregate_local_when.py` | ✓ |
-| Nested `SUM(AVG(x * cost)) PER col` with unequal groups | `test_per_objective.py::test_sum_avg_per_unequal_groups` | ✓ |
-| Nested `SUM(AVG(x * cost)) PER col` with **extreme** group-size asymmetry (1:5) | `test_per_objective.py::test_sum_avg_per_extreme_unequal_groups` | ✓ |
-| Nested `MAX(AVG(...)) PER col` (easy MAX) | `test_per_objective.py::test_minimize_max_avg_per` | ✓ |
-| Nested `MIN(AVG(...)) PER col` (easy MIN) | `test_per_objective.py::test_maximize_min_avg_per` | ✓ |
+All oracle-verified unless noted:
+
+- **Core** (`test_avg.py`): `AVG(x) op K` constraints, flat AVG objective (= SUM argmax), AVG + WHEN, AVG + PER (per-group average), AVG + WHEN + PER, BOOLEAN and INTEGER variables, AVG in bilinear constraint, `AVG(x) <> K` (Big-M + RHS scaling, plain and with WHEN), AVG with no DECIDE variable (passthrough, no oracle needed).
+- **Aggregate-local WHEN** (`test_aggregate_local_when.py`): local WHEN on AVG, and local WHEN + AVG + PER.
+- **Nested PER objectives** (`test_per_objective.py`): `SUM(AVG(x * cost)) PER col` with unequal groups, including extreme 1:5 group-size asymmetry; `MAX(AVG(...)) PER col` (easy MAX) and `MIN(AVG(...)) PER col` (easy MIN).
 
 ## Feature interactions covered
 
