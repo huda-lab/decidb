@@ -67,7 +67,8 @@ After `GRBoptimize()`, the status is checked:
 |---|---|
 | `GRB_OPTIMAL` | Extract and return solution |
 | `GRB_INFEASIBLE` | `InvalidInputException` with constraint diagnosis suggestions |
-| `GRB_UNBOUNDED` / `GRB_INF_OR_UNBD` | `InvalidInputException` suggesting bounds |
+| `GRB_UNBOUNDED` | `InvalidInputException` suggesting bounds |
+| `GRB_INF_OR_UNBD` | Disambiguated first: set `DualReductions=0` on the model's env (`GRBgetenv`) and re-optimize — yields a definitive `GRB_INFEASIBLE` or `GRB_UNBOUNDED` (Gurobi's documented recipe; presolve dual reductions are what blur the two). If the re-solve itself fails, a combined infeasible-or-unbounded `InvalidInputException` is raised |
 | `GRB_TIME_LIMIT` | `InvalidInputException` about complexity |
 | `GRB_ITERATION_LIMIT` | `InvalidInputException` about complexity |
 | Other | Generic `InvalidInputException` with status code |

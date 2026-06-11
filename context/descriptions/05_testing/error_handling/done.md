@@ -41,9 +41,11 @@ rows zero).
 `test_error_infeasible.py::TestUnboundedModels`: unbounded MAXIMIZE with
 `IS INTEGER` and with `IS REAL` (only lower bound).
 
-Error message matches `(?i)(unbounded|infeasible)` — accepts either, since
-some solvers return `INF_OR_UNBD` when they can't distinguish the two without
-further analysis.
+Error messages are matched exactly (`(?i)unbounded` here, `(?i)infeasible`
+for the infeasible class). Gurobi's ambiguous `INF_OR_UNBD` status is
+disambiguated in the backend via a `DualReductions=0` re-solve (Gurobi's
+documented recipe), so DecidB always reports the definitive status; the
+gurobipy oracle applies the same recipe.
 
 ## Solver-specific error paths
 

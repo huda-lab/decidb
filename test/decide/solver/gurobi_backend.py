@@ -167,6 +167,12 @@ class GurobiSolver(OracleSolver):
 
         t0 = time.perf_counter()
         self._model.optimize()
+        if self._model.status == gp.GRB.INF_OR_UNBD:
+            # Presolve dual reductions blur infeasible vs unbounded; Gurobi's
+            # documented recipe is to disable them and re-solve, which yields
+            # a definitive INFEASIBLE or UNBOUNDED status.
+            self._model.setParam("DualReductions", 0)
+            self._model.optimize()
         solve_time = time.perf_counter() - t0
 
         status_map = {

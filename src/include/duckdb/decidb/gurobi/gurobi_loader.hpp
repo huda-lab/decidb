@@ -51,7 +51,7 @@ static constexpr const char *GRB_INT_ATTR_STATUS = "Status";
 static constexpr const char *GRB_DBL_ATTR_X = "X";
 
 //===----------------------------------------------------------------------===//
-// Function pointer table for the 13 Gurobi C API functions DecidB uses
+// Function pointer table for the Gurobi C API functions DecidB uses
 //===----------------------------------------------------------------------===//
 
 struct GurobiAPI {
@@ -61,6 +61,9 @@ struct GurobiAPI {
 	void (*freeenv)(void *env);
 	int (*setintparam)(void *env, const char *paramname, int value);
 	int (*setdblparam)(void *env, const char *paramname, double value);
+	// Returns the model's own env copy (GRBnewmodel snapshots the env, so
+	// post-creation parameter changes must go through this env, not the original).
+	void *(*getenv_model)(void *model);
 
 	// Model management
 	int (*newmodel)(void *env, void **modelP, const char *name, int numvars,

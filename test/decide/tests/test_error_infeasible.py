@@ -26,7 +26,7 @@ class TestInfeasibleModels:
             DECIDE x IS INTEGER
             SUCH THAT x >= 10 AND x <= 5
             MAXIMIZE SUM(x * l_quantity)
-        """, match=r"(?i)(infeasible|unbounded)")
+        """, match=r"(?i)infeasible")
 
         data = duckdb_conn.execute(
             "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey < 10"
@@ -39,9 +39,7 @@ class TestInfeasibleModels:
             {f"x_{i}": data[i][0] for i in range(len(data))},
             ObjSense.MAXIMIZE,
         )
-        assert oracle_solver.solve().status in (
-            SolverStatus.INFEASIBLE, SolverStatus.UNBOUNDED, SolverStatus.ERROR,
-        )
+        assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
     def test_impossible_sum_constraint(
         self, decidb_cli, duckdb_conn, oracle_solver
@@ -52,7 +50,7 @@ class TestInfeasibleModels:
             DECIDE x IS BOOLEAN
             SUCH THAT SUM(x) >= 999999
             MAXIMIZE SUM(x * l_quantity)
-        """, match=r"(?i)(infeasible|unbounded)")
+        """, match=r"(?i)infeasible")
 
         data = duckdb_conn.execute(
             "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey = 1"
@@ -79,7 +77,7 @@ class TestInfeasibleModels:
             DECIDE x IS BOOLEAN
             SUCH THAT SUM(x) >= 1 AND SUM(x * l_quantity) <= -1
             MAXIMIZE SUM(x)
-        """, match=r"(?i)(infeasible|unbounded)")
+        """, match=r"(?i)infeasible")
 
         data = duckdb_conn.execute(
             "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey < 5"
@@ -111,7 +109,7 @@ class TestInfeasibleModels:
             SUCH THAT x <= 0 WHEN l_quantity > 0
                 AND SUM(x) >= 1
             MAXIMIZE SUM(x * l_quantity)
-        """, match=r"(?i)(infeasible|unbounded|WHEN conditions)")
+        """, match=r"(?i)(infeasible|WHEN conditions)")
 
         data = duckdb_conn.execute("""
             SELECT CAST(l_quantity AS DOUBLE)
@@ -139,8 +137,9 @@ class TestInfeasibleModels:
 @pytest.mark.error
 class TestUnboundedModels:
     """DecidB should detect unbounded models (as opposed to infeasible ones).
-    The oracle cross-verifies by also returning UNBOUNDED (or INFEASIBLE —
-    Gurobi normalises some unbounded MIPs to infeasible in its status enum)."""
+    The oracle cross-verifies by independently returning UNBOUNDED. Gurobi's
+    ambiguous INF_OR_UNBD status is disambiguated on both sides via a
+    DualReductions=0 re-solve, so exact statuses are asserted here."""
 
     def test_unbounded_integer_maximize(
         self, decidb_cli, duckdb_conn, oracle_solver
@@ -151,7 +150,7 @@ class TestUnboundedModels:
             DECIDE x IS INTEGER
             SUCH THAT x >= 1
             MAXIMIZE SUM(x)
-        """, match=r"(?i)(unbounded|infeasible)")
+        """, match=r"(?i)unbounded")
 
         data = duckdb_conn.execute(
             "SELECT 1 FROM lineitem WHERE l_orderkey <= 5"
@@ -163,9 +162,7 @@ class TestUnboundedModels:
         oracle_solver.set_objective(
             {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
         )
-        assert oracle_solver.solve().status in (
-            SolverStatus.UNBOUNDED, SolverStatus.INFEASIBLE,
-        )
+        assert oracle_solver.solve().status == SolverStatus.UNBOUNDED
 
     def test_unbounded_real_maximize(
         self, decidb_cli, duckdb_conn, oracle_solver
@@ -176,7 +173,7 @@ class TestUnboundedModels:
             DECIDE x IS REAL
             SUCH THAT x >= 0
             MAXIMIZE SUM(x)
-        """, match=r"(?i)(unbounded|infeasible)")
+        """, match=r"(?i)unbounded")
 
         data = duckdb_conn.execute(
             "SELECT 1 FROM lineitem WHERE l_orderkey <= 5"
@@ -188,9 +185,7 @@ class TestUnboundedModels:
         oracle_solver.set_objective(
             {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
         )
-        assert oracle_solver.solve().status in (
-            SolverStatus.UNBOUNDED, SolverStatus.INFEASIBLE,
-        )
+        assert oracle_solver.solve().status == SolverStatus.UNBOUNDED
 
     def test_mixed_unbounded_integer_var(
         self, decidb_cli, oracle_solver
@@ -227,6 +222,4 @@ class TestUnboundedModels:
             obj[f"x_{i}"] = data[i][1]
             obj[f"y_{i}"] = 1.0
         oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
-        assert oracle_solver.solve().status in (
-            SolverStatus.UNBOUNDED, SolverStatus.INFEASIBLE,
-        )
+        assert oracle_solver.solve().status == SolverStatus.UNBOUNDED

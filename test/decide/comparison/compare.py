@@ -211,4 +211,4 @@ def assert_optimal_match(
 
 def assert_infeasible(decidb_cli, sql: str) -> None:
     """Assert that executing *sql* on decidb raises an infeasibility error."""
-    decidb_cli.assert_error(sql, match=r"(?i)(infeasible|unbounded)")
+    decidb_cli.assert_error(sql, match=r"(?i)infeasible")

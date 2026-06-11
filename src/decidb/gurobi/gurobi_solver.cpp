@@ -199,6 +199,25 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                                 api.geterrormsg(guard.env));
     }
 
+    // Presolve's dual reductions are only valid for feasible, bounded models;
+    // when they fire on a model that is neither, Gurobi can only report the
+    // ambiguous INF_OR_UNBD. Gurobi's documented recipe: disable dual
+    // reductions and re-solve, which yields a definitive INFEASIBLE or
+    // UNBOUNDED. The extra solve only happens in this rare ambiguous case.
+    if (status == GRB_INF_OR_UNBD) {
+        void *model_env = api.getenv_model(guard.model);
+        if (model_env && api.setintparam(model_env, "DualReductions", 0) == 0 &&
+            api.optimize(guard.model) == 0) {
+            error = api.getintattr(guard.model, GRB_INT_ATTR_STATUS, &status);
+            if (error) {
+                throw InternalException("Failed to get Gurobi status: %s",
+                                        api.geterrormsg(guard.env));
+            }
+        }
+        // If disambiguation itself failed, fall through with the original
+        // INF_OR_UNBD status; the branch below reports both possibilities.
+    }
+
     // Soundness: never relabel a non-OPTIMAL termination to OPTIMAL. A
     // suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
     // not a proof of optimality; returning it as if it were would silently
@@ -215,7 +234,7 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                 "  • SUM constraints impossible to satisfy with available data\n"
                 "  • Variable types too restrictive (BOOLEAN when INTEGER needed)\n\n"
                 "Suggestion: Try relaxing constraints or verify input data.");
-        } else if (status == GRB_UNBOUNDED || status == GRB_INF_OR_UNBD) {
+        } else if (status == GRB_UNBOUNDED) {
             throw InvalidInputException(
                 "DECIDE optimization is unbounded: The objective can grow infinitely.\n\n"
                 "This means the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n"
@@ -224,6 +243,14 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
                 "  • Add upper bounds: SUCH THAT x <= 100\n"
                 "  • Add budget limits: SUCH THAT SUM(x * cost) <= budget\n"
                 "  • Use BOOLEAN instead of INTEGER for selection problems");
+        } else if (status == GRB_INF_OR_UNBD) {
+            // Only reachable if the DualReductions=0 re-solve above failed.
+            throw InvalidInputException(
+                "DECIDE optimization is infeasible or unbounded.\n\n"
+                "Either the SUCH THAT conditions cannot all be met simultaneously,\n"
+                "or the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n\n"
+                "Suggestion: Check for contradictory constraints, and ensure the\n"
+                "decision variables are bounded (e.g., SUCH THAT x <= 100).");
         } else if (status == GRB_TIME_LIMIT) {
             throw InvalidInputException(
                 "DECIDE optimization exceeded time limit.\n"
