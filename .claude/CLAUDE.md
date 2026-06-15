@@ -101,19 +101,20 @@ See `.claude/lessons.md` for corrections and gotchas discovered during developme
 
 ## Development Priorities
 
-1. **Performance**: Use `/bench` for the optimize-measure loop. Solver dominates (~95% at scale). Focus on reducing solver input size and improving formulations.
-   - Methodology: `context/descriptions/02_operations/benchmarking.md`
-   - History of applied optimizations + outcomes: `context/descriptions/06_performance/`
-2. **Expressivity**: See `context/descriptions/03_expressivity/` (each keyword has `done.md`/`todo.md`)
-3. **Optimizer**: matrix efficiency, algebraic rewrites (Big-M reformulation, push-down / pull-out)
-   - See `context/descriptions/04_optimizer/` (each strategy area has `done.md`/`todo.md`; start with its `README.md`)
+**Current focus: Query Diagnostics & Solver Behavior.** Turn failed or useless DECIDE solves (infeasible / unbounded / slow) into actionable, **least-change** diagnoses — why it failed and the smallest edit that restores a usable solution — and empirically characterize how Gurobi and HiGHS behave on these cases (status codes, unbounded rays, incumbents at timeout, time limits, interrupts) before building on them.
+   - Area docs + build order: `context/descriptions/08_query_diagnostics/` — start with its `README.md`. Shared plumbing in `foundations/`, then per-state `infeasible/` (flagship elastic engine) · `unbounded/` · `slow/`, each with `done.md`/`todo.md`.
+   - Principles: **manual-first** (diagnosis is opt-in via `PRAGMA diagnose_decide`; never silently spend a second solve or edit the user's query) and **solver-agnostic** (build the elastic model in our own model builder so both backends run it; Gurobi-only APIs like `feasRelax` are accelerators, never dependencies).
+   - Solver-behavior groundwork: probe both backends first — the items marked 🔬 in the `08_query_diagnostics/` todos (HiGHS time-limit/status/ray/warm-start, the interrupt mechanism) are empirical unknowns to resolve before implementing.
+
+Ongoing (secondary):
+- **Optimizer**: matrix efficiency, algebraic rewrites (Big-M reformulation, push-down / pull-out). `context/descriptions/04_optimizer/` (each strategy area has `done.md`/`todo.md`; start with its `README.md`).
 
 ## Documentation
 
 Full docs in `context/descriptions/` — start with `README.md` there for navigation and reading order.
 Key areas: `00_project_overview/` (syntax spec), `01_pipeline/` (architecture), `03_expressivity/` (feature status), `04_optimizer/` (rewrite strategies).
 
-**MANDATORY: Keep docs in sync with code changes.** Whenever a code change affects the behavior, semantics, or implementation of a feature documented in `context/descriptions/`, you MUST update the relevant `done.md` (and `todo.md` if applicable) in the same work session. This includes:
+**MANDATORY: Keep docs in sync with code changes.** Whenever a code change affects the behavior, semantics, or implementation of a feature documented in `context/descriptions/`, you MUST update the relevant `done.md` (and `todo.md` if applicable) or `{description}.md` file in the same work session. This includes:
 - Semantic changes (how a feature works)
 - Implementation changes (data structures, code paths, function signatures)
 - Code Pointers sections (line numbers, file references, tag constants)

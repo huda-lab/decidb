@@ -7,7 +7,7 @@ structured for quick navigation by both AI agents and human developers.
 
 ## Convention: done.md / todo.md
 
-In `03_expressivity/`, `04_optimizer/`, and `05_testing/`, each feature area is a **subfolder** containing:
+In `03_expressivity/`, `04_optimizer/`, `05_testing/`, and `08_query_diagnostics/`, each feature area is a **subfolder** containing:
 
 - **`done.md`** — What is implemented today: semantics, implementation notes, and code pointers
 - **`todo.md`** — What remains to be built: design rationale, implementation suggestions
@@ -28,6 +28,7 @@ This makes it trivial to determine what exists vs. what needs building.
 | `05_testing/`          | Test coverage tracking — which scenarios are oracle-verified vs. feasibility-only, and what gaps remain            | You are adding tests, auditing coverage, or debugging a suspected correctness regression |
 | `06_performance/`      | Append-only log of performance optimizations applied to DeciDB. One file per optimization batch, dated, with hypothesis + measured outcome. | You want to know what's already been tried, or you're about to commit a perf change and need to record it |
 | `07_issues/`           | Issue tracking: `bugs/` (open bugs in `todo.md`, lessons from resolved bugs in `done.md`) and `code_quality/` (open code-quality issues in `todo.md`) | You hit an unexpected error, want the known traps before touching grammar/solver/linearization code, or are looking for logged cleanup work |
+| `08_query_diagnostics/` | Diagnosing failed/useless DECIDE solves (infeasible / unbounded / slow): the elastic relaxation engine, ray diagnosis, and the shared `foundations/` plumbing. Each state is a subfolder with done.md/todo.md; start at its `README.md`. | You are working on turning a solver failure into an actionable, least-change diagnosis |
 
 ---
 
