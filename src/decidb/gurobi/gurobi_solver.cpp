@@ -47,7 +47,7 @@ bool GurobiSolver::IsAvailable() {
     return available;
 }
 
-vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
+SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
     auto &api = GurobiLoader::API();
     idx_t total_vars = ilp.num_vars;
 
@@ -221,52 +221,35 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
     // Soundness: never relabel a non-OPTIMAL termination to OPTIMAL. A
     // suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
     // not a proof of optimality; returning it as if it were would silently
-    // mislead the caller. We throw a clear error instead. The TimeLimit set
-    // above keeps the session from hanging; surfacing it as a query error
-    // (rather than relabeling to OPTIMAL) preserves correctness.
+    // mislead the caller. Instead we map the raw status to a SolverStatus and
+    // return it (no solution); the operator surfaces the default error
+    // (manual-first) or, with a diagnose pragma, routes it to diagnosis.
     if (status != GRB_OPTIMAL) {
-        if (status == GRB_INFEASIBLE) {
-            throw InvalidInputException(
-                "DECIDE optimization is infeasible: No valid solution exists that satisfies all constraints.\n\n"
-                "This means the SUCH THAT conditions cannot all be met simultaneously.\n\n"
-                "Common causes:\n"
-                "  • Contradictory bounds (e.g., x >= 10 AND x <= 5)\n"
-                "  • SUM constraints impossible to satisfy with available data\n"
-                "  • Variable types too restrictive (BOOLEAN when INTEGER needed)\n\n"
-                "Suggestion: Try relaxing constraints or verify input data.");
-        } else if (status == GRB_UNBOUNDED) {
-            throw InvalidInputException(
-                "DECIDE optimization is unbounded: The objective can grow infinitely.\n\n"
-                "This means the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n"
-                "You must add constraints to bound the decision variables.\n\n"
-                "Examples:\n"
-                "  • Add upper bounds: SUCH THAT x <= 100\n"
-                "  • Add budget limits: SUCH THAT SUM(x * cost) <= budget\n"
-                "  • Use BOOLEAN instead of INTEGER for selection problems");
-        } else if (status == GRB_INF_OR_UNBD) {
-            // Only reachable if the DualReductions=0 re-solve above failed.
-            throw InvalidInputException(
-                "DECIDE optimization is infeasible or unbounded.\n\n"
-                "Either the SUCH THAT conditions cannot all be met simultaneously,\n"
-                "or the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n\n"
-                "Suggestion: Check for contradictory constraints, and ensure the\n"
-                "decision variables are bounded (e.g., SUCH THAT x <= 100).");
-        } else if (status == GRB_TIME_LIMIT) {
-            throw InvalidInputException(
-                "DECIDE optimization exceeded time limit.\n"
-                "The problem may be too complex to solve in reasonable time.\n"
-                "Try simplifying constraints or reducing data size.");
-        } else if (status == GRB_ITERATION_LIMIT) {
-            throw InvalidInputException(
-                "DECIDE optimization exceeded iteration limit.\n"
-                "The problem may be too complex. Try simplifying constraints.");
-        } else {
-            throw InvalidInputException(
-                "DECIDE optimization failed with Gurobi status %d.\n"
-                "The optimization could not find a solution.\n"
-                "This may indicate a problem with the constraints or objective.",
-                status);
+        SolverResult result;
+        result.raw_status = status;
+        switch (status) {
+        case GRB_INFEASIBLE:
+            result.status = SolverStatus::INFEASIBLE;
+            break;
+        case GRB_UNBOUNDED:
+            result.status = SolverStatus::UNBOUNDED;
+            break;
+        case GRB_INF_OR_UNBD:
+            // Only reachable if the DualReductions=0 re-solve above failed to
+            // disambiguate.
+            result.status = SolverStatus::INF_OR_UNBD;
+            break;
+        case GRB_TIME_LIMIT:
+            result.status = SolverStatus::TIME_LIMIT;
+            break;
+        case GRB_ITERATION_LIMIT:
+            result.status = SolverStatus::ITERATION_LIMIT;
+            break;
+        default:
+            result.status = SolverStatus::OTHER;
+            break;
         }
+        return result;
     }
 
     //===--------------------------------------------------------------------===//
@@ -287,7 +270,10 @@ vector<double> GurobiSolver::Solve(const SolverModel &ilp) {
         }
     }
 
-    return result;
+    SolverResult solve_result;
+    solve_result.status = SolverStatus::OPTIMAL;
+    solve_result.solution = std::move(result);
+    return solve_result;
 }
 
 } // namespace duckdb

@@ -5024,7 +5024,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_timer.Start();
     }
 
-    gstate.ilp_solution = SolveModel(solver_input, var_indexer);
+    SolverResult solve_result = SolveModel(solver_input, var_indexer);
+    if (solve_result.status != SolverStatus::OPTIMAL) {
+        // Manual-first: surface the default error for a non-optimal solve. The
+        // F4 diagnose pragma will later gate this call to route the status into
+        // diagnosis (infeasible / unbounded / slow) instead of throwing.
+        ThrowDecideSolveError(solve_result);
+    }
+    gstate.ilp_solution = std::move(solve_result.solution);
     // Move the indexer onto gstate now that solve is complete; readback in
     // Execute() needs it to outlive solver_input.
     gstate.var_indexer = std::move(var_indexer);

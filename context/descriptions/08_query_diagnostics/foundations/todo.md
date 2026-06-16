@@ -5,7 +5,7 @@ state engine depends on these. Checklist with dependencies; detail follows.
 
 ## Checklist
 
-- [ ] **F1 · Structured solver result** (v1.3) — deps: none
+- [x] **F1 · Structured solver result** (v1.3) — deps: none — ✅ **done**, see `done.md`
 - [ ] **F2 · Constraint provenance** (v1.2-A) — deps: none
 - [ ] **F3 · Relaxability tagging** (v1.2-B) — deps: F2
 - [ ] **F4 · Invocation pragma `PRAGMA diagnose_decide`** — deps: F1
@@ -18,41 +18,29 @@ linearizations reused by the elastic engine (`infeasible/` I3).
 
 ---
 
-## F1 · Structured solver result
+## F1 · Structured solver result — ✅ implemented
 
-**Goal.** Replace the bare `vector<double>` return with a result struct carrying
-status + diagnostics, so callers branch on outcome instead of catching an
-exception.
+See `done.md` for the landed design and code pointers. Summary: `SolveModel` and
+both backends now return a `SolverResult { status, solution, ray, raw_status }`
+(`SolverStatus` enum incl. `INF_OR_UNBD`); backends map-and-return instead of
+throwing on solver status; HiGHS `kUnboundedOrInfeasible` (9) → `INF_OR_UNBD`; the
+default error text is the single helper `ThrowDecideSolveError`, called by the
+operator (manual-first) — the F4 pragma will gate that call site.
 
-Today `SolveModel` returns `vector<double>` (`src/include/duckdb/decidb/ilp_solver.hpp:29`)
-and both backends *throw* on any non-optimal status. **Confirmed (P1): the status
-is always in hand before the throw — F1 is a pure refactor, no new solver calls.**
-Verified throw sites: Gurobi `gurobi_solver.cpp:229/238/248/255/260/264`, HiGHS
-`deterministic_naive.cpp:208/217/226/231/236`.
+**Resolved decisions:**
+- **Throw site = operator (F4-ready).** Backends + facade never throw on solver
+  status; `PhysicalDecide::Finalize` throws the default message on non-optimal.
+- **Timeout data deferred to the slow branch.** F1 populates only `status` +
+  `solution` (+ empty `ray`). Incumbent / objective / best-bound / gap and HiGHS
+  `time_limit` honoring land with the slow branch (S1/S2).
 
-**Build.**
-- Result struct: `status` enum {optimal, infeasible, unbounded, inf_or_unbd,
-  time_limit}, `solution` (when present), `incumbent`, `best_bound`, `gap`, and a
-  ray/diagnosis slot. **Must model HiGHS `kUnboundedOrInfeasible` (status 9) →
-  `inf_or_unbd` (P2/P3): HiGHS returns it on MILP-unbounded and the naive backend
-  currently drops it into a generic catch-all.**
-- Stop throwing on non-optimal; return the status. Default user-facing behavior
-  still errors (manual-first) — this only makes the info *available*.
-- Keep Gurobi's incumbent at TIME_LIMIT (currently discarded — it throws without
-  reading `SolCount`, `gurobi_solver.cpp:254`).
+**Still-open carry-overs (not F1):**
+- 🔬 confirm HiGHS honors `time_limit` and returns a usable status on timeout
+  (slow branch).
 - **Separate infeasibility source (P3):** single-variable contradictions are
   caught by a pre-solve bound check in the model builder and never reach the
-  solver status switch — relevant to the infeasible engine; F1's status model
+  solver status switch — relevant to the infeasible engine; the status model
   isn't the only failure surface.
-- 🔬 **Probe (slow-case, still open):** confirm HiGHS honors `time_limit` (none is
-  set in `deterministic_naive.cpp` today) and returns a usable status on timeout.
-  (The infeasible / unbounded status questions are now answered — P3.)
-
-**Test.** Status parity across backends on constructed optimal / infeasible /
-unbounded / timeout inputs; incumbent retained at timeout; HiGHS honors
-`time_limit`.
-
-**Gates:** everything.
 
 ---
 
@@ -85,8 +73,9 @@ Today `ModelConstraint` carries only indices / coefficients / sense / rhs
 **Test.** Provenance correct across aggregate / PER / per-row shapes; reverse
 index round-trips. Bonus: improves EXPLAIN output and error messages generally.
 
-**Gates:** F3, F5, the elastic engine, infeasibility reporting. (Variable naming
-for ray→SQL mapping is F6, not F2.)
+**Gates:** F3, F5, the elastic engine, infeasibility reporting, **unbounded
+reporting (U3, via F5)**. (Variable *naming* for ray→SQL mapping is F6, not F2;
+F2 supplies the clause-level labels F5 renders for every state.)
 
 ---
 
@@ -164,7 +153,8 @@ user-clause level.
 unit conversions match the typed user value; per-group rows don't collapse to a
 single clause when groups diverge.
 
-**Deps:** F2. **Used by:** infeasibility reporting (I4).
+**Deps:** F2. **Used by:** infeasibility reporting (I4), unbounded ray reporting
+(U3) — the shared reporting surface across all diagnosis states.
 
 ---
 

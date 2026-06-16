@@ -9,7 +9,7 @@ add a bound or fix a sign error — you can't relax your way out), but the
 
 - [ ] **U1 · HiGHS INF_OR_UNBD disambiguation** (obj=0 probe) — deps: F1
 - [ ] **U2 · Ray extraction** (portable fallback only) — deps: F1
-- [ ] **U3 · Ray→SQL mapping + reporting** (full output) — deps: U2, F6, F4, F5
+- [ ] **U3 · Ray→SQL mapping + reporting** (full output) — deps: U2, F6, F2, F4, F5
 
 > **Already done (Gurobi):** INF_OR_UNBD disambiguation via `DualReductions=0`
 > re-solve (`gurobi_solver.cpp:202-219`). See `done.md`.
@@ -90,8 +90,18 @@ bounded/feasible inputs yield no ray.
   upper bound." **Never pick the bound value** — any finite bound works; the right
   number is domain knowledge. Open: whether to *suggest* an example value (e.g.
   the largest RHS in scope) or stay silent to avoid a bad anchor.
+- **Shared reporting surface (why F2 is a dep):** U3 emits through the unified
+  **F5** relation, not a one-off variable-only format, so every diagnosis state
+  renders consistently — and **F5 needs F2** for clause-level labels. Unbounded's
+  *own* content is variable-centric (F6 names the escaping vars), so F2's primary
+  payoff here is **building + battle-testing the shared F2+F5 reporting stack on
+  the simpler unbounded case** before the infeasible engine relies on it.
+  *Optional enrichment F2 enables (not v1):* a constraint-aware line — "clause N
+  references escaping var x but never bounds it."
 
 **Test (differential).** Correct escaping variables named — user vars AND aux vars
 traced to their source expression; `INF_OR_UNBD` routes correctly.
 
-**Deps:** U2, **F6** (variable provenance — full, incl. aux→expression), F4, F5.
+**Deps:** U2, **F6** (variable provenance — full, incl. aux→expression),
+**F2** (constraint provenance — supplies F5's clause labels; see note above),
+F4, F5.
