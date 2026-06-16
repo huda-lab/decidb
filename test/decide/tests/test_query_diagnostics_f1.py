@@ -6,7 +6,7 @@ tests pin the externally visible contract until F4 adds the diagnose pragma:
 
   * optimal statuses still return normal DECIDE rows;
   * non-optimal statuses still surface the friendly DECIDE errors;
-  * HiGHS's ambiguous MILP status 9 no longer leaks as "solver status 9".
+  * HiGHS's ambiguous MILP status 9 is disambiguated to a definitive error.
 """
 
 import pytest
@@ -103,17 +103,29 @@ class TestF1StructuredSolverResult:
         _assert_friendly_error(decidb_cli_highs, sql, required)
 
     @pytest.mark.error
-    def test_highs_inf_or_unbd_status_9_is_not_generic(
+    def test_highs_inf_or_unbd_status_9_is_disambiguated(
         self, decidb_cli_highs
     ):
         """HiGHS MILP-unbounded can report kUnboundedOrInfeasible (raw 9).
 
-        F1 must map that to INF_OR_UNBD, whose default message mentions
-        unboundedness, instead of falling through to the generic raw-status
-        message. U1 may later disambiguate this to a definitive unbounded error;
-        either way, raw "solver status 9" must not leak.
+        F1 maps that to INF_OR_UNBD instead of falling through to the generic
+        raw-status message. U1 then re-solves with objective=0 and converts this
+        case to a definitive unbounded error.
         """
-        _assert_friendly_error(decidb_cli_highs, _UNBOUNDED_MILP_SQL, "unbounded")
+        combined = _combined_error(decidb_cli_highs, _UNBOUNDED_MILP_SQL)
+        lower = combined.lower()
+        assert "decide optimization is unbounded" in lower, (
+            "U1 regression: HiGHS status 9 was not disambiguated to a "
+            f"definitive unbounded error:\n{combined[:700]}"
+        )
+        assert "infeasible or unbounded" not in lower, (
+            "U1 regression: ambiguous INF_OR_UNBD message leaked through:\n"
+            f"{combined[:700]}"
+        )
+        assert "solver status" not in lower, (
+            "F1 regression: raw backend status leaked through the user-facing "
+            f"error:\n{combined[:700]}"
+        )
 
     @pytest.mark.error
     @pytest.mark.parametrize(

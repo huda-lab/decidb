@@ -17,6 +17,21 @@
 
 namespace duckdb {
 
+//! Backend chosen for a prepared SolverModel solve. Kept explicit so diagnostic
+//! re-solves can use the same backend as the primary solve.
+enum class SolverBackend {
+	GUROBI,
+	HIGHS
+};
+
+//! Resolve the backend DeciDB should use for this solve, honoring the
+//! DECIDB_FORCE_SOLVER test override and otherwise preferring Gurobi.
+SolverBackend SelectSolverBackend();
+
+//! Solve an already-built SolverModel with the selected backend. Diagnostic
+//! engines use this to run transformed models without rebuilding SolverInput.
+SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend);
+
 //! Builds a SolverModel from the given SolverInput, selects the best available
 //! solver backend (Gurobi if licensed, otherwise HiGHS), solves, and returns a
 //! SolverResult: the terminal status plus, when optimal, the solution vector of

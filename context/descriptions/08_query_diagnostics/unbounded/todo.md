@@ -7,33 +7,12 @@ add a bound or fix a sign error — you can't relax your way out), but the
 
 ## Checklist
 
-- [ ] **U1 · HiGHS INF_OR_UNBD disambiguation** (obj=0 probe) — deps: F1
+- [x] **U1 · HiGHS INF_OR_UNBD disambiguation** (obj=0 probe) — deps: F1 — ✅ **done**, see `done.md`
 - [ ] **U2 · Ray extraction** (portable fallback only) — deps: F1
 - [ ] **U3 · Ray→SQL mapping + reporting** (full output) — deps: U2, F6, F2, F4, F5
 
-> **Already done (Gurobi):** INF_OR_UNBD disambiguation via `DualReductions=0`
-> re-solve (`gurobi_solver.cpp:202-219`). See `done.md`.
-
----
-
-## U1 · HiGHS INF_OR_UNBD disambiguation (obj=0 probe)
-
-**Goal.** Gurobi already disambiguates (above). Provide the portable equivalent
-for HiGHS: the **objective=0 probe** — re-solve with the objective replaced by 0;
-feasible ⇒ unbounded, infeasible ⇒ route to `infeasible/`.
-
-**Confirmed by probe (P2/P3/P4):** HiGHS *does* return the ambiguous
-`kUnboundedOrInfeasible` (status 9) on MILP-unbounded models, and the naive
-backend mishandles it today — it falls into the generic "solver status 9"
-catch-all (`deterministic_naive.cpp:235-241`). The obj=0 re-solve disambiguates
-cleanly on both backends (feasible ⇒ unbounded), MILP included.
-Redundant-but-harmless for LP (HiGHS already returns a definitive `kUnbounded`).
-
-**Build.** Add an explicit `kUnboundedOrInfeasible` branch in
-`deterministic_naive.cpp`; on hitting it, re-solve with the objective zeroed and
-classify by feasibility.
-
-**Deps:** F1.
+> INF_OR_UNBD disambiguation is complete for both backends: Gurobi via
+> `DualReductions=0`, HiGHS via U1's zero-objective probe. See `done.md`.
 
 ---
 

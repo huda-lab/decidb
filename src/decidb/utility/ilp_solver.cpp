@@ -1,4 +1,5 @@
 #include "duckdb/decidb/ilp_solver.hpp"
+#include "duckdb/decidb/diagnostic_solves.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
@@ -9,9 +10,7 @@
 
 namespace duckdb {
 
-SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer) {
-    SolverModel model = SolverModel::Build(input, indexer);
-
+SolverBackend SelectSolverBackend() {
     // Test-only override: DECIDB_FORCE_SOLVER=highs|gurobi pins the backend.
     // Used by the DECIDE test suite (see test/decide/conftest.py fixtures
     // decidb_cli_highs / decidb_cli_gurobi) to exercise both backends on a
@@ -19,21 +18,60 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer) {
     if (const char *force = std::getenv("DECIDB_FORCE_SOLVER")) {
         std::string choice(force);
         if (choice == "highs" || choice == "HIGHS") {
-            return DeterministicNaive::Solve(model);
+            return SolverBackend::HIGHS;
         }
         if (choice == "gurobi" || choice == "GUROBI") {
             if (!GurobiSolver::IsAvailable()) {
                 throw InvalidInputException(
                     "DECIDB_FORCE_SOLVER=gurobi but Gurobi is not available on this host");
             }
-            return GurobiSolver::Solve(model);
+            return SolverBackend::GUROBI;
         }
     }
 
     if (GurobiSolver::IsAvailable()) {
-        return GurobiSolver::Solve(model);
+        return SolverBackend::GUROBI;
     }
-    return DeterministicNaive::Solve(model);
+    return SolverBackend::HIGHS;
+}
+
+SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend) {
+    switch (backend) {
+    case SolverBackend::GUROBI:
+        return GurobiSolver::Solve(model);
+    case SolverBackend::HIGHS:
+        return DeterministicNaive::Solve(model);
+    }
+    throw InternalException("Unknown DECIDE solver backend");
+}
+
+static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBackend backend,
+                                          const SolverResult &original) {
+    if (original.status != SolverStatus::INF_OR_UNBD) {
+        return original;
+    }
+
+    SolverModel probe_model = MakeZeroObjectiveProbeModel(model);
+    SolverResult probe_result = SolvePreparedModel(probe_model, backend);
+
+    SolverResult disambiguated = original;
+    switch (probe_result.status) {
+    case SolverStatus::OPTIMAL:
+        disambiguated.status = SolverStatus::UNBOUNDED;
+        return disambiguated;
+    case SolverStatus::INFEASIBLE:
+        disambiguated.status = SolverStatus::INFEASIBLE;
+        return disambiguated;
+    default:
+        return original;
+    }
+}
+
+SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer) {
+    SolverModel model = SolverModel::Build(input, indexer);
+    SolverBackend backend = SelectSolverBackend();
+    SolverResult result = SolvePreparedModel(model, backend);
+    return DisambiguateInfOrUnbd(model, backend, result);
 }
 
 void ThrowDecideSolveError(const SolverResult &result) {
