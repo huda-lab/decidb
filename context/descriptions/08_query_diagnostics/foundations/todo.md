@@ -10,6 +10,7 @@ state engine depends on these. Checklist with dependencies; detail follows.
 - [ ] **F3 · Relaxability tagging** (v1.2-B) — deps: F2
 - [ ] **F4 · Invocation pragma `PRAGMA diagnose_decide`** — deps: F1
 - [ ] **F5 · Diagnostic reporting relation** — deps: F2
+- [ ] **F6 · Variable provenance** (column-side; index→name + aux→expression) — deps: none; used by U3
 
 External dependency (tracked in `03_expressivity/sql_functions/todo.md`):
 **decision-variable norms (v1.1)** — abs-aux / count-binary+Big-M / max-aux
@@ -24,20 +25,28 @@ status + diagnostics, so callers branch on outcome instead of catching an
 exception.
 
 Today `SolveModel` returns `vector<double>` (`src/include/duckdb/decidb/ilp_solver.hpp:29`)
-and both backends *throw* on any non-optimal status (`gurobi_solver.cpp:227`,
-`deterministic_naive.cpp:207`).
+and both backends *throw* on any non-optimal status. **Confirmed (P1): the status
+is always in hand before the throw — F1 is a pure refactor, no new solver calls.**
+Verified throw sites: Gurobi `gurobi_solver.cpp:229/238/248/255/260/264`, HiGHS
+`deterministic_naive.cpp:208/217/226/231/236`.
 
 **Build.**
 - Result struct: `status` enum {optimal, infeasible, unbounded, inf_or_unbd,
   time_limit}, `solution` (when present), `incumbent`, `best_bound`, `gap`, and a
-  ray/diagnosis slot.
+  ray/diagnosis slot. **Must model HiGHS `kUnboundedOrInfeasible` (status 9) →
+  `inf_or_unbd` (P2/P3): HiGHS returns it on MILP-unbounded and the naive backend
+  currently drops it into a generic catch-all.**
 - Stop throwing on non-optimal; return the status. Default user-facing behavior
   still errors (manual-first) — this only makes the info *available*.
 - Keep Gurobi's incumbent at TIME_LIMIT (currently discarded — it throws without
   reading `SolCount`, `gurobi_solver.cpp:254`).
-- 🔬 **Probe:** confirm HiGHS honors `time_limit` (none is set in
-  `deterministic_naive.cpp` today) and returns a usable status on
-  timeout / infeasible / unbounded.
+- **Separate infeasibility source (P3):** single-variable contradictions are
+  caught by a pre-solve bound check in the model builder and never reach the
+  solver status switch — relevant to the infeasible engine; F1's status model
+  isn't the only failure surface.
+- 🔬 **Probe (slow-case, still open):** confirm HiGHS honors `time_limit` (none is
+  set in `deterministic_naive.cpp` today) and returns a usable status on timeout.
+  (The infeasible / unbounded status questions are now answered — P3.)
 
 **Test.** Status parity across backends on constructed optimal / infeasible /
 unbounded / timeout inputs; incumbent retained at timeout; HiGHS honors
@@ -51,6 +60,11 @@ unbounded / timeout inputs; incumbent retained at timeout; HiGHS honors
 
 **Goal.** Map every emitted matrix row back to the user clause that produced it —
 diagnosis reports at the clause level, so nothing works without this.
+
+**Scope (P7).** F2 is *constraint/row* provenance (which clause a row came from).
+It does **not** provide variable names — naming an escaping *variable* (U3) needs
+*column-side* provenance, the separate **F6**. F2 = rows → clauses; F6 = columns →
+user variables/expressions.
 
 Today `ModelConstraint` carries only indices / coefficients / sense / rhs
 (`src/include/duckdb/decidb/ilp_model.hpp:78-83`) — no provenance.
@@ -71,7 +85,8 @@ Today `ModelConstraint` carries only indices / coefficients / sense / rhs
 **Test.** Provenance correct across aggregate / PER / per-row shapes; reverse
 index round-trips. Bonus: improves EXPLAIN output and error messages generally.
 
-**Gates:** F3, F5, the elastic engine, ray→SQL mapping, all reporting.
+**Gates:** F3, F5, the elastic engine, infeasibility reporting. (Variable naming
+for ray→SQL mapping is F6, not F2.)
 
 ---
 
@@ -150,3 +165,35 @@ unit conversions match the typed user value; per-group rows don't collapse to a
 single clause when groups diverge.
 
 **Deps:** F2. **Used by:** infeasibility reporting (I4).
+
+---
+
+## F6 · Variable provenance (column-side)
+
+**Goal.** Map every solver *column* back to the user-facing thing it represents,
+so the unbounded diagnosis can name the escaping variable (U3). The column-side
+complement of F2 (which does rows/clauses).
+
+Today names die at the solver boundary (P7): `VarIndexer` (`ilp_model.hpp:23-75`)
+maps `(decide_var_idx, row)` → flat column index, but no names reach `SolverInput`
+/ `SolverModel`. User names live only in `LogicalDecide.decide_variables[*].alias`
+(`logical_decide.hpp:51`). Auxiliary columns from linearization (`__abs_aux_N__`,
+`__bilinear_aux_N__`, `__minmax_ind_N__`, `__ne_ind_N__`) carry generated names +
+partial link metadata, but **no link to the source expression**.
+
+**Build (full — per the U3 "full output" decision).**
+- **User variables:** thread the `.alias` from `LogicalDecide` through to the
+  solver result so a column index resolves to the user's variable name. Modest.
+- **Auxiliary variables:** capture an aux→source-expression link at optimizer
+  time (where the expressions still exist — the ABS / MIN-MAX / McCormick / `<>`
+  passes in `src/optimizer/decide/decide_optimizer.cpp`), so an escaping aux
+  resolves to the user's original `ABS(...)` / `MAX(...)` / product expression,
+  not the internal name. ~300–400 lines across LogicalDecide + execution layer
+  (P7). **This is the bulk of the "full output" cost.**
+- Reverse map: flat column index → `(decide var | aux)` → name / expression.
+
+**Test.** A column index resolves to the correct user variable name; an auxiliary
+column resolves to its originating user expression across ABS / MIN-MAX /
+McCormick / `<>`.
+
+**Deps:** none. **Used by:** U3 (ray→SQL naming). Column-side complement of F2.

@@ -36,8 +36,9 @@ a too-open one); slow is a runtime event masking the other states.
 ## Folders
 
 - `foundations/` — shared plumbing every state consumes: structured solver
-  result, constraint provenance + relaxability tagging, the invocation pragma,
-  the diagnostic reporting relation. **Build first — gates everything.**
+  result, constraint provenance (F2) + variable provenance (F6) + relaxability
+  tagging, the invocation pragma, the diagnostic reporting relation. **Build
+  first — gates everything.**
 - `infeasible/` — the elastic relaxation engine, per-constraint-type slack
   treatment, and reporting.
 - `unbounded/` — ray extraction, ray→SQL mapping, reporting.
@@ -47,10 +48,10 @@ a too-open one); slow is a runtime event masking the other states.
 ## Build order (dependency tiers)
 
 ```
-Tier 1  F1 structured-result · F2 provenance ─ F3 relaxability · F5 reporting-relation
-        F4 pragma (needs F1)
-Tier 2  I1/I2 elastic · U1/U2 ray                 (engines; each needs Tier 1)
-Tier 3  I4 infeasible-reporting · U3 ray-reporting · S1–S4 slow
+Tier 1  F1 structured-result · F2 constraint-prov · F6 variable-prov
+        F3 relaxability (needs F2) · F5 reporting-relation (needs F2) · F4 pragma (needs F1)
+Tier 2  I1/I2 elastic · U1 disambiguation · U2 ray (fallback-only)   (engines; need Tier 1)
+Tier 3  I4 infeasible-reporting · U3 ray-reporting (full) · S1–S4 slow
 ```
 
 ## Invocation — `PRAGMA diagnose_decide`
