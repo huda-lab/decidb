@@ -24,6 +24,13 @@ enum class SolverBackend {
 	HIGHS
 };
 
+//! Internal solver toggles for diagnostic-only follow-up solves. The default
+//! preserves today's user-facing path: non-optimal solves return a status and
+//! no extra diagnostic artifacts.
+struct SolveModelOptions {
+	bool extract_unbounded_ray = false;
+};
+
 //! Resolve the backend DeciDB should use for this solve, honoring the
 //! DECIDB_FORCE_SOLVER test override and otherwise preferring Gurobi.
 SolverBackend SelectSolverBackend();
@@ -45,6 +52,8 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend)
 //!
 //! `indexer` is the VarIndexer constructed once in Finalize() and threaded
 //! through here to avoid duplicate construction inside SolverModel::Build().
+SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
+                         const SolveModelOptions &options);
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer);
 
 } // namespace duckdb

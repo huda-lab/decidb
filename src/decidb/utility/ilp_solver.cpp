@@ -5,10 +5,52 @@
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
 #include "duckdb/common/exception.hpp"
 
+#include <cmath>
 #include <cstdlib>
 #include <string>
+#include <utility>
 
 namespace duckdb {
+
+namespace {
+
+constexpr double UNBOUNDED_RAY_IMPROVEMENT_EPSILON = 1e-8;
+
+double ComputeLinearObjectiveValue(const SolverModel &model, const vector<double> &solution) {
+	if (solution.size() != model.obj_coeffs.size()) {
+		return 0.0;
+	}
+
+	double objective = 0.0;
+	for (idx_t col = 0; col < solution.size(); col++) {
+		objective += model.obj_coeffs[col] * solution[col];
+	}
+	return objective;
+}
+
+void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backend,
+                                   const SolveModelOptions &options, SolverResult &result) {
+	if (!options.extract_unbounded_ray || result.status != SolverStatus::UNBOUNDED) {
+		return;
+	}
+
+	SolverModel ray_model;
+	if (!BuildUnboundedRayFallbackModel(model, ray_model)) {
+		return;
+	}
+
+	SolverResult ray_result = SolvePreparedModel(ray_model, backend);
+	if (ray_result.status != SolverStatus::OPTIMAL || ray_result.solution.size() != model.num_vars) {
+		return;
+	}
+
+	double improvement = ComputeLinearObjectiveValue(ray_model, ray_result.solution);
+	if (std::isfinite(improvement) && improvement > UNBOUNDED_RAY_IMPROVEMENT_EPSILON) {
+		result.ray = std::move(ray_result.solution);
+	}
+}
+
+} // namespace
 
 SolverBackend SelectSolverBackend() {
     // Test-only override: DECIDB_FORCE_SOLVER=highs|gurobi pins the backend.
@@ -67,11 +109,18 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
     }
 }
 
+SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
+                        const SolveModelOptions &options) {
+	SolverModel model = SolverModel::Build(input, indexer);
+	SolverBackend backend = SelectSolverBackend();
+	SolverResult result = SolvePreparedModel(model, backend);
+	result = DisambiguateInfOrUnbd(model, backend, result);
+	AttachUnboundedRayIfRequested(model, backend, options, result);
+	return result;
+}
+
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer) {
-    SolverModel model = SolverModel::Build(input, indexer);
-    SolverBackend backend = SelectSolverBackend();
-    SolverResult result = SolvePreparedModel(model, backend);
-    return DisambiguateInfOrUnbd(model, backend, result);
+	return SolveModel(input, indexer, SolveModelOptions());
 }
 
 void ThrowDecideSolveError(const SolverResult &result) {

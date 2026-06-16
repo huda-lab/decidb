@@ -38,8 +38,39 @@ MILP-unbounded case to the definitive unbounded message instead of the old
 ambiguous text — for both MAXIMIZE and MINIMIZE, since the zero-objective probe
 is sense-agnostic.
 
+## U2 · Portable fallback ray extraction — DONE
+
+U2 is implemented as a diagnostic-only follow-up solve over the prepared
+`SolverModel`; it is not wired to user-facing diagnosis yet.
+
+- `SolveModelOptions::extract_unbounded_ray` in
+  `src/include/duckdb/decidb/ilp_solver.hpp` is the internal opt-in. The existing
+  two-argument `SolveModel(input, indexer)` overload keeps default failed-query
+  behavior unchanged and does not pay for ray extraction.
+- `BuildUnboundedRayFallbackModel` in
+  `src/decidb/utility/diagnostic_solves.cpp` builds the bounded LP:
+  `maximize signed(c)^T d`, preserves each linear row sense with RHS `0`, relaxes
+  all variables to continuous, and sets `0 <= d_i <= 1` only when the original
+  upper bound is effectively infinite (`>= 1e20`). Finite-upper-bound columns are
+  fixed to `d_i = 0`.
+- Quadratic objectives and quadratic constraints are intentionally out of scope
+  for U2 v1. The helper returns false and leaves `SolverResult::ray` empty.
+- `src/decidb/utility/ilp_solver.cpp` invokes the fallback only after U1 has
+  resolved the primary result to `SolverStatus::UNBOUNDED`, solves the ray LP on
+  the same backend, and attaches `SolverResult::ray` only when the ray LP is
+  `OPTIMAL` and signed objective improvement is greater than `1e-8`.
+- Native Gurobi/HiGHS ray APIs remain deferred as optional accelerators; U2 owns
+  the portable box-LP path first.
+
+Covered by `test/common/test_decidb_diagnostic_solves.cpp`, test case
+`DeciDB query diagnostics unbounded ray fallback`: symmetric MAX full-support
+ray, signed MIN objective, finite-upper-bound zeroing, bounded-shape no-ray,
+`>=` / `=` row-sense preservation in homogenization, integrality relaxation, and
+opt-in-only `SolveModel` attachment.
+
 ## Remaining Unbounded Work
 
 Otherwise: unbounded currently throws the shared static paragraph in
-`ThrowDecideSolveError` (`ilp_solver.cpp:88-96`). Ray extraction / diagnosis is
-not implemented.
+`ThrowDecideSolveError` (`src/decidb/utility/ilp_solver.cpp`). Ray extraction is
+available internally when requested, but ray-to-SQL mapping, the diagnostic
+pragma, and user-facing reporting are still U3/F4/F5/F6 work.

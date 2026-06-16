@@ -10,8 +10,8 @@ gate for the rest of the area.
   `src/include/duckdb/decidb/solver_result.hpp`. `SolverStatus` =
   `{OPTIMAL, INFEASIBLE, UNBOUNDED, INF_OR_UNBD, TIME_LIMIT, ITERATION_LIMIT, OTHER}`
   (`:23`); `SolverResult { status, solution, ray, raw_status }` (`:37`). `ray` is
-  reserved for U2; `raw_status` carries the backend-native code for the OTHER
-  message.
+  populated by U2 only on the explicit diagnostic ray-extraction path; `raw_status`
+  carries the backend-native code for the OTHER message.
 - **Backends map-and-return instead of throwing on solver status.**
   `GurobiSolver::Solve` and `DeterministicNaive::Solve` now return `SolverResult`
   (signatures in their headers). The non-optimal status blocks became switch maps
@@ -38,8 +38,8 @@ gate for the rest of the area.
   HiGHS-pinned regression remains in
   `test/decide/tests/test_error_infeasible.py::test_highs_milp_unbounded_reports_unbounded`.
 - **Deferred (not F1):** timeout incumbent / objective / best-bound / gap fields
-  (slow branch, S2); filling `ray` (U2); the pragma gate (F4); HiGHS `time_limit`
-  honoring (slow branch).
+  (slow branch, S2); the pragma gate (F4); HiGHS `time_limit` honoring (slow
+  branch).
 
 ## Baseline for the remaining foundations (F2–F6)
 

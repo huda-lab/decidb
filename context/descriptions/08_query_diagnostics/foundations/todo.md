@@ -1,11 +1,11 @@
-# Query Diagnostics — Foundations (planned)
+# Query Diagnostics — Foundations (remaining)
 
 Shared infrastructure consumed by all diagnosis states. **Build first** — every
-state engine depends on these. Checklist with dependencies; detail follows.
+state engine depends on these. This file tracks remaining foundation work; landed
+foundation notes live in `done.md`.
 
 ## Checklist
 
-- [x] **F1 · Structured solver result** (v1.3) — deps: none — ✅ **done**, see `done.md`
 - [ ] **F2 · Constraint provenance** (v1.2-A) — deps: none
 - [ ] **F3 · Relaxability tagging** (v1.2-B) — deps: F2
 - [ ] **F4 · Invocation pragma `PRAGMA diagnose_decide`** — deps: F1
@@ -15,32 +15,6 @@ state engine depends on these. Checklist with dependencies; detail follows.
 External dependency (tracked in `03_expressivity/sql_functions/todo.md`):
 **decision-variable norms (v1.1)** — abs-aux / count-binary+Big-M / max-aux
 linearizations reused by the elastic engine (`infeasible/` I3).
-
----
-
-## F1 · Structured solver result — ✅ implemented
-
-See `done.md` for the landed design and code pointers. Summary: `SolveModel` and
-both backends now return a `SolverResult { status, solution, ray, raw_status }`
-(`SolverStatus` enum incl. `INF_OR_UNBD`); backends map-and-return instead of
-throwing on solver status; HiGHS `kUnboundedOrInfeasible` (9) → `INF_OR_UNBD`; the
-default error text is the single helper `ThrowDecideSolveError`, called by the
-operator (manual-first) — the F4 pragma will gate that call site.
-
-**Resolved decisions:**
-- **Throw site = operator (F4-ready).** Backends + facade never throw on solver
-  status; `PhysicalDecide::Finalize` throws the default message on non-optimal.
-- **Timeout data deferred to the slow branch.** F1 populates only `status` +
-  `solution` (+ empty `ray`). Incumbent / objective / best-bound / gap and HiGHS
-  `time_limit` honoring land with the slow branch (S1/S2).
-
-**Still-open carry-overs (not F1):**
-- 🔬 confirm HiGHS honors `time_limit` and returns a usable status on timeout
-  (slow branch).
-- **Separate infeasibility source (P3):** single-variable contradictions are
-  caught by a pre-solve bound check in the model builder and never reach the
-  solver status switch — relevant to the infeasible engine; the status model
-  isn't the only failure surface.
 
 ---
 
