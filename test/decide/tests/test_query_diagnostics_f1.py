@@ -49,6 +49,18 @@ _UNBOUNDED_MILP_SQL = """
 """
 
 
+# Same MILP-unbounded shape but escaping toward -inf via MINIMIZE. The U1 probe
+# zeros the objective entirely, so disambiguation must be sense-agnostic: a
+# MINIMIZE-unbounded MILP has to resolve to the same definitive "unbounded"
+# error, not depend on the MAXIMIZE sense.
+_UNBOUNDED_MILP_MIN_SQL = """
+    SELECT id, x FROM (VALUES (1), (2)) t(id)
+    DECIDE x IS INTEGER
+    SUCH THAT x >= 1
+    MINIMIZE SUM(x * -1)
+"""
+
+
 def _combined_error(cli, sql: str) -> str:
     result = cli.execute_raw(sql)
     combined = result.stderr + result.stdout
@@ -103,16 +115,20 @@ class TestF1StructuredSolverResult:
         _assert_friendly_error(decidb_cli_highs, sql, required)
 
     @pytest.mark.error
+    @pytest.mark.parametrize(
+        "sql", [_UNBOUNDED_MILP_SQL, _UNBOUNDED_MILP_MIN_SQL]
+    )
     def test_highs_inf_or_unbd_status_9_is_disambiguated(
-        self, decidb_cli_highs
+        self, decidb_cli_highs, sql
     ):
         """HiGHS MILP-unbounded can report kUnboundedOrInfeasible (raw 9).
 
         F1 maps that to INF_OR_UNBD instead of falling through to the generic
         raw-status message. U1 then re-solves with objective=0 and converts this
-        case to a definitive unbounded error.
+        case to a definitive unbounded error. The probe zeros the objective, so
+        both MAXIMIZE and MINIMIZE unbounded MILPs must disambiguate the same way.
         """
-        combined = _combined_error(decidb_cli_highs, _UNBOUNDED_MILP_SQL)
+        combined = _combined_error(decidb_cli_highs, sql)
         lower = combined.lower()
         assert "decide optimization is unbounded" in lower, (
             "U1 regression: HiGHS status 9 was not disambiguated to a "

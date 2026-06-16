@@ -33,9 +33,10 @@ prepared-model solving for future diagnostic reruns, and performs the U1
 classification before the operator sees the result (`ilp_solver.hpp:20-33`,
 `ilp_solver.cpp:13-75`).
 
-Covered by `test_query_diagnostics_f1.py:105-128`, which pins the HiGHS
+Covered by `test_query_diagnostics_f1.py:117-142`, which pins the HiGHS
 MILP-unbounded case to the definitive unbounded message instead of the old
-ambiguous text.
+ambiguous text — for both MAXIMIZE and MINIMIZE, since the zero-objective probe
+is sense-agnostic.
 
 ## Remaining Unbounded Work
 
