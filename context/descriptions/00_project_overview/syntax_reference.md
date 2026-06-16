@@ -128,6 +128,11 @@ SUCH THAT (x - t) * (x - t) <= K
 - `AVG(expr)` is supported. Rewritten to `SUM(expr)` with RHS scaled by row count N at execution time. For objectives, `AVG` and `SUM` share the same argmax/argmin. For constraints, `AVG(expr) op K` becomes `SUM(expr) op K*N` where N is the row count (adjusted for WHEN/PER context).
 - `MIN(expr)` and `MAX(expr)` are supported. Easy cases (`MAX(expr) <= K`, `MIN(expr) >= K`) become per-row constraints with no auxiliary variables. Hard cases (opposite direction, equality) use a global auxiliary variable and Big-M binary indicators. In objectives, `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` use a global auxiliary; `MAXIMIZE MAX(expr)` and `MINIMIZE MIN(expr)` additionally require Big-M indicators. Composes with WHEN.
 - Aggregate-local filters are supported on individual aggregate terms: `SUM(expr) WHEN condition + SUM(expr2) WHEN condition2`. This is different from an expression-level `WHEN` on the whole constraint or objective.
+- `norm(expr, p)` expresses an L_p regularization term over a decision-variable expression (lasso/ridge-style). The user supplies the weight, e.g. `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. It is desugared at bind time into existing supported forms, so it composes with WHEN/PER and works in both objectives and constraints (including norm-bounded constraints like `norm(e, 1) <= K`). Supported orders:
+  - `norm(e, 1)` → `SUM(ABS(e))` — L1 (sparse-leaning; ABS linearization).
+  - `norm(e, 2)` → `SUM(POWER(e, 2))` — squared L2 / ridge (convex QP).
+  - `norm(e, 'inf')` → `MAX(ABS(e))` — L-infinity (max linearization).
+  - `norm(e, 0, M)` → **L0 / count of nonzeros**. Adds one 0/1 indicator `z` per row with the linking constraint `ABS(e) <= M*z`; the term becomes `SUM(z)`. Requires an explicit finite bound `M >= max |e|` (a tight bound is data-dependent and is not inferred at bind time). Upgrades the model to a MILP. Useful as an objective penalty or as an exact-count cap: `norm(e, 0, M) <= K`.
 
 ## 6. Conditional Expressions — `WHEN`
 

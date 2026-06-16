@@ -471,6 +471,164 @@ static void RewriteScopedVarRefs(unique_ptr<ParsedExpression> &expr,
 	});
 }
 
+// Desugar norm(expr, p) regularization terms into existing supported expressions
+// before binding (lasso/ridge-style penalties; the user supplies the weight):
+//   norm(e, 1)     -> SUM(ABS(e))       L1, sparse-ish      (ABS-aux)
+//   norm(e, 2)     -> SUM(POWER(e, 2))  squared L2 / ridge  (convex QP)
+//   norm(e, 'inf') -> MAX(ABS(e))       L-infinity          (max-aux)
+// e.g. MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1). Because this rewrites to
+// the existing aggregate forms, it composes with everything downstream (the
+// optimizer's ABS/MAX/POWER passes, WHEN, PER) with no further changes.
+// norm(e, 0) (L0 / count of nonzeros) needs an indicator variable + Big-M — not a
+// pure expression rewrite — so it is rejected here, pending a separate pass.
+static void RewriteNorm(unique_ptr<ParsedExpression> &expr) {
+	if (!expr) {
+		return;
+	}
+	// Recurse first so the inner expression (and any nested norm) is rewritten.
+	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
+		RewriteNorm(child);
+	});
+	if (expr->GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return;
+	}
+	auto &func = expr->Cast<FunctionExpression>();
+	if (func.is_operator || !StringUtil::CIEquals(func.function_name, "norm")) {
+		return;
+	}
+	if (func.children.size() != 2) {
+		throw BinderException(*expr, "norm(expr, p) takes exactly two arguments: an expression and "
+		                             "the order p (1, 2, or 'inf').");
+	}
+	if (func.children[1]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+		throw BinderException(*expr, "The order p in norm(expr, p) must be a constant (1, 2, or 'inf').");
+	}
+	const Value &pv = func.children[1]->Cast<ConstantExpression>().value;
+	auto inner = std::move(func.children[0]);
+
+	// Choose the aggregate form for the requested norm.
+	string agg, wrap; // wrap = inner transform ("abs" or "power"); agg = outer aggregate
+	if (pv.type().id() == LogicalTypeId::VARCHAR) {
+		string s = StringUtil::Lower(StringValue::Get(pv));
+		if (s != "inf" && s != "infinity" && s != "max") {
+			throw BinderException(*expr, "Unsupported norm order '%s'. Use 1, 2, or 'inf'.", s);
+		}
+		agg = "max"; wrap = "abs";
+	} else if (pv.type().IsNumeric()) {
+		double p = pv.GetValue<double>();
+		if (p == 1.0) {
+			agg = "sum"; wrap = "abs";
+		} else if (p == 2.0) {
+			agg = "sum"; wrap = "power";
+		} else if (p == 0.0) {
+			throw BinderException(*expr, "norm(expr, 0) (L0 / count of nonzeros) is not yet supported; "
+			                             "it needs indicator variables. Use 1, 2, or 'inf'.");
+		} else {
+			throw BinderException(*expr, "Unsupported norm order %g. Supported: 1 (L1), 2 (L2/ridge), "
+			                             "'inf' (L-infinity).", p);
+		}
+	} else {
+		throw BinderException(*expr, "The order p in norm(expr, p) must be 1, 2, or 'inf'.");
+	}
+
+	// Build wrap(inner): ABS(inner) or POWER(inner, 2).
+	vector<unique_ptr<ParsedExpression>> wrap_args;
+	wrap_args.push_back(std::move(inner));
+	if (wrap == "power") {
+		wrap_args.push_back(make_uniq<ConstantExpression>(Value::INTEGER(2)));
+	}
+	auto wrapped = make_uniq<FunctionExpression>(wrap, std::move(wrap_args));
+	// Build agg(wrapped): SUM(...) or MAX(...).
+	vector<unique_ptr<ParsedExpression>> agg_args;
+	agg_args.push_back(std::move(wrapped));
+	auto replacement = make_uniq<FunctionExpression>(agg, std::move(agg_args));
+	if (!expr->alias.empty()) {
+		replacement->alias = expr->alias;
+	}
+	expr = std::move(replacement);
+}
+
+// Expand norm(expr, 0, M) (L0 / count of nonzeros) into an indicator + Big-M.
+// Unlike L1/L2/L-inf this cannot be a pure expression rewrite: counting nonzeros
+// needs NEW variables. For each L0 term we add one BOOLEAN indicator z (replicated
+// per row like any decision variable), a linking constraint ABS(expr) <= M*z (so z
+// is forced to 1 whenever expr != 0), and the term itself becomes SUM(z). M is a
+// user-supplied finite upper bound on |expr| — required because a tight bound is
+// data-dependent and can't be inferred at bind time. Matched nodes are replaced by
+// SUM(z) in place; the linking constraints are collected into `links` for the
+// caller to AND into the SUCH THAT tree.
+static void RewriteNormL0(unique_ptr<ParsedExpression> &expr,
+                          case_insensitive_map_t<idx_t> &variables,
+                          vector<bool> &is_boolean_var,
+                          vector<string> &var_names,
+                          vector<LogicalType> &var_types,
+                          idx_t &l0_counter,
+                          vector<unique_ptr<ParsedExpression>> &links) {
+	if (!expr) {
+		return;
+	}
+	// Recurse first so inner expressions (and any nested norm) are handled.
+	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
+		RewriteNormL0(child, variables, is_boolean_var, var_names, var_types, l0_counter, links);
+	});
+	if (expr->GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return;
+	}
+	auto &func = expr->Cast<FunctionExpression>();
+	if (func.is_operator || !StringUtil::CIEquals(func.function_name, "norm")) {
+		return;
+	}
+	// Act only on p == 0; orders 1/2/'inf' are handled by RewriteNorm.
+	if (func.children.size() < 2 || func.children[1]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+		return;
+	}
+	const Value &pv = func.children[1]->Cast<ConstantExpression>().value;
+	if (!pv.type().IsNumeric() || pv.GetValue<double>() != 0.0) {
+		return;
+	}
+	if (func.children.size() != 3 || func.children[2]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+		throw BinderException(*expr,
+		    "norm(expr, 0) (L0 / count of nonzeros) needs an explicit finite bound: write "
+		    "norm(expr, 0, M) where M >= max |expr|. A tight bound is data-dependent, so it "
+		    "cannot be inferred automatically yet.");
+	}
+	double M = func.children[2]->Cast<ConstantExpression>().value.GetValue<double>();
+	if (!(M > 0.0)) {
+		throw BinderException(*expr, "The L0 bound M in norm(expr, 0, M) must be a positive constant.");
+	}
+	auto inner = std::move(func.children[0]);
+
+	// One 0/1 indicator per row. INTEGER (not BOOLEAN) so it participates in the
+	// arithmetic `M * z` below — same convention as the IN-domain indicators; the
+	// explicit 0 <= z <= 1 bounds are added by the indicator-bounds loop later.
+	string z_name = "__l0_ind_" + to_string(l0_counter++) + "__";
+	idx_t z_idx = var_names.size();
+	var_names.push_back(z_name);
+	var_types.push_back(LogicalType::INTEGER);
+	is_boolean_var.push_back(true);
+	variables.emplace(z_name, z_idx);
+
+	// Linking constraint: ABS(inner) <= M * z.
+	vector<unique_ptr<ParsedExpression>> abs_args;
+	abs_args.push_back(std::move(inner));
+	auto abs_call = make_uniq<FunctionExpression>("abs", std::move(abs_args));
+	vector<unique_ptr<ParsedExpression>> mul_args;
+	mul_args.push_back(make_uniq<ConstantExpression>(Value::DOUBLE(M)));
+	mul_args.push_back(make_uniq<ColumnRefExpression>(z_name));
+	auto mz = make_uniq<FunctionExpression>("*", std::move(mul_args));
+	links.push_back(make_uniq<ComparisonExpression>(
+	    ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(abs_call), std::move(mz)));
+
+	// The term becomes SUM(z) — the count of nonzeros.
+	vector<unique_ptr<ParsedExpression>> sum_args;
+	sum_args.push_back(make_uniq<ColumnRefExpression>(z_name));
+	auto replacement = make_uniq<FunctionExpression>("sum", std::move(sum_args));
+	if (!expr->alias.empty()) {
+		replacement->alias = expr->alias;
+	}
+	expr = std::move(replacement);
+}
+
 // Rewrite IN domain constraints on DECIDE variables into auxiliary binary indicator
 // variables + cardinality/linking constraints.
 // x IN (v1, v2, ..., vK) becomes:
@@ -795,6 +953,34 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         for (auto &sel_expr : statement.select_list) {
             RewriteScopedVarRefs(sel_expr, decide_variable_names);
         }
+
+        // Expand norm(expr, 0, M) (L0) first — it creates BOOLEAN indicator
+        // variables and per-row linking constraints, which are then ANDed into
+        // the SUCH THAT tree. Runs before RewriteNorm so the latter only sees
+        // the p=1/2/'inf' orders.
+        {
+            idx_t l0_counter = 0;
+            vector<unique_ptr<ParsedExpression>> l0_links;
+            RewriteNormL0(statement.decide_objective, decide_variable_names, is_boolean_var,
+                          var_names, var_types, l0_counter, l0_links);
+            RewriteNormL0(statement.decide_constraints, decide_variable_names, is_boolean_var,
+                          var_names, var_types, l0_counter, l0_links);
+            for (auto &link : l0_links) {
+                if (statement.decide_constraints) {
+                    statement.decide_constraints = make_uniq<ConjunctionExpression>(
+                        ExpressionType::CONJUNCTION_AND, std::move(link),
+                        std::move(statement.decide_constraints));
+                } else {
+                    statement.decide_constraints = std::move(link);
+                }
+            }
+        }
+
+        // Desugar norm(expr, p) regularization terms into the existing aggregate
+        // forms (SUM(ABS)/SUM(POWER)/MAX(ABS)) before binding — in both the
+        // objective and the SUCH THAT constraints (norm-bounded constraints).
+        RewriteNorm(statement.decide_constraints);
+        RewriteNorm(statement.decide_objective);
 
         // MIN/MAX rewrite is handled by DecideOptimizer::RewriteMinMax (post-binding).
 
