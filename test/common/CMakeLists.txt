@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   test_cast.cpp
   test_checksum.cpp
+  test_decidb_constraint_provenance.cpp
   test_decidb_diagnostic_solves.cpp
   test_file_system.cpp
   test_hyperlog.cpp

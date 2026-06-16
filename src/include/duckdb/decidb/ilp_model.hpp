@@ -13,6 +13,8 @@
 
 #include "duckdb/decidb/solver_input.hpp"
 
+#include <map>
+
 namespace duckdb {
 
 //! Maps (decide_var_idx, row) pairs to flat solver variable indices.
@@ -74,12 +76,34 @@ struct VarIndexer {
     static VarIndexer BuildRef(const SolverInput &input);
 };
 
+//! Origin of an emitted matrix row.
+//!   USER       — emitted from a user SUCH THAT clause (relaxable; F3 refines this).
+//!   STRUCTURAL — synthesized by a linearization/linking rewrite (rigid).
+//! F2 stamps the obvious split only (USER on the EvaluatedConstraint-derived paths,
+//! STRUCTURAL on the raw global-constraint push). The exhaustive structural
+//! enumeration across the optimizer/execution rewrite paths is F3.
+enum class ConstraintKind : uint8_t { USER, STRUCTURAL };
+
+//! Row → clause provenance carried by every emitted constraint (F2). Lets diagnosis
+//! report at the user-clause level instead of at raw matrix rows.
+struct ConstraintProvenance {
+    //! Index into SolverInput::constraints of the user clause that produced this row.
+    //! DConstants::INVALID_INDEX for synthetic/structural rows with no user clause.
+    idx_t clause_id = DConstants::INVALID_INDEX;
+    //! PER/WHEN group id at emission (or the row id for per-row clauses).
+    //! DConstants::INVALID_INDEX when the clause is ungrouped.
+    idx_t group_key = DConstants::INVALID_INDEX;
+    //! USER vs STRUCTURAL (see ConstraintKind).
+    ConstraintKind kind = ConstraintKind::USER;
+};
+
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs
 struct ModelConstraint {
     vector<int> indices;       //!< Variable indices into the flattened variable array
     vector<double> coefficients; //!< Coefficient for each variable
     char sense;                //!< '<' (<=), '>' (>=), '=' (==)
     double rhs;                //!< Right-hand side value
+    ConstraintProvenance provenance; //!< Row → clause origin (F2)
 };
 
 //! Solver-agnostic optimization model, ready for any backend to consume.
@@ -122,6 +146,7 @@ struct SolverModel {
         vector<double> q_coefficients;
         char sense;
         double rhs;
+        ConstraintProvenance provenance; //!< Row → clause origin (F2)
     };
     vector<QuadraticConstraint> quadratic_constraints;
 
@@ -132,6 +157,13 @@ struct SolverModel {
     //! PhysicalDecide::Finalize() and threaded through).
     static SolverModel Build(SolverInput &input, const VarIndexer &indexer);
 };
+
+//! Reverse index: user clause_id → positions of its rows in model.constraints (F2).
+//! One forward pass over the linear constraints; structural rows (clause_id ==
+//! DConstants::INVALID_INDEX) are skipped. Quadratic constraints carry provenance
+//! too but are not indexed here (linear matrix is the common diagnosis surface).
+//! Ordered map for deterministic iteration in reporting/tests.
+std::map<idx_t, vector<idx_t>> BuildClauseToRows(const SolverModel &model);
 
 //! Build CSR group→rows index from a per-row group_id array.
 //!   row_group_ids[r] in [0..num_groups) → row r belongs to that group

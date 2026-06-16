@@ -68,9 +68,25 @@ ray, signed MIN objective, finite-upper-bound zeroing, bounded-shape no-ray,
 `>=` / `=` row-sense preservation in homogenization, integrality relaxation, and
 opt-in-only `SolveModel` attachment.
 
-## Remaining Unbounded Work
+## Reporting stack wired (F2 + F4 + F5) — DONE
 
-Otherwise: unbounded currently throws the shared static paragraph in
-`ThrowDecideSolveError` (`src/decidb/utility/ilp_solver.cpp`). Ray extraction is
-available internally when requested, but ray-to-SQL mapping, the diagnostic
-pragma, and user-facing reporting are still U3/F4/F5/F6 work.
+The shared foundations U3 was gated on now exist (see `foundations/done.md`):
+F2 (row→clause provenance), F4 (the `diagnose_decide` consent gate), and F5 (the
+`decide_diagnostics()` table function). With `PRAGMA diagnose_decide='unbounded'`
+(or `auto`), an unbounded solve now routes through `BuildUnboundedDiagnostic`,
+stashes a `DecideDiagnostic` per-connection, and throws the short pointer error;
+`SELECT * FROM decide_diagnostics()` returns the diagnosis as a relation. The gate
+pre-arms U2 ray extraction only for unbounded/auto (manual-first). With no pragma,
+behavior is unchanged — the static `ThrowDecideSolveError` paragraph.
+
+## Remaining Unbounded Work (U3)
+
+The unbounded diagnosis content is a **scaffold** today: status + the generic
+"add a bound" prescription (one `add bound` row). U3 enriches it by naming the
+escaping variables — collect `ray[i] > 0` columns and map each to its SQL name via
+**F6** variable provenance (user vars + aux→source-expression), narrow suspects via
+the type/sign/bound filter, and render named rows through the same `decide_diagnostics()`
+relation. **U3's one open dep is F6** (U2 ray + F2/F4/F5 reporting are in place).
+The F2→F5 clause-label join is built but not yet exercised by unbounded (its content
+is variable-centric) — the optional "clause N references an unbounded variable" line
+remains a non-v1 enrichment.

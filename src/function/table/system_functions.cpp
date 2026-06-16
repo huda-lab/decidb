@@ -1,4 +1,5 @@
 #include "duckdb/function/table/system_functions.hpp"
+#include "duckdb/decidb/decide_diagnostic.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
@@ -42,6 +43,7 @@ void BuiltinFunctions::RegisterSQLiteFunctions() {
 	DuckDBTypesFun::RegisterFunction(*this);
 	DuckDBVariablesFun::RegisterFunction(*this);
 	DuckDBViewsFun::RegisterFunction(*this);
+	DecideDiagnosticsFun::RegisterFunction(*this); // DeciDB query-diagnostics surface (F5)
 	TestAllTypesFun::RegisterFunction(*this);
 	TestVectorTypesFun::RegisterFunction(*this);
 }

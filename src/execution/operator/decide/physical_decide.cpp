@@ -13,6 +13,7 @@
 #include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/decide_diagnostic.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -5024,11 +5025,27 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_timer.Start();
     }
 
-    SolverResult solve_result = SolveModel(solver_input, var_indexer);
+    // F4: read the diagnose_decide consent gate. Manual-first — when the user has
+    // opted into unbounded/auto diagnosis, pre-arm unbounded-ray extraction so the
+    // ray is available if the solve turns out unbounded (paid for only then).
+    string diagnose_mode = GetDiagnoseDecideMode(context);
+    SolveModelOptions solve_options;
+    solve_options.extract_unbounded_ray = DiagnoseModeWantsUnboundedRay(diagnose_mode);
+
+    SolverResult solve_result = SolveModel(solver_input, var_indexer, solve_options);
     if (solve_result.status != SolverStatus::OPTIMAL) {
-        // Manual-first: surface the default error for a non-optimal solve. The
-        // F4 diagnose pragma will later gate this call to route the status into
-        // diagnosis (infeasible / unbounded / slow) instead of throwing.
+        // Filter semantics: diagnose only when the mode matches the actual status
+        // AND a state engine exists. This session only the unbounded engine is
+        // built; other matched states (infeasible / slow) fall through to the
+        // default error until their engines land.
+        if (DiagnosisApplies(diagnose_mode, solve_result.status) &&
+            solve_result.status == SolverStatus::UNBOUNDED) {
+            DecideDiagnostic diag = BuildUnboundedDiagnostic(solve_result);
+            StashDecideDiagnostic(context, diag);
+            ThrowDecideDiagnosisReady(diag);
+        }
+        // Manual-first default: surface the static error (mode none, non-matching
+        // mode, or matched-but-unimplemented state).
         ThrowDecideSolveError(solve_result);
     }
     gstate.ilp_solution = std::move(solve_result.solution);

@@ -7,7 +7,9 @@ add a bound or fix a sign error — you can't relax your way out), but the
 
 ## Checklist
 
-- [ ] **U3 · Ray→SQL mapping + reporting** (full output) — deps: U2, F6, F2, F4, F5
+- [ ] **U3 · Ray→SQL mapping + reporting** (full output) — deps: U2 ✅, F2 ✅, F4 ✅,
+  F5 ✅, **F6 (only open dep)**. The reporting stack + a scaffold diagnosis are wired
+  end-to-end (see `done.md`); U3 swaps the scaffold for named escaping variables.
 
 This file tracks remaining unbounded work; landed unbounded notes live in
 `done.md`.
@@ -45,6 +47,6 @@ This file tracks remaining unbounded work; landed unbounded notes live in
 **Test (differential).** Correct escaping variables named — user vars AND aux vars
 traced to their source expression; `INF_OR_UNBD` routes correctly.
 
-**Deps:** U2, **F6** (variable provenance — full, incl. aux→expression),
-**F2** (constraint provenance — supplies F5's clause labels; see note above),
-F4, F5.
+**Deps:** U2 ✅, **F2 ✅** (constraint provenance — supplies F5's clause labels),
+**F4 ✅** (consent gate), **F5 ✅** (`decide_diagnostics()` relation), and the one
+remaining open dep **F6** (variable provenance — full, incl. aux→expression).

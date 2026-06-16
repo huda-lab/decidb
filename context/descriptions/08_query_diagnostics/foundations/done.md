@@ -41,10 +41,95 @@ gate for the rest of the area.
   (slow branch, S2); the pragma gate (F4); HiGHS `time_limit` honoring (slow
   branch).
 
-## Baseline for the remaining foundations (F2–F6)
+## F2 · Constraint provenance (row → clause) — DONE
 
-- **`ModelConstraint` has no provenance** — only indices / coefficients / sense /
-  rhs (`src/include/duckdb/decidb/ilp_model.hpp:78-83`). F2 adds it.
+Every emitted matrix row now carries where it came from, so diagnosis can report
+at the user-clause level instead of at raw rows.
+
+- **`ConstraintProvenance {clause_id, group_key, kind}`** added to `ModelConstraint`
+  and `SolverModel::QuadraticConstraint`
+  (`src/include/duckdb/decidb/ilp_model.hpp`). `clause_id` = index into
+  `SolverInput::constraints` (`DConstants::INVALID_INDEX` for synthetic rows);
+  `group_key` = PER/WHEN group id at emission (or row id for per-row), INVALID when
+  ungrouped; `kind` = `ConstraintKind{USER, STRUCTURAL}`.
+- **Stamped at all 7 builder fan-out sites** in
+  `src/decidb/utility/ilp_model_builder.cpp`: linear aggregate-ungrouped /
+  aggregate-PER / per-row, the raw global-constraint push (the only site stamped
+  **STRUCTURAL**), and the three quadratic analogues. `clause_id` is derived by
+  pointer arithmetic into `input.constraints` so it survives the `continue` skips.
+- **Reverse index** `BuildClauseToRows(const SolverModel&)` → ordered
+  `clause_id → [row positions]` over the linear matrix (structural rows excluded;
+  quadratic rows carry provenance but aren't indexed yet).
+- **`kind` scope boundary:** F2 stamps only the unambiguous split (USER on the
+  EvaluatedConstraint paths, STRUCTURAL on the global-raw push). The **exhaustive**
+  STRUCTURAL enumeration across McCormick / Big-M MIN-MAX / ABS / `<>` rewrite paths
+  is **F3**, still open — do not assume `kind` is complete.
+- Covered by `test/common/test_decidb_constraint_provenance.cpp` (aggregate / PER /
+  per-row provenance, distinct clause ids, structural tagging, reverse-index
+  round-trip).
+
+## F4 · `PRAGMA diagnose_decide` (manual-first consent gate) — DONE
+
+Sticky session setting selecting whether/which failed solve is diagnosed. Modes
+`none`(default) / `infeasible` / `unbounded` / `slow` / `auto`. **Filter, not
+force:** a mode acts only when the solve actually lands in that state.
+
+- Registered as an **extension option** (no settings-codegen, no grammar change)
+  via `RegisterDecideDiagnosticOptions(DBConfig&)`, called once from
+  `DatabaseInstance::Configure` (`src/main/database.cpp`). `AddExtensionOption`'s
+  set-callback validates the enum, so a typo fails fast at SET time. Read back with
+  `ClientContext::TryGetCurrentSetting`. Works with both `PRAGMA diagnose_decide=…`
+  and `SET diagnose_decide=…`; `RESET` restores `none`.
+- Helpers in `src/decidb/utility/decide_diagnostic.cpp`: `GetDiagnoseDecideMode`,
+  `DiagnosisApplies(mode, status)` (filter predicate), `DiagnoseModeWantsUnboundedRay`.
+- **Gate** wired into `PhysicalDecide::Finalize`
+  (`src/execution/operator/decide/physical_decide.cpp`): read the mode before the
+  solve and pre-arm `SolveModelOptions::extract_unbounded_ray` only for
+  unbounded/auto (manual-first — default pays nothing); on a non-optimal result,
+  if the mode matches the status **and an engine exists** (this session: UNBOUNDED
+  only) build+stash the diagnosis and throw the short pointer error, otherwise fall
+  through to the unchanged `ThrowDecideSolveError`. Matched-but-unimplemented states
+  (`infeasible`/`slow`) fall through until their engines land.
+- Covered by `test/decide/tests/test_query_diagnostics_f4.py` (both backends):
+  default `none` reproduces the F1 error; valid modes accepted; invalid mode
+  rejected; filter scoping (unbounded mode ignores an infeasible solve and vice
+  versa); `auto` routes unbounded.
+
+## F5 · Shared diagnostic reporting surface — DONE
+
+A structured diagnosis a state engine populates, stashed per-connection, surfaced
+as a fixed-schema relation.
+
+- **`DecideDiagnostic` / `DiagnosticRow` / `DecideDiagnosticState`**
+  (`src/include/duckdb/decidb/decide_diagnostic.hpp`). The state is a
+  `ClientContextState` stashed under key `decide_diagnostics`; the failing DECIDE
+  mutates it before throwing, so it survives into the next statement on the same
+  connection.
+- **`decide_diagnostics()` table function** (registered with one line in
+  `src/function/table/system_functions.cpp`, implemented in
+  `src/decidb/utility/decide_diagnostic.cpp`) with fixed schema
+  `(state, clause, group_key, edit_kind, suggested_change)` all VARCHAR; empty row
+  fields render as NULL. **Output-surface decision:** a runtime result-schema switch
+  is bind-time-blocked (DECIDE is a clause on SELECT; the projection binds the
+  decision columns before the solve runs — `logical_decide.cpp:23,34`,
+  `transform_select_node.cpp:107`), so the diagnosis is surfaced via this companion
+  table function instead.
+- **Unbounded content is a scaffold this session:** `BuildUnboundedDiagnostic`
+  emits status + the generic "add a bound" prescription. U3/F6 enrich it with the
+  named escaping variables (the `result.ray` is already threaded in). Because the
+  unbounded content is variable-centric, the F2→F5 clause-label *join* is built but
+  not yet exercised end-to-end — that lands with U3 / the infeasible engine.
+- **Deferred (with the user):** the slack→Δ conversion (AVG `s*/N_g`, strict `</>`
+  re-quote) — it has no producer until the infeasible elastic engine, so building it
+  now would be speculative.
+- Covered by `test/decide/tests/test_query_diagnostics_f5.py` (both backends):
+  failing DECIDE + follow-up `SELECT * FROM decide_diagnostics()` returns the
+  scaffold row; fixed schema; empty when nothing diagnosed / no pragma.
+
+## Baseline for the remaining foundations (F3, F6)
+
+- **`ModelConstraint` provenance** — landed (F2 above). F3 still owes the exhaustive
+  STRUCTURAL stamping across the linearization rewrite paths.
 - **Variable names die at the solver boundary** — `VarIndexer` maps
   `(decide_var_idx, row)` → flat index but stores no names; aliases live only in
   `LogicalDecide.decide_variables[*].alias`. F6 threads them through.
