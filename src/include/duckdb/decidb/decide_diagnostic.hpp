@@ -23,6 +23,7 @@ class ClientContext;
 class BuiltinFunctions;
 class DBConfig;
 struct SolverResult;
+struct ColumnProvenance;
 
 //! One row of the relation surfaced by decide_diagnostics(). Empty string fields
 //! render as SQL NULL.
@@ -55,10 +56,14 @@ public:
 //! Key under which DecideDiagnosticState is registered on the ClientContext.
 static constexpr const char *DECIDE_DIAGNOSTIC_STATE_KEY = "decide_diagnostics";
 
-//! Build the unbounded diagnosis. Scaffold this session: status + generic
-//! "add a bound" prescription. U3/F6 enrich it with the named escaping variables
-//! traced from `result.ray`; the parameter is already threaded for that.
-DecideDiagnostic BuildUnboundedDiagnostic(const SolverResult &result);
+//! Build the unbounded diagnosis. Names the escaping variables (F6): collects the
+//! columns with a non-zero entry in `result.ray`, resolves each through `columns`
+//! (F6 variable provenance — user name or aux source expression), dedups by label,
+//! and emits one "add bound" row per escaping variable. Falls back to the generic
+//! "add a bound" prescription when no ray is attached (e.g. quadratic models, where
+//! U2 extracts none). DeciDB never picks the bound value — any finite bound works.
+DecideDiagnostic BuildUnboundedDiagnostic(const SolverResult &result,
+                                          const vector<ColumnProvenance> &columns);
 
 //! Store `diag` on the connection so decide_diagnostics() can read it next statement.
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag);

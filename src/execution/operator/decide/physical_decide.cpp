@@ -5040,7 +5040,28 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // default error until their engines land.
         if (DiagnosisApplies(diagnose_mode, solve_result.status) &&
             solve_result.status == SolverStatus::UNBOUNDED) {
-            DecideDiagnostic diag = BuildUnboundedDiagnostic(solve_result);
+            // F6: resolve each flat solver column to its user-facing source. User
+            // variables resolve to their name; auxiliary linearization variables to
+            // the user's original expression (captured at optimizer time); the
+            // global block stays unnamed. BuildUnboundedDiagnostic then names the
+            // escaping columns from the ray.
+            idx_t nvars = decide_variables.size();
+            vector<string> var_labels(nvars);
+            vector<bool> var_is_aux(nvars, false);
+            for (auto &ae : aux_var_expressions) {
+                if (ae.first < nvars) {
+                    var_labels[ae.first] = ae.second;
+                    var_is_aux[ae.first] = true;
+                }
+            }
+            for (idx_t i = 0; i < nvars; i++) {
+                if (!var_is_aux[i]) {
+                    var_labels[i] = decide_variables[i]->GetName();
+                }
+            }
+            vector<ColumnProvenance> columns =
+                BuildColumnProvenance(var_indexer, var_labels, var_is_aux);
+            DecideDiagnostic diag = BuildUnboundedDiagnostic(solve_result, columns);
             StashDecideDiagnostic(context, diag);
             ThrowDecideDiagnosisReady(diag);
         }

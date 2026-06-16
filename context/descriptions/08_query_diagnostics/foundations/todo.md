@@ -13,7 +13,11 @@ foundation notes live in `done.md`.
 - [x] **F4 · Invocation pragma `PRAGMA diagnose_decide`** — DONE (see `done.md`)
 - [x] **F5 · Diagnostic reporting relation** — DONE (see `done.md`, surfaced as the
   `decide_diagnostics()` table function)
-- [ ] **F6 · Variable provenance** (column-side; index→name + aux→expression) — deps: none; used by U3
+- [x] **F6 · Variable provenance** (column-side; index→name + aux→expression) — DONE
+  (see `done.md`). Folded in U3's consuming half: the unbounded diagnosis now names
+  escaping variables. Aux→expression capture + `BuildColumnProvenance` landed; only
+  user vars escape in practice (aux are structurally bounded), so aux naming is
+  defensive infrastructure.
 
 External dependency (tracked in `03_expressivity/sql_functions/todo.md`):
 **decision-variable norms (v1.1)** — abs-aux / count-binary+Big-M / max-aux
@@ -61,32 +65,12 @@ through the existing `decide_diagnostics()` relation (F5, done).
 
 ---
 
-## F6 · Variable provenance (column-side)
+## F6 · Variable provenance (column-side) — DONE
 
-**Goal.** Map every solver *column* back to the user-facing thing it represents,
-so the unbounded diagnosis can name the escaping variable (U3). The column-side
-complement of F2 (which does rows/clauses).
-
-Today names die at the solver boundary (P7): `VarIndexer` (`ilp_model.hpp:23-75`)
-maps `(decide_var_idx, row)` → flat column index, but no names reach `SolverInput`
-/ `SolverModel`. User names live only in `LogicalDecide.decide_variables[*].alias`
-(`logical_decide.hpp:51`). Auxiliary columns from linearization (`__abs_aux_N__`,
-`__bilinear_aux_N__`, `__minmax_ind_N__`, `__ne_ind_N__`) carry generated names +
-partial link metadata, but **no link to the source expression**.
-
-**Build (full — per the U3 "full output" decision).**
-- **User variables:** thread the `.alias` from `LogicalDecide` through to the
-  solver result so a column index resolves to the user's variable name. Modest.
-- **Auxiliary variables:** capture an aux→source-expression link at optimizer
-  time (where the expressions still exist — the ABS / MIN-MAX / McCormick / `<>`
-  passes in `src/optimizer/decide/decide_optimizer.cpp`), so an escaping aux
-  resolves to the user's original `ABS(...)` / `MAX(...)` / product expression,
-  not the internal name. ~300–400 lines across LogicalDecide + execution layer
-  (P7). **This is the bulk of the "full output" cost.**
-- Reverse map: flat column index → `(decide var | aux)` → name / expression.
-
-**Test.** A column index resolves to the correct user variable name; an auxiliary
-column resolves to its originating user expression across ABS / MIN-MAX /
-McCormick / `<>`.
-
-**Deps:** none. **Used by:** U3 (ray→SQL naming). Column-side complement of F2.
+Moved to `done.md`. `LogicalDecide::aux_var_expressions` (aux→source-expression,
+captured at the 4 optimizer aux-creation sites) + `ColumnProvenance` /
+`BuildColumnProvenance` (`ilp_model.hpp` / `ilp_model_builder.cpp`) give a `flat
+column → {USER name | AUX expr | GLOBAL_AUX}` map. Folded in U3's consumer:
+`BuildUnboundedDiagnostic` now names escaping variables. Finding: only user
+INTEGER/REAL vars escape in practice (aux are structurally bounded), so aux naming
+is defensive infrastructure.

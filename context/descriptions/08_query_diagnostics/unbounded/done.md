@@ -79,14 +79,28 @@ stashes a `DecideDiagnostic` per-connection, and throws the short pointer error;
 pre-arms U2 ray extraction only for unbounded/auto (manual-first). With no pragma,
 behavior is unchanged — the static `ThrowDecideSolveError` paragraph.
 
-## Remaining Unbounded Work (U3)
+## U3 · Ray→SQL naming (full output) — DONE (landed with F6)
 
-The unbounded diagnosis content is a **scaffold** today: status + the generic
-"add a bound" prescription (one `add bound` row). U3 enriches it by naming the
-escaping variables — collect `ray[i] > 0` columns and map each to its SQL name via
-**F6** variable provenance (user vars + aux→source-expression), narrow suspects via
-the type/sign/bound filter, and render named rows through the same `decide_diagnostics()`
-relation. **U3's one open dep is F6** (U2 ray + F2/F4/F5 reporting are in place).
-The F2→F5 clause-label join is built but not yet exercised by unbounded (its content
-is variable-centric) — the optional "clause N references an unbounded variable" line
-remains a non-v1 enrichment.
+The scaffold is replaced: the unbounded diagnosis now **names the escaping
+variables**. The consuming half of U3 landed together with F6 (variable provenance)
+— see `foundations/done.md` (F6). `BuildUnboundedDiagnostic(result, columns)`
+collects ray columns with `|ray[i]| > 1e-8`, resolves each through the F6
+`flat column → ColumnProvenance` map, dedups by label (a row-scoped `x` escaping
+across rows reports once), and emits one `add bound` row per escaping variable
+through the same `decide_diagnostics()` relation. **Never picks the bound value.**
+
+- **Suspect filter is free:** the U2 box-LP ray already fixes finite-UB columns to
+  0, so a non-zero ray entry *is* the type/sign/bound-filtered suspect set (P7) — no
+  extra filter needed.
+- **Only user vars escape in practice (verified, both backends):** aux variables are
+  structurally bounded (ABS Big-M / bilinear McCormick require finite bounds and
+  error before the solver; MIN/MAX/`<>` indicators are BOOLEAN `[0,1]`). The
+  aux→expression naming is therefore defensive — correct if an aux ever escapes, but
+  user INTEGER/REAL vars are the practical escapers.
+- Covered by `test/decide/tests/test_query_diagnostics_f6.py` and
+  `test/common/test_decidb_variable_provenance.cpp`.
+
+**Residual (non-v1):** the F2→F5 clause-label join is built but not exercised by
+unbounded (its content is variable-centric) — the optional "clause N references
+escaping var x but never bounds it" line remains an enrichment, as does suggesting
+an example bound value (deliberately avoided to not anchor on a bad number).

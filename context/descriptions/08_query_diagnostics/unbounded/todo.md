@@ -7,12 +7,15 @@ add a bound or fix a sign error — you can't relax your way out), but the
 
 ## Checklist
 
-- [ ] **U3 · Ray→SQL mapping + reporting** (full output) — deps: U2 ✅, F2 ✅, F4 ✅,
-  F5 ✅, **F6 (only open dep)**. The reporting stack + a scaffold diagnosis are wired
-  end-to-end (see `done.md`); U3 swaps the scaffold for named escaping variables.
+- [x] **U3 · Ray→SQL mapping + reporting** (full output) — DONE, landed with **F6**
+  (see `done.md` here and `foundations/done.md`). The unbounded diagnosis names the
+  escaping variables (user vars; aux→expression as defensive infrastructure).
+  **Residual (non-v1):** the optional clause-aware line ("clause N references
+  escaping var x but never bounds it") and whether to suggest an example bound value.
 
 This file tracks remaining unbounded work; landed unbounded notes live in
-`done.md`.
+`done.md`. **The unbounded state is now functionally complete** — only the non-v1
+enrichments above remain.
 
 ---
 

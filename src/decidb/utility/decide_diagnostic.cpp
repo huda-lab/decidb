@@ -2,10 +2,14 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/function/built_in_functions.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
+
+#include <cmath>
+#include <set>
 
 namespace duckdb {
 
@@ -70,24 +74,77 @@ bool DiagnoseModeWantsUnboundedRay(const string &mode) {
 // Diagnosis construction + per-connection stash
 //===----------------------------------------------------------------------===//
 
-DecideDiagnostic BuildUnboundedDiagnostic(const SolverResult &result) {
-	// U3/F6 will read result.ray to name the escaping variables; the scaffold here
-	// reports the status and the forced prescription (add a bound). DeciDB never
-	// picks the bound value — any finite bound works and the right number is domain
-	// knowledge.
-	(void)result;
+DecideDiagnostic BuildUnboundedDiagnostic(const SolverResult &result,
+                                          const vector<ColumnProvenance> &columns) {
+	// Name the escaping variables from the ray (F6). The U2 box-LP ray already fixes
+	// any column with a finite upper bound to 0, so a non-zero ray entry is exactly a
+	// variable that can grow without bound (the type/sign/bound "suspects" filter is
+	// pre-baked). DeciDB never picks the bound value — any finite bound works and the
+	// right number is domain knowledge.
+	static constexpr double RAY_ESCAPE_EPSILON = 1e-8;
 
 	DecideDiagnostic diag;
 	diag.valid = true;
 	diag.status = SolverStatus::UNBOUNDED;
 	diag.state = "unbounded";
+
+	// Collect escaping columns, deduplicated by their user-facing label so a
+	// row-scoped variable escaping across every row reports once. Column order is
+	// preserved for deterministic output.
+	vector<string> escaping_labels; // display labels, in first-seen column order
+	std::set<string> seen;
+	bool saw_unnamed_global = false;
+	for (idx_t col = 0; col < result.ray.size() && col < columns.size(); col++) {
+		if (std::fabs(result.ray[col]) <= RAY_ESCAPE_EPSILON) {
+			continue;
+		}
+		const ColumnProvenance &prov = columns[col];
+		if (prov.kind == ColumnKind::GLOBAL_AUX || prov.label.empty()) {
+			saw_unnamed_global = true;
+			continue;
+		}
+		// For an AUX column the label is the user's source expression; for a USER
+		// column it is the variable name. Both go in as-is.
+		if (seen.insert(prov.label).second) {
+			escaping_labels.push_back(prov.label);
+		}
+	}
+
+	if (!escaping_labels.empty()) {
+		string names;
+		for (idx_t i = 0; i < escaping_labels.size(); i++) {
+			names += (i == 0 ? "" : ", ") + escaping_labels[i];
+		}
+		diag.summary = "The objective is unbounded: it can improve without limit because " +
+		               string(escaping_labels.size() == 1 ? "the variable " : "the variables ") +
+		               names + " can grow without bound.";
+		for (auto &label : escaping_labels) {
+			DiagnosticRow row;
+			row.edit_kind = "add bound";
+			row.suggested_change = "'" + label +
+			                       "' can grow without bound; add an upper bound (e.g. SUCH THAT " +
+			                       label + " <= K), or fix an objective sign error.";
+			diag.rows.push_back(std::move(row));
+		}
+		return diag;
+	}
+
+	// No named escaping variable resolved — either no ray was attached (e.g. a
+	// quadratic model, where U2 extracts none) or only an internal global auxiliary
+	// escaped (which signals a model-generation issue, not a user error). Fall back
+	// to the generic prescription so behavior never regresses.
 	diag.summary = "The objective is unbounded: it can improve without limit because "
 	               "at least one decision variable can grow without bound.";
-
 	DiagnosticRow row;
 	row.edit_kind = "add bound";
-	row.suggested_change = "Add an upper bound to bound the objective "
-	                       "(e.g. SUCH THAT <var> <= K), or fix an objective sign error.";
+	if (saw_unnamed_global) {
+		row.suggested_change = "An internal auxiliary variable grows without bound (this "
+		                       "likely indicates a model-generation issue). Add an upper "
+		                       "bound to the relevant decision variable.";
+	} else {
+		row.suggested_change = "Add an upper bound to bound the objective "
+		                       "(e.g. SUCH THAT <var> <= K), or fix an objective sign error.";
+	}
 	diag.rows.push_back(std::move(row));
 	return diag;
 }

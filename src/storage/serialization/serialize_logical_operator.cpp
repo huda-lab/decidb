@@ -399,6 +399,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 		serializer.WritePropertyWithDefault<vector<idx_t>>(230, "abs_maximize_link_aux", am_aux);
 		serializer.WritePropertyWithDefault<vector<idx_t>>(231, "abs_maximize_link_y", am_y);
 	}
+	serializer.WritePropertyWithDefault<vector<pair<idx_t, string>>>(232, "aux_var_expressions", aux_var_expressions);
 	serializer.WritePropertyWithDefault<uint8_t>(209, "flat_objective_agg", static_cast<uint8_t>(flat_objective_agg));
 	serializer.WritePropertyWithDefault<bool>(210, "flat_objective_is_easy", flat_objective_is_easy);
 	serializer.WritePropertyWithDefault<uint8_t>(211, "per_inner_agg", static_cast<uint8_t>(per_inner_agg));
@@ -476,6 +477,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 			result->abs_maximize_links.push_back({am_aux[i], am_y[i]});
 		}
 	}
+	deserializer.ReadPropertyWithDefault<vector<pair<idx_t, string>>>(232, "aux_var_expressions", result->aux_var_expressions);
 	uint8_t flat_agg_val = 0;
 	deserializer.ReadPropertyWithDefault<uint8_t>(209, "flat_objective_agg", flat_agg_val);
 	result->flat_objective_agg = static_cast<ObjectiveAggregateType>(flat_agg_val);

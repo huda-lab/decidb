@@ -125,14 +125,62 @@ as a fixed-schema relation.
 - Covered by `test/decide/tests/test_query_diagnostics_f5.py` (both backends):
   failing DECIDE + follow-up `SELECT * FROM decide_diagnostics()` returns the
   scaffold row; fixed schema; empty when nothing diagnosed / no pragma.
+- **Superseded:** the unbounded scaffold row is now replaced by named escaping
+  variables (F6 below); the F5 test still passes (the substrings it asserts —
+  `unbounded` / `add bound` / `add an upper bound` — survive in the named rows).
 
-## Baseline for the remaining foundations (F3, F6)
+## F6 · Variable provenance (column-side) — DONE
+
+The column-side complement of F2: map every solver column back to the user-facing
+thing it represents, so the unbounded diagnosis can **name the escaping variables**
+instead of emitting the generic scaffold. Per the "full output" decision this slice
+also folded in U3's consuming half (ray → named rows).
+
+- **Aux→source-expression capture (the bulk).** New
+  `LogicalDecide::aux_var_expressions` (`vector<pair<idx_t, string>>`,
+  `logical_decide.hpp`) maps an auxiliary variable's index in `decide_variables` to
+  the user's original expression string. Stamped at the 4 aux-creation sites in
+  `src/optimizer/decide/decide_optimizer.cpp` (where the source expression is still
+  in hand): `<>` indicator (`comp.left <> comp.right`), MIN/MAX indicator
+  (`MAX(inner)`), ABS aux (`ABS(inner)`), bilinear aux (`(b * x)`). Threaded
+  LogicalDecide → PhysicalDecide in `plan_decide.cpp` (alongside the sibling aux
+  metadata) and serialized as property `232`.
+- **`ColumnProvenance` + `BuildColumnProvenance`** (`ilp_model.hpp` /
+  `ilp_model_builder.cpp`, next to `ConstraintProvenance` / `BuildClauseToRows`).
+  `ColumnKind{USER, AUX, GLOBAL_AUX}`; the builder is **pure** (no Expression
+  dependency — caller pre-extracts per-decide-var labels + an is-aux flag) and
+  inverts `VarIndexer::Get(var, row)` over all rows to produce a `flat column →
+  ColumnProvenance` map sized `indexer.total_vars`. Global-block columns default to
+  GLOBAL_AUX (unnamed). Mirrors the solution-readback iteration in
+  `physical_decide.cpp`.
+- **Naming wired into `BuildUnboundedDiagnostic`** (now takes `(result, columns)`).
+  At the `PhysicalDecide::Finalize` diagnosis site, per-decide-var labels are built
+  (user → `decide_variables[i]->GetName()`, aux → its captured expression) and run
+  through `BuildColumnProvenance`. The diagnosis collects ray columns with
+  `|ray[i]| > 1e-8`, resolves each via the map, **dedups by label** (a row-scoped
+  `x` escaping across every row reports once), and emits one "add bound" row per
+  escaping variable. Falls back to the generic scaffold when no ray is attached
+  (quadratic models — U2 extracts none) or only an unnamed global aux escaped (which
+  it flags as a likely model-generation issue). **Never picks the bound value.**
+- **Empirical scope (verified on both backends):** in current DECIDE formulations
+  **only user INTEGER/REAL variables actually escape**. Auxiliary variables are
+  structurally bounded — ABS Big-M and bilinear McCormick require finite bounds (they
+  error *before* the solver) and MIN/MAX/`<>` indicators are BOOLEAN `[0,1]`. So the
+  aux→expression naming is **defensive infrastructure** (it correctly names an aux if
+  one ever does escape, e.g. a future feature or a model-gen bug); the practical
+  escapers are user vars. This matches P7's "narrow suspects for free": the U2 box-LP
+  ray already fixes finite-UB columns to 0, so a non-zero ray entry *is* the filtered
+  suspect set — no extra type/sign/bound filter needed.
+- Covered by `test/common/test_decidb_variable_provenance.cpp` (the pure builder:
+  USER / AUX / GLOBAL_AUX resolution, each linearization-aux kind, entity-scoped
+  column collapse) and `test/decide/tests/test_query_diagnostics_f6.py` (both
+  backends: REAL var, INTEGER/MILP via the HiGHS `INF_OR_UNBD` path, multi-var
+  dedup, `auto` routing, manual-first no-pragma silence).
+
+## Baseline for the remaining foundations (F3)
 
 - **`ModelConstraint` provenance** — landed (F2 above). F3 still owes the exhaustive
   STRUCTURAL stamping across the linearization rewrite paths.
-- **Variable names die at the solver boundary** — `VarIndexer` maps
-  `(decide_var_idx, row)` → flat index but stores no names; aliases live only in
-  `LogicalDecide.decide_variables[*].alias`. F6 threads them through.
 - **HiGHS sets no time limit** (Gurobi reads `DECIDB_TIME_LIMIT`, 300s default,
   `gurobi_solver.cpp:70-81`). Honoring it on HiGHS is a slow-branch item, **not**
   F1.

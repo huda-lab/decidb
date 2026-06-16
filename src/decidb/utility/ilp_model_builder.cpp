@@ -996,6 +996,41 @@ std::map<idx_t, vector<idx_t>> BuildClauseToRows(const SolverModel &model) {
     return clause_to_rows;
 }
 
+vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
+                                               const vector<string> &var_labels,
+                                               const vector<bool> &var_is_aux) {
+    // Every flat column defaults to an unnamed global-block auxiliary; the row /
+    // entity blocks are then overwritten below. Columns in [global_block_start,
+    // total_vars) (internal global auxiliaries) keep the default.
+    vector<ColumnProvenance> provenance(indexer.total_vars);
+
+    idx_t num_decide_vars = var_labels.size();
+    for (idx_t var = 0; var < num_decide_vars; var++) {
+        ColumnKind kind = (var < var_is_aux.size() && var_is_aux[var]) ? ColumnKind::AUX
+                                                                       : ColumnKind::USER;
+        // Inverting Get(var, row) over all rows visits every column this variable
+        // owns. Entity-scoped variables collapse multiple rows onto one column;
+        // the repeated writes are idempotent (same var/label, instance pinned to
+        // the entity id via Get's mapping).
+        for (idx_t row = 0; row < indexer.num_rows; row++) {
+            idx_t col = indexer.Get(var, row);
+            if (col >= provenance.size()) {
+                continue; // defensive: never index past the flat array
+            }
+            ColumnProvenance &slot = provenance[col];
+            slot.kind = kind;
+            slot.label = var_labels[var];
+            slot.decide_var_idx = var;
+            // For entity-scoped vars, the instance is the entity id (col - base);
+            // for row-scoped vars it is the row. Both recover from the column.
+            slot.instance = indexer.is_entity_scoped[var]
+                                ? col - indexer.entity_var_base[var]
+                                : row;
+        }
+    }
+    return provenance;
+}
+
 //===----------------------------------------------------------------------===//
 // SparseCoeffAccumulator
 //===----------------------------------------------------------------------===//
