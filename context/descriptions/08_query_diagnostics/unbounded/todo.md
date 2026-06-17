@@ -5,51 +5,43 @@ region too *open* in the improving direction. The *fix* is forced (the user must
 add a bound or fix a sign error — you can't relax your way out), but the
 *diagnosis* can be rich: name the exact variables escaping to infinity.
 
-## Checklist
+## Output schema (current)
 
-- [x] **U3 · Ray→SQL mapping + reporting** (full output) — DONE, landed with **F6**
-  (see `done.md` here and `foundations/done.md`). The unbounded diagnosis names the
-  escaping variables (user vars; aux→expression as defensive infrastructure).
-  **Residual (non-v1):** the optional clause-aware line ("clause N references
-  escaping var x but never bounds it") and whether to suggest an example bound value.
+The unbounded diagnosis surfaces through `decide_diagnostics()` as a
+**variable-centric** relation (one row = one escaping variable; see
+`foundations/done.md` · F5):
 
-This file tracks remaining unbounded work; landed unbounded notes live in
-`done.md`. **The unbounded state is now functionally complete** — only the non-v1
-enrichments above remain.
+    query_id | state | variable | direction | group_label | suggested_bound
 
----
+`variable` + `direction` are populated; `query_id` ties the rows of one solve
+together; `group_label` + `suggested_bound` are reserved (NULL) — see Residual below.
 
-## U3 · Ray→SQL mapping + reporting (full output)
+## Landed (see `done.md`)
 
-**Goal.** Turn the ray into a user-facing diagnosis.
+- **U3 · Ray→SQL naming (full output)** — names the escaping variables (user vars;
+  aux→expression as defensive infrastructure) and reports the escape direction,
+  through the variable-centric `decide_diagnostics()` relation. Landed with **F6**.
 
-- Collect variables with `dᵢ > 0`; map each to its SQL name via **F6 variable
-  provenance**. **Decision: full output** — if a ray variable is an auxiliary
-  (`MAX(expr)` z, ABS aux, McCormick / `<>`), trace it back to the user's original
-  expression (F6's aux→expression link), not the internal `__abs_aux_N__` name.
-- **DecidB narrows suspects for free (verified, P7):** only `IS INTEGER` /
-  `IS REAL` can escape (BOOLEAN locked to [0,1]); all *user* vars are non-negative
-  so escape is +∞; McCormick factors have a finite UB so can't be the source.
-  Mechanical culprit test: MAXIMIZE → positive objective coefficient with no upper
-  cap. The candidate filter needs **no new data** — it runs on the model's
-  existing bounds / coeffs / types.
-- **Report:** escaping variables (fully named), likely cause ("missing
-  capacity/budget constraint or objective sign error"), prescription "add an
-  upper bound." **Never pick the bound value** — any finite bound works; the right
-  number is domain knowledge. Open: whether to *suggest* an example value (e.g.
-  the largest RHS in scope) or stay silent to avoid a bad anchor.
-- **Shared reporting surface (why F2 is a dep):** U3 emits through the unified
-  **F5** relation, not a one-off variable-only format, so every diagnosis state
-  renders consistently — and **F5 needs F2** for clause-level labels. Unbounded's
-  *own* content is variable-centric (F6 names the escaping vars), so F2's primary
-  payoff here is **building + battle-testing the shared F2+F5 reporting stack on
-  the simpler unbounded case** before the infeasible engine relies on it.
-  *Optional enrichment F2 enables (not v1):* a constraint-aware line — "clause N
-  references escaping var x but never bounds it."
+## Remaining (non-v1 enrichments — the unbounded state is functionally complete)
 
-**Test (differential).** Correct escaping variables named — user vars AND aux vars
-traced to their source expression; `INF_OR_UNBD` routes correctly.
+- [ ] **`group_label` — per-group (`PER`) naming.** With `PER`, one variable name
+  becomes one instance per group; when only some groups escape, name which (e.g.
+  `region=ASIA`) instead of leaving it ambiguous. Two pieces of work: **(a)** the
+  current dedup-by-name in `BuildUnboundedDiagnostic` collapses per-group instances
+  into a single row — switch to dedup by `(name, group)` when grouped; **(b)** plumb
+  the `PER`/`WHEN` group's display value down to the diagnosis site (the group→name
+  plumbing, shared with the infeasible engine). Until then `group_label` reads NULL.
+  With no `PER` the column is *genuinely* NULL (one variable = one thing, nothing to
+  disambiguate) — this is the common case (e.g. the `run.sh` demo).
+- [ ] **`suggested_bound` — example cap value.** Compute a candidate (e.g. the
+  largest RHS in scope) to fill the column. Deliberately deferred: a wrong number
+  anchors the user, and the right cap is domain knowledge. The code is small; the
+  hold-up is the design call, not the work.
+- [ ] **Clause-aware line (optional).** Name the clauses an escaping variable appears
+  in. **Hard limit (finding, load-bearing):** the ray identifies a *missing* bound,
+  so it can name the runaway variable but **cannot** finger a single guilty clause —
+  a flipped-sign constraint is mathematically indistinguishable from an absent one.
+  So this can only ever be *context* ("`x` appears in clauses 2, 5; none cap it"),
+  never blame. Needs the same clause-text plumbing as the infeasible engine.
 
-**Deps:** U2 ✅, **F2 ✅** (constraint provenance — supplies F5's clause labels),
-**F4 ✅** (consent gate), **F5 ✅** (`decide_diagnostics()` relation), and the one
-remaining open dep **F6** (variable provenance — full, incl. aux→expression).
+This file tracks remaining unbounded work; landed unbounded notes live in `done.md`.

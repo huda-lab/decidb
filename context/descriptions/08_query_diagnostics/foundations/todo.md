@@ -4,20 +4,18 @@ Shared infrastructure consumed by all diagnosis states. **Build first** — ever
 state engine depends on these. This file tracks remaining foundation work; landed
 foundation notes live in `done.md`.
 
-## Checklist
+## Landed (see `done.md`)
 
-- [x] **F2 · Constraint provenance** (v1.2-A) — DONE (see `done.md`)
+- **F2** · Constraint provenance · **F4** · `PRAGMA diagnose_decide` · **F5** ·
+  `decide_diagnostics()` relation · **F6** · Variable provenance (column-side;
+  index→name + aux→expression, consumed by the unbounded diagnosis to name escaping
+  vars). Detailed notes in `done.md`.
+
+## Remaining
+
 - [ ] **F3 · Relaxability tagging** (v1.2-B) — deps: F2 (satisfied; the `kind` field
   + USER/global-STRUCTURAL split landed with F2 — F3 owes the *exhaustive* STRUCTURAL
-  stamping across the linearization paths)
-- [x] **F4 · Invocation pragma `PRAGMA diagnose_decide`** — DONE (see `done.md`)
-- [x] **F5 · Diagnostic reporting relation** — DONE (see `done.md`, surfaced as the
-  `decide_diagnostics()` table function)
-- [x] **F6 · Variable provenance** (column-side; index→name + aux→expression) — DONE
-  (see `done.md`). Folded in U3's consuming half: the unbounded diagnosis now names
-  escaping variables. Aux→expression capture + `BuildColumnProvenance` landed; only
-  user vars escape in practice (aux are structurally bounded), so aux naming is
-  defensive infrastructure.
+  stamping across the linearization paths). Detail below.
 
 External dependency (tracked in `03_expressivity/sql_functions/todo.md`):
 **decision-variable norms (v1.1)** — abs-aux / count-binary+Big-M / max-aux
@@ -62,15 +60,3 @@ re-quote against the typed `K`) was scoped to F5 originally but **deferred to th
 infeasible engine** — unbounded produces no slacks, so it had no live consumer.
 Build it here (or in `infeasible/`) when the elastic engine needs it; render it
 through the existing `decide_diagnostics()` relation (F5, done).
-
----
-
-## F6 · Variable provenance (column-side) — DONE
-
-Moved to `done.md`. `LogicalDecide::aux_var_expressions` (aux→source-expression,
-captured at the 4 optimizer aux-creation sites) + `ColumnProvenance` /
-`BuildColumnProvenance` (`ilp_model.hpp` / `ilp_model_builder.cpp`) give a `flat
-column → {USER name | AUX expr | GLOBAL_AUX}` map. Folded in U3's consumer:
-`BuildUnboundedDiagnostic` now names escaping variables. Finding: only user
-INTEGER/REAL vars escape in practice (aux are structurally bounded), so aux naming
-is defensive infrastructure.

@@ -108,26 +108,34 @@ as a fixed-schema relation.
 - **`decide_diagnostics()` table function** (registered with one line in
   `src/function/table/system_functions.cpp`, implemented in
   `src/decidb/utility/decide_diagnostic.cpp`) with fixed schema
-  `(state, clause, group_key, edit_kind, suggested_change)` all VARCHAR; empty row
-  fields render as NULL. **Output-surface decision:** a runtime result-schema switch
-  is bind-time-blocked (DECIDE is a clause on SELECT; the projection binds the
-  decision columns before the solve runs — `logical_decide.cpp:23,34`,
-  `transform_select_node.cpp:107`), so the diagnosis is surfaced via this companion
-  table function instead.
-- **Unbounded content is a scaffold this session:** `BuildUnboundedDiagnostic`
-  emits status + the generic "add a bound" prescription. U3/F6 enrich it with the
-  named escaping variables (the `result.ray` is already threaded in). Because the
-  unbounded content is variable-centric, the F2→F5 clause-label *join* is built but
-  not yet exercised end-to-end — that lands with U3 / the infeasible engine.
-- **Deferred (with the user):** the slack→Δ conversion (AVG `s*/N_g`, strict `</>`
-  re-quote) — it has no producer until the infeasible elastic engine, so building it
-  now would be speculative.
+  `(query_id BIGINT, state, variable, direction, group_label, suggested_bound)` —
+  `query_id` is BIGINT, the rest VARCHAR; empty string row fields render as SQL NULL.
+  The schema is **variable-centric** (one row = one escaping variable): `variable`
+  and `group_label` are names (never internal ids), `direction` is the escape
+  direction, and `query_id` ties together every row of one failed solve.
+  **Output-surface decision:** a runtime result-schema switch is bind-time-blocked
+  (DECIDE is a clause on SELECT; the projection binds the decision columns before the
+  solve runs — `logical_decide.cpp:23,34`, `transform_select_node.cpp:107`), so the
+  diagnosis is surfaced via this companion table function instead.
+- **Unbounded content (current):** `BuildUnboundedDiagnostic` emits one row per
+  escaping variable carrying its **name** (F6) and the **direction** it escapes (the
+  sign of its ray entry; `+∞` in practice, since user vars are bounded below at 0).
+  `group_label` and `suggested_bound` are reserved for later enrichment and read NULL
+  for now. `query_id` is stamped at stash time from a per-connection counter
+  (`DecideDiagnosticState::next_query_id`).
+- **Deferred (with the user):** `suggested_bound` (a concrete cap value — left NULL
+  to avoid anchoring on a bad number) and `group_label` name resolution (the
+  escaping-instance's PER/WHEN group), plus the slack→Δ conversion for the infeasible
+  engine. None have a producer yet, so building them now would be speculative.
 - Covered by `test/decide/tests/test_query_diagnostics_f5.py` (both backends):
-  failing DECIDE + follow-up `SELECT * FROM decide_diagnostics()` returns the
-  scaffold row; fixed schema; empty when nothing diagnosed / no pragma.
-- **Superseded:** the unbounded scaffold row is now replaced by named escaping
-  variables (F6 below); the F5 test still passes (the substrings it asserts —
-  `unbounded` / `add bound` / `add an upper bound` — survive in the named rows).
+  failing DECIDE + follow-up `SELECT * FROM decide_diagnostics()` returns the named
+  row (read as CSV); fixed schema via DESCRIBE; empty when nothing diagnosed / no
+  pragma.
+- **Note — schema reshaped around unbounded:** the original shared 5-tuple
+  `(state, clause, group_key, edit_kind, suggested_change)` was replaced by this
+  variable-centric schema. The future infeasible/slow engines, whose subject is a
+  *clause* not a *variable*, will need to revisit these columns (see
+  `infeasible/todo.md`).
 
 ## F6 · Variable provenance (column-side) — DONE
 
@@ -157,11 +165,12 @@ also folded in U3's consuming half (ray → named rows).
   At the `PhysicalDecide::Finalize` diagnosis site, per-decide-var labels are built
   (user → `decide_variables[i]->GetName()`, aux → its captured expression) and run
   through `BuildColumnProvenance`. The diagnosis collects ray columns with
-  `|ray[i]| > 1e-8`, resolves each via the map, **dedups by label** (a row-scoped
-  `x` escaping across every row reports once), and emits one "add bound" row per
-  escaping variable. Falls back to the generic scaffold when no ray is attached
-  (quadratic models — U2 extracts none) or only an unnamed global aux escaped (which
-  it flags as a likely model-generation issue). **Never picks the bound value.**
+  `|ray[i]| > 1e-8`, resolves each via the map, **dedups by name** (a row-scoped
+  `x` escaping across every row reports once), and emits one row per escaping
+  variable carrying its **name** and escape **direction** (the sign of its ray
+  entry). Falls back to a single detail-less row when no ray is attached (quadratic
+  models — U2 extracts none) or only an unnamed global aux escaped (which it flags on
+  the stderr summary as a likely model-generation issue). **Never picks the bound.**
 - **Empirical scope (verified on both backends):** in current DECIDE formulations
   **only user INTEGER/REAL variables actually escape**. Auxiliary variables are
   structurally bounded — ABS Big-M and bilinear McCormick require finite bounds (they

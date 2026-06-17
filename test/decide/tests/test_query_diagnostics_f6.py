@@ -2,12 +2,14 @@
 
 F6 maps every solver column back to the user-facing thing it represents — user
 variable name, or (for an auxiliary linearization column) the user's original
-source expression. Folded into the unbounded diagnosis, the report now names the
-escaping variable(s) instead of the generic scaffold prescription.
+source expression. Folded into the unbounded diagnosis, the decide_diagnostics()
+relation now reports each escaping variable by NAME with the DIRECTION it escapes
+(always +∞ today, since user variables are bounded below at 0).
 
 These tests drive the two-statement flow (a failing DECIDE that stashes, then a
-SELECT that reads `decide_diagnostics()` back) via `execute_script`, under both
-backends.
+SELECT that reads `decide_diagnostics()` back) via `execute_script`, reading the
+relation as CSV so single-letter variable names assert unambiguously. Run under
+both backends.
 
 Empirical scope note: in current DECIDE formulations only *user* INTEGER/REAL
 variables can actually escape to infinity. Auxiliary variables are structurally
@@ -17,41 +19,51 @@ escaping-variable naming exercises user vars; the aux→expression resolution is
 covered by the C++ unit test (test_decidb_variable_provenance.cpp).
 """
 
+import csv
+import io
+
 import pytest
 
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
 
-def _script(decide_sql, mode="unbounded"):
-    return (
+def _diagnose(cli, decide_sql, mode="unbounded"):
+    script = (
+        ".mode csv\n"
         f"PRAGMA diagnose_decide='{mode}';\n"
         f"{decide_sql};\n"
         "SELECT * FROM decide_diagnostics();\n"
     )
+    return cli.execute_script(script)
+
+
+def _rows(result):
+    return list(csv.DictReader(io.StringIO(result.stdout)))
 
 
 @pytest.mark.query_diagnostics
 class TestF6VariableNaming:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_real_var_named(self, request, cli_fixture):
-        """A single escaping REAL user variable is named in the prescription."""
+        """A single escaping REAL user variable is named in the relation."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
-        result = cli.execute_script(_script(sql))
+        result = _diagnose(cli, sql)
 
         assert (
             "diagnosis ready: select * from decide_diagnostics()"
             in result.stderr.lower()
         )
-        out = result.stdout.lower()
-        assert "unbounded" in out
-        assert "add bound" in out
-        # The variable name 'x' rides in suggested_change, summary mentions it too.
-        assert "'x' can grow without bound" in out
+        rows = _rows(result)
+        assert len(rows) == 1
+        assert rows[0]["variable"] == "x"
+        assert rows[0]["direction"] == "+∞"
+        assert rows[0]["state"] == "unbounded"
+        # The summary still names the variable on stderr.
         assert "the variable x can grow without bound" in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -63,25 +75,25 @@ class TestF6VariableNaming:
             "SELECT id, n FROM (VALUES (1), (2)) t(id) "
             "DECIDE n IS INTEGER SUCH THAT n >= 0 MAXIMIZE SUM(n)"
         )
-        result = cli.execute_script(_script(sql))
-        assert "'n' can grow without bound" in result.stdout.lower()
+        rows = _rows(_diagnose(cli, sql))
+        assert [r["variable"] for r in rows] == ["n"]
+        assert rows[0]["direction"] == "+∞"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_multiple_escaping_vars_each_named_once(self, request, cli_fixture):
         """Two escaping vars yield two rows; each row-scoped var is deduped to one
-        row even though it instantiates a column per source row."""
+        row even though it instantiates a column per source row, and both rows
+        share one query_id (same solve)."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x, y FROM (VALUES (1), (2)) t(id) "
             "DECIDE x IS REAL, y IS REAL SUCH THAT x >= 0 AND y >= 0 "
             "MAXIMIZE SUM(x + y)"
         )
-        rows = cli.execute_script(_script(sql)).stdout.lower()
-        assert "'x' can grow without bound" in rows
-        assert "'y' can grow without bound" in rows
-        # Deduped: exactly one row per variable (not one per (var, source-row)).
-        assert rows.count("'x' can grow without bound") == 1
-        assert rows.count("'y' can grow without bound") == 1
+        rows = _rows(_diagnose(cli, sql))
+        assert len(rows) == 2
+        assert sorted(r["variable"] for r in rows) == ["x", "y"]
+        assert len({r["query_id"] for r in rows}) == 1
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_auto_mode_names_unbounded_var(self, request, cli_fixture):
@@ -91,8 +103,8 @@ class TestF6VariableNaming:
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
-        out = cli.execute_script(_script(sql, mode="auto")).stdout.lower()
-        assert "'x' can grow without bound" in out
+        rows = _rows(_diagnose(cli, sql, mode="auto"))
+        assert [r["variable"] for r in rows] == ["x"]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_no_pragma_no_naming(self, request, cli_fixture):
@@ -102,7 +114,7 @@ class TestF6VariableNaming:
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
-        script = f"{sql};\nSELECT * FROM decide_diagnostics();\n"
+        script = f".mode csv\n{sql};\nSELECT * FROM decide_diagnostics();\n"
         result = cli.execute_script(script)
         assert "diagnosis ready" not in result.stderr.lower()
-        assert "can grow without bound" not in result.stdout.lower()
+        assert _rows(result) == []

@@ -82,12 +82,18 @@ behavior is unchanged — the static `ThrowDecideSolveError` paragraph.
 ## U3 · Ray→SQL naming (full output) — DONE (landed with F6)
 
 The scaffold is replaced: the unbounded diagnosis now **names the escaping
-variables**. The consuming half of U3 landed together with F6 (variable provenance)
-— see `foundations/done.md` (F6). `BuildUnboundedDiagnostic(result, columns)`
-collects ray columns with `|ray[i]| > 1e-8`, resolves each through the F6
-`flat column → ColumnProvenance` map, dedups by label (a row-scoped `x` escaping
-across rows reports once), and emits one `add bound` row per escaping variable
-through the same `decide_diagnostics()` relation. **Never picks the bound value.**
+variables** and reports the **direction** each escapes. The consuming half of U3
+landed with F6 (variable provenance) — see `foundations/done.md` (F6).
+`BuildUnboundedDiagnostic(result, columns)` collects ray columns with
+`|ray[i]| > 1e-8`, resolves each through the F6 `flat column → ColumnProvenance`
+map, dedups by name (a row-scoped `x` escaping across rows reports once), and emits
+one row per escaping variable through the `decide_diagnostics()` relation. Each row
+carries `variable` (the name) and `direction` (the sign of its ray entry — `+∞` in
+practice). **Never picks the bound value** (`suggested_bound` stays NULL).
+
+The relation schema is `query_id | state | variable | direction | group_label |
+suggested_bound` (see `foundations/done.md` · F5). `group_label` and
+`suggested_bound` read NULL for now; `query_id` ties together the rows of one solve.
 
 - **Suspect filter is free:** the U2 box-LP ray already fixes finite-UB columns to
   0, so a non-zero ray entry *is* the type/sign/bound-filtered suspect set (P7) — no
@@ -96,11 +102,19 @@ through the same `decide_diagnostics()` relation. **Never picks the bound value.
   structurally bounded (ABS Big-M / bilinear McCormick require finite bounds and
   error before the solver; MIN/MAX/`<>` indicators are BOOLEAN `[0,1]`). The
   aux→expression naming is therefore defensive — correct if an aux ever escapes, but
-  user INTEGER/REAL vars are the practical escapers.
-- Covered by `test/decide/tests/test_query_diagnostics_f6.py` and
+  user INTEGER/REAL vars are the practical escapers. They are bounded below at 0, so
+  the escape `direction` is `+∞` in every practical case (the sign is computed from
+  the ray regardless, so a future signed/free variable would report `-∞` correctly).
+- Demoed end-to-end on the real TPC-H DB via `run.sh` (a 3-variable `part`
+  production model where only `promo` escapes); covered by
+  `test/decide/tests/test_query_diagnostics_f6.py` and
   `test/common/test_decidb_variable_provenance.cpp`.
 
-**Residual (non-v1):** the F2→F5 clause-label join is built but not exercised by
-unbounded (its content is variable-centric) — the optional "clause N references
-escaping var x but never bounds it" line remains an enrichment, as does suggesting
-an example bound value (deliberately avoided to not anchor on a bad number).
+**Residual (non-v1):** the clause/`group_label` linkage — naming the PER/WHEN group
+an escaping instance belongs to, and the optional "clause N references escaping var
+x but never bounds it" line — remains an enrichment (it needs constraint-text
+plumbing shared with the infeasible engine). `suggested_bound` (an example cap
+value) is deliberately deferred to avoid anchoring on a bad number. A key finding
+recorded during this work: the ray identifies a *missing* bound, so it can name the
+runaway variable but **cannot** finger a single guilty clause (a flipped-sign
+constraint is indistinguishable from an absent one).

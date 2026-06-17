@@ -26,21 +26,24 @@ struct SolverResult;
 struct ColumnProvenance;
 
 //! One row of the relation surfaced by decide_diagnostics(). Empty string fields
-//! render as SQL NULL.
+//! render as SQL NULL. For the unbounded state, one row = one escaping variable.
 struct DiagnosticRow {
-	string clause;           //!< user-clause label (F2); empty => not clause-scoped
-	string group_key;        //!< PER/WHEN group label; empty => ungrouped
-	string edit_kind;        //!< "add bound" / "loosen RHS" / "widen bound" / "remove"
-	string suggested_change; //!< human-readable prescription (never a chosen value for unbounded)
+	string variable;        //!< escaping variable NAME (F6); empty => NULL
+	string direction;       //!< direction it escapes: "+∞" / "-∞"; empty => NULL
+	string group_label;     //!< PER/WHEN group NAME the escaping instance belongs to;
+	                        //!< empty => NULL (ungrouped, or name resolution not yet wired)
+	string suggested_bound; //!< suggested finite bound; empty => NULL (deferred — not yet computed)
 };
 
 //! Structured diagnosis produced by a state engine and rendered by the table
 //! function. Shared across all diagnosis states so output stays consistent.
 struct DecideDiagnostic {
 	bool valid = false;                       //!< false => nothing diagnosed yet
+	int64_t query_id = 0;                     //!< per-connection diagnosis id; ties together
+	                                          //!< every row produced by the same failed solve
 	SolverStatus status = SolverStatus::OTHER;
 	string state;                             //!< "unbounded" / "infeasible" / "slow"
-	string summary;                           //!< one-line human summary
+	string summary;                           //!< one-line human summary (the stderr pointer)
 	vector<DiagnosticRow> rows;
 };
 
@@ -51,6 +54,7 @@ struct DecideDiagnostic {
 class DecideDiagnosticState : public ClientContextState {
 public:
 	DecideDiagnostic latest;
+	int64_t next_query_id = 1; //!< monotonic per-connection id, assigned at each stash
 };
 
 //! Key under which DecideDiagnosticState is registered on the ClientContext.
@@ -58,10 +62,11 @@ static constexpr const char *DECIDE_DIAGNOSTIC_STATE_KEY = "decide_diagnostics";
 
 //! Build the unbounded diagnosis. Names the escaping variables (F6): collects the
 //! columns with a non-zero entry in `result.ray`, resolves each through `columns`
-//! (F6 variable provenance — user name or aux source expression), dedups by label,
-//! and emits one "add bound" row per escaping variable. Falls back to the generic
-//! "add a bound" prescription when no ray is attached (e.g. quadratic models, where
-//! U2 extracts none). DeciDB never picks the bound value — any finite bound works.
+//! (F6 variable provenance — user name or aux source expression), dedups by name,
+//! and emits one row per escaping variable carrying its NAME and escape DIRECTION
+//! (the sign of its ray entry). `group_label` and `suggested_bound` are left empty
+//! (NULL) for now. Falls back to a single detail-less row when no ray is attached
+//! (e.g. quadratic models, where U2 extracts none). DeciDB never picks the bound.
 DecideDiagnostic BuildUnboundedDiagnostic(const SolverResult &result,
                                           const vector<ColumnProvenance> &columns);
 

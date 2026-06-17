@@ -2,15 +2,21 @@
 
 F5 adds a structured diagnosis that a state engine populates, stashes
 per-connection, and surfaces via the `decide_diagnostics()` table function with a
-fixed schema (state, clause, group_key, edit_kind, suggested_change). This session
-the unbounded engine fills a scaffold row (status + "add a bound" prescription);
-U3/F6 will later enrich it with the named escaping variables.
+fixed schema. For the unbounded state each row names one escaping variable:
+
+    query_id | state | variable | direction | group_label | suggested_bound
+
+`group_label` and `suggested_bound` are reserved for later enrichment and read
+NULL for now; `query_id` ties together every row of one failed solve.
 
 The end-to-end flow spans two statements on one connection (a failing DECIDE that
 stashes, then a SELECT that reads it back), so these tests drive the CLI via
-`execute_script` (stdin) — `-c` halts after the DECIDE error. Runs under both
-backends.
+`execute_script` (stdin) — `-c` halts after the DECIDE error. The relation is read
+as CSV so its rows parse unambiguously. Runs under both backends.
 """
+
+import csv
+import io
 
 import pytest
 
@@ -22,20 +28,39 @@ _UNBOUNDED_SQL = (
     "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
 )
 
-_DIAGNOSE_THEN_READ = (
-    "PRAGMA diagnose_decide='unbounded';\n"
-    f"{_UNBOUNDED_SQL};\n"
-    "SELECT * FROM decide_diagnostics();\n"
-)
+_EXPECTED_SCHEMA = [
+    "query_id",
+    "state",
+    "variable",
+    "direction",
+    "group_label",
+    "suggested_bound",
+]
+
+
+def _diagnose(cli, decide_sql, mode="unbounded"):
+    """Run PRAGMA + a failing DECIDE + the relation read on one stdin session.
+    The relation is emitted as CSV so its rows parse unambiguously."""
+    script = (
+        ".mode csv\n"
+        f"PRAGMA diagnose_decide='{mode}';\n"
+        f"{decide_sql};\n"
+        "SELECT * FROM decide_diagnostics();\n"
+    )
+    return cli.execute_script(script)
+
+
+def _rows(result):
+    return list(csv.DictReader(io.StringIO(result.stdout)))
 
 
 @pytest.mark.query_diagnostics
 class TestF5DiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_diagnosis_surfaces_as_relation(self, request, cli_fixture):
-        """Failing DECIDE stashes; the follow-up SELECT returns the scaffold row."""
+        """Failing DECIDE stashes; the follow-up SELECT returns one named row."""
         cli = request.getfixturevalue(cli_fixture)
-        result = cli.execute_script(_DIAGNOSE_THEN_READ)
+        result = _diagnose(cli, _UNBOUNDED_SQL)
 
         # The DECIDE itself still errors, with the pointer on stderr.
         assert (
@@ -43,30 +68,26 @@ class TestF5DiagnosticsRelation:
             in result.stderr.lower()
         )
 
-        # The relation is read from stdout (table format).
-        out = result.stdout.lower()
-        assert "unbounded" in out          # state column
-        assert "add bound" in out          # edit_kind column
-        assert "add an upper bound" in out  # suggested_change column
+        rows = _rows(result)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["state"] == "unbounded"
+        assert row["variable"] == "x"
+        assert row["direction"] == "+∞"
+        # group_label + suggested_bound are SQL NULL (reserved for later); DuckDB's
+        # CSV writer renders a NULL cell as the literal "NULL".
+        assert row["group_label"] == "NULL"
+        assert row["suggested_bound"] == "NULL"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_relation_has_fixed_schema(self, request, cli_fixture):
-        """The table function's bind-time schema is the shared 5-column relation."""
+        """The table function's bind-time schema is the fixed unbounded relation."""
         cli = request.getfixturevalue(cli_fixture)
-        rows, cols = cli.execute("SELECT * FROM decide_diagnostics()")
         # Fresh process => empty stash => zero rows, but the schema is fixed.
-        # (`execute` returns ([], []) on an empty JSON result, so assert schema via
-        #  a DESCRIBE instead, which always yields the column list.)
+        # DESCRIBE always yields the column list regardless of stash contents.
         desc_rows, _ = cli.execute("DESCRIBE SELECT * FROM decide_diagnostics()")
         names = [str(r[0]).lower() for r in desc_rows]
-        assert names == [
-            "state",
-            "clause",
-            "group_key",
-            "edit_kind",
-            "suggested_change",
-        ]
-        assert rows == []
+        assert names == _EXPECTED_SCHEMA
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_empty_when_nothing_diagnosed(self, request, cli_fixture):
@@ -79,8 +100,8 @@ class TestF5DiagnosticsRelation:
     def test_no_diagnosis_stashed_without_pragma(self, request, cli_fixture):
         """Manual-first: an unbounded DECIDE with no pragma stashes nothing."""
         cli = request.getfixturevalue(cli_fixture)
-        script = f"{_UNBOUNDED_SQL};\nSELECT * FROM decide_diagnostics();\n"
+        script = f".mode csv\n{_UNBOUNDED_SQL};\nSELECT * FROM decide_diagnostics();\n"
         result = cli.execute_script(script)
         # Static error, no pointer, and the relation stays empty.
         assert "diagnosis ready" not in result.stderr.lower()
-        assert "add bound" not in result.stdout.lower()
+        assert _rows(result) == []
