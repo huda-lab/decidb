@@ -13,6 +13,8 @@
 
 #include "duckdb/decidb/solver_input.hpp"
 
+#include <map>
+
 namespace duckdb {
 
 //! Maps (decide_var_idx, row) pairs to flat solver variable indices.
@@ -74,12 +76,34 @@ struct VarIndexer {
     static VarIndexer BuildRef(const SolverInput &input);
 };
 
+//! Origin of an emitted matrix row.
+//!   USER       — emitted from a user SUCH THAT clause (relaxable; F3 refines this).
+//!   STRUCTURAL — synthesized by a linearization/linking rewrite (rigid).
+//! F2 stamps the obvious split only (USER on the EvaluatedConstraint-derived paths,
+//! STRUCTURAL on the raw global-constraint push). The exhaustive structural
+//! enumeration across the optimizer/execution rewrite paths is F3.
+enum class ConstraintKind : uint8_t { USER, STRUCTURAL };
+
+//! Row → clause provenance carried by every emitted constraint (F2). Lets diagnosis
+//! report at the user-clause level instead of at raw matrix rows.
+struct ConstraintProvenance {
+    //! Index into SolverInput::constraints of the user clause that produced this row.
+    //! DConstants::INVALID_INDEX for synthetic/structural rows with no user clause.
+    idx_t clause_id = DConstants::INVALID_INDEX;
+    //! PER/WHEN group id at emission (or the row id for per-row clauses).
+    //! DConstants::INVALID_INDEX when the clause is ungrouped.
+    idx_t group_key = DConstants::INVALID_INDEX;
+    //! USER vs STRUCTURAL (see ConstraintKind).
+    ConstraintKind kind = ConstraintKind::USER;
+};
+
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs
 struct ModelConstraint {
     vector<int> indices;       //!< Variable indices into the flattened variable array
     vector<double> coefficients; //!< Coefficient for each variable
     char sense;                //!< '<' (<=), '>' (>=), '=' (==)
     double rhs;                //!< Right-hand side value
+    ConstraintProvenance provenance; //!< Row → clause origin (F2)
 };
 
 //! Solver-agnostic optimization model, ready for any backend to consume.
@@ -122,6 +146,7 @@ struct SolverModel {
         vector<double> q_coefficients;
         char sense;
         double rhs;
+        ConstraintProvenance provenance; //!< Row → clause origin (F2)
     };
     vector<QuadraticConstraint> quadratic_constraints;
 
@@ -132,6 +157,48 @@ struct SolverModel {
     //! PhysicalDecide::Finalize() and threaded through).
     static SolverModel Build(SolverInput &input, const VarIndexer &indexer);
 };
+
+//! Reverse index: user clause_id → positions of its rows in model.constraints (F2).
+//! One forward pass over the linear constraints; structural rows (clause_id ==
+//! DConstants::INVALID_INDEX) are skipped. Quadratic constraints carry provenance
+//! too but are not indexed here (linear matrix is the common diagnosis surface).
+//! Ordered map for deterministic iteration in reporting/tests.
+std::map<idx_t, vector<idx_t>> BuildClauseToRows(const SolverModel &model);
+
+//! What a flat solver column represents to the user (F6 variable provenance —
+//! the column-side complement of ConstraintProvenance):
+//!   USER       — a user decision variable; `label` is its name.
+//!   AUX        — an auxiliary decision variable from a linearization rewrite
+//!                (ABS / MIN-MAX / McCormick / <>); `label` is the user's original
+//!                source expression captured at optimizer time.
+//!   GLOBAL_AUX — an internal global-block auxiliary (e.g. composed MIN/MAX term)
+//!                with no user-facing source; `label` is empty.
+enum class ColumnKind : uint8_t { USER, AUX, GLOBAL_AUX };
+
+//! Column → user-facing source provenance carried per flat solver column (F6).
+struct ColumnProvenance {
+    ColumnKind kind = ColumnKind::GLOBAL_AUX;
+    //! User variable name (USER), source expression (AUX), or empty (GLOBAL_AUX).
+    string label;
+    //! Source decide-variable index; INVALID for global-block columns.
+    idx_t decide_var_idx = DConstants::INVALID_INDEX;
+    //! Row (row-scoped) or entity id (entity-scoped) this column instantiates;
+    //! INVALID for global-block columns. Disambiguates repeated names.
+    idx_t instance = DConstants::INVALID_INDEX;
+};
+
+//! Reverse map: flat solver column index → ColumnProvenance (F6). The column-side
+//! complement of BuildClauseToRows. Pure (no planner/Expression dependency): the
+//! caller pre-extracts per-decide-variable labels (user name or aux source
+//! expression) and an is-aux flag. Output is sized `indexer.total_vars`; every
+//! entry defaults to GLOBAL_AUX (the global block stays unnamed), then the row /
+//! entity blocks are filled by inverting `indexer.Get(var, row)` over all
+//! decide variables and rows — mirrors the solution-readback iteration.
+//!   var_labels[v]  — name (USER) or source expression (AUX) for decide var v
+//!   var_is_aux[v]  — true if decide var v is an auxiliary linearization variable
+vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
+                                               const vector<string> &var_labels,
+                                               const vector<bool> &var_is_aux);
 
 //! Build CSR group→rows index from a per-row group_id array.
 //!   row_group_ids[r] in [0..num_groups) → row r belongs to that group

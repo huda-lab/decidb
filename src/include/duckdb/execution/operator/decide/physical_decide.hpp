@@ -159,6 +159,11 @@ public:
     vector<LogicalDecide::BilinearLink> bilinear_links;
     vector<LogicalDecide::AbsMaximizeLink> abs_maximize_links;
 
+    // F6: auxiliary variable index -> user's original source expression string
+    // (ABS(...) / MIN/MAX(...) / product / <>), for naming an escaping aux column
+    // in the unbounded diagnosis. Sparse; only auxiliary variables appear.
+    vector<pair<idx_t, string>> aux_var_expressions;
+
     // Composed MIN/MAX constraints (additive LHS with MIN/MAX terms mixed in).
     // Each is emitted as a block of RawConstraints in global_constraints at sink finalize.
     vector<LogicalDecide::ComposedMinMaxConstraint> composed_minmax_constraints;

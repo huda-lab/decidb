@@ -113,6 +113,9 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 			if (!decide.variable_entity_scope.empty()) {
 				decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 			}
+			// F6: record the user's original <> comparison for diagnosis naming
+			decide.aux_var_expressions.emplace_back(
+			    ind_idx, "(" + comp.left->ToString() + " <> " + comp.right->ToString() + ")");
 			// Tag the comparison with the indicator index for direct matching
 			comp.alias = string(NE_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "__";
 		}
@@ -783,6 +786,9 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxIndicator(LogicalDecide &d
 		decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 	}
 	decide.minmax_indicator_links.emplace_back(agg_name, ind_idx);
+	// F6: record the user's original MIN/MAX(inner) for diagnosis naming
+	decide.aux_var_expressions.emplace_back(ind_idx,
+	                                        StringUtil::Upper(agg_name) + "(" + inner.ToString() + ")");
 
 	// Build a SUM(inner) aggregate tagged with the indicator index
 	vector<unique_ptr<Expression>> sum_children;
@@ -1045,6 +1051,9 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				if (!decide.variable_entity_scope.empty()) {
 					decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
 				}
+				// F6: record the user's original ABS(inner) for diagnosis naming
+				decide.aux_var_expressions.emplace_back(
+				    aux_idx, "ABS(" + func.children[0]->ToString() + ")");
 
 				// Read the Big-M marker set by TagAbsConstraintsForBigM. Tag is
 				// set on the BoundFunctionExpression alias before the rewrite.
@@ -1279,6 +1288,9 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				if (!decide.variable_entity_scope.empty()) {
 					decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX); // row-scoped
 				}
+				// F6: record the user's original product (b * x) for diagnosis naming
+				decide.aux_var_expressions.emplace_back(
+				    aux_idx, "(" + func.children[0]->ToString() + " * " + func.children[1]->ToString() + ")");
 
 				if (both_bool) {
 					// AND-linearization: w <= b1, w <= b2, w >= b1 + b2 - 1

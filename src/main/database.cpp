@@ -1,6 +1,7 @@
 #include "duckdb/main/database.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/decidb/decide_diagnostic.hpp"
 #include "duckdb/common/virtual_file_system.hpp"
 #include "duckdb/execution/index/index_type_set.hpp"
 #include "duckdb/execution/operator/helper/physical_set.hpp"
@@ -421,6 +422,8 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 		config.options.access_mode = AccessMode::READ_WRITE;
 	}
 	config.extension_parameters = new_config.extension_parameters;
+	// DeciDB: register the diagnose_decide session setting (query diagnostics, F4).
+	RegisterDecideDiagnosticOptions(config);
 	if (new_config.file_system) {
 		config.file_system = std::move(new_config.file_system);
 	} else {

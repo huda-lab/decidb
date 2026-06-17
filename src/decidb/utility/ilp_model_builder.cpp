@@ -465,6 +465,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             continue;
         }
 
+        // F2: this clause's stable id = its position in input.constraints. Pointer
+        // arithmetic survives the `continue` skips above (a trailing counter would not).
+        idx_t clause_id = static_cast<idx_t>(&eval_const - input.constraints.data());
+
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
         bool lhs_is_integer = IsEvalConstraintLhsIntegerValued(eval_const);
@@ -549,6 +553,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
                 }
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
+                constr.provenance.clause_id = clause_id; // F2 site 1: aggregate, ungrouped
                 PushNormalizedConstraint(std::move(constr));
 
             } else {
@@ -635,6 +640,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
 
                     ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
+                    constr.provenance.clause_id = clause_id; // F2 site 2: aggregate + PER/WHEN
+                    constr.provenance.group_key = g;
                     PushNormalizedConstraint(std::move(constr));
                 }
             }
@@ -691,6 +698,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
                 double rhs = eval_const.rhs_values[row] - rhs_adjustment;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
+                constr.provenance.clause_id = clause_id; // F2 site 3: per-row
+                constr.provenance.group_key =
+                    has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 PushNormalizedConstraint(std::move(constr));
             }
         }
@@ -845,6 +855,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             continue;  // Already handled as linear above
         }
 
+        // F2: clause id = position in input.constraints (see linear loop above).
+        idx_t clause_id = static_cast<idx_t>(&eval_const - input.constraints.data());
+
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
         bool lhs_is_integer = IsEvalConstraintLhsIntegerValued(eval_const);
@@ -856,8 +869,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // Single aggregate: all rows
                 vector<idx_t> all_rows(num_rows);
                 std::iota(all_rows.begin(), all_rows.end(), 0);
-                model.quadratic_constraints.push_back(
-                    BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer));
+                auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer);
+                qc.provenance.clause_id = clause_id; // F2 site 5: quadratic aggregate, ungrouped
+                model.quadratic_constraints.push_back(std::move(qc));
             } else {
                 // PER groups: one QuadraticConstraint per group, reuse CSR
                 BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups,
@@ -872,8 +886,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
                     vector<idx_t> group_rows_slice(flat_rows.begin() + g_begin,
                                                    flat_rows.begin() + g_end);
-                    model.quadratic_constraints.push_back(
-                        BuildQuadraticConstraint(eval_const, group_rows_slice, rhs, lhs_is_integer));
+                    auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, rhs, lhs_is_integer);
+                    qc.provenance.clause_id = clause_id; // F2 site 6: quadratic aggregate + PER
+                    qc.provenance.group_key = g;
+                    model.quadratic_constraints.push_back(std::move(qc));
                 }
             }
         } else {
@@ -884,8 +900,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 }
                 vector<idx_t> single_row{row};
                 double rhs = eval_const.rhs_values.Get(row);
-                model.quadratic_constraints.push_back(
-                    BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_is_integer));
+                auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_is_integer);
+                qc.provenance.clause_id = clause_id; // F2 site 7: quadratic per-row
+                qc.provenance.group_key =
+                    has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
+                model.quadratic_constraints.push_back(std::move(qc));
             }
         }
     }
@@ -899,6 +918,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         constr.coefficients = std::move(raw.coefficients);
         constr.sense = raw.sense;
         constr.rhs = raw.rhs;
+        // F2 site 4: synthetic linking rows (no user clause). The full structural
+        // enumeration across linearization paths is F3; this is the one site that
+        // unambiguously has no EvaluatedConstraint source.
+        constr.provenance.kind = ConstraintKind::STRUCTURAL;
         model.constraints.push_back(std::move(constr));
     }
 
@@ -959,6 +982,53 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     }
 
     return model;
+}
+
+std::map<idx_t, vector<idx_t>> BuildClauseToRows(const SolverModel &model) {
+    std::map<idx_t, vector<idx_t>> clause_to_rows;
+    for (idx_t row = 0; row < model.constraints.size(); row++) {
+        idx_t clause_id = model.constraints[row].provenance.clause_id;
+        if (clause_id == DConstants::INVALID_INDEX) {
+            continue; // structural / synthetic row with no user clause
+        }
+        clause_to_rows[clause_id].push_back(row);
+    }
+    return clause_to_rows;
+}
+
+vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
+                                               const vector<string> &var_labels,
+                                               const vector<bool> &var_is_aux) {
+    // Every flat column defaults to an unnamed global-block auxiliary; the row /
+    // entity blocks are then overwritten below. Columns in [global_block_start,
+    // total_vars) (internal global auxiliaries) keep the default.
+    vector<ColumnProvenance> provenance(indexer.total_vars);
+
+    idx_t num_decide_vars = var_labels.size();
+    for (idx_t var = 0; var < num_decide_vars; var++) {
+        ColumnKind kind = (var < var_is_aux.size() && var_is_aux[var]) ? ColumnKind::AUX
+                                                                       : ColumnKind::USER;
+        // Inverting Get(var, row) over all rows visits every column this variable
+        // owns. Entity-scoped variables collapse multiple rows onto one column;
+        // the repeated writes are idempotent (same var/label, instance pinned to
+        // the entity id via Get's mapping).
+        for (idx_t row = 0; row < indexer.num_rows; row++) {
+            idx_t col = indexer.Get(var, row);
+            if (col >= provenance.size()) {
+                continue; // defensive: never index past the flat array
+            }
+            ColumnProvenance &slot = provenance[col];
+            slot.kind = kind;
+            slot.label = var_labels[var];
+            slot.decide_var_idx = var;
+            // For entity-scoped vars, the instance is the entity id (col - base);
+            // for row-scoped vars it is the row. Both recover from the column.
+            slot.instance = indexer.is_entity_scoped[var]
+                                ? col - indexer.entity_var_base[var]
+                                : row;
+        }
+    }
+    return provenance;
 }
 
 //===----------------------------------------------------------------------===//

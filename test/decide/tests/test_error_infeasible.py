@@ -223,3 +223,19 @@ class TestUnboundedModels:
             obj[f"y_{i}"] = 1.0
         oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
         assert oracle_solver.solve().status == SolverStatus.UNBOUNDED
+
+    def test_highs_milp_unbounded_reports_unbounded(self, decidb_cli_highs):
+        """F1 regression, pinned to HiGHS: on a MILP-unbounded model HiGHS
+        returns the ambiguous ``kUnboundedOrInfeasible`` (status 9). Before F1
+        that fell into a generic 'solver status 9' catch-all with no 'unbounded'
+        substring; F1 maps it to INF_OR_UNBD, whose message says 'infeasible or
+        unbounded'. (U1 will later disambiguate it to a definitive UNBOUNDED via
+        the obj=0 probe.) The assertion holds whether HiGHS reports 9 or a
+        definitive 10 — both now produce an 'unbounded'-matching message.
+        """
+        decidb_cli_highs.assert_error("""
+            SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
+            DECIDE x IS INTEGER
+            SUCH THAT x >= 1
+            MAXIMIZE SUM(x)
+        """, match=r"(?i)unbounded")

@@ -13,6 +13,7 @@
 #include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/decide_diagnostic.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -5117,7 +5118,51 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_timer.Start();
     }
 
-    gstate.ilp_solution = SolveModel(solver_input, var_indexer);
+    // F4: read the diagnose_decide consent gate. Manual-first — when the user has
+    // opted into unbounded/auto diagnosis, pre-arm unbounded-ray extraction so the
+    // ray is available if the solve turns out unbounded (paid for only then).
+    string diagnose_mode = GetDiagnoseDecideMode(context);
+    SolveModelOptions solve_options;
+    solve_options.extract_unbounded_ray = DiagnoseModeWantsUnboundedRay(diagnose_mode);
+
+    SolverResult solve_result = SolveModel(solver_input, var_indexer, solve_options);
+    if (solve_result.status != SolverStatus::OPTIMAL) {
+        // Filter semantics: diagnose only when the mode matches the actual status
+        // AND a state engine exists. This session only the unbounded engine is
+        // built; other matched states (infeasible / slow) fall through to the
+        // default error until their engines land.
+        if (DiagnosisApplies(diagnose_mode, solve_result.status) &&
+            solve_result.status == SolverStatus::UNBOUNDED) {
+            // F6: resolve each flat solver column to its user-facing source. User
+            // variables resolve to their name; auxiliary linearization variables to
+            // the user's original expression (captured at optimizer time); the
+            // global block stays unnamed. BuildUnboundedDiagnostic then names the
+            // escaping columns from the ray.
+            idx_t nvars = decide_variables.size();
+            vector<string> var_labels(nvars);
+            vector<bool> var_is_aux(nvars, false);
+            for (auto &ae : aux_var_expressions) {
+                if (ae.first < nvars) {
+                    var_labels[ae.first] = ae.second;
+                    var_is_aux[ae.first] = true;
+                }
+            }
+            for (idx_t i = 0; i < nvars; i++) {
+                if (!var_is_aux[i]) {
+                    var_labels[i] = decide_variables[i]->GetName();
+                }
+            }
+            vector<ColumnProvenance> columns =
+                BuildColumnProvenance(var_indexer, var_labels, var_is_aux);
+            DecideDiagnostic diag = BuildUnboundedDiagnostic(solve_result, columns);
+            StashDecideDiagnostic(context, diag);
+            ThrowDecideDiagnosisReady(diag);
+        }
+        // Manual-first default: surface the static error (mode none, non-matching
+        // mode, or matched-but-unimplemented state).
+        ThrowDecideSolveError(solve_result);
+    }
+    gstate.ilp_solution = std::move(solve_result.solution);
     // Move the indexer onto gstate now that solve is complete; readback in
     // Execute() needs it to outlive solver_input.
     gstate.var_indexer = std::move(var_indexer);

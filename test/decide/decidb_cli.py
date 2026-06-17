@@ -115,6 +115,27 @@ class DecidBCli:
             env=self._subprocess_env(),
         )
 
+    def execute_script(
+        self, sql: str, *, timeout: float = 120
+    ) -> subprocess.CompletedProcess:
+        """Run a multi-statement script via stdin on a single connection.
+
+        Unlike ``-c`` (which halts the remaining statements once one errors),
+        stdin mode continues after an error. This is required for the
+        diagnostics flow: a failing DECIDE throws a pointer error, then a
+        follow-up ``SELECT * FROM decide_diagnostics()`` reads the diagnosis
+        that was stashed per-connection before the throw. Both statements must
+        run on the same connection.
+        """
+        return subprocess.run(
+            [self.exe, self.db, "-readonly"],
+            input=sql,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=self._subprocess_env(),
+        )
+
     def assert_error(
         self, sql: str, *, match: str | None = None, timeout: float = 120
     ) -> None:

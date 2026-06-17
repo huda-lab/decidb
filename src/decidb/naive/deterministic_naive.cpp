@@ -7,7 +7,7 @@
 
 namespace duckdb {
 
-vector<double> DeterministicNaive::Solve(const SolverModel &model) {
+SolverResult DeterministicNaive::Solve(const SolverModel &model) {
     idx_t total_vars = model.num_vars;
 
     //===--------------------------------------------------------------------===//
@@ -205,40 +205,35 @@ vector<double> DeterministicNaive::Solve(const SolverModel &model) {
 
     HighsModelStatus model_status = highs.getModelStatus();
     if (model_status != HighsModelStatus::kOptimal) {
-        if (model_status == HighsModelStatus::kInfeasible) {
-            throw InvalidInputException(
-                "DECIDE optimization is infeasible: No valid solution exists that satisfies all constraints.\n\n"
-                "This means the SUCH THAT conditions cannot all be met simultaneously.\n\n"
-                "Common causes:\n"
-                "  • Contradictory bounds (e.g., x >= 10 AND x <= 5)\n"
-                "  • SUM constraints impossible to satisfy with available data\n"
-                "  • Variable types too restrictive (BOOLEAN when INTEGER needed)\n\n"
-                "Suggestion: Try relaxing constraints or verify input data.");
-        } else if (model_status == HighsModelStatus::kUnbounded) {
-            throw InvalidInputException(
-                "DECIDE optimization is unbounded: The objective can grow infinitely.\n\n"
-                "This means the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n"
-                "You must add constraints to bound the decision variables.\n\n"
-                "Examples:\n"
-                "  • Add upper bounds: SUCH THAT x <= 100\n"
-                "  • Add budget limits: SUCH THAT SUM(x * cost) <= budget\n"
-                "  • Use BOOLEAN instead of INTEGER for selection problems");
-        } else if (model_status == HighsModelStatus::kTimeLimit) {
-            throw InvalidInputException(
-                "DECIDE optimization exceeded time limit.\n"
-                "The problem may be too complex to solve in reasonable time.\n"
-                "Try simplifying constraints or reducing data size.");
-        } else if (model_status == HighsModelStatus::kIterationLimit) {
-            throw InvalidInputException(
-                "DECIDE optimization exceeded iteration limit.\n"
-                "The problem may be too complex. Try simplifying constraints.");
-        } else {
-            throw InvalidInputException(
-                "DECIDE optimization failed with solver status %d.\n"
-                "The optimization could not find a solution.\n"
-                "This may indicate a problem with the constraints or objective.",
-                (int)model_status);
+        // Map the raw model status to a normalized SolverStatus and return it
+        // (no solution). The operator surfaces the default error (manual-first)
+        // or routes it to diagnosis when a diagnose pragma is active.
+        SolverResult result;
+        result.raw_status = (int)model_status;
+        switch (model_status) {
+        case HighsModelStatus::kInfeasible:
+            result.status = SolverStatus::INFEASIBLE;
+            break;
+        case HighsModelStatus::kUnbounded:
+            result.status = SolverStatus::UNBOUNDED;
+            break;
+        case HighsModelStatus::kUnboundedOrInfeasible:
+            // HiGHS returns this on MILP-unbounded models; without an explicit
+            // branch it would fall into OTHER (the old generic catch-all). U1
+            // (obj=0 probe) later disambiguates it to UNBOUNDED / INFEASIBLE.
+            result.status = SolverStatus::INF_OR_UNBD;
+            break;
+        case HighsModelStatus::kTimeLimit:
+            result.status = SolverStatus::TIME_LIMIT;
+            break;
+        case HighsModelStatus::kIterationLimit:
+            result.status = SolverStatus::ITERATION_LIMIT;
+            break;
+        default:
+            result.status = SolverStatus::OTHER;
+            break;
         }
+        return result;
     }
 
     //===--------------------------------------------------------------------===//
@@ -263,7 +258,10 @@ vector<double> DeterministicNaive::Solve(const SolverModel &model) {
         result[i] = val;
     }
 
-    return result;
+    SolverResult solve_result;
+    solve_result.status = SolverStatus::OPTIMAL;
+    solve_result.solution = std::move(result);
+    return solve_result;
 }
 
 } // namespace duckdb

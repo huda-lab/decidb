@@ -100,6 +100,14 @@ public:
     };
     vector<AbsMaximizeLink> abs_maximize_links;
 
+    //! Maps an auxiliary variable's index in decide_variables to a human-readable
+    //! source expression (the user's original ABS(...) / MAX(...) / product / <>),
+    //! captured at optimizer time for diagnosis variable-naming (F6 variable
+    //! provenance). Sparse — only auxiliary variables appear. Consumed by the
+    //! unbounded diagnosis to name an escaping aux column by its source expression
+    //! rather than its internal __abs_aux_N__ name.
+    vector<pair<idx_t, string>> aux_var_expressions;
+
     //! Composed MIN/MAX constraint: additive LHS with one or more MIN/MAX terms alongside
     //! SUM/AVG terms. Each term becomes a global auxiliary at execution time (MIN/MAX) or
     //! is summed into the outer ILP row (SUM/AVG). See DecideOptimizer::RewriteComposedMinMax.

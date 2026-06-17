@@ -285,6 +285,17 @@ Feeds: **U3** (ray→SQL mapping), **F2** scoping.
   - **Two-tier U3:** *thin* = mechanical filter on user vars + alias threading
     (works with today's data); *thick* = full aux-expression tracing (~300–400
     lines, additive, no redesign — deferrable).
+- **Update (F6 landed).** Both tiers shipped together as F6 (see
+  `foundations/done.md`): `BuildColumnProvenance` does the reverse map; the *thick*
+  aux→source-expression tracing is captured at the 4 optimizer aux-creation sites
+  (`LogicalDecide::aux_var_expressions`). Refinement of the "narrow suspects" claim:
+  the filter is even cheaper than predicted — the **U2 box-LP ray already fixes every
+  finite-UB column to 0**, so a non-zero ray entry *is* the filtered suspect; no
+  separate type/sign/bound pass runs. And the empirical kicker: **aux columns never
+  actually escape** in current formulations (ABS Big-M / McCormick need finite bounds
+  and throw pre-solve; MIN/MAX/`<>` indicators are BOOLEAN `[0,1]`), so the thick
+  aux-naming is defensive infrastructure — user INTEGER/REAL vars are the only real
+  escapers, exactly the suspect set this probe predicted.
 
 ---
 
