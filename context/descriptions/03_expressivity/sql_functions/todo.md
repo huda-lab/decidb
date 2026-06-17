@@ -4,54 +4,21 @@
 
 ## Decision-Variable Norms (L0 / L1 / L2 / L∞)
 
-**Priority: Medium — planned.** Foundation feature (research phase v1.1). The
-query-diagnostics elastic engine reuses its linearization machinery — see
-`../../08_query_diagnostics/infeasible/todo.md` (I3) and that area's `README.md`.
+**Implemented** as the `norm(expr, p)` function — see `done.md` ("norm(expr, p)
+— L_p Regularization") and `../../00_project_overview/syntax_reference.md`.
+Desugared at bind time: p = 1 → `SUM(ABS)`, p = 2 → `SUM(POWER(·,2))`,
+p = 'inf' → `MAX(ABS)`, p = 0 (count) → indicator + Big-M `ABS(e) <= M*z`, term
+→ `SUM(z)`. The user supplies the weight λ directly.
 
-**Syntax: undesigned.** There is no `NORM` / `L1` / `L0` surface today; designing
-it is the first open item, and the canonical spec
-(`../../00_project_overview/syntax_reference.md`) must be updated before this doc.
-This is distinct from the hypothetical norm-bounded *constraint* `NORM(...) <= budget`
-floated in `../problem_types/todo.md` — that bounds a norm inside `SUCH THAT`; this
-exposes a norm as an *objective* over decision variables.
+### Remaining work
 
-### Why it's needed — the diffuse-answer failure mode
-
-A query can solve fine yet return a useless answer. "Minimize magnitude"
-objectives (e.g. `MINIMIZE SUM(ABS(new − old))`) admit many equally-optimal
-solutions, and the solver returns an arbitrary **diffuse** one — a thousand tiny
-changes instead of a few legible ones. The solve succeeds; the *answer* is the
-failure. The fix is **expressivity**, not an automatic rewrite: expose norms as a
-first-class, user-selected construct so the user states the intent. DeciDB never
-silently reformulates the user's objective.
-
-### The four norms and their linearizations
-
-| Norm           | Meaning                                       | Linearization                              |
-| -------------- | --------------------------------------------- | ------------------------------------------ |
-| **L0 / count** | number of changed variables (minimal *count*) | per-variable binary + finite bound, Big-M  |
-| **L1**         | sum of magnitudes (sparse-ish, linear)        | abs-aux (reuses ABS — `done.md`)           |
-| **L2**         | Euclidean                                     | convex QP — already in the solver layer    |
-| **L∞**         | max single deviation                          | max-aux (reuses MAX — `done.md`)           |
-
-Most of the machinery already exists: ABS Path A/B (abs-aux) and easy/hard
-MIN/MAX (max-aux) are documented in `done.md`, and L2 is supported through the
-existing QP path. The genuinely new work is the **L0 count** construct
-(per-variable indicator binary + finite bound + Big-M) and the user-facing syntax
-to select a norm.
-
-### Open questions
-
-- **Syntax** (above) — function-like `NORM(expr, p)`, or per-norm keywords?
-  Update the spec first.
-- **Which norms ship first** — L0 + L1 are the high-value pair.
-- **L0's per-variable finite bound** interacts with structural variable bounds (it
-  needs a finite Big-M per variable).
-
-### Testing
-
-Differential vs `oracle_solver` on constructed cases (never hand-computed): L0
-yields minimal-*count* edits; L1 / L∞ match the oracle's norm-minimizing point.
+- **L0 auto-`M`.** L0 currently requires an explicit bound `norm(e, 0, M)`. A
+  tight `M` is data-dependent; wire L0 into the data-driven Big-M / implied-bound
+  machinery so `norm(e, 0)` can infer `M` at execution time.
+- **Scale-free α / smart-λ.** Auto-selecting the weight via `α = λ/λ_max`
+  (validated externally: L0/L1 have a crisp finite `λ_max`, ridge/L2 saturates
+  asymptotically) was **intentionally deferred** — judged overcomplicated for SQL
+  users and it needs a multi-solve. Revisit only if requested.
 
 ---
 

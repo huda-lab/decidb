@@ -332,6 +332,37 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 
 ---
 
+## norm(expr, p) — L_p Regularization (Desugared at Bind Time)
+
+`norm(expr, p)` exposes a lasso/ridge-style regularization term over a
+decision-variable expression. The user supplies the weight as an ordinary
+coefficient, e.g. `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. It is
+desugared **before binding** in `bind_select_node.cpp` (`RewriteNorm` for
+p = 1 / 2 / 'inf'; `RewriteNormL0` for p = 0), so it inherits all downstream
+handling (ABS / MAX / POWER linearization, WHEN, PER) and works in both
+objectives and constraints.
+
+| `p` | desugars to | meaning | class |
+| --- | ----------- | ------- | ----- |
+| `1` | `SUM(ABS(expr))` | L1, sparse-leaning | LP |
+| `2` | `SUM(POWER(expr, 2))` | squared L2 / ridge | convex QP |
+| `'inf'` | `MAX(ABS(expr))` | L-infinity (worst deviation) | LP |
+| `0, M` | indicator + `ABS(expr) <= M*z`; term → `SUM(z)` | L0 / count of nonzeros | MILP |
+
+- **L0 needs an explicit bound** — `norm(expr, 0, M)` with `M >= max |expr|`. One
+  INTEGER 0/1 indicator `z` per row is created (auto-bounded), the linking
+  constraint `ABS(expr) <= M*z` is added to `SUCH THAT`, and the term becomes
+  `SUM(z)`. A tight `M` is data-dependent and is **not** inferred at bind time;
+  auto-`M` via the data-driven Big-M machinery is future work.
+- Usable as an objective penalty, a sole objective, or a constraint
+  (`norm(e, 1) <= K`, and the exact count cap `norm(e, 0, M) <= K`).
+- Unsupported orders (e.g. `p = 3`) and `norm(e, 0)` without `M` raise a clear
+  binder error.
+- The user supplies the weight λ directly; scale-free `α`/`λ_max` auto-selection
+  is intentionally not built (see project memory).
+- Tests: `test/decide/tests/test_norm.py` — per-order desugaring equivalence,
+  WHEN/PER composition, HiGHS backend (QP + MILP), and error paths.
+
 ## Summary Table (Implemented Only)
 
 | Function / Operator | In Constraints | In Objective | In WHEN / WHERE |
@@ -340,6 +371,7 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 | `AVG()` over dec. vars | Yes (RHS scaled) | Yes (→SUM) | N/A |
 | `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | Yes (global aux / Big-M) | N/A |
 | `ABS()` over dec. vars | Yes (linearized) | Yes (linearized) | N/A |
+| `norm(expr, p)` (p = 1 / 2 / 'inf' / 0,M) | Yes (incl. count cap) | Yes (penalty / sole) | N/A |
 | `*` (var x const/col) | Yes | Yes | N/A |
 | `*` (var x var, bilinear) | Yes (McCormick / Gurobi QCQP) | Yes (McCormick / Gurobi non-convex) | N/A |
 | `POWER(expr, 2)` / `expr ** 2` (QP) | N/A | Yes (convex: both solvers; non-convex: Gurobi) | N/A |
