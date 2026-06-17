@@ -12,9 +12,6 @@ p = 'inf' → `MAX(ABS)`, p = 0 (count) → indicator + Big-M `ABS(e) <= M*z`, t
 
 ### Remaining work
 
-- **L0 auto-`M`.** L0 currently requires an explicit bound `norm(e, 0, M)`. A
-  tight `M` is data-dependent; wire L0 into the data-driven Big-M / implied-bound
-  machinery so `norm(e, 0)` can infer `M` at execution time.
 - **Scale-free α / smart-λ.** Auto-selecting the weight via `α = λ/λ_max`
   (validated externally: L0/L1 have a crisp finite `λ_max`, ridge/L2 saturates
   asymptotically) was **intentionally deferred** — judged overcomplicated for SQL

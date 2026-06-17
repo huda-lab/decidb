@@ -548,15 +548,21 @@ static void RewriteNorm(unique_ptr<ParsedExpression> &expr) {
 	expr = std::move(replacement);
 }
 
-// Expand norm(expr, 0, M) (L0 / count of nonzeros) into an indicator + Big-M.
+// Expand norm(expr, 0[, M]) (L0 / count of nonzeros) into an indicator + Big-M.
 // Unlike L1/L2/L-inf this cannot be a pure expression rewrite: counting nonzeros
-// needs NEW variables. For each L0 term we add one BOOLEAN indicator z (replicated
-// per row like any decision variable), a linking constraint ABS(expr) <= M*z (so z
-// is forced to 1 whenever expr != 0), and the term itself becomes SUM(z). M is a
-// user-supplied finite upper bound on |expr| — required because a tight bound is
-// data-dependent and can't be inferred at bind time. Matched nodes are replaced by
+// needs NEW variables. For each L0 term we add one 0/1 indicator z (replicated per
+// row like any decision variable), a linking constraint forcing z = 1 whenever
+// expr != 0, and the term itself becomes SUM(z). Matched nodes are replaced by
 // SUM(z) in place; the linking constraints are collected into `links` for the
 // caller to AND into the SUCH THAT tree.
+//
+// Two modes by the Big-M source:
+//   norm(expr, 0, M) — explicit bound. Link: ABS(expr) <= M*z (single constraint).
+//   norm(expr, 0)    — auto bound. The indicator is named `__l0auto_ind_*` and the
+//                      link is the raw two-sided pair `expr <= M*z`, `-expr <= M*z`
+//                      with a placeholder M; the physical operator refills a tight,
+//                      data-driven Big-M after implied-bound propagation (the raw
+//                      form keeps `expr`'s terms visible so the bound is derivable).
 static void RewriteNormL0(unique_ptr<ParsedExpression> &expr,
                           case_insensitive_map_t<idx_t> &variables,
                           vector<bool> &is_boolean_var,
@@ -586,38 +592,60 @@ static void RewriteNormL0(unique_ptr<ParsedExpression> &expr,
 	if (!pv.type().IsNumeric() || pv.GetValue<double>() != 0.0) {
 		return;
 	}
-	if (func.children.size() != 3 || func.children[2]->GetExpressionClass() != ExpressionClass::CONSTANT) {
-		throw BinderException(*expr,
-		    "norm(expr, 0) (L0 / count of nonzeros) needs an explicit finite bound: write "
-		    "norm(expr, 0, M) where M >= max |expr|. A tight bound is data-dependent, so it "
-		    "cannot be inferred automatically yet.");
-	}
-	double M = func.children[2]->Cast<ConstantExpression>().value.GetValue<double>();
-	if (!(M > 0.0)) {
-		throw BinderException(*expr, "The L0 bound M in norm(expr, 0, M) must be a positive constant.");
+	bool auto_m = (func.children.size() == 2);
+	double M = 1.0;  // placeholder for auto-M (refilled at execution); literal for explicit
+	if (!auto_m) {
+		if (func.children.size() != 3 || func.children[2]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+			throw BinderException(*expr,
+			    "norm(expr, 0, M): the bound M must be a constant. Omit it — norm(expr, 0) — "
+			    "to infer M from the data, or pass a positive literal.");
+		}
+		M = func.children[2]->Cast<ConstantExpression>().value.GetValue<double>();
+		if (!(M > 0.0)) {
+			throw BinderException(*expr, "The L0 bound M in norm(expr, 0, M) must be a positive constant.");
+		}
 	}
 	auto inner = std::move(func.children[0]);
 
 	// One 0/1 indicator per row. INTEGER (not BOOLEAN) so it participates in the
 	// arithmetic `M * z` below — same convention as the IN-domain indicators; the
-	// explicit 0 <= z <= 1 bounds are added by the indicator-bounds loop later.
-	string z_name = "__l0_ind_" + to_string(l0_counter++) + "__";
+	// explicit 0 <= z <= 1 bounds are added by the indicator-bounds loop later. The
+	// `__l0auto_ind_` prefix marks auto-M links for the physical operator to refill.
+	string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
 	idx_t z_idx = var_names.size();
 	var_names.push_back(z_name);
 	var_types.push_back(LogicalType::INTEGER);
 	is_boolean_var.push_back(true);
 	variables.emplace(z_name, z_idx);
 
-	// Linking constraint: ABS(inner) <= M * z.
-	vector<unique_ptr<ParsedExpression>> abs_args;
-	abs_args.push_back(std::move(inner));
-	auto abs_call = make_uniq<FunctionExpression>("abs", std::move(abs_args));
-	vector<unique_ptr<ParsedExpression>> mul_args;
-	mul_args.push_back(make_uniq<ConstantExpression>(Value::DOUBLE(M)));
-	mul_args.push_back(make_uniq<ColumnRefExpression>(z_name));
-	auto mz = make_uniq<FunctionExpression>("*", std::move(mul_args));
-	links.push_back(make_uniq<ComparisonExpression>(
-	    ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(abs_call), std::move(mz)));
+	auto make_mz = [&]() {
+		vector<unique_ptr<ParsedExpression>> mul_args;
+		mul_args.push_back(make_uniq<ConstantExpression>(Value::DOUBLE(M)));
+		mul_args.push_back(make_uniq<ColumnRefExpression>(z_name));
+		return make_uniq<FunctionExpression>("*", std::move(mul_args));
+	};
+	if (auto_m) {
+		// Raw two-sided link so `inner`'s terms stay visible for the data-driven
+		// Big-M: M*z >= inner  AND  M*z >= -inner  (i.e. |inner| <= M*z), M placeholder.
+		// Written M*z-first (decision variable leads the LHS): a per-row constraint
+		// whose LHS leads with a data column is not enforced correctly, so the
+		// `inner <= M*z` orientation must be avoided here.
+		links.push_back(make_uniq<ComparisonExpression>(
+		    ExpressionType::COMPARE_GREATERTHANOREQUALTO, make_mz(), inner->Copy()));
+		vector<unique_ptr<ParsedExpression>> neg_args;
+		neg_args.push_back(make_uniq<ConstantExpression>(Value::DOUBLE(0.0)));
+		neg_args.push_back(std::move(inner));
+		auto neg_inner = make_uniq<FunctionExpression>("-", std::move(neg_args));
+		links.push_back(make_uniq<ComparisonExpression>(
+		    ExpressionType::COMPARE_GREATERTHANOREQUALTO, make_mz(), std::move(neg_inner)));
+	} else {
+		// Explicit M: ABS(inner) <= M*z (single constraint).
+		vector<unique_ptr<ParsedExpression>> abs_args;
+		abs_args.push_back(std::move(inner));
+		auto abs_call = make_uniq<FunctionExpression>("abs", std::move(abs_args));
+		links.push_back(make_uniq<ComparisonExpression>(
+		    ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(abs_call), make_mz()));
+	}
 
 	// The term becomes SUM(z) — the count of nonzeros.
 	vector<unique_ptr<ParsedExpression>> sum_args;

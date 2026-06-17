@@ -3323,6 +3323,53 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     DecidePropagateImpliedBounds(gstate.evaluated_constraints, solver_input.lower_bounds,
                                  solver_input.upper_bounds, num_rows);
 
+    // Auto-M for L0 `norm(e, 0)`: the binder emitted the raw links `e <= M*z` and
+    // `-e <= M*z` with a placeholder coefficient on each `__l0auto_ind_*` indicator.
+    // Now that implied bounds are known, fill a tight, data-driven Big-M (mirrors
+    // the <> path): zero the indicator's own coefficient, compute M from the
+    // remaining (inner-expression) terms + RHS, then set the indicator coefficient
+    // to -M. The links carry a negative indicator coefficient, so implied-bound
+    // propagation above already skipped them (no contamination from the placeholder).
+    {
+        unordered_set<idx_t> l0_auto;
+        for (idx_t i = 0; i < decide_variables.size(); i++) {
+            if (StringUtil::StartsWith(decide_variables[i]->GetName(), "__l0auto_ind_")) {
+                l0_auto.insert(i);
+            }
+        }
+        if (!l0_auto.empty()) {
+            for (auto &ec : gstate.evaluated_constraints) {
+                // Locate the auto-L0 indicator term, and confirm this is a LINK
+                // (it also carries the inner expression's variable) rather than the
+                // indicator's own 0<=z<=1 bound row — which we must not rewrite.
+                idx_t z_term = DConstants::INVALID_INDEX;
+                bool has_inner_var = false;
+                for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+                    idx_t v = ec.variable_indices[t];
+                    if (v == DConstants::INVALID_INDEX) {
+                        continue;
+                    }
+                    if (l0_auto.count(v)) {
+                        z_term = t;
+                    } else {
+                        has_inner_var = true;
+                    }
+                }
+                if (z_term == DConstants::INVALID_INDEX || !has_inner_var) {
+                    continue;
+                }
+                // Zero the indicator's own contribution, compute the tight Big-M from
+                // the remaining (inner) terms + RHS, then set the indicator coeff = +M.
+                // The link is normalized to `M*z - inner >= rhs`, so the indicator
+                // coefficient is positive.
+                ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
+                double M = DecideTightPerRowBigM(ec, solver_input.lower_bounds,
+                                                 solver_input.upper_bounds, num_rows);
+                ec.row_coefficients[z_term].AssignScalar(num_rows, M);
+            }
+        }
+    }
+
     // Generate Big-M constraints for MIN/MAX indicator variables
     // For hard cases where MIN/MAX was rewritten to SUM by the optimizer:
     //   MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M, and SUM(y) >= 1

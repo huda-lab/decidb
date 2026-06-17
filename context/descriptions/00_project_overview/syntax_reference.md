@@ -132,7 +132,7 @@ SUCH THAT (x - t) * (x - t) <= K
   - `norm(e, 1)` → `SUM(ABS(e))` — L1 (sparse-leaning; ABS linearization).
   - `norm(e, 2)` → `SUM(POWER(e, 2))` — squared L2 / ridge (convex QP).
   - `norm(e, 'inf')` → `MAX(ABS(e))` — L-infinity (max linearization).
-  - `norm(e, 0, M)` → **L0 / count of nonzeros**. Adds one 0/1 indicator `z` per row with the linking constraint `ABS(e) <= M*z`; the term becomes `SUM(z)`. Requires an explicit finite bound `M >= max |e|` (a tight bound is data-dependent and is not inferred at bind time). Upgrades the model to a MILP. Useful as an objective penalty or as an exact-count cap: `norm(e, 0, M) <= K`.
+  - `norm(e, 0[, M])` → **L0 / count of nonzeros**. Adds one 0/1 indicator `z` per row linked so `z = 1` whenever `e != 0`; the term becomes `SUM(z)`. Upgrades the model to a MILP. The Big-M bound is **inferred from the data** when omitted — `norm(e, 0)` derives a tight per-problem `M` at execution from variable bounds (implied-bound propagation) + data; pass `norm(e, 0, M)` to supply it explicitly (e.g. when bounds aren't inferable, where the auto path would otherwise fall back to a loose default). Useful as an objective penalty or as an exact-count cap: `norm(e, 0[, M]) <= K`.
 
 ## 6. Conditional Expressions — `WHEN`
 

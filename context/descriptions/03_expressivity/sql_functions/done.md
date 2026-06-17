@@ -347,13 +347,21 @@ objectives and constraints.
 | `1` | `SUM(ABS(expr))` | L1, sparse-leaning | LP |
 | `2` | `SUM(POWER(expr, 2))` | squared L2 / ridge | convex QP |
 | `'inf'` | `MAX(ABS(expr))` | L-infinity (worst deviation) | LP |
-| `0, M` | indicator + `ABS(expr) <= M*z`; term → `SUM(z)` | L0 / count of nonzeros | MILP |
+| `0[, M]` | indicator linked so `z=1` iff `expr != 0`; term → `SUM(z)` | L0 / count of nonzeros | MILP |
 
-- **L0 needs an explicit bound** — `norm(expr, 0, M)` with `M >= max |expr|`. One
-  INTEGER 0/1 indicator `z` per row is created (auto-bounded), the linking
-  constraint `ABS(expr) <= M*z` is added to `SUCH THAT`, and the term becomes
-  `SUM(z)`. A tight `M` is data-dependent and is **not** inferred at bind time;
-  auto-`M` via the data-driven Big-M machinery is future work.
+- **L0 Big-M.** One INTEGER 0/1 indicator `z` per row is created (auto-bounded),
+  with linking constraints forcing `z = 1` whenever `expr != 0`; the term becomes
+  `SUM(z)`. The Big-M is **data-driven by default**: `norm(expr, 0)` emits
+  decision-variable-led links `M*z >= expr`, `M*z >= -expr` with a placeholder,
+  and the physical operator fills a tight per-problem `M` after implied-bound
+  propagation (`DecideTightPerRowBigM`, the `<>` path). `norm(expr, 0, M)` supplies
+  `M` explicitly (uses the `ABS(expr) <= M*z` form) — useful when bounds aren't
+  inferable and the auto path would fall back to the `1e6` default.
+  - Implementation: auto links carry a `__l0auto_ind_*` indicator name; the fill
+    lives in `physical_decide.cpp` (`Finalize`, right after implied-bound
+    propagation). Links are written decision-variable-first because a per-row
+    constraint whose LHS leads with a data column is not enforced (see
+    `07_issues/bugs/todo.md`).
 - Usable as an objective penalty, a sole objective, or a constraint
   (`norm(e, 1) <= K`, and the exact count cap `norm(e, 0, M) <= K`).
 - Unsupported orders (e.g. `p = 3`) and `norm(e, 0)` without `M` raise a clear

@@ -95,9 +95,19 @@ def test_norm_l0_count_constraint(decidb_cli):
     assert changed <= 2
 
 
-def test_norm_l0_requires_bound(decidb_cli):
-    with pytest.raises(DecidBCliError, match=r"finite bound|norm\(expr, 0, M\)"):
-        decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 0)"))
+@pytest.mark.correctness
+def test_norm_l0_auto_m_matches_explicit(decidb_cli):
+    """norm(e, 0) (auto, data-driven M) matches explicit norm(e, 0, M) with a safe M."""
+    auto, ca = decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 0)"))
+    exp, ce = decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 0, 1000)"))
+    n_auto = sum(1 for d in _devs(auto, ca) if abs(d) > 1e-6)
+    n_exp = sum(1 for d in _devs(exp, ce) if abs(d) > 1e-6)
+    assert n_auto == n_exp
+
+
+def test_norm_l0_negative_bound_rejected(decidb_cli):
+    with pytest.raises(DecidBCliError, match=r"positive"):
+        decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 0, -5)"))
 
 
 def test_norm_unsupported_order(decidb_cli):
