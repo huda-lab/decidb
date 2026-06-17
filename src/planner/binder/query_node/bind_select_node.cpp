@@ -627,9 +627,6 @@ static void RewriteNormL0(unique_ptr<ParsedExpression> &expr,
 	if (auto_m) {
 		// Raw two-sided link so `inner`'s terms stay visible for the data-driven
 		// Big-M: M*z >= inner  AND  M*z >= -inner  (i.e. |inner| <= M*z), M placeholder.
-		// Written M*z-first (decision variable leads the LHS): a per-row constraint
-		// whose LHS leads with a data column is not enforced correctly, so the
-		// `inner <= M*z` orientation must be avoided here.
 		links.push_back(make_uniq<ComparisonExpression>(
 		    ExpressionType::COMPARE_GREATERTHANOREQUALTO, make_mz(), inner->Copy()));
 		vector<unique_ptr<ParsedExpression>> neg_args;

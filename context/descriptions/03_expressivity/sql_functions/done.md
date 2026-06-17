@@ -359,9 +359,8 @@ objectives and constraints.
   inferable and the auto path would fall back to the `1e6` default.
   - Implementation: auto links carry a `__l0auto_ind_*` indicator name; the fill
     lives in `physical_decide.cpp` (`Finalize`, right after implied-bound
-    propagation). Links are written decision-variable-first because a per-row
-    constraint whose LHS leads with a data column is not enforced (see
-    `07_issues/bugs/todo.md`).
+    propagation). Links are written decision-variable-first (`M*z >= e`) so the
+    inner expression's terms drive the Big-M.
 - Usable as an objective penalty, a sole objective, or a constraint
   (`norm(e, 1) <= K`, and the exact count cap `norm(e, 0, M) <= K`).
 - Unsupported orders (e.g. `p = 3`) and `norm(e, 0)` without `M` raise a clear

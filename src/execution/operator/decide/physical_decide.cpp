@@ -1457,6 +1457,10 @@ public:
 
                         // RHS becomes data-only: DECIDE vars replaced with constant 0
                         constraint->rhs_expr = StripDecideVars(*comp.right, op);
+                        // The LHS data/constant part (decide vars stripped) must also
+                        // move to the bound, negated — otherwise it is dropped (e.g. the
+                        // `10` in `10 - x <= y`). Subtracted from rhs at evaluation.
+                        constraint->lhs_offset_expr = StripDecideVars(*lhs, op);
                     } else if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                         // Simple single-variable constraint (e.g., x <= 5)
                         idx_t var_idx = op.FindDecideVariable(*lhs);
@@ -2661,6 +2665,48 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ExtractDoubleColumn(rhs_result.data[0], rhs_chunk.size(), 1.0,
                                     rhs_col,
                                     "constraint right-hand side");
+                eval_const.rhs_values.SyncSize();
+            }
+        }
+
+        // Subtract the stripped LHS data part from the bound (multi-variable per-row
+        // path). Foldable (no data column) → one scalar subtract; otherwise evaluate
+        // the per-row data column and subtract. A zero offset (bare-var LHS) is a no-op.
+        if (constraint->lhs_offset_expr) {
+            auto &off_expr = *constraint->lhs_offset_expr;
+            if (off_expr.IsFoldable()) {
+                double off = ExpressionExecutor::EvaluateScalar(context, off_expr)
+                                 .DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                if (off != 0.0) {
+                    auto &col = eval_const.rhs_values.MutableDense();
+                    for (idx_t r = 0; r < num_rows; r++) {
+                        col[r] -= off;
+                    }
+                    eval_const.rhs_values.SyncSize();
+                }
+            } else {
+                const Expression &transformed_off =
+                    CachedTransformToChunkExpression(chunk_expr_cache, off_expr, context, num_rows);
+                ExpressionExecutor off_executor(context);
+                off_executor.AddExpression(transformed_off);
+                ColumnDataScanState off_scan;
+                gstate.data.InitializeScan(off_scan);
+                DataChunk off_chunk;
+                off_chunk.Initialize(context, gstate.data.Types());
+                DataChunk off_result;
+                off_result.Initialize(context, vector<LogicalType>{transformed_off.return_type});
+                vector<double> off_vals;
+                off_vals.reserve(num_rows);
+                while (gstate.data.Scan(off_scan, off_chunk)) {
+                    off_result.Reset();
+                    off_executor.Execute(off_chunk, off_result);
+                    ExtractDoubleColumn(off_result.data[0], off_chunk.size(), 1.0, off_vals,
+                                        "constraint LHS data offset");
+                }
+                auto &col = eval_const.rhs_values.MutableDense();
+                for (idx_t r = 0; r < num_rows && r < off_vals.size(); r++) {
+                    col[r] -= off_vals[r];
+                }
                 eval_const.rhs_values.SyncSize();
             }
         }
