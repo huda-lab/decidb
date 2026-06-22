@@ -1,120 +1,106 @@
-# Query Diagnostics — Unbounded (implemented)
+# Query Diagnostics — Unbounded (how it works)
 
-## Gurobi INF_OR_UNBD disambiguation — DONE
+The objective improves without limit — the feasible region is too *open* in the
+improving direction. The fix is forced (the user must add a bound or correct a
+sign; you cannot relax your way out), but the diagnosis is rich: it **names the
+exact variables escaping to infinity**. Opt-in via `PRAGMA diagnose_decide` =
+`unbounded` or `auto`; with no pragma the solve throws the static error unchanged.
 
-When Gurobi presolve returns the
-ambiguous `GRB_INF_OR_UNBD`, DeciDB re-solves with `DualReductions=0`, yielding a
-definitive `INFEASIBLE` or `UNBOUNDED` (the extra solve only happens in this rare
-ambiguous case). `src/decidb/gurobi/gurobi_solver.cpp:202-219`; residual throw if
-the disambiguation itself fails at `246-253`. Landed in commit `9d4bbd59f0`.
+This doc describes the shipped behavior, topic by topic. Remaining enrichments are
+in `todo.md`. Shared plumbing it builds on (the pragma gate, provenance, the
+reporting relation) is in `foundations/done.md`.
 
-So U2/U3 receive an already-disambiguated status on Gurobi.
+## Status disambiguation (`INFEASIBLE` vs `UNBOUNDED`)
 
-## U1 · HiGHS INF_OR_UNBD disambiguation — DONE
+A presolve can report the ambiguous "infeasible *or* unbounded" without deciding
+which. Both backends are normalized to a definitive status before diagnosis runs:
 
-HiGHS has no native MIP disambiguation equivalent to Gurobi's
-`DualReductions=0`. The linked HiGHS source allows `kUnboundedOrInfeasible` for
-MIP results, and its stricter `allow_unbounded_or_infeasible=false` cleanup path
-only forces LP primal-simplex disambiguation. Native `getPrimalRay` is also not a
-classifier because it clears integrality and solves an LP relaxation.
+- **Gurobi** — on `GRB_INF_OR_UNBD`, re-solve once with `DualReductions=0`, which
+  forces a definitive `INFEASIBLE` / `UNBOUNDED` (`gurobi_solver.cpp`).
+- **HiGHS** — has no MIP disambiguation equivalent. The portable classifier
+  re-solves the *same* `SolverModel` on the same backend with the objective
+  zeroed out (`diagnostic_solves.cpp`): a feasible probe ⇒ the original was
+  `UNBOUNDED`; an infeasible probe ⇒ `INFEASIBLE`; anything else preserves the
+  ambiguous status. The zero-objective probe is sense-agnostic (works for
+  MAXIMIZE and MINIMIZE).
 
-U1 provides the portable classifier: when any backend returns normalized
-`SolverStatus::INF_OR_UNBD`, DeciDB runs a prepared zero-objective probe on the
-same `SolverModel` and same selected backend.
+The solve facade (`ilp_solver.cpp`) builds the model and selects the backend once,
+and performs this classification before the operator sees the result.
 
-- `OPTIMAL` ⇒ original model is feasible, so report `UNBOUNDED`.
-- `INFEASIBLE` ⇒ report `INFEASIBLE`.
-- Any other probe result preserves the original ambiguous status.
+## Ray extraction (portable box-LP)
 
-The probe model preserves variables, bounds, integrality, and constraints while
-clearing linear and quadratic objective terms (`diagnostic_solves.cpp:5-16`).
-The solve facade builds the model once, selects the backend once, exposes
-prepared-model solving for future diagnostic reruns, and performs the U1
-classification before the operator sees the result (`ilp_solver.hpp:20-33`,
-`ilp_solver.cpp:13-75`).
+To name escapers we need a recession ray (a direction the solver can travel
+forever improving the objective). Rather than depend on solver-specific ray APIs,
+DeciDB extracts one with a portable LP built over the prepared `SolverModel`
+(`BuildUnboundedRayFallbackModel`, `diagnostic_solves.cpp`):
 
-Covered by `test_query_diagnostics_f1.py:117-142`, which pins the HiGHS
-MILP-unbounded case to the definitive unbounded message instead of the old
-ambiguous text — for both MAXIMIZE and MINIMIZE, since the zero-objective probe
-is sense-agnostic.
+- maximize `signed(c)ᵀ d` (the objective direction),
+- preserve each linear row's sense with RHS `0` (homogenized),
+- relax all variables to continuous,
+- box each direction component to `0 ≤ dᵢ ≤ 1` **only** where the original upper
+  bound is effectively infinite (`≥ 1e20`); finite-upper-bound columns are fixed
+  to `dᵢ = 0`.
 
-## U2 · Portable fallback ray extraction — DONE
+The ray is attached (`SolverResult::ray`) only when this LP is `OPTIMAL` with
+signed objective improvement > `1e-8`. It is opt-in (`SolveModelOptions::
+extract_unbounded_ray`), pre-armed by the pragma gate only for unbounded/auto, so
+the default failure path pays nothing. Quadratic objectives/constraints are out of
+scope (no ray extracted; the diagnosis falls back to a detail-less row).
 
-U2 is implemented as a diagnostic-only follow-up solve over the prepared
-`SolverModel`; it is not wired to user-facing diagnosis yet.
+**Suspect filtering is free:** because the box-LP fixes finite-UB columns to 0, a
+non-zero ray entry *is already* the type/sign/bound-filtered set of suspects — no
+extra filter needed.
 
-- `SolveModelOptions::extract_unbounded_ray` in
-  `src/include/duckdb/decidb/ilp_solver.hpp` is the internal opt-in. The existing
-  two-argument `SolveModel(input, indexer)` overload keeps default failed-query
-  behavior unchanged and does not pay for ray extraction.
-- `BuildUnboundedRayFallbackModel` in
-  `src/decidb/utility/diagnostic_solves.cpp` builds the bounded LP:
-  `maximize signed(c)^T d`, preserves each linear row sense with RHS `0`, relaxes
-  all variables to continuous, and sets `0 <= d_i <= 1` only when the original
-  upper bound is effectively infinite (`>= 1e20`). Finite-upper-bound columns are
-  fixed to `d_i = 0`.
-- Quadratic objectives and quadratic constraints are intentionally out of scope
-  for U2 v1. The helper returns false and leaves `SolverResult::ray` empty.
-- `src/decidb/utility/ilp_solver.cpp` invokes the fallback only after U1 has
-  resolved the primary result to `SolverStatus::UNBOUNDED`, solves the ray LP on
-  the same backend, and attaches `SolverResult::ray` only when the ray LP is
-  `OPTIMAL` and signed objective improvement is greater than `1e-8`.
-- Native Gurobi/HiGHS ray APIs remain deferred as optional accelerators; U2 owns
-  the portable box-LP path first.
+## Naming the escaping variables
 
-Covered by `test/common/test_decidb_diagnostic_solves.cpp`, test case
-`DeciDB query diagnostics unbounded ray fallback`: symmetric MAX full-support
-ray, signed MIN objective, finite-upper-bound zeroing, bounded-shape no-ray,
-`>=` / `=` row-sense preservation in homogenization, integrality relaxation, and
-opt-in-only `SolveModel` attachment.
+The ray gives non-zero entries per solver *column*. Each column is mapped back to
+the user-facing variable through the `ColumnProvenance` map (variable provenance,
+`foundations/done.md`): user columns resolve to the declared variable name, aux
+columns to the source expression they were generated from.
+`BuildUnboundedDiagnostic` collects columns with `|ray[i]| > 1e-8`, resolves each
+through the map, dedups by name, and emits one row per escaping variable.
 
-## Reporting stack wired (F2 + F4 + F5) — DONE
+**Only user variables escape in practice (verified, both backends).** Auxiliary
+variables are structurally bounded — ABS Big-M and bilinear McCormick require
+finite bounds (they error before the solver), and MIN/MAX/`<>` indicators are
+BOOLEAN `[0,1]`. The aux→expression naming is therefore *defensive* (correct if an
+aux ever escapes); the practical escapers are user INTEGER/REAL variables.
 
-The shared foundations U3 was gated on now exist (see `foundations/done.md`):
-F2 (row→clause provenance), F4 (the `diagnose_decide` consent gate), and F5 (the
-`decide_diagnostics()` table function). With `PRAGMA diagnose_decide='unbounded'`
-(or `auto`), an unbounded solve now routes through `BuildUnboundedDiagnostic`,
-stashes a `DecideDiagnostic` per-connection, and throws the short pointer error;
-`SELECT * FROM decide_diagnostics()` returns the diagnosis as a relation. The gate
-pre-arms U2 ray extraction only for unbounded/auto (manual-first). With no pragma,
-behavior is unchanged — the static `ThrowDecideSolveError` paragraph.
+## The output relation
 
-## U3 · Ray→SQL naming (full output) — DONE (landed with F6)
+The diagnosis surfaces through `decide_diagnostics()` (schema in
+`foundations/done.md`) as a **variable-centric** relation — one row per escaping
+variable:
 
-The scaffold is replaced: the unbounded diagnosis now **names the escaping
-variables** and reports the **direction** each escapes. The consuming half of U3
-landed with F6 (variable provenance) — see `foundations/done.md` (F6).
-`BuildUnboundedDiagnostic(result, columns)` collects ray columns with
-`|ray[i]| > 1e-8`, resolves each through the F6 `flat column → ColumnProvenance`
-map, dedups by name (a row-scoped `x` escaping across rows reports once), and emits
-one row per escaping variable through the `decide_diagnostics()` relation. Each row
-carries `variable` (the name) and `direction` (the sign of its ray entry — `+∞` in
-practice). **Never picks the bound value** (`suggested_bound` stays NULL).
+    query_id | state | variable | direction | group_label | suggested_bound
 
-The relation schema is `query_id | state | variable | direction | group_label |
-suggested_bound` (see `foundations/done.md` · F5). `group_label` and
-`suggested_bound` read NULL for now; `query_id` ties together the rows of one solve.
+- `variable` — the escaping variable's name.
+- `direction` — the sign of its ray entry. Always `+∞` today: user variables are
+  non-negative (`[0, 1e30]`), so escape is always upward. The sign is computed
+  from the ray, so a future signed/free variable would report `-∞` — but that
+  path is unreachable and untested until signed variables exist (see `todo.md`
+  and `03_expressivity/decide/todo.md`).
+- `query_id` — ties together the rows of one failed solve.
+- `group_label`, `suggested_bound` — reserved, currently NULL (see `todo.md`).
 
-- **Suspect filter is free:** the U2 box-LP ray already fixes finite-UB columns to
-  0, so a non-zero ray entry *is* the type/sign/bound-filtered suspect set (P7) — no
-  extra filter needed.
-- **Only user vars escape in practice (verified, both backends):** aux variables are
-  structurally bounded (ABS Big-M / bilinear McCormick require finite bounds and
-  error before the solver; MIN/MAX/`<>` indicators are BOOLEAN `[0,1]`). The
-  aux→expression naming is therefore defensive — correct if an aux ever escapes, but
-  user INTEGER/REAL vars are the practical escapers. They are bounded below at 0, so
-  the escape `direction` is `+∞` in every practical case (the sign is computed from
-  the ray regardless, so a future signed/free variable would report `-∞` correctly).
-- Demoed end-to-end on the real TPC-H DB via `run.sh` (a 3-variable `part`
-  production model where only `promo` escapes); covered by
-  `test/decide/tests/test_query_diagnostics_f6.py` and
-  `test/common/test_decidb_variable_provenance.cpp`.
+The error thrown points the user at the relation: `SELECT * FROM
+decide_diagnostics()`.
 
-**Residual (non-v1):** the clause/`group_label` linkage — naming the PER/WHEN group
-an escaping instance belongs to, and the optional "clause N references escaping var
-x but never bounds it" line — remains an enrichment (it needs constraint-text
-plumbing shared with the infeasible engine). `suggested_bound` (an example cap
-value) is deliberately deferred to avoid anchoring on a bad number. A key finding
-recorded during this work: the ray identifies a *missing* bound, so it can name the
-runaway variable but **cannot** finger a single guilty clause (a flipped-sign
-constraint is indistinguishable from an absent one).
+## Load-bearing limit — names a variable, not a guilty clause
+
+The ray identifies a *missing* bound. It can name the runaway variable but
+**cannot** finger a single guilty clause: a flipped-sign constraint is
+mathematically indistinguishable from an absent one. So any clause-level output
+can only ever be *context* ("`x` appears in clauses 2, 5; none cap it"), never
+blame. This shapes every clause-aware enrichment in `todo.md`.
+
+## Tests
+
+Differential vs `oracle_solver` / pinned scenarios:
+`test/decide/tests/test_query_diagnostics_f6.py` (REAL var, INTEGER/MILP via the
+HiGHS `INF_OR_UNBD` path, multi-var dedup, `auto` routing, no-pragma silence) ·
+`test/common/test_decidb_diagnostic_solves.cpp` (ray fallback: full-support ray,
+signed objective, finite-UB zeroing, row-sense preservation, integrality
+relaxation, opt-in attachment) · `test/common/test_decidb_variable_provenance.cpp`
+(USER/AUX/GLOBAL_AUX resolution). Demoed end-to-end on the TPC-H DB via `run.sh`
+(a 3-variable `part` model where only `promo` escapes).
