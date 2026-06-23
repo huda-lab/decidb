@@ -1,24 +1,31 @@
 # DECIDE Clause — Planned Features
 
-## Signed / free decision variables (variables that can go negative)
+## Signed decision variables — finite negative bounds: DONE; free (-∞) domain: deferred
 
-**Need.** Today every decision variable is non-negative: the ILM model builder
-fixes bounds to `[0, 1e30]` for INTEGER/REAL and `[0, 1]` for BOOLEAN
-(`ilp_model_builder.cpp`; see `done.md` · Code Pointers). There is no way to
-declare a variable that may take a negative value, so problems whose natural
-answer is signed — adjustments/deltas that can go either way, repairs that may
-subtract, positions that can be short — cannot be expressed, and the user must
-hand-shift by a constant offset.
+**Implemented (see `done.md` → "Signed variables").** A variable becomes signed
+via an explicit **finite** negative lower bound — `x >= -K`, `x BETWEEN -K AND K`,
+or a negative literal in an `IN` domain. The default stays `[0, +inf)` for any
+variable the query never lowers. The linearizations that were audited and
+addressed: the bound-absorption clamp and the model-builder re-clamp (both
+removed in favor of an "unset" sentinel + resolved-bound copy), and McCormick
+(now emits the full four-corner envelope + widens the aux bound for `L<0`). ABS /
+`norm` L0/L1/Linf / MIN-MAX / `<>` Big-M were verified already sign-safe (their
+Big-M uses `max(|lb|,|ub|)`); the IN rewrite now widens the variable's lower
+bound to the domain minimum for negative literals.
 
-**Scope to define (open).** What the surface should be — e.g. a free variable
-(`-∞ … +∞`), an explicit lower bound (`DECIDE x >= -10`), or a signed type
-marker — and how it interacts with the linearizations that currently *assume*
-non-negativity (ABS, McCormick finite-bound requirement, Big-M, `norm`). These
-all need re-checking; several rely on `[0, …]` today.
+**Deferred — fully-free ($-\infty \ldots +\infty$) domain.** Out of scope by
+design: a signed variable always has a finite lower bound. A truly
+unbounded-below variable (e.g. `x <= 10` meaning `(-inf, 10]`) is the case most
+likely to make objectives unbounded, so it is not expressible without a future
+opt-in (`FREE`/`IS REAL UNBOUNDED` keyword). Two known smaller gaps left for
+later: (1) **column-valued** `IN` domains with negative data values are not
+auto-widened (only constant literals are); (2) a signed variable in a bilinear
+product needs an *explicit* upper bound (implied-bound propagation skips signed
+variables).
 
-**Diagnostics interaction (why this is tracked now).** The unbounded diagnosis
-reports an escape `direction` (`+∞` / `-∞`). Because variables are non-negative,
-escape is always upward, so `direction` is always `+∞` and the `-∞` branch is
-unreachable. Downward escape only becomes possible — and the `-∞` path only
-becomes testable — once signed variables exist. See
+**Diagnostics interaction.** The unbounded diagnosis reports an escape
+`direction` (`+∞` / `-∞`). Because signed variables still have a finite lower
+bound, no variable is unbounded *below*, so downward escape remains unreachable
+and `direction` is still always `+∞`. The `-∞` branch only becomes testable if
+the deferred free-domain work lands. See
 `08_query_diagnostics/unbounded/todo.md` (direction / downward escape).

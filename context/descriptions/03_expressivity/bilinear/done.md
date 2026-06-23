@@ -14,13 +14,28 @@ When one factor is declared `IS BOOLEAN`, the product `b * x` is exactly lineari
 explicitly (`x <= K`) **or inferred** by implied-bound propagation from a
 non-negative `<=`/`=` constraint such as `SUM(x) <= K` (which implies `x <= K`).
 Only when no finite bound can be derived does DeciDB reject with the "finite upper
-bound" error. See `../../04_optimizer/matrix_efficiency/done.md`.
+bound" error. See `../../04_optimizer/matrix_efficiency/done.md`. Note: implied-bound
+propagation does **not** fire for a **signed** (negative-lower-bound) `x`, so a
+signed `x` in a bilinear product must carry an *explicit* finite upper bound.
 
 **Bool x Bool** uses simpler AND-linearization (no Big-M needed). The auxiliary `w` satisfies `w = min(b1, b2)`, i.e., logical AND.
 
-**Bool x Non-Bool** uses McCormick envelopes with Big-M:
-- Structural constraint `w <= x` (generated at optimizer time)
-- Big-M constraints `w <= U*b` and `w >= x - U*(1-b)` (generated at execution time, where U = upper bound on x)
+**Bool x Non-Bool** uses the McCormick envelope for `w = b*x` with `x in [L, U]`.
+All corners are generated at **execution time** (in `physical_decide.cpp`), where
+the resolved bounds `L` and `U` are known:
+- `w <= U*b`                 (ec1)
+- `w >= x - U*(1-b)`         (ec2)
+- `w <= x - L*(1-b)`         (ec3, upper corner)
+- `w >= L*b`                 (ec4, lower corner)
+
+For the common **non-negative** case (`L >= 0`) the lower corner ec4 is implied by
+`w`'s own non-negative bound and is skipped, and ec3 reduces to the plain
+structural `w <= x` — so the emitted set is byte-identical to the historical
+3-constraint form. The structural `w <= x` is **no longer** emitted at optimizer
+time (emitting it unconditionally would force `x >= 0` for a signed `x` when
+`b=0`); it lives in ec3 now. For a **signed** `x` (`L < 0`) all four corners are
+emitted and the aux `w`'s own lower bound is widened to `L` so the product can
+take the negative value of `x` when `b=1`.
 
 ### 2. General Non-Convex (Q Matrix)
 
@@ -90,7 +105,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
    - Detects `*` nodes where both children reference different decide variables
    - Skips identical expressions (existing QP path)
    - For Bool x Bool: AND-linearization with 3 structural constraints, BOOLEAN auxiliary
-   - For Bool x Non-Bool: structural constraint `w <= x` + `BilinearLink` for execution-time Big-M
+   - For Bool x Non-Bool: records a `BilinearLink` only; all McCormick corners (including the upper corner that for `L>=0` is the plain `w <= x`) are emitted at execution time once `L`/`U` are resolved
    - For Non-Boolean x Non-Boolean: left in place for Q matrix path
    - Uses `is_boolean_var` vector (not `return_type`) to detect boolean status
 
@@ -100,7 +115,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
    - `ClassifyNormalizedProduct()`: flattens any nested `*` tree into leaf factors, partitions them into decide-variable indices (`decide_factors`) and data expressions (`coefficient_factors`). Handles arbitrary groupings like `(a*b)*(x*y)` and `a*b*x*y` identically.
    - `BuildCoefficientFromFactors()`: rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms.
    - Linear terms (`decide_factors.size() == 1`) fall through to `ExtractTerms` (uses `ExtractCoefficientWithoutVariable` on the original tree for type-safe coefficient extraction).
-   - McCormick Big-M generation: uses `BilinearLink` metadata + `ExtractVariableBounds` to generate `w <= U*b` and `w >= x - U*(1-b)` constraints
+   - McCormick generation: uses `BilinearLink` metadata + resolved bounds to emit the envelope corners `w <= U*b`, `w >= x - U*(1-b)`, `w <= x - L*(1-b)`, and (only when `L < 0`) `w >= L*b`; widens the aux's lower bound to `L` for signed `x`
    - Evaluates bilinear coefficients per-row, applies WHEN mask
 
 5. **Model Builder** (`ilp_model_builder.cpp`):

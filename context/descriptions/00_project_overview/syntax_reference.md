@@ -16,18 +16,29 @@ SUCH THAT
 - Must be declared in `DECIDE` list with optional type annotation.
 - Scope: Available in `SUCH THAT`, `MAXIMIZE/MINIMIZE`, and the `SELECT` list.
 - **Type Declarations** (in DECIDE clause):
-  - `x IS INTEGER`: Default if no type specified. $x \in \{0, 1, 2, ...\}$
+  - `x IS INTEGER`: Default if no type specified. $x \in \{0, 1, 2, ...\}$ by default
   - `x IS BOOLEAN`: $x \in \{0, 1\}$ (automatically adds bounds constraints)
-  - `x IS REAL`: $x \in [0, \infty)$ (continuous, non-negative)
+  - `x IS REAL`: $x \in [0, \infty)$ by default (continuous)
+- **Default lower bound is 0** for `IS INTEGER` and `IS REAL`. This is a
+  *default*, not a floor: a variable becomes **signed** (may take negative
+  values) when the query gives it an explicit negative lower bound —
+  `x >= -K`, `x BETWEEN -K AND K`, or a negative literal in an `IN` domain
+  (`x IN (-5, 0, 5)`). A variable the query never lowers stays non-negative.
+  There is no fully-free ($-\infty$) domain: signed variables always have a
+  finite lower bound. See `03_expressivity/decide/done.md` → "Signed variables".
 
 **Examples:**
 
 ```sql
 DECIDE x IS BOOLEAN           -- x is binary (0 or 1)
-DECIDE x IS INTEGER           -- x is non-negative integer
+DECIDE x IS INTEGER           -- x is integer, default domain {0, 1, 2, ...}
 DECIDE x                      -- same as x IS INTEGER (default)
-DECIDE x IS REAL              -- x is continuous, non-negative
+DECIDE x IS REAL              -- x is continuous, default domain [0, +inf)
 DECIDE x IS BOOLEAN, y IS INTEGER, z IS REAL  -- multiple typed variables
+
+-- Signed (negative-domain) variables: opt in with an explicit negative bound
+DECIDE adj IS REAL            -- ... SUCH THAT adj BETWEEN -10 AND 10  → adj in [-10, 10]
+DECIDE d IS INTEGER           -- ... SUCH THAT d >= -5                  → d in [-5, +inf)
 ```
 
 ### 2.1 Table-Scoped Variables

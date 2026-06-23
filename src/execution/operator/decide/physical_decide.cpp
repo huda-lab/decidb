@@ -1232,6 +1232,13 @@ static unique_ptr<Expression> FindVarCoefficient(
 //===--------------------------------------------------------------------===//
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
+
+//! Sentinel marking "no explicit lower-bound constraint" during bound absorption.
+//! Resolved to the default 0 in Finalize for any variable the query never lowered.
+//! Distinct from a real bound: signed variables use finite negative bounds only
+//! (no -inf domain), so no legitimate lower bound is anywhere near this value.
+static constexpr double ABSORBED_LOWER_UNSET = -1e30;
+
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
     explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
@@ -1240,7 +1247,14 @@ public:
         // arrays so AnalyzeConstraint can skip emitting one DecideConstraint per row
         // for constraints that are fully captured by column bounds.
         idx_t num_decide_vars = op.decide_variables.size();
-        absorbed_lower_bounds.assign(num_decide_vars, 0.0);
+        // Initialize lower bounds to an "unset" sentinel rather than 0 so that an
+        // explicit negative lower-bound constraint (e.g. `x >= -5`, `BETWEEN -10
+        // AND 10`) is honored instead of clamped to 0. The std::max combiners in
+        // TraverseBoundsConstraints still pick the tightest of multiple `>=`
+        // constraints (max(-1e30, k) == k), and Finalize resolves any variable
+        // still at the sentinel to the default 0 (non-negative unless the query
+        // explicitly lowers the bound). See ABSORBED_LOWER_UNSET.
+        absorbed_lower_bounds.assign(num_decide_vars, ABSORBED_LOWER_UNSET);
         absorbed_upper_bounds.assign(num_decide_vars, 1e30);
         for (idx_t var = 0; var < num_decide_vars; var++) {
             auto &decide_var = op.decide_variables[var]->Cast<BoundColumnRefExpression>();
@@ -3370,6 +3384,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // `x OP const` / BETWEEN constraints; those comparisons were skipped in
     // AnalyzeConstraint so we don't re-emit them as per-row model rows.
     solver_input.lower_bounds = gstate.absorbed_lower_bounds;
+    // Resolve the "unset" sentinel to the default lower bound 0: a variable the
+    // query never explicitly lowered stays non-negative. Variables with an
+    // explicit (possibly negative) lower-bound constraint keep their absorbed
+    // value. Must run before any consumer of lower_bounds (implied-bound
+    // propagation, Big-M, McCormick, model builder).
+    for (auto &lb : solver_input.lower_bounds) {
+        if (lb <= ABSORBED_LOWER_UNSET) {
+            lb = 0.0;
+        }
+    }
     solver_input.upper_bounds = gstate.absorbed_upper_bounds;
 
     // Data-driven implied-bound propagation: derive finite upper bounds for
@@ -3682,11 +3706,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         gstate.evaluated_constraints = std::move(new_constraints);
     }
 
-    // Generate McCormick Big-M constraints for bilinear auxiliary variables (w = b * x).
-    // The structural constraint w <= x was generated at optimizer time.
-    // Here we add: w <= U*b and w >= x - U*(1-b), which require the execution-time bound U.
+    // Generate the McCormick constraints for bilinear auxiliary variables
+    // (w = b * x) where b is Boolean and x ∈ [L, U]. The exact linearization is:
+    //   w <= U*b                  (ec1)
+    //   w >= x - U*(1-b)          (ec2)
+    //   w <= x - L*(1-b)          (ec3, upper corner)
+    //   w >= L*b                  (ec4, lower corner)
+    // For L >= 0 the lower corner is implied by w's own non-negative bound, and
+    // ec3 simplifies to the plain structural `w <= x` (w=0 at b=0 is enforced by
+    // ec1). We emit exactly those two-plus-one constraints in that case, identical
+    // to the prior behavior — the optimizer no longer emits the structural `w <= x`
+    // (it lives here now). For L < 0 we emit the full four corners and widen w's
+    // own lower bound so the product can take the negative value of x when b=1.
     for (auto &link : bilinear_links) {
         double U = solver_input.upper_bounds[link.other_var_idx];
+        double L = solver_input.lower_bounds[link.other_var_idx];
         if (U >= 1e20) {
             throw InvalidInputException(
                 "Bilinear term requires a finite upper bound on variable '%s'. "
@@ -3695,7 +3729,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 decide_variables[link.other_var_idx]->Cast<BoundColumnRefExpression>().alias);
         }
 
-        // Constraint: w <= U * b  (i.e., w - U*b <= 0)
+        // ec1: w <= U * b  (i.e., w - U*b <= 0)
         EvaluatedConstraint ec1;
         ec1.variable_indices = {link.aux_idx, link.bool_var_idx};
         ec1.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
@@ -3705,7 +3739,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         ec1.lhs_is_aggregate = false;
         gstate.evaluated_constraints.push_back(std::move(ec1));
 
-        // Constraint: w >= x - U*(1-b) = x - U + U*b
+        // ec2: w >= x - U*(1-b) = x - U + U*b
         // Rearranged: w - x + U*b >= -U  →  1*w + (-1)*x + (-U)*b >= -U
         EvaluatedConstraint ec2;
         ec2.variable_indices = {link.aux_idx, link.other_var_idx, link.bool_var_idx};
@@ -3716,6 +3750,40 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
         ec2.lhs_is_aggregate = false;
         gstate.evaluated_constraints.push_back(std::move(ec2));
+
+        // ec3: upper corner. L >= 0 → plain `w <= x`; L < 0 → `w <= x - L*(1-b)`,
+        // i.e. w - x - L*b <= -L.
+        EvaluatedConstraint ec3;
+        if (L < 0.0) {
+            ec3.variable_indices = {link.aux_idx, link.other_var_idx, link.bool_var_idx};
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, num_rows));  // -x
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-L, num_rows));    // -L*b
+            ec3.rhs_values.AssignScalar(num_rows, -L);
+        } else {
+            ec3.variable_indices = {link.aux_idx, link.other_var_idx};
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, num_rows));  // -x
+            ec3.rhs_values.AssignScalar(num_rows, 0.0);
+        }
+        ec3.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec3.lhs_is_aggregate = false;
+        gstate.evaluated_constraints.push_back(std::move(ec3));
+
+        // ec4: lower corner `w >= L*b`, only needed when x can be negative.
+        // Also widen the aux's own lower bound so w may equal the negative x at b=1.
+        if (L < 0.0) {
+            solver_input.lower_bounds[link.aux_idx] =
+                std::min(solver_input.lower_bounds[link.aux_idx], L);
+            EvaluatedConstraint ec4;
+            ec4.variable_indices = {link.aux_idx, link.bool_var_idx};
+            ec4.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec4.row_coefficients.push_back(CoefficientColumn::MakeScalar(-L, num_rows));    // -L*b
+            ec4.rhs_values.AssignScalar(num_rows, 0.0);
+            ec4.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+            ec4.lhs_is_aggregate = false;
+            gstate.evaluated_constraints.push_back(std::move(ec4));
+        }
     }
 
     // Generate Big-M upper-bound constraints for MAXIMIZE + ABS auxiliary variables.
