@@ -776,10 +776,39 @@ static void RewriteInDomain(unique_ptr<ParsedExpression> &expr,
 					    make_uniq<ConstantExpression>(Value::INTEGER(0)));
 
 					// Replace the IN expression with AND of both constraints
-					expr = make_uniq<ConjunctionExpression>(
+					unique_ptr<ParsedExpression> combined = make_uniq<ConjunctionExpression>(
 					    ExpressionType::CONJUNCTION_AND,
 					    std::move(cardinality_constraint),
 					    std::move(linking_constraint));
+
+					// If the domain contains a negative constant, the variable's
+					// default lower bound of 0 would silently prune that selection
+					// (the linking equality would make `z=1` for a negative value
+					// infeasible). Widen the lower bound to the domain minimum so
+					// the negative values are reachable. Only applies when every
+					// domain value is a constant we can read here; column-valued
+					// domains keep the default bound (documented limitation).
+					bool all_const = true;
+					double min_const = 0.0;
+					for (idx_t i = 1; i <= K; i++) {
+						if (op.children[i]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+							all_const = false;
+							break;
+						}
+						double v = op.children[i]->Cast<ConstantExpression>().value.GetValue<double>();
+						min_const = std::min(min_const, v);
+					}
+					if (all_const && min_const < 0.0) {
+						auto lower_bound = make_uniq<ComparisonExpression>(
+						    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+						    make_uniq<ColumnRefExpression>(var_name),
+						    make_uniq<ConstantExpression>(Value::DOUBLE(min_const)));
+						combined = make_uniq<ConjunctionExpression>(
+						    ExpressionType::CONJUNCTION_AND,
+						    std::move(combined),
+						    std::move(lower_bound));
+					}
+					expr = std::move(combined);
 					return;
 				}
 			}
