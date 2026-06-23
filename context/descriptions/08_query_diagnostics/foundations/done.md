@@ -65,9 +65,9 @@ it represents, so the unbounded diagnosis names escaping variables.
   pure (caller pre-extracts per-decide-var labels + an is-aux flag) and inverts
   `VarIndexer::Get(var, row)` over all rows to produce a `flat column →
   ColumnProvenance` map. The provenance retains the variable's **instance**
-  identity (entity key for entity-scoped, row for row-scoped) — the hook the
-  unbounded `group_label` enrichment will resolve to a label (`unbounded/todo.md`).
-  Global-block columns default to GLOBAL_AUX (unnamed).
+  identity (entity id for entity-scoped, row for row-scoped) — the hook the
+  unbounded `escaping_instances` characterization resolves to a categorical rule
+  set (`unbounded/done.md`). Global-block columns default to GLOBAL_AUX (unnamed).
 
 Tested in `test/common/test_decidb_variable_provenance.cpp`.
 
@@ -108,8 +108,8 @@ as a fixed-schema relation.
   connection**.
 - **`decide_diagnostics()` table function** (registered in
   `system_functions.cpp`, implemented in `decide_diagnostic.cpp`) with fixed schema
-  `(query_id BIGINT, state, variable, direction, group_label, suggested_bound)` —
-  `query_id` BIGINT, the rest VARCHAR; empty string fields render as SQL NULL. The
+  `(query_id BIGINT, state, variable, direction, escaping_instances, suggested_bound)`
+  — `query_id` BIGINT, the rest VARCHAR; empty string fields render as SQL NULL. The
   schema is **variable-centric** (one row = one escaping variable). `query_id` is
   stamped at stash time from a per-connection counter.
 - **Why a table function and not a result-schema switch:** DECIDE is a clause on
@@ -118,8 +118,12 @@ as a fixed-schema relation.
   switch is bind-time-blocked. The diagnosis is surfaced via this companion table
   function instead.
 - **Today only the unbounded engine populates it** (`BuildUnboundedDiagnostic` — see
-  `unbounded/done.md`). `group_label` / `suggested_bound` read NULL pending the
-  enrichments in `unbounded/todo.md`.
+  `unbounded/done.md`). `escaping_instances` characterizes which instances of a
+  variable escape (categorical rules / total-escape / count); `suggested_bound`
+  reads NULL (DeciDB never picks the bound). The unbounded characterization adds
+  three sticky extension options alongside `diagnose_decide`:
+  `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
+  `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
 
 Tested in `test/decide/tests/test_query_diagnostics_f5.py` (both backends).
 

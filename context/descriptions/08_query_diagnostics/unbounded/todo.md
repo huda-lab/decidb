@@ -4,37 +4,29 @@ The unbounded state is functionally complete (it names the escaping variables �
 see `done.md`). What remains makes the diagnosis *more actionable*: tell the user
 which slice escaped, and prescribe the forced fix. Only open work is listed here.
 
-## `group_label` — which instances escape
+## `escaping_instances` — **shipped** (residual enrichments below)
 
-**Need.** When a variable has multiple scope-instances and only *some* escape, the
-diagnosis should say *which*, so the user bounds the right slice instead of
-re-deriving it. Today `BuildUnboundedDiagnostic` dedups by name and leaves
-`group_label` NULL, so a partial escape is indistinguishable from a total one.
+The categorical characterization landed — `done.md` · `escaping_instances` has the
+full description (categorical sufficient-direction rules, total-escape summary,
+count fallback, the three pragma knobs, row- vs entity-scoped). Residual future
+work only:
 
-**Concept (precise).** The escaping *group* is the variable's **scope instance**,
-not a `PER` group. (`PER` groups *constraint rows*; it does not create per-group
-variables, and a decision variable is not a legal `PER` key — see
-`syntax_reference.md` §7. What multiplies one variable *name* into many escaping
-solver columns is its scope.) Each escaping column already maps to a
-`(name, instance)` via `ColumnProvenance` (`foundations/done.md` · variable
-provenance). The work:
-
-- **Dedup by `(name, instance)`** when the variable is scoped, so partial escapes
-  report separate rows (today's dedup-by-name collapses them).
-- **Resolve the instance to a human label** and put it in `group_label`:
-  - *entity/table-scoped* (`DECIDE Table.var`): the entity key column(s)=value(s),
-    e.g. `empID=Alice`. The scope key exists in provenance; the missing piece is
-    plumbing the key column name + value down to the diagnosis site.
-  - *single-instance* variable (no scope multiplicity — the common case, e.g. the
-    `run.sh` demo): genuinely NULL, nothing to disambiguate.
-
-**Open design call (the one remaining fork).** For a *row-scoped* variable there
-is no inherent group key — the instance is just a result row. Options for its
-label: (a) leave NULL (only entity-scoped variables get labels); (b) characterize
-escaping row-instances by a relevant data column (e.g. the `PER`/`WHEN` column of a
-constraint the variable participates in), reporting one row per distinct value;
-(c) report a raw row identifier. Decide before implementing row-scoped labeling —
-this is a naming/granularity choice, not a coding detail.
+- **Conjunctive rules.** Rules are an independent union of single columns today
+  (`channel=export; region=APAC`). A conjunction (`channel=export AND region=APAC`)
+  would localize finer when escape needs two predicates. Needs a rule-mining pass.
+- **SELECT-only categorical columns named positionally.** Names are harvested from
+  the DECIDE clause's `BoundReferenceExpression`s (`plan_decide.cpp`); a categorical
+  column referenced only in the outer SELECT (not WHEN/PER/objective/constraint)
+  gets a `colN` fallback name. Rare (such columns are usually high-cardinality and
+  excluded), but a full child-output name resolver would fix it.
+- **Tuple display for a single escaping instance.** Currently a single escaping
+  instance (or a single-instance variable) reports the bare count / NULL; showing
+  the offending row's relevant-column tuple was deferred.
+- **Entity-scoped non-key characterization.** Entity-scoped vars are characterized
+  only by entity-key columns (the columns constant within an entity). A join column
+  that varies within an entity is not used.
+- **Continuous-column causes** (e.g. escape driven by `margin > 0`) are out of scope
+  by design — categorical only.
 
 ## `suggested_bound` — deferred design decision
 
@@ -88,6 +80,11 @@ cheaper alternative that sets the right expectation.
 
 ## Test coverage gaps
 
-The current suite only exercises the single-connection flow and full (not partial)
-escape. Add: a partial entity-scoped escape (some instances escape, some bounded)
-once `group_label` lands; the fresh-connection empty-relation case.
+Partial-escape characterization (row-scoped rule, entity-scoped rule, scattered →
+count fallback, total escape, escape-rate pragma) now lands in
+`test_query_diagnostics_escaping_instances.py` + the `CharacterizeEscape` unit test.
+Still uncovered:
+- the `categorical_ratio` / `min_categories` knobs changing what is reported (only
+  `escape_rate` is exercised);
+- the fresh-connection empty-relation case (a second `decidb` process with no prior
+  failed solve in-session).

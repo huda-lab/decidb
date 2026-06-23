@@ -17,6 +17,8 @@
 #include "duckdb/decidb/solver_result.hpp"
 #include "duckdb/main/client_context_state.hpp"
 
+#include <set>
+
 namespace duckdb {
 
 class ClientContext;
@@ -30,9 +32,49 @@ struct ColumnProvenance;
 struct DiagnosticRow {
 	string variable;        //!< escaping variable NAME (F6); empty => NULL
 	string direction;       //!< direction it escapes: "+∞" / "-∞"; empty => NULL
-	string group_label;     //!< PER/WHEN group NAME the escaping instance belongs to;
-	                        //!< empty => NULL (ungrouped, or name resolution not yet wired)
+	string escaping_instances; //!< which instances escape: categorical rule set
+	                        //!< (`c=v (a/b); …`), an `all N instances …` / `a of b
+	                        //!< instances escape` summary, or empty => NULL (nothing
+	                        //!< to disambiguate / not resolved).
 	string suggested_bound; //!< suggested finite bound; empty => NULL (deferred — not yet computed)
+};
+
+//! One categorical "sufficient-direction" rule for an escaping variable: among the
+//! `total` instances where `column = value`, `escaping` of them escape. Reported
+//! when escaping/total ≥ the escape-rate threshold.
+struct EscapeRule {
+	string column;
+	string value;
+	idx_t escaping = 0; //!< a
+	idx_t total = 0;    //!< b (group size, counted in instances)
+};
+
+//! A categorical column's grouping over a variable's instances, fed to
+//! CharacterizeEscape. Pure data (no DuckDB execution types) so the core unit-tests.
+struct ColumnGrouping {
+	string column;                  //!< column name (for the rule)
+	vector<idx_t> instance_to_group; //!< size = total_instances; group id per
+	                                 //!< instance (INVALID_INDEX = excluded)
+	vector<string> group_value;      //!< size = num_groups; value label per group
+};
+
+//! Per-variable escape characterization, assembled by the operator and formatted
+//! by BuildUnboundedDiagnostic into one DiagnosticRow.
+struct VarEscape {
+	string name;             //!< user variable name (USER) or source expr (AUX)
+	string direction;        //!< "+∞" / "-∞"
+	idx_t escaping = 0;      //!< number of escaping instances of this variable
+	idx_t total = 0;        //!< total instances of this variable
+	bool all_escape = false; //!< escaping == total
+	bool is_aux = false;     //!< aux/linearization column (name-only, no rules)
+	vector<EscapeRule> rules; //!< categorical rules (empty => count fallback)
+};
+
+//! Pragma-tunable knobs for the unbounded characterization. Read once per solve.
+struct DecideDiagParams {
+	double escape_rate = 0.8;       //!< report groups with rate ≥ this
+	double categorical_ratio = 0.1; //!< column is categorical if distinct ≤ ratio×N
+	idx_t min_categories = 20;       //!< …or ≤ this absolute floor (small tables)
 };
 
 //! Structured diagnosis produced by a state engine and rendered by the table
@@ -60,15 +102,27 @@ public:
 //! Key under which DecideDiagnosticState is registered on the ClientContext.
 static constexpr const char *DECIDE_DIAGNOSTIC_STATE_KEY = "decide_diagnostics";
 
-//! Build the unbounded diagnosis. Names the escaping variables (F6): collects the
-//! columns with a non-zero entry in `result.ray`, resolves each through `columns`
-//! (F6 variable provenance — user name or aux source expression), dedups by name,
-//! and emits one row per escaping variable carrying its NAME and escape DIRECTION
-//! (the sign of its ray entry). `group_label` and `suggested_bound` are left empty
-//! (NULL) for now. Falls back to a single detail-less row when no ray is attached
-//! (e.g. quadratic models, where U2 extracts none). DeciDB never picks the bound.
-DecideDiagnostic BuildUnboundedDiagnostic(const SolverResult &result,
-                                          const vector<ColumnProvenance> &columns);
+//! Pure characterization core (unit-testable; no DuckDB execution types). For one
+//! escaping variable, given its escaping-instance set, total instance count, the
+//! candidate categorical columns' groupings, and the escape-rate threshold, returns
+//! every `(column, value)` group whose within-group escape rate (escaping/total) ≥
+//! `escape_rate_threshold`, sorted by rate descending then column/value for
+//! determinism. The "sufficient-direction" rules: when `column = value` holds in an
+//! instance, that instance's variable escapes (a of b of the time).
+vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t total_instances,
+                                      const vector<ColumnGrouping> &candidates,
+                                      double escape_rate_threshold);
+
+//! Build the unbounded diagnosis from the per-variable characterizations the
+//! operator assembled (one row per escaping variable). Formats each VarEscape's
+//! `escaping_instances` cell: `all N instances …` when all escape, the `; `-joined
+//! categorical rules `c=v (a/b)` when any clear the threshold, else the bare count
+//! `a of b instances escape`. `saw_unnamed_global` => an internal global auxiliary
+//! escaped (model-generation issue). With no named escaper, emits a single
+//! detail-less row (e.g. quadratic models where no ray is attached). DeciDB never
+//! picks the bound, so `suggested_bound` stays NULL.
+DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes,
+                                          bool saw_unnamed_global);
 
 //! Store `diag` on the connection so decide_diagnostics() can read it next statement.
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag);
@@ -94,6 +148,10 @@ void RegisterDecideDiagnosticOptions(DBConfig &config);
 
 //! Read the current diagnose_decide mode (lowercased; "none" if unset).
 string GetDiagnoseDecideMode(ClientContext &context);
+
+//! Read the unbounded-characterization knobs (escape rate / categorical ratio /
+//! min-categories floor) from the session settings, falling back to defaults.
+DecideDiagParams GetDecideDiagnosticParams(ClientContext &context);
 
 //! Filter predicate: does `mode` request a diagnosis for a solve that ended in
 //! `status`? (none => never; auto => any diagnosable state; otherwise exact match.)

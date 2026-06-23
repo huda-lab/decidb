@@ -106,8 +106,8 @@ reported as a drop; mixed cases prefer loosening.
 
 > **Schema note (changed since this was written).** The shared `decide_diagnostics()`
 > relation was reshaped around the unbounded/variable-centric view to
-> `(query_id, state, variable, direction, group_label, suggested_bound)` — the old
-> 5-tuple `(state, clause, group_key, edit_kind, suggested_change)` referenced below
+> `(query_id, state, variable, direction, escaping_instances, suggested_bound)` — the
+> old 5-tuple `(state, clause, group_key, edit_kind, suggested_change)` referenced below
 > no longer exists. Infeasible's subject is a *clause*, not a variable, so this engine
 > must revisit the output columns (re-add `clause`/`edit_kind`/`suggested_change`, or
 > generalize the relation) before implementing I4. See `foundations/done.md` · F5.

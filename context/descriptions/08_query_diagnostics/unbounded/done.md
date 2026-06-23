@@ -56,9 +56,13 @@ extra filter needed.
 The ray gives non-zero entries per solver *column*. Each column is mapped back to
 the user-facing variable through the `ColumnProvenance` map (variable provenance,
 `foundations/done.md`): user columns resolve to the declared variable name, aux
-columns to the source expression they were generated from.
-`BuildUnboundedDiagnostic` collects columns with `|ray[i]| > 1e-8`, resolves each
-through the map, dedups by name, and emits one row per escaping variable.
+columns to the source expression they were generated from. The diagnosis site
+(`PhysicalDecide` Finalize) collects columns with `|ray[i]| > 1e-8`, groups them by
+`decide_var_idx`, and collects each variable's escaping **scope-instances** (the
+`ColumnProvenance.instance`: the row for row-scoped, the entity id for
+entity-scoped). It emits **one row per escaping variable** carrying its name,
+direction, and a characterization of *which* instances escape (next section).
+`BuildUnboundedDiagnostic` is the pure formatter over that per-variable summary.
 
 **Only user variables escape in practice (verified, both backends).** Auxiliary
 variables are structurally bounded — ABS Big-M and bilinear McCormick require
@@ -72,7 +76,7 @@ The diagnosis surfaces through `decide_diagnostics()` (schema in
 `foundations/done.md`) as a **variable-centric** relation — one row per escaping
 variable:
 
-    query_id | state | variable | direction | group_label | suggested_bound
+    query_id | state | variable | direction | escaping_instances | suggested_bound
 
 - `variable` — the escaping variable's name.
 - `direction` — the sign of its ray entry. Always `+∞` today: user variables are
@@ -81,10 +85,54 @@ variable:
   path is unreachable and untested until signed variables exist (see `todo.md`
   and `03_expressivity/decide/todo.md`).
 - `query_id` — ties together the rows of one failed solve.
-- `group_label`, `suggested_bound` — reserved, currently NULL (see `todo.md`).
+- `escaping_instances` — which instances of the variable escape (next section).
+- `suggested_bound` — reserved, currently NULL (DeciDB never picks the bound; see
+  `todo.md`).
 
 The error thrown points the user at the relation: `SELECT * FROM
 decide_diagnostics()`.
+
+## `escaping_instances` — characterizing which instances escape
+
+A variable name fans out into many scope-instances (row-scoped: one column per
+result row; entity-scoped: one per entity). When only *some* escape, the cell says
+which, so a partial escape is distinguishable from a total one and a localized
+modeling error (a sign flip on one category, a `WHEN`/`PER` cap that skipped a
+slice) is visible. The cell is one of:
+
+- **Total escape** (`escaping == total`): `all N instances escape`.
+- **Categorical rules**: for every categorical column `c` and value `v`, the
+  within-group escape rate `a/b` (a = escaping instances with `c=v`, b = group
+  size) is computed; every group with rate ≥ the escape-rate threshold is reported
+  as `c=v (a/b)`, `; `-joined, strongest first. This is the *sufficient direction*
+  ("when `c=v`, the variable escapes in a of b instances"); the `a/b` count is
+  always shown so a threshold < 1 stays honest. Rules are an independent **union**
+  across columns/values (conjunctions are future work).
+- **Fallback** (single-instance variable, or a scattered escape no categorical
+  group characterizes): the bare count `a of b instances escape` (single-instance
+  variables read NULL — nothing to disambiguate). Aux columns are name-only.
+
+**Mechanism.** Categorical grouping reuses `BuildGroupIds` (one scan per candidate
+column; it returns per-group representative values). A column is a candidate when
+`2 ≤ distinct ≤ max(min_categories, ratio × N)` — relative cardinality excludes
+continuous / id-like columns (out of scope by design). **Row-scoped** variables
+scan all input columns; **entity-scoped** variables scan only the scope's
+entity-key columns (the columns constant within an entity), lifting the row
+grouping to entity granularity via the live entity mapping on the `VarIndexer`. The
+pure rule computation is `CharacterizeEscape` (no DuckDB execution types — unit
+tested). Column names are harvested at physical-plan time from the DECIDE clause's
+own `BoundReferenceExpression`s (`plan_decide.cpp`), whose chunk indices survive
+column pruning; columns referenced only in the outer SELECT fall back to a
+positional `colN` name (almost always high-cardinality, hence excluded anyway).
+
+**Pragma knobs** (extension options, `decide_diagnostic.cpp`):
+`diagnose_decide_escape_rate` (default 0.8), `diagnose_decide_categorical_ratio`
+(default 0.1), `diagnose_decide_min_categories` (default 20 — an absolute floor so
+small tables still qualify).
+
+`PER` is covered only indirectly: we never map escaping instances onto PER groups,
+but if escape aligns with a column a `PER`/`WHEN` clause uses, the categorical scan
+surfaces it on its own.
 
 ## Load-bearing limit — names a variable, not a guilty clause
 
@@ -99,8 +147,16 @@ blame. This shapes every clause-aware enrichment in `todo.md`.
 Differential vs `oracle_solver` / pinned scenarios:
 `test/decide/tests/test_query_diagnostics_f6.py` (REAL var, INTEGER/MILP via the
 HiGHS `INF_OR_UNBD` path, multi-var dedup, `auto` routing, no-pragma silence) ·
-`test/common/test_decidb_diagnostic_solves.cpp` (ray fallback: full-support ray,
-signed objective, finite-UB zeroing, row-sense preservation, integrality
-relaxation, opt-in attachment) · `test/common/test_decidb_variable_provenance.cpp`
-(USER/AUX/GLOBAL_AUX resolution). Demoed end-to-end on the TPC-H DB via `run.sh`
+`test/decide/tests/test_query_diagnostics_escaping_instances.py` (row-scoped
+partial → categorical rule, total escape, scattered → count fallback,
+entity-scoped → entity-key rule, the escape-rate pragma changing what is reported;
+both backends) · `test/decide/tests/test_query_diagnostics_f5.py` (the renamed
+`escaping_instances` schema) · `test/common/test_decidb_escape_characterization.cpp`
+(the pure `CharacterizeEscape` core: threshold gating, union/sort, all-escape,
+excluded instances, empty-rules fallback) · `test/common/test_decidb_diagnostic_solves.cpp`
+(ray fallback: full-support ray, signed objective, finite-UB zeroing, row-sense
+preservation, integrality relaxation, opt-in attachment) ·
+`test/common/test_decidb_variable_provenance.cpp` (USER/AUX/GLOBAL_AUX resolution).
+The characterization string is asserted against constructed cases (oracle/pinned
+confirm only the UNBOUNDED status). Demoed end-to-end on the TPC-H DB via `run.sh`
 (a 3-variable `part` model where only `promo` escapes).

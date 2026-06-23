@@ -8,6 +8,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -32,6 +33,30 @@ static void DiagnoseDecideSetCallback(ClientContext &context, SetScope scope, Va
 	parameter = Value(mode); // normalize to lowercase
 }
 
+static void EscapeRateSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	double v = parameter.GetValue<double>();
+	if (!(v > 0.0 && v <= 1.0)) {
+		throw InvalidInputException(
+		    "diagnose_decide_escape_rate must be in (0, 1]; got " + parameter.ToString() + ".");
+	}
+}
+
+static void CategoricalRatioSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	double v = parameter.GetValue<double>();
+	if (!(v > 0.0 && v <= 1.0)) {
+		throw InvalidInputException(
+		    "diagnose_decide_categorical_ratio must be in (0, 1]; got " + parameter.ToString() + ".");
+	}
+}
+
+static void MinCategoriesSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	int64_t v = parameter.GetValue<int64_t>();
+	if (v < 1) {
+		throw InvalidInputException(
+		    "diagnose_decide_min_categories must be >= 1; got " + parameter.ToString() + ".");
+	}
+}
+
 void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	config.AddExtensionOption(
 	    "diagnose_decide",
@@ -39,6 +64,23 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "Filter semantics: a mode produces a diagnosis only when the solve actually lands in that "
 	    "state; otherwise the query behaves normally.",
 	    LogicalType::VARCHAR, Value("none"), DiagnoseDecideSetCallback);
+	// Unbounded characterization knobs (see decide_diagnostics() escaping_instances).
+	config.AddExtensionOption(
+	    "diagnose_decide_escape_rate",
+	    "Unbounded diagnosis: report a categorical group when its within-group escape rate "
+	    "(escaping/total instances) is at least this value. Range (0, 1]. Default 0.8.",
+	    LogicalType::DOUBLE, Value::DOUBLE(0.8), EscapeRateSetCallback);
+	config.AddExtensionOption(
+	    "diagnose_decide_categorical_ratio",
+	    "Unbounded diagnosis: a column is treated as categorical for characterization when its "
+	    "distinct-value count is at most ratio × num_rows (subject to the min-categories floor). "
+	    "Range (0, 1]. Default 0.1.",
+	    LogicalType::DOUBLE, Value::DOUBLE(0.1), CategoricalRatioSetCallback);
+	config.AddExtensionOption(
+	    "diagnose_decide_min_categories",
+	    "Unbounded diagnosis: absolute floor on the categorical distinct-value cap, so small "
+	    "tables still qualify when ratio × num_rows rounds below a few. Default 20.",
+	    LogicalType::BIGINT, Value::BIGINT(20), MinCategoriesSetCallback);
 }
 
 string GetDiagnoseDecideMode(ClientContext &context) {
@@ -47,6 +89,22 @@ string GetDiagnoseDecideMode(ClientContext &context) {
 		return StringUtil::Lower(value.ToString());
 	}
 	return "none";
+}
+
+DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
+	DecideDiagParams params; // defaults
+	Value value;
+	if (context.TryGetCurrentSetting("diagnose_decide_escape_rate", value) && !value.IsNull()) {
+		params.escape_rate = value.GetValue<double>();
+	}
+	if (context.TryGetCurrentSetting("diagnose_decide_categorical_ratio", value) && !value.IsNull()) {
+		params.categorical_ratio = value.GetValue<double>();
+	}
+	if (context.TryGetCurrentSetting("diagnose_decide_min_categories", value) && !value.IsNull()) {
+		auto v = value.GetValue<int64_t>();
+		params.min_categories = v < 1 ? 1 : (idx_t)v;
+	}
+	return params;
 }
 
 bool DiagnosisApplies(const string &mode, SolverStatus status) {
@@ -74,59 +132,106 @@ bool DiagnoseModeWantsUnboundedRay(const string &mode) {
 // Diagnosis construction + per-connection stash
 //===----------------------------------------------------------------------===//
 
-DecideDiagnostic BuildUnboundedDiagnostic(const SolverResult &result,
-                                          const vector<ColumnProvenance> &columns) {
-	// Name the escaping variables from the ray (F6). The U2 box-LP ray already fixes
-	// any column with a finite upper bound to 0, so a non-zero ray entry is exactly a
-	// variable that can grow without bound. We report, per escaping variable: its NAME,
-	// the DIRECTION it escapes (the sign of its ray entry). `group_label` and
-	// `suggested_bound` are deferred (left NULL). DeciDB never picks the bound value.
-	static constexpr double RAY_ESCAPE_EPSILON = 1e-8;
+vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t total_instances,
+                                      const vector<ColumnGrouping> &candidates,
+                                      double escape_rate_threshold) {
+	(void)total_instances; // counts come from instance_to_group; param documents the contract
+	vector<EscapeRule> rules;
+	for (const auto &cg : candidates) {
+		idx_t num_groups = cg.group_value.size();
+		if (num_groups == 0) {
+			continue;
+		}
+		vector<idx_t> total_count(num_groups, 0);
+		vector<idx_t> esc_count(num_groups, 0);
+		for (idx_t i = 0; i < cg.instance_to_group.size(); i++) {
+			idx_t g = cg.instance_to_group[i];
+			if (g == DConstants::INVALID_INDEX || g >= num_groups) {
+				continue; // instance excluded from this column's grouping (e.g. NULL key)
+			}
+			total_count[g]++;
+			if (escaping.count(i)) {
+				esc_count[g]++;
+			}
+		}
+		// A group is a "sufficient-direction" rule when (nearly) all of its instances
+		// escape: rate = escaping/total ≥ threshold. The a/b count is carried so a
+		// threshold < 1 stays honest.
+		for (idx_t g = 0; g < num_groups; g++) {
+			if (total_count[g] == 0 || esc_count[g] == 0) {
+				continue;
+			}
+			double rate = (double)esc_count[g] / (double)total_count[g];
+			if (rate + 1e-12 >= escape_rate_threshold) {
+				EscapeRule r;
+				r.column = cg.column;
+				r.value = cg.group_value[g];
+				r.escaping = esc_count[g];
+				r.total = total_count[g];
+				rules.push_back(std::move(r));
+			}
+		}
+	}
+	// Deterministic order: strongest rule first, then column/value.
+	std::sort(rules.begin(), rules.end(), [](const EscapeRule &a, const EscapeRule &b) {
+		double ra = (double)a.escaping / (double)a.total;
+		double rb = (double)b.escaping / (double)b.total;
+		if (ra != rb) {
+			return ra > rb;
+		}
+		if (a.column != b.column) {
+			return a.column < b.column;
+		}
+		return a.value < b.value;
+	});
+	return rules;
+}
 
+//! Format one variable's `escaping_instances` cell. Empty => NULL.
+static string FormatEscapingInstances(const VarEscape &ve) {
+	if (ve.is_aux || ve.total <= 1) {
+		// Aux/linearization columns are name-only; a single-instance variable (no
+		// scope multiplicity, e.g. the run.sh demo) has nothing to disambiguate.
+		return string();
+	}
+	if (ve.all_escape) {
+		return "all " + std::to_string(ve.total) + " instances escape";
+	}
+	if (!ve.rules.empty()) {
+		string cell;
+		for (idx_t i = 0; i < ve.rules.size(); i++) {
+			const auto &r = ve.rules[i];
+			cell += (i == 0 ? "" : "; ") + r.column + "=" + r.value + " (" +
+			        std::to_string(r.escaping) + "/" + std::to_string(r.total) + ")";
+		}
+		return cell;
+	}
+	// Single escaping instance among many, or a scattered escape no categorical group
+	// characterizes: report the bare count.
+	return std::to_string(ve.escaping) + " of " + std::to_string(ve.total) + " instances escape";
+}
+
+DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes,
+                                          bool saw_unnamed_global) {
 	DecideDiagnostic diag;
 	diag.valid = true;
 	diag.status = SolverStatus::UNBOUNDED;
 	diag.state = "unbounded";
 
-	// Collect escaping variables, deduplicated by their user-facing name so a
-	// row-scoped variable escaping across every row reports once. First-seen column
-	// order is preserved for deterministic output; the sign of the first-seen ray
-	// entry gives the escape direction (+ for an increase to +∞, - for -∞).
-	vector<string> escaping_names; // display names, in first-seen column order
-	vector<string> escaping_dirs;  // parallel: "+∞" / "-∞"
-	std::set<string> seen;
-	bool saw_unnamed_global = false;
-	for (idx_t col = 0; col < result.ray.size() && col < columns.size(); col++) {
-		double r = result.ray[col];
-		if (std::fabs(r) <= RAY_ESCAPE_EPSILON) {
-			continue;
-		}
-		const ColumnProvenance &prov = columns[col];
-		if (prov.kind == ColumnKind::GLOBAL_AUX || prov.label.empty()) {
-			saw_unnamed_global = true;
-			continue;
-		}
-		// For an AUX column the label is the user's source expression; for a USER
-		// column it is the variable name. Both go in as-is.
-		if (seen.insert(prov.label).second) {
-			escaping_names.push_back(prov.label);
-			escaping_dirs.push_back(r > 0 ? "+∞" : "-∞");
-		}
-	}
-
-	if (!escaping_names.empty()) {
+	if (!escapes.empty()) {
 		string names;
-		for (idx_t i = 0; i < escaping_names.size(); i++) {
-			names += (i == 0 ? "" : ", ") + escaping_names[i];
+		for (idx_t i = 0; i < escapes.size(); i++) {
+			names += (i == 0 ? "" : ", ") + escapes[i].name;
 		}
 		diag.summary = "The objective is unbounded: it can improve without limit because " +
-		               string(escaping_names.size() == 1 ? "the variable " : "the variables ") +
-		               names + " can grow without bound.";
-		for (idx_t i = 0; i < escaping_names.size(); i++) {
+		               string(escapes.size() == 1 ? "the variable " : "the variables ") + names +
+		               " can grow without bound.";
+		for (const auto &ve : escapes) {
 			DiagnosticRow row;
-			row.variable = escaping_names[i];
-			row.direction = escaping_dirs[i];
-			// group_label + suggested_bound intentionally left empty (=> NULL) for now.
+			row.variable = ve.name;
+			row.direction = ve.direction;
+			row.escaping_instances = FormatEscapingInstances(ve);
+			// suggested_bound intentionally left empty (=> NULL): DeciDB never picks it.
 			diag.rows.push_back(std::move(row));
 		}
 		return diag;
@@ -178,7 +283,7 @@ struct DecideDiagnosticsData : public GlobalTableFunctionState {
 
 unique_ptr<FunctionData> DecideDiagnosticsBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<string> &names) {
-	names = {"query_id", "state", "variable", "direction", "group_label", "suggested_bound"};
+	names = {"query_id", "state", "variable", "direction", "escaping_instances", "suggested_bound"};
 	return_types = {LogicalType::BIGINT, LogicalType::VARCHAR, LogicalType::VARCHAR,
 	                LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
 	return nullptr;
@@ -207,7 +312,8 @@ void DecideDiagnosticsFunction(ClientContext &context, TableFunctionInput &data_
 		output.SetValue(col++, count, Value(data.diag.state));
 		output.SetValue(col++, count, row.variable.empty() ? Value() : Value(row.variable));
 		output.SetValue(col++, count, row.direction.empty() ? Value() : Value(row.direction));
-		output.SetValue(col++, count, row.group_label.empty() ? Value() : Value(row.group_label));
+		output.SetValue(col++, count,
+		                row.escaping_instances.empty() ? Value() : Value(row.escaping_instances));
 		output.SetValue(col, count, row.suggested_bound.empty() ? Value() : Value(row.suggested_bound));
 		count++;
 	}

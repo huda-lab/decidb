@@ -4,10 +4,11 @@ F5 adds a structured diagnosis that a state engine populates, stashes
 per-connection, and surfaces via the `decide_diagnostics()` table function with a
 fixed schema. For the unbounded state each row names one escaping variable:
 
-    query_id | state | variable | direction | group_label | suggested_bound
+    query_id | state | variable | direction | escaping_instances | suggested_bound
 
-`group_label` and `suggested_bound` are reserved for later enrichment and read
-NULL for now; `query_id` ties together every row of one failed solve.
+`escaping_instances` characterizes which instances of the variable escape (here
+all of them); `suggested_bound` is reserved for later enrichment and reads NULL;
+`query_id` ties together every row of one failed solve.
 
 The end-to-end flow spans two statements on one connection (a failing DECIDE that
 stashes, then a SELECT that reads it back), so these tests drive the CLI via
@@ -33,7 +34,7 @@ _EXPECTED_SCHEMA = [
     "state",
     "variable",
     "direction",
-    "group_label",
+    "escaping_instances",
     "suggested_bound",
 ]
 
@@ -74,9 +75,10 @@ class TestF5DiagnosticsRelation:
         assert row["state"] == "unbounded"
         assert row["variable"] == "x"
         assert row["direction"] == "+∞"
-        # group_label + suggested_bound are SQL NULL (reserved for later); DuckDB's
-        # CSV writer renders a NULL cell as the literal "NULL".
-        assert row["group_label"] == "NULL"
+        # Both instances of x escape, so escaping_instances reports the total-escape
+        # summary. suggested_bound is SQL NULL (reserved); DuckDB's CSV writer renders
+        # a NULL cell as the literal "NULL".
+        assert row["escaping_instances"] == "all 2 instances escape"
         assert row["suggested_bound"] == "NULL"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)

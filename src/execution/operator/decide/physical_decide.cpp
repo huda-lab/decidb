@@ -1,9 +1,12 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
+#include <map>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include "duckdb/common/profiler.hpp"
@@ -173,7 +176,8 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs,
                           const std::function<bool(idx_t)> &row_filter,
                           bool null_excludes,
                           vector<idx_t> &out_row_to_group,
-                          idx_t &out_num_groups) {
+                          idx_t &out_num_groups,
+                          vector<vector<Value>> *out_rep_keys = nullptr) {
 	out_row_to_group.assign(num_rows, DConstants::INVALID_INDEX);
 	out_num_groups = 0;
 	if (num_rows == 0 || key_exprs.empty()) {
@@ -289,6 +293,11 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs,
 	}
 
 	out_num_groups = next_group;
+	if (out_rep_keys) {
+		// Expose the per-group representative key values (group g's value for each key
+		// column) — used by the unbounded diagnosis to label escaping categorical groups.
+		*out_rep_keys = std::move(rep_keys);
+	}
 }
 
 //! Cache for PER group assignments: shares one full-data scan + group-map build
@@ -5154,7 +5163,160 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
             vector<ColumnProvenance> columns =
                 BuildColumnProvenance(var_indexer, var_labels, var_is_aux);
-            DecideDiagnostic diag = BuildUnboundedDiagnostic(solve_result, columns);
+
+            // Characterize WHICH instances of each escaping variable run away
+            // (escaping_instances). Group ray columns by user variable; for each, the
+            // ray's non-zero entries are its escaping scope-instances (row-scoped: the
+            // row; entity-scoped: the entity). We then describe that instance set with
+            // categorical "sufficient-direction" rules: a column value v such that
+            // (nearly) all instances where the column = v escape.
+            auto diag_params = GetDecideDiagnosticParams(context);
+            auto diag_types = gstate.data.Types();
+
+            // Build a single-column row grouping, keeping it only if it is categorical
+            // (2 ≤ distinct ≤ max(min_categories, ratio × denom)).
+            auto build_row_grouping = [&](idx_t ci, idx_t denom, ColumnGrouping &out) -> bool {
+                BoundReferenceExpression ref(diag_types[ci], ci);
+                vector<const Expression *> keys {&ref};
+                vector<idx_t> row_to_group;
+                idx_t num_groups = 0;
+                vector<vector<Value>> rep_keys;
+                BuildGroupIds(keys, context, gstate.data, num_rows, std::function<bool(idx_t)> {},
+                              /*null_excludes=*/false, row_to_group, num_groups, &rep_keys);
+                idx_t cap = std::max(diag_params.min_categories,
+                                     (idx_t)(diag_params.categorical_ratio * (double)denom));
+                if (num_groups < 2 || num_groups > cap || rep_keys.empty()) {
+                    return false;
+                }
+                out.column = ci < input_column_names.size() ? input_column_names[ci]
+                                                            : ("col" + std::to_string(ci));
+                out.instance_to_group = std::move(row_to_group); // row-indexed
+                out.group_value.resize(num_groups);
+                for (idx_t g = 0; g < num_groups && g < rep_keys[0].size(); g++) {
+                    out.group_value[g] = rep_keys[0][g].IsNull() ? "NULL" : rep_keys[0][g].ToString();
+                }
+                return true;
+            };
+
+            // Row-scoped candidate columns are variable-independent — build once.
+            vector<ColumnGrouping> row_candidates;
+            bool row_candidates_built = false;
+            auto get_row_candidates = [&]() -> vector<ColumnGrouping> & {
+                if (!row_candidates_built) {
+                    for (idx_t ci = 0; ci < diag_types.size(); ci++) {
+                        ColumnGrouping cg;
+                        if (build_row_grouping(ci, num_rows, cg)) {
+                            row_candidates.push_back(std::move(cg));
+                        }
+                    }
+                    row_candidates_built = true;
+                }
+                return row_candidates;
+            };
+
+            // Entity-scoped candidate columns = the scope's entity-key columns only
+            // (the columns constant within an entity); grouping is lifted to entity
+            // granularity. Cached per scope.
+            // var_indexer owns/references the live entity mappings (the Finalize-local
+            // `entity_mappings` has been moved into the solver input by now).
+            auto &live_entity_mappings = var_indexer.entity_mappings_ref
+                                             ? *var_indexer.entity_mappings_ref
+                                             : var_indexer.entity_mappings_owned;
+            std::map<idx_t, vector<ColumnGrouping>> entity_candidates;
+            auto get_entity_candidates = [&](idx_t scope_idx) -> vector<ColumnGrouping> & {
+                auto found = entity_candidates.find(scope_idx);
+                if (found != entity_candidates.end()) {
+                    return found->second;
+                }
+                vector<ColumnGrouping> cands;
+                auto &scope = entity_scopes[scope_idx];
+                auto &mapping = live_entity_mappings[scope_idx];
+                idx_t num_entities = mapping.num_entities;
+                for (idx_t ci : scope.entity_key_physical_indices) {
+                    ColumnGrouping rowcg;
+                    if (!build_row_grouping(ci, num_entities, rowcg)) {
+                        continue;
+                    }
+                    ColumnGrouping ecg;
+                    ecg.column = rowcg.column;
+                    ecg.group_value = std::move(rowcg.group_value);
+                    ecg.instance_to_group.assign(num_entities, DConstants::INVALID_INDEX);
+                    for (idx_t r = 0; r < num_rows && r < mapping.row_to_entity.size(); r++) {
+                        idx_t e = mapping.row_to_entity[r];
+                        if (e < num_entities) {
+                            ecg.instance_to_group[e] = rowcg.instance_to_group[r];
+                        }
+                    }
+                    cands.push_back(std::move(ecg));
+                }
+                return entity_candidates.emplace(scope_idx, std::move(cands)).first->second;
+            };
+
+            // Group escaping ray columns by user variable; collect their instances.
+            static constexpr double RAY_ESCAPE_EPSILON = 1e-8;
+            struct VarAgg {
+                string name;
+                bool is_aux = false;
+                string direction;
+                idx_t vidx = DConstants::INVALID_INDEX;
+                std::set<idx_t> instances;
+            };
+            std::map<idx_t, VarAgg> by_var;
+            bool saw_unnamed_global = false;
+            for (idx_t col = 0; col < solve_result.ray.size() && col < columns.size(); col++) {
+                double rv = solve_result.ray[col];
+                if (std::fabs(rv) <= RAY_ESCAPE_EPSILON) {
+                    continue;
+                }
+                const ColumnProvenance &prov = columns[col];
+                if (prov.kind == ColumnKind::GLOBAL_AUX || prov.label.empty() ||
+                    prov.decide_var_idx == DConstants::INVALID_INDEX) {
+                    saw_unnamed_global = true;
+                    continue;
+                }
+                auto &agg = by_var[prov.decide_var_idx];
+                if (agg.name.empty()) {
+                    agg.name = prov.label;
+                    agg.is_aux = prov.kind == ColumnKind::AUX;
+                    agg.direction = rv > 0 ? "+∞" : "-∞";
+                    agg.vidx = prov.decide_var_idx;
+                }
+                agg.instances.insert(prov.instance);
+            }
+
+            vector<VarEscape> escapes;
+            for (auto &kv : by_var) {
+                VarAgg &agg = kv.second;
+                VarEscape ve;
+                ve.name = agg.name;
+                ve.direction = agg.direction;
+                ve.is_aux = agg.is_aux;
+                ve.total = var_indexer.NumInstances(agg.vidx);
+                ve.escaping = agg.instances.size();
+                ve.all_escape = ve.escaping >= ve.total;
+                if (!agg.is_aux && ve.escaping < ve.total && ve.total > 1) {
+                    bool entity_scoped = agg.vidx < var_indexer.is_entity_scoped.size() &&
+                                         var_indexer.is_entity_scoped[agg.vidx];
+                    if (entity_scoped) {
+                        idx_t scope_idx = agg.vidx < var_indexer.var_entity_mapping_idx.size()
+                                              ? var_indexer.var_entity_mapping_idx[agg.vidx]
+                                              : DConstants::INVALID_INDEX;
+                        if (scope_idx != DConstants::INVALID_INDEX &&
+                            scope_idx < entity_scopes.size() &&
+                            scope_idx < live_entity_mappings.size()) {
+                            ve.rules = CharacterizeEscape(agg.instances, ve.total,
+                                                          get_entity_candidates(scope_idx),
+                                                          diag_params.escape_rate);
+                        }
+                    } else {
+                        ve.rules = CharacterizeEscape(agg.instances, ve.total, get_row_candidates(),
+                                                      diag_params.escape_rate);
+                    }
+                }
+                escapes.push_back(std::move(ve));
+            }
+
+            DecideDiagnostic diag = BuildUnboundedDiagnostic(escapes, saw_unnamed_global);
             StashDecideDiagnostic(context, diag);
             ThrowDecideDiagnosisReady(diag);
         }

@@ -3,6 +3,10 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+
+#include <functional>
 
 namespace duckdb {
 
@@ -73,6 +77,46 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     }
     decide_op->entity_scopes = std::move(op.entity_scopes);
     decide_op->variable_entity_scope = std::move(op.variable_entity_scope);
+
+    // Resolve source column names for the surviving (post-pruning) child columns,
+    // positionally aligned with the materialized data chunk. Used by the unbounded
+    // diagnosis to label escaping categorical groups (escaping_instances).
+    //
+    // Harvest names from the DECIDE clause's own bound references to source columns
+    // (WHEN / PER / objective / constraint / entity-key columns). By physical-plan
+    // time the column-binding resolver has rewritten table-column references to
+    // BoundReferenceExpressions whose `index` is the position in the child data chunk
+    // — exactly the indexing of gstate.data — so this aligns directly and survives
+    // pruning (decision-variable references stay BoundColumnRef and are skipped).
+    // Columns only in the outer SELECT (not the DECIDE clause) keep a positional name;
+    // these are almost always high-cardinality and excluded from characterization.
+    decide_op->input_column_names.assign(child_bindings.size(), string());
+    std::function<void(const Expression &)> harvest = [&](const Expression &e) {
+        if (e.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+            auto &r = e.Cast<BoundReferenceExpression>();
+            if (r.index < decide_op->input_column_names.size() &&
+                decide_op->input_column_names[r.index].empty()) {
+                decide_op->input_column_names[r.index] = r.GetName();
+            }
+        }
+        ExpressionIterator::EnumerateChildren(e, harvest);
+    };
+    if (decide_op->decide_constraints) {
+        harvest(*decide_op->decide_constraints);
+    }
+    if (decide_op->decide_objective) {
+        harvest(*decide_op->decide_objective);
+    }
+    for (auto &e : op.entity_key_expressions) {
+        if (e) {
+            harvest(*e);
+        }
+    }
+    for (idx_t pos = 0; pos < decide_op->input_column_names.size(); pos++) {
+        if (decide_op->input_column_names[pos].empty()) {
+            decide_op->input_column_names[pos] = "col" + std::to_string(pos);
+        }
+    }
     return std::move(decide_op);
 }
 

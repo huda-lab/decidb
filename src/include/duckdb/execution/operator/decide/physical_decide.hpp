@@ -197,6 +197,11 @@ public:
     //! otherwise index into entity_scopes
     vector<idx_t> variable_entity_scope;
 
+    //! Source column name per physical child-output column (positionally aligned
+    //! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Used by
+    //! the unbounded diagnosis to label escaping categorical groups (escaping_instances).
+    vector<string> input_column_names;
+
 public:
     // Source interface
     unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;
