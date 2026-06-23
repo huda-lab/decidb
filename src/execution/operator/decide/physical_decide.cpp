@@ -5219,17 +5219,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         solver_timer.Start();
     }
 
-    // F4: read the diagnose_decide consent gate. Manual-first — when the user has
-    // opted into unbounded/auto diagnosis, pre-arm unbounded-ray extraction so the
-    // ray is available if the solve turns out unbounded (paid for only then).
+    // F4: read the diagnose_decide setting (auto by default; off suppresses). Under
+    // auto, pre-arm unbounded-ray extraction so the ray is available if the solve
+    // turns out unbounded (the ray work is paid for only then). off skips it.
     string diagnose_mode = GetDiagnoseDecideMode(context);
     SolveModelOptions solve_options;
     solve_options.extract_unbounded_ray = DiagnoseModeWantsUnboundedRay(diagnose_mode);
 
     SolverResult solve_result = SolveModel(solver_input, var_indexer, solve_options);
     if (solve_result.status != SolverStatus::OPTIMAL) {
-        // Filter semantics: diagnose only when the mode matches the actual status
-        // AND a state engine exists. This session only the unbounded engine is
+        // Diagnose only when the mode wants this status (auto wants any failed
+        // state) AND a state engine exists. Currently only the unbounded engine is
         // built; other matched states (infeasible / slow) fall through to the
         // default error until their engines land.
         if (DiagnosisApplies(diagnose_mode, solve_result.status) &&
@@ -5267,8 +5267,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 if (num_groups < 2 || num_groups > cap || rep_keys.empty()) {
                     return false;
                 }
-                out.column = ci < input_column_names.size() ? input_column_names[ci]
-                                                            : ("col" + std::to_string(ci));
+                // Suppress rules over columns whose source name we never resolved
+                // (e.g. referenced only in the outer SELECT): naming them with a
+                // positional `colN` the user never wrote is worse than staying silent.
+                if (ci >= input_column_names.size() || input_column_names[ci].empty()) {
+                    return false;
+                }
+                out.column = input_column_names[ci];
                 out.instance_to_group = std::move(row_to_group); // row-indexed
                 out.group_value.resize(num_groups);
                 for (idx_t g = 0; g < num_groups && g < rep_keys[0].size(); g++) {
@@ -5361,12 +5366,23 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 StashDecideDiagnostic(context, diag);
                 ThrowDecideDiagnosisReady(diag);
             }
-            // No named escaping variable (a quadratic model attaches no ray, or only
-            // internal auxiliaries escaped): fall through to the rich static error
-            // rather than stashing a content-free all-NULL relation row.
+            // Diagnosis was requested (mode matched UNBOUNDED) but produced no
+            // per-variable content. Say why it is unavailable rather than throwing
+            // the generic "enable diagnosis and re-run" advert — that advert is
+            // misleading here, since the mode is already on and re-running cannot
+            // help. The empty ray is the quadratic signal: BuildUnboundedRayFallback
+            // declines quadratic models, so no ray was extracted; a present ray that
+            // still yielded no named variable means only internal auxiliaries escaped.
+            string reason =
+                solve_result.ray.empty()
+                    ? "the objective or a constraint is quadratic, so no linear runaway "
+                      "direction can be extracted for a named decision variable."
+                    : "the runaway direction involves only internal auxiliary variables, "
+                      "not a named decision variable.";
+            ThrowUnboundedDiagnosisUnavailable(reason);
         }
-        // Manual-first default: surface the static error (mode none, non-matching
-        // mode, matched-but-unimplemented state, or a diagnosis with no content).
+        // Surface the static error: mode off, a matched-but-unimplemented state
+        // (infeasible / slow), or a diagnosis with no content.
         ThrowDecideSolveError(solve_result);
     }
     // Success: invalidate any diagnosis stashed by an earlier failed solve on this

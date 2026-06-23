@@ -19,8 +19,7 @@ namespace duckdb {
 //===----------------------------------------------------------------------===//
 
 static bool IsValidDiagnoseMode(const string &mode) {
-	return mode == "none" || mode == "infeasible" || mode == "unbounded" || mode == "slow" ||
-	       mode == "auto";
+	return mode == "off" || mode == "auto";
 }
 
 static void DiagnoseDecideSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
@@ -28,7 +27,7 @@ static void DiagnoseDecideSetCallback(ClientContext &context, SetScope scope, Va
 	if (!IsValidDiagnoseMode(mode)) {
 		throw InvalidInputException(
 		    "Invalid diagnose_decide mode '" + parameter.ToString() +
-		    "'. Valid modes: none, infeasible, unbounded, slow, auto.");
+		    "'. Valid modes: off, auto.");
 	}
 	parameter = Value(mode); // normalize to lowercase
 }
@@ -60,10 +59,10 @@ static void MinCategoriesSetCallback(ClientContext &context, SetScope scope, Val
 void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	config.AddExtensionOption(
 	    "diagnose_decide",
-	    "DECIDE failure-diagnosis mode: none (default), infeasible, unbounded, slow, or auto. "
-	    "Filter semantics: a mode produces a diagnosis only when the solve actually lands in that "
-	    "state; otherwise the query behaves normally.",
-	    LogicalType::VARCHAR, Value("none"), DiagnoseDecideSetCallback);
+	    "DECIDE failure-diagnosis mode: auto (default) or off. Under auto, a failed solve "
+	    "(infeasible / unbounded / time-limit) is automatically diagnosed where an engine exists; "
+	    "off suppresses diagnosis and reproduces the plain static solver error.",
+	    LogicalType::VARCHAR, Value("auto"), DiagnoseDecideSetCallback);
 	// Unbounded characterization knobs (see decide_diagnostics() escaping_instances).
 	config.AddExtensionOption(
 	    "diagnose_decide_escape_rate",
@@ -88,7 +87,7 @@ string GetDiagnoseDecideMode(ClientContext &context) {
 	if (context.TryGetCurrentSetting("diagnose_decide", value) && !value.IsNull()) {
 		return StringUtil::Lower(value.ToString());
 	}
-	return "none";
+	return "auto";
 }
 
 DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
@@ -112,20 +111,11 @@ bool DiagnosisApplies(const string &mode, SolverStatus status) {
 		return status == SolverStatus::INFEASIBLE || status == SolverStatus::UNBOUNDED ||
 		       status == SolverStatus::TIME_LIMIT;
 	}
-	if (mode == "infeasible") {
-		return status == SolverStatus::INFEASIBLE;
-	}
-	if (mode == "unbounded") {
-		return status == SolverStatus::UNBOUNDED;
-	}
-	if (mode == "slow") {
-		return status == SolverStatus::TIME_LIMIT;
-	}
-	return false; // "none" or unrecognized
+	return false; // "off" or unrecognized
 }
 
 bool DiagnoseModeWantsUnboundedRay(const string &mode) {
-	return mode == "unbounded" || mode == "auto";
+	return mode == "auto";
 }
 
 //===----------------------------------------------------------------------===//
@@ -287,6 +277,15 @@ void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag) {
 	string msg = "DECIDE optimization is " + diag.state + ".\n\n" + diag.summary +
 	             "\n\nDiagnosis ready (this session): SELECT * FROM decide_diagnostics();";
 	throw InvalidInputException(msg);
+}
+
+void ThrowUnboundedDiagnosisUnavailable(const string &reason) {
+	throw InvalidInputException(
+	    "DECIDE optimization is unbounded: The objective can grow infinitely.\n\n"
+	    "This means the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n"
+	    "You must add constraints to bound the decision variables (e.g., SUCH THAT x <= 100).\n\n"
+	    "Unbounded diagnosis unavailable: " +
+	    reason);
 }
 
 //===----------------------------------------------------------------------===//

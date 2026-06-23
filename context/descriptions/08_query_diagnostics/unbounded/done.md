@@ -1,52 +1,58 @@
 # Query Diagnostics — Unbounded (how it works)
 
+> Router terminal: **failed → unbounded** (`find ray` → report). See `router/README.md`.
+
 The objective improves without limit — the feasible region is too *open* in the
 improving direction. The fix is forced (the user must add a bound or correct a
 sign; you cannot relax your way out), but the diagnosis is rich: it **names the
 exact variables escaping to infinity** and **prescribes the forced remedy** (add
-an upper bound) without inventing the cap value. Opt-in via `PRAGMA
-diagnose_decide` = `unbounded` or `auto`; with no pragma the solve throws the
-static error unchanged.
+an upper bound) without inventing the cap value. On by default (`PRAGMA
+diagnose_decide` is `auto`); set `diagnose_decide='off'` to suppress diagnosis and
+get the plain static error instead.
 
 This doc describes the shipped behavior, topic by topic. Remaining enrichments are
 in `todo.md`. Shared plumbing it builds on (the pragma gate, provenance, the
 reporting relation) is in `foundations/done.md`.
 
-## Status disambiguation (`INFEASIBLE` vs `UNBOUNDED`)
+## Status: reaching the unbounded engine
 
-A presolve can report the ambiguous "infeasible *or* unbounded" without deciding
-which. Both backends are normalized to a definitive status before diagnosis runs:
-
-- **Gurobi** — on `GRB_INF_OR_UNBD`, re-solve once with `DualReductions=0`, which
-  forces a definitive `INFEASIBLE` / `UNBOUNDED` (`gurobi_solver.cpp`).
-- **HiGHS** — has no MIP disambiguation equivalent. The portable classifier
-  re-solves the *same* `SolverModel` on the same backend with the objective
-  zeroed out (`diagnostic_solves.cpp`): a feasible probe ⇒ the original was
-  `UNBOUNDED`; an infeasible probe ⇒ `INFEASIBLE`; anything else preserves the
-  ambiguous status. The zero-objective probe is sense-agnostic (works for
-  MAXIMIZE and MINIMIZE).
-
-The solve facade (`ilp_solver.cpp`) builds the model and selects the backend once,
-and performs this classification before the operator sees the result.
+A presolve can report the ambiguous "infeasible *or* unbounded." The solve facade
+normalizes that to a definitive status (a zero-objective feasibility probe) before
+the engine runs — see `foundations/done.md` ("Structured solver result" and "Solver
+behavior" for the per-backend specifics). A genuinely-unbounded solve therefore
+arrives here as a clean `UNBOUNDED`.
 
 ## Ray extraction (portable box-LP)
 
-To name escapers we need a recession ray (a direction the solver can travel
-forever improving the objective). Rather than depend on solver-specific ray APIs,
-DeciDB extracts one with a portable LP built over the prepared `SolverModel`
-(`BuildUnboundedRayFallbackModel`, `diagnostic_solves.cpp`):
+To name escapers we need a recession ray — a direction the solver can travel forever
+improving the objective. Rather than depend on solver-specific ray APIs, DeciDB
+extracts one with a portable LP built over the prepared `SolverModel`
+(`BuildUnboundedRayFallbackModel`, `diagnostic_solves.cpp`). For variables `d` over
+the model's columns:
 
-- maximize `signed(c)ᵀ d` (the objective direction),
-- preserve each linear row's sense with RHS `0` (homogenized),
-- relax all variables to continuous,
-- box each direction component to `0 ≤ dᵢ ≤ 1` **only** where the original upper
-  bound is effectively infinite (`≥ 1e20`); finite-upper-bound columns are fixed
-  to `dᵢ = 0`.
+```
+maximize    σ · cᵀd            σ = +1 if the model maximizes, −1 if it minimizes
+subject to  Aⱼ · d  {≤,=,≥} 0   for every linear row j (its sense preserved, RHS homogenized to 0)
+            0 ≤ dᵢ ≤ 1          where the original upper bound uᵢ ≥ EFFECTIVE_INFINITY
+            dᵢ = 0               otherwise (a finite upper bound ⇒ that column cannot escape)
+            d continuous         (integrality relaxed)
+```
 
-The ray is attached (`SolverResult::ray`) only when this LP is `OPTIMAL` with
-signed objective improvement > `1e-8`. It is opt-in (`SolveModelOptions::
-extract_unbounded_ray`), pre-armed by the pragma gate only for unbounded/auto, so
-the default failure path pays nothing. Quadratic objectives/constraints are out of
+`σ` makes the objective always a *maximize* of the improving direction, so the box-LP
+is sense-agnostic. Homogenizing every row to RHS `0` keeps only the recession cone of
+the feasible region; the `[0,1]` box makes it bounded so the LP terminates, and the
+per-column gate fixes finite-upper-bound columns to `0` so they never appear in `d`.
+Quadratic objectives/constraints are declined (the builder returns no model).
+
+A recession ray exists iff this LP is `OPTIMAL` with objective > `DIAGNOSTIC_RAY_EPSILON`;
+then `d` is the ray and its nonzero entries are exactly the escaping columns. The ray
+is attached to `SolverResult::ray` only in that case. These two thresholds —
+`EFFECTIVE_INFINITY` (`1e20`) and `DIAGNOSTIC_RAY_EPSILON` (`1e-8`) — live together
+in `decidb/diagnostic_constants.hpp` so the builder, solver, and engine that share
+the box-LP "free suspect filter" invariant agree by construction (see
+`foundations/done.md`). Ray extraction is gated (`SolveModelOptions::
+extract_unbounded_ray`), pre-armed by the pragma gate under `auto` (the default)
+and skipped under `off`, so a suppressed failure path pays nothing. Quadratic objectives/constraints are out of
 scope (no ray extracted). When the ray names no variable — a quadratic model, or a
 ray in which only internal auxiliaries escaped — the diagnosis has no per-variable
 content, so it is **not** stashed: the operator falls through to the rich static
@@ -62,7 +68,7 @@ The ray gives non-zero entries per solver *column*. Each column is mapped back t
 the user-facing variable through the `ColumnProvenance` map (variable provenance,
 `foundations/done.md`): user columns resolve to the declared variable name, aux
 columns to the source expression they were generated from. The `DiagnoseUnbounded`
-engine collects columns with `|ray[i]| > 1e-8`, groups them by `decide_var_idx`,
+engine collects columns with `|ray[i]| > DIAGNOSTIC_RAY_EPSILON`, groups them by `decide_var_idx`,
 and collects each variable's escaping **scope-instances** (the
 `ColumnProvenance.instance`: the row for row-scoped, the entity id for
 entity-scoped). It emits EAV attributes for each escaping variable: always
@@ -113,15 +119,16 @@ decide_diagnostics() (this session)` — see "How the failure is surfaced" below
 
 Two error-text behaviors close the loop between a failed solve and its diagnosis:
 
-- **Advertise the opt-in (manual-first).** With no pragma set, an unbounded solve
-  throws the legacy static error (`ThrowDecideSolveError`, UNBOUNDED branch,
-  `ilp_solver.cpp`). That error now ends with one pointer line — *"For a diagnosis
-  of which variable is unbounded, set `PRAGMA diagnose_decide='auto'` and
-  re-run."* — so the user learns the diagnosis exists without DeciDB spending a
-  second solve on their behalf. Only the unbounded branch advertises; the
-  infeasible/slow branches stay silent because their engines don't exist yet
-  (advertising them would over-promise).
-- **Same-session caveat.** When the pragma *is* set and a diagnosis is stashed, the
+- **Point back to diagnosis when it was turned off.** With `diagnose_decide='off'`
+  an unbounded solve throws the legacy static error (`ThrowDecideSolveError`,
+  UNBOUNDED branch, `ilp_solver.cpp`). That error ends with one pointer line — *"For
+  a diagnosis of which variable is unbounded, set `PRAGMA diagnose_decide='auto'`
+  and re-run."* — so a user who suppressed diagnosis is reminded how to get it back.
+  (Under the `auto` default this branch is not reached for UNBOUNDED: the solve is
+  diagnosed and throws the "diagnosis ready" pointer instead.) Only the unbounded
+  branch advertises; the infeasible/slow branches stay silent because their engines
+  don't exist yet (advertising them would over-promise).
+- **Same-session caveat.** When diagnosis runs and a diagnosis is stashed, the
   thrown error reads *"Diagnosis ready (this session): SELECT * FROM
   decide_diagnostics();"* (`ThrowDecideDiagnosisReady`, `decide_diagnostic.cpp`).
   The stash is per-connection, so a fresh connection (a second `decidb -c …`) gets
@@ -131,6 +138,18 @@ Two error-text behaviors close the loop between a failed solve and its diagnosis
   diagnosis names the runaway variable, not a single guilty clause. That mirrors
   the ray's information limit: a missing bound and a flipped-sign constraint can
   produce the same recession direction.
+- **"Unavailable", not the re-run advert, when diagnosis ran but came up empty.**
+  A content-free unbounded solve (a quadratic model, or a ray that escaped only via
+  internal auxiliaries) falls through even though diagnosis was active. In
+  that case the error must not point the user back at `diagnose_decide='auto'` — it
+  is already on (or default) and re-running cannot help. Instead
+  `ThrowUnboundedDiagnosisUnavailable` (`decide_diagnostic.cpp`) keeps the
+  bound-the-variables guidance and ends with *"Unbounded diagnosis unavailable: …"*
+  naming the reason: an **empty ray** ⇒ the model is quadratic
+  (`BuildUnboundedRayFallbackModel` declines quadratics), a **present ray with no
+  named variable** ⇒ only internal auxiliaries escaped. The re-run advert is
+  therefore reached only when diagnosis was turned `off`; `physical_decide.cpp`
+  picks between the two at that fall-through.
 
 ## `escaping_instances` — characterizing which instances escape
 
@@ -162,8 +181,13 @@ grouping to entity granularity via the live entity mapping on the `VarIndexer`. 
 pure rule computation is `CharacterizeEscape` (no DuckDB execution types — unit
 tested). Column names are harvested at physical-plan time from the DECIDE clause's
 own `BoundReferenceExpression`s (`plan_decide.cpp`), whose chunk indices survive
-column pruning; columns referenced only in the outer SELECT fall back to a
-positional `colN` name (almost always high-cardinality, hence excluded anyway).
+column pruning. Columns referenced only in the outer SELECT carry no harvested
+name (we never saw the identifier the user wrote); a categorical candidate over
+such an unnamed column is **suppressed** rather than labeled with a positional
+`colN` the user never typed (`build_row_grouping` returns false on an empty name) —
+the variable then falls back to the bare count. Such columns are usually
+high-cardinality and excluded by the categorical cap anyway; suppression covers the
+low-cardinality case where the cap would otherwise let an unnamed column through.
 
 **Pragma knobs** (extension options, `decide_diagnostic.cpp`):
 `diagnose_decide_escape_rate` (default 0.8), `diagnose_decide_categorical_ratio`
@@ -188,7 +212,7 @@ in `todo.md`.
 
 Differential vs `oracle_solver` / pinned scenarios:
 `test/decide/tests/test_query_diagnostics_f6.py` (REAL var, INTEGER/MILP via the
-HiGHS `INF_OR_UNBD` path, multi-var dedup, `auto` routing, no-pragma silence) ·
+HiGHS `INF_OR_UNBD` path, multi-var dedup, `auto` routing, `off` suppression) ·
 `test/decide/tests/test_query_diagnostics_escaping_instances.py` (row-scoped
 partial → categorical rule, total escape, scattered → count fallback,
 entity-scoped → entity-key rule, all three characterization pragmas

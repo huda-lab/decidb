@@ -1,13 +1,13 @@
 #include "duckdb/decidb/decide_diagnostic_engines.hpp"
 
+#include "duckdb/decidb/diagnostic_constants.hpp"
+
 #include <cmath>
 #include <map>
 
 namespace duckdb {
 
 namespace {
-
-static constexpr double RAY_ESCAPE_EPSILON = 1e-8;
 
 struct VarAgg {
 	string name;
@@ -30,7 +30,7 @@ DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
 	std::map<idx_t, VarAgg> by_var;
 	for (idx_t col = 0; col < input.result.ray.size() && col < columns.size(); col++) {
 		double rv = input.result.ray[col];
-		if (std::fabs(rv) <= RAY_ESCAPE_EPSILON) {
+		if (std::fabs(rv) <= DIAGNOSTIC_RAY_EPSILON) {
 			continue;
 		}
 		const ColumnProvenance &prov = columns[col];

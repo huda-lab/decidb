@@ -1,5 +1,6 @@
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/decidb/diagnostic_solves.hpp"
+#include "duckdb/decidb/diagnostic_constants.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
@@ -13,8 +14,6 @@
 namespace duckdb {
 
 namespace {
-
-constexpr double UNBOUNDED_RAY_IMPROVEMENT_EPSILON = 1e-8;
 
 double ComputeLinearObjectiveValue(const SolverModel &model, const vector<double> &solution) {
 	if (solution.size() != model.obj_coeffs.size()) {
@@ -45,7 +44,7 @@ void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backe
 	}
 
 	double improvement = ComputeLinearObjectiveValue(ray_model, ray_result.solution);
-	if (std::isfinite(improvement) && improvement > UNBOUNDED_RAY_IMPROVEMENT_EPSILON) {
+	if (std::isfinite(improvement) && improvement > DIAGNOSTIC_RAY_EPSILON) {
 		result.ray = std::move(ray_result.solution);
 	}
 }

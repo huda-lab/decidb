@@ -40,7 +40,7 @@ _EXPECTED_SCHEMA = [
 ]
 
 
-def _diagnose(cli, decide_sql, mode="unbounded"):
+def _diagnose(cli, decide_sql, mode="auto"):
     """Run PRAGMA + a failing DECIDE + the relation read on one stdin session.
     The relation is emitted as CSV so its rows parse unambiguously."""
     script = (
@@ -105,10 +105,14 @@ class TestF5DiagnosticsRelation:
         assert rows == []
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_no_diagnosis_stashed_without_pragma(self, request, cli_fixture):
-        """Manual-first: an unbounded DECIDE with no pragma stashes nothing."""
+    def test_no_diagnosis_stashed_when_off(self, request, cli_fixture):
+        """With diagnosis turned `off`, an unbounded DECIDE stashes nothing."""
         cli = request.getfixturevalue(cli_fixture)
-        script = f".mode csv\n{_UNBOUNDED_SQL};\nSELECT * FROM decide_diagnostics();\n"
+        script = (
+            ".mode csv\n"
+            "PRAGMA diagnose_decide='off';\n"
+            f"{_UNBOUNDED_SQL};\nSELECT * FROM decide_diagnostics();\n"
+        )
         result = cli.execute_script(script)
         # Static error, no pointer, and the relation stays empty.
         assert "diagnosis ready" not in result.stderr.lower()
@@ -126,7 +130,7 @@ class TestF5DiagnosticsRelation:
         )
         script = (
             ".mode csv\n"
-            "PRAGMA diagnose_decide='unbounded';\n"
+            "PRAGMA diagnose_decide='auto';\n"
             f"{_UNBOUNDED_SQL};\n"  # stashes an unbounded diagnosis (and errors)
             f"{bounded_sql};\n"  # succeeds -> clears the stash
             "SELECT 'rows=' || count(*) AS diag FROM decide_diagnostics();\n"
@@ -141,7 +145,11 @@ class TestF5DiagnosticsRelation:
         all-NULL row. A quadratic objective attaches no ray, so under `auto` the
         diagnosis has no per-variable content and falls through to the rich static
         error (Gurobi reaches UNBOUNDED here); HiGHS rejects the non-convex QP
-        pre-solve. Either path: no 'diagnosis ready' pointer and an empty relation."""
+        pre-solve. Either path: no 'diagnosis ready' pointer and an empty relation.
+
+        C8: when diagnosis was requested but cannot produce content, the error states
+        it is unavailable and why (quadratic) instead of re-advertising the opt-in the
+        user already enabled."""
         cli = request.getfixturevalue(cli_fixture)
         qp_sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
@@ -151,22 +159,28 @@ class TestF5DiagnosticsRelation:
         assert "diagnosis ready" not in result.stderr.lower()
         assert _rows(result) == []
         if "gurobi" in cli_fixture:
-            # Gurobi reports UNBOUNDED, exercising the A5 fall-through to the static
-            # error (the old code replaced this with an all-NULL diagnosis row).
-            assert "you must add constraints to bound" in result.stderr.lower()
+            # Gurobi reports UNBOUNDED, exercising the C8 "diagnosis unavailable"
+            # message (the old code replaced this with an all-NULL diagnosis row,
+            # then with the generic re-run advert).
+            err = result.stderr.lower()
+            assert "you must add constraints to bound" in err
+            assert "unbounded diagnosis unavailable" in err
+            assert "quadratic" in err
+            # The misleading opt-in advert must NOT appear: the mode is already on.
+            assert "set pragma diagnose_decide='auto' and re-run" not in err
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    @pytest.mark.parametrize("mode", ["infeasible", "auto"])
-    def test_contradictory_bounds_reach_infeasible_gate(self, request, cli_fixture, mode):
+    def test_contradictory_bounds_reach_infeasible_gate(self, request, cli_fixture):
         """B5: pre-solve contradictory bounds surface as INFEASIBLE status instead
-        of bypassing the diagnose gate with a build-time throw. The infeasible engine
-        does not exist yet, so no diagnosis rows are stashed."""
+        of bypassing the diagnose gate with a build-time throw. Under `auto` the
+        gate wants to diagnose infeasible, but the infeasible engine does not exist
+        yet, so no diagnosis rows are stashed."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x IS REAL SUCH THAT x >= 5 AND x <= 1 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode=mode)
+        result = _diagnose(cli, sql, mode="auto")
         assert "decide optimization is infeasible" in result.stderr.lower()
         assert "diagnosis ready" not in result.stderr.lower()
         assert _rows(result) == []

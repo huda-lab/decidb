@@ -28,7 +28,7 @@ import pytest
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
 
-def _diagnose(cli, decide_sql, mode="unbounded"):
+def _diagnose(cli, decide_sql, mode="auto"):
     script = (
         ".mode csv\n"
         f"PRAGMA diagnose_decide='{mode}';\n"
@@ -116,18 +116,22 @@ class TestF6VariableNaming:
         assert _attrs(rows, "x")["direction"] == "+inf"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_no_pragma_no_naming(self, request, cli_fixture):
-        """Manual-first: without the pragma, nothing is stashed or named."""
+    def test_off_no_naming(self, request, cli_fixture):
+        """With diagnosis turned `off`, nothing is stashed or named."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
-        script = f".mode csv\n{sql};\nSELECT * FROM decide_diagnostics();\n"
+        script = (
+            ".mode csv\n"
+            "PRAGMA diagnose_decide='off';\n"
+            f"{sql};\nSELECT * FROM decide_diagnostics();\n"
+        )
         result = cli.execute_script(script)
         assert "diagnosis ready" not in result.stderr.lower()
         assert _rows(result) == []
-        # A1: the static error still advertises the opt-in so the user can re-run.
+        # A1: the static error points a user who turned diagnosis off back to it.
         assert (
             "set pragma diagnose_decide='auto' and re-run"
             in result.stderr.lower()

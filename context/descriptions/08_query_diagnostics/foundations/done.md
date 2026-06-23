@@ -20,6 +20,22 @@ so callers branch on the outcome. This gates the whole area.
 - **The `SolveModel` facade** returns `SolverResult` and no longer throws on solver
   status (`ilp_solver.cpp`). The default user-facing error text is a single helper,
   `ThrowDecideSolveError(const SolverResult &)`.
+- **`INF_OR_UNBD` is disambiguated by a feasibility probe.** A ray (improving
+  recession direction) is *necessary but not sufficient* for unboundedness — the
+  region must also be feasible (an infeasible problem can still admit an improving
+  ray, e.g. `x − y ≤ −10 AND y − x ≤ −10`). So `DisambiguateInfOrUnbd`
+  (`ilp_solver.cpp`) re-solves a zero-objective copy (`MakeZeroObjectiveProbeModel`):
+  feasible ⇒ rewrite to `UNBOUNDED`, infeasible ⇒ `INFEASIBLE`. A genuinely-unbounded
+  solve therefore reaches the normal unbounded diagnosis under `auto` via this
+  rewrite — `DiagnosisApplies` never needs an `INF_OR_UNBD` branch.
+  - **Residual `INF_OR_UNBD` is an accepted non-diagnosed terminal.** When the
+    probe *itself* returns neither OPTIMAL nor INFEASIBLE (a zero-objective model
+    can't be unbounded, so this means the solver could not decide feasibility at all
+    — error/limit), the status stays `INF_OR_UNBD` and falls to the static
+    `ThrowDecideSolveError` `INF_OR_UNBD` branch with no diagnosis. We deliberately do
+    **not** best-effort the ray here: feasibility is exactly what we failed to
+    establish, so claiming "unbounded" could mislabel an infeasible problem. This is
+    the one terminal the area leaves undiagnosed by design.
 - **Pre-solve model-builder infeasibility is normalized.** Contradictory normalized
   rows and contradictory accumulated bounds throw `DecideInfeasibleModelException`
   inside `SolverModel::Build`; `SolveModel` catches that internal exception and
@@ -33,6 +49,43 @@ so callers branch on the outcome. This gates the whole area.
   `ThrowDecideSolveError`. This is the single gated call site.
 
 Behavior is unchanged for users with no pragma — same errors, same wording.
+
+## Solver behavior (backend reference)
+
+Empirical facts about how the two backends behave on the cases diagnostics cares
+about. Durable reference — the status disambiguation, ray extraction, and the future
+router all rely on these.
+
+- **Versions.** Gurobi is runtime-loaded (dlopen), supporting 9.5–13.0 — the version
+  is parsed from the lib filename, so there is no fixed Gurobi version. HiGHS is
+  vendored 1.11.0 (`third_party/highs/HConfig.h`).
+- **Terminal status by case** (constructed minimal models):
+
+  | Case | Gurobi | HiGHS |
+  | --- | --- | --- |
+  | Unbounded (REAL / LP) | definitive UNBOUNDED | definitive UNBOUNDED (`kUnbounded`) |
+  | Infeasible (aggregate) | INFEASIBLE | INFEASIBLE (`kInfeasible`) |
+  | Unbounded (INTEGER / MILP) | definitive UNBOUNDED | ambiguous `kUnboundedOrInfeasible` → mapped to `INF_OR_UNBD` |
+
+  Gurobi is definitive on both LP and MILP. HiGHS is definitive only for LP; on
+  MILP-unbounded it returns the ambiguous status and has no `DualReductions`-style
+  knob to disambiguate in a re-solve — which is why the portable zero-objective probe
+  exists.
+- **Zero-objective disambiguation.** Re-solving with the objective replaced by `0`
+  (`MakeZeroObjectiveProbeModel`) cleanly separates the ambiguous case on both
+  backends: feasible ⇒ the original was unbounded, infeasible ⇒ infeasible (verified
+  on LP and MILP, both backends). This is the portable analogue of Gurobi's
+  `DualReductions=0`, and is what `DisambiguateInfOrUnbd` runs.
+- **Native ray APIs (optional accelerators, not the default).** Gurobi `UnbdRay`
+  (needs `InfUnbdInfo=1`) returns a ray for continuous models only — it errors on a
+  MIP. HiGHS `getPrimalRay` returns a ray for LP and MIP (even under the ambiguous
+  status, via the LP relaxation), at the cost of an extra LP solve. Neither is
+  uniformly better; DeciDB uses the portable box-LP (`unbounded/done.md`) as the
+  solver-agnostic default and treats native rays as future accelerators.
+
+These facts are the evidence behind the router's inf/unb branch — the ambiguous
+status is real (HiGHS MILP), and ray-presence together with feasibility, not status
+alone, decides unbounded vs infeasible (`router/README.md`).
 
 ## Constraint provenance (row → clause)
 
@@ -92,26 +145,29 @@ it represents, so the unbounded diagnosis names escaping variables.
 
 Tested in `test/common/test_decidb_variable_provenance.cpp`.
 
-## The `diagnose_decide` pragma (consent gate)
+## The `diagnose_decide` pragma
 
-Sticky session setting selecting whether/which failed solve is diagnosed. Modes
-`none` (default) / `infeasible` / `unbounded` / `slow` / `auto`. **Filter, not
-force:** a mode acts only when the solve actually lands in that state, so a
-left-on pragma is harmless and `auto` doesn't violate manual-first (setting the
-pragma *is* the opt-in).
+Sticky session setting selecting whether a failed solve is diagnosed. Two modes:
+`auto` (default) and `off`. Under `auto`, diagnosis runs whenever the solve
+*actually* lands in a failed state an engine covers; on a successful solve it costs
+nothing. `off` suppresses diagnosis entirely and reproduces the plain static solver
+error. (The earlier per-state filter modes `infeasible`/`unbounded`/`slow` and the
+opt-in `none` default were removed: they were filters, not forces, so `auto`
+subsumes every useful case while staying silent on success.)
 
 - Registered as an **extension option** via `RegisterDecideDiagnosticOptions(DBConfig&)`
   (called from `DatabaseInstance::Configure`) — no settings-codegen, no grammar
   change. The set-callback validates the enum, so a typo fails fast at SET time.
   Works with `PRAGMA diagnose_decide=…` and `SET diagnose_decide=…`; `RESET`
-  restores `none`.
+  restores `auto`.
 - Helpers in `decide_diagnostic.cpp`: `GetDiagnoseDecideMode`,
-  `DiagnosisApplies(mode, status)`, `DiagnoseModeWantsUnboundedRay`.
+  `DiagnosisApplies(mode, status)` (true under `auto` for INFEASIBLE / UNBOUNDED /
+  TIME_LIMIT), `DiagnoseModeWantsUnboundedRay` (true under `auto`).
 - **The gate** in `PhysicalDecide::Finalize`: read the mode before the solve,
-  pre-arm `SolveModelOptions::extract_unbounded_ray` only for unbounded/auto
-  (default pays nothing); on a non-optimal result, if the mode matches the status
-  *and an engine exists* (today: UNBOUNDED only) build + stash the diagnosis and
-  throw the short pointer error, else fall through to `ThrowDecideSolveError`.
+  pre-arm `SolveModelOptions::extract_unbounded_ray` under `auto` (`off` pays
+  nothing); on a non-optimal result, if the mode wants the status *and an engine
+  exists* (today: UNBOUNDED only) build + stash the diagnosis and throw the short
+  pointer error, else fall through to `ThrowDecideSolveError`.
   Matched-but-unimplemented states (infeasible/slow) fall through until their
   engines land.
 
@@ -138,6 +194,24 @@ inline branches in `PhysicalDecide::Finalize`.
   The success path still clears the per-connection stash.
 
 Tested in `test/common/test_decidb_diagnostic_engines.cpp`.
+
+## Shared diagnostic constants
+
+The box-LP ray-fallback path spans three translation units — the model builder
+(`diagnostic_solves.cpp`, which opens bounds), the solver facade (`ilp_solver.cpp`,
+which confirms an improving ray), and the unbounded engine
+(`decide_diagnostic_engines.cpp`, which filters escaping columns). Its "free suspect
+filter" invariant only holds if these all use the *same* two thresholds, so they are
+defined once in `src/include/duckdb/decidb/diagnostic_constants.hpp`:
+
+- `EFFECTIVE_INFINITY` (`1e20`) — a finite bound at/above this magnitude is treated
+  as unbounded in that direction (which upper bounds the fallback LP opens).
+- `DIAGNOSTIC_RAY_EPSILON` (`1e-8`) — a ray / objective-improvement component at/below
+  this is treated as zero (both the improving-ray check and the escape filter).
+
+Previously each file redefined its own copy (`EFFECTIVE_INFINITY`,
+`UNBOUNDED_RAY_IMPROVEMENT_EPSILON`, `RAY_ESCAPE_EPSILON`); the shared header removes
+the drift risk.
 
 ## The `decide_diagnostics()` reporting relation
 

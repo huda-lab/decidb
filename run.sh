@@ -9,8 +9,6 @@ cd build/release
 # ./decidb ../../decidb.db <<'EOF'
 # .mode box
 
-# PRAGMA diagnose_decide='auto';
-
 # SELECT p_partkey, make, buy, promo
 # FROM part
 # WHERE p_size <= 5
@@ -30,8 +28,6 @@ cd build/release
 ./decidb ../../decidb.db <<'EOF'
 .mode box
 
-PRAGMA diagnose_decide='auto';
-
 SELECT p_partkey, p_mfgr, buy
 FROM part
 WHERE p_size <= 5
@@ -49,8 +45,6 @@ EOF
 
 # ./decidb ../../decidb.db <<'EOF'
 # .mode box
-
-# PRAGMA diagnose_decide='auto';
 
 # SELECT p_partkey, p_mfgr, p_size, p_retailprice
 # FROM part

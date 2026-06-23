@@ -88,8 +88,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // BoundReferenceExpressions whose `index` is the position in the child data chunk
     // — exactly the indexing of gstate.data — so this aligns directly and survives
     // pruning (decision-variable references stay BoundColumnRef and are skipped).
-    // Columns only in the outer SELECT (not the DECIDE clause) keep a positional name;
-    // these are almost always high-cardinality and excluded from characterization.
+    // Columns only in the outer SELECT (not the DECIDE clause) are left with an empty
+    // name: we never saw the source identifier the user wrote, so we have nothing
+    // truthful to print. The unbounded diagnosis suppresses categorical rules over
+    // unnamed columns rather than inventing a positional `colN` the user never typed.
     decide_op->input_column_names.assign(child_bindings.size(), string());
     std::function<void(const Expression &)> harvest = [&](const Expression &e) {
         if (e.GetExpressionClass() == ExpressionClass::BOUND_REF) {
@@ -110,11 +112,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     for (auto &e : op.entity_key_expressions) {
         if (e) {
             harvest(*e);
-        }
-    }
-    for (idx_t pos = 0; pos < decide_op->input_column_names.size(); pos++) {
-        if (decide_op->input_column_names[pos].empty()) {
-            decide_op->input_column_names[pos] = "col" + std::to_string(pos);
         }
     }
     return std::move(decide_op);

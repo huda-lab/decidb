@@ -134,22 +134,30 @@ void ClearDecideDiagnostic(ClientContext &context);
 //! relation itself is read via SELECT * FROM decide_diagnostics()).
 [[noreturn]] void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag);
 
+//! Throw the unbounded error used when diagnosis WAS requested for an unbounded
+//! solve but produced no per-variable content (e.g. a quadratic model, or a ray
+//! that escaped only via internal auxiliaries). `reason` completes the sentence
+//! "Unbounded diagnosis unavailable: ...". Distinct from the generic
+//! ThrowDecideSolveError advert, which (correctly) tells a user who has NOT
+//! enabled diagnosis to turn it on — useless advice once it is already on.
+[[noreturn]] void ThrowUnboundedDiagnosisUnavailable(const string &reason);
+
 //! Registers the decide_diagnostics() table function.
 struct DecideDiagnosticsFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
 //===----------------------------------------------------------------------===//
-// F4: the `diagnose_decide` consent gate (manual-first).
+// F4: the `diagnose_decide` setting (auto by default; off to suppress).
 //===----------------------------------------------------------------------===//
 
-//! Register the sticky `diagnose_decide` session setting. Modes: none (default) /
-//! infeasible / unbounded / slow / auto. Called once at DBConfig setup; the
-//! set-callback validates the mode so a typo fails fast at SET time. Filter
-//! semantics: a mode diagnoses only when the solve actually lands in that state.
+//! Register the sticky `diagnose_decide` session setting. Modes: auto (default) /
+//! off. Called once at DBConfig setup; the set-callback validates the mode so a
+//! typo fails fast at SET time. Under auto a failed solve is diagnosed wherever an
+//! engine exists; off reproduces the plain static solver error.
 void RegisterDecideDiagnosticOptions(DBConfig &config);
 
-//! Read the current diagnose_decide mode (lowercased; "none" if unset).
+//! Read the current diagnose_decide mode (lowercased; "auto" if unset).
 string GetDiagnoseDecideMode(ClientContext &context);
 
 //! Read the unbounded-characterization knobs (escape rate / categorical ratio /

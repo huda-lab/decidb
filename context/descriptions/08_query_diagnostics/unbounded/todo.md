@@ -4,21 +4,19 @@ The unbounded state is functionally complete (it names the escaping variables �
 see `done.md`). What remains makes the diagnosis *more actionable*: tell the user
 which slice escaped, and prescribe the forced fix. Only open work is listed here.
 
-## `escaping_instances` — **shipped** (residual enrichments below)
+## `escaping_instances` — residual enrichments
 
-The categorical characterization landed — `done.md` · `escaping_instances` has the
-full description (categorical sufficient-direction rules, total-escape summary,
-count fallback, the three pragma knobs, row- vs entity-scoped). Residual future
-work only:
+The categorical characterization itself is shipped (`done.md` · `escaping_instances`).
+Open enrichments:
 
 - **Conjunctive rules.** Rules are an independent union of single columns today
   (`channel=export; region=APAC`). A conjunction (`channel=export AND region=APAC`)
   would localize finer when escape needs two predicates. Needs a rule-mining pass.
-- **SELECT-only categorical columns named positionally.** Names are harvested from
-  the DECIDE clause's `BoundReferenceExpression`s (`plan_decide.cpp`); a categorical
-  column referenced only in the outer SELECT (not WHEN/PER/objective/constraint)
-  gets a `colN` fallback name. Rare (such columns are usually high-cardinality and
-  excluded), but a full child-output name resolver would fix it.
+- **Child-output name resolver for SELECT-only columns.** A categorical column
+  referenced only in the outer SELECT (not WHEN/PER/objective/constraint) carries no
+  harvested name, so its rule is suppressed rather than labeled with a positional
+  `colN`. A full child-output name resolver would recover the user's identifier and
+  let such columns characterize the escape instead of being dropped.
 - **Tuple display for a single escaping instance.** Currently a single escaping
   instance (or a single-instance variable) reports the bare count / NULL; showing
   the offending row's relevant-column tuple was deferred.
@@ -47,10 +45,5 @@ cheaper alternative that sets the right expectation.
 
 ## Test coverage gaps
 
-Partial-escape characterization (row-scoped rule, entity-scoped rule, scattered →
-count fallback, total escape, escape-rate pragma) now lands in
-`test_query_diagnostics_escaping_instances.py` + the `CharacterizeEscape` unit test.
-The `categorical_ratio` and `min_categories` knobs now also have pinned
-end-to-end coverage. Still uncovered:
-- the fresh-connection empty-relation case (a second `decidb` process with no prior
-  failed solve in-session).
+Still uncovered: the fresh-connection empty-relation case (a second `decidb` process
+with no prior failed solve in-session).

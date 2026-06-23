@@ -30,7 +30,7 @@ def _diagnose(cli, decide_sql, setup="", extra_pragmas=""):
     script = (
         ".mode csv\n"
         f"{setup}"
-        "PRAGMA diagnose_decide='unbounded';\n"
+        "PRAGMA diagnose_decide='auto';\n"
         f"{extra_pragmas}"
         f"{decide_sql};\n"
         "SELECT * FROM decide_diagnostics();\n"
@@ -134,6 +134,32 @@ class TestEscapingInstances:
         )
         rows = _rows(_diagnose(cli, sql))
         assert _attr(rows, "hire", "escaping_instances") == "dept=A (10/10)"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_select_only_column_is_not_named_colN(self, request, cli_fixture, oracle_solver):
+        """C6: a low-cardinality column referenced only in the outer SELECT (never in
+        the DECIDE clause) has no source name we ever resolved. Even when it perfectly
+        characterizes the escaping slice, we suppress the rule rather than printing a
+        positional `colN` the user never wrote -> the report falls back to the count.
+
+        Here `zone` splits rows 1-25 ('A') vs 26-100 ('B'); the cap is driven by `id`,
+        so exactly the zone='A' rows escape. `zone` is selected but never referenced in
+        WHEN/objective/decision, so it carries no harvested name."""
+        _assert_oracle_unbounded(
+            oracle_solver, "diagnostic_select_only_column", 100, range(1, 26)
+        )
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, zone, buy FROM ("
+            "SELECT i AS id, CASE WHEN i <= 25 THEN 'A' ELSE 'B' END AS zone, "
+            "i * 1.0 AS w FROM range(1, 101) t(i)) "
+            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN id > 25 "
+            "MAXIMIZE SUM(buy * w)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        value = _attr(rows, "buy", "escaping_instances")
+        assert value == "25 of 100 instances escape", value
+        assert "col" not in value, f"positional colN leaked into report: {value}"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_escape_rate_pragma_changes_reporting(self, request, cli_fixture):

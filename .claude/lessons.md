@@ -6,6 +6,7 @@ Corrections and patterns discovered during development. Updated after mistakes t
 
 - **Grammar files are templates**: Never edit `src_backend_parser_gram.cpp` directly. Edit `.y`/`.yh` files in `third_party/libpg_query/grammar/`, then run `python3 scripts/generate_grammar.py`.
 - **Build before testing**: Always `make` (or `make debug`) after grammar or source changes before running tests.
+- **`done.md` ⟷ `todo.md` are disjoint by construction**: A `todo.md` holds *only* remaining work; the moment a task ships, its content moves to the matching `done.md` (rewritten as present-tense "how it works" documentation, not a "✅ completed" checklist). Never leave a finished item sitting in a todo, and never let a done doc read like a list of completed action items. When implementing a todo task, the same change set updates both files: remove from todo, describe in done. Applies to every `context/descriptions/**/{done,todo}.md` pair.
 
 ## Gotchas
 

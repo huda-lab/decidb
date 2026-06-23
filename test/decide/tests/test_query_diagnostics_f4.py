@@ -1,12 +1,12 @@
-"""F4 — the `diagnose_decide` consent gate (manual-first).
+"""F4 — the `diagnose_decide` setting (auto by default; off to suppress).
 
-F4 adds a sticky session setting `diagnose_decide` with modes
-none(default)/infeasible/unbounded/slow/auto and *filter* semantics: a mode
-produces a diagnosis only when the solve actually lands in that state; otherwise
-the query behaves exactly as before F4. This session only the unbounded engine
-exists, so a fired diagnosis throws the short pointer error
-("Diagnosis ready: SELECT * FROM decide_diagnostics()"); matched-but-unimplemented
-states (infeasible/slow) fall through to the static F1 error.
+`diagnose_decide` is a sticky session setting with two modes: `auto` (the default)
+and `off`. Under `auto` a failed solve is diagnosed automatically wherever an engine
+exists; `off` suppresses diagnosis and reproduces the plain static F1 error. This
+session only the unbounded engine exists, so a fired diagnosis throws the short
+pointer error ("Diagnosis ready: SELECT * FROM decide_diagnostics()"); a
+matched-but-unimplemented state (infeasible/slow) falls through to the static F1
+error even under `auto`.
 
 These tests run under both backends. They use `execute_raw` (one `-c` statement)
 because every assertion here is observable from the failing statement itself —
@@ -41,18 +41,29 @@ def _combined(result) -> str:
 class TestF4DiagnosePragma:
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_default_none_reproduces_static_error(self, request, cli_fixture):
-        """No pragma set => unchanged F1 behavior: static error, no pointer."""
+    def test_default_auto_fires_diagnosis(self, request, cli_fixture):
+        """No pragma set => auto (the default): an unbounded solve is diagnosed and
+        throws the short pointer error, not the plain static error."""
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(cli.execute_raw(_UNBOUNDED_SQL))
+        assert _POINTER in out
+
+    @pytest.mark.error
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_off_suppresses_diagnosis(self, request, cli_fixture):
+        """`off` reproduces the plain static F1 error: no pointer, no relation."""
+        cli = request.getfixturevalue(cli_fixture)
+        out = _combined(
+            cli.execute_raw(f"PRAGMA diagnose_decide='off'; {_UNBOUNDED_SQL}")
+        )
         assert "decide optimization is unbounded" in out
         assert _POINTER not in out
         assert "decide_diagnostics" not in out
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    @pytest.mark.parametrize("mode", ["none", "infeasible", "unbounded", "slow", "auto"])
+    @pytest.mark.parametrize("mode", ["off", "auto"])
     def test_valid_modes_are_accepted(self, request, cli_fixture, mode):
-        """Every valid mode sets cleanly (no error) and the session keeps running."""
+        """Both valid modes set cleanly (no error) and the session keeps running."""
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(
             cli.execute_raw(f"PRAGMA diagnose_decide='{mode}'; SELECT 1 AS ok;")
@@ -62,45 +73,32 @@ class TestF4DiagnosePragma:
 
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_invalid_mode_is_rejected(self, request, cli_fixture):
-        """A typo'd mode fails fast at SET time (set-callback validation)."""
+    @pytest.mark.parametrize("mode", ["bogus", "none", "unbounded", "infeasible", "slow"])
+    def test_invalid_mode_is_rejected(self, request, cli_fixture, mode):
+        """A mode outside {off, auto} — including the removed per-state filters —
+        fails fast at SET time (set-callback validation)."""
         cli = request.getfixturevalue(cli_fixture)
-        out = _combined(cli.execute_raw("PRAGMA diagnose_decide='bogus';"))
+        out = _combined(cli.execute_raw(f"PRAGMA diagnose_decide='{mode}';"))
         assert "invalid diagnose_decide mode" in out
 
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    @pytest.mark.parametrize("mode", ["unbounded", "auto"])
-    def test_unbounded_and_auto_fire_on_unbounded(self, request, cli_fixture, mode):
-        """unbounded / auto both route an unbounded solve into diagnosis."""
+    def test_auto_fires_on_unbounded(self, request, cli_fixture):
+        """Explicit `auto` routes an unbounded solve into diagnosis."""
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(
-            cli.execute_raw(f"PRAGMA diagnose_decide='{mode}'; {_UNBOUNDED_SQL}")
+            cli.execute_raw(f"PRAGMA diagnose_decide='auto'; {_UNBOUNDED_SQL}")
         )
         assert _POINTER in out
 
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_mode_does_not_fire_on_unbounded(self, request, cli_fixture):
-        """Filter scoping: mode targets infeasible, solve is unbounded => static error."""
+    def test_auto_falls_through_on_infeasible(self, request, cli_fixture):
+        """`auto` wants to diagnose infeasible too, but no infeasible engine exists
+        yet, so the solve falls through to the static infeasible error (no pointer)."""
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(
-            cli.execute_raw(f"PRAGMA diagnose_decide='infeasible'; {_UNBOUNDED_SQL}")
-        )
-        assert "decide optimization is unbounded" in out
-        assert _POINTER not in out
-
-    @pytest.mark.error
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_unbounded_mode_does_not_fire_on_infeasible(self, request, cli_fixture):
-        """Filter scoping the other way: unbounded mode ignores an infeasible solve.
-
-        (Infeasible has no engine yet, so even a matching mode would fall through;
-        here the mode does not even match, so the static infeasible error stands.)
-        """
-        cli = request.getfixturevalue(cli_fixture)
-        out = _combined(
-            cli.execute_raw(f"PRAGMA diagnose_decide='unbounded'; {_INFEASIBLE_SQL}")
+            cli.execute_raw(f"PRAGMA diagnose_decide='auto'; {_INFEASIBLE_SQL}")
         )
         assert "decide optimization is infeasible" in out
         assert _POINTER not in out

@@ -1,14 +1,10 @@
 #include "duckdb/decidb/diagnostic_solves.hpp"
 
+#include "duckdb/decidb/diagnostic_constants.hpp"
+
 #include <utility>
 
 namespace duckdb {
-
-namespace {
-
-constexpr double EFFECTIVE_INFINITY = 1e20;
-
-} // namespace
 
 SolverModel MakeZeroObjectiveProbeModel(const SolverModel &model) {
 	SolverModel probe = model;
