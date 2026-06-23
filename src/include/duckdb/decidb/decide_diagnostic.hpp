@@ -133,6 +133,8 @@ void ClearDecideDiagnostic(ClientContext &context);
 //! Throw the short pointer error a failed-but-diagnosed DECIDE surfaces (the
 //! relation itself is read via SELECT * FROM decide_diagnostics()).
 [[noreturn]] void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag);
+[[noreturn]] void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag,
+                                            const string &extra_message);
 
 //! Throw the unbounded error used when diagnosis WAS requested for an unbounded
 //! solve but produced no per-variable content (e.g. a quadratic model, or a ray

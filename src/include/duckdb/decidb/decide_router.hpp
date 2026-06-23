@@ -30,15 +30,16 @@ enum class DiagnosisTerminal {
 	INFEASIBLE,
 	//! Hit the time limit, diagnosis requested: slow terminal (R6; static error until then).
 	TIME_LIMIT,
-	//! No diagnosis: mode is off, or a status no engine covers (residual
-	//! INF_OR_UNBD, ITERATION_LIMIT, OTHER). Falls to the static solver error.
+	//! No diagnosis: mode is off, or a status no engine covers (ITERATION_LIMIT,
+	//! OTHER). Falls to the static solver error.
 	UNDIAGNOSED
 };
 
 //! Classify a solve result into its terminal under the given diagnose_decide
 //! `mode`. Pure: depends only on `result.status` and the mode policy
-//! (`DiagnosisApplies`). INF_OR_UNBD is already resolved upstream in SolveModel,
-//! so any residual INF_OR_UNBD here is the undecided case → UNDIAGNOSED.
+//! (`DiagnosisApplies`), plus the residual INF_OR_UNBD ray sub-signal. Existing
+//! solver/facade status probes still run first; if INF_OR_UNBD survives, a found
+//! ray routes to UNBOUNDED and no ray routes to INFEASIBLE.
 DiagnosisTerminal RouteSolveResult(const SolverResult &result, const string &mode);
 
 } // namespace duckdb

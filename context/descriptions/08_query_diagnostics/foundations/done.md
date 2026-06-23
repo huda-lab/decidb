@@ -20,22 +20,21 @@ so callers branch on the outcome. This gates the whole area.
 - **The `SolveModel` facade** returns `SolverResult` and no longer throws on solver
   status (`ilp_solver.cpp`). The default user-facing error text is a single helper,
   `ThrowDecideSolveError(const SolverResult &)`.
-- **`INF_OR_UNBD` is disambiguated by a feasibility probe.** A ray (improving
+- **`INF_OR_UNBD` first goes through the existing feasibility probe.** A ray (improving
   recession direction) is *necessary but not sufficient* for unboundedness — the
   region must also be feasible (an infeasible problem can still admit an improving
   ray, e.g. `x − y ≤ −10 AND y − x ≤ −10`). So `DisambiguateInfOrUnbd`
   (`ilp_solver.cpp`) re-solves a zero-objective copy (`MakeZeroObjectiveProbeModel`):
   feasible ⇒ rewrite to `UNBOUNDED`, infeasible ⇒ `INFEASIBLE`. A genuinely-unbounded
   solve therefore reaches the normal unbounded diagnosis under `auto` via this
-  rewrite — `DiagnosisApplies` never needs an `INF_OR_UNBD` branch.
-  - **Residual `INF_OR_UNBD` is an accepted non-diagnosed terminal.** When the
+  rewrite.
+  - **Residual `INF_OR_UNBD` is a router fallback, not a broader status policy.** When the
     probe *itself* returns neither OPTIMAL nor INFEASIBLE (a zero-objective model
     can't be unbounded, so this means the solver could not decide feasibility at all
-    — error/limit), the status stays `INF_OR_UNBD` and falls to the static
-    `ThrowDecideSolveError` `INF_OR_UNBD` branch with no diagnosis. We deliberately do
-    **not** best-effort the ray here: feasibility is exactly what we failed to
-    establish, so claiming "unbounded" could mislabel an infeasible problem. This is
-    the one terminal the area leaves undiagnosed by design.
+    — error/limit), the status stays `INF_OR_UNBD`. Under `auto`, the router runs
+    check-ray: ray present reuses the unbounded terminal with the caveat `the problem
+    may still be infeasible.`, and no ray routes to the infeasible terminal. Under
+    `off`, it still falls to the static `ThrowDecideSolveError` `INF_OR_UNBD` branch.
 - **Pre-solve model-builder infeasibility is normalized.** Contradictory normalized
   rows and contradictory accumulated bounds throw `DecideInfeasibleModelException`
   inside `SolverModel::Build`; `SolveModel` catches that internal exception and
@@ -84,8 +83,9 @@ router all rely on these.
   solver-agnostic default and treats native rays as future accelerators.
 
 These facts are the evidence behind the router's inf/unb branch — the ambiguous
-status is real (HiGHS MILP), and ray-presence together with feasibility, not status
-alone, decides unbounded vs infeasible (`router/README.md`).
+status is real (HiGHS MILP), the feasibility probe stays first, and a residual
+ray is reported with an explicit caveat because feasibility was not established
+(`router/README.md`).
 
 ## Constraint provenance (row → clause)
 

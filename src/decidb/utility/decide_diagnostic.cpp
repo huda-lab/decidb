@@ -109,6 +109,7 @@ DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
 bool DiagnosisApplies(const string &mode, SolverStatus status) {
 	if (mode == "auto") {
 		return status == SolverStatus::INFEASIBLE || status == SolverStatus::UNBOUNDED ||
+		       status == SolverStatus::INF_OR_UNBD ||
 		       status == SolverStatus::TIME_LIMIT;
 	}
 	return false; // "off" or unrecognized
@@ -274,8 +275,15 @@ void ClearDecideDiagnostic(ClientContext &context) {
 }
 
 void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag) {
-	string msg = "DECIDE optimization is " + diag.state + ".\n\n" + diag.summary +
-	             "\n\nDiagnosis ready (this session): SELECT * FROM decide_diagnostics();";
+	ThrowDecideDiagnosisReady(diag, string());
+}
+
+void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag, const string &extra_message) {
+	string msg = "DECIDE optimization is " + diag.state + ".\n\n" + diag.summary;
+	if (!extra_message.empty()) {
+		msg += "\n\n" + extra_message;
+	}
+	msg += "\n\nDiagnosis ready (this session): SELECT * FROM decide_diagnostics();";
 	throw InvalidInputException(msg);
 }
 

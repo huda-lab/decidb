@@ -70,8 +70,8 @@ Tier 1  shipped: F1 structured-result · F2 constraint-prov · F6 variable-prov
         F3 relaxability (needs F2) · F5 reporting-relation (needs F2) · F4 pragma (needs F1)
 Tier 2  I1/I2 elastic · U2 ray (fallback-only)   (engines; need Tier 1)
         R1/R2 router seam + unbounded terminal (needs U2)
-Tier 3  R3/R4 router inf/unb check-ray + remove facade probe (subsumes the old U1
-        disambiguation) · I4 infeasible-reporting · U3 ray-reporting (full) · S1–S4 slow
+Tier 3  shipped: R3 residual inf/unb check-ray fallback (existing status probes stay)
+        I4 infeasible-reporting · U3 ray-reporting (full) · S1–S4 slow
         R5/R6 router infeasible + time_limit terminals (land with I4 / slow)
 ```
 

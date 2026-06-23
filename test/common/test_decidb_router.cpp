@@ -2,22 +2,25 @@
 
 #include "duckdb/decidb/decide_router.hpp"
 
+#include <utility>
+
 using namespace duckdb;
 
 namespace {
 
-SolverResult MakeResult(SolverStatus status) {
+SolverResult MakeResult(SolverStatus status, duckdb::vector<double> ray = duckdb::vector<double>()) {
 	SolverResult result;
 	result.status = status;
+	result.ray = std::move(ray);
 	return result;
 }
 
 } // namespace
 
-// The router is a pure classifier: (status, mode) -> terminal. INF_OR_UNBD is
-// already resolved to UNBOUNDED/INFEASIBLE upstream in SolveModel, so any residual
-// INF_OR_UNBD reaching the router is the undecided case and routes to UNDIAGNOSED,
-// alongside ITERATION_LIMIT and OTHER.
+// The router is a pure classifier: (status + mode + residual INF_OR_UNBD ray
+// signal) -> terminal. Existing solver/facade probes still run before this point;
+// if INF_OR_UNBD survives, the router sends a found ray to the unbounded terminal
+// and no ray to the infeasible terminal.
 TEST_CASE("DeciDB query-diagnostics router", "[decidb][query_diagnostics][router]") {
 	SECTION("auto mode routes each failed state to its terminal") {
 		CHECK(RouteSolveResult(MakeResult(SolverStatus::OPTIMAL), "auto") == DiagnosisTerminal::SOLVED);
@@ -29,6 +32,10 @@ TEST_CASE("DeciDB query-diagnostics router", "[decidb][query_diagnostics][router
 	SECTION("off mode suppresses diagnosis: every failed state is UNDIAGNOSED") {
 		CHECK(RouteSolveResult(MakeResult(SolverStatus::UNBOUNDED), "off") == DiagnosisTerminal::UNDIAGNOSED);
 		CHECK(RouteSolveResult(MakeResult(SolverStatus::INFEASIBLE), "off") == DiagnosisTerminal::UNDIAGNOSED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), "off") ==
+		      DiagnosisTerminal::UNDIAGNOSED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), "off") ==
+		      DiagnosisTerminal::UNDIAGNOSED);
 		CHECK(RouteSolveResult(MakeResult(SolverStatus::TIME_LIMIT), "off") == DiagnosisTerminal::UNDIAGNOSED);
 	}
 
@@ -36,9 +43,15 @@ TEST_CASE("DeciDB query-diagnostics router", "[decidb][query_diagnostics][router
 		CHECK(RouteSolveResult(MakeResult(SolverStatus::OPTIMAL), "off") == DiagnosisTerminal::SOLVED);
 	}
 
+	SECTION("residual INF_OR_UNBD routes by ray signal in auto mode") {
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), "auto") ==
+		      DiagnosisTerminal::UNBOUNDED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), "auto") ==
+		      DiagnosisTerminal::INFEASIBLE);
+	}
+
 	SECTION("statuses no engine covers are UNDIAGNOSED in both modes") {
 		for (const char *mode : {"auto", "off"}) {
-			CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), mode) == DiagnosisTerminal::UNDIAGNOSED);
 			CHECK(RouteSolveResult(MakeResult(SolverStatus::ITERATION_LIMIT), mode) == DiagnosisTerminal::UNDIAGNOSED);
 			CHECK(RouteSolveResult(MakeResult(SolverStatus::OTHER), mode) == DiagnosisTerminal::UNDIAGNOSED);
 		}

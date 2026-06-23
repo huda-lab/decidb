@@ -29,7 +29,8 @@ double ComputeLinearObjectiveValue(const SolverModel &model, const vector<double
 
 void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backend,
                                    const SolveModelOptions &options, SolverResult &result) {
-	if (!options.extract_unbounded_ray || result.status != SolverStatus::UNBOUNDED) {
+	if (!options.extract_unbounded_ray ||
+	    (result.status != SolverStatus::UNBOUNDED && result.status != SolverStatus::INF_OR_UNBD)) {
 		return;
 	}
 

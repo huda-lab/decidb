@@ -75,6 +75,7 @@ class TestUnboundedVariableDiagnostics:
         assert "add an upper bound, e.g. such that x <= <cap>" in result.stderr.lower()
         # C2: set the expectation that the ray names a variable, not clause blame.
         assert "not a single guilty clause" in result.stderr.lower()
+        assert "the problem may still be infeasible." not in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_integer_var_named(self, request, cli_fixture):
@@ -86,8 +87,10 @@ class TestUnboundedVariableDiagnostics:
             "SELECT id, n FROM (VALUES (1), (2)) t(id) "
             "DECIDE n IS INTEGER SUCH THAT n >= 0 MAXIMIZE SUM(n)"
         )
-        rows = _rows(_diagnose(cli, sql))
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
         assert _attrs(rows, "n")["direction"] == "+inf"
+        assert "the problem may still be infeasible." not in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_multiple_escaping_vars_each_named_once(self, request, cli_fixture):

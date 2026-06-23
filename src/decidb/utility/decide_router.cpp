@@ -27,9 +27,14 @@ DiagnosisTerminal RouteSolveResult(const SolverResult &result, const string &mod
 	case SolverStatus::TIME_LIMIT:
 		return DiagnosisApplies(mode, result.status) ? DiagnosisTerminal::TIME_LIMIT
 		                                             : DiagnosisTerminal::UNDIAGNOSED;
+	case SolverStatus::INF_OR_UNBD:
+		if (!DiagnosisApplies(mode, result.status)) {
+			return DiagnosisTerminal::UNDIAGNOSED;
+		}
+		return result.ray.empty() ? DiagnosisTerminal::INFEASIBLE : DiagnosisTerminal::UNBOUNDED;
 	default:
-		// Residual INF_OR_UNBD (SolveModel's probe could not decide), ITERATION_LIMIT,
-		// OTHER: no engine covers these — fall to the static solver error.
+		// ITERATION_LIMIT / OTHER: no engine covers these — fall to the static
+		// solver error.
 		return DiagnosisTerminal::UNDIAGNOSED;
 	}
 }

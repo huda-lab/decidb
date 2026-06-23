@@ -116,4 +116,25 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(result->GetValue(4, 0).ToString() == "relaxation");
 		CHECK(result->GetValue(5, 0).ToString() == "rhs + 1");
 	}
+
+	SECTION("inf-or-unbounded caveat is query-message only") {
+		DecideDiagnostic diag;
+		diag.valid = true;
+		diag.status = SolverStatus::UNBOUNDED;
+		diag.state = "unbounded";
+		diag.summary = "The objective is unbounded because x can grow without bound.";
+
+		try {
+			ThrowDecideDiagnosisReady(diag, "the problem may still be infeasible.");
+			FAIL("expected ThrowDecideDiagnosisReady to throw");
+		} catch (const InvalidInputException &ex) {
+			string message = ex.what();
+			CHECK(message.find("The objective is unbounded because x can grow without bound.") != string::npos);
+			CHECK(message.find("the problem may still be infeasible.") != string::npos);
+			CHECK(message.find("SELECT * FROM decide_diagnostics()") != string::npos);
+		}
+
+		CHECK(diag.summary == "The objective is unbounded because x can grow without bound.");
+		CHECK(diag.summary.find("the problem may still be infeasible.") == string::npos);
+	}
 }

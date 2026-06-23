@@ -5397,7 +5397,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
         if (diag.valid && !diag.rows.empty()) {
             StashDecideDiagnostic(context, diag);
-            ThrowDecideDiagnosisReady(diag);
+            string extra_message;
+            if (solve_result.status == SolverStatus::INF_OR_UNBD) {
+                extra_message = "the problem may still be infeasible.";
+            }
+            ThrowDecideDiagnosisReady(diag, extra_message);
         }
         // Diagnosis was requested but produced no per-variable content. Say why it
         // is unavailable rather than throwing the generic "enable diagnosis and
@@ -5414,7 +5418,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                   "not a named decision variable.";
         ThrowUnboundedDiagnosisUnavailable(reason);
     }
-    case DiagnosisTerminal::INFEASIBLE: // elastic engine lands at R5
+    case DiagnosisTerminal::INFEASIBLE: { // elastic engine lands at R5
+        SolverResult terminal_result = solve_result;
+        if (terminal_result.status == SolverStatus::INF_OR_UNBD) {
+            terminal_result.status = SolverStatus::INFEASIBLE;
+        }
+        ThrowDecideSolveError(terminal_result);
+    }
     case DiagnosisTerminal::TIME_LIMIT: // slow terminal lands at R6
     case DiagnosisTerminal::UNDIAGNOSED:
         // Mode off, or a status no engine covers yet: the plain static solver error.
