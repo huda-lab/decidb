@@ -143,10 +143,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
-    // Merge with explicit bounds from input (intersect with type-based defaults)
+    // Merge with explicit bounds from input. The physical operator already
+    // resolved each variable's lower bound (defaulting unconstrained variables to
+    // 0 and honoring explicit negative bounds), so it is authoritative: take it
+    // directly rather than std::max-ing with the type default, which would clamp a
+    // legitimate negative bound back to 0. The upper bound is still intersected
+    // (the type default is a true ceiling, e.g. 1.0 for BOOLEAN).
     for (idx_t var = 0; var < num_decide_vars; var++) {
         if (var < input.lower_bounds.size()) {
-            per_var_lower[var] = std::max(per_var_lower[var], input.lower_bounds[var]);
+            per_var_lower[var] = input.lower_bounds[var];
         }
         if (var < input.upper_bounds.size()) {
             per_var_upper[var] = std::min(per_var_upper[var], input.upper_bounds[var]);

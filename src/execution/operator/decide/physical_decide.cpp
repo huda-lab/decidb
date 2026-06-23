@@ -1232,6 +1232,13 @@ static unique_ptr<Expression> FindVarCoefficient(
 //===--------------------------------------------------------------------===//
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
+
+//! Sentinel marking "no explicit lower-bound constraint" during bound absorption.
+//! Resolved to the default 0 in Finalize for any variable the query never lowered.
+//! Distinct from a real bound: signed variables use finite negative bounds only
+//! (no -inf domain), so no legitimate lower bound is anywhere near this value.
+static constexpr double ABSORBED_LOWER_UNSET = -1e30;
+
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
     explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
@@ -1240,7 +1247,14 @@ public:
         // arrays so AnalyzeConstraint can skip emitting one DecideConstraint per row
         // for constraints that are fully captured by column bounds.
         idx_t num_decide_vars = op.decide_variables.size();
-        absorbed_lower_bounds.assign(num_decide_vars, 0.0);
+        // Initialize lower bounds to an "unset" sentinel rather than 0 so that an
+        // explicit negative lower-bound constraint (e.g. `x >= -5`, `BETWEEN -10
+        // AND 10`) is honored instead of clamped to 0. The std::max combiners in
+        // TraverseBoundsConstraints still pick the tightest of multiple `>=`
+        // constraints (max(-1e30, k) == k), and Finalize resolves any variable
+        // still at the sentinel to the default 0 (non-negative unless the query
+        // explicitly lowers the bound). See ABSORBED_LOWER_UNSET.
+        absorbed_lower_bounds.assign(num_decide_vars, ABSORBED_LOWER_UNSET);
         absorbed_upper_bounds.assign(num_decide_vars, 1e30);
         for (idx_t var = 0; var < num_decide_vars; var++) {
             auto &decide_var = op.decide_variables[var]->Cast<BoundColumnRefExpression>();
@@ -3370,6 +3384,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // `x OP const` / BETWEEN constraints; those comparisons were skipped in
     // AnalyzeConstraint so we don't re-emit them as per-row model rows.
     solver_input.lower_bounds = gstate.absorbed_lower_bounds;
+    // Resolve the "unset" sentinel to the default lower bound 0: a variable the
+    // query never explicitly lowered stays non-negative. Variables with an
+    // explicit (possibly negative) lower-bound constraint keep their absorbed
+    // value. Must run before any consumer of lower_bounds (implied-bound
+    // propagation, Big-M, McCormick, model builder).
+    for (auto &lb : solver_input.lower_bounds) {
+        if (lb <= ABSORBED_LOWER_UNSET) {
+            lb = 0.0;
+        }
+    }
     solver_input.upper_bounds = gstate.absorbed_upper_bounds;
 
     // Data-driven implied-bound propagation: derive finite upper bounds for
