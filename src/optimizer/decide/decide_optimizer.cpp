@@ -1343,19 +1343,13 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 						}
 					}
 
-					auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
-					auto &other_var_ref = decide.decide_variables[other_var_idx]->Cast<BoundColumnRefExpression>();
-
-					// w <= x  (structural constraint, no Big-M needed). Use the bare other-variable
-					// reference even when the source had a coefficient: the McCormick relation
-					// w = b*x must be tight, and any coefficient gets folded into the replacement
-					// expression below.
-					auto c_struct = make_uniq<BoundComparisonExpression>(
-					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
-					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
-					    make_uniq<BoundColumnRefExpression>(other_var_ref.alias, other_var_ref.return_type, other_var_ref.binding));
-					AppendConstraint(decide, std::move(c_struct));
-
+					// The McCormick linking constraints (including the upper corner
+					// w <= x - L*(1-b), which for L>=0 is the plain structural w <= x)
+					// are emitted at execution time in physical_decide.cpp, where the
+					// resolved bounds L and U of the other variable are known. Emitting
+					// the structural w <= x here would be unconditional and therefore
+					// wrong for a negative-domain x (it forces x >= 0 when b=0). We only
+					// record the link; execution adds all four corners.
 					LogicalDecide::BilinearLink link;
 					link.aux_idx = aux_idx;
 					link.bool_var_idx = bool_var_idx;

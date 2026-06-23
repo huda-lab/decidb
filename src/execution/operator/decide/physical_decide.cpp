@@ -3706,11 +3706,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         gstate.evaluated_constraints = std::move(new_constraints);
     }
 
-    // Generate McCormick Big-M constraints for bilinear auxiliary variables (w = b * x).
-    // The structural constraint w <= x was generated at optimizer time.
-    // Here we add: w <= U*b and w >= x - U*(1-b), which require the execution-time bound U.
+    // Generate the McCormick constraints for bilinear auxiliary variables
+    // (w = b * x) where b is Boolean and x ∈ [L, U]. The exact linearization is:
+    //   w <= U*b                  (ec1)
+    //   w >= x - U*(1-b)          (ec2)
+    //   w <= x - L*(1-b)          (ec3, upper corner)
+    //   w >= L*b                  (ec4, lower corner)
+    // For L >= 0 the lower corner is implied by w's own non-negative bound, and
+    // ec3 simplifies to the plain structural `w <= x` (w=0 at b=0 is enforced by
+    // ec1). We emit exactly those two-plus-one constraints in that case, identical
+    // to the prior behavior — the optimizer no longer emits the structural `w <= x`
+    // (it lives here now). For L < 0 we emit the full four corners and widen w's
+    // own lower bound so the product can take the negative value of x when b=1.
     for (auto &link : bilinear_links) {
         double U = solver_input.upper_bounds[link.other_var_idx];
+        double L = solver_input.lower_bounds[link.other_var_idx];
         if (U >= 1e20) {
             throw InvalidInputException(
                 "Bilinear term requires a finite upper bound on variable '%s'. "
@@ -3719,7 +3729,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 decide_variables[link.other_var_idx]->Cast<BoundColumnRefExpression>().alias);
         }
 
-        // Constraint: w <= U * b  (i.e., w - U*b <= 0)
+        // ec1: w <= U * b  (i.e., w - U*b <= 0)
         EvaluatedConstraint ec1;
         ec1.variable_indices = {link.aux_idx, link.bool_var_idx};
         ec1.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
@@ -3729,7 +3739,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         ec1.lhs_is_aggregate = false;
         gstate.evaluated_constraints.push_back(std::move(ec1));
 
-        // Constraint: w >= x - U*(1-b) = x - U + U*b
+        // ec2: w >= x - U*(1-b) = x - U + U*b
         // Rearranged: w - x + U*b >= -U  →  1*w + (-1)*x + (-U)*b >= -U
         EvaluatedConstraint ec2;
         ec2.variable_indices = {link.aux_idx, link.other_var_idx, link.bool_var_idx};
@@ -3740,6 +3750,40 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
         ec2.lhs_is_aggregate = false;
         gstate.evaluated_constraints.push_back(std::move(ec2));
+
+        // ec3: upper corner. L >= 0 → plain `w <= x`; L < 0 → `w <= x - L*(1-b)`,
+        // i.e. w - x - L*b <= -L.
+        EvaluatedConstraint ec3;
+        if (L < 0.0) {
+            ec3.variable_indices = {link.aux_idx, link.other_var_idx, link.bool_var_idx};
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, num_rows));  // -x
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-L, num_rows));    // -L*b
+            ec3.rhs_values.AssignScalar(num_rows, -L);
+        } else {
+            ec3.variable_indices = {link.aux_idx, link.other_var_idx};
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, num_rows));  // -x
+            ec3.rhs_values.AssignScalar(num_rows, 0.0);
+        }
+        ec3.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec3.lhs_is_aggregate = false;
+        gstate.evaluated_constraints.push_back(std::move(ec3));
+
+        // ec4: lower corner `w >= L*b`, only needed when x can be negative.
+        // Also widen the aux's own lower bound so w may equal the negative x at b=1.
+        if (L < 0.0) {
+            solver_input.lower_bounds[link.aux_idx] =
+                std::min(solver_input.lower_bounds[link.aux_idx], L);
+            EvaluatedConstraint ec4;
+            ec4.variable_indices = {link.aux_idx, link.bool_var_idx};
+            ec4.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec4.row_coefficients.push_back(CoefficientColumn::MakeScalar(-L, num_rows));    // -L*b
+            ec4.rhs_values.AssignScalar(num_rows, 0.0);
+            ec4.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+            ec4.lhs_is_aggregate = false;
+            gstate.evaluated_constraints.push_back(std::move(ec4));
+        }
     }
 
     // Generate Big-M upper-bound constraints for MAXIMIZE + ABS auxiliary variables.
