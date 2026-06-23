@@ -236,7 +236,8 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	diag.summary = "The objective is unbounded: it can improve without limit because " +
 	               string(escapes.size() == 1 ? "the variable " : "the variables ") + names +
 	               " can grow without bound. To fix, add an upper bound, e.g. SUCH THAT " +
-	               escapes[0].name + " <= <cap>.";
+	               escapes[0].name +
+	               " <= <cap>. This diagnosis names the runaway variable, not a single guilty clause.";
 	// Legend for the escaping_instances cell format — only when categorical rules are
 	// actually reported, otherwise it is irrelevant noise.
 	if (any_categorical) {
@@ -245,10 +246,21 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	}
 	for (const auto &ve : escapes) {
 		DiagnosticRow row;
-		row.variable = ve.name;
-		row.direction = ve.direction;
-		row.escaping_instances = FormatEscapingInstances(ve);
+		row.subject_kind = "variable";
+		row.subject = ve.name;
+		row.attribute = "direction";
+		row.value = ve.direction;
 		diag.rows.push_back(std::move(row));
+
+		auto escaping_instances = FormatEscapingInstances(ve);
+		if (!escaping_instances.empty()) {
+			DiagnosticRow instances_row;
+			instances_row.subject_kind = "variable";
+			instances_row.subject = ve.name;
+			instances_row.attribute = "escaping_instances";
+			instances_row.value = std::move(escaping_instances);
+			diag.rows.push_back(std::move(instances_row));
+		}
 	}
 	return diag;
 }
@@ -256,9 +268,9 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag) {
 	auto state =
 	    context.registered_state->GetOrCreate<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
-	// Stamp a per-connection id so every row of this diagnosis shares one query_id
+	// Stamp a per-connection id so every row of this diagnosis shares one diagnosis_id
 	// (and a later diagnosis on the same connection gets a distinct one).
-	diag.query_id = state->next_query_id++;
+	diag.diagnosis_id = state->next_diagnosis_id++;
 	state->latest = std::move(diag);
 }
 
@@ -292,9 +304,9 @@ struct DecideDiagnosticsData : public GlobalTableFunctionState {
 
 unique_ptr<FunctionData> DecideDiagnosticsBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<string> &names) {
-	names = {"query_id", "state", "variable", "direction", "escaping_instances"};
+	names = {"diagnosis_id", "state", "subject_kind", "subject", "attribute", "value"};
 	return_types = {LogicalType::BIGINT, LogicalType::VARCHAR, LogicalType::VARCHAR,
-	                LogicalType::VARCHAR, LogicalType::VARCHAR};
+	                LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
 	return nullptr;
 }
 
@@ -317,12 +329,12 @@ void DecideDiagnosticsFunction(ClientContext &context, TableFunctionInput &data_
 	while (data.offset < data.diag.rows.size() && count < STANDARD_VECTOR_SIZE) {
 		auto &row = data.diag.rows[data.offset++];
 		idx_t col = 0;
-		output.SetValue(col++, count, Value::BIGINT(data.diag.query_id));
+		output.SetValue(col++, count, Value::BIGINT(data.diag.diagnosis_id));
 		output.SetValue(col++, count, Value(data.diag.state));
-		output.SetValue(col++, count, row.variable.empty() ? Value() : Value(row.variable));
-		output.SetValue(col++, count, row.direction.empty() ? Value() : Value(row.direction));
-		output.SetValue(col, count,
-		                row.escaping_instances.empty() ? Value() : Value(row.escaping_instances));
+		output.SetValue(col++, count, row.subject_kind.empty() ? Value() : Value(row.subject_kind));
+		output.SetValue(col++, count, row.subject.empty() ? Value() : Value(row.subject));
+		output.SetValue(col++, count, row.attribute.empty() ? Value() : Value(row.attribute));
+		output.SetValue(col, count, row.value.empty() ? Value() : Value(row.value));
 		count++;
 	}
 	output.SetCardinality(count);

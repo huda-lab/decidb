@@ -28,15 +28,13 @@ struct SolverResult;
 struct ColumnProvenance;
 
 //! One row of the relation surfaced by decide_diagnostics(). Empty string fields
-//! render as SQL NULL. For the unbounded state, one row = one escaping variable.
+//! render as SQL NULL. Long-form EAV so each diagnosis state can choose its own
+//! attributes without changing the table schema.
 struct DiagnosticRow {
-	string variable;        //!< escaping variable NAME (F6); empty => NULL
-	string direction;       //!< direction it escapes: "+inf" / "-inf" (ASCII, robust
-	                        //!< in CSV / WHERE filters); empty => NULL
-	string escaping_instances; //!< which instances escape: categorical rule set
-	                        //!< (`c=v (a/b); …`), an `all N instances …` / `a of b
-	                        //!< instances escape` summary, or empty => NULL (nothing
-	                        //!< to disambiguate / not resolved).
+	string subject_kind; //!< "variable" / "clause" / future state-specific subject
+	string subject;      //!< e.g. variable name or clause id; empty => NULL
+	string attribute;    //!< state-owned attribute name; empty => NULL
+	string value;        //!< state-owned attribute value; empty => NULL
 };
 
 //! One categorical "sufficient-direction" rule for an escaping variable: among the
@@ -81,7 +79,7 @@ struct DecideDiagParams {
 //! function. Shared across all diagnosis states so output stays consistent.
 struct DecideDiagnostic {
 	bool valid = false;                       //!< false => nothing diagnosed yet
-	int64_t query_id = 0;                     //!< per-connection diagnosis id; ties together
+	int64_t diagnosis_id = 0;                 //!< per-connection diagnosis id; ties together
 	                                          //!< every row produced by the same failed solve
 	SolverStatus status = SolverStatus::OTHER;
 	string state;                             //!< "unbounded" / "infeasible" / "slow"
@@ -96,7 +94,7 @@ struct DecideDiagnostic {
 class DecideDiagnosticState : public ClientContextState {
 public:
 	DecideDiagnostic latest;
-	int64_t next_query_id = 1; //!< monotonic per-connection id, assigned at each stash
+	int64_t next_diagnosis_id = 1; //!< monotonic per-connection id, assigned at each stash
 };
 
 //! Key under which DecideDiagnosticState is registered on the ClientContext.

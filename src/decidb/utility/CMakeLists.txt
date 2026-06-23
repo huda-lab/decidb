@@ -2,6 +2,7 @@ add_library_unity(
   duckdb_decidb_util
   OBJECT
   decide_diagnostic.cpp
+  decide_diagnostic_engines.cpp
   diagnostic_solves.cpp
   debug.cpp
   ilp_model_builder.cpp

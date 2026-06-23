@@ -4,6 +4,7 @@ add_library_unity(
   test_cast.cpp
   test_checksum.cpp
   test_decidb_constraint_provenance.cpp
+  test_decidb_diagnostic_engines.cpp
   test_decidb_diagnostic_solves.cpp
   test_decidb_escape_characterization.cpp
   test_decidb_variable_provenance.cpp

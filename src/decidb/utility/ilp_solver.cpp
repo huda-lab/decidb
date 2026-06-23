@@ -111,7 +111,14 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
 
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
                         const SolveModelOptions &options) {
-	SolverModel model = SolverModel::Build(input, indexer);
+	SolverModel model;
+	try {
+		model = SolverModel::Build(input, indexer);
+	} catch (const DecideInfeasibleModelException &) {
+		SolverResult result;
+		result.status = SolverStatus::INFEASIBLE;
+		return result;
+	}
 	SolverBackend backend = SelectSolverBackend();
 	SolverResult result = SolvePreparedModel(model, backend);
 	result = DisambiguateInfOrUnbd(model, backend, result);

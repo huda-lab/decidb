@@ -32,6 +32,16 @@ enum class ObjectiveAggregateType : uint8_t {
     MAX_AGG     //! MAX aggregate
 };
 
+//! Origin/relaxability role of an emitted DECIDE matrix row.
+//!   USER_PARAMETER — carries a user-editable parameter/RHS; elastic may slacken.
+//!   USER_MECHANISM — helper row attached to a user clause; rigid.
+//!   STRUCTURAL     — synthesized definition/linking row; rigid.
+enum class ConstraintKind : uint8_t { USER_PARAMETER, USER_MECHANISM, STRUCTURAL };
+
+inline bool IsRelaxableForElastic(ConstraintKind kind) {
+	return kind == ConstraintKind::USER_PARAMETER;
+}
+
 //! Tag used to identify WHEN-conditional constraints throughout the pipeline
 static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
 
@@ -60,6 +70,10 @@ static constexpr const char *NE_INDICATOR_TAG_PREFIX = "__ne_ind_tag_";
 //! wrote as MIN/MAX must reject, even though the optimized constraint is now
 //! per-row. Set on the BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
+
+//! Tag marking optimizer-generated helper constraints that define auxiliaries or
+//! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
+static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
 
 //! Tag prefix for ABS upper-bound constraint linking.
 //! Format: "__abs_ub_pos_<y_idx>__" on C1 (aux >= inner)

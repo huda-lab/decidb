@@ -1011,6 +1011,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(y_idx) + "__";
 
 			decide.abs_maximize_links.push_back({pair.aux_idx, y_idx});
+		} else {
+			c1->alias = STRUCTURAL_CONSTRAINT_TAG;
+			c2->alias = STRUCTURAL_CONSTRAINT_TAG;
 		}
 
 		AppendConstraint(decide, std::move(c1));
@@ -1303,6 +1306,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
 					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
 					    make_uniq<BoundColumnRefExpression>(b1_ref.alias, b1_ref.return_type, b1_ref.binding));
+					c1->alias = STRUCTURAL_CONSTRAINT_TAG;
 					AppendConstraint(decide, std::move(c1));
 
 					// w <= b2
@@ -1310,6 +1314,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
 					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
 					    make_uniq<BoundColumnRefExpression>(b2_ref.alias, b2_ref.return_type, b2_ref.binding));
+					c2->alias = STRUCTURAL_CONSTRAINT_TAG;
 					AppendConstraint(decide, std::move(c2));
 
 					// w >= b1 + b2 - 1  (i.e., b1 + b2 - w <= 1)
@@ -1325,6 +1330,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
 					    std::move(b1_plus_b2_minus_w),
 					    make_uniq<BoundConstantExpression>(Value::INTEGER(1)));
+					c3->alias = STRUCTURAL_CONSTRAINT_TAG;
 					AppendConstraint(decide, std::move(c3));
 				} else {
 					// Bool × Non-Bool McCormick: w <= x (structural, at plan time)

@@ -7,7 +7,7 @@ optimum *is* the least-change fix.
 
 ## Checklist
 
-- [ ] **I1 · Elastic engine core** (v2.1) — deps: F1, F2, F3
+- [ ] **I1 · Elastic engine core** (v2.1) — deps: shipped foundations (F1/F2/F3)
 - [ ] **I2 · Per-constraint-type elastic treatment** — deps: I1
 - [ ] **I3 · L0 / removal dial** — deps: I1, norms (v1.1)
 - [ ] **I4 · Infeasibility reporting** (v3.1) — deps: I1/I2, F4, F5
@@ -104,18 +104,16 @@ reported as a drop; mixed cases prefer loosening.
 
 **Goal.** Render the slack solution at the user-clause level.
 
-> **Schema note (changed since this was written).** The shared `decide_diagnostics()`
-> relation was reshaped around the unbounded/variable-centric view to
-> `(query_id, state, variable, direction, escaping_instances)` — the
-> old 5-tuple `(state, clause, group_key, edit_kind, suggested_change)` referenced below
-> no longer exists. Infeasible's subject is a *clause*, not a variable, so this engine
-> must revisit the output columns (re-add `clause`/`edit_kind`/`suggested_change`, or
-> generalize the relation) before implementing I4. See `foundations/done.md` · F5.
-> (B1 in the active work queue is the relation-reshape decision that resolves this.)
+> **Schema note.** The shared `decide_diagnostics()` relation is now cross-state
+> EAV: `(diagnosis_id, state, subject_kind, subject, attribute, value)`. Infeasible
+> should render clause-level facts as rows such as `subject_kind='clause'`,
+> `subject=<clause id/group>`, `attribute='edit_kind'/'suggested_change'/...`.
+> No schema redesign is needed before I4; choose the exact attribute vocabulary in
+> the engine. See `foundations/done.md`.
 
-- **Always:** a structured edit list — `(clause, group_key, edit_kind,
-  suggested_change)` via F5, PER reported per group, plus the **achievable
-  objective** from stage-2.
+- **Always:** a structured edit list in EAV form — clause/group subject plus
+  `edit_kind`, `suggested_change`, and related attributes; PER reported per group;
+  plus the **achievable objective** from stage-2.
 - **Conditionally:** a runnable rewritten DECIDE query — only when the edits
   collapse to one coherent clause; otherwise say why a single rewrite isn't
   expressible (PER groups sharing one `K`).

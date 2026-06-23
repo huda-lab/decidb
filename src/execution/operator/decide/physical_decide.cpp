@@ -17,6 +17,7 @@
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/decide_diagnostic_engines.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -1349,6 +1350,7 @@ public:
             auto sep = payload.find('_');
             constraint.minmax_indicator_idx = std::stoull(payload.substr(0, sep));
             constraint.minmax_agg_type = payload.substr(sep + 1);
+            constraint.kind = ConstraintKind::USER_MECHANISM;
         }
     }
 
@@ -1408,20 +1410,26 @@ public:
                     auto payload = comp.alias.substr(strlen(NE_INDICATOR_TAG_PREFIX));
                     payload = payload.substr(0, payload.size() - 2);  // strip trailing "__"
                     constraint->ne_indicator_idx = std::stoull(payload);
+                    constraint->kind = ConstraintKind::USER_MECHANISM;
                 }
 
                 // Parse ABS MAXIMIZE upper-bound tag: marks a lower-bound ABS constraint
                 // (aux >= inner or aux >= -inner) that needs Big-M upper bounds at finalization.
+                if (comp.alias == STRUCTURAL_CONSTRAINT_TAG) {
+                    constraint->kind = ConstraintKind::STRUCTURAL;
+                }
                 if (comp.alias.size() > strlen(ABS_UB_POS_TAG_PREFIX) + 2 &&
                     comp.alias.substr(0, strlen(ABS_UB_POS_TAG_PREFIX)) == ABS_UB_POS_TAG_PREFIX) {
                     auto payload = comp.alias.substr(strlen(ABS_UB_POS_TAG_PREFIX));
                     constraint->abs_y_idx = std::stoull(payload.substr(0, payload.size() - 2));
                     constraint->abs_is_pos_bound = true;
+                    constraint->kind = ConstraintKind::STRUCTURAL;
                 } else if (comp.alias.size() > strlen(ABS_UB_NEG_TAG_PREFIX) + 2 &&
                            comp.alias.substr(0, strlen(ABS_UB_NEG_TAG_PREFIX)) == ABS_UB_NEG_TAG_PREFIX) {
                     auto payload = comp.alias.substr(strlen(ABS_UB_NEG_TAG_PREFIX));
                     constraint->abs_y_idx = std::stoull(payload.substr(0, payload.size() - 2));
                     constraint->abs_is_pos_bound = false;
+                    constraint->kind = ConstraintKind::STRUCTURAL;
                 }
 
                 // Detect easy-direction MIN/MAX optimizer rewrite (see decide.hpp).
@@ -2515,6 +2523,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         eval_const.ne_indicator_idx = constraint->ne_indicator_idx;
         eval_const.abs_y_idx = constraint->abs_y_idx;
         eval_const.abs_is_pos_bound = constraint->abs_is_pos_bound;
+        eval_const.kind = constraint->kind;
 
         // Initialize result storage
         eval_const.row_coefficients.resize(constraint->lhs_terms.size());
@@ -3499,6 +3508,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_row.lhs_is_aggregate = false; // per-row!
                 ec_row.row_group_ids = ec.row_group_ids;
                 ec_row.num_groups = ec.num_groups;
+                ec_row.kind = ConstraintKind::USER_MECHANISM;
                 new_constraints.push_back(std::move(ec_row));
 
                 // SUM(y) >= 1 (at least one row must satisfy)
@@ -3510,6 +3520,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
                 ec_sum.num_groups = ec.num_groups;
+                ec_sum.kind = ConstraintKind::USER_MECHANISM;
                 new_constraints.push_back(std::move(ec_sum));
             } else {
                 // MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M
@@ -3524,6 +3535,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_row.lhs_is_aggregate = false;
                 ec_row.row_group_ids = ec.row_group_ids;
                 ec_row.num_groups = ec.num_groups;
+                ec_row.kind = ConstraintKind::USER_MECHANISM;
                 new_constraints.push_back(std::move(ec_row));
 
                 // SUM(y) >= 1
@@ -3535,6 +3547,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
                 ec_sum.num_groups = ec.num_groups;
+                ec_sum.kind = ConstraintKind::USER_MECHANISM;
                 new_constraints.push_back(std::move(ec_sum));
             }
         }
@@ -3684,6 +3697,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec1.lhs_is_aggregate = false; // per-row
                     ec1.row_group_ids = ec.row_group_ids;
                     ec1.num_groups = ec.num_groups;
+                    ec1.kind = ConstraintKind::USER_MECHANISM;
                     new_constraints.push_back(std::move(ec1));
 
                     // Constraint 2: x - M*z ≥ K + 1 - M
@@ -3697,6 +3711,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec2.lhs_is_aggregate = false; // per-row
                     ec2.row_group_ids = ec.row_group_ids;
                     ec2.num_groups = ec.num_groups;
+                    ec2.kind = ConstraintKind::USER_MECHANISM;
                     new_constraints.push_back(std::move(ec2));
                 }
             } else {
@@ -3737,6 +3752,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         ec1.rhs_values.AssignScalar(num_rows, 0.0);
         ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
         ec1.lhs_is_aggregate = false;
+        ec1.kind = ConstraintKind::STRUCTURAL;
         gstate.evaluated_constraints.push_back(std::move(ec1));
 
         // ec2: w >= x - U*(1-b) = x - U + U*b
@@ -3749,6 +3765,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         ec2.rhs_values.AssignScalar(num_rows, -U);
         ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
         ec2.lhs_is_aggregate = false;
+        ec2.kind = ConstraintKind::STRUCTURAL;
         gstate.evaluated_constraints.push_back(std::move(ec2));
 
         // ec3: upper corner. L >= 0 → plain `w <= x`; L < 0 → `w <= x - L*(1-b)`,
@@ -3768,6 +3785,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
         ec3.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
         ec3.lhs_is_aggregate = false;
+        ec3.kind = ConstraintKind::STRUCTURAL;
         gstate.evaluated_constraints.push_back(std::move(ec3));
 
         // ec4: lower corner `w >= L*b`, only needed when x can be negative.
@@ -3782,6 +3800,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             ec4.rhs_values.AssignScalar(num_rows, 0.0);
             ec4.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
             ec4.lhs_is_aggregate = false;
+            ec4.kind = ConstraintKind::STRUCTURAL;
             gstate.evaluated_constraints.push_back(std::move(ec4));
         }
     }
@@ -3886,6 +3905,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             ec_ub1.lhs_is_aggregate = false;
             ec_ub1.row_group_ids = c1.row_group_ids;
             ec_ub1.num_groups = c1.num_groups;
+            ec_ub1.kind = ConstraintKind::STRUCTURAL;
             gstate.evaluated_constraints.push_back(std::move(ec_ub1));
 
             // C_ub2: same as C2 but add y_idx with coeff -2M, flip to <=, rhs unchanged
@@ -3899,6 +3919,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             ec_ub2.lhs_is_aggregate = false;
             ec_ub2.row_group_ids = c2.row_group_ids;
             ec_ub2.num_groups = c2.num_groups;
+            ec_ub2.kind = ConstraintKind::STRUCTURAL;
             gstate.evaluated_constraints.push_back(std::move(ec_ub2));
         }
     }
@@ -4217,6 +4238,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             rc1.coefficients = common_coefs;
             rc1.indices.push_back(static_cast<int>(z_idx));
             rc1.coefficients.push_back(-M);
+            rc1.kind = ConstraintKind::USER_MECHANISM;
             solver_input.global_constraints.push_back(std::move(rc1));
 
             // ec2: SUM(coeffs) - M*z >= K + 1 - M
@@ -4227,6 +4249,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             rc2.coefficients = std::move(common_coefs);
             rc2.indices.push_back(static_cast<int>(z_idx));
             rc2.coefficients.push_back(-M);
+            rc2.kind = ConstraintKind::USER_MECHANISM;
             solver_input.global_constraints.push_back(std::move(rc2));
         }
     }
@@ -4995,6 +5018,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             default:
                 throw InternalException("Composed MIN/MAX: unexpected comparison type.");
             }
+            outer.kind = ConstraintKind::USER_PARAMETER;
             solver_input.global_constraints.push_back(std::move(outer));
         }
     }
@@ -5210,11 +5234,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // default error until their engines land.
         if (DiagnosisApplies(diagnose_mode, solve_result.status) &&
             solve_result.status == SolverStatus::UNBOUNDED) {
-            // F6: resolve each flat solver column to its user-facing source. User
-            // variables resolve to their name; auxiliary linearization variables to
-            // the user's original expression (captured at optimizer time); the
-            // global block stays unnamed. BuildUnboundedDiagnostic then names the
-            // escaping columns from the ray.
             idx_t nvars = decide_variables.size();
             vector<string> var_labels(nvars);
             vector<bool> var_is_aux(nvars, false);
@@ -5229,15 +5248,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     var_labels[i] = decide_variables[i]->GetName();
                 }
             }
-            vector<ColumnProvenance> columns =
-                BuildColumnProvenance(var_indexer, var_labels, var_is_aux);
 
-            // Characterize WHICH instances of each escaping variable run away
-            // (escaping_instances). Group ray columns by user variable; for each, the
-            // ray's non-zero entries are its escaping scope-instances (row-scoped: the
-            // row; entity-scoped: the entity). We then describe that instance set with
-            // categorical "sufficient-direction" rules: a column value v such that
-            // (nearly) all instances where the column = v escape.
             auto diag_params = GetDecideDiagnosticParams(context);
             auto diag_types = gstate.data.Types();
 
@@ -5320,72 +5331,33 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 return entity_candidates.emplace(scope_idx, std::move(cands)).first->second;
             };
 
-            // Group escaping ray columns by user variable; collect their instances.
-            static constexpr double RAY_ESCAPE_EPSILON = 1e-8;
-            struct VarAgg {
-                string name;
-                bool is_aux = false;
-                string direction;
-                idx_t vidx = DConstants::INVALID_INDEX;
-                std::set<idx_t> instances;
+            auto get_candidates = [&](idx_t decide_var_idx, idx_t total_instances) -> vector<ColumnGrouping> {
+                bool entity_scoped = decide_var_idx < var_indexer.is_entity_scoped.size() &&
+                                     var_indexer.is_entity_scoped[decide_var_idx];
+                if (!entity_scoped) {
+                    return get_row_candidates();
+                }
+                idx_t scope_idx = decide_var_idx < var_indexer.var_entity_mapping_idx.size()
+                                      ? var_indexer.var_entity_mapping_idx[decide_var_idx]
+                                      : DConstants::INVALID_INDEX;
+                if (scope_idx == DConstants::INVALID_INDEX ||
+                    scope_idx >= entity_scopes.size() ||
+                    scope_idx >= live_entity_mappings.size()) {
+                    return {};
+                }
+                return get_entity_candidates(scope_idx);
             };
-            std::map<idx_t, VarAgg> by_var;
-            for (idx_t col = 0; col < solve_result.ray.size() && col < columns.size(); col++) {
-                double rv = solve_result.ray[col];
-                if (std::fabs(rv) <= RAY_ESCAPE_EPSILON) {
-                    continue;
-                }
-                const ColumnProvenance &prov = columns[col];
-                if (prov.kind == ColumnKind::GLOBAL_AUX || prov.label.empty() ||
-                    prov.decide_var_idx == DConstants::INVALID_INDEX) {
-                    // Unnamed / internal-global-aux column: cannot attribute to a user
-                    // variable, so it contributes no per-variable content.
-                    continue;
-                }
-                auto &agg = by_var[prov.decide_var_idx];
-                if (agg.name.empty()) {
-                    agg.name = prov.label;
-                    agg.is_aux = prov.kind == ColumnKind::AUX;
-                    agg.direction = rv > 0 ? "+inf" : "-inf";
-                    agg.vidx = prov.decide_var_idx;
-                }
-                agg.instances.insert(prov.instance);
-            }
 
-            vector<VarEscape> escapes;
-            for (auto &kv : by_var) {
-                VarAgg &agg = kv.second;
-                VarEscape ve;
-                ve.name = agg.name;
-                ve.direction = agg.direction;
-                ve.is_aux = agg.is_aux;
-                ve.total = var_indexer.NumInstances(agg.vidx);
-                ve.escaping = agg.instances.size();
-                ve.all_escape = ve.escaping >= ve.total;
-                if (!agg.is_aux && ve.escaping < ve.total && ve.total > 1) {
-                    bool entity_scoped = agg.vidx < var_indexer.is_entity_scoped.size() &&
-                                         var_indexer.is_entity_scoped[agg.vidx];
-                    if (entity_scoped) {
-                        idx_t scope_idx = agg.vidx < var_indexer.var_entity_mapping_idx.size()
-                                              ? var_indexer.var_entity_mapping_idx[agg.vidx]
-                                              : DConstants::INVALID_INDEX;
-                        if (scope_idx != DConstants::INVALID_INDEX &&
-                            scope_idx < entity_scopes.size() &&
-                            scope_idx < live_entity_mappings.size()) {
-                            ve.rules = CharacterizeEscape(agg.instances, ve.total,
-                                                          get_entity_candidates(scope_idx),
-                                                          diag_params.escape_rate);
-                        }
-                    } else {
-                        ve.rules = CharacterizeEscape(agg.instances, ve.total, get_row_candidates(),
-                                                      diag_params.escape_rate);
-                    }
-                }
-                escapes.push_back(std::move(ve));
-            }
-
-            if (!escapes.empty()) {
-                DecideDiagnostic diag = BuildUnboundedDiagnostic(escapes);
+            UnboundedDiagnosisInput diag_input {
+                solve_result,
+                var_indexer,
+                var_labels,
+                var_is_aux,
+                diag_params,
+                get_candidates,
+            };
+            DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
+            if (diag.valid && !diag.rows.empty()) {
                 StashDecideDiagnostic(context, diag);
                 ThrowDecideDiagnosisReady(diag);
             }

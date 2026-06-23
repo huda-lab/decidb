@@ -2,13 +2,14 @@
 
 F5 adds a structured diagnosis that a state engine populates, stashes
 per-connection, and surfaces via the `decide_diagnostics()` table function with a
-fixed schema. For the unbounded state each row names one escaping variable:
+fixed long-form schema. For the unbounded state each variable owns attributes:
 
-    query_id | state | variable | direction | escaping_instances
+    diagnosis_id | state | subject_kind | subject | attribute | value
 
 `escaping_instances` characterizes which instances of the variable escape (here
-all of them); `query_id` ties together every row of one failed solve. The forced
-remedy (add a bound) is prescribed in the stderr summary, not a per-row column.
+all of them); `diagnosis_id` ties together every row of one failed solve. The
+forced remedy (add a bound) is prescribed in the stderr summary, not a per-row
+column.
 
 The end-to-end flow spans two statements on one connection (a failing DECIDE that
 stashes, then a SELECT that reads it back), so these tests drive the CLI via
@@ -30,11 +31,12 @@ _UNBOUNDED_SQL = (
 )
 
 _EXPECTED_SCHEMA = [
-    "query_id",
+    "diagnosis_id",
     "state",
-    "variable",
-    "direction",
-    "escaping_instances",
+    "subject_kind",
+    "subject",
+    "attribute",
+    "value",
 ]
 
 
@@ -54,6 +56,14 @@ def _rows(result):
     return list(csv.DictReader(io.StringIO(result.stdout)))
 
 
+def _attrs(rows, subject_kind, subject):
+    return {
+        r["attribute"]: r["value"]
+        for r in rows
+        if r["subject_kind"] == subject_kind and r["subject"] == subject
+    }
+
+
 @pytest.mark.query_diagnostics
 class TestF5DiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -69,14 +79,13 @@ class TestF5DiagnosticsRelation:
         )
 
         rows = _rows(result)
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["state"] == "unbounded"
-        assert row["variable"] == "x"
-        assert row["direction"] == "+inf"
+        assert len(rows) == 2
+        assert {r["state"] for r in rows} == {"unbounded"}
+        attrs = _attrs(rows, "variable", "x")
+        assert attrs["direction"] == "+inf"
         # Both instances of x escape, so escaping_instances reports the total-escape
         # summary.
-        assert row["escaping_instances"] == "all 2 instances escape"
+        assert attrs["escaping_instances"] == "all 2 instances escape"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_relation_has_fixed_schema(self, request, cli_fixture):
@@ -145,3 +154,19 @@ class TestF5DiagnosticsRelation:
             # Gurobi reports UNBOUNDED, exercising the A5 fall-through to the static
             # error (the old code replaced this with an all-NULL diagnosis row).
             assert "you must add constraints to bound" in result.stderr.lower()
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize("mode", ["infeasible", "auto"])
+    def test_contradictory_bounds_reach_infeasible_gate(self, request, cli_fixture, mode):
+        """B5: pre-solve contradictory bounds surface as INFEASIBLE status instead
+        of bypassing the diagnose gate with a build-time throw. The infeasible engine
+        does not exist yet, so no diagnosis rows are stashed."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x >= 5 AND x <= 1 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode=mode)
+        assert "decide optimization is infeasible" in result.stderr.lower()
+        assert "diagnosis ready" not in result.stderr.lower()
+        assert _rows(result) == []

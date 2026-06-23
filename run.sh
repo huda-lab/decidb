@@ -43,3 +43,16 @@ MAXIMIZE SUM(buy * p_retailprice * 0.10);
 SELECT * FROM decide_diagnostics();
 EOF
 
+
+
+
+
+# ./decidb ../../decidb.db <<'EOF'
+# .mode box
+
+# PRAGMA diagnose_decide='auto';
+
+# SELECT p_partkey, p_mfgr, p_size, p_retailprice
+# FROM part
+# WHERE p_size <= 5;
+# EOF

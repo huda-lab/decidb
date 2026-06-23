@@ -1,8 +1,7 @@
 # Query Diagnostics — Foundations (how it works)
 
 Shared plumbing every diagnosis state consumes. This doc describes the shipped
-infrastructure, topic by topic. Remaining foundation work (F3 relaxability
-tagging) is in `todo.md`.
+infrastructure, topic by topic. Remaining foundation work is in `todo.md`.
 
 ## Structured solver result
 
@@ -21,6 +20,13 @@ so callers branch on the outcome. This gates the whole area.
 - **The `SolveModel` facade** returns `SolverResult` and no longer throws on solver
   status (`ilp_solver.cpp`). The default user-facing error text is a single helper,
   `ThrowDecideSolveError(const SolverResult &)`.
+- **Pre-solve model-builder infeasibility is normalized.** Contradictory normalized
+  rows and contradictory accumulated bounds throw `DecideInfeasibleModelException`
+  inside `SolverModel::Build`; `SolveModel` catches that internal exception and
+  returns `SolverResult{status = INFEASIBLE}`. A fast contradiction such as
+  `x >= 5 AND x <= 1` therefore reaches the same `PhysicalDecide::Finalize` gate as
+  backend-reported infeasibility, instead of bypassing diagnostics with a direct
+  builder error.
 - **The throw lives in the operator.** `PhysicalDecide::Finalize`
   (`physical_decide.cpp`) branches on status: optimal → store the solution;
   non-optimal → the pragma gate decides whether to diagnose or call
@@ -37,17 +43,32 @@ user-clause level instead of raw rows.
   `SolverModel::QuadraticConstraint` (`src/include/duckdb/decidb/ilp_model.hpp`).
   `clause_id` indexes `SolverInput::constraints` (`INVALID_INDEX` for synthetic
   rows); `group_key` is the PER/WHEN group id at emission (or row id for per-row,
-  INVALID when ungrouped); `kind = ConstraintKind{USER, STRUCTURAL}`.
+  INVALID when ungrouped); `kind` is the row role consumed by the future elastic
+  engine.
+- **Single row-role enum:** `ConstraintKind = { USER_PARAMETER, USER_MECHANISM,
+  STRUCTURAL }` (`duckdb/common/enums/decide.hpp`). `USER_PARAMETER` carries a
+  user-editable parameter/RHS and is relaxable. `USER_MECHANISM` is a rigid helper
+  row attached to a user clause (for example generated `<>` and hard MIN/MAX
+  mechanism rows). `STRUCTURAL` is a synthesized definition/linking row. The
+  elastic predicate is one equality: `IsRelaxableForElastic(kind)` is true only for
+  `USER_PARAMETER`.
 - **Stamped at every builder fan-out site** in `ilp_model_builder.cpp` (linear
   aggregate-ungrouped / aggregate-PER / per-row, the raw global push, and the three
   quadratic analogues). `clause_id` is derived by pointer arithmetic into
-  `input.constraints` so it survives `continue` skips.
-- **`BuildClauseToRows(const SolverModel&)`** is the reverse index: `clause_id →
-  [row positions]` over the linear matrix.
-- **`kind` scope:** the unambiguous split is stamped (USER on the evaluated-constraint
-  paths, STRUCTURAL on the global-raw push). The exhaustive STRUCTURAL enumeration
-  across the linearization rewrite paths is F3 (`todo.md`) — `kind` is not yet
-  complete.
+  `input.constraints` so it survives `continue` skips. Evaluated constraints default
+  to `USER_PARAMETER` unless the planner/operator stamps a rigid role; raw generated
+  constraints default to `STRUCTURAL` unless explicitly marked as user mechanism or
+  user parameter.
+- **Rigid rewrite rows are stamped at the source.** The optimizer tags structural
+  rewrites that re-enter constraint parsing with `STRUCTURAL_CONSTRAINT_TAG`, and
+  `PhysicalDecide` stamps generated McCormick / ABS envelope rows as `STRUCTURAL`;
+  generated `<>` and hard MIN/MAX mechanism rows as `USER_MECHANISM`; and composed
+  MIN/MAX outer user pins as `USER_PARAMETER`.
+- **`BuildClauseRowIndex(const SolverModel&)`** is the reverse index. It returns
+  `ClauseRowIndex { by_clause, by_clause_group }`, where each value is a list of
+  `ConstraintRowRef { type, index }`. `type` distinguishes linear matrix rows from
+  quadratic rows; `by_clause_group` keys `(clause_id, group_key)` for PER/per-row
+  elastic slack placement.
 
 Tested in `test/common/test_decidb_constraint_provenance.cpp`.
 
@@ -96,6 +117,28 @@ pragma *is* the opt-in).
 
 Tested in `test/decide/tests/test_query_diagnostics_f4.py` (both backends).
 
+## Diagnosis engine seam
+
+State-specific diagnosis logic lives behind free-function engines rather than as
+inline branches in `PhysicalDecide::Finalize`.
+
+- **Unbounded engine:** `DiagnoseUnbounded(const UnboundedDiagnosisInput&)`
+  (`src/include/duckdb/decidb/decide_diagnostic_engines.hpp`,
+  `src/decidb/utility/decide_diagnostic_engines.cpp`). The input carries the
+  `SolverResult`, `VarIndexer`, user labels, aux flags, diagnostic params, and an
+  injected `get_candidates(decide_var_idx, total_instances)` callback for categorical
+  groupings.
+- **Boundary:** the engine is free of DuckDB execution/operator types. It reads the
+  ray, maps columns through variable provenance, groups escaping instances by
+  DECIDE variable, asks the callback for row/entity categorical candidates, and
+  returns a `DecideDiagnostic` only when it produced named variable content.
+- **`Finalize` owns orchestration:** read mode, pre-arm unbounded ray extraction,
+  call the matching engine for the status, stash + throw only when the engine
+  returns a valid diagnosis, otherwise fall through to `ThrowDecideSolveError`.
+  The success path still clears the per-connection stash.
+
+Tested in `test/common/test_decidb_diagnostic_engines.cpp`.
+
 ## The `decide_diagnostics()` reporting relation
 
 A structured diagnosis a state engine populates, stashed per-connection, surfaced
@@ -113,27 +156,28 @@ as a fixed-schema relation.
   counter is left intact so ids stay monotonic across solves.
 - **`decide_diagnostics()` table function** (registered in
   `system_functions.cpp`, implemented in `decide_diagnostic.cpp`) with fixed schema
-  `(query_id BIGINT, state, variable, direction, escaping_instances)`
-  — `query_id` BIGINT, the rest VARCHAR; empty string fields render as SQL NULL. The
-  schema is **variable-centric** (one row = one escaping variable). `query_id` is
-  stamped at stash time from a per-connection counter.
+  `(diagnosis_id BIGINT, state, subject_kind, subject, attribute, value)`. The
+  string columns are VARCHAR; empty string fields render as SQL NULL.
+  `diagnosis_id` is stamped at stash time from a per-connection counter and ties
+  all rows from one diagnosed failure together.
+- **Long-form EAV surface:** `subject_kind` names the entity type (`variable` today,
+  `clause` for infeasible later); `subject` is the state-engine-owned identifier;
+  `attribute`/`value` carry that engine's facts. This keeps the table function
+  schema stable as new states add their own attributes.
 - **Why a table function and not a result-schema switch:** DECIDE is a clause on
   SELECT, and the projection binds the decision columns before the solve runs
   (`logical_decide.cpp`, `transform_select_node.cpp`), so a runtime result-schema
   switch is bind-time-blocked. The diagnosis is surfaced via this companion table
   function instead.
 - **Today only the unbounded engine populates it** (`BuildUnboundedDiagnostic` — see
-  `unbounded/done.md`). `escaping_instances` characterizes which instances of a
-  variable escape (categorical rules / total-escape / count); the forced remedy
-  (add a bound) is prescribed in the stderr summary, not a per-row column. The
+  `unbounded/done.md`). It emits one `direction` row for every escaping variable
+  and an `escaping_instances` row only when there is instance multiplicity to
+  explain (categorical rules / total-escape / count). The forced remedy (add a
+  bound) is prescribed in the stderr summary, not a per-row attribute. The
   unbounded characterization adds
   three sticky extension options alongside `diagnose_decide`:
   `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
 
-Tested in `test/decide/tests/test_query_diagnostics_f5.py` (both backends).
-
-**Schema is currently shaped around unbounded.** The infeasible/slow engines,
-whose subject is a *clause* not a *variable*, will need to revisit these columns
-(re-add `clause`/`edit_kind`/`suggested_change`, or generalize the relation) before
-they can report — see `infeasible/todo.md`.
+Tested in `test/decide/tests/test_query_diagnostics_f5.py` (both backends) and
+`test/common/test_decidb_diagnostic_engines.cpp` (a clause-shaped stub row).

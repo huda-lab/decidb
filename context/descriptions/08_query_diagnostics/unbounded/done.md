@@ -61,13 +61,14 @@ extra filter needed.
 The ray gives non-zero entries per solver *column*. Each column is mapped back to
 the user-facing variable through the `ColumnProvenance` map (variable provenance,
 `foundations/done.md`): user columns resolve to the declared variable name, aux
-columns to the source expression they were generated from. The diagnosis site
-(`PhysicalDecide` Finalize) collects columns with `|ray[i]| > 1e-8`, groups them by
-`decide_var_idx`, and collects each variable's escaping **scope-instances** (the
+columns to the source expression they were generated from. The `DiagnoseUnbounded`
+engine collects columns with `|ray[i]| > 1e-8`, groups them by `decide_var_idx`,
+and collects each variable's escaping **scope-instances** (the
 `ColumnProvenance.instance`: the row for row-scoped, the entity id for
-entity-scoped). It emits **one row per escaping variable** carrying its name,
-direction, and a characterization of *which* instances escape (next section).
-`BuildUnboundedDiagnostic` is the pure formatter over that per-variable summary.
+entity-scoped). It emits EAV attributes for each escaping variable: always
+`direction`, and `escaping_instances` when there is scope multiplicity to
+characterize (next section). `BuildUnboundedDiagnostic` is the pure formatter over
+that per-variable summary.
 
 **Only user variables escape in practice (verified, both backends).** Auxiliary
 variables are structurally bounded — ABS Big-M and bilinear McCormick require
@@ -78,28 +79,31 @@ aux ever escapes); the practical escapers are user INTEGER/REAL variables.
 ## The output relation
 
 The diagnosis surfaces through `decide_diagnostics()` (schema in
-`foundations/done.md`) as a **variable-centric** relation — one row per escaping
-variable:
+`foundations/done.md`) as long-form EAV rows:
 
-    query_id | state | variable | direction | escaping_instances
+    diagnosis_id | state | subject_kind | subject | attribute | value
 
-- `variable` — the escaping variable's name.
-- `direction` — the sign of its ray entry, as ASCII `+inf` / `-inf` (not the Unicode
-  `±∞` glyph: ASCII is robust in CSV exports, `WHERE direction = '+inf'` filters, and
-  non-UTF-8 terminals). Always `+inf` today: user variables are non-negative
+- `subject_kind` — `variable` for every unbounded row.
+- `subject` — the escaping variable's name.
+- `attribute = direction` — the sign of its ray entry, as ASCII `+inf` / `-inf`
+  (not the Unicode `±∞` glyph: ASCII is robust in CSV exports, EAV filters such as
+  `WHERE attribute = 'direction' AND value = '+inf'`, and non-UTF-8 terminals).
+  Always `+inf` today: user variables are non-negative
   (`[0, 1e30]`), so escape is always upward. The sign is computed from the ray, so a
   future signed/free variable would report `-inf` — but that path is unreachable and
   untested until signed variables exist (see `todo.md` and
   `03_expressivity/decide/todo.md`).
-- `query_id` — ties together the rows of one failed solve.
-- `escaping_instances` — which instances of the variable escape (next section).
+- `diagnosis_id` — ties together the rows of one failed solve.
+- `attribute = escaping_instances` — which instances of the variable escape (next
+  section). This row is omitted for name-only cases where the value would be NULL
+  (aux/name-only or a single-instance variable).
 
 The forced remedy (add a bound) is a single statement that applies to every
 escaping variable, so it is carried in the **summary** (stderr), not as a per-row
-column. (An always-NULL `suggested_bound` column previously shipped here; it was
+attribute. (An always-NULL `suggested_bound` column previously shipped here; it was
 dropped — DeciDB never picks the cap value, so there was nothing per-variable to
 report.) When any row carries categorical rules, the summary also appends a
-one-line legend for the `escaping_instances` cell format (`c=v (a/b)` = a of b
+one-line legend for the `escaping_instances` value format (`c=v (a/b)` = a of b
 instances where `c=v` escape; `; `-separated rules are alternatives).
 
 The error thrown points the user at the relation: `SELECT * FROM
@@ -123,6 +127,10 @@ Two error-text behaviors close the loop between a failed solve and its diagnosis
   The stash is per-connection, so a fresh connection (a second `decidb -c …`) gets
   an empty relation; the "(this session)" qualifier sets that expectation. A
   richer empty-stash explanatory row was considered and deferred.
+- **Variable, not clause blame.** The stashed-diagnosis summary also says the
+  diagnosis names the runaway variable, not a single guilty clause. That mirrors
+  the ray's information limit: a missing bound and a flipped-sign constraint can
+  produce the same recession direction.
 
 ## `escaping_instances` — characterizing which instances escape
 
@@ -172,7 +180,9 @@ The ray identifies a *missing* bound. It can name the runaway variable but
 **cannot** finger a single guilty clause: a flipped-sign constraint is
 mathematically indistinguishable from an absent one. So any clause-level output
 can only ever be *context* ("`x` appears in clauses 2, 5; none cap it"), never
-blame. This shapes every clause-aware enrichment in `todo.md`.
+blame. The current summary states this caveat directly so users do not hunt for
+clause blame in `decide_diagnostics()`. This shapes every clause-aware enrichment
+in `todo.md`.
 
 ## Tests
 
@@ -181,9 +191,13 @@ Differential vs `oracle_solver` / pinned scenarios:
 HiGHS `INF_OR_UNBD` path, multi-var dedup, `auto` routing, no-pragma silence) ·
 `test/decide/tests/test_query_diagnostics_escaping_instances.py` (row-scoped
 partial → categorical rule, total escape, scattered → count fallback,
-entity-scoped → entity-key rule, the escape-rate pragma changing what is reported;
-both backends) · `test/decide/tests/test_query_diagnostics_f5.py` (the renamed
-`escaping_instances` schema) · `test/common/test_decidb_escape_characterization.cpp`
+entity-scoped → entity-key rule, all three characterization pragmas
+`escape_rate` / `categorical_ratio` / `min_categories` changing what is reported;
+both backends, with oracle-confirmed unbounded constructed cases for the
+cardinality-knob tests) · `test/decide/tests/test_query_diagnostics_f5.py` (the renamed
+EAV `decide_diagnostics()` schema and `diagnosis_id`) ·
+`test/common/test_decidb_diagnostic_engines.cpp` (`DiagnoseUnbounded` with injected
+grouping and a clause-shaped EAV stub row) · `test/common/test_decidb_escape_characterization.cpp`
 (the pure `CharacterizeEscape` core: threshold gating, union/sort, all-escape,
 excluded instances, empty-rules fallback) · `test/common/test_decidb_diagnostic_solves.cpp`
 (ray fallback: full-support ray, signed objective, finite-UB zeroing, row-sense
@@ -192,4 +206,5 @@ preservation, integrality relaxation, opt-in attachment) ·
 The characterization string is asserted against constructed cases (oracle/pinned
 confirm only the UNBOUNDED status). Demoed end-to-end on the TPC-H DB via `run.sh`
 (a 1-variable `part` model where `buy` is uncapped for `Manufacturer#1` rows, so
-the diagnosis reports `buy`, `+inf`, `p_mfgr=Manufacturer#1 (29/29)`).
+the diagnosis reports EAV rows for `buy` / `direction` / `+inf` and
+`buy` / `escaping_instances` / `p_mfgr=Manufacturer#1 (29/29)`).

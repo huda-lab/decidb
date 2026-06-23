@@ -42,6 +42,14 @@ def _rows(result):
     return list(csv.DictReader(io.StringIO(result.stdout)))
 
 
+def _attrs(rows, subject):
+    return {
+        r["attribute"]: r["value"]
+        for r in rows
+        if r["subject_kind"] == "variable" and r["subject"] == subject
+    }
+
+
 @pytest.mark.query_diagnostics
 class TestF6VariableNaming:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -59,14 +67,14 @@ class TestF6VariableNaming:
             in result.stderr.lower()
         )
         rows = _rows(result)
-        assert len(rows) == 1
-        assert rows[0]["variable"] == "x"
-        assert rows[0]["direction"] == "+inf"
-        assert rows[0]["state"] == "unbounded"
+        assert _attrs(rows, "x")["direction"] == "+inf"
+        assert {r["state"] for r in rows} == {"unbounded"}
         # The summary still names the variable on stderr.
         assert "the variable x can grow without bound" in result.stderr.lower()
         # A4: and prescribes the forced remedy (add a bound) without a number.
         assert "add an upper bound, e.g. such that x <= <cap>" in result.stderr.lower()
+        # C2: set the expectation that the ray names a variable, not clause blame.
+        assert "not a single guilty clause" in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_integer_var_named(self, request, cli_fixture):
@@ -78,14 +86,13 @@ class TestF6VariableNaming:
             "DECIDE n IS INTEGER SUCH THAT n >= 0 MAXIMIZE SUM(n)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert [r["variable"] for r in rows] == ["n"]
-        assert rows[0]["direction"] == "+inf"
+        assert _attrs(rows, "n")["direction"] == "+inf"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_multiple_escaping_vars_each_named_once(self, request, cli_fixture):
         """Two escaping vars yield two rows; each row-scoped var is deduped to one
         row even though it instantiates a column per source row, and both rows
-        share one query_id (same solve)."""
+        share one diagnosis_id (same solve)."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x, y FROM (VALUES (1), (2)) t(id) "
@@ -93,9 +100,9 @@ class TestF6VariableNaming:
             "MAXIMIZE SUM(x + y)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert len(rows) == 2
-        assert sorted(r["variable"] for r in rows) == ["x", "y"]
-        assert len({r["query_id"] for r in rows}) == 1
+        assert _attrs(rows, "x")["direction"] == "+inf"
+        assert _attrs(rows, "y")["direction"] == "+inf"
+        assert len({r["diagnosis_id"] for r in rows}) == 1
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_auto_mode_names_unbounded_var(self, request, cli_fixture):
@@ -106,7 +113,7 @@ class TestF6VariableNaming:
             "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
         rows = _rows(_diagnose(cli, sql, mode="auto"))
-        assert [r["variable"] for r in rows] == ["x"]
+        assert _attrs(rows, "x")["direction"] == "+inf"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_no_pragma_no_naming(self, request, cli_fixture):

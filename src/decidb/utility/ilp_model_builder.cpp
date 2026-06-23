@@ -438,7 +438,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             violated = std::abs(constr.rhs) > EPS;
         }
         if (violated) {
-            throw InvalidInputException(
+            throw DecideInfeasibleModelException(
                 "DECIDE optimization is infeasible: a constraint reduces to "
                 "0 %c %g after absorbing variable bounds and cancelling terms.",
                 constr.sense, constr.rhs);
@@ -559,6 +559,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 }
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                 constr.provenance.clause_id = clause_id; // F2 site 1: aggregate, ungrouped
+                constr.provenance.kind = eval_const.kind;
                 PushNormalizedConstraint(std::move(constr));
 
             } else {
@@ -647,6 +648,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                     constr.provenance.clause_id = clause_id; // F2 site 2: aggregate + PER/WHEN
                     constr.provenance.group_key = g;
+                    constr.provenance.kind = eval_const.kind;
                     PushNormalizedConstraint(std::move(constr));
                 }
             }
@@ -706,6 +708,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.clause_id = clause_id; // F2 site 3: per-row
                 constr.provenance.group_key =
                     has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
+                constr.provenance.kind = eval_const.kind;
                 PushNormalizedConstraint(std::move(constr));
             }
         }
@@ -876,6 +879,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 std::iota(all_rows.begin(), all_rows.end(), 0);
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer);
                 qc.provenance.clause_id = clause_id; // F2 site 5: quadratic aggregate, ungrouped
+                qc.provenance.kind = eval_const.kind;
                 model.quadratic_constraints.push_back(std::move(qc));
             } else {
                 // PER groups: one QuadraticConstraint per group, reuse CSR
@@ -894,6 +898,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, rhs, lhs_is_integer);
                     qc.provenance.clause_id = clause_id; // F2 site 6: quadratic aggregate + PER
                     qc.provenance.group_key = g;
+                    qc.provenance.kind = eval_const.kind;
                     model.quadratic_constraints.push_back(std::move(qc));
                 }
             }
@@ -909,6 +914,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 qc.provenance.clause_id = clause_id; // F2 site 7: quadratic per-row
                 qc.provenance.group_key =
                     has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
+                qc.provenance.kind = eval_const.kind;
                 model.quadratic_constraints.push_back(std::move(qc));
             }
         }
@@ -926,7 +932,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // F2 site 4: synthetic linking rows (no user clause). The full structural
         // enumeration across linearization paths is F3; this is the one site that
         // unambiguously has no EvaluatedConstraint source.
-        constr.provenance.kind = ConstraintKind::STRUCTURAL;
+        constr.provenance.kind = raw.kind;
         model.constraints.push_back(std::move(constr));
     }
 
@@ -940,7 +946,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                     i, model.col_lower[i], model.col_upper[i]);
         }
         if (model.col_lower[i] > model.col_upper[i]) {
-            throw InvalidInputException(
+            throw DecideInfeasibleModelException(
                 "DECIDE optimization is infeasible: contradictory bounds on variable %llu "
                 "(lower=%f > upper=%f). Check your SUCH THAT constraints for conflicting bounds.",
                 i, model.col_lower[i], model.col_upper[i]);
@@ -989,16 +995,37 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     return model;
 }
 
-std::map<idx_t, vector<idx_t>> BuildClauseToRows(const SolverModel &model) {
-    std::map<idx_t, vector<idx_t>> clause_to_rows;
+ClauseRowIndex BuildClauseRowIndex(const SolverModel &model) {
+    ClauseRowIndex index;
     for (idx_t row = 0; row < model.constraints.size(); row++) {
-        idx_t clause_id = model.constraints[row].provenance.clause_id;
+        const auto &provenance = model.constraints[row].provenance;
+        idx_t clause_id = provenance.clause_id;
         if (clause_id == DConstants::INVALID_INDEX) {
-            continue; // structural / synthetic row with no user clause
+            continue;
         }
-        clause_to_rows[clause_id].push_back(row);
+        ConstraintRowRef ref;
+        ref.type = ConstraintRowType::LINEAR;
+        ref.index = row;
+        index.by_clause[clause_id].push_back(ref);
+        if (provenance.group_key != DConstants::INVALID_INDEX) {
+            index.by_clause_group[{clause_id, provenance.group_key}].push_back(ref);
+        }
     }
-    return clause_to_rows;
+    for (idx_t row = 0; row < model.quadratic_constraints.size(); row++) {
+        const auto &provenance = model.quadratic_constraints[row].provenance;
+        idx_t clause_id = provenance.clause_id;
+        if (clause_id == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        ConstraintRowRef ref;
+        ref.type = ConstraintRowType::QUADRATIC;
+        ref.index = row;
+        index.by_clause[clause_id].push_back(ref);
+        if (provenance.group_key != DConstants::INVALID_INDEX) {
+            index.by_clause_group[{clause_id, provenance.group_key}].push_back(ref);
+        }
+    }
+    return index;
 }
 
 vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,

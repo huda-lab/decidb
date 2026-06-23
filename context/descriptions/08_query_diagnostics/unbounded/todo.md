@@ -50,8 +50,7 @@ cheaper alternative that sets the right expectation.
 Partial-escape characterization (row-scoped rule, entity-scoped rule, scattered →
 count fallback, total escape, escape-rate pragma) now lands in
 `test_query_diagnostics_escaping_instances.py` + the `CharacterizeEscape` unit test.
-Still uncovered:
-- the `categorical_ratio` / `min_categories` knobs changing what is reported (only
-  `escape_rate` is exercised);
+The `categorical_ratio` and `min_categories` knobs now also have pinned
+end-to-end coverage. Still uncovered:
 - the fresh-connection empty-relation case (a second `decidb` process with no prior
   failed solve in-session).

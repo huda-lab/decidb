@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/solver_input.hpp"
 
 #include <map>
@@ -76,13 +77,17 @@ struct VarIndexer {
     static VarIndexer BuildRef(const SolverInput &input);
 };
 
-//! Origin of an emitted matrix row.
-//!   USER       — emitted from a user SUCH THAT clause (relaxable; F3 refines this).
-//!   STRUCTURAL — synthesized by a linearization/linking rewrite (rigid).
-//! F2 stamps the obvious split only (USER on the EvaluatedConstraint-derived paths,
-//! STRUCTURAL on the raw global-constraint push). The exhaustive structural
-//! enumeration across the optimizer/execution rewrite paths is F3.
-enum class ConstraintKind : uint8_t { USER, STRUCTURAL };
+class DecideInfeasibleModelException : public Exception {
+public:
+	explicit DecideInfeasibleModelException(const string &message)
+	    : Exception(ExceptionType::INVALID_INPUT, message) {
+	}
+
+	template <typename... ARGS>
+	explicit DecideInfeasibleModelException(const string &message, ARGS... params)
+	    : DecideInfeasibleModelException(Exception::ConstructMessage(message, params...)) {
+	}
+};
 
 //! Row → clause provenance carried by every emitted constraint (F2). Lets diagnosis
 //! report at the user-clause level instead of at raw matrix rows.
@@ -93,8 +98,8 @@ struct ConstraintProvenance {
     //! PER/WHEN group id at emission (or the row id for per-row clauses).
     //! DConstants::INVALID_INDEX when the clause is ungrouped.
     idx_t group_key = DConstants::INVALID_INDEX;
-    //! USER vs STRUCTURAL (see ConstraintKind).
-    ConstraintKind kind = ConstraintKind::USER;
+    //! User parameter vs rigid mechanism/structural row (see ConstraintKind).
+    ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 };
 
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs
@@ -158,12 +163,25 @@ struct SolverModel {
     static SolverModel Build(SolverInput &input, const VarIndexer &indexer);
 };
 
-//! Reverse index: user clause_id → positions of its rows in model.constraints (F2).
-//! One forward pass over the linear constraints; structural rows (clause_id ==
-//! DConstants::INVALID_INDEX) are skipped. Quadratic constraints carry provenance
-//! too but are not indexed here (linear matrix is the common diagnosis surface).
-//! Ordered map for deterministic iteration in reporting/tests.
-std::map<idx_t, vector<idx_t>> BuildClauseToRows(const SolverModel &model);
+enum class ConstraintRowType : uint8_t { LINEAR, QUADRATIC };
+
+struct ConstraintRowRef {
+	ConstraintRowType type = ConstraintRowType::LINEAR;
+	idx_t index = DConstants::INVALID_INDEX;
+};
+
+//! Reverse index over linear and quadratic constraint rows. `by_clause` groups all
+//! emitted rows for a clause; `by_clause_group` narrows to one PER/WHEN group.
+struct ClauseRowIndex {
+	std::map<idx_t, vector<ConstraintRowRef>> by_clause;
+	std::map<std::pair<idx_t, idx_t>, vector<ConstraintRowRef>> by_clause_group;
+};
+
+//! Reverse index: user clause_id / (clause_id, group_key) → emitted row refs (F2/B3).
+//! Rows with INVALID clause ids are skipped. Ordered maps keep reporting/tests
+//! deterministic. Structural rows are retained in the index and filtered by
+//! provenance.kind by consumers that need relaxable-only rows.
+ClauseRowIndex BuildClauseRowIndex(const SolverModel &model);
 
 //! What a flat solver column represents to the user (F6 variable provenance —
 //! the column-side complement of ConstraintProvenance):
@@ -188,7 +206,7 @@ struct ColumnProvenance {
 };
 
 //! Reverse map: flat solver column index → ColumnProvenance (F6). The column-side
-//! complement of BuildClauseToRows. Pure (no planner/Expression dependency): the
+//! complement of BuildClauseRowIndex. Pure (no planner/Expression dependency): the
 //! caller pre-extracts per-decide-variable labels (user name or aux source
 //! expression) and an is-aux flag. Output is sized `indexer.total_vars`; every
 //! entry defaults to GLOBAL_AUX (the global block stays unnamed), then the row /

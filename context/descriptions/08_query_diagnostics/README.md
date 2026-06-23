@@ -48,7 +48,7 @@ a too-open one); slow is a runtime event masking the other states.
 ## Build order (dependency tiers)
 
 ```
-Tier 1  F1 structured-result · F2 constraint-prov · F6 variable-prov
+Tier 1  shipped: F1 structured-result · F2 constraint-prov · F6 variable-prov
         F3 relaxability (needs F2) · F5 reporting-relation (needs F2) · F4 pragma (needs F1)
 Tier 2  I1/I2 elastic · U1 disambiguation · U2 ray (fallback-only)   (engines; need Tier 1)
 Tier 3  I4 infeasible-reporting · U3 ray-reporting (full) · S1–S4 slow
@@ -61,7 +61,7 @@ fail fast as today), `infeasible` / `unbounded` / `slow` (scoped), `auto`
 (whichever state the solve lands in). **Filter semantics, not force:** a mode
 acts only when the solve *actually* lands in that state, so a left-on pragma is
 harmless and `auto` doesn't violate manual-first (setting the pragma *is* the
-opt-in). See `foundations/todo.md` (F4).
+opt-in). See `foundations/done.md` (F4).
 
 ## External dependency — decision-variable norms (v1.1)
 

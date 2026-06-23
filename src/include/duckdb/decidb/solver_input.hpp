@@ -244,6 +244,7 @@ struct EvaluatedConstraint {
     };
     vector<QuadraticGroup> quadratic_groups;
     bool has_quadratic = false;
+    ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 
     //! Unified WHEN+PER row→group mapping
     //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)
@@ -330,6 +331,7 @@ struct SolverInput {
         vector<double> coefficients;
         char sense;     // '<' (<=), '>' (>=), '=' (==)
         double rhs;
+        ConstraintKind kind = ConstraintKind::STRUCTURAL;
     };
     vector<RawConstraint> global_constraints;
 
