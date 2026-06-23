@@ -4,11 +4,11 @@ F5 adds a structured diagnosis that a state engine populates, stashes
 per-connection, and surfaces via the `decide_diagnostics()` table function with a
 fixed schema. For the unbounded state each row names one escaping variable:
 
-    query_id | state | variable | direction | escaping_instances | suggested_bound
+    query_id | state | variable | direction | escaping_instances
 
 `escaping_instances` characterizes which instances of the variable escape (here
-all of them); `suggested_bound` is reserved for later enrichment and reads NULL;
-`query_id` ties together every row of one failed solve.
+all of them); `query_id` ties together every row of one failed solve. The forced
+remedy (add a bound) is prescribed in the stderr summary, not a per-row column.
 
 The end-to-end flow spans two statements on one connection (a failing DECIDE that
 stashes, then a SELECT that reads it back), so these tests drive the CLI via
@@ -35,7 +35,6 @@ _EXPECTED_SCHEMA = [
     "variable",
     "direction",
     "escaping_instances",
-    "suggested_bound",
 ]
 
 
@@ -65,7 +64,7 @@ class TestF5DiagnosticsRelation:
 
         # The DECIDE itself still errors, with the pointer on stderr.
         assert (
-            "diagnosis ready: select * from decide_diagnostics()"
+            "diagnosis ready (this session): select * from decide_diagnostics()"
             in result.stderr.lower()
         )
 
@@ -74,12 +73,10 @@ class TestF5DiagnosticsRelation:
         row = rows[0]
         assert row["state"] == "unbounded"
         assert row["variable"] == "x"
-        assert row["direction"] == "+∞"
+        assert row["direction"] == "+inf"
         # Both instances of x escape, so escaping_instances reports the total-escape
-        # summary. suggested_bound is SQL NULL (reserved); DuckDB's CSV writer renders
-        # a NULL cell as the literal "NULL".
+        # summary.
         assert row["escaping_instances"] == "all 2 instances escape"
-        assert row["suggested_bound"] == "NULL"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_relation_has_fixed_schema(self, request, cli_fixture):
@@ -107,3 +104,44 @@ class TestF5DiagnosticsRelation:
         # Static error, no pointer, and the relation stays empty.
         assert "diagnosis ready" not in result.stderr.lower()
         assert _rows(result) == []
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_successful_solve_clears_stale_diagnosis(self, request, cli_fixture):
+        """A2: fail -> fix -> succeed invalidates the stash, so decide_diagnostics()
+        does not keep reporting a now-resolved failure. The success DECIDE also emits
+        CSV, so the relation read emits a `rows=N` sentinel to parse past it."""
+        cli = request.getfixturevalue(cli_fixture)
+        bounded_sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
+        )
+        script = (
+            ".mode csv\n"
+            "PRAGMA diagnose_decide='unbounded';\n"
+            f"{_UNBOUNDED_SQL};\n"  # stashes an unbounded diagnosis (and errors)
+            f"{bounded_sql};\n"  # succeeds -> clears the stash
+            "SELECT 'rows=' || count(*) AS diag FROM decide_diagnostics();\n"
+        )
+        result = cli.execute_script(script)
+        assert "rows=0" in result.stdout
+        assert "rows=1" not in result.stdout
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_qp_unbounded_no_content_free_diagnosis(self, request, cli_fixture):
+        """A5: an unbounded solve that names no variable must not stash a content-free
+        all-NULL row. A quadratic objective attaches no ray, so under `auto` the
+        diagnosis has no per-variable content and falls through to the rich static
+        error (Gurobi reaches UNBOUNDED here); HiGHS rejects the non-convex QP
+        pre-solve. Either path: no 'diagnosis ready' pointer and an empty relation."""
+        cli = request.getfixturevalue(cli_fixture)
+        qp_sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(POWER(x, 2))"
+        )
+        result = _diagnose(cli, qp_sql, mode="auto")
+        assert "diagnosis ready" not in result.stderr.lower()
+        assert _rows(result) == []
+        if "gurobi" in cli_fixture:
+            # Gurobi reports UNBOUNDED, exercising the A5 fall-through to the static
+            # error (the old code replaced this with an all-NULL diagnosis row).
+            assert "you must add constraints to bound" in result.stderr.lower()

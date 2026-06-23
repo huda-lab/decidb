@@ -28,47 +28,14 @@ work only:
 - **Continuous-column causes** (e.g. escape driven by `margin > 0`) are out of scope
   by design — categorical only.
 
-## `suggested_bound` — deferred design decision
-
-Explicitly deferred (user). The relation names the runaway variable but does not
-yet prescribe a value to cap it at, and there is no defensible number to put here
-(a wrong cap anchors the user; the right cap is domain knowledge). Whether this
-column becomes a concrete value, a non-anchoring remedy hint, or is dropped is an
-open design decision to settle before any work. Separately, see "Prescribe the
-fix" below for surfacing the *forced* remedy without committing to a number.
-
-## Prescribe the fix (least-change wording)
-
-The least-change promise says name the smallest edit that restores a usable
-solution. For unbounded the edit is forced and known: add an upper bound (or
-correct a sign). The diagnosis currently names the variable but stops short of
-saying so. Add the remedy to the summary — e.g. "add an upper bound such as
-`SUCH THAT x <= <cap>`" — without inventing a number. (This is the actionable half
-of `suggested_bound`; it can ship independently of the column's design call.)
-
-## Advertise the opt-in (agreed)
-
-With no pragma, an unbounded solve throws the legacy static error, which never
-mentions that a diagnosis is available. Append one line to the default
-unbounded/infeasible error pointing at the opt-in (e.g. "for a diagnosis, set
-`PRAGMA diagnose_decide='auto'` and re-run"). Advertises without auto-solving, so
-manual-first is preserved.
-
-## Same-session caveat
-
-The diagnosis is stashed per-connection, so the `SELECT * FROM
-decide_diagnostics()` the error points to returns an empty relation if run on a
-fresh connection (e.g. a second `decidb -c …`). Either note "(in this session)"
-in the pointer text, or have `decide_diagnostics()` explain an empty stash.
-
 ## Direction / downward escape
 
-`direction` is always `+∞` and the `-∞` branch is unreachable today, because
-variables are non-negative. Downward escape only becomes possible — and the `-∞`
+`direction` is always `+inf` and the `-inf` branch is unreachable today, because
+variables are non-negative. Downward escape only becomes possible — and the `-inf`
 path only becomes testable — once **signed/free variables** exist (tracked in
 `03_expressivity/decide/todo.md`). When they do: open the lower bound in the ray
 model (`BuildUnboundedRayFallbackModel` currently fixes `col_lower = 0`) and add a
-free-variable oracle test for the `-∞` direction.
+free-variable oracle test for the `-inf` direction.
 
 ## Clause-aware context line (optional)
 

@@ -3,8 +3,10 @@
 The objective improves without limit — the feasible region is too *open* in the
 improving direction. The fix is forced (the user must add a bound or correct a
 sign; you cannot relax your way out), but the diagnosis is rich: it **names the
-exact variables escaping to infinity**. Opt-in via `PRAGMA diagnose_decide` =
-`unbounded` or `auto`; with no pragma the solve throws the static error unchanged.
+exact variables escaping to infinity** and **prescribes the forced remedy** (add
+an upper bound) without inventing the cap value. Opt-in via `PRAGMA
+diagnose_decide` = `unbounded` or `auto`; with no pragma the solve throws the
+static error unchanged.
 
 This doc describes the shipped behavior, topic by topic. Remaining enrichments are
 in `todo.md`. Shared plumbing it builds on (the pragma gate, provenance, the
@@ -45,7 +47,10 @@ The ray is attached (`SolverResult::ray`) only when this LP is `OPTIMAL` with
 signed objective improvement > `1e-8`. It is opt-in (`SolveModelOptions::
 extract_unbounded_ray`), pre-armed by the pragma gate only for unbounded/auto, so
 the default failure path pays nothing. Quadratic objectives/constraints are out of
-scope (no ray extracted; the diagnosis falls back to a detail-less row).
+scope (no ray extracted). When the ray names no variable — a quadratic model, or a
+ray in which only internal auxiliaries escaped — the diagnosis has no per-variable
+content, so it is **not** stashed: the operator falls through to the rich static
+`ThrowDecideSolveError` instead of advertising a content-free all-NULL relation.
 
 **Suspect filtering is free:** because the box-LP fixes finite-UB columns to 0, a
 non-zero ray entry *is already* the type/sign/bound-filtered set of suspects — no
@@ -76,21 +81,48 @@ The diagnosis surfaces through `decide_diagnostics()` (schema in
 `foundations/done.md`) as a **variable-centric** relation — one row per escaping
 variable:
 
-    query_id | state | variable | direction | escaping_instances | suggested_bound
+    query_id | state | variable | direction | escaping_instances
 
 - `variable` — the escaping variable's name.
-- `direction` — the sign of its ray entry. Always `+∞` today: user variables are
-  non-negative (`[0, 1e30]`), so escape is always upward. The sign is computed
-  from the ray, so a future signed/free variable would report `-∞` — but that
-  path is unreachable and untested until signed variables exist (see `todo.md`
-  and `03_expressivity/decide/todo.md`).
+- `direction` — the sign of its ray entry, as ASCII `+inf` / `-inf` (not the Unicode
+  `±∞` glyph: ASCII is robust in CSV exports, `WHERE direction = '+inf'` filters, and
+  non-UTF-8 terminals). Always `+inf` today: user variables are non-negative
+  (`[0, 1e30]`), so escape is always upward. The sign is computed from the ray, so a
+  future signed/free variable would report `-inf` — but that path is unreachable and
+  untested until signed variables exist (see `todo.md` and
+  `03_expressivity/decide/todo.md`).
 - `query_id` — ties together the rows of one failed solve.
 - `escaping_instances` — which instances of the variable escape (next section).
-- `suggested_bound` — reserved, currently NULL (DeciDB never picks the bound; see
-  `todo.md`).
+
+The forced remedy (add a bound) is a single statement that applies to every
+escaping variable, so it is carried in the **summary** (stderr), not as a per-row
+column. (An always-NULL `suggested_bound` column previously shipped here; it was
+dropped — DeciDB never picks the cap value, so there was nothing per-variable to
+report.) When any row carries categorical rules, the summary also appends a
+one-line legend for the `escaping_instances` cell format (`c=v (a/b)` = a of b
+instances where `c=v` escape; `; `-separated rules are alternatives).
 
 The error thrown points the user at the relation: `SELECT * FROM
-decide_diagnostics()`.
+decide_diagnostics() (this session)` — see "How the failure is surfaced" below.
+
+## How the failure is surfaced (error messaging)
+
+Two error-text behaviors close the loop between a failed solve and its diagnosis:
+
+- **Advertise the opt-in (manual-first).** With no pragma set, an unbounded solve
+  throws the legacy static error (`ThrowDecideSolveError`, UNBOUNDED branch,
+  `ilp_solver.cpp`). That error now ends with one pointer line — *"For a diagnosis
+  of which variable is unbounded, set `PRAGMA diagnose_decide='auto'` and
+  re-run."* — so the user learns the diagnosis exists without DeciDB spending a
+  second solve on their behalf. Only the unbounded branch advertises; the
+  infeasible/slow branches stay silent because their engines don't exist yet
+  (advertising them would over-promise).
+- **Same-session caveat.** When the pragma *is* set and a diagnosis is stashed, the
+  thrown error reads *"Diagnosis ready (this session): SELECT * FROM
+  decide_diagnostics();"* (`ThrowDecideDiagnosisReady`, `decide_diagnostic.cpp`).
+  The stash is per-connection, so a fresh connection (a second `decidb -c …`) gets
+  an empty relation; the "(this session)" qualifier sets that expectation. A
+  richer empty-stash explanatory row was considered and deferred.
 
 ## `escaping_instances` — characterizing which instances escape
 
@@ -159,4 +191,5 @@ preservation, integrality relaxation, opt-in attachment) ·
 `test/common/test_decidb_variable_provenance.cpp` (USER/AUX/GLOBAL_AUX resolution).
 The characterization string is asserted against constructed cases (oracle/pinned
 confirm only the UNBOUNDED status). Demoed end-to-end on the TPC-H DB via `run.sh`
-(a 3-variable `part` model where only `promo` escapes).
+(a 1-variable `part` model where `buy` is uncapped for `Manufacturer#1` rows, so
+the diagnosis reports `buy`, `+inf`, `p_mfgr=Manufacturer#1 (29/29)`).

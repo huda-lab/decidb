@@ -30,7 +30,7 @@ _INFEASIBLE_SQL = (
     "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
 )
 
-_POINTER = "diagnosis ready: select * from decide_diagnostics()"
+_POINTER = "diagnosis ready (this session): select * from decide_diagnostics()"
 
 
 def _combined(result) -> str:

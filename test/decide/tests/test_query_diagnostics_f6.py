@@ -4,7 +4,7 @@ F6 maps every solver column back to the user-facing thing it represents — user
 variable name, or (for an auxiliary linearization column) the user's original
 source expression. Folded into the unbounded diagnosis, the decide_diagnostics()
 relation now reports each escaping variable by NAME with the DIRECTION it escapes
-(always +∞ today, since user variables are bounded below at 0).
+(always +inf today, since user variables are bounded below at 0).
 
 These tests drive the two-statement flow (a failing DECIDE that stashes, then a
 SELECT that reads `decide_diagnostics()` back) via `execute_script`, reading the
@@ -55,16 +55,18 @@ class TestF6VariableNaming:
         result = _diagnose(cli, sql)
 
         assert (
-            "diagnosis ready: select * from decide_diagnostics()"
+            "diagnosis ready (this session): select * from decide_diagnostics()"
             in result.stderr.lower()
         )
         rows = _rows(result)
         assert len(rows) == 1
         assert rows[0]["variable"] == "x"
-        assert rows[0]["direction"] == "+∞"
+        assert rows[0]["direction"] == "+inf"
         assert rows[0]["state"] == "unbounded"
         # The summary still names the variable on stderr.
         assert "the variable x can grow without bound" in result.stderr.lower()
+        # A4: and prescribes the forced remedy (add a bound) without a number.
+        assert "add an upper bound, e.g. such that x <= <cap>" in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_integer_var_named(self, request, cli_fixture):
@@ -77,7 +79,7 @@ class TestF6VariableNaming:
         )
         rows = _rows(_diagnose(cli, sql))
         assert [r["variable"] for r in rows] == ["n"]
-        assert rows[0]["direction"] == "+∞"
+        assert rows[0]["direction"] == "+inf"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_multiple_escaping_vars_each_named_once(self, request, cli_fixture):
@@ -118,3 +120,8 @@ class TestF6VariableNaming:
         result = cli.execute_script(script)
         assert "diagnosis ready" not in result.stderr.lower()
         assert _rows(result) == []
+        # A1: the static error still advertises the opt-in so the user can re-run.
+        assert (
+            "set pragma diagnose_decide='auto' and re-run"
+            in result.stderr.lower()
+        )

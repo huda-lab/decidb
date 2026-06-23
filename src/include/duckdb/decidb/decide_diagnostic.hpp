@@ -31,12 +31,12 @@ struct ColumnProvenance;
 //! render as SQL NULL. For the unbounded state, one row = one escaping variable.
 struct DiagnosticRow {
 	string variable;        //!< escaping variable NAME (F6); empty => NULL
-	string direction;       //!< direction it escapes: "+∞" / "-∞"; empty => NULL
+	string direction;       //!< direction it escapes: "+inf" / "-inf" (ASCII, robust
+	                        //!< in CSV / WHERE filters); empty => NULL
 	string escaping_instances; //!< which instances escape: categorical rule set
 	                        //!< (`c=v (a/b); …`), an `all N instances …` / `a of b
 	                        //!< instances escape` summary, or empty => NULL (nothing
 	                        //!< to disambiguate / not resolved).
-	string suggested_bound; //!< suggested finite bound; empty => NULL (deferred — not yet computed)
 };
 
 //! One categorical "sufficient-direction" rule for an escaping variable: among the
@@ -117,15 +117,20 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //! operator assembled (one row per escaping variable). Formats each VarEscape's
 //! `escaping_instances` cell: `all N instances …` when all escape, the `; `-joined
 //! categorical rules `c=v (a/b)` when any clear the threshold, else the bare count
-//! `a of b instances escape`. `saw_unnamed_global` => an internal global auxiliary
-//! escaped (model-generation issue). With no named escaper, emits a single
-//! detail-less row (e.g. quadratic models where no ray is attached). DeciDB never
-//! picks the bound, so `suggested_bound` stays NULL.
-DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes,
-                                          bool saw_unnamed_global);
+//! `a of b instances escape`. The summary prescribes the forced remedy (add a finite
+//! bound) without inventing the cap, and appends a one-line legend for the
+//! `escaping_instances` cell format when categorical rules are present. Precondition:
+//! `escapes` is non-empty — the caller falls through to the static error when the ray
+//! names nothing (quadratic model, or only internal auxiliaries escaped).
+DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes);
 
 //! Store `diag` on the connection so decide_diagnostics() can read it next statement.
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag);
+
+//! Invalidate any stashed diagnosis on the connection. Called on a successful
+//! solve so decide_diagnostics() does not keep reporting a now-resolved failure.
+//! The per-connection id counter is left intact (ids stay monotonic across solves).
+void ClearDecideDiagnostic(ClientContext &context);
 
 //! Throw the short pointer error a failed-but-diagnosed DECIDE surfaces (the
 //! relation itself is read via SELECT * FROM decide_diagnostics()).

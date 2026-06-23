@@ -142,7 +142,9 @@ void ThrowDecideSolveError(const SolverResult &result) {
             "Examples:\n"
             "  • Add upper bounds: SUCH THAT x <= 100\n"
             "  • Add budget limits: SUCH THAT SUM(x * cost) <= budget\n"
-            "  • Use BOOLEAN instead of INTEGER for selection problems");
+            "  • Use BOOLEAN instead of INTEGER for selection problems\n\n"
+            "For a diagnosis of which variable is unbounded, set "
+            "PRAGMA diagnose_decide='auto' and re-run.");
     case SolverStatus::INF_OR_UNBD:
         throw InvalidInputException(
             "DECIDE optimization is infeasible or unbounded.\n\n"

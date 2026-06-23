@@ -190,8 +190,9 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //! Format one variable's `escaping_instances` cell. Empty => NULL.
 static string FormatEscapingInstances(const VarEscape &ve) {
 	if (ve.is_aux || ve.total <= 1) {
-		// Aux/linearization columns are name-only; a single-instance variable (no
-		// scope multiplicity, e.g. the run.sh demo) has nothing to disambiguate.
+		// Aux/linearization columns are name-only; a single-instance variable (no scope
+		// multiplicity — e.g. a DECIDE over a single-row input) has nothing to
+		// disambiguate.
 		return string();
 	}
 	if (ve.all_escape) {
@@ -211,45 +212,44 @@ static string FormatEscapingInstances(const VarEscape &ve) {
 	return std::to_string(ve.escaping) + " of " + std::to_string(ve.total) + " instances escape";
 }
 
-DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes,
-                                          bool saw_unnamed_global) {
+DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
+	// Precondition: at least one named escaping variable. The caller falls through to
+	// the rich static error when the ray names nothing (a quadratic model attaches no
+	// ray, or only internal auxiliaries escaped), so this never builds a content-free
+	// diagnosis.
+	D_ASSERT(!escapes.empty());
 	DecideDiagnostic diag;
 	diag.valid = true;
 	diag.status = SolverStatus::UNBOUNDED;
 	diag.state = "unbounded";
 
-	if (!escapes.empty()) {
-		string names;
-		for (idx_t i = 0; i < escapes.size(); i++) {
-			names += (i == 0 ? "" : ", ") + escapes[i].name;
+	string names;
+	bool any_categorical = false;
+	for (idx_t i = 0; i < escapes.size(); i++) {
+		names += (i == 0 ? "" : ", ") + escapes[i].name;
+		if (!escapes[i].rules.empty()) {
+			any_categorical = true;
 		}
-		diag.summary = "The objective is unbounded: it can improve without limit because " +
-		               string(escapes.size() == 1 ? "the variable " : "the variables ") + names +
-		               " can grow without bound.";
-		for (const auto &ve : escapes) {
-			DiagnosticRow row;
-			row.variable = ve.name;
-			row.direction = ve.direction;
-			row.escaping_instances = FormatEscapingInstances(ve);
-			// suggested_bound intentionally left empty (=> NULL): DeciDB never picks it.
-			diag.rows.push_back(std::move(row));
-		}
-		return diag;
 	}
-
-	// No named escaping variable resolved — either no ray was attached (e.g. a
-	// quadratic model, where U2 extracts none) or only an internal global auxiliary
-	// escaped (which signals a model-generation issue, not a user error). Emit a
-	// single detail-less row so the relation still reports the unbounded state; the
-	// stderr summary carries the explanation.
-	if (saw_unnamed_global) {
-		diag.summary = "The objective is unbounded: an internal auxiliary variable grows "
-		               "without bound (this likely indicates a model-generation issue).";
-	} else {
-		diag.summary = "The objective is unbounded: at least one decision variable can grow "
-		               "without bound.";
+	// Prescribe the forced remedy (add a finite bound) without inventing the cap
+	// value — DeciDB names what to change, the user supplies the magnitude.
+	diag.summary = "The objective is unbounded: it can improve without limit because " +
+	               string(escapes.size() == 1 ? "the variable " : "the variables ") + names +
+	               " can grow without bound. To fix, add an upper bound, e.g. SUCH THAT " +
+	               escapes[0].name + " <= <cap>.";
+	// Legend for the escaping_instances cell format — only when categorical rules are
+	// actually reported, otherwise it is irrelevant noise.
+	if (any_categorical) {
+		diag.summary += " (In escaping_instances, \"c=v (a/b)\" means a of b instances where "
+		                "c=v escape; \"; \"-separated rules are alternatives.)";
 	}
-	diag.rows.emplace_back(); // all fields empty => one all-NULL detail row under state=unbounded
+	for (const auto &ve : escapes) {
+		DiagnosticRow row;
+		row.variable = ve.name;
+		row.direction = ve.direction;
+		row.escaping_instances = FormatEscapingInstances(ve);
+		diag.rows.push_back(std::move(row));
+	}
 	return diag;
 }
 
@@ -262,9 +262,18 @@ void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag) {
 	state->latest = std::move(diag);
 }
 
+void ClearDecideDiagnostic(ClientContext &context) {
+	// Only clear if a stash exists — a successful solve on a connection that never
+	// diagnosed anything has nothing to invalidate (and no reason to create state).
+	auto state = context.registered_state->Get<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
+	if (state) {
+		state->latest = DecideDiagnostic(); // valid=false => decide_diagnostics() returns 0 rows
+	}
+}
+
 void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag) {
 	string msg = "DECIDE optimization is " + diag.state + ".\n\n" + diag.summary +
-	             "\n\nDiagnosis ready: SELECT * FROM decide_diagnostics();";
+	             "\n\nDiagnosis ready (this session): SELECT * FROM decide_diagnostics();";
 	throw InvalidInputException(msg);
 }
 
@@ -283,9 +292,9 @@ struct DecideDiagnosticsData : public GlobalTableFunctionState {
 
 unique_ptr<FunctionData> DecideDiagnosticsBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<string> &names) {
-	names = {"query_id", "state", "variable", "direction", "escaping_instances", "suggested_bound"};
+	names = {"query_id", "state", "variable", "direction", "escaping_instances"};
 	return_types = {LogicalType::BIGINT, LogicalType::VARCHAR, LogicalType::VARCHAR,
-	                LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+	                LogicalType::VARCHAR, LogicalType::VARCHAR};
 	return nullptr;
 }
 
@@ -312,9 +321,8 @@ void DecideDiagnosticsFunction(ClientContext &context, TableFunctionInput &data_
 		output.SetValue(col++, count, Value(data.diag.state));
 		output.SetValue(col++, count, row.variable.empty() ? Value() : Value(row.variable));
 		output.SetValue(col++, count, row.direction.empty() ? Value() : Value(row.direction));
-		output.SetValue(col++, count,
+		output.SetValue(col, count,
 		                row.escaping_instances.empty() ? Value() : Value(row.escaping_instances));
-		output.SetValue(col, count, row.suggested_bound.empty() ? Value() : Value(row.suggested_bound));
 		count++;
 	}
 	output.SetCardinality(count);

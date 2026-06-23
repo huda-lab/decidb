@@ -5262,7 +5262,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 std::set<idx_t> instances;
             };
             std::map<idx_t, VarAgg> by_var;
-            bool saw_unnamed_global = false;
             for (idx_t col = 0; col < solve_result.ray.size() && col < columns.size(); col++) {
                 double rv = solve_result.ray[col];
                 if (std::fabs(rv) <= RAY_ESCAPE_EPSILON) {
@@ -5271,14 +5270,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 const ColumnProvenance &prov = columns[col];
                 if (prov.kind == ColumnKind::GLOBAL_AUX || prov.label.empty() ||
                     prov.decide_var_idx == DConstants::INVALID_INDEX) {
-                    saw_unnamed_global = true;
+                    // Unnamed / internal-global-aux column: cannot attribute to a user
+                    // variable, so it contributes no per-variable content.
                     continue;
                 }
                 auto &agg = by_var[prov.decide_var_idx];
                 if (agg.name.empty()) {
                     agg.name = prov.label;
                     agg.is_aux = prov.kind == ColumnKind::AUX;
-                    agg.direction = rv > 0 ? "+∞" : "-∞";
+                    agg.direction = rv > 0 ? "+inf" : "-inf";
                     agg.vidx = prov.decide_var_idx;
                 }
                 agg.instances.insert(prov.instance);
@@ -5316,14 +5316,22 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 escapes.push_back(std::move(ve));
             }
 
-            DecideDiagnostic diag = BuildUnboundedDiagnostic(escapes, saw_unnamed_global);
-            StashDecideDiagnostic(context, diag);
-            ThrowDecideDiagnosisReady(diag);
+            if (!escapes.empty()) {
+                DecideDiagnostic diag = BuildUnboundedDiagnostic(escapes);
+                StashDecideDiagnostic(context, diag);
+                ThrowDecideDiagnosisReady(diag);
+            }
+            // No named escaping variable (a quadratic model attaches no ray, or only
+            // internal auxiliaries escaped): fall through to the rich static error
+            // rather than stashing a content-free all-NULL relation row.
         }
         // Manual-first default: surface the static error (mode none, non-matching
-        // mode, or matched-but-unimplemented state).
+        // mode, matched-but-unimplemented state, or a diagnosis with no content).
         ThrowDecideSolveError(solve_result);
     }
+    // Success: invalidate any diagnosis stashed by an earlier failed solve on this
+    // connection, so decide_diagnostics() no longer reports a now-resolved failure.
+    ClearDecideDiagnostic(context);
     gstate.ilp_solution = std::move(solve_result.solution);
     // Move the indexer onto gstate now that solve is complete; readback in
     // Execute() needs it to outlive solver_input.

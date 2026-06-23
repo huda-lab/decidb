@@ -105,10 +105,15 @@ as a fixed-schema relation.
   (`src/include/duckdb/decidb/decide_diagnostic.hpp`). The state is a
   `ClientContextState` stashed under key `decide_diagnostics`; the failing DECIDE
   mutates it before throwing, so it survives into the next statement **on the same
-  connection**.
+  connection**. **Lifecycle:** the stash holds *the most recent diagnosed failure
+  on the connection, until the next successful solve clears it.* A successful
+  DECIDE (`OPTIMAL` in `PhysicalDecide::Finalize`) calls `ClearDecideDiagnostic`,
+  which invalidates `latest` (so `decide_diagnostics()` returns 0 rows) — a stale
+  diagnosis never lingers after the user fixes the query. The per-connection id
+  counter is left intact so ids stay monotonic across solves.
 - **`decide_diagnostics()` table function** (registered in
   `system_functions.cpp`, implemented in `decide_diagnostic.cpp`) with fixed schema
-  `(query_id BIGINT, state, variable, direction, escaping_instances, suggested_bound)`
+  `(query_id BIGINT, state, variable, direction, escaping_instances)`
   — `query_id` BIGINT, the rest VARCHAR; empty string fields render as SQL NULL. The
   schema is **variable-centric** (one row = one escaping variable). `query_id` is
   stamped at stash time from a per-connection counter.
@@ -119,8 +124,9 @@ as a fixed-schema relation.
   function instead.
 - **Today only the unbounded engine populates it** (`BuildUnboundedDiagnostic` — see
   `unbounded/done.md`). `escaping_instances` characterizes which instances of a
-  variable escape (categorical rules / total-escape / count); `suggested_bound`
-  reads NULL (DeciDB never picks the bound). The unbounded characterization adds
+  variable escape (categorical rules / total-escape / count); the forced remedy
+  (add a bound) is prescribed in the stderr summary, not a per-row column. The
+  unbounded characterization adds
   three sticky extension options alongside `diagnose_decide`:
   `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).

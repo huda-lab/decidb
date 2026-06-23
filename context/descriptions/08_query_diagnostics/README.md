@@ -15,7 +15,7 @@ build order, not version numbers.
 | ------------ | --------------------------------------------------- | --------------------- |
 | Solved       | return the result normally — no diagnosis needed    | —                     |
 | Infeasible ★ | **loosen** — elastic relaxation                     | `infeasible/` (flagship) |
-| Unbounded    | **tighten** — name the escaping variable via the ray | `unbounded/`          |
+| Unbounded    | **tighten** — name the escaping variable via the ray, prescribe a bound | `unbounded/`          |
 | Slow         | read incumbent / bound / gap and route              | `slow/`               |
 
 Infeasible and unbounded are mirror images (loosen a too-small region vs. tighten
