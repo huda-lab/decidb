@@ -1,11 +1,10 @@
-"""F1 structured solver-result regressions.
+"""Structured solver-result regressions for query diagnostics.
 
-F1 changed the solver boundary from "backend throws on non-optimal status" to
-"backend returns SolverResult; PhysicalDecide decides how to surface it." These
-tests pin the externally visible contract until F4 adds the diagnose pragma:
+The solver boundary returns SolverResult for non-optimal statuses; PhysicalDecide
+decides how to surface them. These tests pin the externally visible contract:
 
   * optimal statuses still return normal DECIDE rows;
-  * non-optimal statuses still surface the friendly DECIDE errors;
+  * non-optimal statuses still surface friendly DECIDE errors;
   * HiGHS's ambiguous MILP status 9 is disambiguated to a definitive error.
 """
 
@@ -49,10 +48,10 @@ _UNBOUNDED_MILP_SQL = """
 """
 
 
-# Same MILP-unbounded shape but escaping toward -inf via MINIMIZE. The U1 probe
-# zeros the objective entirely, so disambiguation must be sense-agnostic: a
-# MINIMIZE-unbounded MILP has to resolve to the same definitive "unbounded"
-# error, not depend on the MAXIMIZE sense.
+# Same MILP-unbounded shape but escaping toward -inf via MINIMIZE. The
+# zero-objective probe zeros the objective entirely, so disambiguation must be
+# sense-agnostic: a MINIMIZE-unbounded MILP has to resolve to the same definitive
+# "unbounded" error, not depend on the MAXIMIZE sense.
 _UNBOUNDED_MILP_MIN_SQL = """
     SELECT id, x FROM (VALUES (1), (2)) t(id)
     DECIDE x IS INTEGER
@@ -79,13 +78,13 @@ def _assert_friendly_error(cli, sql: str, required: str) -> None:
         f"{combined[:700]}"
     )
     assert "solver status" not in lower, (
-        "F1 regression: raw backend status leaked through the user-facing "
+        "Structured-result regression: raw backend status leaked through the user-facing "
         f"error:\n{combined[:700]}"
     )
 
 
 @pytest.mark.query_diagnostics
-class TestF1StructuredSolverResult:
+class TestStructuredSolverResult:
     @pytest.mark.parametrize(
         "cli_fixture", ["decidb_cli_highs", "decidb_cli_gurobi"]
     )
@@ -108,7 +107,7 @@ class TestF1StructuredSolverResult:
             (_UNBOUNDED_LP_SQL, "DECIDE optimization is unbounded"),
         ],
     )
-    def test_highs_non_optimal_statuses_use_default_errors(
+    def test_highs_non_optimal_statuses_use_friendly_errors(
         self, decidb_cli_highs, sql, required
     ):
         """HiGHS INFEASIBLE / UNBOUNDED return SolverResult, then operator throws."""
@@ -123,23 +122,24 @@ class TestF1StructuredSolverResult:
     ):
         """HiGHS MILP-unbounded can report kUnboundedOrInfeasible (raw 9).
 
-        F1 maps that to INF_OR_UNBD instead of falling through to the generic
-        raw-status message. U1 then re-solves with objective=0 and converts this
-        case to a definitive unbounded error. The probe zeros the objective, so
-        both MAXIMIZE and MINIMIZE unbounded MILPs must disambiguate the same way.
+        The backend maps that to INF_OR_UNBD instead of falling through to the
+        generic raw-status message. The zero-objective feasibility probe then
+        converts this case to a definitive unbounded error. The probe zeros the
+        objective, so both MAXIMIZE and MINIMIZE unbounded MILPs must disambiguate
+        the same way.
         """
         combined = _combined_error(decidb_cli_highs, sql)
         lower = combined.lower()
         assert "decide optimization is unbounded" in lower, (
-            "U1 regression: HiGHS status 9 was not disambiguated to a "
+            "HiGHS status 9 was not disambiguated to a "
             f"definitive unbounded error:\n{combined[:700]}"
         )
         assert "infeasible or unbounded" not in lower, (
-            "U1 regression: ambiguous INF_OR_UNBD message leaked through:\n"
+            "Ambiguous INF_OR_UNBD message leaked through:\n"
             f"{combined[:700]}"
         )
         assert "solver status" not in lower, (
-            "F1 regression: raw backend status leaked through the user-facing "
+            "Structured-result regression: raw backend status leaked through the user-facing "
             f"error:\n{combined[:700]}"
         )
 
@@ -151,8 +151,8 @@ class TestF1StructuredSolverResult:
             (_UNBOUNDED_LP_SQL, "DECIDE optimization is unbounded"),
         ],
     )
-    def test_gurobi_non_optimal_statuses_use_default_errors(
+    def test_gurobi_non_optimal_statuses_use_friendly_errors(
         self, decidb_cli_gurobi, sql, required
     ):
-        """Gurobi non-optimal statuses follow the same F1 operator throw path."""
+        """Gurobi non-optimal statuses follow the same operator throw path."""
         _assert_friendly_error(decidb_cli_gurobi, sql, required)

@@ -1,9 +1,9 @@
-"""F6 — variable provenance (column-side): name the escaping variables.
+"""Unbounded variable diagnostics: name each escaping variable.
 
-F6 maps every solver column back to the user-facing thing it represents — user
+Every solver column maps back to the user-facing thing it represents: user
 variable name, or (for an auxiliary linearization column) the user's original
 source expression. Folded into the unbounded diagnosis, the decide_diagnostics()
-relation now reports each escaping variable by NAME with the DIRECTION it escapes
+relation reports each escaping variable by NAME with the DIRECTION it escapes
 (always +inf today, since user variables are bounded below at 0).
 
 These tests drive the two-statement flow (a failing DECIDE that stashes, then a
@@ -51,7 +51,7 @@ def _attrs(rows, subject):
 
 
 @pytest.mark.query_diagnostics
-class TestF6VariableNaming:
+class TestUnboundedVariableDiagnostics:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_real_var_named(self, request, cli_fixture):
         """A single escaping REAL user variable is named in the relation."""
@@ -79,7 +79,8 @@ class TestF6VariableNaming:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_integer_var_named(self, request, cli_fixture):
         """An INTEGER var is a MILP — on HiGHS this is the INF_OR_UNBD (status 9)
-        path that U1 disambiguates — and is still named correctly."""
+        path that the zero-objective probe disambiguates — and is still named
+        correctly."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, n FROM (VALUES (1), (2)) t(id) "
@@ -90,9 +91,7 @@ class TestF6VariableNaming:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_multiple_escaping_vars_each_named_once(self, request, cli_fixture):
-        """Two escaping vars yield two rows; each row-scoped var is deduped to one
-        row even though it instantiates a column per source row, and both rows
-        share one diagnosis_id (same solve)."""
+        """Two escaping vars are deduped by variable and share one diagnosis_id."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x, y FROM (VALUES (1), (2)) t(id) "
@@ -102,7 +101,29 @@ class TestF6VariableNaming:
         rows = _rows(_diagnose(cli, sql))
         assert _attrs(rows, "x")["direction"] == "+inf"
         assert _attrs(rows, "y")["direction"] == "+inf"
+        assert _attrs(rows, "x")["escaping_instances"] == "all 2 instances escape"
+        assert _attrs(rows, "y")["escaping_instances"] == "all 2 instances escape"
+        assert {
+            r["subject"]
+            for r in rows
+            if r["subject_kind"] == "variable" and r["attribute"] == "direction"
+        } == {"x", "y"}
         assert len({r["diagnosis_id"] for r in rows}) == 1
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_minimize_unbounded_var_named_from_improving_direction(
+        self, request, cli_fixture
+    ):
+        """A MINIMIZE objective that improves toward -inf still names x escaping +inf."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x >= 0 MINIMIZE SUM(x * -1)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        assert _attrs(rows, "x")["direction"] == "+inf"
+        assert "the variable x can grow without bound" in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_auto_mode_names_unbounded_var(self, request, cli_fixture):

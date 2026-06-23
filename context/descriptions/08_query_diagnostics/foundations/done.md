@@ -171,7 +171,7 @@ subsumes every useful case while staying silent on success.)
   Matched-but-unimplemented states (infeasible/slow) fall through until their
   engines land.
 
-Tested in `test/decide/tests/test_query_diagnostics_f4.py` (both backends).
+Tested in `test/decide/tests/test_query_diagnostics_pragmas.py` (both backends).
 
 ## Diagnosis engine seam
 
@@ -253,5 +253,5 @@ as a fixed-schema relation.
   `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
 
-Tested in `test/decide/tests/test_query_diagnostics_f5.py` (both backends) and
+Tested in `test/decide/tests/test_query_diagnostics_relation.py` (both backends) and
 `test/common/test_decidb_diagnostic_engines.cpp` (a clause-shaped stub row).

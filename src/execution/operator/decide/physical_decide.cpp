@@ -18,6 +18,7 @@
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/decide_diagnostic.hpp"
 #include "duckdb/decidb/decide_diagnostic_engines.hpp"
+#include "duckdb/decidb/decide_router.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -2391,6 +2392,140 @@ static void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &cons
             }
         }
     }
+}
+
+//! Builds the categorical-candidate groupings the unbounded engine consumes to
+//! characterize *which* instances of an escaping variable run away. Operator-bound
+//! (it reads the executor chunks, entity scopes, and BuildGroupIds), so it lives
+//! here rather than in the pure router/engine units; Finalize just invokes it.
+//!
+//! A stateful functor (not a set of lambdas) so its lazily-built caches — the
+//! row-scoped candidates and the per-scope entity candidates — survive across the
+//! many calls the engine makes, one per escaping decision variable. The stored
+//! references point at Finalize-locals that outlive the engine call.
+namespace {
+struct UnboundedCandidateProvider {
+	ClientContext &context;
+	ColumnDataCollection &data;
+	vector<LogicalType> types;
+	const DecideDiagParams &params;
+	const vector<string> &input_column_names;
+	const VarIndexer &var_indexer;
+	const vector<EntityScopeInfo> &entity_scopes;
+	const vector<EntityMapping> &entity_mappings;
+	idx_t num_rows;
+
+	//! Row-scoped candidate columns are variable-independent — built once.
+	vector<ColumnGrouping> row_candidates;
+	bool row_candidates_built = false;
+	//! Entity-scoped candidates cached per scope.
+	std::map<idx_t, vector<ColumnGrouping>> entity_candidates;
+
+	//! Build a single-column row grouping, keeping it only if it is categorical
+	//! (2 ≤ distinct ≤ max(min_categories, ratio × denom)).
+	bool BuildRowGrouping(idx_t ci, idx_t denom, ColumnGrouping &out) {
+		BoundReferenceExpression ref(types[ci], ci);
+		vector<const Expression *> keys {&ref};
+		vector<idx_t> row_to_group;
+		idx_t num_groups = 0;
+		vector<vector<Value>> rep_keys;
+		BuildGroupIds(keys, context, data, num_rows, std::function<bool(idx_t)> {},
+		              /*null_excludes=*/false, row_to_group, num_groups, &rep_keys);
+		idx_t cap = std::max(params.min_categories, (idx_t)(params.categorical_ratio * (double)denom));
+		if (num_groups < 2 || num_groups > cap || rep_keys.empty()) {
+			return false;
+		}
+		// Suppress rules over columns whose source name we never resolved (e.g.
+		// referenced only in the outer SELECT): naming them with a positional
+		// `colN` the user never wrote is worse than staying silent.
+		if (ci >= input_column_names.size() || input_column_names[ci].empty()) {
+			return false;
+		}
+		out.column = input_column_names[ci];
+		out.instance_to_group = std::move(row_to_group); // row-indexed
+		out.group_value.resize(num_groups);
+		for (idx_t g = 0; g < num_groups && g < rep_keys[0].size(); g++) {
+			out.group_value[g] = rep_keys[0][g].IsNull() ? "NULL" : rep_keys[0][g].ToString();
+		}
+		return true;
+	}
+
+	vector<ColumnGrouping> &GetRowCandidates() {
+		if (!row_candidates_built) {
+			for (idx_t ci = 0; ci < types.size(); ci++) {
+				ColumnGrouping cg;
+				if (BuildRowGrouping(ci, num_rows, cg)) {
+					row_candidates.push_back(std::move(cg));
+				}
+			}
+			row_candidates_built = true;
+		}
+		return row_candidates;
+	}
+
+	//! Entity-scoped candidate columns = the scope's entity-key columns only (the
+	//! columns constant within an entity); grouping is lifted to entity granularity.
+	vector<ColumnGrouping> &GetEntityCandidates(idx_t scope_idx) {
+		auto found = entity_candidates.find(scope_idx);
+		if (found != entity_candidates.end()) {
+			return found->second;
+		}
+		vector<ColumnGrouping> cands;
+		auto &scope = entity_scopes[scope_idx];
+		auto &mapping = entity_mappings[scope_idx];
+		idx_t num_entities = mapping.num_entities;
+		for (idx_t ci : scope.entity_key_physical_indices) {
+			ColumnGrouping rowcg;
+			if (!BuildRowGrouping(ci, num_entities, rowcg)) {
+				continue;
+			}
+			ColumnGrouping ecg;
+			ecg.column = rowcg.column;
+			ecg.group_value = std::move(rowcg.group_value);
+			ecg.instance_to_group.assign(num_entities, DConstants::INVALID_INDEX);
+			for (idx_t r = 0; r < num_rows && r < mapping.row_to_entity.size(); r++) {
+				idx_t e = mapping.row_to_entity[r];
+				if (e < num_entities) {
+					ecg.instance_to_group[e] = rowcg.instance_to_group[r];
+				}
+			}
+			cands.push_back(std::move(ecg));
+		}
+		return entity_candidates.emplace(scope_idx, std::move(cands)).first->second;
+	}
+
+	vector<ColumnGrouping> operator()(idx_t decide_var_idx, idx_t total_instances) {
+		(void)total_instances;
+		bool entity_scoped = decide_var_idx < var_indexer.is_entity_scoped.size() &&
+		                     var_indexer.is_entity_scoped[decide_var_idx];
+		if (!entity_scoped) {
+			return GetRowCandidates();
+		}
+		idx_t scope_idx = decide_var_idx < var_indexer.var_entity_mapping_idx.size()
+		                      ? var_indexer.var_entity_mapping_idx[decide_var_idx]
+		                      : DConstants::INVALID_INDEX;
+		if (scope_idx == DConstants::INVALID_INDEX || scope_idx >= entity_scopes.size() ||
+		    scope_idx >= entity_mappings.size()) {
+			return {};
+		}
+		return GetEntityCandidates(scope_idx);
+	}
+};
+} // namespace
+
+//! Assemble the unbounded engine's `get_candidates` callback. Resolves the live
+//! entity mappings (the Finalize-local mappings have been moved into the solver
+//! input by now, so var_indexer owns/references them) and returns a stateful
+//! provider wrapped as the engine's std::function input.
+static std::function<vector<ColumnGrouping>(idx_t, idx_t)>
+BuildUnboundedCandidateProvider(ClientContext &context, ColumnDataCollection &data, vector<LogicalType> types,
+                                const DecideDiagParams &params, const vector<string> &input_column_names,
+                                const VarIndexer &var_indexer, const vector<EntityScopeInfo> &entity_scopes,
+                                idx_t num_rows) {
+	const vector<EntityMapping> &live_entity_mappings =
+	    var_indexer.entity_mappings_ref ? *var_indexer.entity_mappings_ref : var_indexer.entity_mappings_owned;
+	return UnboundedCandidateProvider {context,    data,           std::move(types), params, input_column_names,
+	                                   var_indexer, entity_scopes,  live_entity_mappings, num_rows};
 }
 
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
@@ -5227,164 +5362,65 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     solve_options.extract_unbounded_ray = DiagnoseModeWantsUnboundedRay(diagnose_mode);
 
     SolverResult solve_result = SolveModel(solver_input, var_indexer, solve_options);
-    if (solve_result.status != SolverStatus::OPTIMAL) {
-        // Diagnose only when the mode wants this status (auto wants any failed
-        // state) AND a state engine exists. Currently only the unbounded engine is
-        // built; other matched states (infeasible / slow) fall through to the
-        // default error until their engines land.
-        if (DiagnosisApplies(diagnose_mode, solve_result.status) &&
-            solve_result.status == SolverStatus::UNBOUNDED) {
-            idx_t nvars = decide_variables.size();
-            vector<string> var_labels(nvars);
-            vector<bool> var_is_aux(nvars, false);
-            for (auto &ae : aux_var_expressions) {
-                if (ae.first < nvars) {
-                    var_labels[ae.first] = ae.second;
-                    var_is_aux[ae.first] = true;
-                }
+
+    // Route the solve outcome to its diagnosis terminal. RouteSolveResult is a pure
+    // classifier (status + mode → terminal); the operator owns the engine call,
+    // stash, and throw for each terminal. INFEASIBLE / TIME_LIMIT classify
+    // distinctly but share the static-error path until their engines land (R5 / R6).
+    switch (RouteSolveResult(solve_result, diagnose_mode)) {
+    case DiagnosisTerminal::SOLVED:
+        break; // fall through to the success stores below
+    case DiagnosisTerminal::UNBOUNDED: {
+        idx_t nvars = decide_variables.size();
+        vector<string> var_labels(nvars);
+        vector<bool> var_is_aux(nvars, false);
+        for (auto &ae : aux_var_expressions) {
+            if (ae.first < nvars) {
+                var_labels[ae.first] = ae.second;
+                var_is_aux[ae.first] = true;
             }
-            for (idx_t i = 0; i < nvars; i++) {
-                if (!var_is_aux[i]) {
-                    var_labels[i] = decide_variables[i]->GetName();
-                }
-            }
-
-            auto diag_params = GetDecideDiagnosticParams(context);
-            auto diag_types = gstate.data.Types();
-
-            // Build a single-column row grouping, keeping it only if it is categorical
-            // (2 ≤ distinct ≤ max(min_categories, ratio × denom)).
-            auto build_row_grouping = [&](idx_t ci, idx_t denom, ColumnGrouping &out) -> bool {
-                BoundReferenceExpression ref(diag_types[ci], ci);
-                vector<const Expression *> keys {&ref};
-                vector<idx_t> row_to_group;
-                idx_t num_groups = 0;
-                vector<vector<Value>> rep_keys;
-                BuildGroupIds(keys, context, gstate.data, num_rows, std::function<bool(idx_t)> {},
-                              /*null_excludes=*/false, row_to_group, num_groups, &rep_keys);
-                idx_t cap = std::max(diag_params.min_categories,
-                                     (idx_t)(diag_params.categorical_ratio * (double)denom));
-                if (num_groups < 2 || num_groups > cap || rep_keys.empty()) {
-                    return false;
-                }
-                // Suppress rules over columns whose source name we never resolved
-                // (e.g. referenced only in the outer SELECT): naming them with a
-                // positional `colN` the user never wrote is worse than staying silent.
-                if (ci >= input_column_names.size() || input_column_names[ci].empty()) {
-                    return false;
-                }
-                out.column = input_column_names[ci];
-                out.instance_to_group = std::move(row_to_group); // row-indexed
-                out.group_value.resize(num_groups);
-                for (idx_t g = 0; g < num_groups && g < rep_keys[0].size(); g++) {
-                    out.group_value[g] = rep_keys[0][g].IsNull() ? "NULL" : rep_keys[0][g].ToString();
-                }
-                return true;
-            };
-
-            // Row-scoped candidate columns are variable-independent — build once.
-            vector<ColumnGrouping> row_candidates;
-            bool row_candidates_built = false;
-            auto get_row_candidates = [&]() -> vector<ColumnGrouping> & {
-                if (!row_candidates_built) {
-                    for (idx_t ci = 0; ci < diag_types.size(); ci++) {
-                        ColumnGrouping cg;
-                        if (build_row_grouping(ci, num_rows, cg)) {
-                            row_candidates.push_back(std::move(cg));
-                        }
-                    }
-                    row_candidates_built = true;
-                }
-                return row_candidates;
-            };
-
-            // Entity-scoped candidate columns = the scope's entity-key columns only
-            // (the columns constant within an entity); grouping is lifted to entity
-            // granularity. Cached per scope.
-            // var_indexer owns/references the live entity mappings (the Finalize-local
-            // `entity_mappings` has been moved into the solver input by now).
-            auto &live_entity_mappings = var_indexer.entity_mappings_ref
-                                             ? *var_indexer.entity_mappings_ref
-                                             : var_indexer.entity_mappings_owned;
-            std::map<idx_t, vector<ColumnGrouping>> entity_candidates;
-            auto get_entity_candidates = [&](idx_t scope_idx) -> vector<ColumnGrouping> & {
-                auto found = entity_candidates.find(scope_idx);
-                if (found != entity_candidates.end()) {
-                    return found->second;
-                }
-                vector<ColumnGrouping> cands;
-                auto &scope = entity_scopes[scope_idx];
-                auto &mapping = live_entity_mappings[scope_idx];
-                idx_t num_entities = mapping.num_entities;
-                for (idx_t ci : scope.entity_key_physical_indices) {
-                    ColumnGrouping rowcg;
-                    if (!build_row_grouping(ci, num_entities, rowcg)) {
-                        continue;
-                    }
-                    ColumnGrouping ecg;
-                    ecg.column = rowcg.column;
-                    ecg.group_value = std::move(rowcg.group_value);
-                    ecg.instance_to_group.assign(num_entities, DConstants::INVALID_INDEX);
-                    for (idx_t r = 0; r < num_rows && r < mapping.row_to_entity.size(); r++) {
-                        idx_t e = mapping.row_to_entity[r];
-                        if (e < num_entities) {
-                            ecg.instance_to_group[e] = rowcg.instance_to_group[r];
-                        }
-                    }
-                    cands.push_back(std::move(ecg));
-                }
-                return entity_candidates.emplace(scope_idx, std::move(cands)).first->second;
-            };
-
-            auto get_candidates = [&](idx_t decide_var_idx, idx_t total_instances) -> vector<ColumnGrouping> {
-                bool entity_scoped = decide_var_idx < var_indexer.is_entity_scoped.size() &&
-                                     var_indexer.is_entity_scoped[decide_var_idx];
-                if (!entity_scoped) {
-                    return get_row_candidates();
-                }
-                idx_t scope_idx = decide_var_idx < var_indexer.var_entity_mapping_idx.size()
-                                      ? var_indexer.var_entity_mapping_idx[decide_var_idx]
-                                      : DConstants::INVALID_INDEX;
-                if (scope_idx == DConstants::INVALID_INDEX ||
-                    scope_idx >= entity_scopes.size() ||
-                    scope_idx >= live_entity_mappings.size()) {
-                    return {};
-                }
-                return get_entity_candidates(scope_idx);
-            };
-
-            UnboundedDiagnosisInput diag_input {
-                solve_result,
-                var_indexer,
-                var_labels,
-                var_is_aux,
-                diag_params,
-                get_candidates,
-            };
-            DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
-            if (diag.valid && !diag.rows.empty()) {
-                StashDecideDiagnostic(context, diag);
-                ThrowDecideDiagnosisReady(diag);
-            }
-            // Diagnosis was requested (mode matched UNBOUNDED) but produced no
-            // per-variable content. Say why it is unavailable rather than throwing
-            // the generic "enable diagnosis and re-run" advert — that advert is
-            // misleading here, since the mode is already on and re-running cannot
-            // help. The empty ray is the quadratic signal: BuildUnboundedRayFallback
-            // declines quadratic models, so no ray was extracted; a present ray that
-            // still yielded no named variable means only internal auxiliaries escaped.
-            string reason =
-                solve_result.ray.empty()
-                    ? "the objective or a constraint is quadratic, so no linear runaway "
-                      "direction can be extracted for a named decision variable."
-                    : "the runaway direction involves only internal auxiliary variables, "
-                      "not a named decision variable.";
-            ThrowUnboundedDiagnosisUnavailable(reason);
         }
-        // Surface the static error: mode off, a matched-but-unimplemented state
-        // (infeasible / slow), or a diagnosis with no content.
+        for (idx_t i = 0; i < nvars; i++) {
+            if (!var_is_aux[i]) {
+                var_labels[i] = decide_variables[i]->GetName();
+            }
+        }
+
+        auto diag_params = GetDecideDiagnosticParams(context);
+        auto get_candidates =
+            BuildUnboundedCandidateProvider(context, gstate.data, gstate.data.Types(), diag_params,
+                                            input_column_names, var_indexer, entity_scopes, num_rows);
+
+        UnboundedDiagnosisInput diag_input {
+            solve_result, var_indexer, var_labels, var_is_aux, diag_params, get_candidates,
+        };
+        DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
+        if (diag.valid && !diag.rows.empty()) {
+            StashDecideDiagnostic(context, diag);
+            ThrowDecideDiagnosisReady(diag);
+        }
+        // Diagnosis was requested but produced no per-variable content. Say why it
+        // is unavailable rather than throwing the generic "enable diagnosis and
+        // re-run" advert — that advert is misleading here, since the mode is already
+        // on and re-running cannot help. An empty ray is the quadratic signal
+        // (BuildUnboundedRayFallback declines quadratic models, so no ray was
+        // extracted); a present ray that named nothing means only internal
+        // auxiliaries escaped.
+        string reason =
+            solve_result.ray.empty()
+                ? "the objective or a constraint is quadratic, so no linear runaway "
+                  "direction can be extracted for a named decision variable."
+                : "the runaway direction involves only internal auxiliary variables, "
+                  "not a named decision variable.";
+        ThrowUnboundedDiagnosisUnavailable(reason);
+    }
+    case DiagnosisTerminal::INFEASIBLE: // elastic engine lands at R5
+    case DiagnosisTerminal::TIME_LIMIT: // slow terminal lands at R6
+    case DiagnosisTerminal::UNDIAGNOSED:
+        // Mode off, or a status no engine covers yet: the plain static solver error.
         ThrowDecideSolveError(solve_result);
     }
+
     // Success: invalidate any diagnosis stashed by an earlier failed solve on this
     // connection, so decide_diagnostics() no longer reports a now-resolved failure.
     ClearDecideDiagnostic(context);

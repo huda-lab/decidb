@@ -64,6 +64,7 @@ make decide-test
 ./test/decide/run_tests.sh -m per_clause             # PER keyword
 ./test/decide/run_tests.sh -m explain                # EXPLAIN / EXPLAIN ANALYZE output tests
 ./test/decide/run_tests.sh -m sql_joins              # JOIN tests
+./test/decide/run_tests.sh -m query_diagnostics      # DECIDE diagnostic failure/reporting tests
 ./test/decide/run_tests.sh -m large_scale            # performance / scaling
 
 # Meta markers — combine multiple categories
@@ -152,6 +153,12 @@ make decide-test
 | Marker | File | Tests | Status |
 |--------|------|-------|--------|
 | `explain` | `test_explain.py` | 21 | passing |
+
+### Query Diagnostics
+
+| Marker | Coverage |
+|--------|----------|
+| `query_diagnostics` | Structured solver statuses, `diagnose_decide` settings, `decide_diagnostics()` relation lifecycle/schema, unbounded variable naming, and escaping-instance characterization |
 
 ### Scale & Performance
 

@@ -1,8 +1,8 @@
-"""F5 — the shared diagnostic reporting surface (decide_diagnostics()).
+"""The shared diagnostic reporting surface: decide_diagnostics().
 
-F5 adds a structured diagnosis that a state engine populates, stashes
-per-connection, and surfaces via the `decide_diagnostics()` table function with a
-fixed long-form schema. For the unbounded state each variable owns attributes:
+A state engine populates a structured diagnosis, stashes it per-connection, and
+surfaces it via the `decide_diagnostics()` table function with a fixed long-form
+schema. For the unbounded state each variable owns attributes:
 
     diagnosis_id | state | subject_kind | subject | attribute | value
 
@@ -19,6 +19,7 @@ as CSV so its rows parse unambiguously. Runs under both backends.
 
 import csv
 import io
+import re
 
 import pytest
 
@@ -64,8 +65,14 @@ def _attrs(rows, subject_kind, subject):
     }
 
 
+def _diagnosis_marker(stdout, label):
+    match = re.search(rf"{label}=(\d+):(\d+):(\d+)", stdout)
+    assert match, f"Missing {label!r} diagnosis marker in stdout:\n{stdout}"
+    return tuple(int(group) for group in match.groups())
+
+
 @pytest.mark.query_diagnostics
-class TestF5DiagnosticsRelation:
+class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_diagnosis_surfaces_as_relation(self, request, cli_fixture):
         """Failing DECIDE stashes; the follow-up SELECT returns one named row."""
@@ -138,6 +145,41 @@ class TestF5DiagnosticsRelation:
         result = cli.execute_script(script)
         assert "rows=0" in result.stdout
         assert "rows=1" not in result.stdout
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_repeated_failures_replace_rows_and_advance_diagnosis_id(
+        self, request, cli_fixture
+    ):
+        """The stash holds only the latest failure, while ids advance per diagnosis."""
+        cli = request.getfixturevalue(cli_fixture)
+        y_sql = (
+            "SELECT id, y FROM (VALUES (1), (2)) t(id) "
+            "DECIDE y IS REAL SUCH THAT y >= 0 MAXIMIZE SUM(y)"
+        )
+        marker_sql = (
+            "SELECT '{label}=' || min(diagnosis_id) || ':' || "
+            "count(DISTINCT diagnosis_id) || ':' || count(*) AS marker "
+            "FROM decide_diagnostics();\n"
+        )
+        script = (
+            ".mode csv\n"
+            "PRAGMA diagnose_decide='auto';\n"
+            f"{_UNBOUNDED_SQL};\n"
+            f"{marker_sql.format(label='first')}"
+            f"{y_sql};\n"
+            f"{marker_sql.format(label='second')}"
+        )
+        result = cli.execute_script(script)
+
+        first_id, first_distinct, first_rows = _diagnosis_marker(
+            result.stdout, "first"
+        )
+        second_id, second_distinct, second_rows = _diagnosis_marker(
+            result.stdout, "second"
+        )
+        assert (first_distinct, first_rows) == (1, 2)
+        assert (second_distinct, second_rows) == (1, 2)
+        assert second_id == first_id + 1
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_qp_unbounded_no_content_free_diagnosis(self, request, cli_fixture):

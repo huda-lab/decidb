@@ -238,3 +238,34 @@ class TestEscapingInstances:
             )
         )
         assert _attr(lowered, "buy", "escaping_instances") == "8 of 120 instances escape"
+
+    @pytest.mark.error
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        ("pragma", "value", "message"),
+        [
+            (
+                "diagnose_decide_escape_rate",
+                "0",
+                "diagnose_decide_escape_rate must be in (0, 1]",
+            ),
+            (
+                "diagnose_decide_categorical_ratio",
+                "0",
+                "diagnose_decide_categorical_ratio must be in (0, 1]",
+            ),
+            (
+                "diagnose_decide_min_categories",
+                "0",
+                "diagnose_decide_min_categories must be >= 1",
+            ),
+        ],
+    )
+    def test_characterization_pragmas_validate_bounds(
+        self, request, cli_fixture, pragma, value, message
+    ):
+        """Invalid unbounded-characterization knobs fail at SET time."""
+        cli = request.getfixturevalue(cli_fixture)
+        result = cli.execute_raw(f"PRAGMA {pragma}={value};")
+        combined = (result.stderr + result.stdout).lower()
+        assert message in combined

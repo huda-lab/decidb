@@ -6,13 +6,16 @@ recession ray? an incumbent?) and routes to exactly **one terminal**: an engine
 followed by a report, or a direct report. It is the one place that decides "what
 does this solve outcome mean, and what do we do about it."
 
-It **replaces** the post-solve logic currently scattered across three places:
+It **replaces** the post-solve logic that was scattered across three places:
 
 - the facade's inf/unb disambiguation re-solve (`DisambiguateInfOrUnbd` in
-  `ilp_solver.cpp` — Gurobi `DualReductions=0`, HiGHS zero-objective probe),
-- the `DiagnosisApplies(mode, status)` filter gate, and
+  `ilp_solver.cpp` — Gurobi `DualReductions=0`, HiGHS zero-objective probe) — *still
+  in the facade; R3/R4 move it in*,
+- the `DiagnosisApplies(mode, status)` filter gate — *now a shared helper the
+  classifier defers to*, and
 - the engine-selection / fall-through branch in `PhysicalDecide::Finalize`
-  (`physical_decide.cpp`).
+  (`physical_decide.cpp`) — **done** (Batch 1): unified behind `RouteSolveResult` +
+  the operator `switch` (`done.md`).
 
 Those become one explicit decision tree. In particular, **the separate inf/unb
 disambiguation probe is removed**: the router disambiguates "infeasible or
@@ -61,7 +64,9 @@ MILP gives a second reason it can hold).
 The router is the integration point for every per-state engine, so it lands
 incrementally as those engines exist:
 
-- **unbounded** engine — **shipped** (`unbounded/done.md`): `find ray` + report.
+- **the seam + unbounded terminal** — **shipped** (Batch 1, `done.md`): the
+  `RouteSolveResult` classifier and the operator `switch`, with the `find ray` +
+  report unbounded engine behind the `UNBOUNDED` terminal.
 - **elastic / infeasible** engine — **not built** (`infeasible/`): until it lands,
   the `infeasible` and inf/unb-`not found` branches fall through to the static
   error rather than producing a relaxation report.

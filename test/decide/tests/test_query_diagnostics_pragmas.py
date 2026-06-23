@@ -1,16 +1,17 @@
-"""F4 — the `diagnose_decide` setting (auto by default; off to suppress).
+"""The `diagnose_decide` setting: auto by default, off to suppress.
 
 `diagnose_decide` is a sticky session setting with two modes: `auto` (the default)
 and `off`. Under `auto` a failed solve is diagnosed automatically wherever an engine
-exists; `off` suppresses diagnosis and reproduces the plain static F1 error. This
-session only the unbounded engine exists, so a fired diagnosis throws the short
-pointer error ("Diagnosis ready: SELECT * FROM decide_diagnostics()"); a
-matched-but-unimplemented state (infeasible/slow) falls through to the static F1
+exists; `off` suppresses diagnosis and reproduces the plain static solver error.
+Today only the unbounded engine exists, so a fired diagnosis throws the short pointer
+error ("Diagnosis ready: SELECT * FROM decide_diagnostics()"); a
+matched-but-unimplemented state (infeasible/slow) falls through to the static solver
 error even under `auto`.
 
 These tests run under both backends. They use `execute_raw` (one `-c` statement)
 because every assertion here is observable from the failing statement itself —
-the cross-statement diagnostics relation is covered in test_query_diagnostics_f5.
+the cross-statement diagnostics relation is covered in
+test_query_diagnostics_relation.
 """
 
 import pytest
@@ -38,7 +39,7 @@ def _combined(result) -> str:
 
 
 @pytest.mark.query_diagnostics
-class TestF4DiagnosePragma:
+class TestDiagnoseDecidePragma:
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_default_auto_fires_diagnosis(self, request, cli_fixture):
@@ -51,7 +52,7 @@ class TestF4DiagnosePragma:
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_off_suppresses_diagnosis(self, request, cli_fixture):
-        """`off` reproduces the plain static F1 error: no pointer, no relation."""
+        """`off` reproduces the plain static solver error: no pointer, no relation."""
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(
             cli.execute_raw(f"PRAGMA diagnose_decide='off'; {_UNBOUNDED_SQL}")
@@ -73,13 +74,34 @@ class TestF4DiagnosePragma:
 
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    @pytest.mark.parametrize("mode", ["bogus", "none", "unbounded", "infeasible", "slow"])
+    @pytest.mark.parametrize(
+        "mode", ["bogus", "none", "unbounded", "infeasible", "slow"]
+    )
     def test_invalid_mode_is_rejected(self, request, cli_fixture, mode):
         """A mode outside {off, auto} — including the removed per-state filters —
         fails fast at SET time (set-callback validation)."""
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(cli.execute_raw(f"PRAGMA diagnose_decide='{mode}';"))
         assert "invalid diagnose_decide mode" in out
+
+    @pytest.mark.error
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_set_form_and_reset_restore_default_auto(self, request, cli_fixture):
+        """The extension option also works through SET, and RESET returns to auto."""
+        cli = request.getfixturevalue(cli_fixture)
+
+        off = _combined(
+            cli.execute_raw(f"SET diagnose_decide='off'; {_UNBOUNDED_SQL}")
+        )
+        assert "decide optimization is unbounded" in off
+        assert _POINTER not in off
+
+        reset = _combined(
+            cli.execute_raw(
+                f"SET diagnose_decide='off'; RESET diagnose_decide; {_UNBOUNDED_SQL}"
+            )
+        )
+        assert _POINTER in reset
 
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)

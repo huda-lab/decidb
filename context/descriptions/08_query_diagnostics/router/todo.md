@@ -1,42 +1,17 @@
 # Router — todo
 
 The router is the unified post-solve dispatch (see `README.md` for the tree and
-rationale). It **replaces** today's scattered logic: the facade's inf/unb
-disambiguation re-solve (`DisambiguateInfOrUnbd`, `ilp_solver.cpp`), the
-`DiagnosisApplies(mode, status)` gate, and the engine-selection / fall-through
-branch in `PhysicalDecide::Finalize` (`physical_decide.cpp`).
+rationale). **Batch 1 shipped** the seam (`RouteSolveResult`) and the unbounded
+terminal (R1 / R2) — see `done.md`. It still has to **replace** the remaining
+scattered logic: the facade's inf/unb disambiguation re-solve
+(`DisambiguateInfOrUnbd`, `ilp_solver.cpp`) and wire the infeasible / time_limit
+terminals to real engines.
 
 Tasks are individually pickable. Each carries its pointers, the decision it
 settles (if any), how to test it, and which `done.md` section to write when it
 lands. Suggested batches at the bottom.
 
 ---
-
-## R1 — Decide where the router lives, stand up the seam
-
-- **What:** introduce a single `RouteSolveResult(...)` entry point that takes the
-  `SolverResult` (+ the bits it needs: model/indexer for ray extraction, the
-  `diagnose_decide` mode, context for stashing) and returns/throws the terminal
-  action. No behavior change yet — it just wraps the current branching.
-- **Decision (open):** does the router live in the operator (`physical_decide.cpp`,
-  where the engines and stash already are) or as its own unit in
-  `src/decidb/utility/` (testable without the execution stack, mirroring
-  `diagnostic_solves.cpp`)? Lean: its own unit, so the decision tree is unit-testable
-  with injected `SolverResult`s; the operator calls it.
-- **Pointers:** `src/execution/operator/decide/physical_decide.cpp` (current
-  dispatch ~5230–5390), `src/decidb/utility/decide_diagnostic.cpp` (gate helpers).
-- **Test:** none yet (pure refactor) — existing diagnostics suite must stay green.
-- **Done section:** "Where the router lives / the seam."
-
-## R2 — Move the failed→unbounded path into the router
-
-- **What:** the shipped unbounded engine (`find ray` → report) becomes the
-  `UNBOUNDED` terminal of the router. Behavior identical; just relocated behind
-  `RouteSolveResult`.
-- **Pointers:** unbounded engine entry `DiagnoseUnbounded` (`physical_decide.cpp`),
-  `unbounded/done.md`.
-- **Test:** `test_query_diagnostics_f4/f5/f6/escaping_instances.py` stay green.
-- **Done section:** "Terminals: unbounded."
 
 ## R3 — inf/unb → check ray (the new disambiguation)
 
@@ -95,23 +70,24 @@ lands. Suggested batches at the bottom.
 - **Test:** ships with the slow work.
 - **Done section:** "Terminals: time_limit."
 
-## R7 — Router decision-tree unit tests
+## R7 — Router decision-tree unit tests (remaining leaves)
 
-- **What:** unit-test `RouteSolveResult` against injected `SolverResult`s covering
-  every leaf of the tree (solved, unbounded, infeasible, inf/unb±ray, time_limit
-  incumbent / no-sol), independent of the execution stack. Depends on R1's seam
-  being unit-testable.
-- **Pointers:** mirror `test/common/test_decidb_diagnostic_solves.cpp` /
-  `test_decidb_diagnostic_engines.cpp`.
-- **Done section:** "Tests."
+- **Shipped (Batch 1):** the leaves that exist today — `SOLVED`, `UNBOUNDED`,
+  `INFEASIBLE`, `TIME_LIMIT`, `UNDIAGNOSED` (residual `INF_OR_UNBD` /
+  `ITERATION_LIMIT` / `OTHER`) — are unit-tested across both modes in
+  `test/common/test_decidb_router.cpp`.
+- **What remains:** extend coverage as new leaves/sub-signals land —
+  inf/unb ± ray (R3) and time_limit incumbent / no-sol (R6) — once those branches
+  read sub-signals beyond the bare status.
+- **Pointers:** `test/common/test_decidb_router.cpp` (mirror its pattern).
+- **Done section:** fold into "Tests."
 
 ---
 
 ## Suggested batches
 
-- **Batch 1 (refactor, no behavior change):** R1 + R2 + R7-partial — stand up the
-  seam, move the unbounded path in, unit-test the leaves that exist. Ship behind
-  green existing tests.
+- ~~**Batch 1 (refactor, no behavior change):** R1 + R2 + R7-partial~~ — **shipped**
+  (`done.md`): the seam, the unbounded terminal, and the unit-tested existing leaves.
 - **Batch 2 (the inf/unb win):** R3 + R4 — check-ray disambiguation in, facade
   probe out. This is the user-visible payoff and the reason the router exists.
 - **Batch 3 (blocked, lands with their engines):** R5 with the infeasible engine,

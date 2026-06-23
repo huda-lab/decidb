@@ -211,15 +211,17 @@ in `todo.md`.
 ## Tests
 
 Differential vs `oracle_solver` / pinned scenarios:
-`test/decide/tests/test_query_diagnostics_f6.py` (REAL var, INTEGER/MILP via the
-HiGHS `INF_OR_UNBD` path, multi-var dedup, `auto` routing, `off` suppression) ·
+`test/decide/tests/test_query_diagnostics_unbounded_variables.py` (REAL var,
+INTEGER/MILP via the HiGHS `INF_OR_UNBD` path, MINIMIZE improving direction,
+multi-var dedup, `auto` routing, `off` suppression) ·
 `test/decide/tests/test_query_diagnostics_escaping_instances.py` (row-scoped
 partial → categorical rule, total escape, scattered → count fallback,
 entity-scoped → entity-key rule, all three characterization pragmas
-`escape_rate` / `categorical_ratio` / `min_categories` changing what is reported;
+`escape_rate` / `categorical_ratio` / `min_categories` changing what is reported
+plus validating their bounds;
 both backends, with oracle-confirmed unbounded constructed cases for the
-cardinality-knob tests) · `test/decide/tests/test_query_diagnostics_f5.py` (the renamed
-EAV `decide_diagnostics()` schema and `diagnosis_id`) ·
+cardinality-knob tests) · `test/decide/tests/test_query_diagnostics_relation.py`
+(the renamed EAV `decide_diagnostics()` schema and `diagnosis_id`) ·
 `test/common/test_decidb_diagnostic_engines.cpp` (`DiagnoseUnbounded` with injected
 grouping and a clause-shaped EAV stub row) · `test/common/test_decidb_escape_characterization.cpp`
 (the pure `CharacterizeEscape` core: threshold gating, union/sort, all-escape,

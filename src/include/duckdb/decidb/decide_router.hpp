@@ -1,0 +1,44 @@
+//===----------------------------------------------------------------------===//
+//                         DecidB
+//
+// duckdb/decidb/decide_router.hpp
+//
+// The query-diagnostics router: the single post-solve dispatch spine. It is a
+// pure classifier — given the solve result and the diagnose_decide mode, it names
+// the terminal the operator should route to. It owns no engine invocation and no
+// execution/operator types, so the decision tree is unit-testable in isolation.
+// See context/descriptions/08_query_diagnostics/router/.
+//
+//===----------------------------------------------------------------------===//
+
+#pragma once
+
+#include "duckdb/decidb/solver_result.hpp"
+
+namespace duckdb {
+
+//! A leaf of the router's dispatch tree — the terminal a solve routes to.
+//! INFEASIBLE / TIME_LIMIT are classified distinctly today even though no engine
+//! is wired for them yet (they currently share the static-error path in the
+//! operator); their engines drop in at R5 / R6 without touching this classifier.
+enum class DiagnosisTerminal {
+	//! OPTIMAL: store the solution (the success path).
+	SOLVED,
+	//! Failed unbounded, diagnosis requested: run the unbounded engine.
+	UNBOUNDED,
+	//! Failed infeasible, diagnosis requested: elastic engine (R5; static error until then).
+	INFEASIBLE,
+	//! Hit the time limit, diagnosis requested: slow terminal (R6; static error until then).
+	TIME_LIMIT,
+	//! No diagnosis: mode is off, or a status no engine covers (residual
+	//! INF_OR_UNBD, ITERATION_LIMIT, OTHER). Falls to the static solver error.
+	UNDIAGNOSED
+};
+
+//! Classify a solve result into its terminal under the given diagnose_decide
+//! `mode`. Pure: depends only on `result.status` and the mode policy
+//! (`DiagnosisApplies`). INF_OR_UNBD is already resolved upstream in SolveModel,
+//! so any residual INF_OR_UNBD here is the undecided case → UNDIAGNOSED.
+DiagnosisTerminal RouteSolveResult(const SolverResult &result, const string &mode);
+
+} // namespace duckdb

@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   decide_diagnostic.cpp
   decide_diagnostic_engines.cpp
+  decide_router.cpp
   diagnostic_solves.cpp
   debug.cpp
   ilp_model_builder.cpp
