@@ -80,7 +80,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 
     // Resolve source column names for the surviving (post-pruning) child columns,
     // positionally aligned with the materialized data chunk. Used by the unbounded
-    // diagnosis to label escaping categorical groups (escaping_instances).
+    // diagnosis to label escaping categorical groups (affected_rows).
     //
     // Harvest names from the DECIDE clause's own bound references to source columns
     // (WHEN / PER / objective / constraint / entity-key columns). By physical-plan

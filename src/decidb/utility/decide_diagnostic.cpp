@@ -63,7 +63,7 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "(infeasible / unbounded / time-limit) is automatically diagnosed where an engine exists; "
 	    "off suppresses diagnosis and reproduces the plain static solver error.",
 	    LogicalType::VARCHAR, Value("auto"), DiagnoseDecideSetCallback);
-	// Unbounded characterization knobs (see decide_diagnostics() escaping_instances).
+	// Unbounded characterization knobs (see decide_diagnostics() affected_rows).
 	config.AddExtensionOption(
 	    "diagnose_decide_escape_rate",
 	    "Unbounded diagnosis: report a categorical group when its within-group escape rate "
@@ -178,7 +178,7 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 	return rules;
 }
 
-//! Format one variable's `escaping_instances` cell. Empty => NULL.
+//! Format one variable's `affected_rows` / `affected_entities` cell. Empty => NULL.
 static string FormatEscapingInstances(const VarEscape &ve) {
 	if (ve.is_aux || ve.total <= 1) {
 		// Aux/linearization columns are name-only; a single-instance variable (no scope
@@ -186,21 +186,23 @@ static string FormatEscapingInstances(const VarEscape &ve) {
 		// disambiguate.
 		return string();
 	}
+	// Plain-language, self-describing cell: "rows"/"entities" per the variable's scope,
+	// so no legend is needed to read it.
+	const char *noun = ve.is_entity_scoped ? " entities" : " rows";
 	if (ve.all_escape) {
-		return "all " + std::to_string(ve.total) + " instances escape";
+		return "all " + std::to_string(ve.total) + noun;
 	}
 	if (!ve.rules.empty()) {
 		string cell;
 		for (idx_t i = 0; i < ve.rules.size(); i++) {
 			const auto &r = ve.rules[i];
-			cell += (i == 0 ? "" : "; ") + r.column + "=" + r.value + " (" +
-			        std::to_string(r.escaping) + "/" + std::to_string(r.total) + ")";
+			cell += (i == 0 ? "" : "; ") + std::to_string(r.escaping) + " of " +
+			        std::to_string(r.total) + noun + " where " + r.column + " = '" + r.value + "'";
 		}
 		return cell;
 	}
-	// Single escaping instance among many, or a scattered escape no categorical group
-	// characterizes: report the bare count.
-	return std::to_string(ve.escaping) + " of " + std::to_string(ve.total) + " instances escape";
+	// Scattered escape that no categorical group characterizes: report the bare count.
+	return std::to_string(ve.escaping) + " of " + std::to_string(ve.total) + noun;
 }
 
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
@@ -215,31 +217,27 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	diag.state = "unbounded";
 
 	string names;
-	bool any_categorical = false;
 	for (idx_t i = 0; i < escapes.size(); i++) {
 		names += (i == 0 ? "" : ", ") + escapes[i].name;
-		if (!escapes[i].rules.empty()) {
-			any_categorical = true;
-		}
 	}
 	// Prescribe the forced remedy (add a finite bound) without inventing the cap
 	// value — DeciDB names what to change, the user supplies the magnitude.
-	diag.summary = "The objective is unbounded: it can improve without limit because " +
-	               string(escapes.size() == 1 ? "the variable " : "the variables ") + names +
-	               " can grow without bound. To fix, add an upper bound, e.g. SUCH THAT " +
-	               escapes[0].name +
-	               " <= <cap>. This diagnosis names the runaway variable, not a single guilty clause.";
-	// Legend for the escaping_instances cell format — only when categorical rules are
-	// actually reported, otherwise it is irrelevant noise.
-	if (any_categorical) {
-		diag.summary += " (In escaping_instances, \"c=v (a/b)\" means a of b instances where "
-		                "c=v escape; \"; \"-separated rules are alternatives.)";
+	if (escapes.size() == 1) {
+		diag.summary = "variable " + names + " can grow without bound. Add an upper bound, e.g. SUCH THAT " +
+		               escapes[0].name + " <= <cap>.";
+	} else {
+		string bounds;
+		for (idx_t i = 0; i < escapes.size(); i++) {
+			bounds += (i == 0 ? "" : " AND ") + escapes[i].name + " <= <cap>";
+		}
+		diag.summary = "variables " + names + " can grow without bound. Add upper bounds, e.g. SUCH THAT " +
+		               bounds + ".";
 	}
 	for (const auto &ve : escapes) {
 		DiagnosticRow row;
 		row.subject_kind = "variable";
 		row.subject = ve.name;
-		row.attribute = "direction";
+		row.attribute = "grows_toward";
 		row.value = ve.direction;
 		diag.rows.push_back(std::move(row));
 
@@ -248,7 +246,7 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 			DiagnosticRow instances_row;
 			instances_row.subject_kind = "variable";
 			instances_row.subject = ve.name;
-			instances_row.attribute = "escaping_instances";
+			instances_row.attribute = ve.is_entity_scoped ? "affected_entities" : "affected_rows";
 			instances_row.value = std::move(escaping_instances);
 			diag.rows.push_back(std::move(instances_row));
 		}
@@ -279,21 +277,18 @@ void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag) {
 }
 
 void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag, const string &extra_message) {
-	string msg = "DECIDE optimization is " + diag.state + ".\n\n" + diag.summary;
+	string msg = "DECIDE optimization is " + diag.state + ": " + diag.summary;
 	if (!extra_message.empty()) {
-		msg += "\n\n" + extra_message;
+		msg += " " + extra_message;
 	}
-	msg += "\n\nDiagnosis ready (this session): SELECT * FROM decide_diagnostics();";
+	msg += "\nDetails: SELECT * FROM decide_diagnostics();";
 	throw InvalidInputException(msg);
 }
 
 void ThrowUnboundedDiagnosisUnavailable(const string &reason) {
 	throw InvalidInputException(
-	    "DECIDE optimization is unbounded: The objective can grow infinitely.\n\n"
-	    "This means the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n"
-	    "You must add constraints to bound the decision variables (e.g., SUCH THAT x <= 100).\n\n"
-	    "Unbounded diagnosis unavailable: " +
-	    reason);
+	    "DECIDE optimization is unbounded: " + reason +
+	    " Add an upper bound, e.g. SUCH THAT x <= <cap>.");
 }
 
 //===----------------------------------------------------------------------===//

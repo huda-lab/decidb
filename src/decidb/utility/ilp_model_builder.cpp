@@ -439,9 +439,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
         if (violated) {
             throw DecideInfeasibleModelException(
-                "DECIDE optimization is infeasible: a constraint reduces to "
-                "0 %c %g after absorbing variable bounds and cancelling terms.",
-                constr.sense, constr.rhs);
+                "DECIDE optimization is infeasible: a SUCH THAT constraint cannot be satisfied.");
         }
         // Tautology (0 <= k>=0, 0 >= k<=0, 0 = 0) — drop.
     };
@@ -947,9 +945,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
         if (model.col_lower[i] > model.col_upper[i]) {
             throw DecideInfeasibleModelException(
-                "DECIDE optimization is infeasible: contradictory bounds on variable %llu "
-                "(lower=%f > upper=%f). Check your SUCH THAT constraints for conflicting bounds.",
-                i, model.col_lower[i], model.col_upper[i]);
+                "DECIDE optimization is infeasible: a decision variable has conflicting lower and upper bounds.");
         }
         if (!std::isfinite(model.obj_coeffs[i])) {
             throw InternalException("Objective coefficient not finite at col %llu: %f",

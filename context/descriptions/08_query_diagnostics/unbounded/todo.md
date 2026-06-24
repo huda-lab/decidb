@@ -4,9 +4,9 @@ The unbounded state is functionally complete (it names the escaping variables �
 see `done.md`). What remains makes the diagnosis *more actionable*: tell the user
 which slice escaped, and prescribe the forced fix. Only open work is listed here.
 
-## `escaping_instances` — residual enrichments
+## `affected_rows` / `affected_entities` — residual enrichments
 
-The categorical characterization itself is shipped (`done.md` · `escaping_instances`).
+The categorical characterization itself is shipped (`done.md` · `affected_rows`).
 Open enrichments:
 
 - **Conjunctive rules.** Rules are an independent union of single columns today
@@ -28,7 +28,7 @@ Open enrichments:
 
 ## Direction / downward escape
 
-`direction` is always `+inf` and the `-inf` branch is unreachable today, because
+`grows_toward` is always `+inf` and the `-inf` branch is unreachable today, because
 variables are non-negative. Downward escape only becomes possible — and the `-inf`
 path only becomes testable — once **signed/free variables** exist (tracked in
 `03_expressivity/decide/todo.md`). When they do: open the lower bound in the ray
@@ -39,9 +39,10 @@ free-variable oracle test for the `-inf` direction.
 
 Name the clauses an escaping variable appears in — *context only* ("`x` appears in
 clauses 2, 5; none cap it"), never blame, per the load-bearing limit in `done.md`.
-Needs the clause-text plumbing shared with the infeasible engine. A static caveat
-("DeciDB can name the runaway variable but not a single guilty clause") is a
-cheaper alternative that sets the right expectation.
+Needs the clause-text plumbing shared with the infeasible engine. (The old static
+caveat — "names the runaway variable, not a single guilty clause" — was **removed**
+from the user error for concision, so it is no longer the cheaper alternative; any
+context line, if built, stays opt-in detail, not inlined blame.)
 
 ## Test coverage gaps
 

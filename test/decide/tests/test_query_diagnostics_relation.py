@@ -6,8 +6,8 @@ schema. For the unbounded state each variable owns attributes:
 
     diagnosis_id | state | subject_kind | subject | attribute | value
 
-`escaping_instances` characterizes which instances of the variable escape (here
-all of them); `diagnosis_id` ties together every row of one failed solve. The
+`affected_rows` characterizes which rows of the variable escape (here all of
+them); `diagnosis_id` ties together every row of one failed solve. The
 forced remedy (add a bound) is prescribed in the stderr summary, not a per-row
 column.
 
@@ -81,7 +81,7 @@ class TestDiagnosticsRelation:
 
         # The DECIDE itself still errors, with the pointer on stderr.
         assert (
-            "diagnosis ready (this session): select * from decide_diagnostics()"
+            "details: select * from decide_diagnostics()"
             in result.stderr.lower()
         )
 
@@ -89,10 +89,9 @@ class TestDiagnosticsRelation:
         assert len(rows) == 2
         assert {r["state"] for r in rows} == {"unbounded"}
         attrs = _attrs(rows, "variable", "x")
-        assert attrs["direction"] == "+inf"
-        # Both instances of x escape, so escaping_instances reports the total-escape
-        # summary.
-        assert attrs["escaping_instances"] == "all 2 instances escape"
+        assert attrs["grows_toward"] == "+inf"
+        # Both instances of x escape, so affected_rows reports the total-escape summary.
+        assert attrs["affected_rows"] == "all 2 rows"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_relation_has_fixed_schema(self, request, cli_fixture):
@@ -122,7 +121,7 @@ class TestDiagnosticsRelation:
         )
         result = cli.execute_script(script)
         # Static error, no pointer, and the relation stays empty.
-        assert "diagnosis ready" not in result.stderr.lower()
+        assert "select * from decide_diagnostics()" not in result.stderr.lower()
         assert _rows(result) == []
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -187,7 +186,7 @@ class TestDiagnosticsRelation:
         all-NULL row. A quadratic objective attaches no ray, so under `auto` the
         diagnosis has no per-variable content and falls through to the rich static
         error (Gurobi reaches UNBOUNDED here); HiGHS rejects the non-convex QP
-        pre-solve. Either path: no 'diagnosis ready' pointer and an empty relation.
+        pre-solve. Either path: no diagnosis pointer and an empty relation.
 
         C8: when diagnosis was requested but cannot produce content, the error states
         it is unavailable and why (quadratic) instead of re-advertising the opt-in the
@@ -198,16 +197,15 @@ class TestDiagnosticsRelation:
             "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(POWER(x, 2))"
         )
         result = _diagnose(cli, qp_sql, mode="auto")
-        assert "diagnosis ready" not in result.stderr.lower()
+        assert "select * from decide_diagnostics()" not in result.stderr.lower()
         assert _rows(result) == []
         if "gurobi" in cli_fixture:
             # Gurobi reports UNBOUNDED, exercising the C8 "diagnosis unavailable"
             # message (the old code replaced this with an all-NULL diagnosis row,
             # then with the generic re-run advert).
             err = result.stderr.lower()
-            assert "you must add constraints to bound" in err
-            assert "unbounded diagnosis unavailable" in err
-            assert "quadratic" in err
+            assert "add an upper bound" in err
+            assert "non-linear" in err
             # The misleading opt-in advert must NOT appear: the mode is already on.
             assert "set pragma diagnose_decide='auto' and re-run" not in err
 
@@ -224,5 +222,5 @@ class TestDiagnosticsRelation:
         )
         result = _diagnose(cli, sql, mode="auto")
         assert "decide optimization is infeasible" in result.stderr.lower()
-        assert "diagnosis ready" not in result.stderr.lower()
+        assert "select * from decide_diagnostics()" not in result.stderr.lower()
         assert _rows(result) == []

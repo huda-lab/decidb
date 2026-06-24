@@ -4,7 +4,7 @@
 and `off`. Under `auto` a failed solve is diagnosed automatically wherever an engine
 exists; `off` suppresses diagnosis and reproduces the plain static solver error.
 Today only the unbounded engine exists, so a fired diagnosis throws the short pointer
-error ("Diagnosis ready: SELECT * FROM decide_diagnostics()"); a
+error ("Details: SELECT * FROM decide_diagnostics()"); a
 matched-but-unimplemented state (infeasible/slow) falls through to the static solver
 error even under `auto`.
 
@@ -31,7 +31,7 @@ _INFEASIBLE_SQL = (
     "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
 )
 
-_POINTER = "diagnosis ready (this session): select * from decide_diagnostics()"
+_POINTER = "details: select * from decide_diagnostics()"
 
 
 def _combined(result) -> str:

@@ -53,12 +53,12 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.rows.size() == 2);
 		CHECK(diag.rows[0].subject_kind == "variable");
 		CHECK(diag.rows[0].subject == "x");
-		CHECK(diag.rows[0].attribute == "direction");
+		CHECK(diag.rows[0].attribute == "grows_toward");
 		CHECK(diag.rows[0].value == "+inf");
 		CHECK(diag.rows[1].subject_kind == "variable");
 		CHECK(diag.rows[1].subject == "x");
-		CHECK(diag.rows[1].attribute == "escaping_instances");
-		CHECK(diag.rows[1].value == "channel=export (2/2)");
+		CHECK(diag.rows[1].attribute == "affected_rows");
+		CHECK(diag.rows[1].value == "2 of 2 rows where channel = 'export'");
 	}
 
 	SECTION("unbounded engine returns invalid diagnosis when ray names no variable") {

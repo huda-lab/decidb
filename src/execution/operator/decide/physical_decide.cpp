@@ -5399,7 +5399,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             StashDecideDiagnostic(context, diag);
             string extra_message;
             if (solve_result.status == SolverStatus::INF_OR_UNBD) {
-                extra_message = "the problem may still be infeasible.";
+                extra_message = "It may instead be infeasible.";
             }
             ThrowDecideDiagnosisReady(diag, extra_message);
         }
@@ -5412,10 +5412,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // auxiliaries escaped.
         string reason =
             solve_result.ray.empty()
-                ? "the objective or a constraint is quadratic, so no linear runaway "
-                  "direction can be extracted for a named decision variable."
-                : "the runaway direction involves only internal auxiliary variables, "
-                  "not a named decision variable.";
+                ? "a non-linear term prevents naming the variable."
+                : "the runaway is an internal helper variable.";
         ThrowUnboundedDiagnosisUnavailable(reason);
     }
     case DiagnosisTerminal::INFEASIBLE: { // elastic engine lands at R5

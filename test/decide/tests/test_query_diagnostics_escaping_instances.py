@@ -1,17 +1,16 @@
-"""Unbounded `escaping_instances` — characterize WHICH instances of a variable escape.
+"""Unbounded affected_rows / affected_entities — characterize WHICH rows/entities escape.
 
 When a variable's name fans out into many scope-instances (row-scoped: one column
-per result row; entity-scoped: one per entity) and only some escape, the renamed
-`escaping_instances` attribute of `decide_diagnostics()` describes the escaping set with
-categorical, sufficient-direction rules — `when c=v, the variable escapes in a of b
-instances` (rendered `c=v (a/b)`) for every categorical (column, value) whose
-within-group escape rate clears the threshold. Total escape collapses to
-`all N instances escape`; a single-instance variable or a scattered escape that no
-categorical group characterizes falls back to the bare `a of b instances escape`.
+per result row; entity-scoped: one per entity) and only some escape, the
+`affected_rows` / `affected_entities` attribute of `decide_diagnostics()` describes the
+escaping set with self-describing categorical rules — `a of b rows where c = 'v'` for
+every categorical (column, value) whose within-group escape rate clears the threshold.
+Total escape collapses to `all N rows`; a single-instance variable or a scattered escape
+that no categorical group characterizes falls back to the bare `a of b rows`.
 
 Cases are constructed so the escaping slice is known by construction; the
-characterization string is asserted directly (the `diagnosis ready` pointer on
-stderr confirms the solve was classified UNBOUNDED). Runs under both backends.
+characterization string is asserted directly (the `details` pointer on stderr
+confirms the solve was classified UNBOUNDED). Runs under both backends.
 """
 
 import csv
@@ -89,7 +88,7 @@ class TestEscapingInstances:
         """Only one categorical value's rows escape -> a single sufficient rule."""
         cli = request.getfixturevalue(cli_fixture)
         rows = _rows(_diagnose(cli, _ROW_PARTIAL))
-        assert _attr(rows, "buy", "escaping_instances") == "channel=export (20/20)"
+        assert _attr(rows, "buy", "affected_rows") == "20 of 20 rows where channel = 'export'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_total_escape_summary(self, request, cli_fixture):
@@ -101,7 +100,7 @@ class TestEscapingInstances:
             "DECIDE buy IS REAL SUCH THAT buy >= 0 MAXIMIZE SUM(buy * margin)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attr(rows, "buy", "escaping_instances") == "all 100 instances escape"
+        assert _attr(rows, "buy", "affected_rows") == "all 100 rows"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_scattered_escape_falls_back_to_count(self, request, cli_fixture):
@@ -115,7 +114,7 @@ class TestEscapingInstances:
             "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN id <= 50 MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attr(rows, "buy", "escaping_instances") == "50 of 100 instances escape"
+        assert _attr(rows, "buy", "affected_rows") == "50 of 100 rows"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_entity_scoped_partial_escape_rule(self, request, cli_fixture):
@@ -133,7 +132,7 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(hire * eid)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attr(rows, "hire", "escaping_instances") == "dept=A (10/10)"
+        assert _attr(rows, "hire", "affected_entities") == "10 of 10 entities where dept = 'A'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_select_only_column_is_not_named_colN(self, request, cli_fixture, oracle_solver):
@@ -157,8 +156,8 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
-        value = _attr(rows, "buy", "escaping_instances")
-        assert value == "25 of 100 instances escape", value
+        value = _attr(rows, "buy", "affected_rows")
+        assert value == "25 of 100 rows", value
         assert "col" not in value, f"positional colN leaked into report: {value}"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -176,10 +175,10 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
-        assert _attr(default, "buy", "escaping_instances") == "90 of 300 instances escape"
+        assert _attr(default, "buy", "affected_rows") == "90 of 300 rows"
 
         lowered = _rows(_diagnose(cli, sql, extra_pragmas="PRAGMA diagnose_decide_escape_rate=0.5;\n"))
-        assert _attr(lowered, "buy", "escaping_instances") == "category=P (90/150)"
+        assert _attr(lowered, "buy", "affected_rows") == "90 of 150 rows where category = 'P'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_categorical_ratio_pragma_changes_reporting(self, request, cli_fixture, oracle_solver):
@@ -199,7 +198,7 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
-        assert _attr(default, "buy", "escaping_instances") == "4 of 100 instances escape"
+        assert _attr(default, "buy", "affected_rows") == "4 of 100 rows"
 
         raised = _rows(
             _diagnose(
@@ -208,7 +207,7 @@ class TestEscapingInstances:
                 extra_pragmas="PRAGMA diagnose_decide_categorical_ratio=0.25;\n",
             )
         )
-        assert _attr(raised, "buy", "escaping_instances") == "bucket=target (4/4)"
+        assert _attr(raised, "buy", "affected_rows") == "4 of 4 rows where bucket = 'target'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_min_categories_pragma_changes_reporting(self, request, cli_fixture, oracle_solver):
@@ -228,7 +227,7 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
-        assert _attr(default, "buy", "escaping_instances") == "segment=target (8/8)"
+        assert _attr(default, "buy", "affected_rows") == "8 of 8 rows where segment = 'target'"
 
         lowered = _rows(
             _diagnose(
@@ -237,7 +236,7 @@ class TestEscapingInstances:
                 extra_pragmas="PRAGMA diagnose_decide_min_categories=10;\n",
             )
         )
-        assert _attr(lowered, "buy", "escaping_instances") == "8 of 120 instances escape"
+        assert _attr(lowered, "buy", "affected_rows") == "8 of 120 rows"
 
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)

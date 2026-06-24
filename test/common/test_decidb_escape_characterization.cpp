@@ -6,7 +6,7 @@
 
 using namespace duckdb;
 
-// Pure core of the unbounded `escaping_instances` characterization. Given a
+// Pure core of the unbounded affected-rows/entities characterization. Given a
 // variable's escaping-instance set and categorical column groupings, CharacterizeEscape
 // returns every (column, value) group whose within-group escape rate (escaping/total)
 // clears the threshold — the "sufficient-direction" rule: when column = value, the

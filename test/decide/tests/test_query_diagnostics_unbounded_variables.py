@@ -63,18 +63,16 @@ class TestUnboundedVariableDiagnostics:
         result = _diagnose(cli, sql)
 
         assert (
-            "diagnosis ready (this session): select * from decide_diagnostics()"
+            "details: select * from decide_diagnostics()"
             in result.stderr.lower()
         )
         rows = _rows(result)
-        assert _attrs(rows, "x")["direction"] == "+inf"
+        assert _attrs(rows, "x")["grows_toward"] == "+inf"
         assert {r["state"] for r in rows} == {"unbounded"}
         # The summary still names the variable on stderr.
-        assert "the variable x can grow without bound" in result.stderr.lower()
+        assert "variable x can grow without bound" in result.stderr.lower()
         # A4: and prescribes the forced remedy (add a bound) without a number.
         assert "add an upper bound, e.g. such that x <= <cap>" in result.stderr.lower()
-        # C2: set the expectation that the ray names a variable, not clause blame.
-        assert "not a single guilty clause" in result.stderr.lower()
         assert "the problem may still be infeasible." not in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -89,7 +87,7 @@ class TestUnboundedVariableDiagnostics:
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
-        assert _attrs(rows, "n")["direction"] == "+inf"
+        assert _attrs(rows, "n")["grows_toward"] == "+inf"
         assert "the problem may still be infeasible." not in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -102,14 +100,14 @@ class TestUnboundedVariableDiagnostics:
             "MAXIMIZE SUM(x + y)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attrs(rows, "x")["direction"] == "+inf"
-        assert _attrs(rows, "y")["direction"] == "+inf"
-        assert _attrs(rows, "x")["escaping_instances"] == "all 2 instances escape"
-        assert _attrs(rows, "y")["escaping_instances"] == "all 2 instances escape"
+        assert _attrs(rows, "x")["grows_toward"] == "+inf"
+        assert _attrs(rows, "y")["grows_toward"] == "+inf"
+        assert _attrs(rows, "x")["affected_rows"] == "all 2 rows"
+        assert _attrs(rows, "y")["affected_rows"] == "all 2 rows"
         assert {
             r["subject"]
             for r in rows
-            if r["subject_kind"] == "variable" and r["attribute"] == "direction"
+            if r["subject_kind"] == "variable" and r["attribute"] == "grows_toward"
         } == {"x", "y"}
         assert len({r["diagnosis_id"] for r in rows}) == 1
 
@@ -125,8 +123,8 @@ class TestUnboundedVariableDiagnostics:
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
-        assert _attrs(rows, "x")["direction"] == "+inf"
-        assert "the variable x can grow without bound" in result.stderr.lower()
+        assert _attrs(rows, "x")["grows_toward"] == "+inf"
+        assert "variable x can grow without bound" in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_auto_mode_names_unbounded_var(self, request, cli_fixture):
@@ -137,7 +135,7 @@ class TestUnboundedVariableDiagnostics:
             "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
         rows = _rows(_diagnose(cli, sql, mode="auto"))
-        assert _attrs(rows, "x")["direction"] == "+inf"
+        assert _attrs(rows, "x")["grows_toward"] == "+inf"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_off_no_naming(self, request, cli_fixture):
@@ -153,7 +151,7 @@ class TestUnboundedVariableDiagnostics:
             f"{sql};\nSELECT * FROM decide_diagnostics();\n"
         )
         result = cli.execute_script(script)
-        assert "diagnosis ready" not in result.stderr.lower()
+        assert "select * from decide_diagnostics()" not in result.stderr.lower()
         assert _rows(result) == []
         # A1: the static error points a user who turned diagnosis off back to it.
         assert (

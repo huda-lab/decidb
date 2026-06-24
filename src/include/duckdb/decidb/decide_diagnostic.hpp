@@ -65,6 +65,7 @@ struct VarEscape {
 	idx_t total = 0;        //!< total instances of this variable
 	bool all_escape = false; //!< escaping == total
 	bool is_aux = false;     //!< aux/linearization column (name-only, no rules)
+	bool is_entity_scoped = false; //!< true => instances are entities, not rows (noun)
 	vector<EscapeRule> rules; //!< categorical rules (empty => count fallback)
 };
 
@@ -113,11 +114,11 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 
 //! Build the unbounded diagnosis from the per-variable characterizations the
 //! operator assembled (one row per escaping variable). Formats each VarEscape's
-//! `escaping_instances` cell: `all N instances …` when all escape, the `; `-joined
-//! categorical rules `c=v (a/b)` when any clear the threshold, else the bare count
-//! `a of b instances escape`. The summary prescribes the forced remedy (add a finite
-//! bound) without inventing the cap, and appends a one-line legend for the
-//! `escaping_instances` cell format when categorical rules are present. Precondition:
+//! `affected_rows` / `affected_entities` cell (self-describing, no legend): `all N
+//! rows` when all escape, the `; `-joined categorical rules `a of b rows where
+//! c = 'v'` when any clear the threshold, else the bare count `a of b rows`
+//! (`entities` in place of `rows` for entity-scoped vars). The summary prescribes the
+//! forced remedy (add a finite bound) without inventing the cap. Precondition:
 //! `escapes` is non-empty — the caller falls through to the static error when the ray
 //! names nothing (quadratic model, or only internal auxiliaries escaped).
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes);
@@ -139,7 +140,8 @@ void ClearDecideDiagnostic(ClientContext &context);
 //! Throw the unbounded error used when diagnosis WAS requested for an unbounded
 //! solve but produced no per-variable content (e.g. a quadratic model, or a ray
 //! that escaped only via internal auxiliaries). `reason` completes the sentence
-//! "Unbounded diagnosis unavailable: ...". Distinct from the generic
+//! "DECIDE optimization is unbounded: <reason> Add an upper bound, e.g. SUCH THAT
+//! x <= <cap>." Distinct from the generic
 //! ThrowDecideSolveError advert, which (correctly) tells a user who has NOT
 //! enabled diagnosis to turn it on — useless advice once it is already on.
 [[noreturn]] void ThrowUnboundedDiagnosisUnavailable(const string &reason);

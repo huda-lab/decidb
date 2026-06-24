@@ -72,7 +72,7 @@ engine collects columns with `|ray[i]| > DIAGNOSTIC_RAY_EPSILON`, groups them by
 and collects each variable's escaping **scope-instances** (the
 `ColumnProvenance.instance`: the row for row-scoped, the entity id for
 entity-scoped). It emits EAV attributes for each escaping variable: always
-`direction`, and `escaping_instances` when there is scope multiplicity to
+`grows_toward`, and `affected_rows` / `affected_entities` when there is scope multiplicity to
 characterize (next section). `BuildUnboundedDiagnostic` is the pure formatter over
 that per-variable summary.
 
@@ -91,85 +91,92 @@ The diagnosis surfaces through `decide_diagnostics()` (schema in
 
 - `subject_kind` — `variable` for every unbounded row.
 - `subject` — the escaping variable's name.
-- `attribute = direction` — the sign of its ray entry, as ASCII `+inf` / `-inf`
+- `attribute = grows_toward` — the sign of its ray entry, as ASCII `+inf` / `-inf`
   (not the Unicode `±∞` glyph: ASCII is robust in CSV exports, EAV filters such as
-  `WHERE attribute = 'direction' AND value = '+inf'`, and non-UTF-8 terminals).
+  `WHERE attribute = 'grows_toward' AND value = '+inf'`, and non-UTF-8 terminals).
   Always `+inf` today: user variables are non-negative
   (`[0, 1e30]`), so escape is always upward. The sign is computed from the ray, so a
   future signed/free variable would report `-inf` — but that path is unreachable and
   untested until signed variables exist (see `todo.md` and
   `03_expressivity/decide/todo.md`).
 - `diagnosis_id` — ties together the rows of one failed solve.
-- `attribute = escaping_instances` — which instances of the variable escape (next
-  section). This row is omitted for name-only cases where the value would be NULL
-  (aux/name-only or a single-instance variable).
+- `attribute = affected_rows` (row-scoped) / `affected_entities` (entity-scoped) —
+  which rows/entities of the variable escape (next section). This row is omitted for
+  name-only cases where the value would be NULL (aux/name-only or a single-instance
+  variable).
 
 The forced remedy (add a bound) is a single statement that applies to every
 escaping variable, so it is carried in the **summary** (stderr), not as a per-row
 attribute. (An always-NULL `suggested_bound` column previously shipped here; it was
 dropped — DeciDB never picks the cap value, so there was nothing per-variable to
-report.) When any row carries categorical rules, the summary also appends a
-one-line legend for the `escaping_instances` value format (`c=v (a/b)` = a of b
-instances where `c=v` escape; `; `-separated rules are alternatives).
+report.) The `affected_rows` / `affected_entities` value is **self-describing**
+(`a of b rows where c = 'v'`), so the summary carries **no** legend — a deliberate
+declutter for the SQL-user audience (no `c=v (a/b)` shorthand to decode).
 
-The error thrown points the user at the relation: `SELECT * FROM
-decide_diagnostics() (this session)` — see "How the failure is surfaced" below.
+The error thrown points the user at the relation: `Details: SELECT * FROM
+decide_diagnostics();` — see "How the failure is surfaced" below.
 
 ## How the failure is surfaced (error messaging)
 
-Two error-text behaviors close the loop between a failed solve and its diagnosis:
+All failure text follows one rule (the **"user-facing output is for SQL users"**
+principle): one line naming the state + the smallest fix, no solver/LP jargon, no
+bullet-list lectures, no meta-commentary on how the diagnosis was derived. Detail
+lives in the opt-in relation, not the error.
 
 - **Point back to diagnosis when it was turned off.** With `diagnose_decide='off'`
-  an unbounded solve throws the legacy static error (`ThrowDecideSolveError`,
-  UNBOUNDED branch, `ilp_solver.cpp`). That error ends with one pointer line — *"For
-  a diagnosis of which variable is unbounded, set `PRAGMA diagnose_decide='auto'`
-  and re-run."* — so a user who suppressed diagnosis is reminded how to get it back.
-  (Under the `auto` default this branch is not reached for UNBOUNDED: the solve is
-  diagnosed and throws the "diagnosis ready" pointer instead.) Only the unbounded
-  branch advertises; the infeasible/slow branches stay silent because their engines
-  don't exist yet (advertising them would over-promise).
-- **Same-session caveat.** When diagnosis runs and a diagnosis is stashed, the
-  thrown error reads *"Diagnosis ready (this session): SELECT * FROM
-  decide_diagnostics();"* (`ThrowDecideDiagnosisReady`, `decide_diagnostic.cpp`).
-  The stash is per-connection, so a fresh connection (a second `decidb -c …`) gets
-  an empty relation; the "(this session)" qualifier sets that expectation. A
-  richer empty-stash explanatory row was considered and deferred.
-- **Variable, not clause blame.** The stashed-diagnosis summary also says the
-  diagnosis names the runaway variable, not a single guilty clause. That mirrors
-  the ray's information limit: a missing bound and a flipped-sign constraint can
-  produce the same recession direction.
-- **"Unavailable", not the re-run advert, when diagnosis ran but came up empty.**
-  A content-free unbounded solve (a quadratic model, or a ray that escaped only via
-  internal auxiliaries) falls through even though diagnosis was active. In
-  that case the error must not point the user back at `diagnose_decide='auto'` — it
-  is already on (or default) and re-running cannot help. Instead
-  `ThrowUnboundedDiagnosisUnavailable` (`decide_diagnostic.cpp`) keeps the
-  bound-the-variables guidance and ends with *"Unbounded diagnosis unavailable: …"*
-  naming the reason: an **empty ray** ⇒ the model is quadratic
-  (`BuildUnboundedRayFallbackModel` declines quadratics), a **present ray with no
-  named variable** ⇒ only internal auxiliaries escaped. The re-run advert is
-  therefore reached only when diagnosis was turned `off`; `physical_decide.cpp`
-  picks between the two at that fall-through.
+  an unbounded solve throws the static error (`ThrowDecideSolveError`, UNBOUNDED
+  branch, `ilp_solver.cpp`): *"DECIDE optimization is unbounded: a decision variable
+  can grow without bound. Add an upper bound, e.g. SUCH THAT x <= <cap>. For the
+  variable, set `PRAGMA diagnose_decide='auto'` and re-run."* — so a user who
+  suppressed diagnosis is reminded how to get the per-variable detail back. (Under
+  the `auto` default this branch is not reached for UNBOUNDED: the solve is diagnosed
+  and throws the `Details:` pointer instead.) Only the unbounded branch advertises;
+  infeasible/slow stay silent until their engines exist.
+- **The relation pointer.** When a diagnosis is stashed, the thrown error ends with
+  *"Details: SELECT * FROM decide_diagnostics();"* (`ThrowDecideDiagnosisReady`,
+  `decide_diagnostic.cpp`). The stash is per-connection, so a fresh connection gets
+  an empty relation; the earlier *"(this session)"* qualifier was dropped for
+  concision (the per-connection lifecycle still holds — it is just no longer spelled
+  out in the error).
+- **No clause-blame caveat in the message.** Earlier the summary appended *"names the
+  runaway variable, not a single guilty clause."* That sentence was **removed** from
+  stderr: it answers a question a SQL user has not asked and spends the most prominent
+  line on a limitation rather than the fix. The limit itself still holds (a missing
+  bound and a flipped-sign constraint share a recession direction) — it lives in this
+  doc (see "Load-bearing limit"), not in the user's error.
+- **"Unavailable" reason, not the re-run advert, when diagnosis ran but came up
+  empty.** A content-free unbounded solve (a quadratic model, or a ray that escaped
+  only via internal auxiliaries) falls through even though diagnosis was active. The
+  error must not point the user back at `diagnose_decide='auto'` — it is already on.
+  `ThrowUnboundedDiagnosisUnavailable` (`decide_diagnostic.cpp`) instead names the
+  reason and keeps the fix: *"DECIDE optimization is unbounded: a non-linear term
+  prevents naming the variable. Add an upper bound, e.g. SUCH THAT x <= <cap>."*
+  (empty ray ⇒ quadratic; `BuildUnboundedRayFallbackModel` declines quadratics) or
+  *"…the runaway is an internal helper variable…"* (present ray, only internal
+  auxiliaries escaped). The re-run advert is reached only when diagnosis was turned
+  `off`; `physical_decide.cpp` picks the reason at that fall-through.
 
-## `escaping_instances` — characterizing which instances escape
+## `affected_rows` / `affected_entities` — characterizing which rows escape
 
 A variable name fans out into many scope-instances (row-scoped: one column per
-result row; entity-scoped: one per entity). When only *some* escape, the cell says
-which, so a partial escape is distinguishable from a total one and a localized
-modeling error (a sign flip on one category, a `WHEN`/`PER` cap that skipped a
-slice) is visible. The cell is one of:
+result row → `affected_rows`; entity-scoped: one per entity → `affected_entities`).
+When only *some* escape, the cell says which, so a partial escape is distinguishable
+from a total one and a localized modeling error (a sign flip on one category, a
+`WHEN`/`PER` cap that skipped a slice) is visible. Every cell is **self-describing**
+(no legend); it is one of:
 
-- **Total escape** (`escaping == total`): `all N instances escape`.
+- **Total escape** (`escaping == total`): `all N rows` (or `all N entities`).
 - **Categorical rules**: for every categorical column `c` and value `v`, the
-  within-group escape rate `a/b` (a = escaping instances with `c=v`, b = group
-  size) is computed; every group with rate ≥ the escape-rate threshold is reported
-  as `c=v (a/b)`, `; `-joined, strongest first. This is the *sufficient direction*
-  ("when `c=v`, the variable escapes in a of b instances"); the `a/b` count is
+  within-group escape rate `a/b` (a = escaping rows with `c=v`, b = group size) is
+  computed; every group with rate ≥ the escape-rate threshold is reported as
+  `a of b rows where c = 'v'`, `; `-joined, strongest first. This is the *sufficient
+  direction* ("when `c=v`, the variable escapes in a of b rows"); the `a/b` count is
   always shown so a threshold < 1 stays honest. Rules are an independent **union**
   across columns/values (conjunctions are future work).
 - **Fallback** (single-instance variable, or a scattered escape no categorical
-  group characterizes): the bare count `a of b instances escape` (single-instance
-  variables read NULL — nothing to disambiguate). Aux columns are name-only.
+  group characterizes): the bare count `a of b rows` (single-instance variables read
+  NULL — nothing to disambiguate). Aux columns are name-only. Entity-scoped variables
+  read `entities` in place of `rows` throughout.
 
 **Mechanism.** Categorical grouping reuses `BuildGroupIds` (one scan per candidate
 column; it returns per-group representative values). A column is a candidate when
@@ -204,9 +211,9 @@ The ray identifies a *missing* bound. It can name the runaway variable but
 **cannot** finger a single guilty clause: a flipped-sign constraint is
 mathematically indistinguishable from an absent one. So any clause-level output
 can only ever be *context* ("`x` appears in clauses 2, 5; none cap it"), never
-blame. The current summary states this caveat directly so users do not hunt for
-clause blame in `decide_diagnostics()`. This shapes every clause-aware enrichment
-in `todo.md`.
+blame. This limit is **not** surfaced in the user error (it was removed for
+concision — a SQL user needs the fix, not the caveat); it is recorded here because
+it shapes every clause-aware enrichment in `todo.md`.
 
 ## Tests
 
@@ -232,5 +239,5 @@ preservation, integrality relaxation, opt-in attachment) ·
 The characterization string is asserted against constructed cases (oracle/pinned
 confirm only the UNBOUNDED status). Demoed end-to-end on the TPC-H DB via `run.sh`
 (a 1-variable `part` model where `buy` is uncapped for `Manufacturer#1` rows, so
-the diagnosis reports EAV rows for `buy` / `direction` / `+inf` and
-`buy` / `escaping_instances` / `p_mfgr=Manufacturer#1 (29/29)`).
+the diagnosis reports EAV rows for `buy` / `grows_toward` / `+inf` and
+`buy` / `affected_rows` / `29 of 29 rows where p_mfgr = 'Manufacturer#1'`).

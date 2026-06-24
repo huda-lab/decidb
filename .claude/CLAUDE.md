@@ -56,6 +56,7 @@ Keyword-by-keyword feature status: `context/descriptions/03_expressivity/` (each
 - **Follow DuckDB patterns first**: When adding a feature, find how DuckDB handles the analogous SQL case and mirror that approach. Don't invent new patterns when DuckDB already has one.
 - **Solver-agnostic**: Features must work with both Gurobi and HiGHS. Don't rely on solver-specific capabilities without a fallback path.
 - **Minimal DuckDB core modifications**: DeciDB extends DuckDB; prefer adding new code over modifying core DuckDB files. The less we touch upstream, the easier version upgrades are.
+- **User-facing output is for SQL users, not solver experts**: Every string a user reads — error messages, diagnostics, hints — must be concise and *actionable*. Name the offending object by its SQL identifier (variable / column / clause), state the smallest concrete edit that fixes it, and stop. No solver or LP/math jargon (ray, recession, instance, escape, dual, Big-M, "guilty clause"), no internal mechanics, no meta-commentary on how the diagnosis was derived. **Tell the user the fix, not the math.** Push deeper detail into a relation they can opt into (e.g. `decide_diagnostics()`) instead of inlining it into the error. This applies everywhere output reaches a user, diagnostics most of all.
 
 ## Demand Elegance (Balanced)
 

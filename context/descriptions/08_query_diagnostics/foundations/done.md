@@ -47,7 +47,9 @@ so callers branch on the outcome. This gates the whole area.
   non-optimal → the pragma gate decides whether to diagnose or call
   `ThrowDecideSolveError`. This is the single gated call site.
 
-Behavior is unchanged for users with no pragma — same errors, same wording.
+Routing and behavior are unchanged for users with no pragma. (The static error
+*wording* was later tightened — concise, one line + the smallest fix, no jargon —
+under the "user-facing output is for SQL users" principle; see `unbounded/done.md`.)
 
 ## Solver behavior (backend reference)
 
@@ -140,7 +142,7 @@ it represents, so the unbounded diagnosis names escaping variables.
   `VarIndexer::Get(var, row)` over all rows to produce a `flat column →
   ColumnProvenance` map. The provenance retains the variable's **instance**
   identity (entity id for entity-scoped, row for row-scoped) — the hook the
-  unbounded `escaping_instances` characterization resolves to a categorical rule
+  unbounded `affected_rows` characterization resolves to a categorical rule
   set (`unbounded/done.md`). Global-block columns default to GLOBAL_AUX (unnamed).
 
 Tested in `test/common/test_decidb_variable_provenance.cpp`.
@@ -244,11 +246,11 @@ as a fixed-schema relation.
   switch is bind-time-blocked. The diagnosis is surfaced via this companion table
   function instead.
 - **Today only the unbounded engine populates it** (`BuildUnboundedDiagnostic` — see
-  `unbounded/done.md`). It emits one `direction` row for every escaping variable
-  and an `escaping_instances` row only when there is instance multiplicity to
-  explain (categorical rules / total-escape / count). The forced remedy (add a
-  bound) is prescribed in the stderr summary, not a per-row attribute. The
-  unbounded characterization adds
+  `unbounded/done.md`). It emits one `grows_toward` row for every escaping variable
+  and an `affected_rows` / `affected_entities` row only when there is instance
+  multiplicity to explain (self-describing categorical rules / total-escape / count).
+  The forced remedy (add a bound) is prescribed in the stderr summary, not a per-row
+  attribute. The unbounded characterization adds
   three sticky extension options alongside `diagnose_decide`:
   `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).

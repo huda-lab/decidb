@@ -131,43 +131,30 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer) {
 }
 
 void ThrowDecideSolveError(const SolverResult &result) {
+    // User-facing failure text: one line naming the state + the smallest fix, no
+    // solver/LP jargon, no bullet-list lectures. (UNBOUNDED here is the diagnosis-off
+    // path — under auto the named engine runs instead — so it points back to the
+    // pragma for the per-variable detail.)
     switch (result.status) {
     case SolverStatus::INFEASIBLE:
         throw InvalidInputException(
-            "DECIDE optimization is infeasible: No valid solution exists that satisfies all constraints.\n\n"
-            "This means the SUCH THAT conditions cannot all be met simultaneously.\n\n"
-            "Common causes:\n"
-            "  • Contradictory bounds (e.g., x >= 10 AND x <= 5)\n"
-            "  • SUM constraints impossible to satisfy with available data\n"
-            "  • Variable types too restrictive (BOOLEAN when INTEGER needed)\n\n"
-            "Suggestion: Try relaxing constraints or verify input data.");
+            "DECIDE optimization is infeasible: the SUCH THAT constraints cannot all be satisfied at once. "
+            "Check for conflicting constraints or an unreachable SUM target.");
     case SolverStatus::UNBOUNDED:
         throw InvalidInputException(
-            "DECIDE optimization is unbounded: The objective can grow infinitely.\n\n"
-            "This means the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n"
-            "You must add constraints to bound the decision variables.\n\n"
-            "Examples:\n"
-            "  • Add upper bounds: SUCH THAT x <= 100\n"
-            "  • Add budget limits: SUCH THAT SUM(x * cost) <= budget\n"
-            "  • Use BOOLEAN instead of INTEGER for selection problems\n\n"
-            "For a diagnosis of which variable is unbounded, set "
-            "PRAGMA diagnose_decide='auto' and re-run.");
+            "DECIDE optimization is unbounded: a decision variable can grow without bound. "
+            "Add an upper bound, e.g. SUCH THAT x <= <cap>. "
+            "For the variable, set PRAGMA diagnose_decide='auto' and re-run.");
     case SolverStatus::INF_OR_UNBD:
         throw InvalidInputException(
-            "DECIDE optimization is infeasible or unbounded.\n\n"
-            "Either the SUCH THAT conditions cannot all be met simultaneously,\n"
-            "or the MAXIMIZE/MINIMIZE goal has no finite optimal value.\n\n"
-            "Suggestion: Check for contradictory constraints, and ensure the\n"
-            "decision variables are bounded (e.g., SUCH THAT x <= 100).");
+            "DECIDE optimization is infeasible or unbounded: the constraints conflict, or a decision "
+            "variable is unbounded. Add bounds, e.g. SUCH THAT x <= <cap>.");
     case SolverStatus::TIME_LIMIT:
         throw InvalidInputException(
-            "DECIDE optimization exceeded time limit.\n"
-            "The problem may be too complex to solve in reasonable time.\n"
-            "Try simplifying constraints or reducing data size.");
+            "DECIDE optimization hit the time limit. Simplify the constraints or reduce the input size.");
     case SolverStatus::ITERATION_LIMIT:
         throw InvalidInputException(
-            "DECIDE optimization exceeded iteration limit.\n"
-            "The problem may be too complex. Try simplifying constraints.");
+            "DECIDE optimization hit the iteration limit. Simplify the constraints.");
     case SolverStatus::OTHER:
     case SolverStatus::OPTIMAL:
         // OTHER, or OPTIMAL passed here in error: fall through to the generic
@@ -175,11 +162,7 @@ void ThrowDecideSolveError(const SolverResult &result) {
         // future addition; control still reaches the throw below.)
         break;
     }
-    throw InvalidInputException(
-        "DECIDE optimization failed with solver status %d.\n"
-        "The optimization could not find a solution.\n"
-        "This may indicate a problem with the constraints or objective.",
-        result.raw_status);
+    throw InvalidInputException("DECIDE optimization failed (solver status %d).", result.raw_status);
 }
 
 } // namespace duckdb

@@ -4,7 +4,7 @@ These verify the contract around DECIDB_TIME_LIMIT, the env-var knob that
 caps Gurobi solve time:
 
   - When set to a small value, a pathologically hard MIQP hits the limit
-    and the friendly "exceeded time limit" message surfaces (rather than
+    and the friendly "hit the time limit" message surfaces (rather than
     the generic Gurobi-status fallback or a SIGKILL from the test harness).
   - When unset, the 300s default applies and normal queries finish without
     interference.
@@ -99,8 +99,8 @@ class TestTimeLimit:
             time_limit=1, subprocess_timeout=15,
         )
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)exceeded time limit", combined), (
-            f"Expected 'exceeded time limit' message but got:\n"
+        assert re.search(r"(?i)hit the time limit", combined), (
+            f"Expected 'hit the time limit' message but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
@@ -122,7 +122,7 @@ class TestTimeLimit:
             time_limit=None, subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
-        assert not re.search(r"(?i)exceeded time limit", combined), (
+        assert not re.search(r"(?i)hit the time limit", combined), (
             f"Cheap query unexpectedly hit a time limit:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
@@ -152,7 +152,7 @@ class TestTimeLimit:
             time_limit=garbage, subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
-        assert not re.search(r"(?i)exceeded time limit", combined), (
+        assert not re.search(r"(?i)hit the time limit", combined), (
             f"Garbage env-var value {garbage!r} unexpectedly triggered a "
             f"time limit:\n"
             f"  stdout: {result.stdout[:400]}\n"
@@ -182,7 +182,7 @@ class TestTimeLimit:
             time_limit=0.5, subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)exceeded time limit", combined), (
+        assert re.search(r"(?i)hit the time limit", combined), (
             f"DECIDB_TIME_LIMIT=0.5 did not fire on pathological MIQP:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
