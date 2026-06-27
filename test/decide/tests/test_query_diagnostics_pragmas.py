@@ -115,12 +115,24 @@ class TestDiagnoseDecidePragma:
 
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_auto_falls_through_on_infeasible(self, request, cli_fixture):
-        """`auto` wants to diagnose infeasible too, but no infeasible engine exists
-        yet, so the solve falls through to the static infeasible error (no pointer)."""
+    def test_auto_fires_on_infeasible(self, request, cli_fixture):
+        """`auto` now routes an infeasible solve into the elastic engine (I1): the
+        error carries the diagnosis pointer and the least-change fix (here, loosening
+        the unreachable SUM target). Edit details are asserted in the relation suite."""
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(
             cli.execute_raw(f"PRAGMA diagnose_decide='auto'; {_INFEASIBLE_SQL}")
+        )
+        assert "decide optimization is infeasible" in out
+        assert _POINTER in out
+
+    @pytest.mark.error
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_off_suppresses_infeasible_diagnosis(self, request, cli_fixture):
+        """`off` reproduces the plain static infeasible error — no diagnosis pointer."""
+        cli = request.getfixturevalue(cli_fixture)
+        out = _combined(
+            cli.execute_raw(f"PRAGMA diagnose_decide='off'; {_INFEASIBLE_SQL}")
         )
         assert "decide optimization is infeasible" in out
         assert _POINTER not in out

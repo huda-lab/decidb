@@ -14,5 +14,5 @@ through the existing `decide_diagnostics()` relation.
 ## External dependency
 
 **Decision-variable norms (v1.1)** — abs-aux / count-binary+Big-M / max-aux
-linearizations reused by the elastic engine (`infeasible/` I3). Tracked in
+linearizations reused by the elastic engine (`infeasible/` I4). Tracked in
 `03_expressivity/sql_functions/todo.md`.

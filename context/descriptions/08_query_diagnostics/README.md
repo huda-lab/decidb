@@ -68,11 +68,11 @@ too-open one; slow is a runtime event masking the other states.
 ```
 Tier 1  shipped: F1 structured-result · F2 constraint-prov · F6 variable-prov
         F3 relaxability (needs F2) · F5 reporting-relation (needs F2) · F4 pragma (needs F1)
-Tier 2  I1/I2 elastic · U2 ray (fallback-only)   (engines; need Tier 1)
+Tier 2  I0–I2 elastic engine (seam · stage-1 · shapes) · U2 ray (fallback-only)
         R1/R2 router seam + unbounded terminal (needs U2)
 Tier 3  shipped: R3 residual inf/unb check-ray fallback (existing status probes stay)
-        I4 infeasible-reporting · U3 ray-reporting (full) · S1–S4 slow
-        R5/R6 router infeasible + time_limit terminals (land with I4 / slow)
+        I3 stage-2 · I4 L0 dial (needs norms v1.1) · I5 infeasible-reporting · U3 · S1–S4 slow
+        R5/R6 router infeasible + time_limit terminals (R5 with I0/I1, R6 with slow)
 ```
 
 ## Invocation — `PRAGMA diagnose_decide`
@@ -91,4 +91,4 @@ User-writable L0/L1/L2/L∞ norms on decision variables. The elastic engine reus
 its abs-aux / count-binary+Big-M / max-aux linearization machinery. Implementation
 lives in `03_expressivity/sql_functions/todo.md` (it is an expressivity feature,
 not a diagnostic); tracked there, listed here only as an upstream dependency of
-`infeasible/` (I3).
+`infeasible/` (I4).

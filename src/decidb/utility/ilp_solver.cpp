@@ -110,11 +110,12 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
 }
 
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
-                        const SolveModelOptions &options) {
+                        const SolveModelOptions &options, SolverModel *retained_model) {
 	SolverModel model;
 	try {
 		model = SolverModel::Build(input, indexer);
 	} catch (const DecideInfeasibleModelException &) {
+		// Infeasibility proven during Build: no model exists to retain.
 		SolverResult result;
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
@@ -123,6 +124,11 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 	SolverResult result = SolvePreparedModel(model, backend);
 	result = DisambiguateInfOrUnbd(model, backend, result);
 	AttachUnboundedRayIfRequested(model, backend, options, result);
+	// Hand the built model to a diagnosis engine if one asked for it (it is
+	// otherwise discarded here). Done last: the helpers above still need it alive.
+	if (retained_model) {
+		*retained_model = std::move(model);
+	}
 	return result;
 }
 

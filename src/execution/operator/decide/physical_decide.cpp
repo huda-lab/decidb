@@ -1241,6 +1241,19 @@ static unique_ptr<Expression> FindVarCoefficient(
 //! (no -inf domain), so no legitimate lower bound is anywhere near this value.
 static constexpr double ABSORBED_LOWER_UNSET = -1e30;
 
+//! A user-written simple bound (`x OP const` / `x BETWEEN a AND b`) that was
+//! absorbed into the column-bound arrays instead of emitted as a matrix row, so it
+//! carries no provenance and is invisible to the elastic engine. The infeasible
+//! diagnosis re-emits these as USER_PARAMETER slackable rows (I1, decision 1a). One
+//! spec per user-written direction: BETWEEN yields two (lower + upper). BOOLEAN /
+//! default non-negativity bounds are NOT recorded — only bounds a user expression
+//! produced.
+struct UserBoundSpec {
+    idx_t decide_var_idx; //!< index into op.decide_variables
+    char sense;           //!< '<' (<= K), '>' (>= K), '=' (== K)
+    double k;             //!< the (integer-strict-normalized) bound value
+};
+
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
     explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
@@ -2023,22 +2036,30 @@ public:
                                 (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
                                  op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
                             bool absorbed = true;
-                            // Apply bound based on comparison type
+                            // Apply bound based on comparison type. Each absorbed
+                            // direction is also recorded as a UserBoundSpec so the
+                            // infeasible diagnosis can re-emit it as a slackable row;
+                            // the spec carries the same integer-strict normalization.
                             if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
+                                user_absorbed_bounds.push_back({var_idx, '<', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
+                                user_absorbed_bounds.push_back({var_idx, '>', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
                                 lower_bounds[var_idx] = bound_value;
                                 upper_bounds[var_idx] = bound_value;
+                                user_absorbed_bounds.push_back({var_idx, '=', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_LESSTHAN && is_integer_var) {
                                 // x < bound → x <= bound-1 for integers. REAL strict
                                 // inequality has no valid absorption — leave it for
                                 // the constraint path which rejects with a clear error.
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value - 1.0);
+                                user_absorbed_bounds.push_back({var_idx, '<', bound_value - 1.0});
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHAN && is_integer_var) {
                                 // x > bound → x >= bound+1 for integers.
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value + 1.0);
+                                user_absorbed_bounds.push_back({var_idx, '>', bound_value + 1.0});
                             } else {
                                 absorbed = false;
                             }
@@ -2093,13 +2114,19 @@ public:
                         double lo = ExtractBound(between.lower.get());
                         double hi = ExtractBound(between.upper.get());
 
+                        // BETWEEN is absorbed but (unlike COMPARISON) never tracked
+                        // for re-emission until now. Record each finite side as its
+                        // own UserBoundSpec so the infeasible diagnosis loosens
+                        // BETWEEN uniformly with the other simple bounds (I1).
                         if (!std::isnan(lo)) {
                             if (!between.lower_inclusive && is_integer_var) lo += 1.0;
                             lower_bounds[var_idx] = std::max(lower_bounds[var_idx], lo);
+                            user_absorbed_bounds.push_back({var_idx, '>', lo});
                         }
                         if (!std::isnan(hi)) {
                             if (!between.upper_inclusive && is_integer_var) hi -= 1.0;
                             upper_bounds[var_idx] = std::min(upper_bounds[var_idx], hi);
+                            user_absorbed_bounds.push_back({var_idx, '<', hi});
                         }
                     }
                 }
@@ -2134,6 +2161,10 @@ public:
     //! column bounds — AnalyzeConstraint skips these to avoid emitting
     //! `num_rows` redundant per-row model rows per absorbed bound.
     std::unordered_set<const Expression *> absorbed_bound_exprs;
+    //! Structured record of every user-written simple bound absorbed above, kept so
+    //! the infeasible diagnosis can re-emit them as slackable rows (I1, decision 1a).
+    //! Recorded for both COMPARISON and BETWEEN (the latter as two specs).
+    vector<UserBoundSpec> user_absorbed_bounds;
 
     //===--------------------------------------------------------------------===//
     // Evaluated Coefficients (Phase 2)
@@ -5355,25 +5386,29 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     }
 
     // F4: read the diagnose_decide setting (auto by default; off suppresses). Under
-    // auto, pre-arm unbounded-ray extraction so the ray is available if the solve
-    // turns out unbounded (the ray work is paid for only then). off skips it.
+    // auto, arm diagnosis prep: pre-extract the unbounded ray so it is ready if the
+    // solve turns out unbounded, and retain the built model so the INFEASIBLE terminal
+    // can hand it to the elastic engine. off pays for neither, and both failure
+    // terminals are auto-only anyway (RouteSolveResult).
     string diagnose_mode = GetDiagnoseDecideMode(context);
+    bool diagnosis_armed = DiagnoseModeWantsUnboundedRay(diagnose_mode);
     SolveModelOptions solve_options;
-    solve_options.extract_unbounded_ray = DiagnoseModeWantsUnboundedRay(diagnose_mode);
+    solve_options.extract_unbounded_ray = diagnosis_armed;
 
-    SolverResult solve_result = SolveModel(solver_input, var_indexer, solve_options);
+    // Retained only when diagnosis is armed; the move is trivial and the model is
+    // freed when Finalize returns. SolveModel otherwise discards the built model.
+    SolverModel retained_model;
+    SolverResult solve_result =
+        SolveModel(solver_input, var_indexer, solve_options, diagnosis_armed ? &retained_model : nullptr);
 
-    // Route the solve outcome to its diagnosis terminal. RouteSolveResult is a pure
-    // classifier (status + mode → terminal); the operator owns the engine call,
-    // stash, and throw for each terminal. INFEASIBLE / TIME_LIMIT classify
-    // distinctly but share the static-error path until their engines land (R5 / R6).
-    switch (RouteSolveResult(solve_result, diagnose_mode)) {
-    case DiagnosisTerminal::SOLVED:
-        break; // fall through to the success stores below
-    case DiagnosisTerminal::UNBOUNDED: {
+    // Per-decide-variable labels + is-aux flags for column provenance. Both failure
+    // terminals need them (UNBOUNDED names the runaway variable; INFEASIBLE carries
+    // them into the elastic engine), so build them once here; invoked lazily inside a
+    // failing arm so the SOLVED path pays nothing.
+    auto build_var_labels = [&](vector<string> &var_labels, vector<bool> &var_is_aux) {
         idx_t nvars = decide_variables.size();
-        vector<string> var_labels(nvars);
-        vector<bool> var_is_aux(nvars, false);
+        var_labels.assign(nvars, string());
+        var_is_aux.assign(nvars, false);
         for (auto &ae : aux_var_expressions) {
             if (ae.first < nvars) {
                 var_labels[ae.first] = ae.second;
@@ -5385,6 +5420,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 var_labels[i] = decide_variables[i]->GetName();
             }
         }
+    };
+
+    // Route the solve outcome to its diagnosis terminal. RouteSolveResult is a pure
+    // classifier (status + mode → terminal); the operator owns the engine call,
+    // stash, and throw for each terminal. TIME_LIMIT still shares the static-error
+    // path until its engine lands (R6).
+    switch (RouteSolveResult(solve_result, diagnose_mode)) {
+    case DiagnosisTerminal::SOLVED:
+        break; // fall through to the success stores below
+    case DiagnosisTerminal::UNBOUNDED: {
+        vector<string> var_labels;
+        vector<bool> var_is_aux;
+        build_var_labels(var_labels, var_is_aux);
 
         auto diag_params = GetDecideDiagnosticParams(context);
         auto get_candidates =
@@ -5416,11 +5464,72 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 : "the runaway is an internal helper variable.";
         ThrowUnboundedDiagnosisUnavailable(reason);
     }
-    case DiagnosisTerminal::INFEASIBLE: { // elastic engine lands at R5
+    case DiagnosisTerminal::INFEASIBLE: {
+        // A residual INF_OR_UNBD is routed here only with an empty ray; normalize it
+        // so the message (and any diagnosis) reads as infeasible.
         SolverResult terminal_result = solve_result;
         if (terminal_result.status == SolverStatus::INF_OR_UNBD) {
             terminal_result.status = SolverStatus::INFEASIBLE;
         }
+        vector<string> var_labels;
+        vector<bool> var_is_aux;
+        build_var_labels(var_labels, var_is_aux);
+
+        auto diag_params = GetDecideDiagnosticParams(context);
+        SolverBackend backend = SelectSolverBackend();
+
+        // Decision 1a: a user constraint like `x <= 10` / `x BETWEEN a AND b` was
+        // absorbed into the column-bound arrays, not emitted as a matrix row, so it
+        // is invisible to the elastic engine. Re-emit each absorbed user bound as a
+        // USER_PARAMETER slackable row on the retained model and relax the rigid
+        // column bound it produced, so the bound is enforced only by the (loosenable)
+        // row. Scope (I1): single-instance variables only — a bound on a
+        // multi-instance variable fans into one shared knob across N rows, which is
+        // the shared-slack mechanism in I2; mark it unhandled instead so the engine
+        // stays honest about an elastic-infeasible verdict.
+        bool has_unhandled_user_bounds = false;
+        idx_t synthetic_clause_id = solver_input.constraints.size();
+        for (const auto &b : gstate.user_absorbed_bounds) {
+            if (var_indexer.NumInstances(b.decide_var_idx) != 1) {
+                has_unhandled_user_bounds = true;
+                continue;
+            }
+            idx_t col = var_indexer.Get(b.decide_var_idx, 0);
+            if (col >= retained_model.num_vars || retained_model.is_binary[col]) {
+                // BOOLEAN 0/1 is structural, not a loosenable parameter; leave rigid.
+                continue;
+            }
+            // Relax the rigid column bound for the direction this spec enforces
+            // (1e30 / -1e30 = the model's ±infinity). Other directions and any
+            // default non-negativity stay rigid.
+            if (b.sense == '<' || b.sense == '=') {
+                retained_model.col_upper[col] = 1e30;
+            }
+            if (b.sense == '>' || b.sense == '=') {
+                retained_model.col_lower[col] = -1e30;
+            }
+            ModelConstraint row;
+            row.indices.push_back(static_cast<int>(col));
+            row.coefficients.push_back(1.0);
+            row.sense = b.sense;
+            row.rhs = b.k;
+            row.provenance = {synthetic_clause_id++, DConstants::INVALID_INDEX,
+                              ConstraintKind::USER_PARAMETER};
+            retained_model.constraints.push_back(std::move(row));
+        }
+
+        InfeasibleDiagnosisInput diag_input {
+            retained_model, var_indexer, var_labels, var_is_aux, diag_params,
+            has_unhandled_user_bounds,
+            [backend](const SolverModel &m) { return SolvePreparedModel(m, backend); },
+        };
+        DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+        if (diag.valid && !diag.rows.empty()) {
+            StashDecideDiagnostic(context, diag);
+            ThrowDecideDiagnosisReady(diag);
+        }
+        // I0: the engine is a seam and always returns invalid, so control reaches the
+        // static infeasible error. I1 fills the engine and this becomes the fallback.
         ThrowDecideSolveError(terminal_result);
     }
     case DiagnosisTerminal::TIME_LIMIT: // slow terminal lands at R6

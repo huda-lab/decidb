@@ -212,9 +212,10 @@ class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_contradictory_bounds_reach_infeasible_gate(self, request, cli_fixture):
         """B5: pre-solve contradictory bounds surface as INFEASIBLE status instead
-        of bypassing the diagnose gate with a build-time throw. Under `auto` the
-        gate wants to diagnose infeasible, but the infeasible engine does not exist
-        yet, so no diagnosis rows are stashed."""
+        of bypassing the diagnose gate with a build-time throw. Here both bounds are
+        absorbed (and contradict) on a multi-instance variable, so the build-time
+        contradiction fast-path leaves no relaxable rows for the elastic engine — it
+        returns no diagnosis and the static infeasible error stands."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
@@ -222,5 +223,60 @@ class TestDiagnosticsRelation:
         )
         result = _diagnose(cli, sql, mode="auto")
         assert "decide optimization is infeasible" in result.stderr.lower()
+        assert "select * from decide_diagnostics()" not in result.stderr.lower()
+        assert _rows(result) == []
+
+    # I1: the elastic engine turns an infeasible solve into the least-change fix.
+    # These cases have a UNIQUE minimizer (the `2*x` coefficient breaks the L1 tie),
+    # so the reported edit is deterministic across both backends.
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_absorbed_bound_is_loosened(self, request, cli_fixture):
+        """Decision 1a end-to-end: a user `x <= 5` is absorbed into the column bound
+        (no row, no provenance), yet the engine must still loosen it. The conflict is
+        with the row `2*x >= 30` (x >= 15); loosening the cap to 15 is the unique fix.
+        Proves the operator re-emits the absorbed bound as a slackable row."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        attrs = _attrs(rows, "clause", "x <= 5")
+        assert attrs["suggested_change"] == "x <= 15"
+        assert attrs["amount"] == "10"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_between_bound_is_loosened(self, request, cli_fixture):
+        """BETWEEN is now tracked for re-emission too (it was absorbed but untracked).
+        `x BETWEEN 0 AND 5` against `2*x >= 30` loosens the upper side to 15; the
+        lower side (0) takes no slack, so only the cap edit is reported."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x BETWEEN 0 AND 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        attrs = _attrs(rows, "clause", "x <= 5")
+        assert attrs["suggested_change"] == "x <= 15"
+        assert attrs["amount"] == "10"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_diagnosis_suppressed_when_off(self, request, cli_fixture):
+        """Under `off`, the same infeasible query reproduces the plain static error:
+        no diagnosis pointer and an empty relation."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="off")
         assert "select * from decide_diagnostics()" not in result.stderr.lower()
         assert _rows(result) == []

@@ -254,6 +254,62 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	return diag;
 }
 
+DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits) {
+	// Precondition: at least one edit. The engine returns an invalid diagnosis (so the
+	// caller falls through to the static error) when nothing is loosenable or every
+	// slack came back zero, so this never builds a content-free edit list.
+	D_ASSERT(!edits.empty());
+	DecideDiagnostic diag;
+	diag.valid = true;
+	diag.status = SolverStatus::INFEASIBLE;
+	diag.state = "infeasible";
+
+	// Summary: name the smallest change(s) that restore feasibility. Tell the user
+	// the fix, not the math — no slacks, no "elastic", just the edited constraint(s).
+	if (edits.size() == 1) {
+		diag.summary = "the constraints cannot all be satisfied at once. Loosen " + edits[0].label +
+		               " to " + edits[0].suggestion + ".";
+	} else {
+		string changes;
+		for (idx_t i = 0; i < edits.size(); i++) {
+			changes += (i == 0 ? "" : "; ") + edits[i].label + " to " + edits[i].suggestion;
+		}
+		diag.summary = "the constraints cannot all be satisfied at once. Loosen " + changes + ".";
+	}
+
+	for (const auto &e : edits) {
+		DiagnosticRow change_row;
+		change_row.subject_kind = "clause";
+		change_row.subject = e.label;
+		change_row.attribute = "suggested_change";
+		change_row.value = e.suggestion;
+		diag.rows.push_back(std::move(change_row));
+
+		DiagnosticRow amount_row;
+		amount_row.subject_kind = "clause";
+		amount_row.subject = e.label;
+		amount_row.attribute = "amount";
+		amount_row.value = e.amount;
+		diag.rows.push_back(std::move(amount_row));
+	}
+	return diag;
+}
+
+DecideDiagnostic BuildElasticInfeasibleDiagnostic() {
+	DecideDiagnostic diag;
+	diag.valid = true;
+	diag.status = SolverStatus::INFEASIBLE;
+	diag.state = "infeasible";
+	diag.summary = "the constraints cannot all be satisfied at once, and loosening your SUCH THAT "
+	               "limits cannot fix it — the conflict involves a fixed part of the query.";
+	DiagnosticRow row;
+	row.subject_kind = "model";
+	row.attribute = "elastic_infeasible";
+	row.value = "true";
+	diag.rows.push_back(std::move(row));
+	return diag;
+}
+
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag) {
 	auto state =
 	    context.registered_state->GetOrCreate<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);

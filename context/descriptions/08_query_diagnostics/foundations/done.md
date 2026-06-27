@@ -194,6 +194,12 @@ inline branches in `PhysicalDecide::Finalize`.
   call the matching engine for the status, stash + throw only when the engine
   returns a valid diagnosis, otherwise fall through to `ThrowDecideSolveError`.
   The success path still clears the per-connection stash.
+- **Infeasible engine (I1):** `DiagnoseInfeasible(const InfeasibleDiagnosisInput&)`
+  carries the built `SolverModel` (the elastic transform reshapes it) plus an
+  injected `solve_model` callback, and a `has_unhandled_user_bounds` flag the
+  operator sets when it absorbed a user bound it could not re-emit as a slackable
+  row (multi-instance, I2 scope) — the flag keeps the elastic-infeasible verdict
+  honest. Engine internals are in `infeasible/done.md`.
 
 Tested in `test/common/test_decidb_diagnostic_engines.cpp`.
 

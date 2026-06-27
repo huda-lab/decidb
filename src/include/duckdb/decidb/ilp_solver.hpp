@@ -52,8 +52,13 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend)
 //!
 //! `indexer` is the VarIndexer constructed once in Finalize() and threaded
 //! through here to avoid duplicate construction inside SolverModel::Build().
+//!
+//! `retained_model` (optional): when non-null, the built SolverModel is moved
+//! into it after the solve so a diagnosis engine can transform and re-solve it
+//! (the model is otherwise a local and discarded once the solve returns). Left
+//! untouched when Build() proves infeasibility before a model exists.
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
-                         const SolveModelOptions &options);
+                         const SolveModelOptions &options, SolverModel *retained_model = nullptr);
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer);
 
 } // namespace duckdb

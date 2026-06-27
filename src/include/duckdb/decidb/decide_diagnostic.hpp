@@ -123,6 +123,28 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //! names nothing (quadratic model, or only internal auxiliaries escaped).
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes);
 
+//! One least-change edit the infeasible (elastic) engine found: loosen the
+//! constraint as written (`label`, e.g. "x <= 10") to `suggestion` (e.g.
+//! "x <= 12.5"). All fields are pre-formatted strings so the builder is pure layout.
+struct ClauseEdit {
+	string label;      //!< the constraint as the user wrote it
+	string suggestion; //!< the constraint after the minimal loosening
+	string amount;     //!< magnitude of the loosening (formatted)
+};
+
+//! Build the infeasible diagnosis from the minimal edit list the elastic stage-1
+//! solve produced (one clause per positive slack). The summary prescribes the
+//! smallest change(s) that restore feasibility; each edit emits `suggested_change`
+//! and `amount` rows keyed by the clause as written. Precondition: `edits`
+//! non-empty (the caller falls through to the static error otherwise).
+DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits);
+
+//! Build the diagnosis for the case where the elastic program itself is infeasible:
+//! loosening the user's editable constraints cannot restore feasibility because the
+//! conflict reaches rigid (structural/mechanism) rows. A distinct, honest outcome —
+//! not a minimal edit list.
+DecideDiagnostic BuildElasticInfeasibleDiagnostic();
+
 //! Store `diag` on the connection so decide_diagnostics() can read it next statement.
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag);
 

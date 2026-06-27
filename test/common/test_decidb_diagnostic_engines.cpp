@@ -1,6 +1,7 @@
 #include "catch.hpp"
 
 #include "duckdb/decidb/decide_diagnostic_engines.hpp"
+#include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb.hpp"
 
 using namespace duckdb;
@@ -13,6 +14,47 @@ SolverInput MakeRowScopedInput(idx_t num_rows) {
 	input.num_decide_vars = 1;
 	input.variable_types = {LogicalType::DOUBLE};
 	return input;
+}
+
+//! One linear constraint over the single variable x: `coeff * x <sense> rhs`.
+struct SingleVarRow {
+	double coeff;
+	char sense;
+	double rhs;
+	ConstraintKind kind;
+};
+
+//! A one-variable REAL model (x in [0, +inf)) with the given constraints. Used to
+//! exercise the elastic engine end-to-end against the bundled HiGHS backend.
+SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
+	SolverModel m;
+	m.num_vars = 1;
+	m.col_lower = {0.0};
+	m.col_upper = {1e30};
+	m.is_integer = {false};
+	m.is_binary = {false};
+	m.obj_coeffs = {0.0};
+	m.maximize = false;
+	for (idx_t i = 0; i < rows.size(); i++) {
+		ModelConstraint c;
+		c.indices = {0};
+		c.coefficients = {rows[i].coeff};
+		c.sense = rows[i].sense;
+		c.rhs = rows[i].rhs;
+		c.provenance = {i, DConstants::INVALID_INDEX, rows[i].kind};
+		m.constraints.push_back(std::move(c));
+	}
+	return m;
+}
+
+//! First value of the EAV diagnosis row matching subject+attribute, or "".
+string FindRow(const DecideDiagnostic &diag, const string &subject, const string &attribute) {
+	for (const auto &r : diag.rows) {
+		if (r.subject == subject && r.attribute == attribute) {
+			return r.value;
+		}
+	}
+	return string();
 }
 
 } // namespace
@@ -87,6 +129,91 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    [](idx_t, idx_t) { return duckdb::vector<ColumnGrouping>(); },
 		};
 		CHECK(!DiagnoseUnbounded(diag_input).valid);
+	}
+
+	// I1: the elastic engine runs a real stage-1 solve (bundled HiGHS) and reports
+	// the least-change fix. `input` outlives `indexer` (BuildRef references it).
+	SolverInput input = MakeRowScopedInput(1);
+	VarIndexer indexer = VarIndexer::BuildRef(input);
+	duckdb::vector<string> labels {"x"};
+	duckdb::vector<bool> is_aux {false};
+	DecideDiagParams params;
+	auto solve_highs = [](const SolverModel &m) { return SolvePreparedModel(m, SolverBackend::HIGHS); };
+
+	SECTION("elastic engine reports the minimal loosening of a relaxable row") {
+		// x <= 5 (relaxable) conflicts with the rigid x >= 10. The only fix is to
+		// loosen the cap to 10 — a unique minimizer, so the amount is deterministic.
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '<', 5.0, ConstraintKind::USER_PARAMETER},
+		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(diag.state == "infeasible");
+		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 10");
+		CHECK(FindRow(diag, "x <= 5", "amount") == "5");
+		CHECK(diag.summary.find("Loosen x <= 5 to x <= 10") != string::npos);
+	}
+
+	SECTION("equality row loosens via its two-sided slack") {
+		// x = 5 (relaxable) conflicts with the rigid x >= 8: the equality must move
+		// up to 8 (s⁺ = 3). The `=` two-slack form must report the net edit.
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '=', 5.0, ConstraintKind::USER_PARAMETER},
+		    {1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(FindRow(diag, "x == 5", "suggested_change") == "x == 8");
+		CHECK(FindRow(diag, "x == 5", "amount") == "3");
+	}
+
+	SECTION("elastic-infeasible when loosening cannot fix a rigid conflict") {
+		// The conflict is between two rigid rows (x <= 5, x >= 10); the lone
+		// relaxable row (x <= 100) cannot help, so the elastic program is itself
+		// infeasible — a distinct, honest outcome.
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '<', 100.0, ConstraintKind::USER_PARAMETER},
+		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
+		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		REQUIRE(diag.rows.size() == 1);
+		CHECK(diag.rows[0].subject_kind == "model");
+		CHECK(diag.rows[0].attribute == "elastic_infeasible");
+		CHECK(diag.rows[0].value == "true");
+	}
+
+	SECTION("punted multi-instance bound suppresses the elastic-infeasible claim") {
+		// Same rigid conflict, but the operator flagged an absorbed bound it could
+		// not re-emit (I2 scope). The engine must NOT declare it unfixable — it falls
+		// through to the static error (invalid diagnosis) instead.
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '<', 100.0, ConstraintKind::USER_PARAMETER},
+		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
+		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params,
+		                                     /*has_unhandled_user_bounds=*/true, solve_highs};
+		CHECK(!DiagnoseInfeasible(diag_input).valid);
+	}
+
+	SECTION("no relaxable rows falls through to the static error") {
+		// Every constraint is rigid: there is nothing to loosen, so the engine
+		// returns an invalid diagnosis (caller uses the static infeasible error).
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
+		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		CHECK(!DiagnoseInfeasible(diag_input).valid);
 	}
 
 	SECTION("diagnostics relation carries clause-shaped infeasible attributes") {
