@@ -29,9 +29,10 @@ order, not versions.
 
 **Current behavior.** A per-row bound whose RHS is an uncorrelated scalar subquery
 (`x <= (SELECT 5)`) is enforced correctly by the main solver, but infeasible diagnosis
-treats it as a per-row *data* conflict (`x <= 5 conflicts in N of N rows`) instead of an
-editable shared cap that loosens to a single value. The foldable-expression sibling
-(`x <= 2 + 3`) is fixed and now behaves like a shared literal cap.
+treats the subquery RHS as per-row data. The resulting diagnosis is therefore a data
+conflict summary, not an editable shared cap that loosens to a single value. The
+foldable-expression sibling (`x <= 2 + 3`) is fixed and now behaves like a shared literal
+cap.
 
 **Reproduction.**
 
@@ -43,8 +44,9 @@ SUCH THAT x <= (SELECT 5) AND x >= lo
 MAXIMIZE SUM(x);
 ```
 
-Under `PRAGMA diagnose_decide='auto'`, this reports a conflict summary on `x <= 5`
-rather than `Loosen x <= 5 to x <= 10`.
+Under `PRAGMA diagnose_decide='auto'`, this reports a data-RHS conflict summary
+(currently the competing floor `x >= 10 conflicts in 1 of 1 rows`, depending on the
+solver's tie choice) rather than `Loosen x <= 5 to x <= 10`.
 
 **Why this remains.** Shared-literal classification currently uses
 `Expression::IsFoldable()` in the `physical_decide.cpp` constraint RHS-evaluation block.

@@ -4,6 +4,22 @@ Resolved bugs condensed to their generalizable lessons: what broke, why, and wha
 
 ---
 
+## Strict quadratic infeasible diagnosis exposed the normalized non-strict row
+
+**Broke**: Strict quadratic / bilinear constraints use the quadratic model-builder path.
+That path correctly enforced the integer-step rewrite (`POWER(x,2) < 10` → `<= 9`) but did
+not stamp `ConstraintProvenance::strict` / `typed_k`, so infeasible diagnosis reported
+`POWER(x, 2) <= 9` → `POWER(x, 2) <= 16` instead of re-quoting the user's strict literal as
+`POWER(x, 2) < 10` → `POWER(x, 2) < 17`.
+
+**Fix/lesson**: Every path that applies strict integer-step normalization must also carry
+the user's adjusted typed literal into provenance. The linear path already did this in
+`ApplyComparisonSense`; the quadratic path now mirrors it in `BuildQuadraticConstraint`.
+Pinned by a Gurobi-gated diagnostics relation regression.
+
+Pointers: `ilp_model_builder.cpp` (`BuildQuadraticConstraint` strict `<` / `>` cases),
+`test_query_diagnostics_relation.py` (`test_infeasible_strict_quadratic_requotes_typed_literal`).
+
 ## Column-bound conflicts were invisible to the infeasible elastic engine
 
 **Broke**: An infeasible DECIDE whose conflict lived in a variable's **column bounds** (not a matrix row) was never diagnosed — it fell through to the plain static error instead of a least-change fix. Two flavors, one root cause: (1) a foldable single-variable cap like `x <= 2+3` is emitted as a slackable row *and* copied into a rigid implied `col_upper` by `DecidePropagateImpliedBounds` (a presolve tightening with no provenance), so the rigid box shadowed the row and the solver loosened the wrong (data) constraint; (2) two opposite absorbed bounds (`x <= 4 AND x >= 10`) inverted the box (`col_lower > col_upper`), and `SolverModel::Build` threw `DecideInfeasibleModelException` **before `retained_model` was populated** (`ilp_solver.cpp`), handing the engine an empty model. The built `SolverModel`'s `col_lower`/`col_upper` is a *fused* product of intrinsic domain + absorbed user bounds + implied tightenings, with no way to tell them apart after the fact.

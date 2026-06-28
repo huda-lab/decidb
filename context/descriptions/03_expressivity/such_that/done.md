@@ -35,6 +35,13 @@ Constraints are joined by `AND`. Each `AND`-separated expression is a distinct c
 
 **Aggregate constraints** use `SUM(...)` (or `AVG`/`MIN`/`MAX`) over the relation or a filtered subset; they compile to a single linear inequality. **Per-row constraints** have no aggregate; the system generates one constraint per input row.
 
+**Comparison direction is normalized at bind time.** Internally DeciDB keeps the
+DECIDE-bearing expression on the left side of a comparison. User-written reversed
+forms with a non-DECIDE/non-aggregate left side are flipped before validation:
+`5 >= x` binds as `x <= 5`, `2 <= x` as `x >= 2`, and `10 >= SUM(x)` as
+`SUM(x) <= 10`. This applies before simple bounds are absorbed into column
+bounds, so diagnostics still see the canonical user bound shape.
+
 **Composed `MIN`/`MAX` in the LHS** — an additive LHS may mix `MIN`/`MAX` terms with `SUM`/`AVG` terms. Each `MIN`/`MAX` becomes a continuous global auxiliary pinned per row; the outer constraint is linear in `{x, z_k}`.
 
 ```sql

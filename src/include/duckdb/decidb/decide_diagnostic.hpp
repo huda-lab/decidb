@@ -208,9 +208,9 @@ DecideDiagParams GetDecideDiagnosticParams(ClientContext &context);
 //! `status`? (none => never; auto => any diagnosable state; otherwise exact match.)
 bool DiagnosisApplies(const string &mode, SolverStatus status);
 
-//! Whether `mode` should pre-arm unbounded-ray extraction before the solve, so
-//! the ray is available if the solve turns out unbounded (manual-first: only paid
-//! for when the user opted into unbounded/auto diagnosis).
-bool DiagnoseModeWantsUnboundedRay(const string &mode);
+//! Whether `mode` should pre-arm diagnosis work before the solve. Under `auto`,
+//! this pays for shared prep such as unbounded-ray extraction and retained model
+//! capture; `off` pays for none of it.
+bool DiagnoseModeArmsDiagnosis(const string &mode);
 
 } // namespace duckdb

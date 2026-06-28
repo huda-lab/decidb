@@ -862,14 +862,22 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     "Strict inequality '<' is not supported when the left-hand side "
                     "involves a REAL variable or a non-integer coefficient. Use '<=' instead.");
             }
-            qc.sense = '<'; qc.rhs = std::ceil(adjusted_rhs) - 1.0; break;
+            qc.sense = '<';
+            qc.rhs = std::ceil(adjusted_rhs) - 1.0;
+            qc.provenance.strict = true;
+            qc.provenance.typed_k = adjusted_rhs;
+            break;
         case ExpressionType::COMPARE_GREATERTHAN:
             if (!lhs_is_integer) {
                 throw InvalidInputException(
                     "Strict inequality '>' is not supported when the left-hand side "
                     "involves a REAL variable or a non-integer coefficient. Use '>=' instead.");
             }
-            qc.sense = '>'; qc.rhs = std::floor(adjusted_rhs) + 1.0; break;
+            qc.sense = '>';
+            qc.rhs = std::floor(adjusted_rhs) + 1.0;
+            qc.provenance.strict = true;
+            qc.provenance.typed_k = adjusted_rhs;
+            break;
         default:
             throw InternalException("Unsupported comparison type in ILP model builder (quadratic)");
         }

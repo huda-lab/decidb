@@ -320,6 +320,24 @@ class TestDiagnosticsRelation:
         assert _attrs(rows, "clause", "x <= 5")
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_reversed_bound_is_absorbed_and_reported(self, request, cli_fixture):
+        """A reversed simple bound (`5 >= x`) normalizes to `x <= 5` before bound
+        absorption, so the elastic engine still re-emits it as an editable user
+        bound instead of losing it behind the rigid column box."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,12)) t(id, lo) "
+            "DECIDE x IS REAL SUCH THAT 5 >= x AND x >= lo MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        cap = _attrs(rows, "clause", "x <= 5")
+        assert cap["suggested_change"] == "x <= 12"
+        assert cap["amount"] == "7"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_per_group_reports_one_edit_per_group(self, request, cli_fixture):
         """I2.b: an aggregate `SUM(x) >= 5 PER grp` emits one row per group, so each
         group gets its own slack — a per-group edit, not one global edit. Group 'a'
@@ -510,6 +528,25 @@ class TestDiagnosticsRelation:
         assert edit["suggested_change"].startswith("POWER(x, 2) <= 100")
         # amount ≈ 96 (10² − 4), allowing for solver tolerance.
         assert abs(float(edit["amount"]) - 96.0) < 1e-3
+
+    @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
+    def test_infeasible_strict_quadratic_requotes_typed_literal(self, request, cli_fixture):
+        """I2.d regression: strict quadratic constraints must carry the user's typed
+        literal through the quadratic builder too. `POWER(x,2) < 10` is enforced as
+        `<= 9`, but the diagnosis should re-quote the edit as `< 10` -> `< 17`,
+        not expose the normalized `<= 9` row."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,4)) t(id, lo) "
+            "DECIDE x IS INTEGER SUCH THAT POWER(x,2) < 10 AND x >= lo MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        edit = _attrs(rows, "clause", "POWER(x, 2) < 10")
+        assert edit["suggested_change"] == "POWER(x, 2) < 17"
+        assert edit["amount"] == "7"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_ne_rows_stay_rigid(self, request, cli_fixture):

@@ -81,7 +81,9 @@ stage 1:   min  Σ wᵢ sᵢ              (uniform wᵢ = 1)
   (so its runtime type is INTEGER — indistinguishable by type from a genuine integer bound),
   so `TraverseBoundsConstraints` consults `op.is_boolean_var` (threaded from `LogicalDecide`)
   and **does not record** the domain bounds in `user_absorbed_bounds`; only genuine user
-  bounds are re-emitted. `has_unhandled_user_bounds` therefore stays `false`.
+  bounds are re-emitted. Reversed user bounds such as `5 >= x` are flipped by the
+  constraint binder before this pass, so they follow the same absorption and re-emission
+  path as `x <= 5`. `has_unhandled_user_bounds` therefore stays `false`.
 - **Engine (`decide_diagnostic_engines.cpp`, `DiagnoseInfeasible`).** Pure model math.
   Copies the model, rebuilds the objective as `min Σ sᵢ` (zeroes the user objective, drops
   the quadratic objective, `maximize=false`), and adds a slack to every relaxable **linear**
@@ -218,7 +220,8 @@ the max overshoot (7), one edit, not the sum (10). Python differential
 (`test_query_diagnostics_relation.py`): easy-MAX and multi-instance bound report total = max
 overshoot; aggregate `SUM PER g` reports one exact edit per group; a BOOLEAN model loosens its
 SUM target, never its 0/1 domain (regression guard); a data-RHS clause reports a conflict
-summary; a penalized data row defers to an editable edit; AVG/strict re-quote; quadratic and
+summary; a penalized data row defers to an editable edit; reversed bounds are reported as their
+canonical absorbed form; AVG/strict re-quote (including strict quadratic); quadratic and
 McCormick gated to Gurobi; `<>` and McCormick rows stay rigid.
 
 ## Elastic engine: column-bound conflicts (intrinsic reset, inverted box, type-domain errors)

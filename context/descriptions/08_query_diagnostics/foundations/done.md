@@ -167,14 +167,15 @@ subsumes every useful case while staying silent on success.)
   restores `auto`.
 - Helpers in `decide_diagnostic.cpp`: `GetDiagnoseDecideMode`,
   `DiagnosisApplies(mode, status)` (true under `auto` for INFEASIBLE / UNBOUNDED /
-  TIME_LIMIT), `DiagnoseModeWantsUnboundedRay` (true under `auto`).
+  TIME_LIMIT), `DiagnoseModeArmsDiagnosis` (true under `auto`; controls shared
+  pre-solve diagnosis prep).
 - **The gate** in `PhysicalDecide::Finalize`: read the mode before the solve,
-  pre-arm `SolveModelOptions::extract_unbounded_ray` under `auto` (`off` pays
-  nothing); on a non-optimal result, if the mode wants the status *and an engine
-  exists* (today: UNBOUNDED only) build + stash the diagnosis and throw the short
-  pointer error, else fall through to `ThrowDecideSolveError`.
-  Matched-but-unimplemented states (infeasible/slow) fall through until their
-  engines land.
+  pre-arm `SolveModelOptions::extract_unbounded_ray`, infeasible-bound tolerance,
+  and retained-model capture under `auto` (`off` pays nothing). On a non-optimal
+  result, `RouteSolveResult` dispatches to the UNBOUNDED or INFEASIBLE terminal
+  when available; the terminal builds + stashes the diagnosis and throws the short
+  pointer error, else falls through to `ThrowDecideSolveError`. TIME_LIMIT still
+  follows the static-error path until the slow terminal lands.
 
 Tested in `test/decide/tests/test_query_diagnostics_pragmas.py` (both backends).
 

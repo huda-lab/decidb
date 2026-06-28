@@ -11,6 +11,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/materialized_query_result.hpp"
@@ -22,6 +23,24 @@ DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &
 }
 
 static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
+
+static bool IsSupportedComparison(ExpressionType type) {
+    switch (type) {
+    case ExpressionType::COMPARE_EQUAL:
+    case ExpressionType::COMPARE_LESSTHAN:
+    case ExpressionType::COMPARE_GREATERTHAN:
+    case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+    case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+    case ExpressionType::COMPARE_NOTEQUAL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool IsDecideConstraintLHS(DecideExpression type) {
+    return type == DecideExpression::VARIABLE || type == DecideExpression::SUM;
+}
 
 static bool IsAllowedOperatorChildren(const vector<unique_ptr<ParsedExpression>> &children,
                                       const case_insensitive_map_t<idx_t> &variables) {
@@ -102,6 +121,22 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
     auto &comp = expr.Cast<ComparisonExpression>();
     string error_msg;
     auto left_type = GetExpressionType(*comp.left, error_msg);
+
+    // DuckDB's parser preserves the written comparison shape. DECIDE's constraint
+    // binder expects the DECIDE-bearing expression on the LHS, so normalize
+    // equivalent reversed forms like `5 >= x` to `x <= 5` before validation.
+    if (left_type == DecideExpression::INVALID && IsSupportedComparison(comp.type) &&
+        !ExpressionContainsDecideVariable(*comp.left, variables) && !ContainsDecideAggregate(*comp.left)) {
+        string right_error;
+        auto right_type = GetExpressionType(*comp.right, right_error);
+        if (IsDecideConstraintLHS(right_type)) {
+            comp.type = FlipComparisonExpression(comp.type);
+            std::swap(comp.left, comp.right);
+            left_type = right_type;
+            error_msg = right_error;
+        }
+    }
+
     auto SimplifyZeroAddition = [&](auto &&self, unique_ptr<ParsedExpression> &node) -> void {
         if (!node) {
             return;

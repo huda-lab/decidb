@@ -131,6 +131,29 @@ def test_per_row_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     )
 
 
+@pytest.mark.var_integer
+@pytest.mark.cons_perrow
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_reversed_bound_comparisons_are_normalized(decidb_cli):
+    """Equivalent reversed comparisons (`K >= x`, `K <= x`, `K >= SUM(x)`)
+    bind as the canonical DECIDE-LHS forms."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, x
+        FROM (VALUES (1), (2)) t(id)
+        DECIDE x IS INTEGER
+        SUCH THAT 5 >= x
+            AND 2 <= x
+            AND 6 >= SUM(x)
+        MAXIMIZE SUM(x)
+    """)
+    x_idx = cols.index("x")
+    xs = [int(row[x_idx]) for row in rows]
+    assert all(2 <= x <= 5 for x in xs)
+    assert sum(xs) == 6
+
+
 # --- Per-row LHS with linear transforms (regression tests) ---
 # Before Fix A, these silently returned wrong answers because ExtractTerms
 # didn't handle `/` and the ilp_model_builder dropped LHS terms without a

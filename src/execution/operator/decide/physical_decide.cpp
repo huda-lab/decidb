@@ -1277,12 +1277,6 @@ public:
         // explicitly lowers the bound). See ABSORBED_LOWER_UNSET.
         absorbed_lower_bounds.assign(num_decide_vars, ABSORBED_LOWER_UNSET);
         absorbed_upper_bounds.assign(num_decide_vars, 1e30);
-        for (idx_t var = 0; var < num_decide_vars; var++) {
-            auto &decide_var = op.decide_variables[var]->Cast<BoundColumnRefExpression>();
-            if (decide_var.return_type == LogicalType::BOOLEAN) {
-                absorbed_upper_bounds[var] = 1.0;
-            }
-        }
         if (op.decide_constraints) {
             TraverseBoundsConstraints(*op.decide_constraints, absorbed_lower_bounds,
                                       absorbed_upper_bounds);
@@ -5468,7 +5462,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // can hand it to the elastic engine. off pays for neither, and both failure
     // terminals are auto-only anyway (RouteSolveResult).
     string diagnose_mode = GetDiagnoseDecideMode(context);
-    bool diagnosis_armed = DiagnoseModeWantsUnboundedRay(diagnose_mode);
+    bool diagnosis_armed = DiagnoseModeArmsDiagnosis(diagnose_mode);
     SolveModelOptions solve_options;
     solve_options.extract_unbounded_ray = diagnosis_armed;
     // Keep an inverted column box (col_lower > col_upper) alive through Build under

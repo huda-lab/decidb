@@ -115,7 +115,7 @@ bool DiagnosisApplies(const string &mode, SolverStatus status) {
 	return false; // "off" or unrecognized
 }
 
-bool DiagnoseModeWantsUnboundedRay(const string &mode) {
+bool DiagnoseModeArmsDiagnosis(const string &mode) {
 	return mode == "auto";
 }
 
