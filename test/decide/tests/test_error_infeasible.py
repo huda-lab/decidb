@@ -132,6 +132,50 @@ class TestInfeasibleModels:
         )
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
+    def test_real_upper_below_nonnegativity_is_rejected(
+        self, decidb_cli, oracle_solver
+    ):
+        """Bug 1 / Part C: a user upper bound below the non-negative REAL floor
+        (`x <= -1`, default lower 0) is a type-domain conflict — loosening can never
+        help, only the type can. It is rejected with a precise static error naming the
+        domain, BEFORE the elastic engine, rather than reaching diagnosis."""
+        decidb_cli.assert_error(
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x <= -1 MAXIMIZE SUM(x)",
+            match=r"(?i)x <= -1 cannot hold.*non-negative",
+        )
+        oracle_solver.create_model("infeas_real_upper_below_zero")
+        oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=-1.0)
+        oracle_solver.set_objective({"x": 1.0}, ObjSense.MAXIMIZE)
+        assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
+
+    def test_boolean_lower_above_domain_is_rejected(
+        self, decidb_cli, oracle_solver
+    ):
+        """Bug 1 / Part C: a user lower bound above the BOOLEAN 0/1 ceiling (`x >= 2`)
+        is a type-domain conflict, rejected with a precise static error naming the
+        domain. The 0/1 box is intrinsic and never loosened."""
+        decidb_cli.assert_error(
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT x >= 2 MAXIMIZE SUM(x)",
+            match=r"(?i)x >= 2 cannot hold.*BOOLEAN",
+        )
+        oracle_solver.create_model("infeas_boolean_lower_above_one")
+        oracle_solver.add_variable("x", VarType.BINARY, lb=0.0, ub=1.0)
+        oracle_solver.add_constraint({"x": 1.0}, ">=", 2.0, name="x_ge_2")
+        oracle_solver.set_objective({"x": 1.0}, ObjSense.MAXIMIZE)
+        assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
+
+    def test_user_overridden_negative_lower_is_feasible(self, decidb_cli):
+        """Part C guard: `x <= -1 AND x >= -5` explicitly lowers the floor below 0, so
+        the box [-5, -1] is feasible and must NOT trip the non-negativity rejection —
+        the maximum is -1."""
+        rows, _ = decidb_cli.execute(
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x <= -1 AND x >= -5 MAXIMIZE SUM(x)"
+        )
+        assert rows and rows[0][0] == pytest.approx(-1.0)
+
 
 @pytest.mark.error_infeasible
 @pytest.mark.error

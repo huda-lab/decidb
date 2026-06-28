@@ -41,7 +41,48 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 		c.coefficients = {rows[i].coeff};
 		c.sense = rows[i].sense;
 		c.rhs = rows[i].rhs;
-		c.provenance = {i, DConstants::INVALID_INDEX, rows[i].kind};
+		// These model literal-RHS bounds (`x <= 5`), so they are SHARED_LITERAL — a
+		// single editable knob — not per-row data (which routes to a conflict summary).
+		c.provenance = {i, DConstants::INVALID_INDEX, rows[i].kind, ElasticShape::SHARED_LITERAL};
+		m.constraints.push_back(std::move(c));
+	}
+	return m;
+}
+
+//! One linear constraint `coeff * x[var] <sense> rhs` over a multi-variable model,
+//! with explicit provenance for exercising shared-slack blocks (I2.a): rows sharing
+//! a `clause_id` and tagged SHARED_LITERAL collapse to one slack.
+struct MultiVarRow {
+	int var;
+	double coeff;
+	char sense;
+	double rhs;
+	ConstraintKind kind;
+	idx_t clause_id = DConstants::INVALID_INDEX;
+	ElasticShape shape = ElasticShape::PER_ROW_DATA;
+	idx_t group_key = DConstants::INVALID_INDEX;
+};
+
+//! A REAL model over `num_vars` variables (each in [0, +inf)) with the given rows.
+SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
+	SolverModel m;
+	m.num_vars = num_vars;
+	m.col_lower.assign(num_vars, 0.0);
+	m.col_upper.assign(num_vars, 1e30);
+	m.is_integer.assign(num_vars, false);
+	m.is_binary.assign(num_vars, false);
+	m.obj_coeffs.assign(num_vars, 0.0);
+	m.maximize = false;
+	for (const auto &r : rows) {
+		ModelConstraint c;
+		c.indices = {r.var};
+		c.coefficients = {r.coeff};
+		c.sense = r.sense;
+		c.rhs = r.rhs;
+		c.provenance.clause_id = r.clause_id;
+		c.provenance.kind = r.kind;
+		c.provenance.shape = r.shape;
+		c.provenance.group_key = r.group_key;
 		m.constraints.push_back(std::move(c));
 	}
 	return m;
@@ -214,6 +255,291 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		});
 		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
 		CHECK(!DiagnoseInfeasible(diag_input).valid);
+	}
+
+	SECTION("BuildElasticModel adds one size-1 block per relaxable row, rigid rows untouched") {
+		// Structural seam (I2.0): the elastic transform is a pure function of the base
+		// model. A relaxable `<` row gets one slack column; the `=` row gets two; the
+		// STRUCTURAL row gets none. Each block spans exactly its own row (size 1 == I1).
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '<', 5.0, ConstraintKind::USER_PARAMETER},
+		    {1.0, '=', 7.0, ConstraintKind::USER_PARAMETER},
+		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		});
+		ElasticModel elastic = BuildElasticModel(model);
+
+		// 1 original var + 1 slack (`<`) + 2 slacks (`=`) = 4 columns.
+		CHECK(elastic.model.num_vars == 4);
+		CHECK(elastic.model.col_lower.size() == 4);
+		CHECK(elastic.model.obj_coeffs.size() == 4);
+		// Objective is min Σ sᵢ: the user var carries weight 0, each slack weight 1.
+		CHECK(elastic.model.obj_coeffs[0] == 0.0);
+		CHECK(!elastic.model.maximize);
+
+		REQUIRE(elastic.slacks.size() == 2);
+		const auto &b0 = elastic.slacks[0];
+		CHECK(b0.rows == duckdb::vector<idx_t> {0});
+		CHECK(b0.sense == '<');
+		CHECK(b0.neg_col == DConstants::INVALID_INDEX);
+		const auto &b1 = elastic.slacks[1];
+		CHECK(b1.rows == duckdb::vector<idx_t> {1});
+		CHECK(b1.sense == '=');
+		CHECK(b1.neg_col != DConstants::INVALID_INDEX);
+	}
+
+	SECTION("BuildElasticModel shares ONE slack across a SHARED_LITERAL block") {
+		// I2.a structure: three rows of one clause (clause_id 0), tagged SHARED_LITERAL,
+		// must collapse to a single shared slack column wired into all three rows — not
+		// three independent slacks. A second clause stays its own block.
+		SolverModel model = MakeModel(4, {
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {3, 1.0, '<', 9.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_LITERAL},
+		});
+		ElasticModel elastic = BuildElasticModel(model);
+
+		// 4 user vars + 1 shared slack (clause 0) + 1 slack (clause 1) = 6 columns.
+		CHECK(elastic.model.num_vars == 6);
+		REQUIRE(elastic.slacks.size() == 2);
+		CHECK(elastic.slacks[0].rows == duckdb::vector<idx_t> {0, 1, 2});
+		CHECK(elastic.slacks[1].rows == duckdb::vector<idx_t> {3});
+		// The shared slack column appears in all three rows of clause 0.
+		idx_t shared_col = elastic.slacks[0].pos_col;
+		for (idx_t r : {0u, 1u, 2u}) {
+			const auto &row = elastic.model.constraints[r];
+			bool found = false;
+			for (idx_t k = 0; k < row.indices.size(); k++) {
+				if (static_cast<idx_t>(row.indices[k]) == shared_col) {
+					found = true;
+					CHECK(row.coefficients[k] == -1.0); // `<` loosens upward (Ax − s ≤ b)
+				}
+			}
+			CHECK(found);
+		}
+	}
+
+	SECTION("shared-slack block reports the max overshoot, not the sum") {
+		// One clause `x <= 5` over two rows (instances of the row-scoped var x);
+		// structural floors force x@row0 ≥ 8 (overshoot 3) and x@row1 ≥ 12 (overshoot
+		// 7). One shared knob → the fix is the MAX overshoot (7), a single edit.
+		// Independent slacks would report 3 and 7 (sum 10) and two edits.
+		SolverInput row_input = MakeRowScopedInput(2);
+		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
+		duckdb::vector<string> row_labels {"x"};
+		duckdb::vector<bool> row_aux {false};
+		SolverModel model = MakeModel(2, {
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
+		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model,  row_indexer, row_labels,
+		                                     row_aux, params,      false,
+		                                     solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(diag.state == "infeasible");
+		// Exactly one edit (one clause), amount = max overshoot = 7.
+		idx_t change_rows = 0;
+		for (const auto &r : diag.rows) {
+			if (r.attribute == "suggested_change") {
+				change_rows++;
+			}
+		}
+		CHECK(change_rows == 1);
+		CHECK(FindRow(diag, "x <= 5", "amount") == "7");
+		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 12");
+	}
+
+	SECTION("PER: one shared slack per group, not per row and not one across all groups") {
+		// I2.b: an easy-MAX-style clause under PER fans into N_g rows per group, all
+		// tagged SHARED_LITERAL with the same clause_id but distinct group_key. Each
+		// group is its own shared block: group 0 (rows 0,1) → one slack, group 1
+		// (rows 2,3) → another. The runnable edit is one move per group.
+		SolverModel model = MakeModel(4, {
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 0},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 0},
+		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 1},
+		    {3, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 1},
+		});
+		ElasticModel elastic = BuildElasticModel(model);
+
+		// 4 user vars + one shared slack per group = 6 columns.
+		CHECK(elastic.model.num_vars == 6);
+		REQUIRE(elastic.slacks.size() == 2);
+		CHECK(elastic.slacks[0].rows == duckdb::vector<idx_t> {0, 1});
+		CHECK(elastic.slacks[1].rows == duckdb::vector<idx_t> {2, 3});
+	}
+
+	SECTION("data-RHS rows stay independent size-1 blocks") {
+		// PER_ROW_DATA rows (a data RHS like `x <= col`) have no shared-literal collapse
+		// and must remain independent size-1 blocks — pin that I2.a grouping did not
+		// absorb them. (Aggregate PER rows are SHARED_LITERAL; this is the data path.)
+		SolverModel model = MakeModel(2, {
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA, 0},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA, 1},
+		});
+		ElasticModel elastic = BuildElasticModel(model);
+
+		REQUIRE(elastic.slacks.size() == 2);
+		CHECK(elastic.slacks[0].rows == duckdb::vector<idx_t> {0});
+		CHECK(elastic.slacks[1].rows == duckdb::vector<idx_t> {1});
+	}
+
+	SECTION("USER_MECHANISM and STRUCTURAL rows are never slackened") {
+		// I2.e: `<>` indicator rows (USER_MECHANISM) and McCormick links (STRUCTURAL)
+		// are rigid — the elastic transform attaches no slack to them.
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '<', 5.0, ConstraintKind::USER_MECHANISM},
+		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		});
+		ElasticModel elastic = BuildElasticModel(model);
+		CHECK(elastic.slacks.empty());
+		CHECK(elastic.model.num_vars == 1); // no slack columns added
+	}
+
+	SECTION("data-RHS slack is penalized so an editable knob loosens first") {
+		// I2.c: an editable cap (SHARED_LITERAL) and a data floor (PER_ROW_DATA) both
+		// conflict with a rigid pin; the data slack carries a higher weight, so the
+		// solver loosens the editable cap and leaves the data row alone.
+		SolverModel model = MakeModel(1, {
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {0, 1.0, '>', 3.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::PER_ROW_DATA},
+		    {0, 1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		// The cap loosens to 10 (amount 5); the data floor is not touched.
+		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 10");
+		CHECK(FindRow(diag, "x >= 3", "conflict").empty());
+	}
+
+	SECTION("data-RHS conflict reports a per-clause summary, not a suggestion") {
+		// I2.c: when only data-RHS rows can move (rigid floors force them), report ONE
+		// conflict summary per clause (M of N rows), with no suggested_change/amount.
+		SolverInput row_input = MakeRowScopedInput(2);
+		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
+		duckdb::vector<string> row_labels {"x"};
+		duckdb::vector<bool> row_aux {false};
+		SolverModel model = MakeModel(2, {
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA},
+		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
+		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model,   row_indexer, row_labels,
+		                                     row_aux, params,      false,
+		                                     solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(FindRow(diag, "x <= 5", "conflict") == "conflicts in 2 of 2 rows");
+		CHECK(FindRow(diag, "x <= 5", "suggested_change").empty());
+		CHECK(FindRow(diag, "x <= 5", "amount").empty());
+	}
+
+	SECTION("strict < re-quotes the suggestion against the user's typed literal") {
+		// I2.d: `x < 5` (integer) is built as `x <= 4` with strict provenance + typed_k=5.
+		// Loosening the δ-row by 6 (to <= 10) re-quotes as `x < 5` → `x < 11`, rendered `<`.
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '<', 4.0, ConstraintKind::USER_PARAMETER},
+		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
+		});
+		model.constraints[0].provenance.strict = true;
+		model.constraints[0].provenance.typed_k = 5.0;
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(FindRow(diag, "x < 5", "suggested_change") == "x < 11");
+		CHECK(FindRow(diag, "x < 5", "amount") == "6");
+	}
+
+	SECTION("AVG row renders an AVG(...) label and reports the raw slack") {
+		// I2.d: a pure AVG aggregate stores coefficients pre-scaled by 1/N (avg_scaled),
+		// so the label collapses back to `AVG(x)` and the slack is reported in AVG units.
+		SolverInput row_input = MakeRowScopedInput(2);
+		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
+		duckdb::vector<string> row_labels {"x"};
+		duckdb::vector<bool> row_aux {false};
+		SolverModel m;
+		m.num_vars = 2;
+		m.col_lower = {0.0, 0.0};
+		m.col_upper = {1e30, 1e30};
+		m.is_integer = {false, false};
+		m.is_binary = {false, false};
+		m.obj_coeffs = {0.0, 0.0};
+		m.maximize = false;
+		ModelConstraint avg_row;
+		avg_row.indices = {0, 1};
+		avg_row.coefficients = {0.5, 0.5}; // (1/2)x0 + (1/2)x1 = AVG(x)
+		avg_row.sense = '<';
+		avg_row.rhs = 5.0;
+		avg_row.provenance.clause_id = 0;
+		avg_row.provenance.kind = ConstraintKind::USER_PARAMETER;
+		avg_row.provenance.shape = ElasticShape::SHARED_LITERAL;
+		avg_row.provenance.avg_scaled = true;
+		m.constraints.push_back(std::move(avg_row));
+		for (int v : {0, 1}) {
+			ModelConstraint floor;
+			floor.indices = {v};
+			floor.coefficients = {1.0};
+			floor.sense = '>';
+			floor.rhs = 10.0;
+			floor.provenance.kind = ConstraintKind::STRUCTURAL;
+			m.constraints.push_back(std::move(floor));
+		}
+		InfeasibleDiagnosisInput diag_input {m,       row_indexer, row_labels,
+		                                     row_aux, params,      false,
+		                                     solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(FindRow(diag, "AVG(x) <= 5", "suggested_change") == "AVG(x) <= 10");
+		CHECK(FindRow(diag, "AVG(x) <= 5", "amount") == "5");
+	}
+
+	SECTION("BuildElasticModel slacks a quadratic constraint's linear RHS only, never Q") {
+		// I2.d: a relaxable quadratic constraint `x² <= 4` gets a slack on its LINEAR
+		// part; the Q matrix is untouched, and the block is marked quadratic.
+		SolverModel model;
+		model.num_vars = 1;
+		model.col_lower = {0.0};
+		model.col_upper = {1e30};
+		model.is_integer = {false};
+		model.is_binary = {false};
+		model.obj_coeffs = {0.0};
+		model.maximize = false;
+		SolverModel::QuadraticConstraint qc;
+		qc.q_rows = {0};
+		qc.q_cols = {0};
+		qc.q_coefficients = {1.0}; // x²
+		qc.sense = '<';
+		qc.rhs = 4.0;
+		qc.provenance.clause_id = 0;
+		qc.provenance.kind = ConstraintKind::USER_PARAMETER;
+		qc.provenance.shape = ElasticShape::SHARED_LITERAL;
+		model.quadratic_constraints.push_back(std::move(qc));
+
+		ElasticModel elastic = BuildElasticModel(model);
+
+		CHECK(elastic.model.num_vars == 2); // one slack column
+		REQUIRE(elastic.slacks.size() == 1);
+		CHECK(elastic.slacks[0].quadratic);
+		CHECK(elastic.slacks[0].rows == duckdb::vector<idx_t> {0});
+		CHECK(elastic.slacks[0].sense == '<');
+		const auto &eqc = elastic.model.quadratic_constraints[0];
+		// Q matrix untouched.
+		CHECK(eqc.q_coefficients == duckdb::vector<double> {1.0});
+		CHECK(eqc.q_rows.size() == 1);
+		// Slack landed on the linear part with the loosening sign.
+		REQUIRE(eqc.linear_indices.size() == 1);
+		CHECK(static_cast<idx_t>(eqc.linear_indices[0]) == elastic.slacks[0].pos_col);
+		CHECK(eqc.linear_coefficients[0] == -1.0);
 	}
 
 	SECTION("diagnostics relation carries clause-shaped infeasible attributes") {
