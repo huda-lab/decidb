@@ -149,6 +149,13 @@ public:
     // Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
 
+    // Per-variable flag: true if the variable was declared IS BOOLEAN (copied from
+    // LogicalDecide). A BOOLEAN variable is lowered to an INTEGER with a 0/1 domain
+    // (synthesized `x >= 0` / `x <= 1` constraints), so its runtime type is INTEGER;
+    // this flag is the only surviving signal that the 0/1 box is the variable's
+    // intrinsic domain, not a user-editable bound. Indexed by decide_variables position.
+    vector<bool> is_boolean_var;
+
     // Indices of auxiliary indicator variables for not-equal (<>) constraints
     vector<idx_t> ne_indicator_indices;
 

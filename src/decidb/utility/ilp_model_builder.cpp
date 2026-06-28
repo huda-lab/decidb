@@ -402,7 +402,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     "Strict inequality '>' is not supported when the left-hand side "
                     "involves a REAL variable or a non-integer coefficient. Use '>=' instead.");
             }
+            // δ site: `> K` becomes `>= floor(K)+1`. Remember the user's typed K so
+            // diagnosis can re-quote a suggestion against `> K`, not the δ-adjusted rhs.
             constr.sense = '>'; constr.rhs = std::floor(rhs) + 1.0;
+            constr.provenance.strict = true; constr.provenance.typed_k = rhs;
         } else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
             constr.sense = '<'; constr.rhs = rhs;
         } else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
@@ -411,7 +414,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     "Strict inequality '<' is not supported when the left-hand side "
                     "involves a REAL variable or a non-integer coefficient. Use '<=' instead.");
             }
+            // δ site: `< K` becomes `<= ceil(K)-1`. Remember the user's typed K.
             constr.sense = '<'; constr.rhs = std::ceil(rhs) - 1.0;
+            constr.provenance.strict = true; constr.provenance.typed_k = rhs;
         } else if (cmp == ExpressionType::COMPARE_EQUAL) {
             constr.sense = '='; constr.rhs = rhs;
         } else {
@@ -558,6 +563,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                 constr.provenance.clause_id = clause_id; // F2 site 1: aggregate, ungrouped
                 constr.provenance.kind = eval_const.kind;
+                constr.provenance.avg_scaled = eval_const.avg_scaled;
+                // An aggregate's RHS is required to be scalar (one editable knob), so
+                // it is a SHARED_LITERAL, not per-row data. This keeps PER_ROW_DATA
+                // meaning exactly "data RHS" for the conflict-summary path (I2.c).
+                constr.provenance.shape = ElasticShape::SHARED_LITERAL;
                 PushNormalizedConstraint(std::move(constr));
 
             } else {
@@ -647,6 +657,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     constr.provenance.clause_id = clause_id; // F2 site 2: aggregate + PER/WHEN
                     constr.provenance.group_key = g;
                     constr.provenance.kind = eval_const.kind;
+                    constr.provenance.avg_scaled = eval_const.avg_scaled;
+                    // Scalar RHS per group → one editable knob per group (SHARED_LITERAL),
+                    // not per-row data. See site 1 (I2.c).
+                    constr.provenance.shape = ElasticShape::SHARED_LITERAL;
                     PushNormalizedConstraint(std::move(constr));
                 }
             }
@@ -707,6 +721,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.group_key =
                     has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 constr.provenance.kind = eval_const.kind;
+                // I2.a: a constant-literal RHS is one editable knob shared across all
+                // the rows this clause emits → mark them a shared-slack block. A data
+                // RHS (e.g. `x <= col`) stays per-row independent.
+                constr.provenance.shape = eval_const.rhs_is_shared_literal
+                                              ? ElasticShape::SHARED_LITERAL
+                                              : ElasticShape::PER_ROW_DATA;
                 PushNormalizedConstraint(std::move(constr));
             }
         }
@@ -943,7 +963,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             throw InternalException("Column bounds invalid at col %llu: [%f, %f]",
                                     i, model.col_lower[i], model.col_upper[i]);
         }
-        if (model.col_lower[i] > model.col_upper[i]) {
+        if (model.col_lower[i] > model.col_upper[i] && !input.tolerate_infeasible_bounds) {
+            // Under infeasible diagnosis (tolerate_infeasible_bounds) we keep the inverted
+            // box and return the model so the elastic engine can reset it to the intrinsic
+            // domain and diagnose the conflict as a least-change edit. Otherwise the fast
+            // build-time infeasible throw stands.
             throw DecideInfeasibleModelException(
                 "DECIDE optimization is infeasible: a decision variable has conflicting lower and upper bounds.");
         }

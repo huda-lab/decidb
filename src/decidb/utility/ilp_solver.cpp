@@ -120,6 +120,23 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
 	}
+	// Under diagnosis (tolerate_infeasible_bounds), Build keeps an inverted column box
+	// (col_lower > col_upper) instead of throwing, so the model can be retained for the
+	// elastic engine. But the box IS infeasible, and some backends reject it at load
+	// (HiGHS errors hard, poisoning the session). Short-circuit to INFEASIBLE here —
+	// retaining the model — without ever handing the inverted box to the solver.
+	if (input.tolerate_infeasible_bounds) {
+		for (idx_t col = 0; col < model.num_vars; col++) {
+			if (model.col_lower[col] > model.col_upper[col]) {
+				SolverResult result;
+				result.status = SolverStatus::INFEASIBLE;
+				if (retained_model) {
+					*retained_model = std::move(model);
+				}
+				return result;
+			}
+		}
+	}
 	SolverBackend backend = SelectSolverBackend();
 	SolverResult result = SolvePreparedModel(model, backend);
 	result = DisambiguateInfOrUnbd(model, backend, result);

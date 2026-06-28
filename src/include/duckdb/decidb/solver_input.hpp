@@ -245,6 +245,17 @@ struct EvaluatedConstraint {
     vector<QuadraticGroup> quadratic_groups;
     bool has_quadratic = false;
     ConstraintKind kind = ConstraintKind::USER_PARAMETER;
+    //! True when the RHS is a single constant literal `K` (not a per-row data column
+    //! or scalar aggregate). The literal is one editable knob shared across every row
+    //! this clause emits, so the elastic engine collapses those rows to ONE shared
+    //! slack (ElasticShape::SHARED_LITERAL); a data RHS stays per-row independent.
+    bool rhs_is_shared_literal = false;
+
+    //! True when this is a pure-linear AVG aggregate whose row coefficients were
+    //! pre-scaled by 1/N_g for the AVG→SUM rewrite. Propagated to the row provenance
+    //! so infeasible diagnosis renders the clause as `AVG(...)` (and the slack is
+    //! already in the user's AVG units — report it raw). I2.d.
+    bool avg_scaled = false;
 
     //! Unified WHEN+PER row→group mapping
     //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)
@@ -343,6 +354,13 @@ struct SolverInput {
     //! Per-variable scope: INVALID_INDEX = row-scoped (default),
     //! otherwise index into entity_mappings
     vector<idx_t> variable_entity_scope;
+
+    //! When set (infeasible diagnosis armed), SolverModel::Build does NOT throw on an
+    //! inverted column box (col_lower > col_upper). The model is built and retained so the
+    //! elastic engine can reset the box to the intrinsic domain and diagnose the conflict
+    //! as a least-change edit instead of dying with the static "conflicting bounds" error.
+    //! Off by default: the fast build-time infeasible throw is kept for non-diagnosis solves.
+    bool tolerate_infeasible_bounds = false;
 };
 
 } // namespace duckdb

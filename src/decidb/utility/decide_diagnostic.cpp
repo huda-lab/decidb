@@ -266,18 +266,36 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits) {
 
 	// Summary: name the smallest change(s) that restore feasibility. Tell the user
 	// the fix, not the math — no slacks, no "elastic", just the edited constraint(s).
-	if (edits.size() == 1) {
-		diag.summary = "the constraints cannot all be satisfied at once. Loosen " + edits[0].label +
-		               " to " + edits[0].suggestion + ".";
-	} else {
-		string changes;
-		for (idx_t i = 0; i < edits.size(); i++) {
-			changes += (i == 0 ? "" : "; ") + edits[i].label + " to " + edits[i].suggestion;
+	// LOOSEN edits read "Loosen X to Y"; a data-RHS clause has no single value to
+	// loosen, so it reads "`X` conflicts in M of N rows".
+	string loosen;
+	string summaries;
+	for (const auto &e : edits) {
+		if (e.kind == ClauseEditKind::CONFLICT_SUMMARY) {
+			summaries += (summaries.empty() ? "" : " ") + e.label + " " + e.detail +
+			             " (no single value to loosen).";
+		} else {
+			loosen += (loosen.empty() ? "" : "; ") + e.label + " to " + e.suggestion;
 		}
-		diag.summary = "the constraints cannot all be satisfied at once. Loosen " + changes + ".";
+	}
+	diag.summary = "the constraints cannot all be satisfied at once.";
+	if (!loosen.empty()) {
+		diag.summary += " Loosen " + loosen + ".";
+	}
+	if (!summaries.empty()) {
+		diag.summary += " " + summaries;
 	}
 
 	for (const auto &e : edits) {
+		if (e.kind == ClauseEditKind::CONFLICT_SUMMARY) {
+			DiagnosticRow conflict_row;
+			conflict_row.subject_kind = "clause";
+			conflict_row.subject = e.label;
+			conflict_row.attribute = "conflict";
+			conflict_row.value = e.detail;
+			diag.rows.push_back(std::move(conflict_row));
+			continue;
+		}
 		DiagnosticRow change_row;
 		change_row.subject_kind = "clause";
 		change_row.subject = e.label;

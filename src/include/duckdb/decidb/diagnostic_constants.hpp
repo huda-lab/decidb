@@ -25,4 +25,13 @@ constexpr double EFFECTIVE_INFINITY = 1e20;
 //! genuine improving ray and to filter which variables actually escape.
 constexpr double DIAGNOSTIC_RAY_EPSILON = 1e-8;
 
+//! Elastic-program objective weight for a data-RHS (PER_ROW_DATA) slack, relative
+//! to an editable-knob slack (weight 1). A data-RHS constraint (`x <= col`) cannot
+//! be edited by the user — loosening it is not an actionable fix, only a conflict —
+//! so penalizing its slack steers the solver to loosen editable constraints first
+//! and report a clean single-knob edit; data conflicts surface only when editable
+//! loosening genuinely cannot restore feasibility. (A coarse stand-in for the I3
+//! lexicographic tie-break.)
+constexpr double DIAGNOSTIC_DATA_SLACK_WEIGHT = 1e3;
+
 } // namespace duckdb

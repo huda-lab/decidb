@@ -100,6 +100,17 @@ struct ConstraintProvenance {
     idx_t group_key = DConstants::INVALID_INDEX;
     //! User parameter vs rigid mechanism/structural row (see ConstraintKind).
     ConstraintKind kind = ConstraintKind::USER_PARAMETER;
+    //! Elastic-diagnosis shape (I2): does this row share ONE slack with its
+    //! (clause_id, group_key) siblings, or get its own? Default PER_ROW_DATA.
+    ElasticShape shape = ElasticShape::PER_ROW_DATA;
+    //! True when the row's coefficients were pre-scaled by 1/N_g for an AVG rewrite.
+    //! The slack is then already in the user's AVG units (report the raw slack).
+    bool avg_scaled = false;
+    //! True when the user wrote a strict `<` / `>` (a δ offset was baked into `rhs`
+    //! at build time). `typed_k` carries the user's original literal so the reported
+    //! suggestion can be re-quoted against it instead of the δ-adjusted rhs.
+    bool strict = false;
+    double typed_k = 0.0;
 };
 
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs

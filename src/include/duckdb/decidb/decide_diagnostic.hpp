@@ -123,20 +123,34 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //! names nothing (quadratic model, or only internal auxiliaries escaped).
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes);
 
-//! One least-change edit the infeasible (elastic) engine found: loosen the
-//! constraint as written (`label`, e.g. "x <= 10") to `suggestion` (e.g.
-//! "x <= 12.5"). All fields are pre-formatted strings so the builder is pure layout.
+//! How an elastic edit reads back to the user.
+//!   LOOSEN          — a single editable knob: loosen `label` to `suggestion` by
+//!                     `amount` (the I1/I2.a/b shapes, plus AVG/strict/quadratic).
+//!   CONFLICT_SUMMARY — a data-RHS clause (`x <= col`) has no single literal to
+//!                     loosen, so we report which clause conflicts and in how many
+//!                     rows (`detail`), not a scalar suggestion (I2.c).
+enum class ClauseEditKind : uint8_t { LOOSEN, CONFLICT_SUMMARY };
+
+//! One least-change edit the infeasible (elastic) engine found. For LOOSEN: loosen
+//! the constraint as written (`label`, e.g. "x <= 10") to `suggestion` (e.g.
+//! "x <= 12.5") by `amount`. For CONFLICT_SUMMARY: `label` names the clause and
+//! `detail` carries "conflicts in M of N rows" (`suggestion`/`amount` unused). All
+//! fields are pre-formatted strings so the builder is pure layout.
 struct ClauseEdit {
+	ClauseEditKind kind = ClauseEditKind::LOOSEN;
 	string label;      //!< the constraint as the user wrote it
-	string suggestion; //!< the constraint after the minimal loosening
-	string amount;     //!< magnitude of the loosening (formatted)
+	string suggestion; //!< the constraint after the minimal loosening (LOOSEN only)
+	string amount;     //!< magnitude of the loosening, formatted (LOOSEN only)
+	string detail;     //!< "conflicts in M of N rows" (CONFLICT_SUMMARY only)
 };
 
 //! Build the infeasible diagnosis from the minimal edit list the elastic stage-1
-//! solve produced (one clause per positive slack). The summary prescribes the
-//! smallest change(s) that restore feasibility; each edit emits `suggested_change`
-//! and `amount` rows keyed by the clause as written. Precondition: `edits`
-//! non-empty (the caller falls through to the static error otherwise).
+//! solve produced (one clause per positive slack, or one conflict summary per
+//! data-RHS clause). The summary prescribes the smallest change(s) that restore
+//! feasibility; each LOOSEN edit emits `suggested_change` and `amount` rows, each
+//! CONFLICT_SUMMARY edit emits a `conflict` row, keyed by the clause as written.
+//! Precondition: `edits` non-empty (the caller falls through to the static error
+//! otherwise).
 DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits);
 
 //! Build the diagnosis for the case where the elastic program itself is infeasible:

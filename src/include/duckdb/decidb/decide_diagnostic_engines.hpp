@@ -56,10 +56,42 @@ struct InfeasibleDiagnosisInput {
 	std::function<SolverResult(const SolverModel &model)> solve_model;
 };
 
-//! Build the infeasible diagnosis (the elastic least-change fix). I0 is a seam
-//! only: it returns valid=false so the caller falls through to the static error.
-//! The elastic transform + stage-1 solve land in I1; this carries the built model
-//! (which the transform reshapes) in place of the unbounded engine's solved ray.
+//! A slack wired into one or more relaxable rows of the elastic program. A block
+//! may span N matrix rows that share ONE editable user knob (SHARED_LITERAL shapes:
+//! easy MIN/MAX, per-row literal, multi-instance bound) so the minimal slack is the
+//! max overshoot across the block, not the sum. For `=` rows two slacks are used
+//! (s⁺, s⁻); `neg_col` is INVALID for `<` / `>` (one-sided loosening). A size-1
+//! block is the simple-shape (I1) case.
+struct BlockSlackRef {
+	vector<idx_t> rows;                      //!< Row indices this slack spans (≥1).
+	idx_t pos_col;                           //!< Positive slack column in the elastic model.
+	idx_t neg_col = DConstants::INVALID_INDEX; //!< Negative slack column (`=` rows only).
+	char sense;                              //!< '<', '>', or '=' (uniform across the block).
+	//! When true, `rows` index `model.quadratic_constraints` (slack on the linear
+	//! RHS only, never Q — I2.d); otherwise they index `model.constraints`.
+	bool quadratic = false;
+};
+
+//! The elastic program built from a base model: the transformed SolverModel (user
+//! objective zeroed, slacks appended, `min Σ sᵢ`) plus the slack→row wiring needed
+//! to read the result back. Pure function of the base model — the structural test
+//! seam for the elastic transform.
+struct ElasticModel {
+	SolverModel model;
+	vector<BlockSlackRef> slacks;
+};
+
+//! Build the elastic program from a base model: zero the user objective, drop the
+//! quadratic objective, and add a non-negative REAL slack to every relaxable row
+//! (SHARED_LITERAL blocks share one slack across their rows; others get one each).
+//! Rigid (USER_MECHANISM / STRUCTURAL) rows are untouched.
+ElasticModel BuildElasticModel(const SolverModel &base);
+
+//! Build the infeasible diagnosis (the elastic least-change fix): build the elastic
+//! program (BuildElasticModel), solve it via the injected callback, and read the
+//! positive-slack support as the minimal edit list. Returns valid=false (caller
+//! falls through to the static error) when nothing is loosenable or the result is
+//! unusable.
 DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input);
 
 } // namespace duckdb

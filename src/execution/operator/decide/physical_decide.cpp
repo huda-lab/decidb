@@ -1252,6 +1252,12 @@ struct UserBoundSpec {
     idx_t decide_var_idx; //!< index into op.decide_variables
     char sense;           //!< '<' (<= K), '>' (>= K), '=' (== K)
     double k;             //!< the (integer-strict-normalized) bound value
+    //! True when the user wrote a strict `<` / `>` that was integer-normalized into
+    //! `k` (e.g. `x < 10` → k=9). `typed_k` carries the user's original literal so the
+    //! re-emitted row mirrors `ConstraintProvenance::strict` / `typed_k` and the
+    //! infeasible diagnosis re-quotes the suggestion as `<` / `>` against it.
+    bool strict = false;
+    double typed_k = 0.0;
 };
 
 class DecideGlobalSinkState : public GlobalSinkState {
@@ -1280,6 +1286,40 @@ public:
         if (op.decide_constraints) {
             TraverseBoundsConstraints(*op.decide_constraints, absorbed_lower_bounds,
                                       absorbed_upper_bounds);
+        }
+
+        // A user bound that contradicts the variable's INTRINSIC domain (a non-negative
+        // REAL/INTEGER's `>= 0` floor, or a BOOLEAN's `0/1` box) is a deterministic semantic
+        // error, not a constraint conflict to diagnose — loosening can't help, the type can.
+        // Raise a precise static error here (the main pipeline) so it never reaches the
+        // elastic engine, and so it supersedes Build's generic "conflicting bounds" throw.
+        //   - `x <= -1` (REAL): upper below the non-negativity floor → infeasible. But
+        //     `x = -1` or `x <= -1 AND x >= -5` explicitly lower the floor below 0, so the
+        //     guard is `U < 0 AND L >= 0` (floor still at/above the intrinsic 0).
+        //   - `x >= 2` / `x = 2` (BOOLEAN): lower above the 0/1 ceiling → infeasible.
+        // A purely user-vs-user inverted box (e.g. `x >= 5 AND x <= 1`, both >= 0) does NOT
+        // match and proceeds to the elastic engine, which reports a least-change loosen.
+        for (idx_t var = 0; var < num_decide_vars; var++) {
+            bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
+            double L = (absorbed_lower_bounds[var] <= ABSORBED_LOWER_UNSET)
+                           ? 0.0
+                           : absorbed_lower_bounds[var];
+            double U = absorbed_upper_bounds[var];
+            const string vname = op.decide_variables[var]->GetName();
+            const char *domain = is_bool ? "BOOLEAN (0 or 1)" : "non-negative (>= 0)";
+            if (U < 0.0 && L >= 0.0) {
+                throw InvalidInputException(StringUtil::Format(
+                    "DECIDE optimization is infeasible: %s <= %g cannot hold because %s is %s. "
+                    "%s", vname, U, vname, domain,
+                    is_bool ? "Drop the bound or change the variable's type."
+                            : "Add an explicit lower bound if it may be negative."));
+            }
+            if (is_bool && L > 1.0) {
+                throw InvalidInputException(StringUtil::Format(
+                    "DECIDE optimization is infeasible: %s >= %g cannot hold because %s is "
+                    "BOOLEAN (0 or 1). Drop the bound or change the variable's type.",
+                    vname, L, vname));
+            }
         }
 
         // Analyze constraints and objective using new visitor-based approach
@@ -2035,6 +2075,15 @@ public:
                             bool is_integer_var =
                                 (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
                                  op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
+                            // A BOOLEAN variable's 0/1 box arrives here as `x >= 0` /
+                            // `x <= 1` comparisons. BOOLEAN is lowered to an INTEGER with
+                            // that domain, so the runtime type is INTEGER — the only
+                            // surviving signal is op.is_boolean_var. The 0/1 box is the
+                            // variable's intrinsic domain, never a loosenable parameter:
+                            // apply it to the column bounds but do NOT record it for
+                            // elastic re-emission.
+                            bool record_user_bound =
+                                !(var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx]);
                             bool absorbed = true;
                             // Apply bound based on comparison type. Each absorbed
                             // direction is also recorded as a UserBoundSpec so the
@@ -2042,24 +2091,25 @@ public:
                             // the spec carries the same integer-strict normalization.
                             if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
-                                user_absorbed_bounds.push_back({var_idx, '<', bound_value});
+                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '<', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
-                                user_absorbed_bounds.push_back({var_idx, '>', bound_value});
+                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '>', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
                                 lower_bounds[var_idx] = bound_value;
                                 upper_bounds[var_idx] = bound_value;
-                                user_absorbed_bounds.push_back({var_idx, '=', bound_value});
+                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '=', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_LESSTHAN && is_integer_var) {
                                 // x < bound → x <= bound-1 for integers. REAL strict
                                 // inequality has no valid absorption — leave it for
                                 // the constraint path which rejects with a clear error.
+                                // Carry strict + typed_k so the diagnosis re-quotes `< bound`.
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value - 1.0);
-                                user_absorbed_bounds.push_back({var_idx, '<', bound_value - 1.0});
+                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '<', bound_value - 1.0, true, bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHAN && is_integer_var) {
                                 // x > bound → x >= bound+1 for integers.
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value + 1.0);
-                                user_absorbed_bounds.push_back({var_idx, '>', bound_value + 1.0});
+                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '>', bound_value + 1.0, true, bound_value});
                             } else {
                                 absorbed = false;
                             }
@@ -2095,6 +2145,8 @@ public:
                         bool is_integer_var =
                             (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
                              op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
+                        bool record_user_bound =
+                            !(var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx]);
 
                         auto ExtractBound = [](const Expression *e) -> double {
                             while (e->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -2119,14 +2171,21 @@ public:
                         // own UserBoundSpec so the infeasible diagnosis loosens
                         // BETWEEN uniformly with the other simple bounds (I1).
                         if (!std::isnan(lo)) {
-                            if (!between.lower_inclusive && is_integer_var) lo += 1.0;
+                            // A strict lower side (`a <` …) is integer-normalized to lo+1;
+                            // carry strict + the user's typed literal so the diagnosis
+                            // re-quotes `> a` rather than the normalized `>= a+1`.
+                            bool lo_strict = !between.lower_inclusive && is_integer_var;
+                            double lo_typed = lo;
+                            if (lo_strict) lo += 1.0;
                             lower_bounds[var_idx] = std::max(lower_bounds[var_idx], lo);
-                            user_absorbed_bounds.push_back({var_idx, '>', lo});
+                            if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '>', lo, lo_strict, lo_typed});
                         }
                         if (!std::isnan(hi)) {
-                            if (!between.upper_inclusive && is_integer_var) hi -= 1.0;
+                            bool hi_strict = !between.upper_inclusive && is_integer_var;
+                            double hi_typed = hi;
+                            if (hi_strict) hi -= 1.0;
                             upper_bounds[var_idx] = std::min(upper_bounds[var_idx], hi);
-                            user_absorbed_bounds.push_back({var_idx, '<', hi});
+                            if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '<', hi, hi_strict, hi_typed});
                         }
                     }
                 }
@@ -2836,9 +2895,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
             double rhs_constant = const_expr.value.GetValue<double>();
             eval_const.rhs_values.AssignScalar(num_rows, rhs_constant);
+            // The RHS is one editable literal shared across every row this clause
+            // emits → the elastic engine collapses those rows to one shared slack.
+            eval_const.rhs_is_shared_literal = true;
         } else {
             // RHS is a complex expression. It might be row-varying (e.g., column ref) or scalar (aggregate).
             // We evaluate it against the data chunks.
+            // A *foldable* RHS (e.g. `2 + 3`, `5 * 2`, `ABS(-4)`) is one compile-time
+            // scalar shared by every row this clause emits, exactly like a bare literal
+            // — collapse those rows to one shared slack so the infeasible diagnosis
+            // treats it as a single editable cap, not per-row data. A row-varying RHS
+            // (column ref, correlated subquery) is not foldable and stays PER_ROW_DATA.
+            eval_const.rhs_is_shared_literal = constraint->rhs_expr->IsFoldable();
             eval_const.rhs_values.Reserve(num_rows);
 
             const Expression &transformed_rhs =
@@ -3109,12 +3177,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
+        // Track whether EVERY linear term was AVG-scaled (a pure AVG LHS), so the
+        // model builder can tag the row provenance and infeasible diagnosis renders
+        // it as `AVG(...)`. Mixed AVG/non-AVG or bilinear/quadratic LHS stays false
+        // (it has no clean AVG re-quote). I2.d.
+        bool all_avg = !constraint->lhs_terms.empty() && !constraint->has_bilinear &&
+                       !constraint->has_quadratic;
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
             if (term_filters[term_idx].avg_scale) {
                 ScaleAvgRowCoefficients(eval_const.row_coefficients[term_idx], term_filters[term_idx].has_filter,
                                         term_filters[term_idx].mask);
+            } else {
+                all_avg = false;
             }
         }
+        eval_const.avg_scaled = all_avg;
 
         // Evaluate bilinear terms in constraint (if any).
         // Batch terms with coefficient expressions into a single ExpressionExecutor.
@@ -5394,6 +5471,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     bool diagnosis_armed = DiagnoseModeWantsUnboundedRay(diagnose_mode);
     SolveModelOptions solve_options;
     solve_options.extract_unbounded_ray = diagnosis_armed;
+    // Keep an inverted column box (col_lower > col_upper) alive through Build under
+    // diagnosis so the INFEASIBLE terminal can reset it to the intrinsic domain and
+    // diagnose it (Bug 1, all-column-bound conflicts). Off mode keeps the fast throw.
+    solver_input.tolerate_infeasible_bounds = diagnosis_armed;
 
     // Retained only when diagnosis is armed; the move is trivial and the model is
     // freed when Finalize returns. SolveModel otherwise discards the built model.
@@ -5483,44 +5564,87 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // is invisible to the elastic engine. Re-emit each absorbed user bound as a
         // USER_PARAMETER slackable row on the retained model and relax the rigid
         // column bound it produced, so the bound is enforced only by the (loosenable)
-        // row. Scope (I1): single-instance variables only — a bound on a
-        // multi-instance variable fans into one shared knob across N rows, which is
-        // the shared-slack mechanism in I2; mark it unhandled instead so the engine
-        // stays honest about an elastic-infeasible verdict.
-        bool has_unhandled_user_bounds = false;
+        // row. The bound `x <= k` is ONE editable knob; on a multi-instance variable
+        // it fans into one row per instance under a single (synthetic) clause id and
+        // shape SHARED_LITERAL, so the elastic engine collapses them to one shared
+        // slack and reports the max overshoot (I2.a). Single-instance is the N=1 case
+        // (a size-1 block). Only genuine user bounds reach here — a variable's
+        // intrinsic domain (BOOLEAN 0/1, default non-negativity) is never recorded in
+        // user_absorbed_bounds (see TraverseBoundsConstraints), so it stays rigid.
         idx_t synthetic_clause_id = solver_input.constraints.size();
         for (const auto &b : gstate.user_absorbed_bounds) {
-            if (var_indexer.NumInstances(b.decide_var_idx) != 1) {
-                has_unhandled_user_bounds = true;
+            idx_t num_instances = var_indexer.NumInstances(b.decide_var_idx);
+            idx_t bound_clause_id = synthetic_clause_id++;
+            for (idx_t inst = 0; inst < num_instances; inst++) {
+                idx_t col = var_indexer.Get(b.decide_var_idx, inst);
+                if (col >= retained_model.num_vars || retained_model.is_binary[col]) {
+                    // BOOLEAN 0/1 is structural, not a loosenable parameter; leave rigid.
+                    continue;
+                }
+                // Relax the rigid column bound for the direction this spec enforces
+                // (1e30 / -1e30 = the model's ±infinity), so the bound is enforced
+                // only by the loosenable row.
+                if (b.sense == '<' || b.sense == '=') {
+                    retained_model.col_upper[col] = 1e30;
+                }
+                if (b.sense == '>' || b.sense == '=') {
+                    retained_model.col_lower[col] = -1e30;
+                }
+                ModelConstraint row;
+                row.indices.push_back(static_cast<int>(col));
+                row.coefficients.push_back(1.0);
+                row.sense = b.sense;
+                row.rhs = b.k;
+                row.provenance.clause_id = bound_clause_id;
+                row.provenance.group_key = DConstants::INVALID_INDEX;
+                row.provenance.kind = ConstraintKind::USER_PARAMETER;
+                row.provenance.shape = ElasticShape::SHARED_LITERAL;
+                // Mirror the strict re-quote stamped by ApplyComparisonSense on the
+                // non-absorbed path, so `x < 10` reports `< 10` → `< 16`, not `<= 9`.
+                row.provenance.strict = b.strict;
+                row.provenance.typed_k = b.typed_k;
+                retained_model.constraints.push_back(std::move(row));
+            }
+        }
+
+        // Bug 3: a single-variable user row like `x <= 2+3` is ALSO copied into the rigid
+        // column box by DecidePropagateImpliedBounds (a presolve tightening that keeps no
+        // provenance, so it is not in user_absorbed_bounds). The slackable row stays pinned
+        // behind that rigid bound. Reset every non-binary DECIDE column back to its intrinsic
+        // domain so the (loosenable) row is the sole enforcer. Implied tightenings only ever
+        // RAISE the lower above 0 or LOWER the upper below +inf (propagation never loosens),
+        // so clamping `lower>0 → 0` and `upper → +inf` reverses exactly the implied part:
+        //   - a user-bounded direction was already opened to ±1e30 by the loop above (kept);
+        //   - the intrinsic default (lower 0 / upper +inf) is unchanged;
+        //   - an implied tightening (lower>0 / upper<+inf) is reverted — its backing row
+        //     (USER_PARAMETER slackable, or STRUCTURAL still-rigid) continues to enforce it.
+        // BOOLEAN columns are left as-is so the intrinsic 0/1 box stays rigid. NOTE: a
+        // BOOLEAN is lowered to an INTEGER carrying a [0,1] box, so `is_binary[col]` is
+        // FALSE for it — `is_boolean_var[var]` is the only reliable signal (see the
+        // comment in TraverseBoundsConstraints). Using is_binary here would reset the 0/1
+        // upper to +inf and silently turn the variable unbounded.
+        for (idx_t var = 0; var < decide_variables.size(); var++) {
+            if (var < is_boolean_var.size() && is_boolean_var[var]) {
                 continue;
             }
-            idx_t col = var_indexer.Get(b.decide_var_idx, 0);
-            if (col >= retained_model.num_vars || retained_model.is_binary[col]) {
-                // BOOLEAN 0/1 is structural, not a loosenable parameter; leave rigid.
-                continue;
+            idx_t num_instances = var_indexer.NumInstances(var);
+            for (idx_t inst = 0; inst < num_instances; inst++) {
+                idx_t col = var_indexer.Get(var, inst);
+                if (col >= retained_model.num_vars || retained_model.is_binary[col]) {
+                    continue;
+                }
+                if (retained_model.col_lower[col] > 0.0) {
+                    retained_model.col_lower[col] = 0.0;
+                }
+                if (retained_model.col_upper[col] < 1e30) {
+                    retained_model.col_upper[col] = 1e30;
+                }
             }
-            // Relax the rigid column bound for the direction this spec enforces
-            // (1e30 / -1e30 = the model's ±infinity). Other directions and any
-            // default non-negativity stay rigid.
-            if (b.sense == '<' || b.sense == '=') {
-                retained_model.col_upper[col] = 1e30;
-            }
-            if (b.sense == '>' || b.sense == '=') {
-                retained_model.col_lower[col] = -1e30;
-            }
-            ModelConstraint row;
-            row.indices.push_back(static_cast<int>(col));
-            row.coefficients.push_back(1.0);
-            row.sense = b.sense;
-            row.rhs = b.k;
-            row.provenance = {synthetic_clause_id++, DConstants::INVALID_INDEX,
-                              ConstraintKind::USER_PARAMETER};
-            retained_model.constraints.push_back(std::move(row));
         }
 
         InfeasibleDiagnosisInput diag_input {
             retained_model, var_indexer, var_labels, var_is_aux, diag_params,
-            has_unhandled_user_bounds,
+            /*has_unhandled_user_bounds=*/false,
             [backend](const SolverModel &m) { return SolvePreparedModel(m, backend); },
         };
         DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
