@@ -94,12 +94,15 @@ ray is reported with an explicit caveat because feasibility was not established
 Every emitted matrix row records where it came from, so diagnosis reports at the
 user-clause level instead of raw rows.
 
-- **`ConstraintProvenance {clause_id, group_key, kind}`** on `ModelConstraint` and
-  `SolverModel::QuadraticConstraint` (`src/include/duckdb/decidb/ilp_model.hpp`).
-  `clause_id` indexes `SolverInput::constraints` (`INVALID_INDEX` for synthetic
-  rows); `group_key` is the PER/WHEN group id at emission (or row id for per-row,
-  INVALID when ungrouped); `kind` is the row role consumed by the future elastic
-  engine.
+- **`ConstraintProvenance {clause_id, group_key, kind, shape, avg_scaled, strict,
+  typed_k}`** on `ModelConstraint` and `SolverModel::QuadraticConstraint`
+  (`src/include/duckdb/decidb/ilp_model.hpp`). `clause_id` indexes
+  `SolverInput::constraints` (`INVALID_INDEX` for synthetic rows); `group_key` is the
+  PER/WHEN group id at emission (or row id for per-row, INVALID when ungrouped); `kind`
+  is the row role. The trailing fields (added in I2) drive the elastic engine's slack
+  placement: `shape` (`ElasticShape::SHARED_LITERAL` vs `PER_ROW_DATA`) decides whether
+  a clause's rows share **one** slack; `avg_scaled` / `strict` / `typed_k` carry the
+  per-shape unit info for reporting (see `infeasible/done.md`).
 - **Single row-role enum:** `ConstraintKind = { USER_PARAMETER, USER_MECHANISM,
   STRUCTURAL }` (`duckdb/common/enums/decide.hpp`). `USER_PARAMETER` carries a
   user-editable parameter/RHS and is relaxable. `USER_MECHANISM` is a rigid helper
@@ -194,12 +197,14 @@ inline branches in `PhysicalDecide::Finalize`.
   call the matching engine for the status, stash + throw only when the engine
   returns a valid diagnosis, otherwise fall through to `ThrowDecideSolveError`.
   The success path still clears the per-connection stash.
-- **Infeasible engine (I1):** `DiagnoseInfeasible(const InfeasibleDiagnosisInput&)`
-  carries the built `SolverModel` (the elastic transform reshapes it) plus an
-  injected `solve_model` callback, and a `has_unhandled_user_bounds` flag the
-  operator sets when it absorbed a user bound it could not re-emit as a slackable
-  row (multi-instance, I2 scope) — the flag keeps the elastic-infeasible verdict
-  honest. Engine internals are in `infeasible/done.md`.
+- **Infeasible engine (I1/I2):** `DiagnoseInfeasible(const InfeasibleDiagnosisInput&)`
+  carries the built `SolverModel` (the elastic transform `BuildElasticModel` reshapes
+  it) plus an injected `solve_model` callback, and a `has_unhandled_user_bounds` flag
+  that keeps the elastic-infeasible verdict honest when a user bound could not be
+  re-emitted. As of I2.a, **multi-instance bounds are re-emitted** (shared-slack block),
+  so the flag stays `false` in practice; a variable's intrinsic domain (the BOOLEAN 0/1
+  box, default non-negativity) is excluded at recording time via `op.is_boolean_var`
+  rather than punted. Engine internals are in `infeasible/done.md`.
 
 Tested in `test/common/test_decidb_diagnostic_engines.cpp`.
 

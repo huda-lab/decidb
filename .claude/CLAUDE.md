@@ -115,6 +115,8 @@ Ongoing (secondary):
 Full docs in `context/descriptions/` — start with `README.md` there for navigation and reading order.
 Key areas: `00_project_overview/` (syntax spec), `01_pipeline/` (architecture), `03_expressivity/` (feature status), `04_optimizer/` (rewrite strategies).
 
+**`todo.md` and `done.md` are disjoint.** `todo.md` contains only pending work; `done.md` is the present-tense description of how a feature currently works. When a task ships, remove it from `todo.md` and merge its substance into `done.md` — do not leave completed items in `todo.md` or treat `done.md` as a completed-checklist archive.
+
 **MANDATORY: Keep docs in sync with code changes.** Whenever a code change affects the behavior, semantics, or implementation of a feature documented in `context/descriptions/`, you MUST update the relevant `done.md` (and `todo.md` if applicable) or `{description}.md` file in the same work session. This includes:
 - Semantic changes (how a feature works)
 - Implementation changes (data structures, code paths, function signatures)

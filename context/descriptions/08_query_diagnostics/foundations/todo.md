@@ -4,12 +4,14 @@ Shared infrastructure consumed by all diagnosis states. The structured result,
 constraint/variable provenance, relaxability tagging, the pragma gate, and the
 reporting relation have shipped (`done.md`). What remains:
 
-## Slack → Δ conversion (build when the elastic engine needs it)
+## Slack → Δ conversion — home settled: `infeasible/` (I2.d)
 
-The slack→Δ conversion the elastic engine consumes (AVG `s*/N_g`, strict `</>`
-re-quote against the typed `K`) has no live consumer yet — unbounded produces no
-slacks. Build it here or in `infeasible/` when the elastic engine lands; render it
-through the existing `decide_diagnostics()` relation.
+**Settled:** the slack→Δ conversion lands **with the engine in `infeasible/`** (I2.d), since
+the infeasible engine is its only consumer (unbounded produces no slacks). Per-shape units:
+AVG reports the **raw slack** (row coeffs are pre-scaled by `1/N_g`, so it is already in AVG
+units — *supersedes* the earlier `s*/N_g` note); strict `<` / `>` re-quotes against the typed
+`K` via the `strict` / `typed_k` provenance fields. Rendered through the existing
+`decide_diagnostics()` relation. See `infeasible/todo.md` I2.d.
 
 ## External dependency
 

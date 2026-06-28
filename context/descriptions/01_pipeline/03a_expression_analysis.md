@@ -61,6 +61,7 @@ When a bound is absorbed, the source `BOUND_COMPARISON` expression pointer is in
 - Recurses through AND conjunctions, PER wrappers, and WHEN wrappers (examining only `child[0]` for PER/WHEN); WHEN-guarded comparisons are NOT absorbed because they are conditional per-row
 - For comparison expressions: checks that the LHS is not an aggregate, finds the DECIDE variable, extracts the constant RHS value
 - Applies the bound: `<=` updates upper_bounds (min), `>=` updates lower_bounds (max), `=` sets both; strict `<` / `>` on integer vars tighten by ±1; strict `<` / `>` on REAL vars are deliberately NOT absorbed so `ApplyComparisonSense` in the model builder can reject them with its clear error message
+- Each absorbed bound is also recorded as a `UserBoundSpec {decide_var_idx, sense, k}` in `gstate.user_absorbed_bounds`, so the infeasible diagnosis can re-emit it as a loosenable row (it carries no provenance otherwise — see `08_query_diagnostics/infeasible/done.md`). **A variable's intrinsic domain is excluded:** a `BOOLEAN` variable is lowered to an INTEGER with synthesized `x >= 0` / `x <= 1` constraints, so the recording consults `op.is_boolean_var` (threaded from `LogicalDecide`) and skips a BOOLEAN var's 0/1 box (and the default non-negativity); only genuine user bounds are recorded. The column-bound absorption above still applies to all of them.
 
 ## Key Data Structures
 
