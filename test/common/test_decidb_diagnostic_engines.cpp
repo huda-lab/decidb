@@ -232,7 +232,12 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(diag.state == "infeasible");
 		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 10");
 		CHECK(FindRow(diag, "x <= 5", "amount") == "5");
-		CHECK(diag.summary.find("Loosen x <= 5 to x <= 10") != string::npos);
+		// I5: the summary is a lean cue (kind of fix), not the inline specific edit; the
+		// specific clause/amount live in the structured rows above. edit_kind is uniform.
+		CHECK(FindRow(diag, "x <= 5", "edit_kind") == "loosen");
+		CHECK(diag.summary.find("a possible edit was found") != string::npos);
+		CHECK(diag.summary.find("loosen one of your SUCH THAT limits") != string::npos);
+		CHECK(diag.summary.find("Loosen x <= 5 to x <= 10") == string::npos);
 	}
 
 	SECTION("equality row loosens via its two-sided slack") {
@@ -477,6 +482,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(FindRow(diag, "x <= 5", "conflict") == "conflicts in 2 of 2 rows");
 		CHECK(FindRow(diag, "x <= 5", "suggested_change").empty());
 		CHECK(FindRow(diag, "x <= 5", "amount").empty());
+		// I5: a data-RHS conflict carries edit_kind='conflict' (uniform vocabulary), and
+		// the summary uses the data-conflict cue — no "possible edit was found" claim.
+		CHECK(FindRow(diag, "x <= 5", "edit_kind") == "conflict");
+		CHECK(diag.summary.find("conflict is in per-row data") != string::npos);
+		CHECK(diag.summary.find("a possible edit was found") == string::npos);
 	}
 
 	SECTION("strict < re-quotes the suggestion against the user's typed literal") {
@@ -760,7 +770,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
 		CHECK(FindRow(diag, "(x <> 3)", "edit_kind") == "drop");
-		CHECK(diag.summary.find("Remove (x <> 3)") != string::npos);
+		// I5: the summary is a lean cue (kind of fix); the specific `(x <> 3)` is in the row.
+		CHECK(diag.summary.find("a possible edit was found") != string::npos);
+		CHECK(diag.summary.find("remove one of your SUCH THAT constraints") != string::npos);
 	}
 
 	SECTION("prefer-loosen: a loosenable knob is chosen over dropping a `<>`") {

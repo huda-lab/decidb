@@ -285,33 +285,33 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	diag.status = SolverStatus::INFEASIBLE;
 	diag.state = "infeasible";
 
-	// Summary: name the smallest change(s) that restore feasibility. Tell the user
-	// the fix, not the math — no slacks, no "elastic", just the edited constraint(s).
-	// LOOSEN edits read "Loosen X to Y"; a data-RHS clause has no single value to
-	// loosen, so it reads "`X` conflicts in M of N rows".
-	string loosen;
-	string drops;
-	string summaries;
+	// Summary (I5): a lean one-clause cue naming the *kind* of fix, mirroring the
+	// unbounded terminal — the specific clause/amount live in decide_diagnostics(), not
+	// the headline. Tell the user the fix, not the math. "a possible edit was found"
+	// (note: "a", one hitting set, not "the" complete conflict set) when there is an
+	// actionable LOOSEN/DROP edit; a data-RHS-only conflict has no single value to
+	// loosen, so it gets its own cue and defers the per-clause detail to the table.
+	bool has_loosen = false;
+	bool has_drop = false;
+	bool has_conflict = false;
 	for (const auto &e : edits) {
-		if (e.kind == ClauseEditKind::CONFLICT_SUMMARY) {
-			summaries += (summaries.empty() ? "" : " ") + e.label + " " + e.detail +
-			             " (no single value to loosen).";
-		} else if (e.kind == ClauseEditKind::DROP) {
-			drops += (drops.empty() ? "" : "; ") + e.label;
-		} else {
-			loosen += (loosen.empty() ? "" : "; ") + e.label + " to " + e.suggestion;
-		}
+		has_loosen |= (e.kind == ClauseEditKind::LOOSEN);
+		has_drop |= (e.kind == ClauseEditKind::DROP);
+		has_conflict |= (e.kind == ClauseEditKind::CONFLICT_SUMMARY);
 	}
-	diag.summary = "the constraints cannot all be satisfied at once.";
-	if (!loosen.empty()) {
-		diag.summary += " Loosen " + loosen + ".";
-	}
-	// DROP edits (I4): a remove-only `<>` has no value to loosen — the fix is to delete it.
-	if (!drops.empty()) {
-		diag.summary += " Remove " + drops + ".";
-	}
-	if (!summaries.empty()) {
-		diag.summary += " " + summaries;
+	diag.summary = "the constraints cannot all be satisfied at once";
+	if (has_loosen && has_drop) {
+		diag.summary += "; a possible edit was found to make it feasible — loosen or remove "
+		                "one of your SUCH THAT constraints.";
+	} else if (has_loosen) {
+		diag.summary += "; a possible edit was found to make it feasible — loosen one of "
+		                "your SUCH THAT limits.";
+	} else if (has_drop) {
+		diag.summary += "; a possible edit was found to make it feasible — remove one of "
+		                "your SUCH THAT constraints.";
+	} else {
+		// CONFLICT_SUMMARY only: no single literal to loosen, so no clean editable edit.
+		diag.summary += "; the conflict is in per-row data, with no single limit to loosen.";
 	}
 	// I3: the achievable objective after the minimal fix. `unbounded_after_fix` wins —
 	// the relaxed problem has no finite optimum.
@@ -323,6 +323,15 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 
 	for (const auto &e : edits) {
 		if (e.kind == ClauseEditKind::CONFLICT_SUMMARY) {
+			// I5: every edit carries a uniform edit_kind so the relation is
+			// self-describing — filter attribute='edit_kind' to enumerate all edits.
+			DiagnosticRow kind_row;
+			kind_row.subject_kind = "clause";
+			kind_row.subject = e.label;
+			kind_row.attribute = "edit_kind";
+			kind_row.value = "conflict";
+			diag.rows.push_back(std::move(kind_row));
+
 			DiagnosticRow conflict_row;
 			conflict_row.subject_kind = "clause";
 			conflict_row.subject = e.label;
@@ -342,6 +351,14 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 			diag.rows.push_back(std::move(drop_row));
 			continue;
 		}
+		// LOOSEN: edit_kind='loosen' (I5) + the suggested_change/amount pair.
+		DiagnosticRow kind_row;
+		kind_row.subject_kind = "clause";
+		kind_row.subject = e.label;
+		kind_row.attribute = "edit_kind";
+		kind_row.value = "loosen";
+		diag.rows.push_back(std::move(kind_row));
+
 		DiagnosticRow change_row;
 		change_row.subject_kind = "clause";
 		change_row.subject = e.label;

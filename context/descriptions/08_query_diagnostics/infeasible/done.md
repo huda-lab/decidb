@@ -402,6 +402,53 @@ A deferred sibling — an uncorrelated scalar-subquery RHS (`x <= (SELECT 5)`), 
 flattens into a join so it can't be classified as a shared cap without correlation analysis — is
 tracked in `todo.md`.
 
+## Infeasibility reporting: lean cue summary + frozen vocabulary (I5)
+
+I5 is the final reporting step. The structured EAV edit list was already emitted by I1–I4; I5
+makes two refinements and **locks the vocabulary**.
+
+**Lean cue summary (mirrors the unbounded terminal).** `BuildInfeasibleDiagnostic`
+(`decide_diagnostic.cpp`) no longer inlines the *specific* edit (`"Loosen x <= 5 to x <= 10."`).
+The headline is a one-clause cue naming the *kind* of fix; the specific clause/amount live in the
+table (`decide_diagnostics()`), and every thrown message already appends
+`Details: SELECT * FROM decide_diagnostics();`. The cue is adaptive over which edit kinds the
+solve produced:
+- LOOSEN present → `"…; a possible edit was found to make it feasible — loosen one of your SUCH THAT limits."`
+- DROP (no loosen) → `"… — remove one of your SUCH THAT constraints."`
+- both → `"… — loosen or remove one of your SUCH THAT constraints."`
+- CONFLICT_SUMMARY only (no actionable editable edit) → `"…; the conflict is in per-row data, with no single limit to loosen."`
+
+The word *"a possible edit"* (not "the fix") is the honesty framing — the slacks give **one**
+hitting set, not the complete conflict collection — so no separate caveat row is needed. The I3
+achievable-objective sentence is **kept inline** after the cue (`"After this change, the best
+achievable objective is …."` / `"… the objective is unbounded."`). `BuildElasticInfeasibleDiagnostic`
+(the "loosening cannot fix it" path) is untouched — the cue does not apply when no edit was found.
+
+**Why no runnable rewritten query.** The original plan envisioned emitting a copy-paste rewritten
+DECIDE query. It was deliberately dropped: the engine has no access to the original SQL text (it
+works on `SolverModel` rows, and clause labels are *reconstructed* + canonicalized — the user's
+`5 >= x` comes back as `x <= 5`), so a faithful full query is unbuildable and a reconstructed
+partial would duplicate what the table already carries. The table is the source of truth; the
+headline is a lean pointer, exactly like the unbounded terminal.
+
+**Frozen EAV vocabulary.** Every edit row now carries a uniform `attribute='edit_kind'`, so
+filtering `attribute='edit_kind'` enumerates all edits and their kinds — the relation is
+self-describing:
+- `subject_kind='clause'`: `edit_kind` ∈ {`loosen`, `drop`, `conflict`}; plus `suggested_change`
+  + `amount` (LOOSEN only), `conflict` = `"conflicts in M of N rows"` (CONFLICT_SUMMARY only).
+- `subject_kind='model'`: `achievable_objective` (the I3 number, or `'unbounded'`),
+  `elastic_infeasible` (`'true'`, the loosening-cannot-fix-it verdict).
+
+These strings are stable. Previously only DROP carried `edit_kind`; I5 added `loosen` and
+`conflict` so the three edit kinds are uniform.
+
+**Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): the loosen section asserts the cue wording
+(`"a possible edit was found"` + `"loosen one of your SUCH THAT limits"`, and that the old inline
+`"Loosen x <= 5 to x <= 10"` is gone) and `edit_kind='loosen'`; the data-conflict section asserts
+`edit_kind='conflict'` and the data-conflict cue (no "possible edit" claim). Python differential
+(`test_query_diagnostics_relation.py`): a loosen case asserts `edit_kind='loosen'`; the data-RHS
+conflict asserts `edit_kind='conflict'`.
+
 ## Tests
 
 `test/common/test_decidb_diagnostic_engines.cpp` — SECTIONs drive `DiagnoseInfeasible`

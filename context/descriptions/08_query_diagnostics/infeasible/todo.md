@@ -1,10 +1,9 @@
 # Query Diagnostics — Infeasible (planned)
 
-The flagship state. The feasible region is empty. I1/I2 now diagnose the shipped
-least-change shapes by building and solving a **second** optimization — the *elastic
-program* — whose optimum identifies which user constraints to loosen, and by how much.
-The remaining work deepens that result with objective-aware tie-breaking, removal, and
-full reporting.
+The flagship state. The feasible region is empty. The elastic engine — a **second**
+optimization whose optimum identifies which user constraints to loosen and by how much —
+is fully shipped (I1–I5; see `done.md`). The remaining work is the two deferred shapes
+below: uncorrelated scalar-subquery RHS (I2) and aggregate `<>` removal (I4).
 
 > **Router terminal:** `failed → infeasible` → `elastic` → report (`router/README.md`).
 > The terminal classifies distinctly in `RouteSolveResult` (`decide_router.cpp`) and
@@ -23,7 +22,9 @@ order, not versions.
   ("stage-2 achievable objective (freeze-budget)").
 - [x] **I4 · L0 / removal dial** — shipped (per-row `<>`); see `done.md`
   ("L0 / removal dial"). Aggregate `<>` removal deferred (see below).
-- [ ] **I5 · Infeasibility reporting (full)** (v3.1) — deps: I1/I2/I3, F4, F5
+- [x] **I5 · Infeasibility reporting (full)** (v3.1) — shipped; see `done.md`
+  ("Infeasibility reporting: lean cue summary + frozen vocabulary"). The runnable-rewritten-query
+  ambition was deliberately dropped (no source text; table is source of truth).
 
 ---
 
@@ -85,43 +86,6 @@ drops). Until then aggregate `<>` keeps its prior static-error behavior.
 
 ---
 
-## I5 · Infeasibility reporting (full) (v3.1)
-
-**Goal.** Render the slack solution at the user-clause level through `decide_diagnostics()`.
-I1 ships a minimal edit list; this completes it.
-
-> **Schema.** `decide_diagnostics()` is cross-state EAV
-> `(diagnosis_id, state, subject_kind, subject, attribute, value)` (`decide_diagnostic.hpp`,
-> impl `decide_diagnostic.cpp`, registered `system_functions.cpp`). Infeasible renders
-> clause-level facts as rows like `subject_kind='clause'`, `subject=<clause id / group>`,
-> `attribute='edit_kind' | 'suggested_change' | 'amount' | ...`. No schema redesign needed.
-
-- **Always:** a structured edit list in EAV form — clause/group subject plus `edit_kind`,
-  `suggested_change`, amount, and related attributes; PER reported per group; plus the
-  **achievable objective** from I3.
-- **Conditionally:** a runnable rewritten DECIDE query — only when the edits collapse to
-  one coherent clause; otherwise say why a single rewrite isn't expressible (e.g. PER
-  groups sharing one `K`).
-- **Honest wording** (per the user-facing-output principle — actionable, no solver jargon):
-  positive-slack rows are *"involved in the conflict"* (proven: `s*ᵢ > 0 ⇒ i ∈ some IIS`);
-  removal rows *"had to be dropped"* (weaker, always true). Never *"these are all the
-  conflicts"* — the slacks give one hitting set, not the full IIS collection.
-
-**Decisions to settle (I5):**
-- **Attribute vocabulary.** The exact `attribute` strings the infeasible engine emits
-  (`edit_kind`, `suggested_change`, `amount`, `group`, `achievable_objective`,
-  `elastic_infeasible`, …) and their `value` formats. Keep them stable once chosen.
-- **Rewrite trigger + render.** The precise rule for "edits collapse to one clause" → emit
-  a runnable query, and the suppression message otherwise.
-
-**Test.** End-to-end on constructed infeasible queries (both backends,
-`test/decide/tests/test_query_diagnostics_relation.py`); PER divergence correctly
-suppresses the single-query rewrite; the elastic-infeasible case renders its distinct row.
-
-**Deps:** I1/I2/I3, F4, F5.
-
----
-
 ## Suggested batches
 
 - **Batch A (the thin slice):** I1 — simple-shape stage-1 + elastic-infeasible signal +
@@ -129,7 +93,7 @@ suppresses the single-query rewrite; the elastic-infeasible case renders its dis
 - **Batch C (the hard shapes):** I2 — shared-slack placement + per-shape units; the bulk of
   the engine. **Shipped.**
 - **Batch B (objective):** I3 — freeze-budget stage-2 (shape-agnostic). **Shipped.**
-- **Batch D (reporting):** I5 — full two-tier reporting once shapes + objective exist. *Next.*
+- **Batch D (reporting):** I5 — lean cue summary + frozen `edit_kind` vocabulary. **Shipped.**
 - **Batch E (gated):** I4 — L0 / removal dial. **Shipped** for per-row `<>` (norms landed,
   unblocking it); aggregate `<>` removal remains (see "I4 follow-up").
 

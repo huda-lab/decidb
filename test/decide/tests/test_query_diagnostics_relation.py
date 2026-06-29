@@ -280,6 +280,8 @@ class TestDiagnosticsRelation:
         # Stage 2 loosens x's cap (raises the objective), never y's.
         x_cap = _attrs(rows, "clause", "x <= 0")
         assert x_cap["suggested_change"] == "x <= 10"
+        # I5: every edit row carries a uniform edit_kind so the relation self-describes.
+        assert x_cap["edit_kind"] == "loosen"
         assert "suggested_change" not in _attrs(rows, "clause", "y <= 0")
         # The achievable objective is surfaced as a model-level fact (NULL subject).
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
@@ -429,6 +431,8 @@ class TestDiagnosticsRelation:
         assert {r["state"] for r in rows} == {"infeasible"}
         floor = _attrs(rows, "clause", "x >= 5")
         assert floor["conflict"] == "conflicts in 2 of 2 rows"
+        # I5: a data-RHS conflict carries edit_kind='conflict' (uniform vocabulary).
+        assert floor["edit_kind"] == "conflict"
         # A data-RHS clause never gets a scalar loosening suggestion.
         assert "suggested_change" not in floor and "amount" not in floor
 
