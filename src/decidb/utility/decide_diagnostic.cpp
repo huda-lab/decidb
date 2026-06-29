@@ -56,6 +56,14 @@ static void MinCategoriesSetCallback(ClientContext &context, SetScope scope, Val
 	}
 }
 
+static void RemovalBigMSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	double v = parameter.GetValue<double>();
+	if (!(v >= 0.0)) {
+		throw InvalidInputException(
+		    "diagnose_decide_removal_bigm must be >= 0 (0 = auto); got " + parameter.ToString() + ".");
+	}
+}
+
 void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	config.AddExtensionOption(
 	    "diagnose_decide",
@@ -80,6 +88,13 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "Unbounded diagnosis: absolute floor on the categorical distinct-value cap, so small "
 	    "tables still qualify when ratio × num_rows rounds below a few. Default 20.",
 	    LogicalType::BIGINT, Value::BIGINT(20), MinCategoriesSetCallback);
+	// Infeasible diagnosis: removal Big-M for dropping a `<>` (I4 L0 / removal dial).
+	config.AddExtensionOption(
+	    "diagnose_decide_removal_bigm",
+	    "Infeasible diagnosis: the Big-M used to neutralize a dropped `<>` constraint when "
+	    "diagnosing which clause to remove. 0 (default) auto-derives a sufficient value per "
+	    "clause from its existing formulation; set a positive value only to override. >= 0.",
+	    LogicalType::DOUBLE, Value::DOUBLE(0.0), RemovalBigMSetCallback);
 }
 
 string GetDiagnoseDecideMode(ClientContext &context) {
@@ -102,6 +117,10 @@ DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
 	if (context.TryGetCurrentSetting("diagnose_decide_min_categories", value) && !value.IsNull()) {
 		auto v = value.GetValue<int64_t>();
 		params.min_categories = v < 1 ? 1 : (idx_t)v;
+	}
+	if (context.TryGetCurrentSetting("diagnose_decide_removal_bigm", value) && !value.IsNull()) {
+		double v = value.GetValue<double>();
+		params.removal_bigm = v < 0.0 ? 0.0 : v;
 	}
 	return params;
 }
@@ -271,11 +290,14 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	// LOOSEN edits read "Loosen X to Y"; a data-RHS clause has no single value to
 	// loosen, so it reads "`X` conflicts in M of N rows".
 	string loosen;
+	string drops;
 	string summaries;
 	for (const auto &e : edits) {
 		if (e.kind == ClauseEditKind::CONFLICT_SUMMARY) {
 			summaries += (summaries.empty() ? "" : " ") + e.label + " " + e.detail +
 			             " (no single value to loosen).";
+		} else if (e.kind == ClauseEditKind::DROP) {
+			drops += (drops.empty() ? "" : "; ") + e.label;
 		} else {
 			loosen += (loosen.empty() ? "" : "; ") + e.label + " to " + e.suggestion;
 		}
@@ -283,6 +305,10 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	diag.summary = "the constraints cannot all be satisfied at once.";
 	if (!loosen.empty()) {
 		diag.summary += " Loosen " + loosen + ".";
+	}
+	// DROP edits (I4): a remove-only `<>` has no value to loosen — the fix is to delete it.
+	if (!drops.empty()) {
+		diag.summary += " Remove " + drops + ".";
 	}
 	if (!summaries.empty()) {
 		diag.summary += " " + summaries;
@@ -303,6 +329,17 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 			conflict_row.attribute = "conflict";
 			conflict_row.value = e.detail;
 			diag.rows.push_back(std::move(conflict_row));
+			continue;
+		}
+		if (e.kind == ClauseEditKind::DROP) {
+			// I4: a dedicated structured marker, distinct from the LOOSEN
+			// suggested_change/amount pair. The subject names the clause to delete.
+			DiagnosticRow drop_row;
+			drop_row.subject_kind = "clause";
+			drop_row.subject = e.label;
+			drop_row.attribute = "edit_kind";
+			drop_row.value = "drop";
+			diag.rows.push_back(std::move(drop_row));
 			continue;
 		}
 		DiagnosticRow change_row;

@@ -34,4 +34,14 @@ constexpr double DIAGNOSTIC_RAY_EPSILON = 1e-8;
 //! lexicographic tie-break.)
 constexpr double DIAGNOSTIC_DATA_SLACK_WEIGHT = 1e3;
 
+//! Elastic-program objective weight for a `<>` removal indicator (I4), relative to an
+//! editable-knob slack (weight 1) and a data slack (1e3). Dropping a `<>` is the
+//! biggest hammer — it removes the clause rather than loosening it — so it sits at the
+//! top of the weight ladder (editable 1 < data 1e3 < removal 1e6): the solver prefers
+//! any loosening and removes a `<>` only when loosening genuinely cannot restore
+//! feasibility. Like DIAGNOSTIC_DATA_SLACK_WEIGHT this is a coarse weighted stand-in;
+//! it rides the same future lexicographic-tier conversion (see the infeasible
+//! engine's "Notes to revisit").
+constexpr double DIAGNOSTIC_REMOVAL_WEIGHT = 1e6;
+
 } // namespace duckdb

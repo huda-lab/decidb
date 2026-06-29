@@ -245,7 +245,7 @@ DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
 	return BuildUnboundedDiagnostic(escapes);
 }
 
-ElasticModel BuildElasticModel(const SolverModel &base) {
+ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm) {
 	ElasticModel out;
 	out.model = base;
 	SolverModel &elastic = out.model;
@@ -382,6 +382,53 @@ ElasticModel BuildElasticModel(const SolverModel &base) {
 		out.slacks.push_back({{qr}, pos_col, neg_col, sense, /*quadratic=*/true});
 	}
 
+	// I4: the removal dial. A remove-only `<>` cannot be loosened — its two Big-M
+	// disjunction rows (USER_MECHANISM, so the loosening passes above skipped them)
+	// share one `indicator_col`. Group them by it and add ONE binary `w` per `<>`,
+	// wired into each row with a ±M₂ coefficient (sign by sense, like a slack) so
+	// w=1 makes both rows vacuous — the clause is dropped. Penalize W·w
+	// (DIAGNOSTIC_REMOVAL_WEIGHT, above the slack weights) so dropping is a last
+	// resort. M₂ defaults to the clause's own disjunction Big-M (|row coeff on
+	// indicator_col|, provably enough to neutralize either side), overridable.
+	std::map<idx_t, vector<idx_t>> rem_groups;
+	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
+		idx_t ind = elastic.constraints[r].provenance.indicator_col;
+		if (ind != DConstants::INVALID_INDEX) {
+			rem_groups[ind].push_back(r);
+		}
+	}
+	for (auto &kv : rem_groups) {
+		idx_t indicator_col = kv.first;
+		const vector<idx_t> &grp = kv.second;
+		// M₂: honor the pragma override, else derive from the disjunction Big-M.
+		double m2 = removal_bigm;
+		if (!(m2 > 0.0)) {
+			for (idx_t r : grp) {
+				const auto &row = elastic.constraints[r];
+				for (idx_t k = 0; k < row.indices.size(); k++) {
+					if (static_cast<idx_t>(row.indices[k]) == indicator_col) {
+						m2 = std::max(m2, std::fabs(row.coefficients[k]));
+					}
+				}
+			}
+		}
+		// One binary removal indicator w ∈ {0,1}, penalized W.
+		idx_t w_col = elastic.num_vars;
+		elastic.col_lower.push_back(0.0);
+		elastic.col_upper.push_back(1.0);
+		elastic.is_integer.push_back(true);
+		elastic.is_binary.push_back(true);
+		elastic.obj_coeffs.push_back(DIAGNOSTIC_REMOVAL_WEIGHT);
+		elastic.num_vars++;
+		// Wire ±M₂·w into each disjunction row (same sign convention as a slack).
+		for (idx_t r : grp) {
+			auto &row = elastic.constraints[r];
+			row.indices.push_back(static_cast<int>(w_col));
+			row.coefficients.push_back(row.sense == '>' ? m2 : -m2);
+		}
+		out.removals.push_back({grp, w_col, indicator_col});
+	}
+
 	return out;
 }
 
@@ -392,6 +439,7 @@ ElasticModel BuildElasticModel(const SolverModel &base) {
 //! clause (I2.c). Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
 //! appended). Pure in `solution`, so it runs against either the stage-1 or stage-2 solve.
 static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
+                                           const vector<RemovalRef> &removals,
                                            const vector<double> &solution,
                                            const SolverModel &orig_model,
                                            const vector<ColumnProvenance> &columns, bool snap) {
@@ -459,7 +507,31 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		           std::to_string(total) + " rows";
 		edits.push_back(std::move(e));
 	}
+
+	// I4: a removal indicator at 1 means its remove-only `<>` was dropped. The clause
+	// label comes from the indicator column's provenance ("(x <> 3)", recorded at
+	// rewrite time via F6). The set {w = 1} is the minimum-cardinality removal set.
+	for (const auto &r : removals) {
+		if (solution[r.w_col] > 0.5) {
+			ClauseEdit e;
+			e.kind = ClauseEditKind::DROP;
+			e.label = columns[r.indicator_col].label;
+			edits.push_back(std::move(e));
+		}
+	}
 	return edits;
+}
+
+//! True iff `edits` contains at least one DROP (a dropped remove-only `<>`). Gates the
+//! I3 stage-2 re-solve alongside HasLoosenEdit: a removal is an actionable fix, so the
+//! achievable objective after dropping is worth reporting.
+static bool HasRemoval(const vector<ClauseEdit> &edits) {
+	for (const auto &e : edits) {
+		if (e.kind == ClauseEditKind::DROP) {
+			return true;
+		}
+	}
+	return false;
 }
 
 //! True iff `edits` contains at least one actionable (editable) LOOSEN edit, as opposed
@@ -497,11 +569,25 @@ static bool HasObjective(const SolverModel &model) {
 //! row reuses the stage-1 slack weights — read back from the elastic model's objective
 //! coefficients — so it freezes exactly the stage-1 objective ≤ S*.
 static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<BlockSlackRef> &slacks,
-                                    const SolverModel &original, double s_star) {
+                                    const vector<RemovalRef> &removals,
+                                    const vector<double> &stage1_solution, const SolverModel &original,
+                                    double s_star) {
 	SolverModel stage2 = elastic;
 
-	// Budget row: Σ wᵢ sᵢ ≤ S*. Build it while the elastic objective coefficients still
-	// hold the slack weights (editable 1, data DIAGNOSTIC_DATA_SLACK_WEIGHT). The cap is
+	// I4: freeze the removal set. Pin each removal binary to its stage-1 value (0/1)
+	// so stage 2 cannot pick a different set of clauses to drop — the reported DROP set
+	// is stable between stages. The fixed W·w terms then become a constant in the budget.
+	for (const auto &r : removals) {
+		double w = stage1_solution[r.w_col] > 0.5 ? 1.0 : 0.0;
+		stage2.col_lower[r.w_col] = w;
+		stage2.col_upper[r.w_col] = w;
+	}
+
+	// Budget row: Σ wᵢ sᵢ + Σ W·wⱼ ≤ S*. Build it while the elastic objective coefficients
+	// still hold the slack/removal weights (editable 1, data DIAGNOSTIC_DATA_SLACK_WEIGHT,
+	// removal DIAGNOSTIC_REMOVAL_WEIGHT). Including the (now-fixed) removal columns keeps the
+	// cap exactly equal to the stage-1 objective S* = Σ wᵢ sᵢ + Σ W·wⱼ, so the loosening
+	// budget is frozen even though the objective included the removal penalty. The cap is
 	// exactly S*: the stage-1 optimum sits on it, and the backend feasibility tolerance
 	// supplies the cushion that keeps the re-solve feasible. The reported amounts are
 	// snapped past that tolerance — see RoundToSignificant.
@@ -513,6 +599,10 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 			budget.indices.push_back(static_cast<int>(sl.neg_col));
 			budget.coefficients.push_back(elastic.obj_coeffs[sl.neg_col]);
 		}
+	}
+	for (const auto &r : removals) {
+		budget.indices.push_back(static_cast<int>(r.w_col));
+		budget.coefficients.push_back(elastic.obj_coeffs[r.w_col]);
 	}
 	budget.sense = '<';
 	budget.rhs = s_star;
@@ -543,12 +633,13 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		return DecideDiagnostic();
 	}
 
-	ElasticModel elastic = BuildElasticModel(input.model);
+	ElasticModel elastic = BuildElasticModel(input.model, input.params.removal_bigm);
 	const vector<BlockSlackRef> &slacks = elastic.slacks;
 
-	// Nothing loosenable: fall through to the static error (the user's only
-	// constraints are rigid mechanism/structural rows we never edit).
-	if (slacks.empty()) {
+	// Nothing actionable: fall through to the static error (the user's only constraints
+	// are rigid structural rows we never edit). I4: a model with removable `<>` rows but
+	// no loosenable slacks is still actionable — only bail when BOTH are empty.
+	if (slacks.empty() && elastic.removals.empty()) {
 		return DecideDiagnostic();
 	}
 
@@ -572,8 +663,8 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	// slack value is the loosening amount. Label clauses over user-facing column names.
 	vector<ColumnProvenance> columns =
 	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux);
-	vector<ClauseEdit> edits =
-	    ReadElasticEdits(slacks, stage1.solution, input.model, columns, /*snap=*/false);
+	vector<ClauseEdit> edits = ReadElasticEdits(slacks, elastic.removals, stage1.solution,
+	                                            input.model, columns, /*snap=*/false);
 
 	if (edits.empty()) {
 		return DecideDiagnostic();
@@ -585,14 +676,18 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	// would be misleading. Among ALL minimal-loosening fixes (budget frozen at S*),
 	// re-solve the user's objective and report the best one — the stage-2 slacks become the
 	// edit so the edit and the objective agree.
-	if (HasObjective(input.model) && HasLoosenEdit(edits)) {
-		double s_star = stage1.objective_value; // stage-1 ObjVal = Σ wᵢ sᵢ = total loosening
-		SolverModel stage2_model = BuildStage2Model(elastic.model, slacks, input.model, s_star);
+	if (HasObjective(input.model) && (HasLoosenEdit(edits) || HasRemoval(edits))) {
+		// stage-1 ObjVal = Σ wᵢ sᵢ + Σ W·wⱼ; the budget freezes both loosening and the
+		// (pinned) removal set, so the cap stays consistent with this S*.
+		double s_star = stage1.objective_value;
+		SolverModel stage2_model = BuildStage2Model(elastic.model, slacks, elastic.removals,
+		                                            stage1.solution, input.model, s_star);
 		SolverResult stage2 = input.solve_model(stage2_model);
 
 		if (stage2.status == SolverStatus::OPTIMAL && !stage2.solution.empty()) {
 			// Report the objective-maximizing minimal fix and the objective it achieves.
-			edits = ReadElasticEdits(slacks, stage2.solution, input.model, columns, /*snap=*/true);
+			edits = ReadElasticEdits(slacks, elastic.removals, stage2.solution, input.model, columns,
+			                         /*snap=*/true);
 			if (edits.empty()) {
 				return DecideDiagnostic();
 			}

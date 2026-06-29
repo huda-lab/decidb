@@ -21,7 +21,8 @@ order, not versions.
   ("per-shape slack placement"). All of I2.0/a/b/c/d/e landed.
 - [x] **I3 · Stage-2 — freeze-budget objective re-solve** — shipped; see `done.md`
   ("stage-2 achievable objective (freeze-budget)").
-- [ ] **I4 · L0 / removal dial** — deps: I1, norms (v1.1, external)
+- [x] **I4 · L0 / removal dial** — shipped (per-row `<>`); see `done.md`
+  ("L0 / removal dial"). Aggregate `<>` removal deferred (see below).
 - [ ] **I5 · Infeasibility reporting (full)** (v3.1) — deps: I1/I2/I3, F4, F5
 
 ---
@@ -65,28 +66,22 @@ as `SHARED_LITERAL` or a new shared-scalar shape, while correlated subqueries re
 
 ---
 
-## I4 · L0 / removal dial
+## I4 follow-up · aggregate `<>` removal
 
-**Goal.** The "remove a constraint" dial — uncapped slack gated by a binary `zᵢ`, penalize
-`Σ zᵢ`. Mixing L1 + count means the engine prefers a small loosening and removes only when
-loosening can't fix it. The removal set `{i : zᵢ = 1}` is the minimum-cardinality hitting
-set — the closest thing to IIS diagnosis without computing IISs. Required for `<>`
-(remove-only, I2).
+I4 shipped the removal dial for **per-row `<>`** (see `done.md`, "L0 / removal dial"):
+weighted single solve (B1, `DIAGNOSTIC_REMOVAL_WEIGHT` above the slack weights), one binary
+`w` per `<>` wired `±M₂` into its disjunction pair, grouped by the new
+`ConstraintProvenance::indicator_col`, reported as an `edit_kind='drop'` EAV row, with the
+`diagnose_decide_removal_bigm` pragma exposing M₂ (auto default).
 
-**Decisions to settle (I4):**
-- **Penalty mixing.** Pure lexicographic (min loosening, then min removals) vs. weighted
-  sum (`Σ wᵢ sᵢ + M · Σ zᵢ`). Settle the priority / `M` and how it composes with the I3
-  budget freeze.
-- **Offered vs forced removal.** `<>` is remove-only (forced); all other shapes get
-  removal only when loosening cannot restore feasibility.
-
-**Test.** Pure-loosenable cases use no removal; a remove-only `<>` conflict is reported as
-a drop; mixed cases prefer loosening.
-
-**Deps:** I1; reuses the count-binary + Big-M machinery from **norms (v1.1)** — an external
-dependency tracked in `03_expressivity/sql_functions/todo.md`. Blocked until that lands.
-
-**Done section:** "Elastic engine: L0 / removal dial."
+**Remaining:** aggregate `<>` (`SUM(x) <> K`). Its disjunction binary is a **global-block
+aux column** with no user-facing label channel (`BuildColumnProvenance` leaves global aux
+columns unlabeled), so a dropped aggregate `<>` cannot be named. The mechanic would work, but
+the DROP edit's subject would be empty. The fix is a label channel for global-var indicators
+(record the clause text at the aggregate-`<>` site in `physical_decide.cpp` and surface it
+through column provenance), then tag the aggregate rows' `indicator_col` (the
+`SolverInput::RawConstraint` → global-site-4 propagation, reverted in I4 to avoid nameless
+drops). Until then aggregate `<>` keeps its prior static-error behavior.
 
 ---
 
@@ -135,7 +130,8 @@ suppresses the single-query rewrite; the elastic-infeasible case renders its dis
   the engine. **Shipped.**
 - **Batch B (objective):** I3 — freeze-budget stage-2 (shape-agnostic). **Shipped.**
 - **Batch D (reporting):** I5 — full two-tier reporting once shapes + objective exist. *Next.*
-- **Batch E (gated):** I4 — L0 / removal dial, when norms (v1.1) land.
+- **Batch E (gated):** I4 — L0 / removal dial. **Shipped** for per-row `<>` (norms landed,
+  unblocking it); aggregate `<>` removal remains (see "I4 follow-up").
 
 ---
 
@@ -148,9 +144,13 @@ suppresses the single-query rewrite; the elastic-infeasible case renders its dis
   regardless of scale. Revisit if a scale-mixed oracle case misbehaves — with mixed units the
   L1 race can prefer loosening the large-scale constraint. The fix is scale-normalized weights
   (by RHS magnitude / row-coefficient norm); deferred until a test exposes the skew.
-- **Data-slack penalty is a fixed constant, not lexicographic.** `DIAGNOSTIC_DATA_SLACK_WEIGHT`
-  is a coarse stand-in for preferring editable edits over data conflicts. I3 did **not** replace
-  it: the stage-2 budget freeze picks the objective-best fix *among min-loosening edits* (a tier
-  below S*), which is orthogonal to the editable-vs-data preference that lives *inside* the
-  stage-1 weights. A true lexicographic "editable first, then data" tier (drop the weight, run
-  stage 1 in two passes) remains the proper fix — still future work.
+- **Weighted preference ladder is a fixed-constant stand-in, not lexicographic.** Two coarse
+  weights encode preferences in the single stage-1 objective: `DIAGNOSTIC_DATA_SLACK_WEIGHT`
+  (`1e3`, prefer editable edits over data conflicts, I2.c) and `DIAGNOSTIC_REMOVAL_WEIGHT`
+  (`1e6`, prefer any loosening over dropping a `<>`, I4) — giving the ladder editable `1` <
+  data `1e3` < removal `1e6`. I3 did **not** replace them: the stage-2 budget freeze picks the
+  objective-best fix *among min-loosening edits* (a tier below S*), which is orthogonal to the
+  preferences that live *inside* the stage-1 weights. A true lexicographic ladder ("editable,
+  then data, then removal" — drop the weights, run stage 1 in successive passes) remains the
+  proper fix for **both** weights at once — still future work. Revisit if a scale-mixed oracle
+  case makes a weight misorder the fixes.

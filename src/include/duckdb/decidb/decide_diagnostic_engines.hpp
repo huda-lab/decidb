@@ -72,6 +72,18 @@ struct BlockSlackRef {
 	bool quadratic = false;
 };
 
+//! A binary removal indicator wired into the rows of one remove-only `<>` clause
+//! (I4). `<>` cannot be loosened — only dropped — so a single binary `w` is wired
+//! into both Big-M disjunction rows with a ±M₂ coefficient (sign by sense): w=1
+//! makes both rows vacuous (the clause is dropped). The pair is identified by a
+//! shared `indicator_col` (the `<>` disjunction binary). Penalizing W·w (above the
+//! editable/data slack weights) makes removal a last resort.
+struct RemovalRef {
+	vector<idx_t> rows;        //!< Rows of this `<>` disjunction (the pair sharing the indicator).
+	idx_t w_col;               //!< The binary removal column in the elastic model.
+	idx_t indicator_col;       //!< The `<>` disjunction binary — sources the label (resolved later).
+};
+
 //! The elastic program built from a base model: the transformed SolverModel (user
 //! objective zeroed, slacks appended, `min Σ sᵢ`) plus the slack→row wiring needed
 //! to read the result back. Pure function of the base model — the structural test
@@ -79,13 +91,17 @@ struct BlockSlackRef {
 struct ElasticModel {
 	SolverModel model;
 	vector<BlockSlackRef> slacks;
+	vector<RemovalRef> removals; //!< Remove-only `<>` clauses (I4); empty when none.
 };
 
 //! Build the elastic program from a base model: zero the user objective, drop the
 //! quadratic objective, and add a non-negative REAL slack to every relaxable row
 //! (SHARED_LITERAL blocks share one slack across their rows; others get one each).
-//! Rigid (USER_MECHANISM / STRUCTURAL) rows are untouched.
-ElasticModel BuildElasticModel(const SolverModel &base);
+//! Rigid STRUCTURAL rows are untouched; remove-only `<>` rows (USER_MECHANISM with a
+//! valid `indicator_col`) instead get a binary removal indicator (I4). `removal_bigm`
+//! is the M₂ used to neutralize a dropped `<>` (0 = auto-derive per clause from its
+//! existing disjunction Big-M).
+ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm = 0.0);
 
 //! Build the infeasible diagnosis (the elastic least-change fix): build the elastic
 //! program (BuildElasticModel), solve it via the injected callback, and read the

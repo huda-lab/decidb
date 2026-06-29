@@ -74,6 +74,9 @@ struct DecideDiagParams {
 	double escape_rate = 0.8;       //!< report groups with rate ≥ this
 	double categorical_ratio = 0.1; //!< column is categorical if distinct ≤ ratio×N
 	idx_t min_categories = 20;       //!< …or ≤ this absolute floor (small tables)
+	//! Big-M (M₂) used by the infeasible engine to neutralize a dropped `<>` (I4).
+	//! 0 = auto-derive per clause from its existing disjunction Big-M (the usual case).
+	double removal_bigm = 0.0;
 };
 
 //! Structured diagnosis produced by a state engine and rendered by the table
@@ -129,12 +132,15 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes);
 //!   CONFLICT_SUMMARY — a data-RHS clause (`x <= col`) has no single literal to
 //!                     loosen, so we report which clause conflicts and in how many
 //!                     rows (`detail`), not a scalar suggestion (I2.c).
-enum class ClauseEditKind : uint8_t { LOOSEN, CONFLICT_SUMMARY };
+//!   DROP            — a remove-only clause (`<>`) cannot be loosened, only removed;
+//!                     `label` names the clause and the fix is to delete it (I4).
+enum class ClauseEditKind : uint8_t { LOOSEN, CONFLICT_SUMMARY, DROP };
 
 //! One least-change edit the infeasible (elastic) engine found. For LOOSEN: loosen
 //! the constraint as written (`label`, e.g. "x <= 10") to `suggestion` (e.g.
 //! "x <= 12.5") by `amount`. For CONFLICT_SUMMARY: `label` names the clause and
-//! `detail` carries "conflicts in M of N rows" (`suggestion`/`amount` unused). All
+//! `detail` carries "conflicts in M of N rows" (`suggestion`/`amount` unused). For
+//! DROP: `label` names the remove-only clause to delete (other fields unused). All
 //! fields are pre-formatted strings so the builder is pure layout.
 struct ClauseEdit {
 	ClauseEditKind kind = ClauseEditKind::LOOSEN;

@@ -727,6 +727,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.shape = eval_const.rhs_is_shared_literal
                                               ? ElasticShape::SHARED_LITERAL
                                               : ElasticShape::PER_ROW_DATA;
+                // I4: per-row `<>` disjunction rows carry their indicator (a
+                // row-scoped aux var) so the elastic engine groups the pair per row
+                // and offers removal.
+                if (eval_const.ne_indicator_idx != DConstants::INVALID_INDEX) {
+                    constr.provenance.indicator_col =
+                        indexer.Get(eval_const.ne_indicator_idx, row);
+                }
                 PushNormalizedConstraint(std::move(constr));
             }
         }

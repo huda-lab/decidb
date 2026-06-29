@@ -3935,6 +3935,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec1.row_group_ids = ec.row_group_ids;
                     ec1.num_groups = ec.num_groups;
                     ec1.kind = ConstraintKind::USER_MECHANISM;
+                    // I4: tag this disjunction row with its indicator so the elastic
+                    // engine can group the pair and offer removal (remove-only `<>`).
+                    ec1.ne_indicator_idx = indicator_var_idx;
                     new_constraints.push_back(std::move(ec1));
 
                     // Constraint 2: x - M*z ≥ K + 1 - M
@@ -3949,6 +3952,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec2.row_group_ids = ec.row_group_ids;
                     ec2.num_groups = ec.num_groups;
                     ec2.kind = ConstraintKind::USER_MECHANISM;
+                    // I4: same indicator as ec1 — both rows form one removable `<>`.
+                    ec2.ne_indicator_idx = indicator_var_idx;
                     new_constraints.push_back(std::move(ec2));
                 }
             } else {

@@ -225,6 +225,76 @@ summary; a penalized data row defers to an editable edit; reversed bounds are re
 canonical absorbed form; AVG/strict re-quote (including strict quadratic); quadratic and
 McCormick gated to Gurobi; `<>` and McCormick rows stay rigid.
 
+## Elastic engine: L0 / removal dial (`<>` removal)
+
+I4 adds the **removal dial** for clauses that cannot be *loosened*, only *removed* — the
+flagship case is `<>` (not-equal). A `x <> 3` compiles to two rigid `USER_MECHANISM` Big-M
+disjunction rows (`x − M·z ≤ K−1`, `x − M·z ≥ K+1−M`) sharing one binary disjunction
+selector `z`; there is no scalar RHS to stretch, so the loosening passes skip them. I4 lets
+the engine *drop* such a clause and reports it as a `DROP` edit ("Remove `x <> 3`").
+
+**Scope.** Removal applies to **per-row `<>`** only. `STRUCTURAL` rows (McCormick links)
+stay rigid — a definition row cannot be meaningfully dropped. **Aggregate `<>`** (`SUM(x) <>
+K`) is deferred: its disjunction binary is a global-block aux column with no user-facing
+label channel, so naming the dropped clause is not yet possible; it keeps its prior
+static-error behavior.
+
+**Marker = `ConstraintProvenance::indicator_col`** (`ilp_model.hpp`). A new flat-column field
+set **only** at the per-row `<>` site, so it does triple duty: it marks a row as removable
+(`!= INVALID`), groups the disjunction pair (rows sharing one `z` = one `<>` instance — per
+data row), and sources both the removal Big-M and the label. It is set by carrying the
+`<>`'s indicator decide-var on the expanded rows: `physical_decide.cpp` stamps
+`ec1.ne_indicator_idx = ec2.ne_indicator_idx = indicator_var_idx` on the two disjunction
+rows, and the per-row builder site (`ilp_model_builder.cpp`) resolves
+`provenance.indicator_col = indexer.Get(ne_indicator_idx, row)`. The previously-INVALID
+clause_id of these rows is untouched, so no existing clause-id consumer is disturbed.
+
+**Mechanic (all-or-nothing binary, no separate gate row).** Because `<>` removal is binary,
+`BuildElasticModel` (`decide_diagnostic_engines.cpp`), after the loosening + quadratic
+passes, groups relaxable rows by `indicator_col` and adds **one binary `w` per `<>`**, wired
+into each disjunction row with a `±M₂` coefficient (sign by sense, reusing the slack
+convention: `<` → `−M₂`, `>` → `+M₂`). `w = 1` makes both rows vacuous — the clause is
+dropped. **M₂** defaults to the clause's own disjunction Big-M (`|row coeff on indicator_col|`,
+provably enough to neutralize whichever side `z` selects), overridable by the
+`diagnose_decide_removal_bigm` pragma. The wiring is recorded in a `RemovalRef {rows, w_col,
+indicator_col}` on `ElasticModel`.
+
+**Last-resort weighting (B1).** `w` is penalized `DIAGNOSTIC_REMOVAL_WEIGHT` (`1e6`,
+`diagnostic_constants.hpp`), stacked **above** the editable (`1`) and data (`1e3`) slack
+weights, all in the one stage-1 objective (no extra solve). So the solver prefers any
+loosening and drops a `<>` only when loosening genuinely cannot restore feasibility; the
+support `{i : wᵢ = 1}` is the minimum-cardinality removal set. Like the data-slack weight
+this is a coarse weighted stand-in that rides the future lexicographic-tier conversion (see
+"Notes to revisit" in `todo.md`).
+
+**Reading + reporting.** `ReadElasticEdits` reads each `RemovalRef`: `w > 0.5` emits a
+`ClauseEdit{kind = DROP, label = columns[indicator_col].label}` (the F6 "(x <> 3)" string).
+`BuildInfeasibleDiagnostic` renders a DROP as a dedicated EAV row `subject_kind='clause'`,
+`subject='(x <> 3)'`, `attribute='edit_kind'`, `value='drop'` (distinct from the LOOSEN
+`suggested_change`/`amount` pair), and appends "Remove `(x <> 3)`." to the summary. The
+`DiagnoseInfeasible` empty-guard now bails only when **both** slacks and removals are empty,
+so a removal-only model is still diagnosed.
+
+**Stage-2 composition (I3).** Stage 2 runs when there is an objective **and** an actionable
+fix (`HasLoosenEdit || HasRemoval`). `BuildStage2Model` **freezes the removal set** by pinning
+each `w` to its stage-1 value (`col_lower = col_upper`) and extends the budget row over the
+`w` columns too, so the cap stays exactly `S* = stage-1 objective` (which included the
+removal penalty). The reported DROP set is therefore stable between stages; letting `w`
+re-optimize the dropped set is deferred to I5.
+
+**Pragma.** `diagnose_decide_removal_bigm` (DOUBLE, default `0` = auto-derive, `>= 0`,
+`decide_diagnostic.cpp`) threads through `DecideDiagParams::removal_bigm` into
+`BuildElasticModel`. The objective weight `W` stays internal.
+
+**Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): a `<>` pair gets one binary
+`w` wired `−M₂`/`+M₂` with `obj = DIAGNOSTIC_REMOVAL_WEIGHT` and a `RemovalRef`; the pragma
+override replaces M₂; a pinned-`<>` must-drop reports `edit_kind='drop'`; a loosenable
+conflict prefers the LOOSEN and never drops. Python differential
+(`test_query_diagnostics_relation.py`, both backends): `x <> 0 AND x <> 1` on a BOOLEAN drops
+exactly one `<>` (min cardinality), with the achievable objective differential-checked
+against a re-solve of the fixed query; `x <> 5 AND 5 ≤ x ≤ 5` prefers loosening; the pragma
+override produces the same drop and a negative value is rejected at SET time.
+
 ## Elastic engine: stage-2 achievable objective (freeze-budget)
 
 I3 reports the **achievable objective** the user gets after the minimal fix — and the

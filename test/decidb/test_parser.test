@@ -10,15 +10,15 @@ SET search_path = 'decidb,main';
 
 # Parse REAL
 statement ok
-SELECT l_quantity FROM lineitem DECIDE x SUCH THAT x IS REAL MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x IS REAL SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
 # Parse INTEGER
 statement ok
-SELECT l_quantity FROM lineitem DECIDE x SUCH THAT x IS INTEGER MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x IS INTEGER SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
-# Parse BINARY
+# Parse BOOLEAN
 statement ok
-SELECT l_quantity FROM lineitem DECIDE x SUCH THAT x IS BINARY MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x IS BOOLEAN SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
 # No SUCH THAT
 statement error
@@ -28,18 +28,16 @@ Parser Error: syntax error at or near "MAXIMIZE"
 
 # No DECIDE variable
 statement error
-SELECT l_quantity FROM lineitem DECIDE SUCH THAT x IS BINARY MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
 Parser Error: syntax error at or near "SUCH"
 
 # No objective
-statement error
-SELECT l_quantity FROM lineitem DECIDE x SUCH THAT x IS BINARY MAXIMIZE LIMIT 1;
-----
-Parser Error: syntax error at or near "LIMIT"
+statement ok
+SELECT l_quantity FROM lineitem DECIDE x IS BOOLEAN SUCH THAT x <= 1 LIMIT 1;
 
 # Unknown variable type
 statement error
-SELECT l_quantity FROM lineitem DECIDE x SUCH THAT x IS CONTINUOUS MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x IS CONTINUOUS SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
 Parser Error: syntax error at or near "CONTINUOUS"

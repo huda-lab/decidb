@@ -581,10 +581,11 @@ class TestDiagnosticsRelation:
         assert edit["amount"] == "7"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_ne_rows_stay_rigid(self, request, cli_fixture):
-        """I2.e: `<>` is remove-only — its indicator rows (USER_MECHANISM) are rigid and
-        never slackened. The conflict `x <> 5 AND 5 <= x <= 5` is resolved by loosening
-        an editable bound, leaving the `<>` untouched (no removal synthesized)."""
+    def test_infeasible_ne_prefers_loosen_over_drop(self, request, cli_fixture):
+        """I4 prefer-loosen: `<>` is remove-only, and I4 now offers a removal dial for it,
+        but dropping is the last resort (its weight sits above the slack weights). The
+        conflict `x <> 5 AND 5 <= x <= 5` can be fixed either by dropping the `<>` or by
+        loosening an editable bound, so the engine loosens the bound and never drops."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1)) t(id) "
@@ -594,10 +595,74 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        # The edit loosens a bound; no clause mentions the `<>` mechanism.
+        # The edit loosens a bound; the `<>` is offered but not dropped.
         subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
         assert subjects, "expected an editable-bound edit"
         assert all("<>" not in s for s in subjects), subjects
+        assert not [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_ne_must_drop_reports_drop(self, request, cli_fixture):
+        """I4 must-drop: `x <> 0 AND x <> 1` on a BOOLEAN forbids both values of the rigid
+        {0,1} domain, so no loosening helps — the only fix is to drop exactly one `<>`
+        (the minimum-cardinality removal set). The achievable objective after the drop is
+        differential-checked against an independent re-solve of the fixed query."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+        assert len(drops) == 1, rows  # minimum-cardinality: exactly one dropped
+        dropped = drops[0]["subject"]
+        assert "<>" in dropped
+        assert "remove" in result.stderr.lower()  # the static-error summary names the fix
+
+        # Differential: rebuild the query with the dropped `<>` removed, re-solve, and
+        # confirm the achievable objective the diagnosis reported matches. Which `<>` is
+        # dropped is solver-arbitrary, so map the reported subject back to its literal.
+        n = re.search(r"<>\D*(\d+)", dropped).group(1)
+        clause = f"x <> {n}"
+        fixed_sql = (
+            sql.replace(f"{clause} AND ", "")
+            if f"{clause} AND " in sql
+            else sql.replace(f" AND {clause}", "")
+        )
+        fixed = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        objective = sum(float(r["x"]) for r in fixed)
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        assert float(reported) == pytest.approx(objective)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_removal_bigm_pragma_override_and_validation(self, request, cli_fixture):
+        """The removal Big-M is pragma-tunable with an auto default: a positive override
+        yields the same drop on the must-drop query, and a negative value is rejected at
+        SET time."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+        )
+        # A positive override still produces exactly one drop.
+        override = cli.execute_script(
+            ".mode csv\n"
+            "PRAGMA diagnose_decide='auto';\n"
+            "PRAGMA diagnose_decide_removal_bigm=1e7;\n"
+            f"{sql};\n"
+            "SELECT * FROM decide_diagnostics();\n"
+        )
+        rows = list(csv.DictReader(io.StringIO(override.stdout)))
+        drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+        assert len(drops) == 1, rows
+
+        # A negative value is rejected at SET time.
+        bad = cli.execute_script("PRAGMA diagnose_decide_removal_bigm=-1;\nSELECT 1;\n")
+        assert "removal_bigm" in bad.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_mccormick_rows_stay_rigid(self, request, cli_fixture):

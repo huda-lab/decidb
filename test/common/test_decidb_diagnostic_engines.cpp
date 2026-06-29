@@ -1,6 +1,7 @@
 #include "catch.hpp"
 
 #include "duckdb/decidb/decide_diagnostic_engines.hpp"
+#include "duckdb/decidb/diagnostic_constants.hpp"
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb.hpp"
 
@@ -96,6 +97,42 @@ string FindRow(const DecideDiagnostic &diag, const string &subject, const string
 		}
 	}
 	return string();
+}
+
+//! The coefficient on column `col` in `row` (0 if the column is absent).
+double CoeffOn(const ModelConstraint &row, idx_t col) {
+	for (idx_t k = 0; k < row.indices.size(); k++) {
+		if (static_cast<idx_t>(row.indices[k]) == col) {
+			return row.coefficients[k];
+		}
+	}
+	return 0.0;
+}
+
+//! A 2-column model (x = col 0; the `<>` indicator z = col 1, binary) holding the two
+//! rigid USER_MECHANISM Big-M disjunction rows for `x <> 3` (M = 14): `x − 14z ≤ 2`
+//! (x ≤ 2 when z=0) and `x − 14z ≥ −10` (x ≥ 4 when z=1). Both rows carry
+//! indicator_col = 1, so the I4 removal dial groups them into one droppable clause.
+SolverModel MakeNotEqualModel() {
+	SolverModel m;
+	m.num_vars = 2;
+	m.col_lower = {0.0, 0.0};
+	m.col_upper = {10.0, 1.0};
+	m.is_integer = {false, true};
+	m.is_binary = {false, true};
+	m.obj_coeffs = {0.0, 0.0};
+	m.maximize = false;
+	for (char sense : {'<', '>'}) {
+		ModelConstraint c;
+		c.indices = {0, 1};
+		c.coefficients = {1.0, -14.0};
+		c.sense = sense;
+		c.rhs = sense == '<' ? 2.0 : -10.0;
+		c.provenance.kind = ConstraintKind::USER_MECHANISM;
+		c.provenance.indicator_col = 1;
+		m.constraints.push_back(std::move(c));
+	}
+	return m;
 }
 
 } // namespace
@@ -654,5 +691,105 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		CHECK(diag.summary == "The objective is unbounded because x can grow without bound.");
 		CHECK(diag.summary.find("the problem may still be infeasible.") == string::npos);
+	}
+
+	// I4 — the L0 / removal dial. A remove-only `<>` cannot be loosened; instead the
+	// elastic transform gives its disjunction pair one binary `w` (penalized above the
+	// slack weights) that, set to 1, drops the clause.
+	SECTION("BuildElasticModel adds a binary removal indicator for a `<>` clause") {
+		// The two USER_MECHANISM rows share indicator_col 1; they get no slack but a
+		// single binary w wired ±M₂ by sense (auto M₂ = the disjunction Big-M = 14).
+		SolverModel model = MakeNotEqualModel();
+		ElasticModel elastic = BuildElasticModel(model);
+
+		CHECK(elastic.slacks.empty()); // nothing loosenable
+		REQUIRE(elastic.removals.size() == 1);
+		const auto &rem = elastic.removals[0];
+		CHECK(rem.rows == duckdb::vector<idx_t> {0, 1});
+		CHECK(rem.indicator_col == 1);
+		// One binary column appended (w = col 2), penalized DIAGNOSTIC_REMOVAL_WEIGHT.
+		CHECK(elastic.model.num_vars == 3);
+		CHECK(rem.w_col == 2);
+		CHECK(elastic.model.is_binary[2]);
+		CHECK(elastic.model.is_integer[2]);
+		CHECK(elastic.model.col_lower[2] == 0.0);
+		CHECK(elastic.model.col_upper[2] == 1.0);
+		CHECK(elastic.model.obj_coeffs[2] == DIAGNOSTIC_REMOVAL_WEIGHT);
+		// w neutralizes each row with the disjunction Big-M, sign by sense.
+		CHECK(CoeffOn(elastic.model.constraints[0], 2) == -14.0); // `<` row
+		CHECK(CoeffOn(elastic.model.constraints[1], 2) == 14.0);  // `>` row
+	}
+
+	SECTION("removal Big-M honors the pragma override") {
+		// diagnose_decide_removal_bigm replaces the auto M₂ with a flat value.
+		SolverModel model = MakeNotEqualModel();
+		ElasticModel elastic = BuildElasticModel(model, /*removal_bigm=*/99.0);
+		REQUIRE(elastic.removals.size() == 1);
+		idx_t w = elastic.removals[0].w_col;
+		CHECK(CoeffOn(elastic.model.constraints[0], w) == -99.0);
+		CHECK(CoeffOn(elastic.model.constraints[1], w) == 99.0);
+	}
+
+	// A labeled 2-var (x DOUBLE, `<>` indicator BOOLEAN) layout so the dropped clause
+	// renders its user-facing name.
+	SolverInput ne_input;
+	ne_input.num_rows = 1;
+	ne_input.num_decide_vars = 2;
+	ne_input.variable_types = {LogicalType::DOUBLE, LogicalType::BOOLEAN};
+	VarIndexer ne_indexer = VarIndexer::BuildRef(ne_input);
+	duckdb::vector<string> ne_labels {"x", "(x <> 3)"};
+	duckdb::vector<bool> ne_aux {false, true};
+
+	SECTION("must-drop: a `<>` pinned onto its forbidden value is reported as a drop") {
+		// Rigid bounds pin x to exactly 3, which x <> 3 forbids. Nothing is loosenable,
+		// so the only fix is to drop the `<>` — reported as a DROP edit.
+		SolverModel model = MakeNotEqualModel();
+		for (char sense : {'<', '>'}) { // rigid x <= 3 AND x >= 3  → x == 3
+			ModelConstraint pin;
+			pin.indices = {0};
+			pin.coefficients = {1.0};
+			pin.sense = sense;
+			pin.rhs = 3.0;
+			pin.provenance.kind = ConstraintKind::STRUCTURAL;
+			model.constraints.push_back(std::move(pin));
+		}
+		InfeasibleDiagnosisInput diag_input {model,  ne_indexer, ne_labels, ne_aux,
+		                                     params, false,      solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(diag.state == "infeasible");
+		CHECK(FindRow(diag, "(x <> 3)", "edit_kind") == "drop");
+		CHECK(diag.summary.find("Remove (x <> 3)") != string::npos);
+	}
+
+	SECTION("prefer-loosen: a loosenable knob is chosen over dropping a `<>`") {
+		// x is pinned to 3 by a rigid floor and an EDITABLE cap, with x <> 3 forbidding
+		// it. Loosening the cap (cost 1) or dropping the `<>` (cost W) both work, so the
+		// engine loosens and never drops (verifies removal weight > slack weight).
+		SolverModel model = MakeNotEqualModel();
+		ModelConstraint cap; // editable x <= 3
+		cap.indices = {0};
+		cap.coefficients = {1.0};
+		cap.sense = '<';
+		cap.rhs = 3.0;
+		cap.provenance.kind = ConstraintKind::USER_PARAMETER;
+		cap.provenance.shape = ElasticShape::SHARED_LITERAL;
+		model.constraints.push_back(std::move(cap));
+		ModelConstraint floor; // rigid x >= 3
+		floor.indices = {0};
+		floor.coefficients = {1.0};
+		floor.sense = '>';
+		floor.rhs = 3.0;
+		floor.provenance.kind = ConstraintKind::STRUCTURAL;
+		model.constraints.push_back(std::move(floor));
+
+		InfeasibleDiagnosisInput diag_input {model,  ne_indexer, ne_labels, ne_aux,
+		                                     params, false,      solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(FindRow(diag, "x <= 3", "suggested_change") == "x <= 4");
+		CHECK(FindRow(diag, "(x <> 3)", "edit_kind").empty()); // not dropped
 	}
 }

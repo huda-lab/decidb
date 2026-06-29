@@ -111,6 +111,12 @@ struct ConstraintProvenance {
     //! suggestion can be re-quoted against it instead of the δ-adjusted rhs.
     bool strict = false;
     double typed_k = 0.0;
+    //! Flat solver column of the `<>` disjunction binary this row belongs to (I4).
+    //! Set ONLY at the two `<>` mechanism sites, so it doubles as the removal marker
+    //! (`!= INVALID` ⇒ remove-only row) and the grouping key (rows sharing one
+    //! indicator = one `<>` instance). Also sources the removal Big-M
+    //! (|row coeff on this column|) and the user-facing label. INVALID otherwise.
+    idx_t indicator_col = DConstants::INVALID_INDEX;
 };
 
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs

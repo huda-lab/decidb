@@ -266,6 +266,10 @@ as a fixed-schema relation.
   three sticky extension options alongside `diagnose_decide`:
   `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
+  The infeasible engine adds one more, `diagnose_decide_removal_bigm` (DOUBLE,
+  default `0` = auto-derive, `>= 0`): the Big-M used to neutralize a dropped `<>`
+  in the I4 removal dial (see `infeasible/done.md`), threaded via
+  `DecideDiagParams::removal_bigm`.
 
 Tested in `test/decide/tests/test_query_diagnostics_relation.py` (both backends) and
 `test/common/test_decidb_diagnostic_engines.cpp` (a clause-shaped stub row).
