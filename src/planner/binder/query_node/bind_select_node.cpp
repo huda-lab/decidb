@@ -38,6 +38,7 @@
 
 #include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/decidb/symbolic/decide_symbolic.hpp"
+#include "duckdb/decidb/decide_diagnostic.hpp"
 
 namespace duckdb {
 
@@ -556,26 +557,34 @@ static void RewriteNorm(unique_ptr<ParsedExpression> &expr) {
 // SUM(z) in place; the linking constraints are collected into `links` for the
 // caller to AND into the SUCH THAT tree.
 //
-// Two modes by the Big-M source:
-//   norm(expr, 0, M) — explicit bound. Link: ABS(expr) <= M*z (single constraint).
-//   norm(expr, 0)    — auto bound. The indicator is named `__l0auto_ind_*` and the
-//                      link is the raw two-sided pair `expr <= M*z`, `-expr <= M*z`
-//                      with a placeholder M; the physical operator refills a tight,
-//                      data-driven Big-M after implied-bound propagation (the raw
-//                      form keeps `expr`'s terms visible so the bound is derivable).
+// Each term emits THREE links: two FORWARD (forcing z = 1 when expr != 0) and one
+// REVERSE (forcing z = 0 when expr ~= 0). The reverse is what makes the count exact
+// — without it SUM(z) is only an upper bound, which is unsound when the context
+// pulls the count up (norm >= K, = K, MAXIMIZE); see the reverse-link comment below.
+//
+// `tol` is the nonzero threshold (|expr| >= tol counts as nonzero) — read from the
+// `decide_l0_tolerance` session setting by the caller; see GetDecideL0Tolerance.
+//
+// The Big-M source for the forward links has two modes:
+//   norm(expr, 0, M) — explicit bound. Indicator named `__l0_ind_*`, literal M.
+//   norm(expr, 0)    — auto bound. Indicator named `__l0auto_ind_*` with a placeholder
+//                      M; the physical operator refills a tight, data-driven Big-M
+//                      after implied-bound propagation (the raw two-sided form keeps
+//                      `expr`'s terms visible so the bound is derivable).
 static void RewriteNormL0(unique_ptr<ParsedExpression> &expr,
                           case_insensitive_map_t<idx_t> &variables,
                           vector<bool> &is_boolean_var,
                           vector<string> &var_names,
                           vector<LogicalType> &var_types,
                           idx_t &l0_counter,
-                          vector<unique_ptr<ParsedExpression>> &links) {
+                          vector<unique_ptr<ParsedExpression>> &links,
+                          double tol) {
 	if (!expr) {
 		return;
 	}
 	// Recurse first so inner expressions (and any nested norm) are handled.
 	ParsedExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<ParsedExpression> &child) {
-		RewriteNormL0(child, variables, is_boolean_var, var_names, var_types, l0_counter, links);
+		RewriteNormL0(child, variables, is_boolean_var, var_names, var_types, l0_counter, links, tol);
 	});
 	if (expr->GetExpressionClass() != ExpressionClass::FUNCTION) {
 		return;
@@ -624,24 +633,45 @@ static void RewriteNormL0(unique_ptr<ParsedExpression> &expr,
 		mul_args.push_back(make_uniq<ColumnRefExpression>(z_name));
 		return make_uniq<FunctionExpression>("*", std::move(mul_args));
 	};
-	if (auto_m) {
-		// Raw two-sided link so `inner`'s terms stay visible for the data-driven
-		// Big-M: M*z >= inner  AND  M*z >= -inner  (i.e. |inner| <= M*z), M placeholder.
-		links.push_back(make_uniq<ComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHANOREQUALTO, make_mz(), inner->Copy()));
+	// FORWARD links (force z = 1 when inner != 0): the raw two-sided pair
+	//   M*z >= inner  AND  M*z >= -inner   (i.e. |inner| <= M*z).
+	// Kept exact (no tolerance slack here) so a "zero" row reads back as a clean 0
+	// rather than drifting up to the tolerance; the reverse link supplies the
+	// nonzero threshold. Written decision-variable-first so `inner`'s terms stay
+	// visible for the data-driven Big-M refill (auto-M); explicit-M uses the literal
+	// M. Identical shape for both modes — only M's source (placeholder vs literal)
+	// and the indicator name prefix differ.
+	links.push_back(make_uniq<ComparisonExpression>(
+	    ExpressionType::COMPARE_GREATERTHANOREQUALTO, make_mz(), inner->Copy()));
+	{
 		vector<unique_ptr<ParsedExpression>> neg_args;
 		neg_args.push_back(make_uniq<ConstantExpression>(Value::DOUBLE(0.0)));
-		neg_args.push_back(std::move(inner));
+		neg_args.push_back(inner->Copy());
 		auto neg_inner = make_uniq<FunctionExpression>("-", std::move(neg_args));
 		links.push_back(make_uniq<ComparisonExpression>(
 		    ExpressionType::COMPARE_GREATERTHANOREQUALTO, make_mz(), std::move(neg_inner)));
-	} else {
-		// Explicit M: ABS(inner) <= M*z (single constraint).
+	}
+
+	// REVERSE link (force z = 0 when |inner| < tolerance):  ABS(inner) >= TOL*z.
+	// The forward links alone leave z free to be 1 on a zero row, so SUM(z) is only
+	// an UPPER bound on the true count — sound when the context pushes the count
+	// down (minimize penalty, norm(e,0) <= K) but UNSOUND when it pulls the count up
+	// (norm(e,0) >= K, = K, or MAXIMIZE), where a spurious z=1 inflates the count and
+	// a problem that should be infeasible solves anyway. This reverse link pins z to
+	// the true nonzero indicator, making SUM(z) exact in every context. It reuses the
+	// ABS linearization, whose lower-bounded form is tagged for the exact Big-M
+	// envelope (so `inner` must have finite bounds). Values with 0 < |inner| < TOL
+	// are treated as zero (the MILP tolerance for "nonzero").
+	{
 		vector<unique_ptr<ParsedExpression>> abs_args;
 		abs_args.push_back(std::move(inner));
 		auto abs_call = make_uniq<FunctionExpression>("abs", std::move(abs_args));
+		vector<unique_ptr<ParsedExpression>> tz_args;
+		tz_args.push_back(make_uniq<ConstantExpression>(Value::DOUBLE(tol)));
+		tz_args.push_back(make_uniq<ColumnRefExpression>(z_name));
+		auto tz = make_uniq<FunctionExpression>("*", std::move(tz_args));
 		links.push_back(make_uniq<ComparisonExpression>(
-		    ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(abs_call), make_mz()));
+		    ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(abs_call), std::move(tz)));
 	}
 
 	// The term becomes SUM(z) — the count of nonzeros.
@@ -1015,10 +1045,11 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         {
             idx_t l0_counter = 0;
             vector<unique_ptr<ParsedExpression>> l0_links;
+            double l0_tol = GetDecideL0Tolerance(context);
             RewriteNormL0(statement.decide_objective, decide_variable_names, is_boolean_var,
-                          var_names, var_types, l0_counter, l0_links);
+                          var_names, var_types, l0_counter, l0_links, l0_tol);
             RewriteNormL0(statement.decide_constraints, decide_variable_names, is_boolean_var,
-                          var_names, var_types, l0_counter, l0_links);
+                          var_names, var_types, l0_counter, l0_links, l0_tol);
             for (auto &link : l0_links) {
                 if (statement.decide_constraints) {
                     statement.decide_constraints = make_uniq<ConjunctionExpression>(

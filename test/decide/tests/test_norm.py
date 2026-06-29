@@ -175,3 +175,113 @@ def test_norm_on_highs(decidb_cli_highs):
     # L0 (MILP on HiGHS)
     r5, c5 = decidb_cli_highs.execute(_BASE.format(obj="norm(new_qty - l_quantity, 0, 100)"))
     assert r5  # solved and returned rows
+
+
+# --- L0 soundness: the reverse indicator link makes SUM(z) the EXACT count ---
+# Before the reverse link, SUM(z) was only an upper bound on the nonzero count, so
+# a spurious z=1 could satisfy a lower-bound / equality / maximize on the count even
+# when the true count was smaller. These pin that down.
+
+@pytest.mark.correctness
+@pytest.mark.error_infeasible
+def test_norm_l0_lower_bound_infeasible_explicit_m(decidb_cli):
+    # All x pinned to 0 -> true L0 count is 0, so `>= 2` is unsatisfiable. The old
+    # one-way link let phantom z=1 inflate the count and return a (wrong) solution.
+    decidb_cli.assert_error("""
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x = 0 AND norm(x, 0, 100) >= 2
+        MINIMIZE SUM(x)
+    """, match=r"(?i)infeasible")
+
+
+@pytest.mark.correctness
+@pytest.mark.error_infeasible
+def test_norm_l0_lower_bound_infeasible_auto_m(decidb_cli):
+    # Same, via the auto-M path (placeholder M refilled at execution).
+    decidb_cli.assert_error("""
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x = 0 AND norm(x, 0) >= 2
+        MINIMIZE SUM(x)
+    """, match=r"(?i)infeasible")
+
+
+@pytest.mark.correctness
+@pytest.mark.error_infeasible
+def test_norm_l0_equality_infeasible(decidb_cli):
+    decidb_cli.assert_error("""
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x = 0 AND norm(x, 0, 100) = 2
+        MINIMIZE SUM(x)
+    """, match=r"(?i)infeasible")
+
+
+@pytest.mark.correctness
+@pytest.mark.error_infeasible
+def test_norm_l0_lower_bound_infeasible_highs(decidb_cli_highs):
+    # Solver-agnostic: the reverse link is in our model builder, so HiGHS enforces it too.
+    decidb_cli_highs.assert_error("""
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x = 0 AND norm(x, 0, 100) >= 2
+        MINIMIZE SUM(x)
+    """, match=r"(?i)infeasible")
+
+
+@pytest.mark.correctness
+def test_norm_l0_maximize_not_inflated(decidb_cli):
+    # MAXIMIZE rewards z=1; with all x pinned to 0 the true max count is 0, so the
+    # objective must not be inflated. The solve succeeds with x all 0 ...
+    rows, cols = decidb_cli.execute("""
+        SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x = 0
+        MAXIMIZE norm(x, 0, 100)
+    """)
+    xi = cols.index("x")
+    assert all(abs(float(r[xi])) < 1e-4 for r in rows)
+    # ... and demanding even one nonzero is then infeasible (count cannot exceed 0).
+    decidb_cli.assert_error("""
+        SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x = 0 AND norm(x, 0, 100) >= 1
+        MAXIMIZE norm(x, 0, 100)
+    """, match=r"(?i)infeasible")
+
+
+@pytest.mark.correctness
+def test_norm_l0_lower_bound_feasible_is_honest(decidb_cli):
+    # A genuinely feasible `>= 2`: the returned solution must have at least two
+    # actually-nonzero rows (the constraint is met by real nonzeros, not phantom z).
+    rows, cols = decidb_cli.execute("""
+        SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x <= 10 AND norm(x, 0, 100) >= 2 AND SUM(x) >= 4
+        MINIMIZE SUM(x)
+    """)
+    xi = cols.index("x")
+    nonzeros = sum(1 for r in rows if abs(float(r[xi])) >= 1e-4)
+    assert nonzeros >= 2
+
+
+@pytest.mark.correctness
+def test_norm_l0_tolerance_pragma(decidb_cli):
+    # The nonzero threshold is configurable. With the default (1e-4) a forced x=1
+    # counts as nonzero, so `>= 1` is feasible. Raising the tolerance above 1 makes
+    # x=1 count as zero, so the same `>= 1` becomes infeasible.
+    sql = """
+        SELECT id, x FROM (VALUES (1)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x = 1 AND norm(x, 0, 100) >= 1
+        MINIMIZE SUM(x)
+    """
+    rows, _ = decidb_cli.execute(sql)
+    assert rows  # default tolerance: x=1 is nonzero -> feasible
+
+    decidb_cli.assert_error("SET decide_l0_tolerance=2.0;\n" + sql, match=r"(?i)infeasible")
+
+    # Below the floor is rejected up front.
+    decidb_cli.assert_error("SET decide_l0_tolerance=1e-9;",
+                            match=r"(?i)decide_l0_tolerance must be")

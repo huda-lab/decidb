@@ -353,28 +353,48 @@ objectives and constraints.
 | `1` | `SUM(ABS(expr))` | L1, sparse-leaning | LP |
 | `2` | `SUM(POWER(expr, 2))` | squared L2 / ridge | convex QP |
 | `'inf'` | `MAX(ABS(expr))` | L-infinity (worst deviation) | LP |
-| `0[, M]` | indicator linked so `z=1` iff `expr != 0`; term → `SUM(z)` | L0 / count of nonzeros | MILP |
+| `0[, M]` | indicator linked so `z=1` iff `|expr| >= tol`; term → `SUM(z)` | L0 / count of nonzeros (exact) | MILP |
 
-- **L0 Big-M.** One INTEGER 0/1 indicator `z` per row is created (auto-bounded),
-  with linking constraints forcing `z = 1` whenever `expr != 0`; the term becomes
-  `SUM(z)`. The Big-M is **data-driven by default**: `norm(expr, 0)` emits
-  decision-variable-led links `M*z >= expr`, `M*z >= -expr` with a placeholder,
-  and the physical operator fills a tight per-problem `M` after implied-bound
-  propagation (`DecideTightPerRowBigM`, the `<>` path). `norm(expr, 0, M)` supplies
-  `M` explicitly (uses the `ABS(expr) <= M*z` form) — useful when bounds aren't
-  inferable and the auto path would fall back to the `1e6` default.
-  - Implementation: auto links carry a `__l0auto_ind_*` indicator name; the fill
-    lives in `physical_decide.cpp` (`Finalize`, right after implied-bound
-    propagation). Links are written decision-variable-first (`M*z >= e`) so the
+- **L0 indicator (exact in every context).** One INTEGER 0/1 indicator `z` per row.
+  Each term emits **three** linking constraints so `z` is the *exact* nonzero
+  indicator, not merely an upper bound:
+  - **Forward** (`z = 1` when `expr != 0`): the data-driven pair `M*z >= expr`,
+    `M*z >= -expr` (i.e. `|expr| <= M*z`), written decision-variable-first so the
     inner expression's terms drive the Big-M.
+  - **Reverse** (`z = 0` when `|expr| < tol`): `ABS(expr) >= tol*z`. **The
+    soundness-critical link.** Without it `SUM(z)` is only an *upper* bound on the
+    count — sound when the context pushes the count down (`MINIMIZE` penalty,
+    `norm <= K`) but **unsound** when it pulls the count up (`norm >= K`, `= K`,
+    `MAXIMIZE`): a spurious `z=1` on a zero row inflates the count and a problem
+    that should be infeasible solves anyway. The reverse reuses ABS linearization
+    (its lower-bounded form is tagged for the exact Big-M envelope), so `expr` must
+    have **finite bounds**.
+  - The term becomes `SUM(z)`.
+- **Nonzero tolerance.** A row counts as nonzero when `|expr| >= tol`. `tol` must
+  sit above the solver feasibility tolerance (~1e-6) or the reverse link is not
+  enforced (the boundary violation is exactly `tol`); default `1e-4`, configurable
+  via `SET decide_l0_tolerance` (floor `1e-5`, validated). The forward link is kept
+  exact (`z = 0 ⇒ expr = 0`) so "zero" rows read back as clean `0`; the trade-off is
+  a small **dead zone** — a value *forced* into `(0, tol)` has no valid `z` and is
+  reported infeasible (pathological, and genuinely tolerance-ambiguous).
+  Code: `bind_select_node.cpp` (`RewriteNormL0`); the tolerance setting lives in
+  `decide_diagnostic.cpp` (`L0ToleranceSetCallback` / `GetDecideL0Tolerance`).
+- **Big-M source.** `norm(expr, 0)` uses a placeholder `M` on the forward links
+  (indicator `__l0auto_ind_*`) and the physical operator fills a tight per-problem
+  `M` after implied-bound propagation (`DecideTightPerRowBigM`, the `<>` path); the
+  refill skips the reverse link (its only non-indicator variable is the ABS aux).
+  `norm(expr, 0, M)` supplies `M` explicitly (`__l0_ind_*`). The fill lives in
+  `physical_decide.cpp` (`Finalize`, right after implied-bound propagation).
 - Usable as an objective penalty, a sole objective, or a constraint
-  (`norm(e, 1) <= K`, and the exact count cap `norm(e, 0, M) <= K`).
+  (`norm(e, 1) <= K`, and the exact count cap/floor `norm(e, 0[, M]) <= K` / `>= K`).
 - Unsupported orders (e.g. `p = 3`) and `norm(e, 0)` without `M` raise a clear
   binder error.
 - The user supplies the weight λ directly; scale-free `α`/`λ_max` auto-selection
   is intentionally not built (see project memory).
 - Tests: `test/decide/tests/test_norm.py` — per-order desugaring equivalence,
-  WHEN/PER composition, HiGHS backend (QP + MILP), and error paths.
+  WHEN/PER composition, HiGHS backend (QP + MILP), error paths, and L0 exactness
+  (`test_norm_l0_*`: lower-bound/equality/maximize infeasibility on both backends,
+  feasible-is-honest, and the `decide_l0_tolerance` pragma).
 
 ## Summary Table (Implemented Only)
 

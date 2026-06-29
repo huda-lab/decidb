@@ -3692,7 +3692,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                     if (l0_auto.count(v)) {
                         z_term = t;
-                    } else {
+                    } else if (!StringUtil::StartsWith(decide_variables[v]->GetName(), "__abs_aux_")) {
+                        // The REVERSE link `ABS(inner) >= TOL*z` also references the L0
+                        // indicator, but its only other variable is the ABS aux and its
+                        // z-coefficient is the fixed tolerance — it must NOT be refilled.
+                        // Only the FORWARD links carry the inner decision variable, so an
+                        // ABS-aux companion marks the reverse link to skip.
                         has_inner_var = true;
                     }
                 }

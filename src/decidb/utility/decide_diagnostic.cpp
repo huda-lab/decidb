@@ -64,6 +64,23 @@ static void RemovalBigMSetCallback(ClientContext &context, SetScope scope, Value
 	}
 }
 
+// L0 (norm(e, 0)) nonzero threshold. The reverse indicator link `ABS(e) >= tol*z`
+// is violated by exactly `tol` at the boundary (e = 0, z = 1); if `tol` were at or
+// below the solver feasibility tolerance (~1e-6) the solver would accept it and the
+// indicator would not bite, silently reintroducing the over-count. Enforce a floor
+// comfortably above it.
+static constexpr double DECIDE_L0_TOLERANCE_DEFAULT = 1e-4;
+static constexpr double DECIDE_L0_TOLERANCE_FLOOR = 1e-5;
+
+static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	double v = parameter.GetValue<double>();
+	if (!(v >= DECIDE_L0_TOLERANCE_FLOOR)) {
+		throw InvalidInputException(
+		    "decide_l0_tolerance must be >= 1e-5 (it must exceed the solver feasibility "
+		    "tolerance ~1e-6 to be enforced); got " + parameter.ToString() + ".");
+	}
+}
+
 void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	config.AddExtensionOption(
 	    "diagnose_decide",
@@ -95,6 +112,15 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "diagnosing which clause to remove. 0 (default) auto-derives a sufficient value per "
 	    "clause from its existing formulation; set a positive value only to override. >= 0.",
 	    LogicalType::DOUBLE, Value::DOUBLE(0.0), RemovalBigMSetCallback);
+	// L0 nonzero threshold (expressivity knob, registered here with the other DECIDE
+	// session options). norm(e, 0) counts a row as nonzero when |e| >= this value.
+	config.AddExtensionOption(
+	    "decide_l0_tolerance",
+	    "norm(expr, 0) (L0 count of nonzeros): a row counts as nonzero when |expr| is at "
+	    "least this value. Must exceed the solver feasibility tolerance (~1e-6) to be "
+	    "enforced, so >= 1e-5. Default 1e-4. Lower it toward the floor for small-magnitude "
+	    "data; raise it to treat larger residuals as zero.",
+	    LogicalType::DOUBLE, Value::DOUBLE(DECIDE_L0_TOLERANCE_DEFAULT), L0ToleranceSetCallback);
 }
 
 string GetDiagnoseDecideMode(ClientContext &context) {
@@ -103,6 +129,17 @@ string GetDiagnoseDecideMode(ClientContext &context) {
 		return StringUtil::Lower(value.ToString());
 	}
 	return "auto";
+}
+
+double GetDecideL0Tolerance(ClientContext &context) {
+	Value value;
+	if (context.TryGetCurrentSetting("decide_l0_tolerance", value) && !value.IsNull()) {
+		double v = value.GetValue<double>();
+		// The set-callback enforces the floor, but a direct settings write could bypass
+		// it; clamp defensively so the indicator link always bites.
+		return v < DECIDE_L0_TOLERANCE_FLOOR ? DECIDE_L0_TOLERANCE_FLOOR : v;
+	}
+	return DECIDE_L0_TOLERANCE_DEFAULT;
 }
 
 DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
