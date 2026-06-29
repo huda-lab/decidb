@@ -99,19 +99,6 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"Triple.*products.*not supported")
 
-    def test_nonlinear_decide_variables(self, decidb_cli):
-        """SUM(col*(col+x)) passes the binder but fails at execution.
-
-        This is a known issue — the binder doesn't catch this non-linearity,
-        so it triggers an InternalException at execution time.
-        """
-        decidb_cli.assert_error("""
-                SELECT l_quantity FROM lineitem
-                DECIDE x
-                SUCH THAT SUM(l_quantity*(l_extendedprice+x)) <= 5
-                MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"Unsupported aggregate")
-
     def test_between_non_scalar(self, decidb_cli):
         """SUM BETWEEN with a non-scalar bound.
 
@@ -266,6 +253,16 @@ class TestBinderErrors:
                 SUCH THAT SUM(x * val) <= SUM(y * val) AND SUM(y) <= 5
                 MAXIMIZE SUM(x * val)
             """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
+
+    def test_data_only_rhs_aggregate_errors_without_internal(self, decidb_cli):
+        """Direct RHS aggregates are still unsupported, but must not throw InternalException."""
+        decidb_cli.assert_error("""
+                WITH t AS (SELECT 1 AS id, 10 AS val UNION ALL SELECT 2, 20)
+                SELECT id, val, x FROM t
+                DECIDE x
+                SUCH THAT SUM(x * val) <= SUM(val)
+                MAXIMIZE SUM(x * val)
+            """, match=r"DECIDE aggregate constraint RHS contains unsupported aggregate 'sum'")
 
     # --- Unsupported aggregates rejected at DecideBinder::BindAggregate ---
 

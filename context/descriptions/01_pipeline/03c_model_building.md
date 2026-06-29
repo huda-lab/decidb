@@ -84,7 +84,7 @@ A single `ModelConstraint` is produced that sums over all rows:
 
 - **Fast path (all-row-scoped, no duplicate vars)**: reserve `active_terms * num_rows` capacity and push each `(term, row)` contribution directly, skipping zeros.
 - **Accumulation path**: `SparseCoeffAccumulator` keyed by solver variable index, then flushed to COO format. Needed when entity-scoped variables or repeated decide vars can collide on the same flat index.
-- RHS comes from `rhs_values[0]`.
+- RHS comes from `rhs_values[0]`, then any fixed LHS aggregate terms (`variable_index == INVALID_INDEX`) are summed over all rows and subtracted.
 - AVG terms have already been coefficient-scaled in Phase 2. The model builder consumes the evaluated coefficients directly.
 
 ### Path 2: Aggregate, Grouped (WHEN and/or PER)
@@ -92,12 +92,18 @@ A single `ModelConstraint` is produced that sums over all rows:
 A `group_to_rows` index is built: for each group ID, collect which rows belong to it (skipping `INVALID_INDEX` rows). Then one `ModelConstraint` is emitted per non-empty group, using the same fast-path vs. accumulation split as Path 1 (reserves `active_terms * group_rows[g].size()` on the fast path).
 
 - Only rows in the group contribute coefficients.
-- RHS comes from `rhs_values[0]`.
+- RHS comes from `rhs_values[0]`, then any fixed LHS aggregate terms (`variable_index == INVALID_INDEX`) are summed over that group's rows and subtracted.
 - AVG terms have already been coefficient-scaled in Phase 2 using the group's active row count. The model builder consumes the evaluated coefficients directly.
 
 ### Path 3: Per-Row
 
 One `ModelConstraint` per row. Rows with `row_group_ids[row] == INVALID_INDEX` (excluded by WHEN) are skipped. Each constraint pre-reserves `per_row_active_terms` and contains only the terms for that single row, with RHS from `rhs_values[row]`. Variable indices are obtained via `var_indexer.Get(decide_var_idx, row)`.
+
+Fixed LHS terms (`variable_index == INVALID_INDEX`) are subtracted from the RHS here too, one row at a time.
+
+### Quadratic / Bilinear Constraints
+
+Constraints with bilinear terms or `POWER(..., 2)` are emitted through the quadratic constraint builder. Linear fixed LHS terms use the same `INVALID_INDEX` convention as the linear paths and are subtracted from the RHS over the selected row set before the quadratic constraint is finalized.
 
 ### Normalization on Emission
 

@@ -13,7 +13,11 @@ The primary aggregate over expressions involving decision variables. Valid in bo
 ```sql
 MAXIMIZE SUM(x * value)
 SUCH THAT SUM(x * weight) <= 50
+SUCH THAT SUM(x + cost) <= budget
+SUCH THAT SUM(q * (price + x)) <= budget
 ```
+
+In constraints, data-only additive terms inside the aggregate body are supported. They are evaluated over the same active rows as the decision terms, including expression-level `WHEN`, aggregate-local `WHEN`, `PER`, and `AVG` scaling, then subtracted from the scalar RHS before the solver row is built.
 
 **Code**: Validated in `decide_objective_binder.cpp` and `decide_constraints_binder.cpp` — aggregates other than SUM, AVG, MIN, and MAX are rejected with an error.
 
@@ -36,6 +40,7 @@ SUCH THAT SUM(x * weight) <= 50
 
 ```sql
 SUCH THAT AVG(x * weight) <= 10         -- SUM(x*weight) <= 10*N
+SUCH THAT AVG(x + cost) <= 5            -- fixed AVG(cost) is moved to RHS
 SUCH THAT AVG(x) <= 0.5                 -- at most half the rows selected (BOOLEAN)
 SUCH THAT AVG(x * cost) <= 5 WHEN active -- only among active rows
 SUCH THAT AVG(x * cost) WHEN active + SUM(x * fee) WHEN priority <= 100
@@ -128,7 +133,7 @@ This covers (non-exhaustive) `SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND
 
 **POWER exponent check**: The same pre-pass rejects `POWER(base, exp)` / `POW(base, exp)` / `base ** exp` when `base` contains a DECIDE variable and `exp` is not a constant numeric equal to `2`. That covers fractional exponents (`POWER(x, 0.5)`), negative exponents (`POWER(x, -1)`), higher-integer exponents (`POWER(x, 3)`), degenerate exponents (`POWER(x, 0)`, `POWER(x, 1)`), and non-constant exponents (`POWER(x, x)`, `POWER(x, col)`). Previously these tripped `InternalException: FromSymbolic: Non-integer exponents are not supported` during symbolic normalization (which happens before binding), exposing a C++ stack trace. The pre-pass now catches all non-2 cases with the same error messages used by the existing `ValidateQuadraticPower` whitelist inside SUM, so error-text tests stay consistent across SUM and non-SUM contexts.
 
-**Known limitation (pre-existing, out of scope for this rejection)**: `SUM(f(col) * x)` where `f` is an arbitrary scalar function on a data column still trips the symbolic normalizer because `ToSymbolicRecursive` doesn't know those functions. Folding data-only scalar subtrees before normalization is a separate improvement; non-decide-var scalars are accepted by the validator but may fail later if they appear inside a SUM aggregate.
+**Known limitation (pre-existing, out of scope for this rejection)**: `SUM(f(col) * x)` where `f` is an arbitrary scalar function on a data column still trips the symbolic normalizer because `ToSymbolicRecursive` doesn't know those functions. Folding arbitrary data-only scalar functions before normalization is a separate improvement; ordinary arithmetic data-only subterms such as `SUM(x + cost)` and `SUM(q * (price + x))` are supported in aggregate constraints.
 
 ---
 
@@ -216,6 +221,7 @@ SUM(x * weight)    -- OK: aggregate of linear product
 ```sql
 x + y              -- OK: sum of variables
 SUM(x * a + y * b) -- OK: linear combination in aggregate
+SUM(x + cost)      -- OK in constraints: data-only offset is subtracted from RHS
 ```
 
 ### Division (`/`) by a constant or data column

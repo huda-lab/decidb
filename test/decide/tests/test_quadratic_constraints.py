@@ -98,6 +98,28 @@ def _aggregate_sq_dev(data, target_idx, rhs, weight_idx=None):
     return linear, quadratic, rhs - constant
 
 
+@pytest.mark.correctness
+@pytest.mark.quadratic
+@_expect_gurobi
+def test_aggregate_quadratic_constraint_data_only_offset(decidb_cli):
+    """Quadratic aggregate constraints subtract fixed LHS offsets from RHS."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, ROUND(x, 4) AS x, target, cost
+        FROM (
+            VALUES (1, 1.0, 1.0), (2, 2.0, 2.0)
+        ) t(id, target, cost)
+        DECIDE x IS REAL
+        SUCH THAT x >= 0 AND x <= 10
+            AND SUM(POWER(x - target, 2) + cost) <= 3
+        MAXIMIZE SUM(x)
+    """)
+    id_idx = cols.index("id")
+    x_idx = cols.index("x")
+    expected = {1: 1.0, 2: 2.0}
+    for row in rows:
+        assert float(row[x_idx]) == pytest.approx(expected[int(row[id_idx])], abs=1e-3)
+
+
 # ===================================================================
 # Category 1: Core Correctness
 # ===================================================================

@@ -16,7 +16,7 @@ The `TransformExpression` lambda performs this recursively:
 - `BoundColumnRefExpression` -> `BoundReferenceExpression` using `colref.binding.column_index`
 - `BoundFunctionExpression` -> recurse into children, copy `bind_info`
 - `BoundCastExpression` -> recurse into child, re-wrap with `AddCastToType`
-- `BoundAggregateExpression` -> special case: `count_star()` is replaced with a `BoundConstantExpression(num_rows)`
+- `BoundAggregateExpression` -> special case: `count_star()` is replaced with a `BoundConstantExpression(num_rows)`; other direct RHS aggregates are rejected with `InvalidInputException` (use a scalar subquery for aggregate bounds)
 - Constants and other expressions -> copied as-is
 
 This lambda is defined multiple times (for LHS coefficients, RHS expressions, WHEN conditions, PER columns, and objective terms) with slight variations in which expression types are handled.
@@ -32,7 +32,7 @@ For each constraint, each term's coefficient expression is evaluated against the
 5. Each value is cast to `double` via `DefaultCastAs(LogicalType::DOUBLE)`.
 6. Results accumulate into `row_coefficients[term_idx]`, a vector of doubles indexed by global row.
 
-The term's `variable_index` (which DECIDE variable it multiplies) is preserved from Phase 1.
+The term's `variable_index` (which DECIDE variable it multiplies) is preserved from Phase 1. Data-only LHS terms use `INVALID_INDEX`; for aggregate constraints those fixed coefficients are still evaluated for each active row, then the model builder subtracts their row/group sum from the scalar RHS.
 
 ## RHS Evaluation
 

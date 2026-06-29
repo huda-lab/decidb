@@ -70,8 +70,10 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 		if (agg.function.name == "count_star") {
 			return make_uniq_base<Expression, BoundConstantExpression>(Value::BIGINT(num_rows));
 		}
-		throw InternalException("Unsupported aggregate '%s' in constraint RHS. "
-		                        "Only count_star() is supported.", agg.function.name);
+		throw InvalidInputException(
+		    "DECIDE aggregate constraint RHS contains unsupported aggregate '%s'. "
+		    "Use a scalar RHS expression, or compute aggregate bounds in a scalar subquery.",
+		    agg.function.name);
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		auto &comp = expr.Cast<BoundComparisonExpression>();
 		auto left = TransformToChunkExpression(*comp.left, context, num_rows);
@@ -2321,6 +2323,18 @@ static double DecideRowTermRange(const vector<idx_t> &variable_indices,
     return sum;
 }
 
+static double DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices,
+                                      const vector<CoefficientColumn> &row_coefficients,
+                                      idx_t row) {
+    double offset = 0.0;
+    for (idx_t t = 0; t < variable_indices.size(); t++) {
+        if (variable_indices[t] == DConstants::INVALID_INDEX) {
+            offset += row_coefficients[t].Get(row);
+        }
+    }
+    return offset;
+}
+
 //! Legacy fixed Big-M, retained only as a non-strict fallback for genuinely
 //! unbounded variables (no query is rejected; behavior matches the prior code).
 static constexpr double DECIDE_BIGM_FALLBACK = 1e6;
@@ -2337,13 +2351,14 @@ static double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
     bool has_unbounded = false;
     double M = 0.0;
     bool uniform_rhs = ec.rhs_values.IsUniform();
-    double uniform_rhs_mag = uniform_rhs ? std::abs(ec.rhs_values.UniformValue()) : 0.0;
     for (idx_t r = 0; r < num_rows; r++) {
         if (!ec.row_group_ids.empty() &&
             ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
             continue;
         }
-        double rhs_mag = uniform_rhs ? uniform_rhs_mag : std::abs(ec.rhs_values.Get(r));
+        double rhs = uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
+        rhs -= DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, r);
+        double rhs_mag = std::abs(rhs);
         double range = rhs_mag + DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
                                                     r, lower_bounds, upper_bounds, has_unbounded);
         M = std::max(M, range);
@@ -4412,6 +4427,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             if (ec.ne_avg_rhs_scale) {
                 rhs *= static_cast<double>(g_size);
             }
+            double fixed_offset = 0.0;
+            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+                if (ec.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
+                    continue;
+                }
+                auto &col = ec.row_coefficients[term_idx];
+                for (idx_t k = g_begin; k < g_end; k++) {
+                    fixed_offset += col.Get(flat_rows[k]);
+                }
+            }
+            rhs -= fixed_offset;
 
             // Integer-RHS guard: with integer LHS (already enforced by
             // NELhsIsIntegerValued at deferral time) and a non-integer K,

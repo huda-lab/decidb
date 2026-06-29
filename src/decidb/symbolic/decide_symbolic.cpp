@@ -1288,12 +1288,11 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     vector<Symbolic> additive_terms;
     CollectAdditiveTerms(lhs_sym, additive_terms);
 
-    vector<Symbolic> decide_inners;
-    vector<Symbolic> rhs_inners;
+    vector<Symbolic> aggregate_inners;
     double lhs_constant = 0.0;
+    bool has_nonaggregate_structural_term = false;
 
-    decide_inners.reserve(additive_terms.size());
-    rhs_inners.reserve(additive_terms.size());
+    aggregate_inners.reserve(additive_terms.size());
 
     for (auto &term : additive_terms) {
         if (term.type() == typeid(Numeric)) {
@@ -1302,58 +1301,35 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
         }
         Symbolic inner;
         bool has_sum = ExtractSumInner(term, inner);
-        if (!has_sum) {
-            inner = term;
-        }
-        if (SymbolicContainsDecideVariable(inner, ctx.decide_variables)) {
-            decide_inners.push_back(inner);
+        if (has_sum) {
+            // Keep every SUM(...) contribution on the aggregate LHS, including
+            // data-only terms such as SUM(price + x). The physical/model-building
+            // layer represents data-only aggregate terms as INVALID_INDEX
+            // coefficients and subtracts their active-row contribution from RHS.
+            aggregate_inners.push_back(inner);
         } else {
-            rhs_inners.push_back(inner);
+            // A non-aggregate structural sibling (e.g. SUM(x) + col <= K or
+            // SUM(x) + y <= K) has per-row semantics and cannot be folded into
+            // SUM(...). Leave the original tree intact so the normal constraint
+            // extractor rejects it instead of silently changing semantics.
+            has_nonaggregate_structural_term = true;
         }
     }
 
-    if (decide_inners.empty()) {
+    if (aggregate_inners.empty() || has_nonaggregate_structural_term) {
         return cmp.Copy();
     }
 
-    Symbolic decide_inner_sum = SumSymbolicTerms(decide_inners).simplify();
-    auto lhs_inner_expr = BuildFactoredSumExpression(decide_inner_sum, ctx);
+    Symbolic aggregate_inner_sum = SumSymbolicTerms(aggregate_inners).simplify();
+    auto lhs_inner_expr = BuildFactoredSumExpression(aggregate_inner_sum, ctx);
     vector<unique_ptr<ParsedExpression>> lhs_sum_args;
     lhs_sum_args.push_back(std::move(lhs_inner_expr));
     auto lhs_sum = make_uniq<FunctionExpression>("sum", std::move(lhs_sum_args));
 
     double rhs_constant = rhs_num - lhs_constant;
     unique_ptr<ParsedExpression> rhs_expr;
-    if (fabs(rhs_constant) > 1e-12 || rhs_inners.empty()) {
+    if (fabs(rhs_constant) > 1e-12) {
         rhs_expr = MakeDoubleConstant(rhs_constant);
-    }
-
-    for (auto &inner : rhs_inners) {
-        Symbolic neg_inner = (Symbolic(-1.0) * inner).simplify();
-        if (SymbolicIsZero(neg_inner)) {
-            continue;
-        }
-        
-        unique_ptr<ParsedExpression> term_expr;
-        if (neg_inner.type() == typeid(Numeric)) {
-            // Pure numeric constant: use constant * count_star() instead of sum(constant)
-            // This is mathematically equivalent: sum(c) over n rows = c * n = c * count(*)
-            auto const_expr = FromSymbolic(neg_inner, ctx);
-            vector<unique_ptr<ParsedExpression>> count_args;
-            auto count_star = make_uniq<FunctionExpression>("count_star", std::move(count_args));
-            term_expr = MakeOp("*", std::move(const_expr), std::move(count_star));
-        } else {
-            // Non-constant expression: wrap in sum() as before
-            vector<unique_ptr<ParsedExpression>> rhs_args;
-            rhs_args.push_back(FromSymbolic(neg_inner, ctx));
-            term_expr = make_uniq<FunctionExpression>("sum", std::move(rhs_args));
-        }
-        
-        if (!rhs_expr) {
-            rhs_expr = std::move(term_expr);
-        } else {
-            rhs_expr = MakeOp("+", std::move(rhs_expr), std::move(term_expr));
-        }
     }
 
     if (!rhs_expr) {

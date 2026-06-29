@@ -4,6 +4,14 @@ Resolved bugs condensed to their generalizable lessons: what broke, why, and wha
 
 ---
 
+## Data-only terms inside DECIDE SUM constraints escaped as RHS aggregates
+
+**Broke**: `SUM(q * (price + x)) <= K` and similar aggregate constraints could bind, but symbolic normalization split the data-only aggregate contribution onto the RHS as `SUM(data_expr)`. Physical RHS evaluation only knows how to fold generated `count_star()` aggregates, so execution threw an `InternalException` for an unsupported RHS `sum` instead of either accepting the linear form or rejecting it as user input.
+
+**Fix/lesson**: Keep every `SUM(...)` additive contribution on the aggregate LHS, including data-only pieces. Coefficient evaluation already represents fixed LHS terms as `variable_index == INVALID_INDEX`; the linear, grouped, and quadratic model-builder paths now subtract those fixed row/group contributions from the scalar RHS. The remaining direct RHS aggregate path throws `InvalidInputException`, not `InternalException`. **Watch for**: normalizers should not manufacture execution-time expression shapes that the physical evaluator cannot handle; if a data-only term is algebraically part of the active aggregate group, preserve that grouping until rows/groups are known.
+
+Pointers: `decide_symbolic.cpp` (`NormalizeComparisonExpr`), `ilp_model_builder.cpp` (`FixedLinearLhsOffset`, quadratic RHS adjustment), `physical_decide.cpp` (`TransformToChunkExpression`, aggregate `<>` fixed offset), `test_cons_aggregate.py` (`test_sum_body_data_only_offset_*`, `test_avg_body_data_only_offset`), `test_quadratic_constraints.py` (`test_aggregate_quadratic_constraint_data_only_offset`), `test_error_binder.py` (`test_data_only_rhs_aggregate_errors_without_internal`). Fixed 2026-06-29.
+
 ## Strict quadratic infeasible diagnosis exposed the normalized non-strict row
 
 **Broke**: Strict quadratic / bilinear constraints use the quadratic model-builder path.

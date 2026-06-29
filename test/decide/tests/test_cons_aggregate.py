@@ -250,6 +250,139 @@ def test_aggregate_lhs_with_constant_offset(
     )
 
 
+def _picked_ids(rows, cols):
+    id_idx = cols.index("id")
+    x_idx = cols.index("x")
+    return {int(row[id_idx]) for row in rows if float(row[x_idx]) > 0.5}
+
+
+def _picked_pair_ids(rows, cols, left, right):
+    id_idx = cols.index("id")
+    left_idx = cols.index(left)
+    right_idx = cols.index(right)
+    return {
+        int(row[id_idx])
+        for row in rows
+        if float(row[left_idx]) > 0.5 and float(row[right_idx]) > 0.5
+    }
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_sum_body_data_only_offset_plain(decidb_cli):
+    """`SUM(x + cost) <= K` subtracts SUM(cost), not just the scalar literals."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, cost, value, x
+        FROM (
+            VALUES (1, 4.0, 10.0), (2, 5.0, 20.0), (3, 2.0, 15.0)
+        ) t(id, cost, value)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x + cost) <= 12
+        MAXIMIZE SUM(x * value)
+    """)
+    assert _picked_ids(rows, cols) == {2}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_sum_body_data_only_offset_weighted_repro_shape(decidb_cli):
+    """`SUM(q * (price + x))` keeps the data-only `q*price` aggregate offset."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, q, price, x
+        FROM (
+            VALUES (1, 1.0, 5.0), (2, 2.0, 3.0), (3, 3.0, 1.0)
+        ) t(id, q, price)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(q * (price + x)) <= 18
+        MAXIMIZE SUM(x * q)
+    """)
+    assert _picked_ids(rows, cols) == {1, 3}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.bilinear
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_sum_body_data_only_offset_bilinear_constraint(decidb_cli):
+    """Bilinear aggregate constraints subtract fixed LHS offsets before model build."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, cost, value, x, y
+        FROM (
+            VALUES (1, 2.0, 10.0), (2, 3.0, 20.0), (3, 1.0, 15.0)
+        ) t(id, cost, value)
+        DECIDE x IS BOOLEAN, y IS BOOLEAN
+        SUCH THAT SUM(x * y + cost) <= 8
+        MAXIMIZE SUM(x * y * value)
+    """)
+    assert _picked_pair_ids(rows, cols, "x", "y") == {2, 3}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.when
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_sum_body_data_only_offset_outer_when(decidb_cli):
+    """Outer WHEN filters both decision and data-only aggregate contributions."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, cost, w, value, x
+        FROM (
+            VALUES (1, 4.0, true, 10.0),
+                   (2, 4.0, true, 20.0),
+                   (3, 100.0, false, 30.0)
+        ) t(id, cost, w, value)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x + cost) <= 9 WHEN w
+        MAXIMIZE SUM(x * value)
+    """)
+    assert _picked_ids(rows, cols) == {2, 3}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.per_clause
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_sum_body_data_only_offset_per_group(decidb_cli):
+    """PER subtracts the data-only aggregate offset separately for each group."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, grp, cost, value, x
+        FROM (
+            VALUES (1, 'A', 2.0, 10.0),
+                   (2, 'A', 3.0, 20.0),
+                   (3, 'B', 1.0, 5.0),
+                   (4, 'B', 1.0, 6.0)
+        ) t(id, grp, cost, value)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x + cost) <= 6 PER grp
+        MAXIMIZE SUM(x * value)
+    """)
+    assert _picked_ids(rows, cols) == {2, 3, 4}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_avg_body_data_only_offset(decidb_cli):
+    """AVG applies the denominator to data-only terms before moving them to RHS."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, cost, value, x
+        FROM (
+            VALUES (1, 2.0, 10.0), (2, 4.0, 20.0)
+        ) t(id, cost, value)
+        DECIDE x IS BOOLEAN
+        SUCH THAT AVG(x + cost) <= 3.5
+        MAXIMIZE SUM(x * value)
+    """)
+    assert _picked_ids(rows, cols) == {2}
+
+
 # --- Aggregate constraint with division coefficients ---
 # `/` was previously rejected inside SUM; the SUM-argument validator now
 # allows it when the divisor is decide-var-free, which lets users write

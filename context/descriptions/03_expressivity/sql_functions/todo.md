@@ -2,20 +2,27 @@
 
 ---
 
-## Decision-Variable Norms (L0 / L1 / L2 / L∞)
 
-**Implemented** as the `norm(expr, p)` function — see `done.md` ("norm(expr, p)
-— L_p Regularization") and `../../00_project_overview/syntax_reference.md`.
-Desugared at bind time: p = 1 → `SUM(ABS)`, p = 2 → `SUM(POWER(·,2))`,
-p = 'inf' → `MAX(ABS)`, p = 0 (count) → indicator + Big-M `ABS(e) <= M*z`, term
-→ `SUM(z)`. The user supplies the weight λ directly.
+## Data-Only Aggregate RHS in Aggregate Constraints
 
-### Remaining work
+**Planned / moderate scope.** Direct aggregate RHS expressions whose aggregate arguments do not reference DECIDE variables should be supported for aggregate constraints:
 
-- **Scale-free α / smart-λ.** Auto-selecting the weight via `α = λ/λ_max`
-  (validated externally: L0/L1 have a crisp finite `λ_max`, ridge/L2 saturates
-  asymptotically) was **intentionally deferred** — judged overcomplicated for SQL
-  users and it needs a multi-solve. Revisit only if requested.
+```sql
+SUCH THAT SUM(x * val) <= SUM(val)
+SUCH THAT AVG(x + cost) <= AVG(cost) + 1
+SUCH THAT SUM(x * val) <= SUM(val) PER grp
+```
+
+Mathematically these RHS aggregates are scalar once evaluated over the relevant active row set. Today, direct RHS `SUM(...)`/`AVG(...)` reaches `TransformToChunkExpression`, which only has an internal `count_star()` aggregate special case; other RHS aggregates are rejected with `InvalidInputException`. Users can work around simple ungrouped cases by computing the bound in a scalar subquery/CTE.
+
+Implementation notes:
+- Detect and validate RHS aggregate expressions that are data-only (no DECIDE variables).
+- Evaluate them with aggregate semantics rather than scalar `ExpressionExecutor` semantics.
+- Match the aggregate constraint's active row set: expression-level `WHEN`, `PER`, and `AVG` denominators must use the same rows/groups as the LHS.
+- Decide whether aggregate-local `WHEN` on RHS is supported or explicitly rejected.
+- Let grouped aggregate constraints carry per-group RHS values instead of requiring one uniform scalar across all groups.
+
+Keep this separate from fixed data-only terms inside the LHS aggregate body (`SUM(x + cost) <= K`), which are already supported by evaluating fixed `INVALID_INDEX` LHS terms and subtracting their active-row contribution from RHS during model building.
 
 ---
 

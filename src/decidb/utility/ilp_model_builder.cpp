@@ -482,10 +482,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         bool lhs_is_integer = IsEvalConstraintLhsIntegerValued(eval_const);
 
         // Detect whether this constraint can bypass the hash-map accumulator:
-        // * every term must reference a row-scoped decide variable (entity-scoped
-        //   vars collapse many rows to the same solver index — need dedup), AND
+        // * every non-fixed term must reference a row-scoped decide variable
+        //   (entity-scoped vars collapse many rows to the same solver index —
+        //   need dedup), AND
         // * no decide variable appears in more than one term (otherwise distinct
-        //   terms at the same row collide on the same flat index).
+        //   terms at the same row collide on the same flat index). Fixed LHS
+        //   offsets use INVALID_INDEX and are subtracted from RHS separately.
         auto CanUseRowScopedFastPath = [&](const EvaluatedConstraint &ec) -> bool {
             std::unordered_set<idx_t> seen_vars;
             for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
@@ -495,6 +497,24 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 if (!seen_vars.insert(v).second) return false;
             }
             return true;
+        };
+
+        auto FixedLinearLhsOffset = [&](const EvaluatedConstraint &ec,
+                                        const vector<idx_t> *rows,
+                                        idx_t begin,
+                                        idx_t end) -> double {
+            double offset = 0.0;
+            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+                if (ec.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
+                    continue;
+                }
+                auto &col = ec.row_coefficients[term_idx];
+                for (idx_t k = begin; k < end; k++) {
+                    idx_t row = rows ? (*rows)[k] : k;
+                    offset += col.Get(row);
+                }
+            }
+            return offset;
         };
 
         if (is_aggregate) {
@@ -560,6 +580,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         }
                     }
                 }
+                rhs -= FixedLinearLhsOffset(eval_const, nullptr, 0, num_rows);
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                 constr.provenance.clause_id = clause_id; // F2 site 1: aggregate, ungrouped
                 constr.provenance.kind = eval_const.kind;
@@ -653,7 +674,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         accum.Flush(constr.indices, constr.coefficients);
                     }
 
-                    ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
+                    double group_rhs = rhs - FixedLinearLhsOffset(eval_const, &flat_rows, g_begin, g_end);
+                    ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_is_integer);
                     constr.provenance.clause_id = clause_id; // F2 site 2: aggregate + PER/WHEN
                     constr.provenance.group_key = g;
                     constr.provenance.kind = eval_const.kind;
@@ -764,6 +786,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     double coeff = ec.row_coefficients[term_idx][row];
                     int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
                     linear_accum[var_idx] += coeff;
+                }
+            } else {
+                for (idx_t row : row_set) {
+                    rhs_adjustment += ec.row_coefficients[term_idx].Get(row);
                 }
             }
         }
