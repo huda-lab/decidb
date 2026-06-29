@@ -660,9 +660,11 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	}
 
 	// Read the stage-1 slack support: every row with a positive slack is an edit, the
-	// slack value is the loosening amount. Label clauses over user-facing column names.
+	// slack value is the loosening amount. Label clauses over user-facing column names
+	// (global_variable_labels names aggregate `<>` indicators so a dropped one is named).
 	vector<ColumnProvenance> columns =
-	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux);
+	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
+	                          input.global_variable_labels);
 	vector<ClauseEdit> edits = ReadElasticEdits(slacks, elastic.removals, stage1.solution,
 	                                            input.model, columns, /*snap=*/false);
 

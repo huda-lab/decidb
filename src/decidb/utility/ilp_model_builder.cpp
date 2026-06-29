@@ -992,6 +992,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // enumeration across linearization paths is F3; this is the one site that
         // unambiguously has no EvaluatedConstraint source.
         constr.provenance.kind = raw.kind;
+        // I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
+        // removal dial groups the two global rows just like a per-row `<>`.
+        constr.provenance.indicator_col = raw.indicator_col;
         model.constraints.push_back(std::move(constr));
     }
 
@@ -1091,10 +1094,12 @@ ClauseRowIndex BuildClauseRowIndex(const SolverModel &model) {
 
 vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
                                                const vector<string> &var_labels,
-                                               const vector<bool> &var_is_aux) {
+                                               const vector<bool> &var_is_aux,
+                                               const vector<string> &global_var_labels) {
     // Every flat column defaults to an unnamed global-block auxiliary; the row /
     // entity blocks are then overwritten below. Columns in [global_block_start,
-    // total_vars) (internal global auxiliaries) keep the default.
+    // total_vars) (internal global auxiliaries) keep the default unless named via
+    // global_var_labels (an aggregate `<>` indicator — see below).
     vector<ColumnProvenance> provenance(indexer.total_vars);
 
     idx_t num_decide_vars = var_labels.size();
@@ -1119,6 +1124,19 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
             slot.instance = indexer.is_entity_scoped[var]
                                 ? col - indexer.entity_var_base[var]
                                 : row;
+        }
+    }
+    // Name any labeled global-block columns (today: aggregate `<>` indicators).
+    // global_var_labels is parallel to the global block at [global_block_start, ...);
+    // empty entries leave the default unnamed GLOBAL_AUX. Kind stays GLOBAL_AUX —
+    // only the label is consumed (the removal dial reads columns[indicator_col].label).
+    for (idx_t g = 0; g < global_var_labels.size(); g++) {
+        if (global_var_labels[g].empty()) {
+            continue;
+        }
+        idx_t col = indexer.global_block_start + g;
+        if (col < provenance.size()) {
+            provenance[col].label = global_var_labels[g];
         }
     }
     return provenance;

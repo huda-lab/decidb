@@ -9,6 +9,10 @@ using namespace duckdb;
 
 namespace {
 
+//! No labeled global-block columns (only aggregate `<>` indicators carry labels).
+//! Passed where the model has no global vars to name.
+const duckdb::vector<duckdb::string> kNoGlobalLabels;
+
 SolverInput MakeRowScopedInput(idx_t num_rows) {
 	SolverInput input;
 	input.num_rows = num_rows;
@@ -225,7 +229,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '<', 5.0, ConstraintKind::USER_PARAMETER},
 		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -247,7 +251,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '=', 5.0, ConstraintKind::USER_PARAMETER},
 		    {1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -264,7 +268,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
 		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -283,7 +287,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
 		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params,
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params,
 		                                     /*has_unhandled_user_bounds=*/true, solve_highs};
 		CHECK(!DiagnoseInfeasible(diag_input).valid);
 	}
@@ -295,7 +299,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
 		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
 		CHECK(!DiagnoseInfeasible(diag_input).valid);
 	}
 
@@ -377,7 +381,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
 		});
 		InfeasibleDiagnosisInput diag_input {model,  row_indexer, row_labels,
-		                                     row_aux, params,      false,
+		                                     row_aux, kNoGlobalLabels, params, false,
 		                                     solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
@@ -451,7 +455,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {0, 1.0, '>', 3.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::PER_ROW_DATA},
 		    {0, 1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -474,7 +478,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
 		});
 		InfeasibleDiagnosisInput diag_input {model,   row_indexer, row_labels,
-		                                     row_aux, params,      false,
+		                                     row_aux, kNoGlobalLabels, params, false,
 		                                     solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
@@ -498,7 +502,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		});
 		model.constraints[0].provenance.strict = true;
 		model.constraints[0].provenance.typed_k = 5.0;
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -541,7 +545,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 			m.constraints.push_back(std::move(floor));
 		}
 		InfeasibleDiagnosisInput diag_input {m,       row_indexer, row_labels,
-		                                     row_aux, params,      false,
+		                                     row_aux, kNoGlobalLabels, params, false,
 		                                     solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
@@ -617,7 +621,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		model.obj_coeffs = {1.0, 0.0}; // MAXIMIZE x
 		model.maximize = true;
 
-		InfeasibleDiagnosisInput diag_input {model,    indexer2, labels2, is_aux2,
+		InfeasibleDiagnosisInput diag_input {model,    indexer2, labels2, is_aux2, kNoGlobalLabels,
 		                                     params,   false,    solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
@@ -643,7 +647,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		model.obj_coeffs = {0.0, 1.0}; // MAXIMIZE y (unbounded)
 		model.maximize = true;
 
-		InfeasibleDiagnosisInput diag_input {model,    indexer2, labels2, is_aux2,
+		InfeasibleDiagnosisInput diag_input {model,    indexer2, labels2, is_aux2, kNoGlobalLabels,
 		                                     params,   false,    solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
@@ -763,7 +767,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 			pin.provenance.kind = ConstraintKind::STRUCTURAL;
 			model.constraints.push_back(std::move(pin));
 		}
-		InfeasibleDiagnosisInput diag_input {model,  ne_indexer, ne_labels, ne_aux,
+		InfeasibleDiagnosisInput diag_input {model,  ne_indexer, ne_labels, ne_aux, kNoGlobalLabels,
 		                                     params, false,      solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
@@ -796,12 +800,52 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		floor.provenance.kind = ConstraintKind::STRUCTURAL;
 		model.constraints.push_back(std::move(floor));
 
-		InfeasibleDiagnosisInput diag_input {model,  ne_indexer, ne_labels, ne_aux,
+		InfeasibleDiagnosisInput diag_input {model,  ne_indexer, ne_labels, ne_aux, kNoGlobalLabels,
 		                                     params, false,      solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
 		CHECK(FindRow(diag, "x <= 3", "suggested_change") == "x <= 4");
 		CHECK(FindRow(diag, "(x <> 3)", "edit_kind").empty()); // not dropped
+	}
+
+	// I4 follow-up — aggregate `<>` (`SUM(x) <> K`). The disjunction binary is a
+	// GLOBAL-block column, so its name arrives via the global_variable_labels channel
+	// (not var_labels). Same removal dial, named drop. The flat layout matches
+	// MakeNotEqualModel (x = col 0, indicator = col 1); only the label source differs.
+	SECTION("aggregate `<>`: a dropped global-indicator clause is named via global labels") {
+		SolverInput agg_input;
+		agg_input.num_rows = 1;
+		agg_input.num_decide_vars = 1;
+		agg_input.variable_types = {LogicalType::DOUBLE};
+		agg_input.num_global_vars = 1; // the `<>` disjunction binary lives in the global block
+		agg_input.global_variable_types = {LogicalType::BOOLEAN};
+		agg_input.global_lower_bounds = {0.0};
+		agg_input.global_upper_bounds = {1.0};
+		agg_input.global_obj_coeffs = {0.0};
+		agg_input.global_variable_labels = {"(SUM(x) <> 3)"}; // names global col 1
+		VarIndexer agg_indexer = VarIndexer::BuildRef(agg_input);
+		agg_indexer.total_vars = agg_indexer.global_block_start + agg_input.num_global_vars;
+		duckdb::vector<string> agg_labels {"x"};
+		duckdb::vector<bool> agg_aux {false};
+
+		SolverModel model = MakeNotEqualModel(); // col 1 = disjunction binary, indicator_col = 1
+		for (char sense : {'<', '>'}) {          // pin x == 3 (the forbidden value)
+			ModelConstraint pin;
+			pin.indices = {0};
+			pin.coefficients = {1.0};
+			pin.sense = sense;
+			pin.rhs = 3.0;
+			pin.provenance.kind = ConstraintKind::STRUCTURAL;
+			model.constraints.push_back(std::move(pin));
+		}
+		InfeasibleDiagnosisInput diag_input {model,      agg_indexer, agg_labels, agg_aux,
+		                                     agg_input.global_variable_labels, params, false, solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(diag.state == "infeasible");
+		// Without the label channel this subject would be empty (nameless drop).
+		CHECK(FindRow(diag, "(SUM(x) <> 3)", "edit_kind") == "drop");
 	}
 }

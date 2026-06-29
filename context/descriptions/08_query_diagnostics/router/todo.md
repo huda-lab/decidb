@@ -3,24 +3,14 @@
 The router is the unified post-solve dispatch (see `README.md` for the tree and
 rationale). **Batch 1 shipped** the seam (`RouteSolveResult`) and the unbounded
 terminal (R1 / R2); **Batch 2 shipped** residual `INF_OR_UNBD` check-ray routing
-(R3) — see `done.md`. It still has to wire the infeasible / time_limit terminals
-to real engines.
+(R3); **R5 shipped** the infeasible→elastic terminal — see `done.md`. It still has
+to wire the time_limit terminal to a real engine.
 
 Tasks are individually pickable. Each carries its pointers, the decision it
 settles (if any), how to test it, and which `done.md` section to write when it
 lands. Suggested batches at the bottom.
 
 ---
-
-## R5 — failed→infeasible → elastic terminal (blocked on the infeasible engine)
-
-- **What:** wire the `INFEASIBLE` terminal to the elastic engine → report. Until
-  the engine exists (`infeasible/`), this terminal throws the static infeasible
-  error (current behavior), so the router structure is ready for it to drop in.
-- **Blocked by:** the elastic/infeasible engine (`infeasible/todo.md`).
-- **Test:** placeholder — assert infeasible still reaches the static error until the
-  engine lands; full report test ships with the engine.
-- **Done section:** "Terminals: infeasible (elastic)."
 
 ## R6 — time_limit terminal: incumbent vs no-sol (blocked on slow groundwork)
 
@@ -41,7 +31,9 @@ lands. Suggested batches at the bottom.
   `test/common/test_decidb_router.cpp`.
 - **Shipped (Batch 2):** residual `INF_OR_UNBD` is unit-tested across `auto`/`off`
   and ray/no-ray sub-signals.
-- **What remains:** extend coverage when time_limit incumbent / no-sol (R6) lands.
+- **What remains:** extend coverage when the time_limit incumbent / no-sol (R6) leaf
+  lands. (The `INFEASIBLE` leaf is already unit-tested from Batch 1; R5 wired its
+  engine without adding a new leaf, so it needs no further router-level test.)
 - **Pointers:** `test/common/test_decidb_router.cpp` (mirror its pattern).
 - **Done section:** fold into "Tests."
 
@@ -54,5 +46,6 @@ lands. Suggested batches at the bottom.
 - ~~**Batch 2 (the residual inf/unb fallback):** R3~~ — **shipped** (`done.md`):
   existing concrete-status probes stay in place; only residual `INF_OR_UNBD`
   routes through check-ray.
-- **Batch 3 (blocked, lands with their engines):** R5 with the infeasible engine,
-  R6 with the slow groundwork.
+- ~~**R5 (infeasible→elastic terminal):**~~ — **shipped** (`done.md`): the
+  `INFEASIBLE` arm runs the elastic engine.
+- **Batch 3 (blocked, lands with its engine):** R6 with the slow groundwork.

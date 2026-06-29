@@ -1,5 +1,6 @@
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/solver_config.hpp"
 #include "duckdb/common/exception.hpp"
 #include "Highs.h"
 
@@ -16,6 +17,11 @@ SolverResult DeterministicNaive::Solve(const SolverModel &model) {
 
     Highs highs;
     highs.setOptionValue("log_to_console", false);
+    // Cap solve time so a hard MILP/MIQP doesn't hang the session indefinitely.
+    // Uses the shared solver-agnostic resolver (default 300s, overridable via
+    // DECIDB_TIME_LIMIT) so HiGHS honors the same limit as Gurobi; on timeout HiGHS
+    // returns kTimeLimit (mapped to SolverStatus::TIME_LIMIT below).
+    highs.setOptionValue("time_limit", ResolveDecideTimeLimit());
 
     vector<HighsVarType> var_types(total_vars);
     for (idx_t i = 0; i < total_vars; i++) {

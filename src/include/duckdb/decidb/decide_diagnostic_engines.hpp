@@ -40,6 +40,10 @@ struct InfeasibleDiagnosisInput {
 	const VarIndexer &indexer;
 	const vector<string> &var_labels;
 	const vector<bool> &var_is_aux;
+	//! Clause text for global-block columns (aggregate `<>` indicators), parallel
+	//! to the global block; empty for unnamed globals. Lets the removal dial name a
+	//! dropped aggregate `<>`. Forwarded into BuildColumnProvenance.
+	const vector<string> &global_variable_labels;
 	const DecideDiagParams &params;
 
 	//! True when the operator absorbed a user bound it could not re-emit as a

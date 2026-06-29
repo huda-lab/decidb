@@ -3,8 +3,8 @@
 The router is the post-solve dispatch spine: it classifies a solve outcome into the
 one terminal the operator should route to. Batch 1 shipped the **seam and the
 unbounded terminal** (R1 / R2); Batch 2 shipped residual `INF_OR_UNBD` check-ray
-routing (R3). The infeasible / time_limit terminals (R5 / R6) are still in
-`todo.md`.
+routing (R3); R5 wired the **infeasible terminal** to the elastic engine. The
+time_limit terminal (R6) is still in `todo.md`.
 
 ## The classifier — `RouteSolveResult`
 
@@ -28,10 +28,10 @@ types, so the decision tree is unit-testable in isolation
 | `ITERATION_LIMIT` / `OTHER` | `UNDIAGNOSED` | `UNDIAGNOSED` |
 
 The mode policy is not duplicated — the classifier defers to the existing
-`DiagnosisApplies(mode, status)` gate (`decide_diagnostic.hpp`). `INFEASIBLE` and
-`TIME_LIMIT` are classified as distinct leaves today even though no engine is wired
-for them yet; this is what lets R5 / R6 drop their engines in without editing the
-classifier.
+`DiagnosisApplies(mode, status)` gate (`decide_diagnostic.hpp`). Because the
+classifier owns no engine invocation, `TIME_LIMIT` is already a distinct leaf even
+though its engine is not wired yet; this is what let R5 drop the infeasible engine in
+(and lets R6 drop the slow engine in) without editing the classifier.
 
 ## Terminals: inf/unb (check ray)
 
@@ -47,8 +47,7 @@ residual `INF_OR_UNBD`. The router then treats residual `INF_OR_UNBD` as:
 - **ray present** → route to the existing unbounded terminal. The stashed
   `decide_diagnostics()` rows stay exactly the standard unbounded rows; the
   thrown query error appends the caveat `the problem may still be infeasible.`
-- **no ray** → route to the infeasible terminal. Until the elastic engine lands,
-  this means the current static infeasible error.
+- **no ray** → route to the infeasible terminal (the elastic engine; see below).
 
 `diagnose_decide='off'` still suppresses both branches and returns the plain
 static `INF_OR_UNBD` error.
@@ -62,9 +61,12 @@ static `INF_OR_UNBD` error.
 - `UNBOUNDED` → build the per-variable labels and the categorical-candidate provider,
   run `DiagnoseUnbounded`, stash + `ThrowDecideDiagnosisReady` on a populated
   diagnosis, else `ThrowUnboundedDiagnosisUnavailable` (see `unbounded/done.md`).
-- `INFEASIBLE` / `TIME_LIMIT` / `UNDIAGNOSED` → the plain static solver error
-  (`ThrowDecideSolveError`). `INFEASIBLE` / `TIME_LIMIT` get real engines at R5 / R6;
-  they share the static-error arm until then.
+- `INFEASIBLE` → build the elastic-engine input and run `DiagnoseInfeasible`, stash +
+  `ThrowDecideDiagnosisReady` on a valid diagnosis, else `ThrowDecideSolveError` (see
+  "Terminals: infeasible (elastic)" below).
+- `TIME_LIMIT` / `UNDIAGNOSED` → the plain static solver error
+  (`ThrowDecideSolveError`). `TIME_LIMIT` gets its real engine at R6; it shares the
+  static-error arm until then.
 
 This **replaced** the previous ad-hoc guard
 (`DiagnosisApplies(mode, status) && status == UNBOUNDED`), which hand-rolled the
@@ -81,7 +83,19 @@ out of `Finalize` into a stateful functor `UnboundedCandidateProvider` +
 `Finalize`), so `Finalize` only calls it. The functor caches its row-scoped and
 per-scope entity candidates across the engine's per-variable calls.
 
+## Terminals: infeasible (elastic)
+
+R5 wired the `INFEASIBLE` terminal to the **elastic engine**. In the
+`DiagnosisTerminal::INFEASIBLE` arm, `Finalize` re-emits absorbed user bounds as
+slackable rows, resets implied bound tightenings to the intrinsic domain, builds the
+`InfeasibleDiagnosisInput` (the retained `SolverModel` + indexer + labels + an injected
+solve callback), and calls `DiagnoseInfeasible`. A valid diagnosis is stashed and
+surfaced (`ThrowDecideDiagnosisReady`); otherwise the arm falls through to
+`ThrowDecideSolveError`. A residual `INF_OR_UNBD` (empty ray) is normalized to
+`INFEASIBLE` here before the message is built. The engine itself — the elastic program,
+per-shape slack placement, removal dial, and stage-2 achievable objective — is
+documented in `infeasible/done.md`.
+
 ## Still split out
 
-- **The infeasible / time_limit terminals** route to the static error until their
-  engines land (R5 / R6).
+- **The time_limit terminal** routes to the static error until its engine lands (R6).

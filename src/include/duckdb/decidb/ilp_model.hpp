@@ -112,10 +112,11 @@ struct ConstraintProvenance {
     bool strict = false;
     double typed_k = 0.0;
     //! Flat solver column of the `<>` disjunction binary this row belongs to (I4).
-    //! Set ONLY at the two `<>` mechanism sites, so it doubles as the removal marker
-    //! (`!= INVALID` ⇒ remove-only row) and the grouping key (rows sharing one
-    //! indicator = one `<>` instance). Also sources the removal Big-M
-    //! (|row coeff on this column|) and the user-facing label. INVALID otherwise.
+    //! Set at the `<>` mechanism sites — per-row (row-scoped indicator column) and
+    //! aggregate (global-block z, propagated from SolverInput::RawConstraint) — so it
+    //! doubles as the removal marker (`!= INVALID` ⇒ remove-only row) and the grouping
+    //! key (rows sharing one indicator = one `<>` instance). Also sources the removal
+    //! Big-M (|row coeff on this column|) and the user-facing label. INVALID otherwise.
     idx_t indicator_col = DConstants::INVALID_INDEX;
 };
 
@@ -231,9 +232,15 @@ struct ColumnProvenance {
 //! decide variables and rows — mirrors the solution-readback iteration.
 //!   var_labels[v]  — name (USER) or source expression (AUX) for decide var v
 //!   var_is_aux[v]  — true if decide var v is an auxiliary linearization variable
+//!   global_var_labels[g] — clause text for global var g (e.g. an aggregate `<>`
+//!                          indicator "(SUM(x) <> K)"), empty for unnamed globals.
+//!                          Surfaces a label on the otherwise-unnamed global block
+//!                          so the infeasible removal dial can name a dropped
+//!                          aggregate `<>`. Parallel to SolverInput::global_variable_types.
 vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
                                                const vector<string> &var_labels,
-                                               const vector<bool> &var_is_aux);
+                                               const vector<bool> &var_is_aux,
+                                               const vector<string> &global_var_labels = {});
 
 //! Build CSR group→rows index from a per-row group_id array.
 //!   row_group_ids[r] in [0..num_groups) → row r belongs to that group

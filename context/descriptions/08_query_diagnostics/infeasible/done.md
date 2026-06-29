@@ -233,21 +233,43 @@ disjunction rows (`x − M·z ≤ K−1`, `x − M·z ≥ K+1−M`) sharing one 
 selector `z`; there is no scalar RHS to stretch, so the loosening passes skip them. I4 lets
 the engine *drop* such a clause and reports it as a `DROP` edit ("Remove `x <> 3`").
 
-**Scope.** Removal applies to **per-row `<>`** only. `STRUCTURAL` rows (McCormick links)
-stay rigid — a definition row cannot be meaningfully dropped. **Aggregate `<>`** (`SUM(x) <>
-K`) is deferred: its disjunction binary is a global-block aux column with no user-facing
-label channel, so naming the dropped clause is not yet possible; it keeps its prior
-static-error behavior.
+**Scope.** Removal applies to both **per-row `<>`** (`x <> 3`) and **aggregate `<>`**
+(`SUM(x) <> K`). `STRUCTURAL` rows (McCormick links) stay rigid — a definition row cannot be
+meaningfully dropped. The two `<>` shapes differ only in *where* the disjunction binary and
+its label live (per-row = row-scoped column labeled via `var_labels`; aggregate =
+global-block column labeled via the `global_variable_labels` channel — see below); the
+removal mechanic, weighting, and reporting are identical.
 
-**Marker = `ConstraintProvenance::indicator_col`** (`ilp_model.hpp`). A new flat-column field
-set **only** at the per-row `<>` site, so it does triple duty: it marks a row as removable
-(`!= INVALID`), groups the disjunction pair (rows sharing one `z` = one `<>` instance — per
-data row), and sources both the removal Big-M and the label. It is set by carrying the
-`<>`'s indicator decide-var on the expanded rows: `physical_decide.cpp` stamps
-`ec1.ne_indicator_idx = ec2.ne_indicator_idx = indicator_var_idx` on the two disjunction
-rows, and the per-row builder site (`ilp_model_builder.cpp`) resolves
-`provenance.indicator_col = indexer.Get(ne_indicator_idx, row)`. The previously-INVALID
-clause_id of these rows is untouched, so no existing clause-id consumer is disturbed.
+**Marker = `ConstraintProvenance::indicator_col`** (`ilp_model.hpp`). A flat-column field set
+at the two `<>` mechanism sites (per-row *and* aggregate), so it does triple duty: it marks a
+row as removable (`!= INVALID`), groups the disjunction pair (rows sharing one `z` = one `<>`
+instance), and sources both the removal Big-M and the label.
+- **Per-row.** It carries the `<>`'s indicator decide-var on the expanded rows:
+  `physical_decide.cpp` stamps `ec1.ne_indicator_idx = ec2.ne_indicator_idx =
+  indicator_var_idx` on the two disjunction rows, and the per-row builder site
+  (`ilp_model_builder.cpp`) resolves `provenance.indicator_col = indexer.Get(ne_indicator_idx,
+  row)`.
+- **Aggregate.** The deferred aggregate-`<>` expansion (`physical_decide.cpp`) allocates one
+  global binary `z` per group and emits its two rows as `SolverInput::RawConstraint`s with
+  `indicator_col = z_idx`. The global-constraint copy in `ilp_model_builder.cpp` propagates
+  `raw.indicator_col → constr.provenance.indicator_col`, so the global rows group exactly like
+  per-row rows.
+
+The previously-INVALID clause_id of these rows is untouched, so no existing clause-id consumer
+is disturbed.
+
+**Label channel for global-block indicators (aggregate `<>`).** A per-row `<>` indicator is a
+decide-var column, so `BuildColumnProvenance` already names it from `var_labels`. An aggregate
+`<>` binary lives in the global block, which `BuildColumnProvenance` otherwise leaves unnamed —
+so a dropped aggregate `<>` would have an empty subject. `SolverInput::global_variable_labels`
+(parallel to `global_variable_types`) carries the clause text "(SUM(x) <> K)" — looked up from
+`aux_var_expressions` at the aggregate-`<>` site and empty for every other global aux (MIN/MAX,
+McCormick). It is reconciled to the final global-var count with one `resize(num_global_vars)`
+before `SolveModel` (the aggregate-`<>` globals are allocated first, so the labels form a
+contiguous prefix and the trailing MIN/MAX globals pad with ""). `BuildColumnProvenance` takes
+it as an optional argument and writes the labels onto the global-block columns; the infeasible
+engine forwards it through `InfeasibleDiagnosisInput::global_variable_labels`. The DROP edit
+then reads `columns[indicator_col].label` uniformly for both shapes.
 
 **Mechanic (all-or-nothing binary, no separate gate row).** Because `<>` removal is binary,
 `BuildElasticModel` (`decide_diagnostic_engines.cpp`), after the loosening + quadratic
@@ -289,11 +311,14 @@ re-optimize the dropped set is deferred to I5.
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): a `<>` pair gets one binary
 `w` wired `−M₂`/`+M₂` with `obj = DIAGNOSTIC_REMOVAL_WEIGHT` and a `RemovalRef`; the pragma
 override replaces M₂; a pinned-`<>` must-drop reports `edit_kind='drop'`; a loosenable
-conflict prefers the LOOSEN and never drops. Python differential
-(`test_query_diagnostics_relation.py`, both backends): `x <> 0 AND x <> 1` on a BOOLEAN drops
-exactly one `<>` (min cardinality), with the achievable objective differential-checked
-against a re-solve of the fixed query; `x <> 5 AND 5 ≤ x ≤ 5` prefers loosening; the pragma
-override produces the same drop and a negative value is rejected at SET time.
+conflict prefers the LOOSEN and never drops; an **aggregate `<>`** whose disjunction binary is
+a global-block column is named via the `global_variable_labels` channel (not `var_labels`) and
+reported as a drop. Python differential (`test_query_diagnostics_relation.py`, both backends):
+`x <> 0 AND x <> 1` on a BOOLEAN drops exactly one `<>` (min cardinality), with the achievable
+objective differential-checked against a re-solve of the fixed query; `SUM(x) <> 0 AND SUM(x)
+<> 1` (aggregate) drops exactly one *named* aggregate `<>`, also differential-checked; `x <> 5
+AND 5 ≤ x ≤ 5` prefers loosening; the pragma override produces the same drop and a negative
+value is rejected at SET time.
 
 ## Elastic engine: stage-2 achievable objective (freeze-budget)
 

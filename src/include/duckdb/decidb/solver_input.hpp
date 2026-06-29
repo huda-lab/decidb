@@ -334,6 +334,11 @@ struct SolverInput {
     vector<double> global_lower_bounds;
     vector<double> global_upper_bounds;
     vector<double> global_obj_coeffs;  // Objective coefficients for global vars
+    //! Parallel to `global_variable_types`. Clause text for a `<>` indicator
+    //! global (e.g. "(SUM(x) <> 5)"), so the infeasible removal dial can name a
+    //! dropped aggregate `<>`; empty for every other global aux (MIN/MAX,
+    //! McCormick, …). Surfaced via BuildColumnProvenance onto the global column.
+    vector<string> global_variable_labels;
 
     // Raw ILP constraints involving global variables (indices are absolute into the
     // flattened variable array including global vars)
@@ -343,6 +348,10 @@ struct SolverInput {
         char sense;     // '<' (<=), '>' (>=), '=' (==)
         double rhs;
         ConstraintKind kind = ConstraintKind::STRUCTURAL;
+        //! Flat column of the `<>` disjunction binary this row belongs to (mirrors
+        //! ConstraintProvenance::indicator_col). Set at the aggregate-`<>` global
+        //! site so the infeasible removal dial groups the two rows; INVALID otherwise.
+        idx_t indicator_col = DConstants::INVALID_INDEX;
     };
     vector<RawConstraint> global_constraints;
 

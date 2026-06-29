@@ -8,8 +8,9 @@ it's to **read what the solver already knows** and route by the **best bound**.
 Revisit this design after infeasible + unbounded ship; testing those builds the
 intuition for what's actually slow.
 
-> Gurobi reads `DECIDB_TIME_LIMIT` (300s default, `gurobi_solver.cpp:70-81`);
-> HiGHS sets no time limit today (F1). No interrupt mechanism exists yet.
+> Both backends now honor a shared time limit (300s default, `DECIDB_TIME_LIMIT`
+> override) via `ResolveDecideTimeLimit()` in `solver_config.hpp` — see `done.md`.
+> No interrupt mechanism exists yet.
 
 ## Checklist
 

@@ -4387,6 +4387,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         auto &ec = deferred.original;
         bool has_groups = !ec.row_group_ids.empty();
 
+        // I4 (aggregate `<>`): clause text used to name a dropped aggregate `<>`.
+        // The optimizer recorded "(SUM(x) <> K)" in aux_var_expressions keyed by
+        // the indicator decide-var; carry it onto every global z this `ec`
+        // allocates so the infeasible removal dial can label the DROP edit.
+        string ne_label;
+        for (auto &ae : aux_var_expressions) {
+            if (ae.first == ec.ne_indicator_idx) {
+                ne_label = ae.second;
+                break;
+            }
+        }
+
         // Build group → rows mapping. For grouped constraints reuse the CSR
         // index already attached to ec; for ungrouped, materialize the trivial
         // single-group CSR locally.
@@ -4474,6 +4486,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             solver_input.global_lower_bounds.push_back(0.0);
             solver_input.global_upper_bounds.push_back(1.0);
             solver_input.global_obj_coeffs.push_back(0.0);
+            solver_input.global_variable_labels.push_back(ne_label);
 
             // Accumulate LHS coefficients for active rows in this group.
             for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
@@ -4507,6 +4520,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             rc1.indices.push_back(static_cast<int>(z_idx));
             rc1.coefficients.push_back(-M);
             rc1.kind = ConstraintKind::USER_MECHANISM;
+            rc1.indicator_col = z_idx;
             solver_input.global_constraints.push_back(std::move(rc1));
 
             // ec2: SUM(coeffs) - M*z >= K + 1 - M
@@ -4518,6 +4532,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             rc2.indices.push_back(static_cast<int>(z_idx));
             rc2.coefficients.push_back(-M);
             rc2.kind = ConstraintKind::USER_MECHANISM;
+            rc2.indicator_col = z_idx;
             solver_input.global_constraints.push_back(std::move(rc2));
         }
     }
@@ -5501,6 +5516,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // diagnose it (Bug 1, all-column-bound conflicts). Off mode keeps the fast throw.
     solver_input.tolerate_infeasible_bounds = diagnosis_armed;
 
+    // Reconcile the `<>` label channel with the final global-var count. Only the
+    // aggregate-`<>` site labels its global z (for the infeasible removal dial),
+    // and those z's are allocated first (the deferred-NE loop runs before all
+    // MIN/MAX linking), so the labels form a contiguous prefix; pad the trailing
+    // unlabeled MIN/MAX globals with "" to keep the vector parallel with
+    // global_variable_types. (Invariant: never shrinks — only labeled globals
+    // precede the resize point.)
+    D_ASSERT(solver_input.global_variable_labels.size() <= solver_input.num_global_vars);
+    solver_input.global_variable_labels.resize(solver_input.num_global_vars);
+
     // Retained only when diagnosis is armed; the move is trivial and the model is
     // freed when Finalize returns. SolveModel otherwise discards the built model.
     SolverModel retained_model;
@@ -5668,7 +5693,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
 
         InfeasibleDiagnosisInput diag_input {
-            retained_model, var_indexer, var_labels, var_is_aux, diag_params,
+            retained_model, var_indexer, var_labels, var_is_aux,
+            solver_input.global_variable_labels, diag_params,
             /*has_unhandled_user_bounds=*/false,
             [backend](const SolverModel &m) { return SolvePreparedModel(m, backend); },
         };

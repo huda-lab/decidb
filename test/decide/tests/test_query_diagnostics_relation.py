@@ -643,6 +643,44 @@ class TestDiagnosticsRelation:
         assert float(reported) == pytest.approx(objective)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_aggregate_ne_must_drop_is_named(self, request, cli_fixture):
+        """I4 follow-up — aggregate `<>` (`SUM(x) <> K`). Its disjunction binary is a
+        global-block column, so naming a dropped one requires the global-label channel.
+        `SUM(x) <> 0 AND SUM(x) <> 1` on a single BOOLEAN forbids both achievable sums,
+        so the only fix is to drop exactly one aggregate `<>` — and it must be *named*
+        (`(sum(x) <> 0)`), not an empty subject. The achievable objective after the drop
+        is differential-checked against an independent re-solve of the fixed query."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) <> 0 AND SUM(x) <> 1 MINIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+        assert len(drops) == 1, rows  # minimum-cardinality: exactly one dropped
+        dropped = drops[0]["subject"]
+        assert dropped.strip(), "dropped aggregate `<>` must be named, not empty"
+        assert "<>" in dropped and "sum" in dropped.lower(), dropped
+
+        # Differential: rebuild with the dropped aggregate `<>` removed, re-solve, and
+        # confirm the reported achievable objective. Which clause is dropped is arbitrary.
+        n = re.search(r"<>\D*(\d+)", dropped).group(1)
+        clause = f"SUM(x) <> {n}"
+        fixed_sql = (
+            sql.replace(f"{clause} AND ", "")
+            if f"{clause} AND " in sql
+            else sql.replace(f" AND {clause}", "")
+        )
+        fixed = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        objective = sum(float(r["x"]) for r in fixed)
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        assert float(reported) == pytest.approx(objective)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_removal_bigm_pragma_override_and_validation(self, request, cli_fixture):
         """The removal Big-M is pragma-tunable with an auto default: a positive override
         yields the same drop on the must-drop query, and a negative value is rejected at
