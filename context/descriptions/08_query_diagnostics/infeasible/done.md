@@ -102,8 +102,12 @@ by reconstructing its algebra from the **original** row's coefficients over user
 column names (`BuildColumnProvenance`) — `x <= 5` → suggestion `x <= 10` — so no source
 expression text needs threading. `BuildInfeasibleDiagnostic` emits, per edit, EAV rows
 `subject_kind='clause'`, `subject=<clause as written>`, `attribute='suggested_change' |
-'amount'`, plus an actionable one-line summary ("the constraints cannot all be satisfied at
-once. Loosen `x <= 5` to `x <= 10`.").
+'amount'`, plus an actionable one-line summary. The summary names the concrete edit(s)
+inline, mirroring the unbounded terminal: with up to three actionable edits it quotes them
+("… — loosen `x <= 5` to `x <= 10`." / "… remove `x <> 1`." / Oxford-joined with "or"); with
+four or more it falls back to a kind-named cue ("loosen one of your SUCH THAT limits") and
+defers the per-clause detail to the relation. A data-RHS-only conflict keeps its own cue
+("the conflict is in per-row data, with no single limit to loosen").
 
 **Elastic-infeasible signal.** If the elastic program is *itself* infeasible, the conflict
 reaches rigid rows → `BuildElasticInfeasibleDiagnostic` renders a distinct outcome
@@ -163,8 +167,9 @@ keys through bound absorption).
 **Edit conversion (the D3 helper).** Reading the slack support is centralized in
 `MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (`decide_diagnostic_engines.cpp`), the one
 place per-shape rendering lives: it renders the sense, re-quotes a strict `<`/`>` against the
-typed literal, and formats the suggestion. The LHS is rendered shape-aware — plain `FormatTerms`,
-`FormatLhs` (AVG-collapsing), or `FormatQuadraticLhs`. A `ClauseEdit` carries a
+typed literal, and formats the suggestion. The LHS is rendered shape-aware by `FormatLhs` —
+plain `FormatTerms`, AVG-collapsing (`FormatAvgLhs`), or SUM-collapsing (`FormatSumLhs`) —
+or `FormatQuadraticLhs` for a quadratic constraint. A `ClauseEdit` carries a
 `ClauseEditKind` (`LOOSEN` vs `CONFLICT_SUMMARY`, `decide_diagnostic.hpp`) so the builder emits
 either a `suggested_change`/`amount` pair or a single `conflict` row.
 
@@ -193,6 +198,13 @@ A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS: there is no single 
   every linear term is AVG-scaled, propagated at the aggregate provenance sites in
   `ilp_model_builder.cpp`); `FormatLhs` then collapses the `1/N`-scaled terms back to `AVG(x)`
   (inner coeff = stored coeff × the variable's term count) instead of rendering `0.5*x + 0.5*x`.
+- **SUM.** An aggregate `SUM` over rows emits one solver column per row for the same decide
+  variable, so a plain reconstruction reads `x + x + x`. For an **ungrouped** aggregate
+  (`provenance.group_key == INVALID`), `FormatSumLhs` collapses the per-row fan-out back to
+  `SUM(c*var)` — uniform coefficient only (`SUM(price * x)`, data-varying, falls back to the raw
+  reconstruction); a variable appearing once stays as written. PER-grouped aggregates are left
+  expanded (their differing row counts are what distinguishes one group's edit from another's in
+  the relation today) until group identity is surfaced as its own field.
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which now also sets
   `provenance.strict` + `provenance.typed_k` (the user's literal). `MakeLoosenEdit` re-quotes the
@@ -262,7 +274,7 @@ is disturbed.
 decide-var column, so `BuildColumnProvenance` already names it from `var_labels`. An aggregate
 `<>` binary lives in the global block, which `BuildColumnProvenance` otherwise leaves unnamed —
 so a dropped aggregate `<>` would have an empty subject. `SolverInput::global_variable_labels`
-(parallel to `global_variable_types`) carries the clause text "(SUM(x) <> K)" — looked up from
+(parallel to `global_variable_types`) carries the clause text `SUM(x) <> K` — looked up from
 `aux_var_expressions` at the aggregate-`<>` site and empty for every other global aux (MIN/MAX,
 McCormick). It is reconciled to the final global-var count with one `resize(num_global_vars)`
 before `SolveModel` (the aggregate-`<>` globals are allocated first, so the labels form a
@@ -290,10 +302,13 @@ this is a coarse weighted stand-in that rides the future lexicographic-tier conv
 "Notes to revisit" in `todo.md`).
 
 **Reading + reporting.** `ReadElasticEdits` reads each `RemovalRef`: `w > 0.5` emits a
-`ClauseEdit{kind = DROP, label = columns[indicator_col].label}` (the F6 "(x <> 3)" string).
-`BuildInfeasibleDiagnostic` renders a DROP as a dedicated EAV row `subject_kind='clause'`,
-`subject='(x <> 3)'`, `attribute='edit_kind'`, `value='drop'` (distinct from the LOOSEN
-`suggested_change`/`amount` pair), and appends "Remove `(x <> 3)`." to the summary. The
+`ClauseEdit{kind = DROP, label = columns[indicator_col].label}` (the F6 `x <> 3` string).
+The F6 label is built by `DiagnosisComparand` (`decide_optimizer.cpp`), which unwraps the
+implicit `CAST` the binder inserts around a literal and drops the outer parens, so the clause
+reads `x <> 1`, not `(x <> CAST(1 AS INTEGER))`. `BuildInfeasibleDiagnostic` renders a DROP as
+a dedicated EAV row `subject_kind='clause'`, `subject='x <> 3'`, `attribute='edit_kind'`,
+`value='drop'` (distinct from the LOOSEN `suggested_change`/`amount` pair), and names the fix
+inline in the summary ("… remove `x <> 1`."). The
 `DiagnoseInfeasible` empty-guard now bails only when **both** slacks and removals are empty,
 so a removal-only model is still diagnosed.
 
@@ -354,8 +369,10 @@ number would be misleading (those cases fall back to the stage-1 edit list uncha
 (`ReadElasticEdits`, the shared stage-1/stage-2 reader) and the objective value is reported.
 Because the budget is enforced only to the feasibility tolerance, a maximizing re-solve can
 ride that tolerance (a clean `10` arriving as `10.000001`), so stage-2 amounts and the
-objective are snapped to six significant figures (`RoundToSignificant`) — safely below the
-tolerance for amounts of order one and up. The stage-1 read is exact and is **not** snapped.
+objective are snapped by `SnapDiagnosticValue` — snap to the nearest integer when within a
+relative tolerance of one (recovering integer bounds at **any** magnitude; significant-figure
+rounding used to mangle `1234567890` into `1234570001`), else trim to a fixed absolute
+precision. The stage-1 read is exact and is **not** snapped.
 
 **Objective value plumbing.** `SolverResult` carries `objective_value`, populated on
 `OPTIMAL` by both backends in the model's own sense (`gurobi_solver.cpp` via

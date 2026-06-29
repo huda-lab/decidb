@@ -252,6 +252,19 @@ as a fixed-schema relation.
   `clause` for infeasible later); `subject` is the state-engine-owned identifier;
   `attribute`/`value` carry that engine's facts. This keeps the table function
   schema stable as new states add their own attributes.
+- **Scannable one-row-per-subject view (a `PIVOT` recipe, not a second function).** The EAV
+  shape lists one row per `attribute`, so an infeasible loosen clause spans three rows
+  (`edit_kind` / `suggested_change` / `amount`). To read it as one row per clause, pivot it —
+  the columns adapt to whichever attributes the state emitted (loosen, drop, or conflict), so a
+  single recipe covers every infeasible shape without a parallel state-specific table function
+  that would have to duplicate the deliberately-flexible schema:
+
+  ```sql
+  PIVOT (SELECT subject, attribute, value FROM decide_diagnostics() WHERE subject_kind = 'clause')
+  ON attribute USING first(value) GROUP BY subject ORDER BY subject;
+  --  subject │ amount │ edit_kind │ suggested_change
+  --  x <= 1  │ 4      │ loosen    │ x <= 5
+  ```
 - **Why a table function and not a result-schema switch:** DECIDE is a clause on
   SELECT, and the projection binds the decision columns before the solve runs
   (`logical_decide.cpp`, `transform_select_node.cpp`), so a runtime result-schema

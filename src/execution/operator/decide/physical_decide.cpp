@@ -2092,8 +2092,12 @@ public:
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
                                 if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '>', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
-                                lower_bounds[var_idx] = bound_value;
-                                upper_bounds[var_idx] = bound_value;
+                                // Intersect (like `<=`/`>=`), never overwrite: two equalities
+                                // on one variable (`x = 5 AND x = 10`) must invert the box
+                                // (lower 10 > upper 5) so the conflict is caught, not silently
+                                // resolved to the last value written.
+                                lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
+                                upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
                                 if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '=', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_LESSTHAN && is_integer_var) {
                                 // x < bound → x <= bound-1 for integers. REAL strict

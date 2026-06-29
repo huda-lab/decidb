@@ -22,22 +22,29 @@ struct VarAgg {
 //! Compact numeric formatting for user-facing constraint text (drops trailing
 //! zeros: 12.5 not 12.500000, 10 not 10.0).
 string FormatNum(double v) {
+	if (v == 0.0) {
+		return "0"; // normalize -0.0 (a signed-zero solver read) to a clean "0"
+	}
 	char buf[32];
 	snprintf(buf, sizeof(buf), "%.10g", v);
 	return string(buf);
 }
 
-//! Round `v` to `sig` significant figures. Used to clean the I3 stage-2 reads: the
-//! budget freeze is enforced only to the backend feasibility tolerance, so a maximizing
-//! re-solve rides that tolerance and a clean "10" would otherwise print as "10.000001".
-//! Six figures sit safely below the feasibility tolerance (≈1e-6) for amounts of order
-//! one and larger.
-double RoundToSignificant(double v, int sig) {
+//! Clean the sub-tolerance noise an I3 stage-2 read carries: the budget freeze is enforced
+//! only to the backend feasibility tolerance, so a maximizing re-solve rides it and a clean
+//! `10` would otherwise print as `10.000001`. Snap to the nearest integer when within a
+//! relative tolerance of one (recovering integer bounds at any magnitude — `1234567889.0001`
+//! → `1234567889`, which significant-figure rounding would have mangled to `1234570000`);
+//! otherwise trim a genuinely fractional value to a fixed absolute precision.
+double SnapDiagnosticValue(double v) {
 	if (v == 0.0 || !std::isfinite(v)) {
 		return v;
 	}
-	double mag = std::pow(10.0, sig - 1 - std::floor(std::log10(std::fabs(v))));
-	return std::round(v * mag) / mag;
+	double nearest_int = std::round(v);
+	if (std::fabs(v - nearest_int) <= 1e-6 * std::max(1.0, std::fabs(v))) {
+		return nearest_int;
+	}
+	return std::round(v * 1e6) / 1e6;
 }
 
 //! User-facing name of a flat solver column: its provenance label (user variable
@@ -129,11 +136,89 @@ bool FormatAvgLhs(const vector<int> &indices, const vector<double> &coeffs,
 	return true;
 }
 
-//! AVG-aware LHS for a linear constraint row.
+//! SUM rendering: an aggregate SUM over rows emits one solver column per row for the
+//! same decide variable, so a plain reconstruction reads `x + x + x`. Collapse the
+//! per-row fan-out back to `SUM(...)`: group terms by decide variable and render any
+//! variable contributing more than one term as `SUM(c*var)` (a variable that appears
+//! once — e.g. a global decide var added to the aggregate — stays as written). Returns
+//! false (caller falls back to the raw reconstruction) when no variable repeats (the row
+//! is not an aggregate fan) or a summed variable has data-varying coefficients
+//! (`SUM(price * x)`: no single literal coefficient to quote).
+bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
+                  const vector<ColumnProvenance> &cols, string &out) {
+	vector<idx_t> order; // distinct variable keys, first-seen order
+	std::map<idx_t, double> coeff_of;
+	std::map<idx_t, idx_t> count_of;
+	std::map<idx_t, bool> uniform;
+	std::map<idx_t, string> label_of;
+	for (idx_t i = 0; i < indices.size(); i++) {
+		int col = indices[i];
+		// A column with no decide variable (an auxiliary column) never merges with another
+		// — give it a unique key so each stays its own term.
+		idx_t key = (col >= 0 && static_cast<idx_t>(col) < cols.size() &&
+		             cols[col].decide_var_idx != DConstants::INVALID_INDEX)
+		                ? cols[col].decide_var_idx
+		                : DConstants::INVALID_INDEX - 1 - i;
+		double c = coeffs[i];
+		auto it = coeff_of.find(key);
+		if (it == coeff_of.end()) {
+			coeff_of[key] = c;
+			count_of[key] = 1;
+			uniform[key] = true;
+			label_of[key] = ColLabel(cols, col);
+			order.push_back(key);
+		} else {
+			if (std::fabs(it->second - c) > 1e-12) {
+				uniform[key] = false;
+			}
+			count_of[key]++;
+		}
+	}
+	bool any_fan = false;
+	for (idx_t key : order) {
+		if (count_of[key] > 1) {
+			any_fan = true;
+			if (!uniform[key]) {
+				return false; // data-varying coefficient: no single literal to quote
+			}
+		}
+	}
+	if (!any_fan) {
+		return false; // not an aggregate fan: render normally
+	}
+	string s;
+	for (idx_t key : order) {
+		double c = coeff_of[key];
+		double ac = std::fabs(c);
+		string term = (ac == 1.0) ? label_of[key] : (FormatNum(ac) + "*" + label_of[key]);
+		if (count_of[key] > 1) {
+			term = "SUM(" + term + ")";
+		}
+		if (s.empty()) {
+			s += (c < 0 ? "-" : "") + term;
+		} else {
+			s += (c < 0 ? " - " : " + ") + term;
+		}
+	}
+	out = s;
+	return true;
+}
+
+//! Aggregate-aware LHS for a linear constraint row: AVG(...) for an AVG-rewritten row,
+//! SUM(...) for a SUM fan-out, else the raw linear reconstruction.
 string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenance> &cols) {
-	string avg;
-	if (row.provenance.avg_scaled && FormatAvgLhs(row.indices, row.coefficients, cols, avg)) {
-		return avg;
+	string agg;
+	if (row.provenance.avg_scaled && FormatAvgLhs(row.indices, row.coefficients, cols, agg)) {
+		return agg;
+	}
+	// Collapse a SUM fan-out to SUM(...) only for an UNGROUPED aggregate (group_key
+	// INVALID). A PER-grouped aggregate emits one row per group with identical clause
+	// text, so folding would make the groups indistinguishable in the relation (today
+	// their differing row counts tell them apart) until group identity is surfaced as its
+	// own field.
+	if (row.provenance.group_key == DConstants::INVALID_INDEX &&
+	    FormatSumLhs(row.indices, row.coefficients, cols, agg)) {
+		return agg;
 	}
 	return FormatTerms(row.indices, row.coefficients, cols);
 }
@@ -463,7 +548,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		// I3: snap the stage-2 read to absorb the budget cushion's sub-display noise; the
 		// stage-1 read is exact (no budget constraint) and passes through untouched.
 		if (snap) {
-			amount = RoundToSignificant(amount, 6);
+			amount = SnapDiagnosticValue(amount);
 		}
 		// Label the clause from the block's representative ORIGINAL row (orig_model,
 		// before slacks were appended). For a shared-slack block all rows render the
@@ -590,7 +675,7 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 	// budget is frozen even though the objective included the removal penalty. The cap is
 	// exactly S*: the stage-1 optimum sits on it, and the backend feasibility tolerance
 	// supplies the cushion that keeps the re-solve feasible. The reported amounts are
-	// snapped past that tolerance — see RoundToSignificant.
+	// snapped past that tolerance — see SnapDiagnosticValue.
 	ModelConstraint budget;
 	for (const auto &sl : slacks) {
 		budget.indices.push_back(static_cast<int>(sl.pos_col));
@@ -694,7 +779,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 				return DecideDiagnostic();
 			}
 			return BuildInfeasibleDiagnostic(
-			    edits, FormatNum(RoundToSignificant(stage2.objective_value, 6)));
+			    edits, FormatNum(SnapDiagnosticValue(stage2.objective_value)));
 		}
 		if (stage2.status == SolverStatus::UNBOUNDED || stage2.status == SolverStatus::INF_OR_UNBD) {
 			// The minimal fix is valid but the relaxed problem has no finite optimum.

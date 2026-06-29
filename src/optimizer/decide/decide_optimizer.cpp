@@ -78,6 +78,17 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 	FindNotEqualConstraints(*decide.decide_constraints, decide);
 }
 
+//! User-facing rendering of a `<>` comparand for diagnosis labels: unwrap the implicit
+//! CAST the binder inserts around a literal so `x <> 1` reads `x <> 1`, not
+//! `x <> CAST(1 AS INTEGER)`. Falls through to the raw ToString for anything else.
+static string DiagnosisComparand(const Expression &expr) {
+	const Expression *cur = &expr;
+	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		cur = cur->Cast<BoundCastExpression>().child.get();
+	}
+	return cur->ToString();
+}
+
 void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &decide) {
 	// Handle WHEN/PER wrappers: BoundConjunctionExpression with alias tag
 	// Recurse into child[0] (the actual constraint)
@@ -115,7 +126,7 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 			}
 			// F6: record the user's original <> comparison for diagnosis naming
 			decide.aux_var_expressions.emplace_back(
-			    ind_idx, "(" + comp.left->ToString() + " <> " + comp.right->ToString() + ")");
+			    ind_idx, DiagnosisComparand(*comp.left) + " <> " + DiagnosisComparand(*comp.right));
 			// Tag the comparison with the indicator index for direct matching
 			comp.alias = string(NE_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "__";
 		}

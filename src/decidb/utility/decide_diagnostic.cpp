@@ -322,22 +322,42 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	diag.status = SolverStatus::INFEASIBLE;
 	diag.state = "infeasible";
 
-	// Summary (I5): a lean one-clause cue naming the *kind* of fix, mirroring the
-	// unbounded terminal — the specific clause/amount live in decide_diagnostics(), not
-	// the headline. Tell the user the fix, not the math. "a possible edit was found"
-	// (note: "a", one hitting set, not "the" complete conflict set) when there is an
-	// actionable LOOSEN/DROP edit; a data-RHS-only conflict has no single value to
-	// loosen, so it gets its own cue and defers the per-clause detail to the table.
+	// Summary: name the concrete least-change edit(s) inline, mirroring the unbounded
+	// terminal (which names the escaping variable and its fix). With up to three actionable
+	// edits we quote them — "loosen `x <= 5` to `x <= 10`" — so the headline alone tells
+	// the user the fix; the full per-clause detail still lives in decide_diagnostics().
+	// With four or more we fall back to a kind-named cue (the headline would get unwieldy)
+	// and a data-RHS-only conflict has no single value to loosen, so it gets its own cue.
+	// "a possible edit" (note: "a", one hitting set, not "the" complete conflict set).
+	// Tell the user the fix, not the math.
 	bool has_loosen = false;
 	bool has_drop = false;
-	bool has_conflict = false;
+	vector<string> phrases;
 	for (const auto &e : edits) {
-		has_loosen |= (e.kind == ClauseEditKind::LOOSEN);
-		has_drop |= (e.kind == ClauseEditKind::DROP);
-		has_conflict |= (e.kind == ClauseEditKind::CONFLICT_SUMMARY);
+		switch (e.kind) {
+		case ClauseEditKind::LOOSEN:
+			has_loosen = true;
+			phrases.push_back("loosen `" + e.label + "` to `" + e.suggestion + "`");
+			break;
+		case ClauseEditKind::DROP:
+			has_drop = true;
+			phrases.push_back("remove `" + e.label + "`");
+			break;
+		case ClauseEditKind::CONFLICT_SUMMARY:
+			break; // no single literal to quote; reported per-clause in the relation
+		}
 	}
 	diag.summary = "the constraints cannot all be satisfied at once";
-	if (has_loosen && has_drop) {
+	if (!phrases.empty() && phrases.size() <= 3) {
+		diag.summary += "; a possible edit was found to make it feasible — ";
+		for (idx_t i = 0; i < phrases.size(); i++) {
+			if (i > 0) {
+				diag.summary += (i + 1 == phrases.size()) ? ", or " : ", ";
+			}
+			diag.summary += phrases[i];
+		}
+		diag.summary += ".";
+	} else if (has_loosen && has_drop) {
 		diag.summary += "; a possible edit was found to make it feasible — loosen or remove "
 		                "one of your SUCH THAT constraints.";
 	} else if (has_loosen) {

@@ -738,3 +738,128 @@ class TestDiagnosticsRelation:
         result = _diagnose(cli, sql, mode="off")
         assert "select * from decide_diagnostics()" not in result.stderr.lower()
         assert _rows(result) == []
+
+
+@pytest.mark.query_diagnostics
+class TestInfeasibleHeadlineAndRendering:
+    """The infeasible headline names the concrete least-change edit inline, and clause
+    labels read in the user's SQL terms — an ungrouped SUM folds back to `SUM(...)`
+    (not `x + x + x`), and a `<>` drops its implicit CAST/parens."""
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_headline_names_single_loosen_edit(self, request, cli_fixture):
+        """A unique loosen fix is quoted in the stderr headline, not hidden behind a
+        generic "loosen one of your SUCH THAT limits"."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
+            "DECIDE x IS INTEGER SUCH THAT x >= 10 AND x <= 5 MAXIMIZE SUM(x)"
+        )
+        err = _diagnose(cli, sql).stderr.lower()
+        assert "loosen `x <= 5` to `x <= 10`" in err
+        assert "loosen one of your such that limits" not in err
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_ungrouped_sum_folds_in_subject_and_headline(self, request, cli_fixture):
+        """An ungrouped `SUM(x) >= K` renders as `SUM(x)`, in both the relation subject
+        and the named headline edit — never the row-expanded `x + x + x`."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 999999 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        attrs = _attrs(rows, "clause", "SUM(x) >= 999999")
+        assert attrs["suggested_change"] == "SUM(x) >= 3"
+        assert "x + x" not in result.stdout
+        assert "loosen `sum(x) >= 999999` to `sum(x) >= 3`" in result.stderr.lower()
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_ungrouped_weighted_sum_folds_with_uniform_coeff(self, request, cli_fixture):
+        """A uniform-coefficient weighted SUM folds to `SUM(c*x)`; the headline names
+        both edits and the achievable objective normalizes `-0` to `0`."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, w, x FROM (VALUES (1,5),(2,5),(3,5)) t(id,w) "
+            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 1 AND SUM(x * w) <= -1 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        assert _attrs(rows, "clause", "SUM(5*x) <= -1")["suggested_change"] == "SUM(5*x) <= 0"
+        # Signed-zero solver read must print as a clean "0", never "-0".
+        assert _attrs(rows, "model", "NULL")["achievable_objective"] == "0"
+        assert "x + x" not in result.stdout
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_ne_drop_label_is_clean(self, request, cli_fixture):
+        """A dropped `<>` reads `x <> 1` — the binder's implicit CAST and the wrapping
+        parens are stripped — in both the relation subject and the named headline."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        dropped = [r["subject"] for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+        assert len(dropped) == 1
+        assert "cast" not in dropped[0].lower() and "(" not in dropped[0]
+        assert re.fullmatch(r"x <> [01]", dropped[0]), dropped[0]
+        assert "remove `x <>" in result.stderr.lower()
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_three_edits_all_named_in_headline(self, request, cli_fixture):
+        """Up to three actionable edits are named inline (Oxford-joined), not collapsed
+        to the generic kind cue."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id,x,y,z FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL,y IS REAL,z IS REAL "
+            "SUCH THAT x<=1 AND x>=5 AND y<=1 AND y>=5 AND z<=1 AND z>=5 MAXIMIZE SUM(x+y+z)"
+        )
+        err = _diagnose(cli, sql).stderr.lower()
+        assert "loosen `x <= 1` to `x <= 5`" in err
+        assert "loosen `y <= 1` to `y <= 5`" in err
+        assert ", or loosen `z <= 1` to `z <= 5`" in err
+        assert "loosen one of your such that limits" not in err
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_large_magnitude_suggestion_is_exact(self, request, cli_fixture):
+        """A large integer bound is reported exactly — significant-figure rounding used to
+        mangle `x <= 1234567890` into `x <= 1234570001`."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id,x FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL SUCH THAT x <= 1 AND x >= 1234567890 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        attrs = _attrs(_rows(result), "clause", "x <= 1")
+        assert attrs["suggested_change"] == "x <= 1234567890"
+        assert attrs["amount"] == "1234567889"
+
+
+@pytest.mark.query_diagnostics
+class TestEqualityBoundConflict:
+    """Two per-row equality bounds on one variable must intersect (and conflict if
+    contradictory), never resolve last-writer-wins to a wrong solution."""
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize("clause", ["x = 5 AND x = 10", "x = 10 AND x = 5"])
+    def test_contradictory_equalities_are_infeasible(self, request, cli_fixture, clause):
+        cli = request.getfixturevalue(cli_fixture)
+        sql = f"SELECT id,x FROM (VALUES (1)) t(id) DECIDE x IS REAL SUCH THAT {clause} MAXIMIZE SUM(x)"
+        result = _diagnose(cli, sql)
+        assert "infeasible" in result.stderr.lower()
+        assert {r["state"] for r in _rows(result)} == {"infeasible"}
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize("clause,expected", [("x = 5 AND x = 5", 5.0), ("x = -3", -3.0)])
+    def test_consistent_equality_still_solves(self, request, cli_fixture, clause, expected):
+        """Regression guard: the intersect must not break a consistent (or explicitly
+        negative) equality — both still solve to their value, no false infeasible."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = f"SELECT x FROM (VALUES (1)) t(id) DECIDE x IS REAL SUCH THAT {clause} MAXIMIZE SUM(x)"
+        out = cli.execute_script(".mode csv\n" + sql + ";\n").stdout
+        rows = list(csv.DictReader(io.StringIO(out)))
+        assert len(rows) == 1 and float(rows[0]["x"]) == pytest.approx(expected)
