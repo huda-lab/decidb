@@ -27,6 +27,19 @@ string FormatNum(double v) {
 	return string(buf);
 }
 
+//! Round `v` to `sig` significant figures. Used to clean the I3 stage-2 reads: the
+//! budget freeze is enforced only to the backend feasibility tolerance, so a maximizing
+//! re-solve rides that tolerance and a clean "10" would otherwise print as "10.000001".
+//! Six figures sit safely below the feasibility tolerance (≈1e-6) for amounts of order
+//! one and larger.
+double RoundToSignificant(double v, int sig) {
+	if (v == 0.0 || !std::isfinite(v)) {
+		return v;
+	}
+	double mag = std::pow(10.0, sig - 1 - std::floor(std::log10(std::fabs(v))));
+	return std::round(v * mag) / mag;
+}
+
 //! User-facing name of a flat solver column: its provenance label (user variable
 //! name or aux source expression), falling back to a positional name.
 string ColLabel(const vector<ColumnProvenance> &cols, int col) {
@@ -372,49 +385,16 @@ ElasticModel BuildElasticModel(const SolverModel &base) {
 	return out;
 }
 
-DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
-	// Build the elastic program — give every relaxable user constraint a
-	// non-negative slack that lets its RHS stretch, minimize the total loosening,
-	// and read which constraints to loosen (the positive-slack support) and by how
-	// much. The minimal edit list is the least-change fix.
-	if (!input.solve_model) {
-		return DecideDiagnostic();
-	}
-
-	ElasticModel elastic = BuildElasticModel(input.model);
-	const vector<BlockSlackRef> &slacks = elastic.slacks;
-
-	// Nothing loosenable: fall through to the static error (the user's only
-	// constraints are rigid mechanism/structural rows we never edit).
-	if (slacks.empty()) {
-		return DecideDiagnostic();
-	}
-
-	SolverResult result = input.solve_model(elastic.model);
-
-	if (result.status == SolverStatus::INFEASIBLE) {
-		// The elastic program is itself infeasible: the conflict reaches rigid rows.
-		// Only claim that when every user constraint was actually made relaxable — if
-		// the operator punted a multi-instance bound (I2 scope), stay honest and fall
-		// through to the static error rather than wrongly declaring it unfixable.
-		if (input.has_unhandled_user_bounds) {
-			return DecideDiagnostic();
-		}
-		return BuildElasticInfeasibleDiagnostic();
-	}
-	if (result.status != SolverStatus::OPTIMAL || result.solution.empty()) {
-		return DecideDiagnostic();
-	}
-
-	// Read the slack support: every row with a positive slack is an edit, and the
-	// slack value is the loosening amount. Label the clause from the ORIGINAL row
-	// (input.model, before slacks were appended) over user-facing column names.
-	vector<ColumnProvenance> columns =
-	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux);
-
-	// I2.c: a data-RHS clause (`x <= col`) has a per-row RHS, so its rows get
-	// independent slacks and there is no single literal to "loosen to K". Collect
-	// them per clause and emit ONE conflict summary instead of N suggestions.
+//! Read the slack support of a solved elastic model into the user-facing edit list.
+//! Every block whose slack exceeds DIAGNOSTIC_RAY_EPSILON is an edit; the amount is the
+//! slack value (`=` reports the net s⁺ − s⁻). A data-RHS clause (`x <= col`) has no
+//! single literal to loosen, so its rows are collapsed into one CONFLICT_SUMMARY per
+//! clause (I2.c). Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
+//! appended). Pure in `solution`, so it runs against either the stage-1 or stage-2 solve.
+static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
+                                           const vector<double> &solution,
+                                           const SolverModel &orig_model,
+                                           const vector<ColumnProvenance> &columns, bool snap) {
 	struct ConflictAccum {
 		string lhs_sense_rhs; // the clause as written, from its first conflicting row
 		idx_t conflicting = 0;
@@ -425,23 +405,28 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	for (const auto &sl : slacks) {
 		double amount;
 		if (sl.sense == '=') {
-			amount = result.solution[sl.pos_col] - result.solution[sl.neg_col];
+			amount = solution[sl.pos_col] - solution[sl.neg_col];
 		} else {
-			amount = result.solution[sl.pos_col];
+			amount = solution[sl.pos_col];
 		}
 		if (std::fabs(amount) <= DIAGNOSTIC_RAY_EPSILON) {
 			continue;
 		}
-		// Label the clause from the block's representative ORIGINAL row (input.model,
+		// I3: snap the stage-2 read to absorb the budget cushion's sub-display noise; the
+		// stage-1 read is exact (no budget constraint) and passes through untouched.
+		if (snap) {
+			amount = RoundToSignificant(amount, 6);
+		}
+		// Label the clause from the block's representative ORIGINAL row (orig_model,
 		// before slacks were appended). For a shared-slack block all rows render the
 		// same LHS/RHS, so the first row is canonical.
 		if (sl.quadratic) {
-			const auto &orig = input.model.quadratic_constraints[sl.rows.front()];
+			const auto &orig = orig_model.quadratic_constraints[sl.rows.front()];
 			edits.push_back(MakeLoosenEdit(orig.provenance, FormatQuadraticLhs(orig, columns),
 			                               orig.rhs, sl.sense, amount));
 			continue;
 		}
-		const ModelConstraint &orig = input.model.constraints[sl.rows.front()];
+		const ModelConstraint &orig = orig_model.constraints[sl.rows.front()];
 		const ConstraintProvenance &prov = orig.provenance;
 		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA &&
 		                prov.clause_id != DConstants::INVALID_INDEX;
@@ -462,7 +447,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	for (auto &kv : conflicts) {
 		idx_t clause_id = kv.first;
 		idx_t total = 0;
-		for (const auto &row : input.model.constraints) {
+		for (const auto &row : orig_model.constraints) {
 			if (row.provenance.clause_id == clause_id) {
 				total++;
 			}
@@ -474,9 +459,154 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		           std::to_string(total) + " rows";
 		edits.push_back(std::move(e));
 	}
+	return edits;
+}
+
+//! True iff `edits` contains at least one actionable (editable) LOOSEN edit, as opposed
+//! to only data-RHS conflict summaries. Gates the I3 stage-2 re-solve: with no editable
+//! knob there is nothing to maximize the objective over, so an achievable-objective
+//! number would be misleading.
+static bool HasLoosenEdit(const vector<ClauseEdit> &edits) {
+	for (const auto &e : edits) {
+		if (e.kind == ClauseEditKind::LOOSEN) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! True iff the model carries a real objective to re-solve. With no objective there is
+//! no "achievable objective" to report, so the I3 stage-2 re-solve is skipped (and the
+//! stage-1 edit is reported unchanged). Also avoids perturbing objective-less models with
+//! the budget-cushion re-solve.
+static bool HasObjective(const SolverModel &model) {
+	if (model.has_quadratic_obj) {
+		return true;
+	}
+	for (double c : model.obj_coeffs) {
+		if (c != 0.0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Stage-2 freeze-budget model (I3): start from the stage-1 elastic model (slacks
+//! already wired), cap the total loosening at S*, and restore the user's original
+//! objective so the re-solve maximizes it among all minimal-loosening fixes. The budget
+//! row reuses the stage-1 slack weights — read back from the elastic model's objective
+//! coefficients — so it freezes exactly the stage-1 objective ≤ S*.
+static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<BlockSlackRef> &slacks,
+                                    const SolverModel &original, double s_star) {
+	SolverModel stage2 = elastic;
+
+	// Budget row: Σ wᵢ sᵢ ≤ S*. Build it while the elastic objective coefficients still
+	// hold the slack weights (editable 1, data DIAGNOSTIC_DATA_SLACK_WEIGHT). The cap is
+	// exactly S*: the stage-1 optimum sits on it, and the backend feasibility tolerance
+	// supplies the cushion that keeps the re-solve feasible. The reported amounts are
+	// snapped past that tolerance — see RoundToSignificant.
+	ModelConstraint budget;
+	for (const auto &sl : slacks) {
+		budget.indices.push_back(static_cast<int>(sl.pos_col));
+		budget.coefficients.push_back(elastic.obj_coeffs[sl.pos_col]);
+		if (sl.neg_col != DConstants::INVALID_INDEX) {
+			budget.indices.push_back(static_cast<int>(sl.neg_col));
+			budget.coefficients.push_back(elastic.obj_coeffs[sl.neg_col]);
+		}
+	}
+	budget.sense = '<';
+	budget.rhs = s_star;
+	budget.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
+
+	// Restore the user's original objective. The slack columns (appended past the
+	// original variables) get zero objective weight, so the achievable objective the
+	// solver reports is exactly cᵀx over the user's variables.
+	stage2.obj_coeffs = original.obj_coeffs;
+	stage2.obj_coeffs.resize(stage2.num_vars, 0.0);
+	stage2.q_rows = original.q_rows;
+	stage2.q_cols = original.q_cols;
+	stage2.q_vals = original.q_vals;
+	stage2.has_quadratic_obj = original.has_quadratic_obj;
+	stage2.nonconvex_quadratic = original.nonconvex_quadratic;
+	stage2.maximize = original.maximize;
+
+	stage2.constraints.push_back(std::move(budget));
+	return stage2;
+}
+
+DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
+	// Build the elastic program — give every relaxable user constraint a
+	// non-negative slack that lets its RHS stretch, minimize the total loosening,
+	// and read which constraints to loosen (the positive-slack support) and by how
+	// much. The minimal edit list is the least-change fix.
+	if (!input.solve_model) {
+		return DecideDiagnostic();
+	}
+
+	ElasticModel elastic = BuildElasticModel(input.model);
+	const vector<BlockSlackRef> &slacks = elastic.slacks;
+
+	// Nothing loosenable: fall through to the static error (the user's only
+	// constraints are rigid mechanism/structural rows we never edit).
+	if (slacks.empty()) {
+		return DecideDiagnostic();
+	}
+
+	SolverResult stage1 = input.solve_model(elastic.model);
+
+	if (stage1.status == SolverStatus::INFEASIBLE) {
+		// The elastic program is itself infeasible: the conflict reaches rigid rows.
+		// Only claim that when every user constraint was actually made relaxable — if
+		// the operator punted a multi-instance bound (I2 scope), stay honest and fall
+		// through to the static error rather than wrongly declaring it unfixable.
+		if (input.has_unhandled_user_bounds) {
+			return DecideDiagnostic();
+		}
+		return BuildElasticInfeasibleDiagnostic();
+	}
+	if (stage1.status != SolverStatus::OPTIMAL || stage1.solution.empty()) {
+		return DecideDiagnostic();
+	}
+
+	// Read the stage-1 slack support: every row with a positive slack is an edit, the
+	// slack value is the loosening amount. Label clauses over user-facing column names.
+	vector<ColumnProvenance> columns =
+	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux);
+	vector<ClauseEdit> edits =
+	    ReadElasticEdits(slacks, stage1.solution, input.model, columns, /*snap=*/false);
 
 	if (edits.empty()) {
 		return DecideDiagnostic();
+	}
+
+	// I3 — stage-2 freeze-budget re-solve. Only when there is a real objective AND an
+	// editable knob to loosen: a constant objective has nothing to report, and a
+	// data-RHS-only conflict has no actionable edit, so an achievable-objective number
+	// would be misleading. Among ALL minimal-loosening fixes (budget frozen at S*),
+	// re-solve the user's objective and report the best one — the stage-2 slacks become the
+	// edit so the edit and the objective agree.
+	if (HasObjective(input.model) && HasLoosenEdit(edits)) {
+		double s_star = stage1.objective_value; // stage-1 ObjVal = Σ wᵢ sᵢ = total loosening
+		SolverModel stage2_model = BuildStage2Model(elastic.model, slacks, input.model, s_star);
+		SolverResult stage2 = input.solve_model(stage2_model);
+
+		if (stage2.status == SolverStatus::OPTIMAL && !stage2.solution.empty()) {
+			// Report the objective-maximizing minimal fix and the objective it achieves.
+			edits = ReadElasticEdits(slacks, stage2.solution, input.model, columns, /*snap=*/true);
+			if (edits.empty()) {
+				return DecideDiagnostic();
+			}
+			return BuildInfeasibleDiagnostic(
+			    edits, FormatNum(RoundToSignificant(stage2.objective_value, 6)));
+		}
+		if (stage2.status == SolverStatus::UNBOUNDED || stage2.status == SolverStatus::INF_OR_UNBD) {
+			// The minimal fix is valid but the relaxed problem has no finite optimum.
+			// Keep the stage-1 edit and say so.
+			return BuildInfeasibleDiagnostic(edits, /*achievable_objective=*/"",
+			                                 /*unbounded_after_fix=*/true);
+		}
+		// Defensive: the stage-1 point satisfies the budget by construction, so stage 2
+		// is feasible. On any other status fall back to the stage-1 edit, no objective.
 	}
 	return BuildInfeasibleDiagnostic(edits);
 }

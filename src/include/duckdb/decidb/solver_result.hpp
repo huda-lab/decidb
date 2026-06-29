@@ -40,6 +40,11 @@ struct SolverResult {
 	//! Solution vector (size = num_rows * num_decide_vars). Present only when
 	//! `status == OPTIMAL`; empty otherwise.
 	vector<double> solution;
+	//! Objective value at the optimum, in the model's own sense (no sign flip).
+	//! Populated by both backends only when `status == OPTIMAL`; left 0.0 otherwise.
+	//! The infeasible engine's stage-2 re-solve reads this as the achievable objective
+	//! (and stage-1 as the total loosening S*).
+	double objective_value = 0.0;
 	//! Unbounded ray (filled by U2; empty for F1).
 	vector<double> ray;
 	//! Backend-native status code, surfaced in the OTHER catch-all message.

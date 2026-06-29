@@ -261,6 +261,38 @@ class TestDiagnosticsRelation:
         assert attrs["amount"] == "10"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_stage2_picks_objective_best_edit(self, request, cli_fixture):
+        """I3: two editable caps `x <= 0` and `y <= 0` tie with the floor `x + y >= 10`
+        on total loosening (S* = 10), so the minimal fix is non-unique. Stage 2 freezes
+        the budget and maximizes the user's objective, so it must loosen x's cap (not y's)
+        and report the achievable objective. The reported objective is differential-checked
+        against an independent re-solve of the fixed query — nothing is hand-computed."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x, y FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL, y IS REAL "
+            "SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        # Stage 2 loosens x's cap (raises the objective), never y's.
+        x_cap = _attrs(rows, "clause", "x <= 0")
+        assert x_cap["suggested_change"] == "x <= 10"
+        assert "suggested_change" not in _attrs(rows, "clause", "y <= 0")
+        # The achievable objective is surfaced as a model-level fact (NULL subject).
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+
+        # Differential: apply the reported edit, re-solve the now-feasible query, and
+        # confirm its objective matches what the diagnosis promised.
+        fixed_sql = sql.replace("x <= 0", x_cap["suggested_change"])
+        fixed = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        objective = sum(float(r["x"]) for r in fixed)
+        assert float(reported) == pytest.approx(objective)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_between_bound_is_loosened(self, request, cli_fixture):
         """BETWEEN is now tracked for re-emission too (it was absorbed but untracked).
         `x BETWEEN 0 AND 5` against `2*x >= 30` loosens the upper side to 15; the

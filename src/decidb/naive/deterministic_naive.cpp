@@ -261,6 +261,9 @@ SolverResult DeterministicNaive::Solve(const SolverModel &model) {
     SolverResult solve_result;
     solve_result.status = SolverStatus::OPTIMAL;
     solve_result.solution = std::move(result);
+    // Objective value at the optimum, in the model's own sense (the diagnostics
+    // stage-2 re-solve reads this as the achievable objective).
+    solve_result.objective_value = highs.getInfo().objective_function_value;
     return solve_result;
 }
 

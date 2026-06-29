@@ -254,7 +254,9 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	return diag;
 }
 
-DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits) {
+DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
+                                           const string &achievable_objective,
+                                           bool unbounded_after_fix) {
 	// Precondition: at least one edit. The engine returns an invalid diagnosis (so the
 	// caller falls through to the static error) when nothing is loosenable or every
 	// slack came back zero, so this never builds a content-free edit list.
@@ -285,6 +287,13 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits) {
 	if (!summaries.empty()) {
 		diag.summary += " " + summaries;
 	}
+	// I3: the achievable objective after the minimal fix. `unbounded_after_fix` wins —
+	// the relaxed problem has no finite optimum.
+	if (unbounded_after_fix) {
+		diag.summary += " After this change, the objective is unbounded.";
+	} else if (!achievable_objective.empty()) {
+		diag.summary += " After this change, the best achievable objective is " + achievable_objective + ".";
+	}
 
 	for (const auto &e : edits) {
 		if (e.kind == ClauseEditKind::CONFLICT_SUMMARY) {
@@ -309,6 +318,16 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits) {
 		amount_row.attribute = "amount";
 		amount_row.value = e.amount;
 		diag.rows.push_back(std::move(amount_row));
+	}
+	// I3: model-level achievable objective. Single stable attribute (the I5 vocabulary
+	// anchor); the value is the number, or "unbounded" when the relaxed problem has no
+	// finite optimum. Omitted entirely when neither is set (the data-RHS-only path).
+	if (unbounded_after_fix || !achievable_objective.empty()) {
+		DiagnosticRow obj_row;
+		obj_row.subject_kind = "model";
+		obj_row.attribute = "achievable_objective";
+		obj_row.value = unbounded_after_fix ? "unbounded" : achievable_objective;
+		diag.rows.push_back(std::move(obj_row));
 	}
 	return diag;
 }

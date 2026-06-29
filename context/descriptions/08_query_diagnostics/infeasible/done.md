@@ -115,10 +115,11 @@ wrongly declaring the query unfixable. As of I2.a multi-instance bounds *are* re
 flag stays `false` in practice and remains as a defensive guard. Likewise, when there are no
 relaxable rows at all, the engine returns invalid (static error).
 
-**Scope (deferred to later phases).** The achievable-objective re-solve is **I3**. The
-L0/removal dial is **I4** (`<>` remove-only depends on it). Full `decide_diagnostics()`
-rendering (runnable rewritten query) is **I5**. All per-shape slack placement and unit
-conversion (**I2.a–I2.e**) has shipped — see "per-shape slack placement" below.
+**Scope (deferred to later phases).** The achievable-objective re-solve (**I3**) has
+shipped — see "stage-2 achievable objective (freeze-budget)" below. The L0/removal dial is
+**I4** (`<>` remove-only depends on it). Full `decide_diagnostics()` rendering (runnable
+rewritten query) is **I5**. All per-shape slack placement and unit conversion
+(**I2.a–I2.e**) has shipped — see "per-shape slack placement" below.
 
 ## Elastic engine: per-shape slack placement (shared blocks, PER, multi-instance bounds)
 
@@ -223,6 +224,71 @@ SUM target, never its 0/1 domain (regression guard); a data-RHS clause reports a
 summary; a penalized data row defers to an editable edit; reversed bounds are reported as their
 canonical absorbed form; AVG/strict re-quote (including strict quadratic); quadratic and
 McCormick gated to Gurobi; `<>` and McCormick rows stay rigid.
+
+## Elastic engine: stage-2 achievable objective (freeze-budget)
+
+I3 reports the **achievable objective** the user gets after the minimal fix — and the
+specific edit that achieves it. Stage 1 (above) finds the least *total* loosening `S*`, but
+when that minimum is non-unique it returns an **arbitrary** minimizer whose edit need not be
+the one best for the user's objective. Stage 2 is a second lexicographic tier: among all
+min-loosening fixes, pick the one that maximizes the user's original objective, and report
+**that** edit so the edit and the objective agree.
+
+**Method (freeze the budget, not the amounts).** `BuildStage2Model`
+(`decide_diagnostic_engines.cpp`) starts from the stage-1 elastic model (slacks already
+wired) and:
+- adds a rigid **budget row** `Σ wᵢ sᵢ ≤ S*` over the slack columns. The weights are read
+  back from the elastic model's objective coefficients (editable `1`, data
+  `DIAGNOSTIC_DATA_SLACK_WEIGHT`), so the row freezes *exactly* the stage-1 objective. `S*`
+  is `stage1.objective_value` (the stage-1 solve minimized `Σ wᵢ sᵢ`, so its objective value
+  *is* the total loosening). The cap is exactly `S*`, no explicit ε: the stage-1 optimum sits
+  on the boundary and the **backend feasibility tolerance** supplies the cushion that keeps
+  the re-solve feasible (this is decision 1 — "pick against the backend feasibility
+  tolerance" — realized by letting that tolerance *be* the tolerance).
+- **restores the user's original objective** (linear `obj_coeffs`, the quadratic objective
+  `q_*` / `has_quadratic_obj` / `nonconvex_quadratic`, and the `maximize` sense), with the
+  slack columns set to zero objective weight so the reported objective is exactly `cᵀx` over
+  the user's variables. Stage 1 had zeroed and dropped the objective; stage 2 needs it back.
+
+`DiagnoseInfeasible` runs stage 2 only when there is a **real objective** (`HasObjective`)
+**and** an editable `LOOSEN` edit (`HasLoosenEdit`): a constant objective has nothing to
+report, and a data-RHS-only conflict has no actionable edit, so an achievable-objective
+number would be misleading (those cases fall back to the stage-1 edit list unchanged).
+
+**Reading the result.** On `OPTIMAL`, the stage-2 slacks are re-read into the edit list
+(`ReadElasticEdits`, the shared stage-1/stage-2 reader) and the objective value is reported.
+Because the budget is enforced only to the feasibility tolerance, a maximizing re-solve can
+ride that tolerance (a clean `10` arriving as `10.000001`), so stage-2 amounts and the
+objective are snapped to six significant figures (`RoundToSignificant`) — safely below the
+tolerance for amounts of order one and up. The stage-1 read is exact and is **not** snapped.
+
+**Objective value plumbing.** `SolverResult` carries `objective_value`, populated on
+`OPTIMAL` by both backends in the model's own sense (`gurobi_solver.cpp` via
+`GRB_DBL_ATTR_OBJVAL` — a new `getdblattr` scalar getter was added to the loader;
+`deterministic_naive.cpp` via HiGHS `getInfo().objective_function_value`). The engine reads
+it for both `S*` (stage 1) and the achievable objective (stage 2) — ground truth, no `cᵀx`
+re-derivation and no quadratic-convention guessing.
+
+**Reporting.** `BuildInfeasibleDiagnostic` gained two optional arguments
+(`achievable_objective`, `unbounded_after_fix`). When set it appends "After this change, the
+best achievable objective is `<value>`." to the summary and emits one EAV row
+`subject_kind='model'`, `attribute='achievable_objective'`, `value=<number>`. `S*` itself is
+**not** surfaced (decision 4) — the headline fact is the objective, not the internal total.
+
+**Stage-2 unbounded (decision 2).** If the relaxed region is unbounded in the objective
+direction (`UNBOUNDED` / `INF_OR_UNBD`), there is no finite optimum: the engine keeps the
+stage-1 edit (still valid) and reports "After this change, the objective is unbounded." with
+the model row value `'unbounded'`. It does **not** hand off to the unbounded engine — the
+edit is the actionable part, and composing two diagnoses would muddy the message.
+
+**Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): a non-unique-minimizer 2-var case
+(caps `x ≤ 0`, `y ≤ 0` feeding rigid `x + y ≥ 10`, `MAXIMIZE x`) reports the x-cap edit and
+objective `10` — loosening `y` would give `0`; a stage-2-unbounded case (`MAXIMIZE y` with
+`y` free) reports the edit plus `achievable_objective = 'unbounded'`. Python differential
+(`test_query_diagnostics_relation.py`): the same shape end-to-end on both backends, with the
+reported objective checked against an independent re-solve of the fixed query (the edit
+applied), never a hand-computed value. Existing infeasible tests that carry an objective now
+exercise stage 2 transparently — their reported edits are unchanged.
 
 ## Elastic engine: column-bound conflicts (intrinsic reset, inverted box, type-domain errors)
 

@@ -220,6 +220,7 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	LOAD_SYM(addqpterms,       "GRBaddqpterms")
 	LOAD_SYM(optimize,          "GRBoptimize")
 	LOAD_SYM(getintattr,        "GRBgetintattr")
+	LOAD_SYM(getdblattr,        "GRBgetdblattr")
 	LOAD_SYM(getdblattrarray,   "GRBgetdblattrarray")
 	LOAD_SYM(geterrormsg,       "GRBgeterrormsg")
 

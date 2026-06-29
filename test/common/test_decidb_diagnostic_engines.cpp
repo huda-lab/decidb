@@ -542,6 +542,71 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(eqc.linear_coefficients[0] == -1.0);
 	}
 
+	// I3: a 2-decide-var, 1-row input so columns name distinct variables x and y.
+	SolverInput input2;
+	input2.num_rows = 1;
+	input2.num_decide_vars = 2;
+	input2.variable_types = {LogicalType::DOUBLE, LogicalType::DOUBLE};
+	VarIndexer indexer2 = VarIndexer::BuildRef(input2);
+	duckdb::vector<string> labels2 {"x", "y"};
+	duckdb::vector<bool> is_aux2 {false, false};
+
+	SECTION("stage 2 reports the objective-maximizing minimal fix among ties") {
+		// Two editable caps x <= 0, y <= 0 conflict with the rigid floor x + y >= 10.
+		// Total loosening S* = 10 with MANY minimizers (loosen x, loosen y, or split).
+		// Freezing arbitrary stage-1 amounts could loosen y (giving objective 0);
+		// stage 2 maximizes x, so it must loosen x's cap to 10 and report objective 10.
+		SolverModel model = MakeModel(2, {
+		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {1, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_LITERAL},
+		});
+		ModelConstraint floor; // rigid x + y >= 10
+		floor.indices = {0, 1};
+		floor.coefficients = {1.0, 1.0};
+		floor.sense = '>';
+		floor.rhs = 10.0;
+		floor.provenance.kind = ConstraintKind::STRUCTURAL;
+		model.constraints.push_back(std::move(floor));
+		model.obj_coeffs = {1.0, 0.0}; // MAXIMIZE x
+		model.maximize = true;
+
+		InfeasibleDiagnosisInput diag_input {model,    indexer2, labels2, is_aux2,
+		                                     params,   false,    solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(diag.state == "infeasible");
+		// The fix loosens x's cap to 10 (amount 10), not y's.
+		CHECK(FindRow(diag, "x <= 0", "suggested_change") == "x <= 10");
+		CHECK(FindRow(diag, "x <= 0", "amount") == "10");
+		CHECK(FindRow(diag, "y <= 0", "suggested_change").empty());
+		// The achievable objective is reported as a model-level fact and in the summary.
+		CHECK(FindRow(diag, "", "achievable_objective") == "10");
+		CHECK(diag.summary.find("best achievable objective is 10") != string::npos);
+	}
+
+	SECTION("stage 2 reports an unbounded objective after the fix") {
+		// x <= 0 (editable) conflicts with the rigid x >= 5: the unique fix loosens the
+		// cap to 5. But y is free above and absent from every constraint, so MAXIMIZE y
+		// has no finite optimum once feasible — the engine keeps the edit and says so.
+		SolverModel model = MakeModel(2, {
+		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {0, 1.0, '>', 5.0, ConstraintKind::STRUCTURAL},
+		});
+		model.obj_coeffs = {0.0, 1.0}; // MAXIMIZE y (unbounded)
+		model.maximize = true;
+
+		InfeasibleDiagnosisInput diag_input {model,    indexer2, labels2, is_aux2,
+		                                     params,   false,    solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		CHECK(FindRow(diag, "x <= 0", "suggested_change") == "x <= 5");
+		CHECK(FindRow(diag, "x <= 0", "amount") == "5");
+		CHECK(FindRow(diag, "", "achievable_objective") == "unbounded");
+		CHECK(diag.summary.find("objective is unbounded") != string::npos);
+	}
+
 	SECTION("diagnostics relation carries clause-shaped infeasible attributes") {
 		DuckDB db(nullptr);
 		Connection con(db);

@@ -19,7 +19,8 @@ order, not versions.
 - [x] **I1 · Elastic model + stage-1 solve, simple shapes** (v2.1) — shipped; see `done.md`
 - [x] **I2 · Slack placement — shared-slack / multi-row shapes** — shipped; see `done.md`
   ("per-shape slack placement"). All of I2.0/a/b/c/d/e landed.
-- [ ] **I3 · Stage-2 — freeze-budget objective re-solve** — deps: I1 (shape-agnostic)
+- [x] **I3 · Stage-2 — freeze-budget objective re-solve** — shipped; see `done.md`
+  ("stage-2 achievable objective (freeze-budget)").
 - [ ] **I4 · L0 / removal dial** — deps: I1, norms (v1.1, external)
 - [ ] **I5 · Infeasibility reporting (full)** (v3.1) — deps: I1/I2/I3, F4, F5
 
@@ -61,51 +62,6 @@ legitimately row-varying.
 as `SHARED_LITERAL` or a new shared-scalar shape, while correlated subqueries remain
 `PER_ROW_DATA`.
 
-
----
-
-## I3 · Stage-2 — freeze-budget objective re-solve
-
-**Goal.** Report the **achievable objective** the user gets after the minimal fix — and
-the specific edit that achieves it. Shape-agnostic: works on whatever slacks I1/I2 placed.
-
-**Method (freeze the budget, not the amounts).** Keep the slacks as **variables**, cap the
-total loosening at the stage-1 optimum `S*`, and re-solve the user's original objective:
-
-```
-stage 2:   max  cᵀx          (the user's original objective)
-           s.t. Aᵢ x ≤ bᵢ + sᵢ
-                Σ wᵢ sᵢ ≤ S*(1 + ε)         ← freeze the budget; s stays variable
-                sᵢ ≥ 0 , structural rows rigid
-           → report the stage-2 slacks as the edit, and cᵀx* as the achievable objective
-```
-
-This is a lexicographic objective: *(1)* minimize total loosening → `S*` (I1), *(2)* among
-**all** min-loosening edits, pick the one that maximizes the user's objective. It strictly
-dominates freezing the exact amounts, which locks in an *arbitrary* stage-1 minimizer when
-the min-slack solution isn't unique. **Report the stage-2 slacks** (not stage-1's) as the
-edit so the edit and the objective are consistent.
-
-**Decisions to settle (I3):**
-- **Budget tolerance `ε`.** Absolute (`Σwᵢsᵢ ≤ S* + ε`) vs. relative (`S*(1+ε)`). Needed
-  because `S*` is a solved value — too tight spuriously makes stage-2 infeasible. Pick
-  against the backend feasibility tolerance; reuse `DIAGNOSTIC_RAY_EPSILON` /
-  `diagnostic_constants.hpp` style constants or add one.
-- **Stage-2 unbounded.** If the relaxed region is unbounded in the objective direction,
-  stage-2 has no finite max. Decide: report the edit + "objective is unbounded after this
-  fix," or hand to the unbounded engine. Settle the message.
-- **Sparsity tie-break (defer).** Among edits tying on objective, the solver picks one
-  arbitrarily — possibly denser than L1's sparse pick. If edits look dense in practice,
-  add a 3rd lexicographic tier (re-minimize spread/count). Default: skip for v1.
-- **Surface `S*`?** Whether total loosening `S*` is reported as its own fact alongside the
-  per-edit amounts.
-
-**Test (differential vs `oracle_solver`).** On a constructed non-unique-minimizer case
-(e.g. two relaxable caps feeding one structural floor), stage-2 must report a *better*
-objective than freezing the exact amounts would, and the reported edit must be the one
-that achieves the reported objective when re-solved independently.
-
-**Done section:** "Elastic engine: stage-2 achievable objective (freeze-budget)."
 
 ---
 
@@ -177,8 +133,8 @@ suppresses the single-query rewrite; the elastic-infeasible case renders its dis
   minimal edit list, on the shipped I0 seam. **Shipped.**
 - **Batch C (the hard shapes):** I2 — shared-slack placement + per-shape units; the bulk of
   the engine. **Shipped.**
-- **Batch B (objective):** I3 — freeze-budget stage-2 (shape-agnostic). *Next.*
-- **Batch D (reporting):** I5 — full two-tier reporting once shapes + objective exist.
+- **Batch B (objective):** I3 — freeze-budget stage-2 (shape-agnostic). **Shipped.**
+- **Batch D (reporting):** I5 — full two-tier reporting once shapes + objective exist. *Next.*
 - **Batch E (gated):** I4 — L0 / removal dial, when norms (v1.1) land.
 
 ---
@@ -193,5 +149,8 @@ suppresses the single-query rewrite; the elastic-infeasible case renders its dis
   L1 race can prefer loosening the large-scale constraint. The fix is scale-normalized weights
   (by RHS magnitude / row-coefficient norm); deferred until a test exposes the skew.
 - **Data-slack penalty is a fixed constant, not lexicographic.** `DIAGNOSTIC_DATA_SLACK_WEIGHT`
-  is a coarse stand-in for preferring editable edits; a true lexicographic "editable first, then
-  data" tier is the proper fix and folds into the **I3** stage-2 work.
+  is a coarse stand-in for preferring editable edits over data conflicts. I3 did **not** replace
+  it: the stage-2 budget freeze picks the objective-best fix *among min-loosening edits* (a tier
+  below S*), which is orthogonal to the editable-vs-data preference that lives *inside* the
+  stage-1 weights. A true lexicographic "editable first, then data" tier (drop the weight, run
+  stage 1 in two passes) remains the proper fix — still future work.

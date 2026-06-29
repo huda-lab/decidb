@@ -49,6 +49,7 @@ static constexpr int GRB_USER_OBJ_LIMIT = 15;
 static constexpr const char *GRB_INT_ATTR_MODELSENSE = "ModelSense";
 static constexpr const char *GRB_INT_ATTR_STATUS = "Status";
 static constexpr const char *GRB_DBL_ATTR_X = "X";
+static constexpr const char *GRB_DBL_ATTR_OBJVAL = "ObjVal";
 
 //===----------------------------------------------------------------------===//
 // Function pointer table for the Gurobi C API functions DecidB uses
@@ -82,6 +83,7 @@ struct GurobiAPI {
 	// Solve and query
 	int (*optimize)(void *model);
 	int (*getintattr)(void *model, const char *attrname, int *valueP);
+	int (*getdblattr)(void *model, const char *attrname, double *valueP);
 	int (*getdblattrarray)(void *model, const char *attrname, int start, int len, double *values);
 
 	// Error reporting

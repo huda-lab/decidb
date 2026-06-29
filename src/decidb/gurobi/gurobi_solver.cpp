@@ -273,6 +273,13 @@ SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
     SolverResult solve_result;
     solve_result.status = SolverStatus::OPTIMAL;
     solve_result.solution = std::move(result);
+    // Objective value at the optimum, in the model's own sense (the diagnostics
+    // stage-2 re-solve reads this as the achievable objective). A failure to read it
+    // is non-fatal — leave the 0.0 default.
+    double obj_val = 0.0;
+    if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
+        solve_result.objective_value = obj_val;
+    }
     return solve_result;
 }
 

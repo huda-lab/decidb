@@ -144,14 +144,23 @@ struct ClauseEdit {
 	string detail;     //!< "conflicts in M of N rows" (CONFLICT_SUMMARY only)
 };
 
-//! Build the infeasible diagnosis from the minimal edit list the elastic stage-1
-//! solve produced (one clause per positive slack, or one conflict summary per
-//! data-RHS clause). The summary prescribes the smallest change(s) that restore
-//! feasibility; each LOOSEN edit emits `suggested_change` and `amount` rows, each
-//! CONFLICT_SUMMARY edit emits a `conflict` row, keyed by the clause as written.
+//! Build the infeasible diagnosis from the minimal edit list the elastic engine
+//! produced (one clause per positive slack, or one conflict summary per data-RHS
+//! clause). The summary prescribes the smallest change(s) that restore feasibility;
+//! each LOOSEN edit emits `suggested_change` and `amount` rows, each CONFLICT_SUMMARY
+//! edit emits a `conflict` row, keyed by the clause as written.
+//!
+//! `achievable_objective` (I3, the stage-2 freeze-budget re-solve): when non-empty,
+//! appends "After this change, the best achievable objective is <value>." to the
+//! summary and emits one `subject_kind='model'`, `attribute='achievable_objective'`
+//! row. `unbounded_after_fix` overrides it: the relaxed problem has no finite optimum,
+//! so the summary reads "… the objective is unbounded." and the row value is
+//! `'unbounded'`. Both default off (used by the unchanged data-RHS-only path).
 //! Precondition: `edits` non-empty (the caller falls through to the static error
 //! otherwise).
-DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits);
+DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
+                                           const string &achievable_objective = "",
+                                           bool unbounded_after_fix = false);
 
 //! Build the diagnosis for the case where the elastic program itself is infeasible:
 //! loosening the user's editable constraints cannot restore feasibility because the
