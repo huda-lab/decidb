@@ -264,6 +264,17 @@ struct EvaluatedConstraint {
     vector<idx_t> row_group_ids;
     idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
 
+    //! Printable PER key per group (size num_groups when PER-grouped; empty otherwise).
+    //! Surfaces each group's key value (`'a'`, or `EU, 2024` for a composite key) so
+    //! infeasible diagnosis can identify which group an edit belongs to. Stamped onto
+    //! ConstraintProvenance::group_label at the aggregate-PER emission sites.
+    vector<string> group_labels;
+
+    //! WHEN/PER qualifier text for this clause (`PER grp`, `WHEN g='a' PER region, year`),
+    //! same for every group. Stamped onto ConstraintProvenance::qualifier so infeasible
+    //! diagnosis can append it to the reconstructed clause label. Empty when unqualified.
+    string qualifier;
+
     //! CSR-style group→rows index, computed lazily by EnsureGroupCSR().
     //! group_offsets has size num_groups + 1 when populated; empty otherwise.
     //! Group g's active rows occupy [group_offsets[g], group_offsets[g+1]) in group_row_ids.

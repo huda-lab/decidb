@@ -148,6 +148,9 @@ struct ClauseEdit {
 	string suggestion; //!< the constraint after the minimal loosening (LOOSEN only)
 	string amount;     //!< magnitude of the loosening, formatted (LOOSEN only)
 	string detail;     //!< "conflicts in M of N rows" (CONFLICT_SUMMARY only)
+	string group;      //!< printable PER key of this edit's group (empty if ungrouped);
+	                   //!< emitted as a separate `group` EAV row so folded SUM clauses
+	                   //!< stay distinguishable in the relation
 };
 
 //! Build the infeasible diagnosis from the minimal edit list the elastic engine

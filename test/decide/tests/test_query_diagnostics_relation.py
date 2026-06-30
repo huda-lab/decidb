@@ -65,6 +65,24 @@ def _attrs(rows, subject_kind, subject):
     }
 
 
+def _clause_edits(rows):
+    """Group the EAV clause rows into one dict per edit. Each edit's rows are emitted as
+    a contiguous run starting at `edit_kind`, so a new `edit_kind` row opens a new edit.
+    Lets two PER-group edits that share the same folded `subject` be told apart by their
+    separate `group` attribute."""
+    edits = []
+    cur = None
+    for r in rows:
+        if r["subject_kind"] != "clause":
+            continue
+        if r["attribute"] == "edit_kind":
+            cur = {"subject": r["subject"], "edit_kind": r["value"]}
+            edits.append(cur)
+        elif cur is not None:
+            cur[r["attribute"]] = r["value"]
+    return edits
+
+
 def _diagnosis_marker(stdout, label):
     match = re.search(rf"{label}=(\d+):(\d+):(\d+)", stdout)
     assert match, f"Missing {label!r} diagnosis marker in stdout:\n{stdout}"
@@ -373,10 +391,12 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_per_group_reports_one_edit_per_group(self, request, cli_fixture):
-        """I2.b: an aggregate `SUM(x) >= 5 PER grp` emits one row per group, so each
-        group gets its own slack — a per-group edit, not one global edit. Group 'a'
-        (2 BOOLEAN x, max 2) loosens to >= 2 (amount 3); group 'b' (3 x, max 3) to
-        >= 3 (amount 2). BOOLEAN keeps the domain rigid, so there is no floor
+        """PER-group identity: an aggregate `SUM(x) >= 5 PER grp` emits one row per
+        group, so each group gets its own slack — a per-group edit. Both groups now FOLD
+        to the same aggregate clause text `SUM(x) >= 5 PER grp` (not the expanded
+        `x + x`), and a separate `group` row names which group ('a'/'b') the edit applies
+        to. Group 'a' (2 BOOLEAN x, max 2) loosens to >= 2 (amount 3); group 'b' (3 x,
+        max 3) to >= 3 (amount 2). BOOLEAN keeps the domain rigid, so there is no floor
         competition: the per-group amounts are exact."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
@@ -387,13 +407,48 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        # One edit per group, each loosening its own SUM row to that group's max.
-        group_a = _attrs(rows, "clause", "x + x >= 5")
-        group_b = _attrs(rows, "clause", "x + x + x >= 5")
-        assert group_a["suggested_change"] == "x + x >= 2"
-        assert group_a["amount"] == "3"
-        assert group_b["suggested_change"] == "x + x + x >= 3"
-        assert group_b["amount"] == "2"
+        edits = _clause_edits(rows)
+        # Both groups fold to the same aggregate clause text, with the `PER grp` qualifier.
+        # The subject also carries the group label on every EAV row, so clients do not need
+        # to rely on row order to associate suggested_change/amount with a group.
+        assert [e["subject"] for e in edits] == [
+            "SUM(x) >= 5 PER grp [group: a]",
+            "SUM(x) >= 5 PER grp [group: b]",
+        ]
+        assert {
+            r["subject"]
+            for r in rows
+            if r["subject_kind"] == "clause"
+        } == {
+            "SUM(x) >= 5 PER grp [group: a]",
+            "SUM(x) >= 5 PER grp [group: b]",
+        }
+        by_group = {e["group"]: e for e in edits}
+        assert set(by_group) == {"a", "b"}
+        assert by_group["a"]["suggested_change"] == "SUM(x) >= 2 PER grp"
+        assert by_group["a"]["amount"] == "3"
+        assert by_group["b"]["suggested_change"] == "SUM(x) >= 3 PER grp"
+        assert by_group["b"]["amount"] == "2"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_single_row_when_group_keeps_sum_wrapper(self, request, cli_fixture):
+        """Facet B/C: a single-row aggregate group keeps its `SUM(...)` wrapper and the
+        WHEN qualifier in the label. `SUM(x) >= 99 WHEN grp='a'` matches one BOOLEAN row
+        (max 1), so it is infeasible and must render `SUM(x) >= 99 WHEN grp = 'a'` — not a
+        bare `x >= 99` — even though there is no per-row fan-out to fold. The WHEN
+        predicate is rendered cleanly (no implicit CAST / extra parens)."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,'a'),(2,'b')) t(id, grp) "
+            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 99 WHEN grp='a' MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        edit = _attrs(rows, "clause", "SUM(x) >= 99 WHEN grp = 'a'")
+        assert edit["edit_kind"] == "loosen"
+        assert edit["suggested_change"] == "SUM(x) >= 1 WHEN grp = 'a'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_boolean_loosens_constraint_not_domain(self, request, cli_fixture):
@@ -477,6 +532,55 @@ class TestDiagnosticsRelation:
         assert not [r for r in rows if r["attribute"] == "conflict"]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_uncorrelated_subquery_cap_is_editable(self, request, cli_fixture):
+        """I2 follow-up: an UNCORRELATED scalar subquery RHS (`x <= (SELECT 5)`) flattens
+        to a cross-joined column ref, structurally identical to row data — but it is one
+        shared editable cap. The binder tags it SHARED_SCALAR_SUBQUERY_TAG before flattening
+        so the engine loosens it exactly like a literal `x <= 5` would (5 → 10 against the
+        `x >= lo` = 10 floor), not as a per-row data conflict."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
+            "DECIDE x IS REAL SUCH THAT x <= (SELECT 5) AND x >= lo MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        cap = _attrs(rows, "clause", "x <= 5")
+        assert cap["suggested_change"] == "x <= 10"
+        assert cap["amount"] == "5"
+        assert not [r for r in rows if r["attribute"] == "conflict"]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_correlated_subquery_cap_stays_per_row(self, request, cli_fixture):
+        """I2 follow-up guard: a CORRELATED scalar subquery RHS (`x <= (SELECT hi)`, hi from
+        the outer row) is genuinely per-row data and must NOT be tagged shared. The two
+        distinct caps (5, 8) stay independent per-row bounds, so the conflict against the
+        `x >= 100` floor loosens that editable floor down to the binding per-row cap (5),
+        and no `x <= ...` clause ever becomes an editable scalar."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,5),(2,8)) t(id, hi) "
+            "DECIDE x IS REAL SUCH THAT x <= (SELECT hi) AND x >= 100 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        # The editable floor is the loosened knob; per-row caps bound it at min(5,8)=5.
+        floor = _attrs(rows, "clause", "x >= 100")
+        assert floor["edit_kind"] == "loosen"
+        assert floor["suggested_change"] == "x >= 5"
+        # The correlated subquery cap never gets a scalar loosening suggestion.
+        assert not [
+            r for r in rows
+            if r["subject_kind"] == "clause"
+            and r["subject"].startswith("x <=")
+            and r["attribute"] == "suggested_change"
+        ]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_single_absorbed_bound_vs_row(self, request, cli_fixture):
         """Bug 1: a single absorbed cap (`x <= 4`) that conflicts with a matrix row
         (`2*x >= 30` → x >= 15) — the column box (implied + absorbed) no longer pins the
@@ -515,9 +619,10 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_strict_less_than_requotes_typed_literal(self, request, cli_fixture):
-        """I2.d: `x < 10` (integer) is built as `x <= 9` (δ baked in). The reported edit
-        must re-quote against the user's typed `10` and render `<`, not the δ-adjusted
-        `<=`. A penalized data floor forces the strict cap to loosen by 6 → `x < 16`."""
+        """I2.d: `SUM(x) < 10` (integer, single row) is built as `<= 9` (δ baked in). The
+        reported edit must re-quote against the user's typed `10` and render `<`, not the
+        δ-adjusted `<=`. The single-row aggregate keeps its `SUM(...)` wrapper (Facet B). A
+        penalized data floor forces the strict cap to loosen by 6 → `SUM(x) < 16`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,15)) t(id, lo) "
@@ -526,14 +631,15 @@ class TestDiagnosticsRelation:
         result = _diagnose(cli, sql, mode="auto")
 
         rows = _rows(result)
-        edit = _attrs(rows, "clause", "x < 10")
-        assert edit["suggested_change"] == "x < 16"
+        edit = _attrs(rows, "clause", "SUM(x) < 10")
+        assert edit["suggested_change"] == "SUM(x) < 16"
         assert edit["amount"] == "6"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_strict_greater_than_requotes_typed_literal(self, request, cli_fixture):
-        """I2.d: the `>` mirror of the strict re-quote. `x > 10` (built as `x >= 11`)
-        loosens downward against a penalized data cap → `x > 2`."""
+        """I2.d: the `>` mirror of the strict re-quote. `SUM(x) > 10` (single row, built as
+        `>= 11`) loosens downward against a penalized data cap → `SUM(x) > 2`. The
+        single-row aggregate keeps its `SUM(...)` wrapper (Facet B)."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,3)) t(id, hi) "
@@ -542,8 +648,8 @@ class TestDiagnosticsRelation:
         result = _diagnose(cli, sql, mode="auto")
 
         rows = _rows(result)
-        edit = _attrs(rows, "clause", "x > 10")
-        assert edit["suggested_change"] == "x > 2"
+        edit = _attrs(rows, "clause", "SUM(x) > 10")
+        assert edit["suggested_change"] == "SUM(x) > 2"
         assert edit["amount"] == "8"
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])

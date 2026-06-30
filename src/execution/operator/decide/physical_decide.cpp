@@ -316,7 +316,27 @@ struct PerGroupCacheEntry {
 	bool null_excludes;
 	vector<idx_t> unfiltered_row_group_ids;
 	idx_t unfiltered_num_groups;
+	//! Representative key values per unfiltered group ([key_col][gid]); used to label
+	//! each PER group with its printable key for infeasible diagnosis.
+	vector<vector<Value>> unfiltered_rep_keys;
 };
+
+//! Printable key for an (unfiltered) group: the per-key-column representative values
+//! joined with ", " (composite PER key → `EU, 2024`); a NULL value renders "NULL".
+static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, idx_t gid) {
+	string s;
+	for (idx_t c = 0; c < rep_keys.size(); c++) {
+		if (gid >= rep_keys[c].size()) {
+			continue;
+		}
+		const Value &v = rep_keys[c][gid];
+		if (!s.empty()) {
+			s += ", ";
+		}
+		s += v.IsNull() ? "NULL" : v.ToString();
+	}
+	return s;
+}
 
 using PerGroupCache = std::unordered_map<size_t, vector<PerGroupCacheEntry>>;
 
@@ -359,7 +379,8 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
                                      bool null_excludes,
                                      const std::function<bool(idx_t)> &row_filter,
                                      vector<idx_t> &out_row_group_ids,
-                                     idx_t &out_num_groups) {
+                                     idx_t &out_num_groups,
+                                     vector<string> &out_group_labels) {
 	size_t key = HashPerKey(per_columns, null_excludes);
 	auto &bucket = cache[key];
 	PerGroupCacheEntry *entry = nullptr;
@@ -386,12 +407,14 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
 		}
 		std::function<bool(idx_t)> no_filter; // empty = include all
 		BuildGroupIds(key_exprs, context, data, num_rows, no_filter, null_excludes,
-		              entry->unfiltered_row_group_ids, entry->unfiltered_num_groups);
+		              entry->unfiltered_row_group_ids, entry->unfiltered_num_groups,
+		              &entry->unfiltered_rep_keys);
 	}
 
 	// Apply per-call filter and remap surviving group IDs to consecutive 0..K'
 	// in encounter order, matching the legacy BuildGroupIds output exactly.
 	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+	out_group_labels.clear();
 	if (entry->unfiltered_num_groups == 0 || num_rows == 0) {
 		out_num_groups = 0;
 		return;
@@ -406,6 +429,9 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
 		if (mapped == DConstants::INVALID_INDEX) {
 			mapped = next_remap++;
 			remap[unf_gid] = mapped;
+			// Reindex the printable key in lockstep with the dense 0..K' renumber:
+			// mapped == out_group_labels.size() exactly here, so labels stay aligned.
+			out_group_labels.push_back(FormatPerGroupKey(entry->unfiltered_rep_keys, unf_gid));
 		}
 		out_row_group_ids[r] = mapped;
 	}
@@ -424,6 +450,33 @@ static const Expression *UnwrapBoundCasts(const Expression &expr) {
 		cur = cur->Cast<BoundCastExpression>().child.get();
 	}
 	return cur;
+}
+
+//! User-facing rendering of a WHEN predicate for diagnosis labels: unwrap the implicit
+//! CASTs the binder inserts around literals (so `grp = 'a'` reads cleanly instead of
+//! `(grp = CAST('a' AS VARCHAR))`) and drop the redundant outer parens GetName() adds.
+//! Handles comparisons and AND/OR conjunctions; anything else falls back to the unwrapped
+//! expression's ToString.
+static string RenderWhenPredicate(const Expression &expr) {
+	const Expression *cur = UnwrapBoundCasts(expr);
+	if (cur->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+		auto &comp = cur->Cast<BoundComparisonExpression>();
+		return RenderWhenPredicate(*comp.left) + " " + ExpressionTypeToOperator(comp.type) + " " +
+		       RenderWhenPredicate(*comp.right);
+	}
+	if (cur->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = cur->Cast<BoundConjunctionExpression>();
+		string op = conj.type == ExpressionType::CONJUNCTION_AND ? " AND " : " OR ";
+		string s;
+		for (auto &child : conj.children) {
+			if (!s.empty()) {
+				s += op;
+			}
+			s += RenderWhenPredicate(*child);
+		}
+		return s;
+	}
+	return cur->ToString();
 }
 
 static bool IsBoundMultiply(const Expression &expr) {
@@ -2919,7 +2972,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // — collapse those rows to one shared slack so the infeasible diagnosis
             // treats it as a single editable cap, not per-row data. A row-varying RHS
             // (column ref, correlated subquery) is not foldable and stays PER_ROW_DATA.
-            eval_const.rhs_is_shared_literal = constraint->rhs_expr->IsFoldable();
+            // An uncorrelated scalar subquery (`x <= (SELECT 5)`) flattens to a column
+            // ref that is not foldable but IS one shared cap; the binder marked it with
+            // SHARED_SCALAR_SUBQUERY_TAG before flattening so we recognize it here.
+            eval_const.rhs_is_shared_literal =
+                constraint->rhs_expr->IsFoldable() ||
+                IsSharedScalarSubqueryTag(constraint->rhs_expr->GetAlias());
             eval_const.rhs_values.Reserve(num_rows);
 
             const Expression &transformed_rhs =
@@ -3000,6 +3058,29 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool has_when = (constraint->when_condition != nullptr);
         bool has_per = (!constraint->per_columns.empty());
 
+        // Facet C: render the WHEN/PER qualifier for the clause label, reusing the same
+        // expression GetName() the EXPLAIN/ParamsToString path uses. Order mirrors the
+        // postfix syntax (`... WHEN <cond> PER <cols>`). Stamped onto provenance at the
+        // aggregate emission sites; the diagnosis appends it to the reconstructed label.
+        {
+            string &q = eval_const.qualifier;
+            if (has_when) {
+                q = "WHEN " + RenderWhenPredicate(*constraint->when_condition);
+            }
+            if (has_per) {
+                if (!q.empty()) {
+                    q += " ";
+                }
+                q += "PER ";
+                for (idx_t i = 0; i < constraint->per_columns.size(); i++) {
+                    if (i > 0) {
+                        q += ", ";
+                    }
+                    q += constraint->per_columns[i]->GetName();
+                }
+            }
+        }
+
         if (has_when || has_per || has_local_filters) {
             vector<bool> when_mask;
             if (has_when) {
@@ -3020,7 +3101,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 LookupOrBuildPerGroupIds(per_group_cache, constraint->per_columns,
                                          chunk_expr_cache, context, gstate.data, num_rows,
                                          /*null_excludes=*/true, row_is_included,
-                                         eval_const.row_group_ids, eval_const.num_groups);
+                                         eval_const.row_group_ids, eval_const.num_groups,
+                                         eval_const.group_labels);
                 // PER: individual empty groups are skipped silently, but the
                 // aggregate as a whole must see at least one group. Per-row
                 // constraints are exempt — a per-row WHEN matching zero rows is
@@ -3769,6 +3851,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_row.lhs_is_aggregate = false; // per-row!
                 ec_row.row_group_ids = ec.row_group_ids;
                 ec_row.num_groups = ec.num_groups;
+                ec_row.group_labels = ec.group_labels;
+                ec_row.qualifier = ec.qualifier;
                 ec_row.kind = ConstraintKind::USER_MECHANISM;
                 new_constraints.push_back(std::move(ec_row));
 
@@ -3781,6 +3865,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
                 ec_sum.num_groups = ec.num_groups;
+                ec_sum.group_labels = ec.group_labels;
+                ec_sum.qualifier = ec.qualifier;
                 ec_sum.kind = ConstraintKind::USER_MECHANISM;
                 new_constraints.push_back(std::move(ec_sum));
             } else {
@@ -3796,6 +3882,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_row.lhs_is_aggregate = false;
                 ec_row.row_group_ids = ec.row_group_ids;
                 ec_row.num_groups = ec.num_groups;
+                ec_row.group_labels = ec.group_labels;
+                ec_row.qualifier = ec.qualifier;
                 ec_row.kind = ConstraintKind::USER_MECHANISM;
                 new_constraints.push_back(std::move(ec_row));
 
@@ -3808,6 +3896,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ec_sum.lhs_is_aggregate = true;
                 ec_sum.row_group_ids = ec.row_group_ids;
                 ec_sum.num_groups = ec.num_groups;
+                ec_sum.group_labels = ec.group_labels;
+                ec_sum.qualifier = ec.qualifier;
                 ec_sum.kind = ConstraintKind::USER_MECHANISM;
                 new_constraints.push_back(std::move(ec_sum));
             }
@@ -3958,6 +4048,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec1.lhs_is_aggregate = false; // per-row
                     ec1.row_group_ids = ec.row_group_ids;
                     ec1.num_groups = ec.num_groups;
+                    ec1.group_labels = ec.group_labels;
+                    ec1.qualifier = ec.qualifier;
                     ec1.kind = ConstraintKind::USER_MECHANISM;
                     // I4: tag this disjunction row with its indicator so the elastic
                     // engine can group the pair and offer removal (remove-only `<>`).
@@ -3975,6 +4067,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ec2.lhs_is_aggregate = false; // per-row
                     ec2.row_group_ids = ec.row_group_ids;
                     ec2.num_groups = ec.num_groups;
+                    ec2.group_labels = ec.group_labels;
+                    ec2.qualifier = ec.qualifier;
                     ec2.kind = ConstraintKind::USER_MECHANISM;
                     // I4: same indicator as ec1 — both rows form one removable `<>`.
                     ec2.ne_indicator_idx = indicator_var_idx;
@@ -4171,6 +4265,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             ec_ub1.lhs_is_aggregate = false;
             ec_ub1.row_group_ids = c1.row_group_ids;
             ec_ub1.num_groups = c1.num_groups;
+            ec_ub1.group_labels = c1.group_labels;
+            ec_ub1.qualifier = c1.qualifier;
             ec_ub1.kind = ConstraintKind::STRUCTURAL;
             gstate.evaluated_constraints.push_back(std::move(ec_ub1));
 
@@ -4185,6 +4281,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             ec_ub2.lhs_is_aggregate = false;
             ec_ub2.row_group_ids = c2.row_group_ids;
             ec_ub2.num_groups = c2.num_groups;
+            ec_ub2.group_labels = c2.group_labels;
+            ec_ub2.qualifier = c2.qualifier;
             ec_ub2.kind = ConstraintKind::STRUCTURAL;
             gstate.evaluated_constraints.push_back(std::move(ec_ub2));
         }
@@ -4265,11 +4363,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             return true;
         };
 
+        vector<string> obj_group_labels; // unused: objective groups are not diagnosed by clause key
         LookupOrBuildPerGroupIds(per_group_cache, gstate.objective->per_columns,
                                  chunk_expr_cache, context, gstate.data, num_rows,
                                  /*null_excludes=*/true, obj_row_is_included,
                                  solver_input.objective_row_group_ids,
-                                 solver_input.objective_num_groups);
+                                 solver_input.objective_num_groups, obj_group_labels);
     }
 
     auto ScaleObjectiveAvgRows = [&](CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask,

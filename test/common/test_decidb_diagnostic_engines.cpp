@@ -236,12 +236,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(diag.state == "infeasible");
 		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 10");
 		CHECK(FindRow(diag, "x <= 5", "amount") == "5");
-		// I5: the summary is a lean cue (kind of fix), not the inline specific edit; the
-		// specific clause/amount live in the structured rows above. edit_kind is uniform.
+		// I5: with <=3 edits the summary quotes the specific clause inline; the structured
+		// rows above still carry the same data. edit_kind is uniform.
 		CHECK(FindRow(diag, "x <= 5", "edit_kind") == "loosen");
 		CHECK(diag.summary.find("a possible edit was found") != string::npos);
-		CHECK(diag.summary.find("loosen one of your SUCH THAT limits") != string::npos);
-		CHECK(diag.summary.find("Loosen x <= 5 to x <= 10") == string::npos);
+		CHECK(diag.summary.find("loosen `x <= 5` to `x <= 10`") != string::npos);
 	}
 
 	SECTION("equality row loosens via its two-sided slack") {
@@ -774,9 +773,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
 		CHECK(FindRow(diag, "(x <> 3)", "edit_kind") == "drop");
-		// I5: the summary is a lean cue (kind of fix); the specific `(x <> 3)` is in the row.
+		// I5: with <=3 edits the summary quotes the specific clause inline.
 		CHECK(diag.summary.find("a possible edit was found") != string::npos);
-		CHECK(diag.summary.find("remove one of your SUCH THAT constraints") != string::npos);
+		CHECK(diag.summary.find("remove `(x <> 3)`") != string::npos);
 	}
 
 	SECTION("prefer-loosen: a loosenable knob is chosen over dropping a `<>`") {

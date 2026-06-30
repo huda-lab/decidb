@@ -585,6 +585,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.clause_id = clause_id; // F2 site 1: aggregate, ungrouped
                 constr.provenance.kind = eval_const.kind;
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
+                constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
+                constr.provenance.qualifier = eval_const.qualifier;
                 // An aggregate's RHS is required to be scalar (one editable knob), so
                 // it is a SHARED_LITERAL, not per-row data. This keeps PER_ROW_DATA
                 // meaning exactly "data RHS" for the conflict-summary path (I2.c).
@@ -678,8 +680,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_is_integer);
                     constr.provenance.clause_id = clause_id; // F2 site 2: aggregate + PER/WHEN
                     constr.provenance.group_key = g;
+                    if (g < eval_const.group_labels.size()) {
+                        constr.provenance.group_label = eval_const.group_labels[g];
+                    }
                     constr.provenance.kind = eval_const.kind;
                     constr.provenance.avg_scaled = eval_const.avg_scaled;
+                    constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
+                    constr.provenance.qualifier = eval_const.qualifier;
                     // Scalar RHS per group → one editable knob per group (SHARED_LITERAL),
                     // not per-row data. See site 1 (I2.c).
                     constr.provenance.shape = ElasticShape::SHARED_LITERAL;
@@ -939,6 +946,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer);
                 qc.provenance.clause_id = clause_id; // F2 site 5: quadratic aggregate, ungrouped
                 qc.provenance.kind = eval_const.kind;
+                qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
+                qc.provenance.qualifier = eval_const.qualifier;
                 model.quadratic_constraints.push_back(std::move(qc));
             } else {
                 // PER groups: one QuadraticConstraint per group, reuse CSR
@@ -957,7 +966,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, rhs, lhs_is_integer);
                     qc.provenance.clause_id = clause_id; // F2 site 6: quadratic aggregate + PER
                     qc.provenance.group_key = g;
+                    if (g < eval_const.group_labels.size()) {
+                        qc.provenance.group_label = eval_const.group_labels[g];
+                    }
                     qc.provenance.kind = eval_const.kind;
+                    qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
+                    qc.provenance.qualifier = eval_const.qualifier;
                     model.quadratic_constraints.push_back(std::move(qc));
                 }
             }

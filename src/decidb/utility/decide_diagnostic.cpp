@@ -330,6 +330,10 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	// and a data-RHS-only conflict has no single value to loosen, so it gets its own cue.
 	// "a possible edit" (note: "a", one hitting set, not "the" complete conflict set).
 	// Tell the user the fix, not the math.
+	auto relation_subject = [](const ClauseEdit &e) {
+		return e.group.empty() ? e.label : e.label + " [group: " + e.group + "]";
+	};
+
 	bool has_loosen = false;
 	bool has_drop = false;
 	vector<string> phrases;
@@ -379,19 +383,20 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	}
 
 	for (const auto &e : edits) {
+		string subject = relation_subject(e);
 		if (e.kind == ClauseEditKind::CONFLICT_SUMMARY) {
 			// I5: every edit carries a uniform edit_kind so the relation is
 			// self-describing — filter attribute='edit_kind' to enumerate all edits.
 			DiagnosticRow kind_row;
 			kind_row.subject_kind = "clause";
-			kind_row.subject = e.label;
+			kind_row.subject = subject;
 			kind_row.attribute = "edit_kind";
 			kind_row.value = "conflict";
 			diag.rows.push_back(std::move(kind_row));
 
 			DiagnosticRow conflict_row;
 			conflict_row.subject_kind = "clause";
-			conflict_row.subject = e.label;
+			conflict_row.subject = subject;
 			conflict_row.attribute = "conflict";
 			conflict_row.value = e.detail;
 			diag.rows.push_back(std::move(conflict_row));
@@ -402,7 +407,7 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 			// suggested_change/amount pair. The subject names the clause to delete.
 			DiagnosticRow drop_row;
 			drop_row.subject_kind = "clause";
-			drop_row.subject = e.label;
+			drop_row.subject = subject;
 			drop_row.attribute = "edit_kind";
 			drop_row.value = "drop";
 			diag.rows.push_back(std::move(drop_row));
@@ -411,24 +416,35 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 		// LOOSEN: edit_kind='loosen' (I5) + the suggested_change/amount pair.
 		DiagnosticRow kind_row;
 		kind_row.subject_kind = "clause";
-		kind_row.subject = e.label;
+		kind_row.subject = subject;
 		kind_row.attribute = "edit_kind";
 		kind_row.value = "loosen";
 		diag.rows.push_back(std::move(kind_row));
 
 		DiagnosticRow change_row;
 		change_row.subject_kind = "clause";
-		change_row.subject = e.label;
+		change_row.subject = subject;
 		change_row.attribute = "suggested_change";
 		change_row.value = e.suggestion;
 		diag.rows.push_back(std::move(change_row));
 
 		DiagnosticRow amount_row;
 		amount_row.subject_kind = "clause";
-		amount_row.subject = e.label;
+		amount_row.subject = subject;
 		amount_row.attribute = "amount";
 		amount_row.value = e.amount;
 		diag.rows.push_back(std::move(amount_row));
+
+		// Facet A: a PER-grouped edit names its group's printable key so two folded
+		// `SUM(x)` clauses stay distinguishable in the relation. Emitted only when set.
+		if (!e.group.empty()) {
+			DiagnosticRow group_row;
+			group_row.subject_kind = "clause";
+			group_row.subject = subject;
+			group_row.attribute = "group";
+			group_row.value = e.group;
+			diag.rows.push_back(std::move(group_row));
+		}
 	}
 	// I3: model-level achievable objective. Single stable attribute (the I5 vocabulary
 	// anchor); the value is the number, or "unbounded" when the relaxed problem has no

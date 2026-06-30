@@ -204,6 +204,23 @@ bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
 	return true;
 }
 
+//! True if some decide variable contributes more than one term (an aggregate fan-out over
+//! multiple solver columns). Lets a single-contribution aggregate group be wrapped in
+//! SUM(...) (Facet B) without disturbing a multi-row data-varying fan, which stays as its
+//! raw reconstruction.
+static bool HasVarFan(const vector<int> &indices, const vector<ColumnProvenance> &cols) {
+	std::map<idx_t, int> count;
+	for (int col : indices) {
+		if (col >= 0 && static_cast<idx_t>(col) < cols.size() &&
+		    cols[col].decide_var_idx != DConstants::INVALID_INDEX) {
+			if (++count[cols[col].decide_var_idx] > 1) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 //! Aggregate-aware LHS for a linear constraint row: AVG(...) for an AVG-rewritten row,
 //! SUM(...) for a SUM fan-out, else the raw linear reconstruction.
 string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenance> &cols) {
@@ -211,16 +228,20 @@ string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenance> &col
 	if (row.provenance.avg_scaled && FormatAvgLhs(row.indices, row.coefficients, cols, agg)) {
 		return agg;
 	}
-	// Collapse a SUM fan-out to SUM(...) only for an UNGROUPED aggregate (group_key
-	// INVALID). A PER-grouped aggregate emits one row per group with identical clause
-	// text, so folding would make the groups indistinguishable in the relation (today
-	// their differing row counts tell them apart) until group identity is surfaced as its
-	// own field.
-	if (row.provenance.group_key == DConstants::INVALID_INDEX &&
-	    FormatSumLhs(row.indices, row.coefficients, cols, agg)) {
+	// Collapse a uniform SUM fan-out to SUM(c*var). PER-grouped aggregates fold too: they
+	// stay distinguishable in the relation via the `group` EAV row + WHEN/PER qualifier
+	// (Facet A), so the old group_key == INVALID gate is gone.
+	if (FormatSumLhs(row.indices, row.coefficients, cols, agg)) {
 		return agg;
 	}
-	return FormatTerms(row.indices, row.coefficients, cols);
+	string raw = FormatTerms(row.indices, row.coefficients, cols);
+	// Facet B: a single-row / WHEN aggregate group has no per-row fan-out for FormatSumLhs
+	// to fold, so wrap the reconstruction in SUM(...) explicitly. Only when there is no fan
+	// — a multi-row data-varying SUM keeps its raw `2*x + 3*x` form (documented I2.d).
+	if (row.provenance.is_aggregate && !HasVarFan(row.indices, cols)) {
+		return "SUM(" + raw + ")";
+	}
+	return raw;
 }
 
 //! LHS for a quadratic constraint: the linear part plus its Q terms, rendered as
@@ -266,11 +287,16 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
 	double base_rhs = strict ? prov.typed_k : rhs;
 	// `≥` loosens downward (b − s), `≤` / `=` upward (b + s).
 	double new_rhs = (sense == '>') ? base_rhs - amount : base_rhs + amount;
+	// Facet C: append the WHEN/PER qualifier (`PER grp`) so the clause is recognizable;
+	// Facet A: carry the group's printable key as its own field (a separate `group` EAV
+	// row) so two folded `SUM(x)` groups stay distinguishable in the relation.
+	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = lhs + " " + sense_str + " " + FormatNum(base_rhs);
-	e.suggestion = lhs + " " + sense_str + " " + FormatNum(new_rhs);
+	e.label = lhs + " " + sense_str + " " + FormatNum(base_rhs) + suffix;
+	e.suggestion = lhs + " " + sense_str + " " + FormatNum(new_rhs) + suffix;
 	e.amount = FormatNum(std::fabs(amount));
+	e.group = prov.group_label;
 	return e;
 }
 

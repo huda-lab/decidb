@@ -1,13 +1,10 @@
 # Query Diagnostics
 
 Turning failed or useless DECIDE solves into actionable diagnoses. SQL always
-returns rows; a DECIDE *solve* can fail in ways a lookup can't — and today each
+returns rows; a DECIDE *solve* can fail in ways a lookup can't — and an undiagnosed
 failure is a dead end (a static error paragraph, a timeout, or a silently
 arbitrary answer). This area replaces each dead end with a **diagnosis**: *why*
 it failed and the **least-change** edit that restores a usable solution.
-
-Phase tags (`v1.2`, `v2.1`, …) trace back to the research build plan; they encode
-build order, not version numbers.
 
 ## The map — everything flows through the router
 
@@ -34,18 +31,22 @@ incumbent?) — and routes to exactly one terminal. The states below are its lea
                                     infeasible"         report
 ```
 
-- **[`router/`](router/)** — the **spine**: the dispatch tree above and the inf/unb
-  `check ray` disambiguation. Lands incrementally as the terminals below ship.
-- **[`unbounded/`](unbounded/)** — terminal `failed → unbounded`: name the escaping
-  variable via the ray and prescribe a bound (**tighten** a too-open region). Shipped.
-- **[`infeasible/`](infeasible/)** ★ — terminal `failed → infeasible`: elastic
-  relaxation (**loosen** a too-small region). The flagship engine; not built yet.
-- **[`slow/`](slow/)** — terminal `time_limit`: read incumbent / bound / gap and
-  report. Least-settled; revisit after infeasible + unbounded.
-- **[`foundations/`](foundations/)** — the **substrate** every terminal sits on (not
-  a terminal): structured solver result, constraint + variable provenance, the
-  `diagnose_decide` gate, the solver-behavior reference, the reporting relation.
-  **Build first — gates everything.**
+- `[router/](router/)` — the **spine**: the dispatch tree above and the inf/unb
+`check ray` disambiguation. The seam, the unbounded terminal, and the infeasible
+terminal are wired; the `time_limit` terminal is a distinct leaf in the classifier
+but has no engine behind it yet, so it currently falls through to the static error.
+- `[unbounded/](unbounded/)` — terminal `failed → unbounded`: names the escaping
+variable via the ray and prescribes a bound (**tighten** a too-open region).
+- `[infeasible/](infeasible/)` ★ — terminal `failed → infeasible`: elastic
+relaxation (**loosen** a too-small region). The flagship engine — fully shipped
+(I1–I5, plus aggregate `<>` removal).
+- `[slow/](slow/)` — terminal `time_limit`: no diagnosis engine yet. A solve that
+hits the time limit returns `SolverStatus::TIME_LIMIT` and routes to the static
+error; any incumbent is discarded. Only the shared time-limit plumbing
+(`DECIDB_TIME_LIMIT`, honored identically by both backends) is in place.
+- `[foundations/](foundations/)` — the **substrate** every terminal sits on (not
+a terminal): structured solver result, constraint + variable provenance, the
+`diagnose_decide` gate, the solver-behavior reference, the reporting relation.
 
 Infeasible and unbounded are mirror images — loosen a too-small region vs. tighten a
 too-open one; slow is a runtime event masking the other states.
@@ -54,41 +55,324 @@ too-open one; slow is a runtime event masking the other states.
 
 - **Least-change** — propose the smallest edit, not a rewrite.
 - **On by default** — `PRAGMA diagnose_decide` is `auto` by default: a failed solve
-  is diagnosed automatically wherever an engine exists. Set `off` to suppress and
-  get the plain static error. We never edit the user's query; a diagnosis only ever
-  *describes* the failure and prescribes a remedy.
+is diagnosed automatically wherever an engine exists. Set `off` to suppress and
+get the plain static error. We never edit the user's query; a diagnosis only ever
+*describes* the failure and prescribes a remedy.
 - **Solver-agnostic** — everything works on Gurobi and HiGHS. We build the
-  elastic model in our own model builder so both backends solve it natively;
-  Gurobi `feasRelax` is an *accelerator*, never a dependency.
+elastic model in our own model builder so both backends solve it natively;
+Gurobi `feasRelax` is an *accelerator*, never a dependency.
 - **Differential testing** — every phase tests against `oracle_solver` on
-  constructed cases, never hand-computed answers.
+constructed cases, never hand-computed answers.
 
-## Build order (dependency tiers)
 
-```
-Tier 1  shipped: F1 structured-result · F2 constraint-prov · F6 variable-prov
-        F3 relaxability (needs F2) · F5 reporting-relation (needs F2) · F4 pragma (needs F1)
-Tier 2  I0–I2 elastic engine (seam · stage-1 · shapes) · U2 ray (fallback-only)
-        R1/R2 router seam + unbounded terminal (needs U2)
-Tier 3  shipped: R3 residual inf/unb check-ray fallback (existing status probes stay)
-        I3 stage-2 · I4 L0 dial (needs norms v1.1) · I5 infeasible-reporting · U3 · S1–S4 slow
-        R5/R6 router infeasible + time_limit terminals (R5 with I0/I1, R6 with slow)
-```
 
 ## Invocation — `PRAGMA diagnose_decide`
 
-Sticky session pragma with two modes: `auto` (default — diagnose whichever failed
-state the solve lands in, wherever an engine exists) and `off` (suppress diagnosis;
-reproduce the plain static solver error). Diagnosis only ever runs when the solve
-*actually* fails, so leaving `auto` on costs nothing on a successful solve. The
-earlier per-state filter modes (`infeasible` / `unbounded` / `slow`) and the
-opt-in `none` default were removed — `auto` subsumes them. See `foundations/done.md`
-(F4).
+Sticky session pragma with two modes: `auto` (default — diagnose whichever failed  
+state the solve lands in, wherever an engine exists) and `off` (suppress diagnosis;  
+reproduce the plain static solver error). Diagnosis only ever runs when the solve  
+*actually* fails, so leaving `auto` on costs nothing on a successful solve.
 
-## External dependency — decision-variable norms (v1.1)
+---
 
-User-writable L0/L1/L2/L∞ norms on decision variables. The elastic engine reuses
-its abs-aux / count-binary+Big-M / max-aux linearization machinery. Implementation
-lives in `03_expressivity/sql_functions/todo.md` (it is an expressivity feature,
-not a diagnostic); tracked there, listed here only as an upstream dependency of
-`infeasible/` (I4).
+
+
+# DECIDE Diagnostics — Output Across All Unbounded / Infeasible Cases
+
+Generated by running each branch through `build/release/decidb` (Gurobi backend,
+`PRAGMA diagnose_decide='auto'`). Each case shows the **default stderr headline**
+(what a user sees) and the `decide_diagnostics()` **relation** (the structured detail).
+
+## UNBOUNDED
+
+
+
+### U1 — single REAL variable
+
+One unbounded continuous variable being maximized.
+
+```sql
+SELECT id, x FROM (VALUES (1),(2)) t(id) DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is unbounded: variable x can grow without bound. Add an upper bound, e.g. SUCH THAT x <= <cap>.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬───────────┬──────────────┬─────────┬───────────────┬────────────┐
+│ diagnosis_id │   state   │ subject_kind │ subject │   attribute   │   value    │
+├──────────────┼───────────┼──────────────┼─────────┼───────────────┼────────────┤
+│ 1            │ unbounded │ variable     │ x       │ grows_toward  │ +inf       │
+│ 1            │ unbounded │ variable     │ x       │ affected_rows │ all 2 rows │
+└──────────────┴───────────┴──────────────┴─────────┴───────────────┴────────────┘
+```
+
+---
+
+
+
+### U2 — multiple variables escaping
+
+Two continuous variables both grow without bound.
+
+```sql
+SELECT id, x, y FROM (VALUES (1),(2)) t(id) DECIDE x IS REAL, y IS REAL SUCH THAT x >= 0 AND y >= 0 MAXIMIZE SUM(x + y)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is unbounded: variables x, y can grow without bound. Add upper bounds, e.g. SUCH THAT x <= <cap> AND y <= <cap>.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬───────────┬──────────────┬─────────┬───────────────┬────────────┐
+│ diagnosis_id │   state   │ subject_kind │ subject │   attribute   │   value    │
+├──────────────┼───────────┼──────────────┼─────────┼───────────────┼────────────┤
+│ 1            │ unbounded │ variable     │ x       │ grows_toward  │ +inf       │
+│ 1            │ unbounded │ variable     │ x       │ affected_rows │ all 2 rows │
+│ 1            │ unbounded │ variable     │ y       │ grows_toward  │ +inf       │
+│ 1            │ unbounded │ variable     │ y       │ affected_rows │ all 2 rows │
+└──────────────┴───────────┴──────────────┴─────────┴───────────────┴────────────┘
+```
+
+---
+
+
+
+### U3 — INTEGER variable (MILP)
+
+Same shape but integer — exercises the MILP unbounded path.
+
+```sql
+SELECT id, x FROM (VALUES (1),(2)) t(id) DECIDE x IS INTEGER SUCH THAT x >= 0 MAXIMIZE SUM(x)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is unbounded: variable x can grow without bound. Add an upper bound, e.g. SUCH THAT x <= <cap>.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬───────────┬──────────────┬─────────┬───────────────┬────────────┐
+│ diagnosis_id │   state   │ subject_kind │ subject │   attribute   │   value    │
+├──────────────┼───────────┼──────────────┼─────────┼───────────────┼────────────┤
+│ 1            │ unbounded │ variable     │ x       │ grows_toward  │ +inf       │
+│ 1            │ unbounded │ variable     │ x       │ affected_rows │ all 2 rows │
+└──────────────┴───────────┴──────────────┴─────────┴───────────────┴────────────┘
+```
+
+---
+
+
+
+## INFEASIBLE
+
+
+
+### I1 — LOOSEN a single bound
+
+Contradictory per-row bounds; one literal can be loosened.
+
+```sql
+SELECT id, x FROM (VALUES (1),(2),(3)) t(id) DECIDE x IS INTEGER SUCH THAT x >= 10 AND x <= 5 MAXIMIZE SUM(x)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — loosen `x <= 5` to `x <= 10`. After this change, the best achievable objective is 30.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬────────────┬──────────────┬─────────┬──────────────────────┬─────────┐
+│ diagnosis_id │   state    │ subject_kind │ subject │      attribute       │  value  │
+├──────────────┼────────────┼──────────────┼─────────┼──────────────────────┼─────────┤
+│ 1            │ infeasible │ clause       │ x <= 5  │ edit_kind            │ loosen  │
+│ 1            │ infeasible │ clause       │ x <= 5  │ suggested_change     │ x <= 10 │
+│ 1            │ infeasible │ clause       │ x <= 5  │ amount               │ 5       │
+│ 1            │ infeasible │ model        │ NULL    │ achievable_objective │ 30      │
+└──────────────┴────────────┴──────────────┴─────────┴──────────────────────┴─────────┘
+```
+
+---
+
+
+
+### I2 — LOOSEN an aggregate
+
+Impossible SUM target; note the row-by-row clause expansion.
+
+```sql
+SELECT id, x FROM (VALUES (1),(2),(3)) t(id) DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 999999 MAXIMIZE SUM(x)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — loosen `SUM(x) >= 999999` to `SUM(x) >= 3`. After this change, the best achievable objective is 3.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬────────────┬──────────────┬──────────────────┬──────────────────────┬─────────────┐
+│ diagnosis_id │   state    │ subject_kind │     subject      │      attribute       │    value    │
+├──────────────┼────────────┼──────────────┼──────────────────┼──────────────────────┼─────────────┤
+│ 1            │ infeasible │ clause       │ SUM(x) >= 999999 │ edit_kind            │ loosen      │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 999999 │ suggested_change     │ SUM(x) >= 3 │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 999999 │ amount               │ 999996      │
+│ 1            │ infeasible │ model        │ NULL             │ achievable_objective │ 3           │
+└──────────────┴────────────┴──────────────┴──────────────────┴──────────────────────┴─────────────┘
+```
+
+---
+
+
+
+
+### I3 — multiple LOOSEN edits
+
+Conflicting aggregate directions; engine offers two loosenings.
+
+```sql
+SELECT id, w, x FROM (VALUES (1,5),(2,5),(3,5)) t(id,w) DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 1 AND SUM(x * w) <= -1 MAXIMIZE SUM(x)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — loosen `SUM(x) >= 1` to `SUM(x) >= 0`, or loosen `SUM(5*x) <= -1` to `SUM(5*x) <= 0`. After this change, the best achievable objective is 0.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬────────────┬──────────────┬────────────────┬──────────────────────┬───────────────┐
+│ diagnosis_id │   state    │ subject_kind │    subject     │      attribute       │     value     │
+├──────────────┼────────────┼──────────────┼────────────────┼──────────────────────┼───────────────┤
+│ 1            │ infeasible │ clause       │ SUM(x) >= 1    │ edit_kind            │ loosen        │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 1    │ suggested_change     │ SUM(x) >= 0   │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 1    │ amount               │ 1             │
+│ 1            │ infeasible │ clause       │ SUM(5*x) <= -1 │ edit_kind            │ loosen        │
+│ 1            │ infeasible │ clause       │ SUM(5*x) <= -1 │ suggested_change     │ SUM(5*x) <= 0 │
+│ 1            │ infeasible │ clause       │ SUM(5*x) <= -1 │ amount               │ 1             │
+│ 1            │ infeasible │ model        │ NULL           │ achievable_objective │ 0             │
+└──────────────┴────────────┴──────────────┴────────────────┴──────────────────────┴───────────────┘
+```
+
+---
+
+
+
+### I4 — DROP edit (must-remove a <>)
+
+x <> 0 AND x <> 1 forbids both BOOLEAN values; no loosening helps, only removal.
+
+```sql
+SELECT x FROM (VALUES (1)) t(id) DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — remove `x <> 1`. After this change, the best achievable objective is 1.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬────────────┬──────────────┬─────────┬──────────────────────┬───────┐
+│ diagnosis_id │   state    │ subject_kind │ subject │      attribute       │ value │
+├──────────────┼────────────┼──────────────┼─────────┼──────────────────────┼───────┤
+│ 1            │ infeasible │ clause       │ x <> 1  │ edit_kind            │ drop  │
+│ 1            │ infeasible │ model        │ NULL    │ achievable_objective │ 1     │
+└──────────────┴────────────┴──────────────┴─────────┴──────────────────────┴───────┘
+```
+
+---
+
+
+
+### I5 — CONFLICT_SUMMARY (per-row data RHS)
+
+RHS is per-row data (x >= hi); no single literal to loosen, reports an M-of-N conflict.
+
+```sql
+SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) DECIDE x IS BOOLEAN SUCH THAT x >= hi MAXIMIZE SUM(x)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; the conflict is in per-row data, with no single limit to loosen.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬────────────┬──────────────┬─────────┬───────────┬──────────────────────────┐
+│ diagnosis_id │   state    │ subject_kind │ subject │ attribute │          value           │
+├──────────────┼────────────┼──────────────┼─────────┼───────────┼──────────────────────────┤
+│ 1            │ infeasible │ clause       │ x >= 5  │ edit_kind │ conflict                 │
+│ 1            │ infeasible │ clause       │ x >= 5  │ conflict  │ conflicts in 2 of 2 rows │
+└──────────────┴────────────┴──────────────┴─────────┴───────────┴──────────────────────────┘
+```
+
+---
+
+### I6 — PER-group LOOSEN edits
+
+Each PER group gets its own slack. The grouped clause subject includes the group key, and the
+structured `group` row is still emitted.
+
+```sql
+SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)
+```
+
+**Default output (stderr headline):**
+
+```
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — loosen `SUM(x) >= 5 PER grp` to `SUM(x) >= 2 PER grp`, or loosen `SUM(x) >= 5 PER grp` to `SUM(x) >= 3 PER grp`. After this change, the best achievable objective is 5.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+`decide_diagnostics()` **relation:**
+
+```
+┌──────────────┬────────────┬──────────────┬────────────────────────────────┬──────────────────────┬─────────────┐
+│ diagnosis_id │   state    │ subject_kind │            subject             │      attribute       │   value     │
+├──────────────┼────────────┼──────────────┼────────────────────────────────┼──────────────────────┼─────────────┤
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ edit_kind            │ loosen      │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ suggested_change     │ SUM(x) >= 2 │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ amount               │ 3           │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ group                │ a           │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ edit_kind            │ loosen      │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ suggested_change     │ SUM(x) >= 3 │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ amount               │ 2           │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ group                │ b           │
+│ 1            │ infeasible │ model        │ NULL                           │ achievable_objective │ 5           │
+└──────────────┴────────────┴──────────────┴────────────────────────────────┴──────────────────────┴─────────────┘
+```
+
+---

@@ -86,6 +86,22 @@ static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
 
+//! Tag marking a per-row bound whose RHS was an UNCORRELATED scalar subquery
+//! (e.g. `x <= (SELECT 5)`). PlanSubqueries flattens such a subquery into a
+//! cross-joined column ref that is structurally indistinguishable from row data,
+//! so foldability alone (IsFoldable) cannot tell it from a genuinely per-row RHS
+//! (a correlated subquery / column). Detected before flattening and stamped on the
+//! rewritten RHS column-ref alias (see plan_select_node.cpp), this tag tells the
+//! elastic engine the RHS is one shared editable cap (ElasticShape::SHARED_LITERAL),
+//! not per-row data — so infeasible diagnosis reports "Loosen x <= 5 to x <= 10"
+//! instead of a data conflict. Correlated subqueries stay untagged (per-row).
+static constexpr const char *SHARED_SCALAR_SUBQUERY_TAG = "__shared_scalar_subquery__";
+
+//! Returns true if the alias is SHARED_SCALAR_SUBQUERY_TAG
+inline bool IsSharedScalarSubqueryTag(const string &alias) {
+	return alias == SHARED_SCALAR_SUBQUERY_TAG;
+}
+
 //! Tag prefix for ABS upper-bound constraint linking.
 //! Format: "__abs_ub_pos_<y_idx>__" on C1 (aux >= inner)
 //!         "__abs_ub_neg_<y_idx>__" on C2 (aux >= -inner)

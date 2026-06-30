@@ -143,7 +143,8 @@ reads each block back. Exposing it is also the structural test seam.
 = the RHS is one editable literal `K` shared across every row the clause emits;
 `PER_ROW_DATA` = genuine per-row **data** RHS (`x <= col`). Set in `ilp_model_builder.cpp`:
 the per-row builder tags a row `SHARED_LITERAL` when `EvaluatedConstraint::rhs_is_shared_literal`
-(set in `physical_decide.cpp` when `rhs_expr` is a `BOUND_CONSTANT`), else `PER_ROW_DATA`;
+(set in `physical_decide.cpp` when `rhs_expr` is a `BOUND_CONSTANT`, is foldable, or carries the
+`SHARED_SCALAR_SUBQUERY_TAG` alias — see "uncorrelated scalar-subquery RHS" below), else `PER_ROW_DATA`;
 the **aggregate** sites tag their rows `SHARED_LITERAL` directly (an aggregate's RHS is always a
 single scalar knob), so `PER_ROW_DATA` means *exactly* "data RHS"; the absorbed-bound re-emission
 tags its rows `SHARED_LITERAL`. Quadratic constraints leave the default and are always treated as
@@ -199,12 +200,16 @@ A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS: there is no single 
   `ilp_model_builder.cpp`); `FormatLhs` then collapses the `1/N`-scaled terms back to `AVG(x)`
   (inner coeff = stored coeff × the variable's term count) instead of rendering `0.5*x + 0.5*x`.
 - **SUM.** An aggregate `SUM` over rows emits one solver column per row for the same decide
-  variable, so a plain reconstruction reads `x + x + x`. For an **ungrouped** aggregate
-  (`provenance.group_key == INVALID`), `FormatSumLhs` collapses the per-row fan-out back to
-  `SUM(c*var)` — uniform coefficient only (`SUM(price * x)`, data-varying, falls back to the raw
-  reconstruction); a variable appearing once stays as written. PER-grouped aggregates are left
-  expanded (their differing row counts are what distinguishes one group's edit from another's in
-  the relation today) until group identity is surfaced as its own field.
+  variable, so a plain reconstruction reads `x + x + x`. `FormatSumLhs` collapses the per-row
+  fan-out back to `SUM(c*var)` — uniform coefficient only (`SUM(price * x)`, data-varying, falls
+  back to the raw reconstruction). **PER-grouped aggregates fold too** (the old
+  `group_key == INVALID` gate is gone): `SUM(x) >= 5 PER grp` renders both groups as
+  `SUM(x) >= 5 PER grp`, kept distinguishable by the `group` EAV row + `PER grp` qualifier (see
+  "PER-group identity" below). A **single-row / WHEN aggregate group** has no fan-out for
+  `FormatSumLhs` to fold, so `FormatLhs` wraps the reconstruction in `SUM(...)` explicitly when
+  `provenance.is_aggregate` and there is no multi-column fan (`HasVarFan`) — `SUM(x) >= 99 WHEN
+  g='a'` renders `SUM(x) >= 99 …`, not a bare `x >= 99`. A multi-row data-varying SUM keeps its
+  raw `2*x + 3*x` form.
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which now also sets
   `provenance.strict` + `provenance.typed_k` (the user's literal). `MakeLoosenEdit` re-quotes the
@@ -214,6 +219,41 @@ A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS: there is no single 
   carries a `quadratic` flag (its `rows` then index `quadratic_constraints`); `FormatQuadraticLhs`
   renders `POWER(x, 2)` / `x*y` terms. Quadratic slacks are always editable-weighted (a quadratic
   is always a LOOSEN edit, never a data conflict). QCQP is Gurobi-only.
+
+### PER-group identity (group label + qualifier; unblocks the SUM fold for PER)
+
+A PER-grouped aggregate (`SUM(x) >= 5 PER grp`) emits one row per group, so each group can get
+its own edit. Each group's edit is now **self-identifying**, which is what lets the SUM fold
+above apply to PER without the two groups colliding in the relation. Three additive channels,
+all carried on `ConstraintProvenance` (no change to PER solve logic):
+
+- **`group_label`** — the group's printable key (`'a'`, or `EU, 2024` for a composite key).
+  `LookupOrBuildPerGroupIds` (`physical_decide.cpp`) now requests `BuildGroupIds`'s `rep_keys`
+  out-param and stores the per-group representative values on the cache entry; the post-WHEN
+  remap to consecutive `0..K'` reindexes the labels in lockstep (a new `mapped` id is pushed at
+  exactly `out_group_labels.size()`, so labels stay aligned with the dense ordinals).
+  `FormatPerGroupKey` joins composite columns with `, `; NULL renders `"NULL"`. Threaded through
+  `EvaluatedConstraint::group_labels` → stamped on `provenance.group_label` at the aggregate-PER
+  emission sites (`ilp_model_builder.cpp`). The diagnosis uses it twice: every EAV row for the
+  edit gets a self-identifying subject (`SUM(x) >= 5 PER grp [group: a]`), and the structured
+  `group` row (`attribute='group'`, `value='a'`) is still emitted. This avoids relying on relation
+  row order to associate `suggested_change`/`amount` with a group.
+- **`is_aggregate`** — set from `eval_const.lhs_is_aggregate` at the aggregate emission sites;
+  drives the single-row / WHEN `SUM(...)` wrapper in `FormatLhs` (see I2.d SUM above).
+- **`qualifier`** — the `PER grp` / `WHEN <pred>` text, computed once per clause at the
+  WHEN/PER eval site (`physical_decide.cpp`) and appended to the reconstructed label by
+  `MakeLoosenEdit`. PER keys reuse the expression `GetName()` the EXPLAIN path uses; a WHEN
+  predicate is rendered by `RenderWhenPredicate`, which unwraps the binder's implicit literal
+  CASTs and drops redundant outer parens (`grp = 'a'`, not `(grp = CAST('a' AS VARCHAR))`) and
+  handles comparisons + AND/OR.
+
+The objective PER path passes a throwaway labels vector (objective groups are not diagnosed by
+clause key). **Composite PER keys** (`PER (region, year)`) are handled by the join and reachable
+through `SUCH THAT` in the parenthesized form. The **unparenthesized** comma-list form
+(`PER region, year`) is rejected by the constraint binder, which only consumes the first column
+(a pre-existing limitation, logged in `07_issues/bugs/todo.md`). **easy-MAX + PER** stays a
+single global block (absorbed as a column bound, which does not preserve the PER grouping) — see
+the per-shape section above.
 
 ### I2.e — rigid shapes confirmed
 
@@ -231,11 +271,14 @@ against `typed_k`; an AVG row renders `AVG(x)` with the raw slack; a quadratic c
 its linear part only with Q untouched. C++ behavioral: a shared block with rigid floors reports
 the max overshoot (7), one edit, not the sum (10). Python differential
 (`test_query_diagnostics_relation.py`): easy-MAX and multi-instance bound report total = max
-overshoot; aggregate `SUM PER g` reports one exact edit per group; a BOOLEAN model loosens its
-SUM target, never its 0/1 domain (regression guard); a data-RHS clause reports a conflict
-summary; a penalized data row defers to an editable edit; reversed bounds are reported as their
-canonical absorbed form; AVG/strict re-quote (including strict quadratic); quadratic and
-McCormick gated to Gurobi; `<>` and McCormick rows stay rigid.
+overshoot; aggregate `SUM(x) >= 5 PER grp` reports one exact edit per group, each folded to
+`SUM(x) >= 5 PER grp` with a group-qualified subject (`[group: a]` / `[group: b]`) plus a structured
+`group` row; a single-row `SUM(x) >= 99 WHEN grp='a'` keeps its `SUM(...)` wrapper and clean WHEN qualifier; a
+BOOLEAN model loosens its SUM target, never its 0/1 domain (regression guard); a data-RHS clause
+reports a conflict summary; a penalized data row defers to an editable edit; reversed bounds are
+reported as their canonical absorbed form; AVG/strict re-quote (single-row SUM keeps its wrapper:
+`SUM(x) > 10`, including strict quadratic); quadratic and McCormick gated to Gurobi; `<>` and
+McCormick rows stay rigid.
 
 ## Elastic engine: L0 / removal dial (`<>` removal)
 
@@ -440,9 +483,23 @@ domain rigid:
   so an explicitly-lowered floor (`x <= -1 AND x >= -5`, box `[-5,-1]`) stays feasible and a
   purely user-vs-user inverted box (`x >= 5 AND x <= 1`, both ≥ 0) proceeds to the elastic engine.
 
-A deferred sibling — an uncorrelated scalar-subquery RHS (`x <= (SELECT 5)`), which the optimizer
-flattens into a join so it can't be classified as a shared cap without correlation analysis — is
-tracked in `todo.md`.
+### Uncorrelated scalar-subquery RHS (`x <= (SELECT 5)`)
+
+A per-row bound whose RHS is an **uncorrelated** scalar subquery is one shared editable cap, but
+`PlanSubqueries` flattens it into a cross-joined column ref that is structurally indistinguishable
+from genuine per-row data — `IsFoldable()` is false, so naive classification would mis-tag it
+`PER_ROW_DATA` and report a data conflict instead of an editable cap. The correlation information
+exists only *before* flattening, so `plan_select_node.cpp` (right before its `PlanSubqueries` call,
+at the single DECIDE-owned flatten site) scans the bound constraint tree for comparisons whose RHS
+is a scalar `BoundSubqueryExpression` with no correlated columns (`!BoundSubqueryExpression::IsCorrelated()`,
+unwrapping casts), holds raw pointers to those comparison nodes (which survive the in-place rewrite),
+and after flattening stamps the rewritten RHS column-ref alias with `SHARED_SCALAR_SUBQUERY_TAG`
+(`decide.hpp`). The tag rides through the optimizer and into the `DecideConstraint` (alias is
+preserved by `Copy()`); `physical_decide.cpp` ORs `IsSharedScalarSubqueryTag(rhs_expr->GetAlias())`
+into `rhs_is_shared_literal`, so the elastic engine collapses the rows to one shared slack and
+reports `Loosen x <= 5 to x <= 10`. **Correlated** subqueries are left untagged and stay
+`PER_ROW_DATA` (genuinely row-varying). Tests: `test_query_diagnostics_relation.py::
+test_infeasible_uncorrelated_subquery_cap_is_editable` / `…_correlated_subquery_cap_stays_per_row`.
 
 ## Infeasibility reporting: lean cue summary + frozen vocabulary (I5)
 
@@ -450,15 +507,19 @@ I5 is the final reporting step. The structured EAV edit list was already emitted
 makes two refinements and **locks the vocabulary**.
 
 **Lean cue summary (mirrors the unbounded terminal).** `BuildInfeasibleDiagnostic`
-(`decide_diagnostic.cpp`) no longer inlines the *specific* edit (`"Loosen x <= 5 to x <= 10."`).
-The headline is a one-clause cue naming the *kind* of fix; the specific clause/amount live in the
-table (`decide_diagnostics()`), and every thrown message already appends
-`Details: SELECT * FROM decide_diagnostics();`. The cue is adaptive over which edit kinds the
-solve produced:
-- LOOSEN present → `"…; a possible edit was found to make it feasible — loosen one of your SUCH THAT limits."`
-- DROP (no loosen) → `"… — remove one of your SUCH THAT constraints."`
-- both → `"… — loosen or remove one of your SUCH THAT constraints."`
-- CONFLICT_SUMMARY only (no actionable editable edit) → `"…; the conflict is in per-row data, with no single limit to loosen."`
+(`decide_diagnostic.cpp`) inlines the *specific* edit(s) in the headline whenever there are
+**up to three** actionable edits — e.g. `"loosen \`x <= 5\` to \`x <= 10\`"` or
+`"remove \`(x <> 3)\`"` — so the headline alone tells the user the fix. Multiple phrases are
+joined `", "`-separated with `", or "` before the last one (alternative single-edit fixes, not a
+combined edit). The full per-clause detail still lives in the table (`decide_diagnostics()`), and
+every thrown message already appends `Details: SELECT * FROM decide_diagnostics();`. With **four
+or more** edits, or when no edit has a single literal to quote, the headline falls back to a
+kind-named cue (the inline form would get unwieldy):
+- ≤3 edits with a literal to quote → `"…; a possible edit was found to make it feasible — loosen \`x <= 5\` to \`x <= 10\`."` (per-edit phrase, comma/`, or `-joined for multiple)
+- 4+ edits, LOOSEN present → `"…; a possible edit was found to make it feasible — loosen one of your SUCH THAT limits."`
+- 4+ edits, DROP (no loosen) → `"… — remove one of your SUCH THAT constraints."`
+- 4+ edits, both → `"… — loosen or remove one of your SUCH THAT constraints."`
+- CONFLICT_SUMMARY only (no actionable editable edit, any count) → `"…; the conflict is in per-row data, with no single limit to loosen."`
 
 The word *"a possible edit"* (not "the fix") is the honesty framing — the slacks give **one**
 hitting set, not the complete conflict collection — so no separate caveat row is needed. The I3
@@ -477,7 +538,9 @@ headline is a lean pointer, exactly like the unbounded terminal.
 filtering `attribute='edit_kind'` enumerates all edits and their kinds — the relation is
 self-describing:
 - `subject_kind='clause'`: `edit_kind` ∈ {`loosen`, `drop`, `conflict`}; plus `suggested_change`
-  + `amount` (LOOSEN only), `conflict` = `"conflicts in M of N rows"` (CONFLICT_SUMMARY only).
+  + `amount` (LOOSEN only), `conflict` = `"conflicts in M of N rows"` (CONFLICT_SUMMARY only),
+  `group` = the PER key value (LOOSEN on a PER-grouped clause only — disambiguates two folded
+  `SUM(x)` edits that share the same `subject`).
 - `subject_kind='model'`: `achievable_objective` (the I3 number, or `'unbounded'`),
   `elastic_infeasible` (`'true'`, the loosening-cannot-fix-it verdict).
 
@@ -485,9 +548,10 @@ These strings are stable. Previously only DROP carried `edit_kind`; I5 added `lo
 `conflict` so the three edit kinds are uniform.
 
 **Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): the loosen section asserts the cue wording
-(`"a possible edit was found"` + `"loosen one of your SUCH THAT limits"`, and that the old inline
-`"Loosen x <= 5 to x <= 10"` is gone) and `edit_kind='loosen'`; the data-conflict section asserts
-`edit_kind='conflict'` and the data-conflict cue (no "possible edit" claim). Python differential
+(`"a possible edit was found"` + the inline quote `"loosen \`x <= 5\` to \`x <= 10\`"`) and
+`edit_kind='loosen'`; the must-drop section asserts the inline quote `"remove \`(x <> 3)\`"`; the
+data-conflict section asserts `edit_kind='conflict'` and the data-conflict cue (no "possible
+edit" claim). Python differential
 (`test_query_diagnostics_relation.py`): a loosen case asserts `edit_kind='loosen'`; the data-RHS
 conflict asserts `edit_kind='conflict'`.
 

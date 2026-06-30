@@ -1,12 +1,16 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/planner/operator/logical_dummy_scan.hpp"
 #include "duckdb/planner/operator/logical_limit.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include <functional>
 
 namespace duckdb {
@@ -33,8 +37,42 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 	}
 
     if (statement.HasDecideClause()) {
+        // A per-row bound whose RHS is an UNCORRELATED scalar subquery (`x <= (SELECT 5)`)
+        // is one shared editable cap, not row data — but PlanSubqueries below flattens it
+        // into a cross-joined column ref indistinguishable from a real per-row column. The
+        // correlation info only exists NOW, before flattening, so detect those comparisons
+        // here (their nodes survive the in-place rewrite) and stamp the rewritten RHS with
+        // SHARED_SCALAR_SUBQUERY_TAG afterward so infeasible diagnosis treats them as a
+        // single loosenable bound. Correlated subqueries are left untagged (genuinely per-row).
+        vector<BoundComparisonExpression *> shared_subquery_comps;
+        std::function<void(Expression &)> collect_shared_subquery_rhs = [&](Expression &e) {
+            if (e.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+                auto &comp = e.Cast<BoundComparisonExpression>();
+                Expression *rhs = comp.right.get();
+                while (rhs->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    rhs = rhs->Cast<BoundCastExpression>().child.get();
+                }
+                if (rhs->GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
+                    auto &subq = rhs->Cast<BoundSubqueryExpression>();
+                    if (subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated()) {
+                        shared_subquery_comps.push_back(&comp);
+                    }
+                }
+            }
+            ExpressionIterator::EnumerateChildren(e, collect_shared_subquery_rhs);
+        };
+        if (statement.decide_constraints) {
+            collect_shared_subquery_rhs(*statement.decide_constraints);
+        }
+
         PlanSubqueries(statement.decide_constraints, root);
         PlanSubqueries(statement.decide_objective, root);
+
+        // Subquery RHS is now a flattened column ref (PlanSubqueries rewrote it in place,
+        // leaving the comparison node — and our pointers to it — valid). Tag it shared.
+        for (auto *comp : shared_subquery_comps) {
+            comp->right->SetAlias(SHARED_SCALAR_SUBQUERY_TAG);
+        }
         auto decide_op = make_uniq<LogicalDecide>(
             statement.decide_index,
             std::move(statement.decide_variables),

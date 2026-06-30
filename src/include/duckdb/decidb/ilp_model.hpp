@@ -118,6 +118,20 @@ struct ConstraintProvenance {
     //! key (rows sharing one indicator = one `<>` instance). Also sources the removal
     //! Big-M (|row coeff on this column|) and the user-facing label. INVALID otherwise.
     idx_t indicator_col = DConstants::INVALID_INDEX;
+    //! Printable PER key of this row's group (`'a'`, or `EU, 2024` for a composite key).
+    //! Empty when the clause is ungrouped or not PER-grouped. Lets infeasible diagnosis
+    //! identify which group an edit belongs to and emit a `group` EAV row, so PER
+    //! aggregates can fold to `SUM(x)` without colliding in the relation (Facet A).
+    string group_label;
+    //! True when the LHS was an aggregate (`SUM`/`AVG`/...). Lets the diagnosis wrap a
+    //! single-row / WHEN group's reconstruction in `SUM(...)` even when there is no
+    //! per-row fan-out to key on (distinct from SHARED_LITERAL, which a per-row constant
+    //! bound also carries) (Facet B).
+    bool is_aggregate = false;
+    //! WHEN/PER qualifier text (`PER grp`, `PER region, year`, or a `WHEN` predicate)
+    //! appended to the reconstructed clause label so it is fully recognizable. Empty when
+    //! the clause has no WHEN/PER qualifier (Facet C).
+    string qualifier;
 };
 
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs
