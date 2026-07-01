@@ -248,8 +248,8 @@ as a fixed-schema relation.
   string columns are VARCHAR; empty string fields render as SQL NULL.
   `diagnosis_id` is stamped at stash time from a per-connection counter and ties
   all rows from one diagnosed failure together.
-- **Long-form EAV surface:** `subject_kind` names the entity type (`variable` today,
-  `clause` for infeasible later); `subject` is the state-engine-owned identifier;
+- **Long-form EAV surface:** `subject_kind` names the entity type (`variable` for
+  unbounded, `clause`/`model` for infeasible); `subject` is the state-engine-owned identifier;
   `attribute`/`value` carry that engine's facts. This keeps the table function
   schema stable as new states add their own attributes.
 - **Scannable one-row-per-subject view (a `PIVOT` recipe, not a second function).** The EAV
@@ -270,7 +270,7 @@ as a fixed-schema relation.
   (`logical_decide.cpp`, `transform_select_node.cpp`), so a runtime result-schema
   switch is bind-time-blocked. The diagnosis is surfaced via this companion table
   function instead.
-- **Today only the unbounded engine populates it** (`BuildUnboundedDiagnostic` — see
+- **The unbounded engine populates variable rows** (`BuildUnboundedDiagnostic` — see
   `unbounded/done.md`). It emits one `grows_toward` row for every escaping variable
   and an `affected_rows` / `affected_entities` row only when there is instance
   multiplicity to explain (self-describing categorical rules / total-escape / count).
@@ -279,7 +279,9 @@ as a fixed-schema relation.
   three sticky extension options alongside `diagnose_decide`:
   `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
-  The infeasible engine adds one more, `diagnose_decide_removal_bigm` (DOUBLE,
+  The infeasible engine populates clause/model rows (`BuildInfeasibleDiagnostic` —
+  see `infeasible/done.md`) for loosen/drop/conflict edits and achievable-objective
+  metadata. It adds one more option, `diagnose_decide_removal_bigm` (DOUBLE,
   default `0` = auto-derive, `>= 0`): the Big-M used to neutralize a dropped `<>`
   in the I4 removal dial (see `infeasible/done.md`), threaded via
   `DecideDiagParams::removal_bigm`.

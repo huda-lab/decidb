@@ -30,8 +30,8 @@ types, so the decision tree is unit-testable in isolation
 The mode policy is not duplicated — the classifier defers to the existing
 `DiagnosisApplies(mode, status)` gate (`decide_diagnostic.hpp`). Because the
 classifier owns no engine invocation, `TIME_LIMIT` is already a distinct leaf even
-though its engine is not wired yet; this is what let R5 drop the infeasible engine in
-(and lets R6 drop the slow engine in) without editing the classifier.
+though the slow engine is not wired yet; this is what let R5 drop the infeasible
+engine in (and lets R6 drop the slow engine in) without editing the classifier.
 
 ## Terminals: inf/unb (check ray)
 

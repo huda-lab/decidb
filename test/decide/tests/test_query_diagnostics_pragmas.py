@@ -3,10 +3,9 @@
 `diagnose_decide` is a sticky session setting with two modes: `auto` (the default)
 and `off`. Under `auto` a failed solve is diagnosed automatically wherever an engine
 exists; `off` suppresses diagnosis and reproduces the plain static solver error.
-Today only the unbounded engine exists, so a fired diagnosis throws the short pointer
-error ("Details: SELECT * FROM decide_diagnostics()"); a
-matched-but-unimplemented state (infeasible/slow) falls through to the static solver
-error even under `auto`.
+Today the unbounded and infeasible engines exist, so a fired diagnosis throws the
+short pointer error ("Details: SELECT * FROM decide_diagnostics()"); slow/time-limit
+still falls through to the static solver error even under `auto`.
 
 These tests run under both backends. They use `execute_raw` (one `-c` statement)
 because every assertion here is observable from the failing statement itself —

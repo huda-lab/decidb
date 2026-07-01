@@ -404,9 +404,13 @@ class TestDiagnosticsRelation:
             "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
+        err = result.stderr.lower()
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
+        assert "diagnosis points to grouped clause `sum(x) >= 5 per grp` for groups `a` and `b`" in err
+        assert "sum(x) >= 2 per grp" not in err
+        assert "sum(x) >= 3 per grp" not in err
         edits = _clause_edits(rows)
         # Both groups fold to the same aggregate clause text, with the `PER grp` qualifier.
         # The subject also carries the group label on every EAV row, so clients do not need
@@ -484,6 +488,7 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
+        assert "diagnosis points to per-row data in clause `x >= 5`" in result.stderr.lower()
         floor = _attrs(rows, "clause", "x >= 5")
         assert floor["conflict"] == "conflicts in 2 of 2 rows"
         # I5: a data-RHS conflict carries edit_kind='conflict' (uniform vocabulary).
@@ -730,7 +735,7 @@ class TestDiagnosticsRelation:
         assert len(drops) == 1, rows  # minimum-cardinality: exactly one dropped
         dropped = drops[0]["subject"]
         assert "<>" in dropped
-        assert "remove" in result.stderr.lower()  # the static-error summary names the fix
+        assert f"diagnosis points to clause `{dropped.lower()}`" in result.stderr.lower()
 
         # Differential: rebuild the query with the dropped `<>` removed, re-solve, and
         # confirm the achievable objective the diagnosis reported matches. Which `<>` is
@@ -848,27 +853,27 @@ class TestDiagnosticsRelation:
 
 @pytest.mark.query_diagnostics
 class TestInfeasibleHeadlineAndRendering:
-    """The infeasible headline names the concrete least-change edit inline, and clause
-    labels read in the user's SQL terms — an ungrouped SUM folds back to `SUM(...)`
-    (not `x + x + x`), and a `<>` drops its implicit CAST/parens."""
+    """The infeasible headline points to the relevant clause, and clause labels read
+    in the user's SQL terms — an ungrouped SUM folds back to `SUM(...)` (not
+    `x + x + x`), and a `<>` drops its implicit CAST/parens."""
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_headline_names_single_loosen_edit(self, request, cli_fixture):
-        """A unique loosen fix is quoted in the stderr headline, not hidden behind a
-        generic "loosen one of your SUCH THAT limits"."""
+    def test_headline_points_to_single_problem_clause(self, request, cli_fixture):
+        """A unique loosen fix points to its clause in stderr; the actual edit stays in
+        decide_diagnostics()."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
             "DECIDE x IS INTEGER SUCH THAT x >= 10 AND x <= 5 MAXIMIZE SUM(x)"
         )
         err = _diagnose(cli, sql).stderr.lower()
-        assert "loosen `x <= 5` to `x <= 10`" in err
-        assert "loosen one of your such that limits" not in err
+        assert "diagnosis points to clause `x <= 5`" in err
+        assert "loosen `x <= 5` to `x <= 10`" not in err
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ungrouped_sum_folds_in_subject_and_headline(self, request, cli_fixture):
         """An ungrouped `SUM(x) >= K` renders as `SUM(x)`, in both the relation subject
-        and the named headline edit — never the row-expanded `x + x + x`."""
+        and the headline pointer — never the row-expanded `x + x + x`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
@@ -879,12 +884,12 @@ class TestInfeasibleHeadlineAndRendering:
         attrs = _attrs(rows, "clause", "SUM(x) >= 999999")
         assert attrs["suggested_change"] == "SUM(x) >= 3"
         assert "x + x" not in result.stdout
-        assert "loosen `sum(x) >= 999999` to `sum(x) >= 3`" in result.stderr.lower()
+        assert "diagnosis points to clause `sum(x) >= 999999`" in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ungrouped_weighted_sum_folds_with_uniform_coeff(self, request, cli_fixture):
-        """A uniform-coefficient weighted SUM folds to `SUM(c*x)`; the headline names
-        both edits and the achievable objective normalizes `-0` to `0`."""
+        """A uniform-coefficient weighted SUM folds to `SUM(c*x)`; the headline points
+        to both clauses and the achievable objective normalizes `-0` to `0`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, w, x FROM (VALUES (1,5),(2,5),(3,5)) t(id,w) "
@@ -896,11 +901,14 @@ class TestInfeasibleHeadlineAndRendering:
         # Signed-zero solver read must print as a clean "0", never "-0".
         assert _attrs(rows, "model", "NULL")["achievable_objective"] == "0"
         assert "x + x" not in result.stdout
+        err = result.stderr.lower()
+        assert "diagnosis points to clause `sum(x) >= 1` and clause `sum(5*x) <= -1`" in err
+        assert " or loosen " not in err
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ne_drop_label_is_clean(self, request, cli_fixture):
         """A dropped `<>` reads `x <> 1` — the binder's implicit CAST and the wrapping
-        parens are stripped — in both the relation subject and the named headline."""
+        parens are stripped — in both the relation subject and the headline pointer."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
@@ -912,12 +920,12 @@ class TestInfeasibleHeadlineAndRendering:
         assert len(dropped) == 1
         assert "cast" not in dropped[0].lower() and "(" not in dropped[0]
         assert re.fullmatch(r"x <> [01]", dropped[0]), dropped[0]
-        assert "remove `x <>" in result.stderr.lower()
+        assert f"diagnosis points to clause `{dropped[0].lower()}`" in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_three_edits_all_named_in_headline(self, request, cli_fixture):
-        """Up to three actionable edits are named inline (Oxford-joined), not collapsed
-        to the generic kind cue."""
+    def test_three_edits_all_pointed_to_in_headline(self, request, cli_fixture):
+        """Multiple actionable edits point to all problem clauses without implying that
+        any one clause alone is sufficient."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id,x,y,z FROM (VALUES (1)) t(id) "
@@ -925,10 +933,9 @@ class TestInfeasibleHeadlineAndRendering:
             "SUCH THAT x<=1 AND x>=5 AND y<=1 AND y>=5 AND z<=1 AND z>=5 MAXIMIZE SUM(x+y+z)"
         )
         err = _diagnose(cli, sql).stderr.lower()
-        assert "loosen `x <= 1` to `x <= 5`" in err
-        assert "loosen `y <= 1` to `y <= 5`" in err
-        assert ", or loosen `z <= 1` to `z <= 5`" in err
-        assert "loosen one of your such that limits" not in err
+        assert "diagnosis points to clause `x <= 1`, clause `y <= 1`, and clause `z <= 1`" in err
+        assert "loosen `x <= 1` to `x <= 5`" not in err
+        assert " or loosen " not in err
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_large_magnitude_suggestion_is_exact(self, request, cli_fixture):

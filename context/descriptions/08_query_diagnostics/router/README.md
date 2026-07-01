@@ -69,9 +69,9 @@ incrementally as those engines exist:
 - **residual inf/unb check-ray routing** — **shipped** (Batch 2, `done.md`): if
   `INF_OR_UNBD` survives existing concrete-status probes, ray present routes to
   the unbounded terminal with the query-only caveat; no ray routes to infeasible.
-- **elastic / infeasible** engine — **not built** (`infeasible/`): until it lands,
-  the `infeasible` and inf/unb-`not found` branches fall through to the static
-  error rather than producing a relaxation report.
+- **elastic / infeasible** engine — **shipped** (`infeasible/`): the `infeasible`
+  and inf/unb-`not found` branches run the elastic engine and report the
+  least-change relaxation when one is available.
 - **slow / time_limit** handling — **not built** (`slow/`): the `incumbent`/`no sol`
   split and its reports are future work.
 

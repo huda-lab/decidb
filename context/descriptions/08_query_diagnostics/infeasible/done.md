@@ -7,7 +7,8 @@ once. Under `PRAGMA diagnose_decide='auto'`, the infeasible terminal now builds 
 optimization, the **elastic program**, whose optimum is the least-change fix for shipped
 I1/I2 shapes: which user constraints to loosen, and by how much. Shared plumbing it builds
 on (the pragma gate, provenance, the reporting relation) is in `foundations/done.md`.
-Remaining objective/removal/reporting work is tracked in `todo.md`.
+The remaining work is user-facing output polish, tracked in `todo.md`; the engine
+itself is shipped.
 
 ## Engine seam: infeasible
 
@@ -102,12 +103,11 @@ by reconstructing its algebra from the **original** row's coefficients over user
 column names (`BuildColumnProvenance`) — `x <= 5` → suggestion `x <= 10` — so no source
 expression text needs threading. `BuildInfeasibleDiagnostic` emits, per edit, EAV rows
 `subject_kind='clause'`, `subject=<clause as written>`, `attribute='suggested_change' |
-'amount'`, plus an actionable one-line summary. The summary names the concrete edit(s)
-inline, mirroring the unbounded terminal: with up to three actionable edits it quotes them
-("… — loosen `x <= 5` to `x <= 10`." / "… remove `x <> 1`." / Oxford-joined with "or"); with
-four or more it falls back to a kind-named cue ("loosen one of your SUCH THAT limits") and
-defers the per-clause detail to the relation. A data-RHS-only conflict keeps its own cue
-("the conflict is in per-row data, with no single limit to loosen").
+'amount'`, plus a one-line summary. The summary only points to the relevant clause target
+(for example, "diagnosis points to clause `x <= 5`"); suggested changes, amounts, conflict
+counts, groups, and achievable-objective facts stay in `decide_diagnostics()`. A
+data-RHS-only conflict points to the data-backed clause, and PER-group edits point to the
+grouped clause plus the affected group keys.
 
 **Elastic-infeasible signal.** If the elastic program is *itself* infeasible, the conflict
 reaches rigid rows → `BuildElasticInfeasibleDiagnostic` renders a distinct outcome
@@ -350,8 +350,8 @@ The F6 label is built by `DiagnosisComparand` (`decide_optimizer.cpp`), which un
 implicit `CAST` the binder inserts around a literal and drops the outer parens, so the clause
 reads `x <> 1`, not `(x <> CAST(1 AS INTEGER))`. `BuildInfeasibleDiagnostic` renders a DROP as
 a dedicated EAV row `subject_kind='clause'`, `subject='x <> 3'`, `attribute='edit_kind'`,
-`value='drop'` (distinct from the LOOSEN `suggested_change`/`amount` pair), and names the fix
-inline in the summary ("… remove `x <> 1`."). The
+`value='drop'` (distinct from the LOOSEN `suggested_change`/`amount` pair), and points to the
+dropped clause in the summary. The
 `DiagnoseInfeasible` empty-guard now bails only when **both** slacks and removals are empty,
 so a removal-only model is still diagnosed.
 
@@ -404,9 +404,10 @@ wired) and:
   the user's variables. Stage 1 had zeroed and dropped the objective; stage 2 needs it back.
 
 `DiagnoseInfeasible` runs stage 2 only when there is a **real objective** (`HasObjective`)
-**and** an editable `LOOSEN` edit (`HasLoosenEdit`): a constant objective has nothing to
-report, and a data-RHS-only conflict has no actionable edit, so an achievable-objective
-number would be misleading (those cases fall back to the stage-1 edit list unchanged).
+**and** an editable `LOOSEN` or `DROP` edit (`HasLoosenEdit || HasRemoval`): a constant
+objective has nothing to report, and a data-RHS-only conflict has no actionable edit, so an
+achievable-objective number would be misleading (those cases fall back to the stage-1 edit
+list unchanged).
 
 **Reading the result.** On `OPTIMAL`, the stage-2 slacks are re-read into the edit list
 (`ReadElasticEdits`, the shared stage-1/stage-2 reader) and the objective value is reported.
@@ -424,17 +425,17 @@ precision. The stage-1 read is exact and is **not** snapped.
 it for both `S*` (stage 1) and the achievable objective (stage 2) — ground truth, no `cᵀx`
 re-derivation and no quadratic-convention guessing.
 
-**Reporting.** `BuildInfeasibleDiagnostic` gained two optional arguments
-(`achievable_objective`, `unbounded_after_fix`). When set it appends "After this change, the
-best achievable objective is `<value>`." to the summary and emits one EAV row
+**Reporting.** `BuildInfeasibleDiagnostic` has two optional arguments
+(`achievable_objective`, `unbounded_after_fix`). When set it emits one EAV row
 `subject_kind='model'`, `attribute='achievable_objective'`, `value=<number>`. `S*` itself is
-**not** surfaced (decision 4) — the headline fact is the objective, not the internal total.
+**not** surfaced (decision 4), and the stderr headline remains a clause pointer rather than
+an objective report.
 
 **Stage-2 unbounded (decision 2).** If the relaxed region is unbounded in the objective
 direction (`UNBOUNDED` / `INF_OR_UNBD`), there is no finite optimum: the engine keeps the
-stage-1 edit (still valid) and reports "After this change, the objective is unbounded." with
-the model row value `'unbounded'`. It does **not** hand off to the unbounded engine — the
-edit is the actionable part, and composing two diagnoses would muddy the message.
+stage-1 edit (still valid) and emits model row value `'unbounded'`. It does **not** hand off
+to the unbounded engine — the edit is the actionable part, and composing two diagnoses would
+muddy the message.
 
 **Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): a non-unique-minimizer 2-var case
 (caps `x ≤ 0`, `y ≤ 0` feeding rigid `x + y ≥ 10`, `MAXIMIZE x`) reports the x-cap edit and
@@ -506,33 +507,26 @@ test_infeasible_uncorrelated_subquery_cap_is_editable` / `…_correlated_subquer
 I5 is the final reporting step. The structured EAV edit list was already emitted by I1–I4; I5
 makes two refinements and **locks the vocabulary**.
 
-**Lean cue summary (mirrors the unbounded terminal).** `BuildInfeasibleDiagnostic`
-(`decide_diagnostic.cpp`) inlines the *specific* edit(s) in the headline whenever there are
-**up to three** actionable edits — e.g. `"loosen \`x <= 5\` to \`x <= 10\`"` or
-`"remove \`(x <> 3)\`"` — so the headline alone tells the user the fix. Multiple phrases are
-joined `", "`-separated with `", or "` before the last one (alternative single-edit fixes, not a
-combined edit). The full per-clause detail still lives in the table (`decide_diagnostics()`), and
-every thrown message already appends `Details: SELECT * FROM decide_diagnostics();`. With **four
-or more** edits, or when no edit has a single literal to quote, the headline falls back to a
-kind-named cue (the inline form would get unwieldy):
-- ≤3 edits with a literal to quote → `"…; a possible edit was found to make it feasible — loosen \`x <= 5\` to \`x <= 10\`."` (per-edit phrase, comma/`, or `-joined for multiple)
-- 4+ edits, LOOSEN present → `"…; a possible edit was found to make it feasible — loosen one of your SUCH THAT limits."`
-- 4+ edits, DROP (no loosen) → `"… — remove one of your SUCH THAT constraints."`
-- 4+ edits, both → `"… — loosen or remove one of your SUCH THAT constraints."`
-- CONFLICT_SUMMARY only (no actionable editable edit, any count) → `"…; the conflict is in per-row data, with no single limit to loosen."`
+**Lean cue summary.** `BuildInfeasibleDiagnostic` (`decide_diagnostic.cpp`) keeps the thrown
+stderr headline short: it points to the relevant clause target(s) and leaves the actual edits to
+`decide_diagnostics()`. This avoids implying that one listed clause is independently sufficient
+when the engine found a combined repair set.
+- Single target → `"…; diagnosis points to clause \`x <= 5\`."`
+- Multiple targets → `"…; diagnosis points to clause \`SUM(x) >= 1\` and clause \`SUM(5*x) <= -1\`."`
+- PER groups → `"…; diagnosis points to grouped clause \`SUM(x) >= 5 PER grp\` for groups \`a\` and \`b\`."`
+- CONFLICT_SUMMARY only → `"…; diagnosis points to per-row data in clause \`x >= 5\`."`
 
-The word *"a possible edit"* (not "the fix") is the honesty framing — the slacks give **one**
-hitting set, not the complete conflict collection — so no separate caveat row is needed. The I3
-achievable-objective sentence is **kept inline** after the cue (`"After this change, the best
-achievable objective is …."` / `"… the objective is unbounded."`). `BuildElasticInfeasibleDiagnostic`
-(the "loosening cannot fix it" path) is untouched — the cue does not apply when no edit was found.
+Every thrown message still appends `Details: SELECT * FROM decide_diagnostics();`. The table is
+the source of truth for `edit_kind`, `suggested_change`, `amount`, `conflict`, `group`, and
+`achievable_objective`. `BuildElasticInfeasibleDiagnostic` (the "loosening cannot fix it" path)
+is untouched — the cue does not apply when no edit was found.
 
 **Why no runnable rewritten query.** The original plan envisioned emitting a copy-paste rewritten
 DECIDE query. It was deliberately dropped: the engine has no access to the original SQL text (it
 works on `SolverModel` rows, and clause labels are *reconstructed* + canonicalized — the user's
 `5 >= x` comes back as `x <= 5`), so a faithful full query is unbuildable and a reconstructed
 partial would duplicate what the table already carries. The table is the source of truth; the
-headline is a lean pointer, exactly like the unbounded terminal.
+headline is only a lean pointer.
 
 **Frozen EAV vocabulary.** Every edit row now carries a uniform `attribute='edit_kind'`, so
 filtering `attribute='edit_kind'` enumerates all edits and their kinds — the relation is
@@ -547,11 +541,10 @@ self-describing:
 These strings are stable. Previously only DROP carried `edit_kind`; I5 added `loosen` and
 `conflict` so the three edit kinds are uniform.
 
-**Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): the loosen section asserts the cue wording
-(`"a possible edit was found"` + the inline quote `"loosen \`x <= 5\` to \`x <= 10\`"`) and
-`edit_kind='loosen'`; the must-drop section asserts the inline quote `"remove \`(x <> 3)\`"`; the
-data-conflict section asserts `edit_kind='conflict'` and the data-conflict cue (no "possible
-edit" claim). Python differential
+**Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): the loosen section asserts the clause
+pointer (`"diagnosis points to clause \`x <= 5\`"`) and `edit_kind='loosen'`; the must-drop
+section asserts the pointer to `"(x <> 3)"`; the data-conflict section asserts
+`edit_kind='conflict'` and the per-row data pointer. Python differential
 (`test_query_diagnostics_relation.py`): a loosen case asserts `edit_kind='loosen'`; the data-RHS
 conflict asserts `edit_kind='conflict'`.
 

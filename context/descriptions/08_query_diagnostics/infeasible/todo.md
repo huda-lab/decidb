@@ -1,8 +1,16 @@
 # Query Diagnostics — Infeasible (remaining work)
 
 The elastic engine is fully shipped (I1–I5, plus aggregate `<>` removal, PER-group
-identity, and uncorrelated scalar-subquery RHS classification; see `done.md`). Only the
-slack-weighting notes below remain.
+identity, and uncorrelated scalar-subquery RHS classification; see `done.md`).
+
+## Output polish
+
+- **Default stderr wording and labels are still rough.** The engine emits correct
+  diagnoses, but some default output is awkward for SQL users, especially grouped/PER
+  subjects where the subject text and `group` attribute can duplicate context, and
+  multi-edit summaries that read as a flat list of equally minimal alternatives.
+  Tighten `BuildInfeasibleDiagnostic` and the label/provenance formatting so the
+  default error is concise without losing the richer relation rows.
 
 ## Notes to revisit
 

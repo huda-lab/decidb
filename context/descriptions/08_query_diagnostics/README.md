@@ -194,7 +194,7 @@ SELECT id, x FROM (VALUES (1),(2),(3)) t(id) DECIDE x IS INTEGER SUCH THAT x >= 
 **Default output (stderr headline):**
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — loosen `x <= 5` to `x <= 10`. After this change, the best achievable objective is 30.
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `x <= 5`.
 Details: SELECT * FROM decide_diagnostics();
 ```
 
@@ -226,7 +226,7 @@ SELECT id, x FROM (VALUES (1),(2),(3)) t(id) DECIDE x IS BOOLEAN SUCH THAT SUM(x
 **Default output (stderr headline):**
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — loosen `SUM(x) >= 999999` to `SUM(x) >= 3`. After this change, the best achievable objective is 3.
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `SUM(x) >= 999999`.
 Details: SELECT * FROM decide_diagnostics();
 ```
 
@@ -259,7 +259,7 @@ SELECT id, w, x FROM (VALUES (1,5),(2,5),(3,5)) t(id,w) DECIDE x IS BOOLEAN SUCH
 **Default output (stderr headline):**
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — loosen `SUM(x) >= 1` to `SUM(x) >= 0`, or loosen `SUM(5*x) <= -1` to `SUM(5*x) <= 0`. After this change, the best achievable objective is 0.
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `SUM(x) >= 1` and clause `SUM(5*x) <= -1`.
 Details: SELECT * FROM decide_diagnostics();
 ```
 
@@ -294,7 +294,7 @@ SELECT x FROM (VALUES (1)) t(id) DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1
 **Default output (stderr headline):**
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — remove `x <> 1`. After this change, the best achievable objective is 1.
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `x <> 1`.
 Details: SELECT * FROM decide_diagnostics();
 ```
 
@@ -324,7 +324,7 @@ SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) DECIDE x IS BOOLEAN SUCH THAT x
 **Default output (stderr headline):**
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; the conflict is in per-row data, with no single limit to loosen.
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to per-row data in clause `x >= 5`.
 Details: SELECT * FROM decide_diagnostics();
 ```
 
@@ -353,7 +353,7 @@ SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) DE
 **Default output (stderr headline):**
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; a possible edit was found to make it feasible — loosen `SUM(x) >= 5 PER grp` to `SUM(x) >= 2 PER grp`, or loosen `SUM(x) >= 5 PER grp` to `SUM(x) >= 3 PER grp`. After this change, the best achievable objective is 5.
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to grouped clause `SUM(x) >= 5 PER grp` for groups `a` and `b`.
 Details: SELECT * FROM decide_diagnostics();
 ```
 

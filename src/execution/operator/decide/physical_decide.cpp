@@ -5811,8 +5811,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             StashDecideDiagnostic(context, diag);
             ThrowDecideDiagnosisReady(diag);
         }
-        // I0: the engine is a seam and always returns invalid, so control reaches the
-        // static infeasible error. I1 fills the engine and this becomes the fallback.
+        // The elastic engine can still decline to report when no actionable relaxation
+        // exists; keep the plain static infeasible error as the fallback.
         ThrowDecideSolveError(terminal_result);
     }
     case DiagnosisTerminal::TIME_LIMIT: // slow terminal lands at R6

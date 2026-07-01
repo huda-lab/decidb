@@ -4,7 +4,7 @@
 // duckdb/decidb/decide_diagnostic.hpp
 //
 // F5: the shared, structured diagnostic reporting surface. A state engine
-// (unbounded this session; infeasible / slow later) populates a DecideDiagnostic,
+// (currently unbounded or infeasible; slow later) populates a DecideDiagnostic,
 // it is stashed per-connection, and the decide_diagnostics() table function reads
 // it back as a fixed-schema relation. See
 // context/descriptions/08_query_diagnostics/.
@@ -155,16 +155,15 @@ struct ClauseEdit {
 
 //! Build the infeasible diagnosis from the minimal edit list the elastic engine
 //! produced (one clause per positive slack, or one conflict summary per data-RHS
-//! clause). The summary prescribes the smallest change(s) that restore feasibility;
-//! each LOOSEN edit emits `suggested_change` and `amount` rows, each CONFLICT_SUMMARY
-//! edit emits a `conflict` row, keyed by the clause as written.
+//! clause). The summary points to the relevant clause(s); the concrete edits live in
+//! the EAV rows. Each LOOSEN edit emits `suggested_change` and `amount` rows, each
+//! CONFLICT_SUMMARY edit emits a `conflict` row, keyed by the clause as written.
 //!
 //! `achievable_objective` (I3, the stage-2 freeze-budget re-solve): when non-empty,
-//! appends "After this change, the best achievable objective is <value>." to the
-//! summary and emits one `subject_kind='model'`, `attribute='achievable_objective'`
-//! row. `unbounded_after_fix` overrides it: the relaxed problem has no finite optimum,
-//! so the summary reads "… the objective is unbounded." and the row value is
-//! `'unbounded'`. Both default off (used by the unchanged data-RHS-only path).
+//! emits one `subject_kind='model'`, `attribute='achievable_objective'` row.
+//! `unbounded_after_fix` overrides it: the relaxed problem has no finite optimum, so
+//! the row value is `'unbounded'`. Both default off (used by the unchanged
+//! data-RHS-only path).
 //! Precondition: `edits` non-empty (the caller falls through to the static error
 //! otherwise).
 DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,

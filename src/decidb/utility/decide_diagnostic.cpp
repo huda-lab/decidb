@@ -72,6 +72,77 @@ static void RemovalBigMSetCallback(ClientContext &context, SetScope scope, Value
 static constexpr double DECIDE_L0_TOLERANCE_DEFAULT = 1e-4;
 static constexpr double DECIDE_L0_TOLERANCE_FLOOR = 1e-5;
 
+struct DiagnosticTarget {
+	string label;
+	vector<string> groups;
+	bool has_ungrouped = false;
+};
+
+static void AddDiagnosticTarget(vector<DiagnosticTarget> &targets, const ClauseEdit &edit) {
+	auto target = std::find_if(targets.begin(), targets.end(), [&](const DiagnosticTarget &candidate) {
+		return candidate.label == edit.label;
+	});
+	if (target == targets.end()) {
+		targets.push_back(DiagnosticTarget());
+		target = targets.end() - 1;
+		target->label = edit.label;
+	}
+	if (edit.group.empty()) {
+		target->has_ungrouped = true;
+		return;
+	}
+	if (std::find(target->groups.begin(), target->groups.end(), edit.group) == target->groups.end()) {
+		target->groups.push_back(edit.group);
+	}
+}
+
+static string JoinDiagnosticPhrases(const vector<string> &phrases) {
+	if (phrases.empty()) {
+		return "";
+	}
+	if (phrases.size() == 1) {
+		return phrases[0];
+	}
+	string result;
+	for (idx_t i = 0; i < phrases.size(); i++) {
+		if (i > 0) {
+			result += (i + 1 == phrases.size()) ? (phrases.size() == 2 ? " and " : ", and ") : ", ";
+		}
+		result += phrases[i];
+	}
+	return result;
+}
+
+static string QuotedGroupList(const vector<string> &groups) {
+	vector<string> quoted;
+	for (const auto &group : groups) {
+		quoted.push_back("`" + group + "`");
+	}
+	return JoinDiagnosticPhrases(quoted);
+}
+
+static vector<string> BuildDiagnosticTargetPhrases(const vector<ClauseEdit> &edits, bool conflict_only) {
+	vector<DiagnosticTarget> targets;
+	for (const auto &edit : edits) {
+		AddDiagnosticTarget(targets, edit);
+	}
+
+	vector<string> phrases;
+	for (const auto &target : targets) {
+		if (target.has_ungrouped) {
+			string phrase = "clause `" + target.label + "`";
+			phrases.push_back(conflict_only ? "per-row data in " + phrase : phrase);
+		}
+		if (!target.groups.empty()) {
+			string phrase = "grouped clause `" + target.label + "` for ";
+			phrase += target.groups.size() == 1 ? "group " : "groups ";
+			phrase += QuotedGroupList(target.groups);
+			phrases.push_back(conflict_only ? "per-row data in " + phrase : phrase);
+		}
+	}
+	return phrases;
+}
+
 static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
 	if (!(v >= DECIDE_L0_TOLERANCE_FLOOR)) {
@@ -322,64 +393,20 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	diag.status = SolverStatus::INFEASIBLE;
 	diag.state = "infeasible";
 
-	// Summary: name the concrete least-change edit(s) inline, mirroring the unbounded
-	// terminal (which names the escaping variable and its fix). With up to three actionable
-	// edits we quote them — "loosen `x <= 5` to `x <= 10`" — so the headline alone tells
-	// the user the fix; the full per-clause detail still lives in decide_diagnostics().
-	// With four or more we fall back to a kind-named cue (the headline would get unwieldy)
-	// and a data-RHS-only conflict has no single value to loosen, so it gets its own cue.
-	// "a possible edit" (note: "a", one hitting set, not "the" complete conflict set).
-	// Tell the user the fix, not the math.
+	// Summary: keep stderr as a pointer to the relevant query clauses. Suggestions,
+	// amounts, conflict counts, and achievable-objective facts live in decide_diagnostics().
 	auto relation_subject = [](const ClauseEdit &e) {
 		return e.group.empty() ? e.label : e.label + " [group: " + e.group + "]";
 	};
 
-	bool has_loosen = false;
-	bool has_drop = false;
-	vector<string> phrases;
+	bool conflict_only = true;
 	for (const auto &e : edits) {
-		switch (e.kind) {
-		case ClauseEditKind::LOOSEN:
-			has_loosen = true;
-			phrases.push_back("loosen `" + e.label + "` to `" + e.suggestion + "`");
-			break;
-		case ClauseEditKind::DROP:
-			has_drop = true;
-			phrases.push_back("remove `" + e.label + "`");
-			break;
-		case ClauseEditKind::CONFLICT_SUMMARY:
-			break; // no single literal to quote; reported per-clause in the relation
-		}
+		conflict_only = conflict_only && e.kind == ClauseEditKind::CONFLICT_SUMMARY;
 	}
+	vector<string> phrases = BuildDiagnosticTargetPhrases(edits, conflict_only);
 	diag.summary = "the constraints cannot all be satisfied at once";
-	if (!phrases.empty() && phrases.size() <= 3) {
-		diag.summary += "; a possible edit was found to make it feasible — ";
-		for (idx_t i = 0; i < phrases.size(); i++) {
-			if (i > 0) {
-				diag.summary += (i + 1 == phrases.size()) ? ", or " : ", ";
-			}
-			diag.summary += phrases[i];
-		}
-		diag.summary += ".";
-	} else if (has_loosen && has_drop) {
-		diag.summary += "; a possible edit was found to make it feasible — loosen or remove "
-		                "one of your SUCH THAT constraints.";
-	} else if (has_loosen) {
-		diag.summary += "; a possible edit was found to make it feasible — loosen one of "
-		                "your SUCH THAT limits.";
-	} else if (has_drop) {
-		diag.summary += "; a possible edit was found to make it feasible — remove one of "
-		                "your SUCH THAT constraints.";
-	} else {
-		// CONFLICT_SUMMARY only: no single literal to loosen, so no clean editable edit.
-		diag.summary += "; the conflict is in per-row data, with no single limit to loosen.";
-	}
-	// I3: the achievable objective after the minimal fix. `unbounded_after_fix` wins —
-	// the relaxed problem has no finite optimum.
-	if (unbounded_after_fix) {
-		diag.summary += " After this change, the objective is unbounded.";
-	} else if (!achievable_objective.empty()) {
-		diag.summary += " After this change, the best achievable objective is " + achievable_objective + ".";
+	if (!phrases.empty()) {
+		diag.summary += "; diagnosis points to " + JoinDiagnosticPhrases(phrases) + ".";
 	}
 
 	for (const auto &e : edits) {

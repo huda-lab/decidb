@@ -236,11 +236,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(diag.state == "infeasible");
 		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 10");
 		CHECK(FindRow(diag, "x <= 5", "amount") == "5");
-		// I5: with <=3 edits the summary quotes the specific clause inline; the structured
-		// rows above still carry the same data. edit_kind is uniform.
+		// The summary points to the problem clause; the structured rows above carry
+		// the concrete edit. edit_kind is uniform.
 		CHECK(FindRow(diag, "x <= 5", "edit_kind") == "loosen");
-		CHECK(diag.summary.find("a possible edit was found") != string::npos);
-		CHECK(diag.summary.find("loosen `x <= 5` to `x <= 10`") != string::npos);
+		CHECK(diag.summary.find("diagnosis points to clause `x <= 5`") != string::npos);
+		CHECK(diag.summary.find("loosen `x <= 5` to `x <= 10`") == string::npos);
 	}
 
 	SECTION("equality row loosens via its two-sided slack") {
@@ -486,9 +486,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(FindRow(diag, "x <= 5", "suggested_change").empty());
 		CHECK(FindRow(diag, "x <= 5", "amount").empty());
 		// I5: a data-RHS conflict carries edit_kind='conflict' (uniform vocabulary), and
-		// the summary uses the data-conflict cue — no "possible edit was found" claim.
+		// the summary points to the data-backed problem clause.
 		CHECK(FindRow(diag, "x <= 5", "edit_kind") == "conflict");
-		CHECK(diag.summary.find("conflict is in per-row data") != string::npos);
+		CHECK(diag.summary.find("diagnosis points to per-row data in clause `x <= 5`") != string::npos);
 		CHECK(diag.summary.find("a possible edit was found") == string::npos);
 	}
 
@@ -630,15 +630,15 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(FindRow(diag, "x <= 0", "suggested_change") == "x <= 10");
 		CHECK(FindRow(diag, "x <= 0", "amount") == "10");
 		CHECK(FindRow(diag, "y <= 0", "suggested_change").empty());
-		// The achievable objective is reported as a model-level fact and in the summary.
+		// The achievable objective is reported as a model-level fact, not in the summary.
 		CHECK(FindRow(diag, "", "achievable_objective") == "10");
-		CHECK(diag.summary.find("best achievable objective is 10") != string::npos);
+		CHECK(diag.summary.find("best achievable objective is 10") == string::npos);
 	}
 
 	SECTION("stage 2 reports an unbounded objective after the fix") {
 		// x <= 0 (editable) conflicts with the rigid x >= 5: the unique fix loosens the
 		// cap to 5. But y is free above and absent from every constraint, so MAXIMIZE y
-		// has no finite optimum once feasible — the engine keeps the edit and says so.
+		// has no finite optimum once feasible; the table reports that model-level fact.
 		SolverModel model = MakeModel(2, {
 		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
 		    {0, 1.0, '>', 5.0, ConstraintKind::STRUCTURAL},
@@ -654,7 +654,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(FindRow(diag, "x <= 0", "suggested_change") == "x <= 5");
 		CHECK(FindRow(diag, "x <= 0", "amount") == "5");
 		CHECK(FindRow(diag, "", "achievable_objective") == "unbounded");
-		CHECK(diag.summary.find("objective is unbounded") != string::npos);
+		CHECK(diag.summary.find("objective is unbounded") == string::npos);
 	}
 
 	SECTION("diagnostics relation carries clause-shaped infeasible attributes") {
@@ -773,9 +773,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
 		CHECK(FindRow(diag, "(x <> 3)", "edit_kind") == "drop");
-		// I5: with <=3 edits the summary quotes the specific clause inline.
-		CHECK(diag.summary.find("a possible edit was found") != string::npos);
-		CHECK(diag.summary.find("remove `(x <> 3)`") != string::npos);
+		CHECK(diag.summary.find("diagnosis points to clause `(x <> 3)`") != string::npos);
+		CHECK(diag.summary.find("remove `(x <> 3)`") == string::npos);
 	}
 
 	SECTION("prefer-loosen: a loosenable knob is chosen over dropping a `<>`") {

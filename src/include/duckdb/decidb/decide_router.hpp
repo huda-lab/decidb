@@ -18,15 +18,14 @@
 namespace duckdb {
 
 //! A leaf of the router's dispatch tree — the terminal a solve routes to.
-//! INFEASIBLE / TIME_LIMIT are classified distinctly today even though no engine
-//! is wired for them yet (they currently share the static-error path in the
-//! operator); their engines drop in at R5 / R6 without touching this classifier.
+//! INFEASIBLE and TIME_LIMIT are classified distinctly; INFEASIBLE is wired to the
+//! elastic engine, while TIME_LIMIT still shares the static-error path until R6.
 enum class DiagnosisTerminal {
 	//! OPTIMAL: store the solution (the success path).
 	SOLVED,
 	//! Failed unbounded, diagnosis requested: run the unbounded engine.
 	UNBOUNDED,
-	//! Failed infeasible, diagnosis requested: elastic engine (R5; static error until then).
+	//! Failed infeasible, diagnosis requested: run the elastic engine.
 	INFEASIBLE,
 	//! Hit the time limit, diagnosis requested: slow terminal (R6; static error until then).
 	TIME_LIMIT,

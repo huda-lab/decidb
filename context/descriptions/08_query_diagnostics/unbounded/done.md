@@ -130,8 +130,9 @@ lives in the opt-in relation, not the error.
   variable, set `PRAGMA diagnose_decide='auto'` and re-run."* — so a user who
   suppressed diagnosis is reminded how to get the per-variable detail back. (Under
   the `auto` default this branch is not reached for UNBOUNDED: the solve is diagnosed
-  and throws the `Details:` pointer instead.) Only the unbounded branch advertises;
-  infeasible/slow stay silent until their engines exist.
+  and throws the `Details:` pointer instead.) The unbounded static branch is the
+  only one that advertises how to re-enable diagnosis; infeasible now has its own
+  elastic engine under `auto`, while slow stays silent until its engine exists.
 - **The relation pointer.** When a diagnosis is stashed, the thrown error ends with
   *"Details: SELECT * FROM decide_diagnostics();"* (`ThrowDecideDiagnosisReady`,
   `decide_diagnostic.cpp`). The stash is per-connection, so a fresh connection gets
