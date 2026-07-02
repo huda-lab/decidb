@@ -40,10 +40,12 @@ variable via the ray and prescribes a bound (**tighten** a too-open region).
 - `[infeasible/](infeasible/)` ★ — terminal `failed → infeasible`: elastic
 relaxation (**loosen** a too-small region). The flagship engine — fully shipped
 (I1–I5, plus aggregate `<>` removal).
-- `[slow/](slow/)` — terminal `time_limit`: no diagnosis engine yet. A solve that
-hits the time limit returns `SolverStatus::TIME_LIMIT` and routes to the static
-error; any incumbent is discarded. Only the shared time-limit plumbing
-(`DECIDB_TIME_LIMIT`, honored identically by both backends) is in place.
+- `[slow/](slow/)` — terminal `time_limit`: **shipped**. A solve that hits the limit
+returns `SolverStatus::TIME_LIMIT`, prints a plain-language checkpoint report, and — per
+the `decide_on_timeout` pragma (ask / error / continue) — resumes the **same warm solver**
+for more wall-clock, returning the best-so-far rows when the user stops. Not a
+relax/reformulate engine; it reports and continues. (`off` is a master mute → plain
+error.)
 - `[foundations/](foundations/)` — the **substrate** every terminal sits on (not
 a terminal): structured solver result, constraint + variable provenance, the
 `diagnose_decide` gate, the solver-behavior reference, the reporting relation.

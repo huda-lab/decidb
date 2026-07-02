@@ -2,6 +2,8 @@
 #include "duckdb/decidb/diagnostic_solves.hpp"
 #include "duckdb/decidb/diagnostic_constants.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/solver_config.hpp"
+#include "duckdb/decidb/solver_session.hpp"
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
 #include "duckdb/common/exception.hpp"
@@ -87,6 +89,16 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend)
     throw InternalException("Unknown DECIDE solver backend");
 }
 
+unique_ptr<SolverSession> CreateSolverSession(SolverBackend backend) {
+    switch (backend) {
+    case SolverBackend::GUROBI:
+        return GurobiSolver::CreateSession();
+    case SolverBackend::HIGHS:
+        return DeterministicNaive::CreateSession();
+    }
+    throw InternalException("Unknown DECIDE solver backend");
+}
+
 static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBackend backend,
                                           const SolverResult &original) {
     if (original.status != SolverStatus::INF_OR_UNBD) {
@@ -110,7 +122,8 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
 }
 
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
-                        const SolveModelOptions &options, SolverModel *retained_model) {
+                        const SolveModelOptions &options, SolverModel *retained_model,
+                        unique_ptr<SolverSession> *retained_session) {
 	SolverModel model;
 	try {
 		model = SolverModel::Build(input, indexer);
@@ -138,9 +151,20 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 		}
 	}
 	SolverBackend backend = SelectSolverBackend();
-	SolverResult result = SolvePreparedModel(model, backend);
+	// Solve on a live session (the warm-continuation substrate). The first chunk
+	// uses the caller's requested limit, or the shared default when unset (<0).
+	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
+	auto session = CreateSolverSession(backend);
+	SolverResult result = session->Solve(model, time_limit);
 	result = DisambiguateInfOrUnbd(model, backend, result);
 	AttachUnboundedRayIfRequested(model, backend, options, result);
+	// Hand the live session to the continuation loop if one asked for it, so a
+	// time-limit stop can Continue() the same warm solver. Done before moving the
+	// model (the session keeps its own copy of the model data, so the two are
+	// independent), but the model move must still come last for the helpers above.
+	if (retained_session) {
+		*retained_session = std::move(session);
+	}
 	// Hand the built model to a diagnosis engine if one asked for it (it is
 	// otherwise discarded here). Done last: the helpers above still need it alive.
 	if (retained_model) {

@@ -217,6 +217,10 @@ void RegisterDecideDiagnosticOptions(DBConfig &config);
 //! Read the current diagnose_decide mode (lowercased; "auto" if unset).
 string GetDiagnoseDecideMode(ClientContext &context);
 
+//! Read the current decide_on_timeout mode (lowercased; "ask" if unset). Governs
+//! what a time-limit stop does under diagnose_decide='auto': ask | error | continue.
+string GetDecideOnTimeoutMode(ClientContext &context);
+
 //! Read the L0 (norm(e, 0)) nonzero threshold from the session settings (default
 //! 1e-4). Clamped to the floor (>= 1e-5) so the indicator link is always enforced.
 double GetDecideL0Tolerance(ClientContext &context);

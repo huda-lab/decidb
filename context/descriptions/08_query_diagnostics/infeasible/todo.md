@@ -3,14 +3,32 @@
 The elastic engine is fully shipped (I1–I5, plus aggregate `<>` removal, PER-group
 identity, and uncorrelated scalar-subquery RHS classification; see `done.md`).
 
-## Output polish
+## Design entries
 
-- **Default stderr wording and labels are still rough.** The engine emits correct
-  diagnoses, but some default output is awkward for SQL users, especially grouped/PER
-  subjects where the subject text and `group` attribute can duplicate context, and
-  multi-edit summaries that read as a flat list of equally minimal alternatives.
-  Tighten `BuildInfeasibleDiagnostic` and the label/provenance formatting so the
-  default error is concise without losing the richer relation rows.
+- **Elastic knob granularity for non-literal RHS and grouped constraints.** The current engine
+  hard-codes one mapping from solver slacks to user-facing edits: `SHARED_LITERAL` rows share one
+  slack and produce a `suggested_change`; `PER_ROW_DATA` rows get independent slacks and collapse
+  to a `CONFLICT_SUMMARY`; PER aggregate constraints get one slack per group. Generalize this into
+  an explicit diagnostic policy: how should DeciDB invent a *virtual* user knob when the original
+  query has no literal RHS to edit?
+
+  Candidate policies:
+  - `shared_offset`: one offset for the whole clause, e.g. diagnose `x <= col` as the virtual edit
+    `x <= col + delta`. This is the most actionable form when the user can add a tolerance,
+    safety margin, or buffer to the query.
+  - `group_offset`: one offset per PER / grouping bucket, e.g. `SUM(x) >= K PER region` reports
+    the achievable target per region. This explains heterogeneous groups without pretending one
+    global literal edit is tight for every group.
+  - `row_profile`: independent row slacks, summarized as counts / max violation / representative
+    rows. This is best for finding bad data or outliers, but is not directly a query edit.
+  - `auto`: keep today's defaults unless the clause shape indicates a better user knob.
+
+  This is relevant anywhere one written clause fans into many solver rows or where the RHS is
+  semantically data-backed rather than a literal: row-varying bounds (`x <= col`, `x >= demand`),
+  correlated scalar-subquery RHS, equalities to target columns (`x = target_col`), PER aggregates,
+  WHEN-filtered aggregate groups, easy MIN/MAX expansions, and tolerance-like constraints. The
+  report should distinguish virtual edits (`x <= col + delta`) from actual source literals, and
+  preserve row/group profile facts so the user can choose between editing the query and fixing data.
 
 ## Notes to revisit
 

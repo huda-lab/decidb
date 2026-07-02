@@ -1,6 +1,7 @@
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/solver_config.hpp"
+#include "duckdb/decidb/solver_session.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/gurobi/gurobi_loader.hpp"
 
@@ -46,15 +47,41 @@ bool GurobiSolver::IsAvailable() {
     return available;
 }
 
-SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
+namespace {
+
+//! Resumable Gurobi handle. Load() builds the env+model once (its C resources
+//! live in `guard` as members, so they survive across Continue()); RunAndReadback()
+//! sets the per-chunk TimeLimit on the live model and (re-)optimizes. Gurobi resumes
+//! the MIP search in place on a repeat optimize() after a time-limit stop, so
+//! Continue() is just another RunAndReadback() with a fresh chunk budget.
+class GurobiSession : public SolverSession {
+public:
+    SolverResult Solve(const SolverModel &ilp, double time_limit_seconds) override {
+        Load(ilp);
+        return RunAndReadback(time_limit_seconds);
+    }
+
+    SolverResult Continue(double time_limit_seconds) override {
+        // Precondition: Solve() already loaded the model into `guard`.
+        return RunAndReadback(time_limit_seconds);
+    }
+
+private:
+    GurobiGuard guard;
+    idx_t total_vars = 0;
+
+    void Load(const SolverModel &ilp);
+    SolverResult RunAndReadback(double time_limit_seconds);
+};
+
+void GurobiSession::Load(const SolverModel &ilp) {
     auto &api = GurobiLoader::API();
-    idx_t total_vars = ilp.num_vars;
+    total_vars = ilp.num_vars;
 
     //===--------------------------------------------------------------------===//
     // 1. Create Gurobi environment
     //===--------------------------------------------------------------------===//
 
-    GurobiGuard guard;
     int error = api.emptyenv_internal(&guard.env, api.version_major, api.version_minor, api.version_tech);
     if (error || !guard.env) {
         throw InternalException("Failed to create Gurobi environment (error %d). "
@@ -62,12 +89,9 @@ SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
                                 error);
     }
     api.setintparam(guard.env, "OutputFlag", 0);
-    // Cap solve time so a hard MIQP/QCQP doesn't hang the session indefinitely.
-    // The limit is resolved by the shared solver-agnostic helper (default 300s,
-    // overridable via DECIDB_TIME_LIMIT) so Gurobi and HiGHS honor the same value.
-    // Truly hard problems return the best feasible solution found so far (handled
-    // by the GRB_TIME_LIMIT branch below).
-    api.setdblparam(guard.env, "TimeLimit", ResolveDecideTimeLimit());
+    // Note: the TimeLimit is NOT set here — it is a per-chunk budget applied in
+    // RunAndReadback() (on the live model's env), so a warm Continue() can raise it
+    // without a reload.
     // Enable non-convex QP solving via spatial branching when needed
     if (ilp.nonconvex_quadratic) {
         api.setintparam(guard.env, "NonConvex", 2);
@@ -166,12 +190,25 @@ SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
                                         api.geterrormsg(guard.env));
         }
     }
+}
+
+SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
+    auto &api = GurobiLoader::API();
 
     //===--------------------------------------------------------------------===//
     // 4. Solve
     //===--------------------------------------------------------------------===//
 
-    error = api.optimize(guard.model);
+    // Apply the per-chunk wall-clock cap on the live model's env. Setting it here
+    // (rather than on the base env at Load) is what lets a warm Continue() extend
+    // the budget without rebuilding — the same live-model param path the
+    // DualReductions disambiguation below uses.
+    void *model_env = api.getenv_model(guard.model);
+    if (model_env) {
+        api.setdblparam(model_env, "TimeLimit", time_limit_seconds);
+    }
+
+    int error = api.optimize(guard.model);
     if (error) {
         throw InvalidInputException("Gurobi optimization call failed: %s",
                                     api.geterrormsg(guard.env));
@@ -194,7 +231,6 @@ SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
     // reductions and re-solve, which yields a definitive INFEASIBLE or
     // UNBOUNDED. The extra solve only happens in this rare ambiguous case.
     if (status == GRB_INF_OR_UNBD) {
-        void *model_env = api.getenv_model(guard.model);
         if (model_env && api.setintparam(model_env, "DualReductions", 0) == 0 &&
             api.optimize(guard.model) == 0) {
             error = api.getintattr(guard.model, GRB_INT_ATTR_STATUS, &status);
@@ -298,6 +334,18 @@ SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
         solve_result.objective_value = obj_val;
     }
     return solve_result;
+}
+
+} // namespace
+
+SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
+    // Single-shot path: one Solve() on a throwaway session with the default limit.
+    GurobiSession session;
+    return session.Solve(ilp, ResolveDecideTimeLimit());
+}
+
+unique_ptr<SolverSession> GurobiSolver::CreateSession() {
+    return make_uniq<GurobiSession>();
 }
 
 } // namespace duckdb

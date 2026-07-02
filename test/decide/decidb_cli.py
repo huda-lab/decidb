@@ -136,6 +136,46 @@ class DecidBCli:
             env=self._subprocess_env(),
         )
 
+    def execute_interactive(
+        self, sql: str, responses: str, *, timeout: float = 60
+    ) -> subprocess.CompletedProcess:
+        """Run *sql* with a pseudo-terminal as stdin, feeding *responses*.
+
+        The slow-solve ``decide_on_timeout='ask'`` path only prompts when stdin is
+        a terminal (``isatty``); pytest's captured pipe stdin is not one. Driving the
+        child through a PTY makes ``isatty`` true so the interactive continuation
+        prompt engages. The SQL is delivered via ``-c`` (so the PTY is free to carry
+        only the prompt answers), and *responses* — e.g. ``"s\\n"`` (stop), ``"\\n\\ns\\n"``
+        (two continues then stop), or ``"\\x04"`` (EOF) — is written to the PTY master.
+
+        Input is line-buffered by the terminal, so responses can be queued up front:
+        each ``getline`` in the operator consumes one line as it reaches each prompt,
+        independent of solver timing. Returns a ``CompletedProcess`` (stdout, stderr).
+        """
+        import pty
+        import time
+
+        master_fd, slave_fd = pty.openpty()
+        try:
+            proc = subprocess.Popen(
+                [self.exe, self.db, "-readonly", "-c", sql],
+                stdin=slave_fd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self._subprocess_env(),
+            )
+            os.close(slave_fd)  # parent keeps only the master end
+            slave_fd = -1
+            time.sleep(0.2)  # let the child come up before queueing the answers
+            os.write(master_fd, responses.encode())
+            stdout, stderr = proc.communicate(timeout=timeout)
+        finally:
+            os.close(master_fd)
+            if slave_fd >= 0:
+                os.close(slave_fd)
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+
     def assert_error(
         self, sql: str, *, match: str | None = None, timeout: float = 120
     ) -> None:

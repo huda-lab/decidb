@@ -14,6 +14,7 @@
 #include "duckdb/decidb/solver_input.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/solver_result.hpp"
+#include "duckdb/decidb/solver_session.hpp"
 
 namespace duckdb {
 
@@ -29,6 +30,10 @@ enum class SolverBackend {
 //! no extra diagnostic artifacts.
 struct SolveModelOptions {
 	bool extract_unbounded_ray = false;
+	//! Per-solve wall-clock budget (seconds). A negative value means "resolve the
+	//! shared default" (ResolveDecideTimeLimit). The slow-solve continuation loop
+	//! sets this so the first chunk uses the same limit later Continue() chunks do.
+	double time_limit_seconds = -1.0;
 };
 
 //! Resolve the backend DeciDB should use for this solve, honoring the
@@ -57,8 +62,14 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend)
 //! into it after the solve so a diagnosis engine can transform and re-solve it
 //! (the model is otherwise a local and discarded once the solve returns). Left
 //! untouched when Build() proves infeasibility before a model exists.
+//!
+//! `retained_session` (optional): when non-null, the live solver session used for
+//! the solve is moved into it so the slow-solve continuation loop can Continue()
+//! the warm solver on a time-limit stop. Left untouched when Build() proves
+//! infeasibility before any solver runs.
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
-                         const SolveModelOptions &options, SolverModel *retained_model = nullptr);
+                         const SolveModelOptions &options, SolverModel *retained_model = nullptr,
+                         unique_ptr<SolverSession> *retained_session = nullptr);
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer);
 
 } // namespace duckdb

@@ -224,12 +224,29 @@ subsumes every useful case while staying silent on success.)
 - **The gate** in `PhysicalDecide::Finalize`: read the mode before the solve,
   pre-arm `SolveModelOptions::extract_unbounded_ray`, infeasible-bound tolerance,
   and retained-model capture under `auto` (`off` pays nothing). On a non-optimal
-  result, `RouteSolveResult` dispatches to the UNBOUNDED or INFEASIBLE terminal
-  when available; the terminal builds + stashes the diagnosis and throws the short
-  pointer error, else falls through to `ThrowDecideSolveError`. TIME_LIMIT still
-  follows the static-error path until the slow terminal lands.
+  result, `RouteSolveResult` dispatches to the UNBOUNDED / INFEASIBLE / TIME_LIMIT
+  terminal when available; the terminal builds + stashes the diagnosis and throws the
+  short pointer error, else falls through to `ThrowDecideSolveError`.
 
 Tested in `test/decide/tests/test_query_diagnostics_pragmas.py` (both backends).
+
+## The `decide_on_timeout` pragma
+
+Sticky session setting governing what a **time-limit** stop does — but only under
+`diagnose_decide='auto'` (`off` is a master mute: TIME_LIMIT routes to `UNDIAGNOSED` →
+plain error, so `decide_on_timeout` never fires). Three modes, registered the same way
+alongside `diagnose_decide` in `RegisterDecideDiagnosticOptions`, validated by a
+set-callback, read via `GetDecideOnTimeoutMode` (default `ask`):
+
+- `ask` (default) — print the report, then prompt to keep solving on the warm solver at
+  an interactive terminal; **falls back to `error` when stdin is not a TTY** (tests,
+  pipes, benchmarks, C-API) so it never blocks on an unanswerable prompt.
+- `error` — print the report, then error (never returns the incumbent).
+- `continue` — auto-resume each chunk until the solver finishes; Ctrl-C
+  (`ClientContext::interrupted`) breaks at the next chunk boundary.
+
+The full loop, warm-resume session, and stop delivery live in `slow/done.md`; the
+terminal wiring is in `router/done.md` ("Terminals: time_limit").
 
 ## Diagnosis engine seam
 

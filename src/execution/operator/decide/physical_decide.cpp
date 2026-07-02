@@ -33,6 +33,8 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/decidb/solver_config.hpp"
 #include <sys/resource.h>
+#include <unistd.h>  // isatty / STDIN_FILENO — interactive-terminal check for the slow-solve prompt
+#include <iostream>  // std::cin / std::getline — read the continuation decision at a time-limit stop
 
 namespace duckdb {
 
@@ -5694,6 +5696,20 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // diagnose it (Bug 1, all-column-bound conflicts). Off mode keeps the fast throw.
     solver_input.tolerate_infeasible_bounds = diagnosis_armed;
 
+    // S3/S4: slow-solve continuation. `decide_on_timeout` governs what a time-limit
+    // stop does *under diagnose auto* (off is a master mute — RouteSolveResult never
+    // routes TIME_LIMIT to its terminal when diagnosis isn't armed). `ask` needs a
+    // human, so it falls back to `error` when stdin is not a terminal (tests,
+    // benchmarks, -c pipes, C-API) — never prompt where no one can answer. Only the
+    // continue-capable modes need the warm solver retained across the timeout.
+    string on_timeout = GetDecideOnTimeoutMode(context);
+    bool stdin_is_tty = isatty(STDIN_FILENO) != 0;
+    string eff_on_timeout = (on_timeout == "ask" && !stdin_is_tty) ? "error" : on_timeout;
+    bool want_session = diagnosis_armed && eff_on_timeout != "error";
+    // The first solve chunk uses the same per-chunk budget every Continue() chunk will,
+    // so elapsed climbs in even multiples (300s, 600s, ...) across the loop.
+    solve_options.time_limit_seconds = ResolveDecideTimeLimit();
+
     // Reconcile the `<>` label channel with the final global-var count. Only the
     // aggregate-`<>` site labels its global z (for the infeasible removal dial),
     // and those z's are allocated first (the deferred-NE loop runs before all
@@ -5707,12 +5723,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // Retained only when diagnosis is armed; the move is trivial and the model is
     // freed when Finalize returns. SolveModel otherwise discards the built model.
     SolverModel retained_model;
+    // Retained only when a continue-capable timeout mode is active: the live warm
+    // solver, so the TIME_LIMIT terminal can Continue() it for more wall-clock.
+    unique_ptr<SolverSession> retained_session;
     // Always-on wall-clock around the solve (independent of DECIDB_BENCH): the slow
     // checkpoint report (S2) needs the elapsed solve time to show the user.
     Profiler solve_wall_timer;
     solve_wall_timer.Start();
     SolverResult solve_result =
-        SolveModel(solver_input, var_indexer, solve_options, diagnosis_armed ? &retained_model : nullptr);
+        SolveModel(solver_input, var_indexer, solve_options, diagnosis_armed ? &retained_model : nullptr,
+                   want_session ? &retained_session : nullptr);
     solve_wall_timer.End();
 
     // Per-decide-variable labels + is-aux flags for column provenance. Both failure
@@ -5890,13 +5910,102 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // exists; keep the plain static infeasible error as the fallback.
         ThrowDecideSolveError(terminal_result);
     }
-    case DiagnosisTerminal::TIME_LIMIT:
-        // S2: under `auto`, print the checkpoint report (what was found + how far it
-        // can still improve + elapsed/memory) before surfacing the outcome. The
-        // interactive continue loop (S3) and returning the incumbent rows (S4) are
-        // not wired yet, so the statement still errors after the report.
-        PrintDecideTimeoutReport(solve_result, solve_wall_timer.Elapsed(), ResolveDecideTimeLimit());
+    case DiagnosisTerminal::TIME_LIMIT: {
+        // S2/S3/S4: at each chunk boundary print the checkpoint report (what was found
+        // + how far it can still improve + elapsed/memory), then act per
+        // `decide_on_timeout`: error → stop; ask → prompt the user; continue → keep
+        // resuming automatically. "Continue" re-runs the SAME warm solver
+        // (retained_session) for another fresh chunk — the MIP search resumes, elapsed
+        // accumulates. On stop, a usable incumbent is returned as a SUCCESSFUL result
+        // (with a plain stderr caveat that it is not proven best); no incumbent falls
+        // to the existing timeout error.
+        double chunk = ResolveDecideTimeLimit();
+        double cum_elapsed = solve_wall_timer.Elapsed();
+        double cum_budget = chunk;
+
+        if (eff_on_timeout == "error") {
+            // Print the checkpoint once, then error — `error` never returns the
+            // incumbent (that is the ask/continue stop behavior below). This is also
+            // the non-TTY fallback for `ask`, so it preserves today's report-then-error
+            // behavior for tests / benchmarks / pipes.
+            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+            ThrowDecideSolveError(solve_result);
+        }
+
+        // ask / continue: report at each boundary, then continue or stop.
+        for (;;) {
+            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+
+            bool go;
+            if (eff_on_timeout == "continue") {
+                // Auto-continue until the solver finishes on its own. Ctrl-C (the
+                // query interrupt) breaks out at this checkpoint boundary — v1 has no
+                // mid-chunk interrupt (see slow/todo.md).
+                go = !context.interrupted;
+            } else {
+                // "ask": stdin is a terminal (eff_on_timeout guaranteed this), so it is
+                // safe to block reading the user's decision. The CLI's line editor is
+                // inactive mid-execution, so a plain getline does not fight it.
+                if (solve_result.has_solution) {
+                    fprintf(stderr, "Keep improving it?  [Enter] continue +%s  ·  s + Enter to stop and take this solution: ",
+                            FormatDuration(chunk).c_str());
+                } else {
+                    fprintf(stderr, "Keep searching?  [Enter] continue +%s  ·  s + Enter to give up: ",
+                            FormatDuration(chunk).c_str());
+                }
+                fflush(stderr);
+                string line;
+                if (!std::getline(std::cin, line)) {
+                    go = false; // EOF (Ctrl-D / closed input) → stop
+                } else {
+                    StringUtil::Trim(line);
+                    go = StringUtil::Lower(line) != "s";
+                }
+            }
+            if (!go) {
+                break;
+            }
+
+            // Resume the warm solver for another chunk (warm start is automatic — the
+            // solver never left scope).
+            Profiler chunk_timer;
+            chunk_timer.Start();
+            solve_result = retained_session->Continue(chunk);
+            chunk_timer.End();
+            cum_elapsed += chunk_timer.Elapsed();
+            cum_budget += chunk;
+
+            if (solve_result.status == SolverStatus::OPTIMAL) {
+                break; // proven optimum — fall through to the shared success stores
+            }
+            if (solve_result.status != SolverStatus::TIME_LIMIT) {
+                // A resume can only reach a definitive INFEASIBLE/UNBOUNDED when no
+                // incumbent ever existed (an incumbent proves feasibility); surface it
+                // as the plain solver error.
+                ThrowDecideSolveError(solve_result);
+            }
+            // else: another time-limit stop — loop and re-report with fresh numbers.
+        }
+
+        // Loop exited on a stop decision or an OPTIMAL break.
+        if (solve_result.status == SolverStatus::OPTIMAL || solve_result.has_solution) {
+            if (solve_result.status != SolverStatus::OPTIMAL) {
+                // Stopped early with a usable-but-unproven incumbent: succeed and
+                // return it, but say plainly it is not proven best. There is no live
+                // SQL NOTICE channel, so this rides on stderr with the report.
+                fprintf(stderr,
+                        "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
+            }
+            // If a Ctrl-C in continue mode broke the loop, the interrupt is now handled
+            // (we stopped solving and have a result to return); clear it so the rows
+            // flow to the client instead of the executor aborting the query. Covers both
+            // the incumbent stop and the rare "Ctrl-C landed as the optimum was proven".
+            context.interrupted = false;
+            break; // fall through to the shared success stores below
+        }
+        // Stopped with nothing found yet: the plain timeout error.
         ThrowDecideSolveError(solve_result);
+    }
     case DiagnosisTerminal::UNDIAGNOSED:
         // Mode off, or a status no engine covers yet: the plain static solver error.
         ThrowDecideSolveError(solve_result);

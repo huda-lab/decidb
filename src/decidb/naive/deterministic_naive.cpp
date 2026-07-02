@@ -1,6 +1,7 @@
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/solver_config.hpp"
+#include "duckdb/decidb/solver_session.hpp"
 #include "duckdb/common/exception.hpp"
 #include "Highs.h"
 
@@ -8,20 +9,42 @@
 
 namespace duckdb {
 
-SolverResult DeterministicNaive::Solve(const SolverModel &model) {
-    idx_t total_vars = model.num_vars;
+namespace {
+
+//! Resumable HiGHS handle. Load() builds the model into the `highs` object once
+//! (a member, so it survives across Continue()); RunAndReadback() sets the per-chunk
+//! time_limit and (re-)runs. HiGHS resumes its MIP search on a repeat run() after a
+//! time-limit stop, so Continue() is just another RunAndReadback() with a fresh chunk.
+class HighsSession : public SolverSession {
+public:
+    SolverResult Solve(const SolverModel &model, double time_limit_seconds) override {
+        Load(model);
+        return RunAndReadback(time_limit_seconds);
+    }
+
+    SolverResult Continue(double time_limit_seconds) override {
+        // Precondition: Solve() already loaded the model into `highs`.
+        return RunAndReadback(time_limit_seconds);
+    }
+
+private:
+    Highs highs;
+    idx_t total_vars = 0;
+
+    void Load(const SolverModel &model);
+    SolverResult RunAndReadback(double time_limit_seconds);
+};
+
+void HighsSession::Load(const SolverModel &model) {
+    total_vars = model.num_vars;
 
     //===--------------------------------------------------------------------===//
     // 1. Create HiGHS model and set up variables
     //===--------------------------------------------------------------------===//
 
-    Highs highs;
     highs.setOptionValue("log_to_console", false);
-    // Cap solve time so a hard MILP/MIQP doesn't hang the session indefinitely.
-    // Uses the shared solver-agnostic resolver (default 300s, overridable via
-    // DECIDB_TIME_LIMIT) so HiGHS honors the same limit as Gurobi; on timeout HiGHS
-    // returns kTimeLimit (mapped to SolverStatus::TIME_LIMIT below).
-    highs.setOptionValue("time_limit", ResolveDecideTimeLimit());
+    // Note: the time_limit is NOT set here — it is a per-chunk budget applied in
+    // RunAndReadback(), so a warm Continue() can extend it without a reload.
 
     vector<HighsVarType> var_types(total_vars);
     for (idx_t i = 0; i < total_vars; i++) {
@@ -194,12 +217,19 @@ SolverResult DeterministicNaive::Solve(const SolverModel &model) {
                                     (int)status);
         }
     }
+}
 
+SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
     //===--------------------------------------------------------------------===//
     // 4. Solve
     //===--------------------------------------------------------------------===//
 
-    status = highs.run();
+    // Apply the per-chunk wall-clock cap. Setting it here (rather than at Load) is
+    // what lets a warm Continue() extend the budget without rebuilding: HiGHS
+    // resumes its MIP search on a repeat run() after a time-limit stop.
+    highs.setOptionValue("time_limit", time_limit_seconds);
+
+    HighsStatus status = highs.run();
     // HiGHS returns kWarning (not kOk) at the time limit while still exposing a
     // valid model status + incumbent, so throwing on any non-kOk return would
     // crash a diagnosable timeout with INTERNAL. Throw only on a genuine kError;
@@ -294,6 +324,18 @@ SolverResult DeterministicNaive::Solve(const SolverModel &model) {
     // stage-2 re-solve reads this as the achievable objective).
     solve_result.objective_value = highs.getInfo().objective_function_value;
     return solve_result;
+}
+
+} // namespace
+
+SolverResult DeterministicNaive::Solve(const SolverModel &model) {
+    // Single-shot path: one Solve() on a throwaway session with the default limit.
+    HighsSession session;
+    return session.Solve(model, ResolveDecideTimeLimit());
+}
+
+unique_ptr<SolverSession> DeterministicNaive::CreateSession() {
+    return make_uniq<HighsSession>();
 }
 
 } // namespace duckdb

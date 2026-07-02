@@ -32,6 +32,20 @@ static void DiagnoseDecideSetCallback(ClientContext &context, SetScope scope, Va
 	parameter = Value(mode); // normalize to lowercase
 }
 
+static bool IsValidOnTimeoutMode(const string &mode) {
+	return mode == "ask" || mode == "error" || mode == "continue";
+}
+
+static void DecideOnTimeoutSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	string mode = StringUtil::Lower(parameter.ToString());
+	if (!IsValidOnTimeoutMode(mode)) {
+		throw InvalidInputException(
+		    "Invalid decide_on_timeout mode '" + parameter.ToString() +
+		    "'. Valid modes: ask, error, continue.");
+	}
+	parameter = Value(mode); // normalize to lowercase
+}
+
 static void EscapeRateSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
 	if (!(v > 0.0 && v <= 1.0)) {
@@ -159,6 +173,15 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "(infeasible / unbounded / time-limit) is automatically diagnosed where an engine exists; "
 	    "off suppresses diagnosis and reproduces the plain static solver error.",
 	    LogicalType::VARCHAR, Value("auto"), DiagnoseDecideSetCallback);
+	config.AddExtensionOption(
+	    "decide_on_timeout",
+	    "DECIDE behavior when the solver hits the time limit (only under diagnose_decide='auto'; "
+	    "'off' still gives the plain static error). ask (default): print the checkpoint report and, "
+	    "at an interactive terminal, prompt to keep solving on the warm solver — Enter continues, s "
+	    "stops (non-terminal stdin falls back to error). error: print the report, then error. "
+	    "continue: keep resuming automatically until the solver finishes (Ctrl-C stops at the next "
+	    "checkpoint).",
+	    LogicalType::VARCHAR, Value("ask"), DecideOnTimeoutSetCallback);
 	// Unbounded characterization knobs (see decide_diagnostics() affected_rows).
 	config.AddExtensionOption(
 	    "diagnose_decide_escape_rate",
@@ -200,6 +223,14 @@ string GetDiagnoseDecideMode(ClientContext &context) {
 		return StringUtil::Lower(value.ToString());
 	}
 	return "auto";
+}
+
+string GetDecideOnTimeoutMode(ClientContext &context) {
+	Value value;
+	if (context.TryGetCurrentSetting("decide_on_timeout", value) && !value.IsNull()) {
+		return StringUtil::Lower(value.ToString());
+	}
+	return "ask";
 }
 
 double GetDecideL0Tolerance(ClientContext &context) {

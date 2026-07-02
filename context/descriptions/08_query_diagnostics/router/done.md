@@ -3,8 +3,8 @@
 The router is the post-solve dispatch spine: it classifies a solve outcome into the
 one terminal the operator should route to. Batch 1 shipped the **seam and the
 unbounded terminal** (R1 / R2); Batch 2 shipped residual `INF_OR_UNBD` check-ray
-routing (R3); R5 wired the **infeasible terminal** to the elastic engine. The
-time_limit terminal (R6) is still in `todo.md`.
+routing (R3); R5 wired the **infeasible terminal** to the elastic engine; R6 wired the
+**time_limit terminal** to the slow engine (report + warm continuation).
 
 ## The classifier — `RouteSolveResult`
 
@@ -29,9 +29,12 @@ types, so the decision tree is unit-testable in isolation
 
 The mode policy is not duplicated — the classifier defers to the existing
 `DiagnosisApplies(mode, status)` gate (`decide_diagnostic.hpp`). Because the
-classifier owns no engine invocation, `TIME_LIMIT` is already a distinct leaf even
-though the slow engine is not wired yet; this is what let R5 drop the infeasible
-engine in (and lets R6 drop the slow engine in) without editing the classifier.
+classifier owns no engine invocation, `TIME_LIMIT` is a distinct leaf; this is what
+let R5 drop the infeasible engine in and R6 drop the slow engine in without editing the
+classifier. Note the classifier itself was **unchanged** for R6: `TIME_LIMIT` still
+gates on `DiagnosisApplies` (so `off` is a master mute → `UNDIAGNOSED` → plain error),
+and the finer `ask`/`error`/`continue` split lives *inside* the terminal handler, which
+consults the `decide_on_timeout` pragma (see `slow/done.md`).
 
 ## Terminals: inf/unb (check ray)
 
@@ -64,9 +67,11 @@ static `INF_OR_UNBD` error.
 - `INFEASIBLE` → build the elastic-engine input and run `DiagnoseInfeasible`, stash +
   `ThrowDecideDiagnosisReady` on a valid diagnosis, else `ThrowDecideSolveError` (see
   "Terminals: infeasible (elastic)" below).
-- `TIME_LIMIT` / `UNDIAGNOSED` → the plain static solver error
-  (`ThrowDecideSolveError`). `TIME_LIMIT` gets its real engine at R6; it shares the
-  static-error arm until then.
+- `TIME_LIMIT` → the slow engine: print the checkpoint report and, per
+  `decide_on_timeout`, stop (`error`), prompt (`ask`, interactive only), or auto-resume
+  the warm solver (`continue`); a stop with an incumbent falls through to the `SOLVED`
+  success stores, else `ThrowDecideSolveError` (see "Terminals: time_limit" below).
+- `UNDIAGNOSED` → the plain static solver error (`ThrowDecideSolveError`).
 
 This **replaced** the previous ad-hoc guard
 (`DiagnosisApplies(mode, status) && status == UNBOUNDED`), which hand-rolled the
@@ -96,6 +101,15 @@ surfaced (`ThrowDecideDiagnosisReady`); otherwise the arm falls through to
 per-shape slack placement, removal dial, and stage-2 achievable objective — is
 documented in `infeasible/done.md`.
 
-## Still split out
+## Terminals: time_limit (slow engine)
 
-- **The time_limit terminal** routes to the static error until its engine lands (R6).
+R6 wired the `TIME_LIMIT` terminal to the slow engine. The classifier was unchanged
+(TIME_LIMIT still routes only under `auto`); the `Finalize` arm owns the loop. It reads
+`decide_on_timeout` (with the non-TTY `ask`→`error` fallback) and, at each chunk
+boundary, prints `PrintDecideTimeoutReport` then acts: `error` throws; `ask` prompts on
+stdin; `continue` polls `ClientContext::interrupted` and auto-resumes. Resuming calls
+`retained_session->Continue(chunk)` on the live warm solver (handed back from `SolveModel`
+via the `retained_session` out-param). A stop with an incumbent (or a proven optimum from
+a continue) falls through to the shared `SOLVED` success stores with an stderr caveat; a
+stop with no incumbent throws `ThrowDecideSolveError`. Full mechanics + the
+`decide_on_timeout` pragma are in `slow/done.md`.
