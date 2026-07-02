@@ -200,7 +200,11 @@ SolverResult DeterministicNaive::Solve(const SolverModel &model) {
     //===--------------------------------------------------------------------===//
 
     status = highs.run();
-    if (status != HighsStatus::kOk) {
+    // HiGHS returns kWarning (not kOk) at the time limit while still exposing a
+    // valid model status + incumbent, so throwing on any non-kOk return would
+    // crash a diagnosable timeout with INTERNAL. Throw only on a genuine kError;
+    // let kWarning fall through to the model-status switch below.
+    if (status == HighsStatus::kError) {
         HighsModelStatus model_status = highs.getModelStatus();
         throw InternalException("HiGHS solver failed: status %d, model_status %d", (int)status, (int)model_status);
     }
@@ -229,9 +233,28 @@ SolverResult DeterministicNaive::Solve(const SolverModel &model) {
             // (obj=0 probe) later disambiguates it to UNBOUNDED / INFEASIBLE.
             result.status = SolverStatus::INF_OR_UNBD;
             break;
-        case HighsModelStatus::kTimeLimit:
+        case HighsModelStatus::kTimeLimit: {
             result.status = SolverStatus::TIME_LIMIT;
+            const HighsInfo& info = highs.getInfo();
+            // The best proven bound is always meaningful at the time limit,
+            // independent of whether an incumbent was found.
+            result.best_bound = info.mip_dual_bound;
+            // Incumbent reads (objective / gap / solution vector) are only valid
+            // when HiGHS found a feasible solution; otherwise objective_function_value
+            // is inf, mip_gap is nan, and col_value is garbage — so gate on the
+            // primal-solution status.
+            if (info.primal_solution_status == kSolutionStatusFeasible) {
+                result.has_solution = true;
+                result.objective_value = info.objective_function_value;
+                result.gap = info.mip_gap;
+                const HighsSolution& incumbent = highs.getSolution();
+                if (incumbent.col_value.size() >= total_vars) {
+                    result.solution.assign(incumbent.col_value.begin(),
+                                           incumbent.col_value.begin() + total_vars);
+                }
+            }
             break;
+        }
         case HighsModelStatus::kIterationLimit:
             result.status = SolverStatus::ITERATION_LIMIT;
             break;

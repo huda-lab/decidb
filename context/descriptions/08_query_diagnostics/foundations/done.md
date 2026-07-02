@@ -10,9 +10,23 @@ so callers branch on the outcome. This gates the whole area.
 
 - **`SolverResult` + `SolverStatus`** (`src/include/duckdb/decidb/solver_result.hpp`).
   `SolverStatus = {OPTIMAL, INFEASIBLE, UNBOUNDED, INF_OR_UNBD, TIME_LIMIT,
-  ITERATION_LIMIT, OTHER}`; `SolverResult { status, solution, ray, raw_status }`.
+  ITERATION_LIMIT, OTHER}`; `SolverResult { status, solution, objective_value, ray,
+  raw_status, has_solution, best_bound, gap }`.
   `ray` is populated only on the unbounded ray-extraction path; `raw_status` carries
   the backend-native code for the `OTHER` message.
+  - **Timeout incumbent fields (S1).** `solution` + `objective_value` carry the proven
+    optimum at `OPTIMAL` **and** the best-so-far incumbent at `TIME_LIMIT` (when one was
+    found) — so a caller must branch on `status` / `has_solution`, not on solution
+    emptiness, to know whether a value is proven best. `has_solution` is true iff the
+    backend found a feasible incumbent by the limit (Gurobi `SolCount > 0` / HiGHS
+    `primal_solution_status == kSolutionStatusFeasible`); it **gates** the incumbent reads
+    (`solution` / `objective_value` / `gap`) because with no incumbent those attributes
+    return solver sentinels (`-1e100` / `inf` / `nan`). `best_bound` (Gurobi `ObjBound` /
+    HiGHS `mip_dual_bound`) is always meaningful at the limit regardless. `gap` (Gurobi
+    `MIPGap` / HiGHS `mip_gap`) is a **fraction** on *both* backends — HiGHS's `mip_gap`
+    doc string reads "(%)" but the stored value is `|primal − dual| / |primal|`, not a
+    percentage. Populated in the `GRB_TIME_LIMIT` / `kTimeLimit` branches
+    (`gurobi_solver.cpp`, `deterministic_naive.cpp`).
 - **Backends map-and-return** instead of throwing on solver status
   (`gurobi_solver.cpp`, `deterministic_naive.cpp`). HiGHS `kUnboundedOrInfeasible`
   (status 9) maps to `INF_OR_UNBD`. Genuine internal/API errors (NaN/Inf,
@@ -88,6 +102,44 @@ These facts are the evidence behind the router's inf/unb branch — the ambiguou
 status is real (HiGHS MILP), the feasibility probe stays first, and a residual
 ray is reported with an explicit caveat because feasibility was not established
 (`router/README.md`).
+
+- **Time-limit behavior (incumbent / bound / gap at timeout).** Probed 2026-07-02
+  on constructed hard MILPs (equality market-split for the no-incumbent case; a
+  trivially-feasible multi-dim knapsack for the with-incumbent case) with
+  `DECIDB_TIME_LIMIT` set to 1–2 s. **Both backends expose everything the slow
+  router needs at the time limit** — a feasible incumbent (when one was found), its
+  objective, the best bound, and the gap — so Bucket A is *not* reduced on HiGHS.
+
+  | Field | Gurobi (at `GRB_TIME_LIMIT`) | HiGHS (at `kTimeLimit`) |
+  | --- | --- | --- |
+  | incumbent present? | `SolCount > 0` | `primal_solution_status == 2` (feasible) |
+  | incumbent vector | `X` array (only when `SolCount > 0`) | `getSolution().col_value` (only when feasible) |
+  | incumbent objective | `ObjVal` | `getInfo().objective_function_value` |
+  | best bound | `ObjBound` — **always finite/meaningful** | `getInfo().mip_dual_bound` — **always finite/meaningful** |
+  | gap | `MIPGap` (only when incumbent) | `getInfo().mip_gap` (only when incumbent) |
+
+  - **The best bound is the reliable routing key on both backends** — meaningful in
+    both buckets (e.g. the same market-split model reports bound `27` on Gurobi *and*
+    HiGHS). This is what S3's "route by best bound" reads.
+  - **Sentinels must be gated on the incumbent-presence flag, not the read's error
+    code.** With no incumbent, Gurobi's `ObjVal`/`MIPGap` reads *succeed* (error 0)
+    but return `-1e100` / `1e100`; HiGHS returns `objective_function_value = inf` and
+    `mip_gap = nan`, and `col_value` is present but garbage. Read incumbent/objective/gap
+    *only* when `SolCount > 0` (Gurobi) / `primal_solution_status == 2` (HiGHS).
+  - **HiGHS timeout mapping (fixed, S0).** `highs.run()` returns `HighsStatus::kWarning`
+    (not `kOk`) at the time limit. `DeterministicNaive::Solve` now throws only on
+    `HighsStatus::kError`, so `kWarning` falls through to the model-status switch and
+    `kTimeLimit` maps to `TIME_LIMIT` (previously the `!= kOk` guard threw an INTERNAL
+    error first, crashing the diagnosable timeout — see `07_issues/bugs/done.md`). Both
+    backends now produce `TIME_LIMIT` with a readable incumbent / bound / gap.
+  - **Manual interrupt (S1) API exists on both, populated-ness at interrupt not yet
+    probed.** Gurobi `GRBterminate` + a callback that returns non-zero; HiGHS
+    `setCallback` / `startCallback` with a user-interrupt callback. The *time-limit*
+    trigger above needs none of this. Whether a manual interrupt yields the same
+    readable incumbent state is a follow-up probe (S1), not yet run.
+  - **Warm-start (S4) API exists on both.** Gurobi `Start` attribute; HiGHS
+    `setSolution`. Effectiveness for the anytime objective→constraint ladder is
+    deferred to the S4 build.
 
 ## Constraint provenance (row → clause)
 

@@ -4,6 +4,12 @@ Resolved bugs condensed to their generalizable lessons: what broke, why, and wha
 
 ---
 
+## HiGHS timeouts raised INTERNAL instead of TIME_LIMIT (kWarning swallowed)
+
+**Broke**: `DeterministicNaive::Solve` guarded `highs.run()` with `if (status != HighsStatus::kOk) throw`. But HiGHS returns `kWarning` (== 1), not `kOk`, when it stops at the time limit — so a hard MILP that hit `DECIDB_TIME_LIMIT` on HiGHS crashed with `INTERNAL Error: HiGHS solver failed: status 1, model_status 13` before control ever reached the `kTimeLimit → TIME_LIMIT` branch of the model-status switch. Gurobi timed out correctly; only HiGHS was affected, contradicting the doc/comment that claimed HiGHS "returns kTimeLimit". This blocked all slow-diagnostics work on HiGHS.
+
+**Fix/lesson**: Throw only on `HighsStatus::kError`; let `kWarning` fall through to the model-status switch, which maps `kTimeLimit → TIME_LIMIT` (and the incumbent / best-bound / gap become readable). **Watch for**: a solver "success" guard written as `!= kOk` conflates a warning-with-usable-result with a hard failure — gate the throw on the *error* sentinel, not on "not-perfect." Verified on both backends via the market-split probe. Discovered 2026-07-02 probing time-limit behavior for slow diagnostics; fixed as S0 of the slow branch.
+
 ## Data-only terms inside DECIDE SUM constraints escaped as RHS aggregates
 
 **Broke**: `SUM(q * (price + x)) <= K` and similar aggregate constraints could bind, but symbolic normalization split the data-only aggregate contribution onto the RHS as `SUM(data_expr)`. Physical RHS evaluation only knows how to fold generated `count_star()` aggregates, so execution threw an `InternalException` for an unsupported RHS `sum` instead of either accepting the linear form or rejecting it as user input.

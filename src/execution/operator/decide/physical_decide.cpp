@@ -31,6 +31,8 @@
 #include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/decidb/solver_config.hpp"
+#include <sys/resource.h>
 
 namespace duckdb {
 
@@ -2682,6 +2684,74 @@ BuildUnboundedCandidateProvider(ClientContext &context, ColumnDataCollection &da
 	    var_indexer.entity_mappings_ref ? *var_indexer.entity_mappings_ref : var_indexer.entity_mappings_owned;
 	return UnboundedCandidateProvider {context,    data,           std::move(types), params, input_column_names,
 	                                   var_indexer, entity_scopes,  live_entity_mappings, num_rows};
+}
+
+//===--------------------------------------------------------------------===//
+// Slow-solve checkpoint report (S2)
+//===--------------------------------------------------------------------===//
+// On a time-limit termination we tell the SQL user what the solver already found
+// and how far it can still improve, in plain language (no "incumbent"/"gap"/"bound"
+// solver words per the user-output rule). S2 prints the informational block only;
+// the interactive "keep going?" prompt and warm re-solve are S3.
+
+//! Peak resident set size of the whole process, in bytes. Whole-process, not
+//! solve-only — it answers "will continuing risk running out of RAM." ru_maxrss is
+//! bytes on macOS but KiB on Linux, so normalize.
+static double PeakProcessMemoryBytes() {
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0) {
+        return 0.0;
+    }
+#ifdef __APPLE__
+    return (double)usage.ru_maxrss;
+#else
+    return (double)usage.ru_maxrss * 1024.0;
+#endif
+}
+
+//! Compact byte count, e.g. "1.2 GB" / "340 MB".
+static string FormatMemory(double bytes) {
+    const char *unit = "B";
+    double value = bytes;
+    if (value >= 1024.0 * 1024.0 * 1024.0) {
+        value /= 1024.0 * 1024.0 * 1024.0;
+        unit = "GB";
+    } else if (value >= 1024.0 * 1024.0) {
+        value /= 1024.0 * 1024.0;
+        unit = "MB";
+    } else if (value >= 1024.0) {
+        value /= 1024.0;
+        unit = "KB";
+    }
+    return StringUtil::Format(value >= 100.0 ? "%.0f %s" : "%.1f %s", value, unit);
+}
+
+//! Seconds, integer when whole (300s), one decimal for sub-limit probe values (1.5s).
+static string FormatDuration(double seconds) {
+    if (std::fabs(seconds - std::round(seconds)) < 0.05) {
+        return StringUtil::Format("%.0fs", std::round(seconds));
+    }
+    return StringUtil::Format("%.1fs", seconds);
+}
+
+//! Print the path-1 (solution found) / path-2 (no solution) status block to stderr.
+//! Info only — the "keep improving it?" prompt lands with the S3 continuation loop.
+static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_seconds,
+                                     double time_limit) {
+    string limit_str = FormatDuration(time_limit);
+    string tail = StringUtil::Format("  elapsed %s · peak memory %s\n",
+                                     FormatDuration(elapsed_seconds).c_str(),
+                                     FormatMemory(PeakProcessMemoryBytes()).c_str());
+    if (result.has_solution) {
+        // gap is a fraction on both backends; render as a percentage.
+        string closeness = StringUtil::Format("  best objective so far: %g  (within %.2f%% of the best possible)\n",
+                                              result.objective_value, result.gap * 100.0);
+        fprintf(stderr, "DECIDE hit the %s time limit with a usable solution (not proven best).\n%s%s",
+                limit_str.c_str(), closeness.c_str(), tail.c_str());
+    } else {
+        fprintf(stderr, "DECIDE hit the %s time limit without finding a solution yet.\n%s",
+                limit_str.c_str(), tail.c_str());
+    }
 }
 
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
@@ -5637,8 +5707,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // Retained only when diagnosis is armed; the move is trivial and the model is
     // freed when Finalize returns. SolveModel otherwise discards the built model.
     SolverModel retained_model;
+    // Always-on wall-clock around the solve (independent of DECIDB_BENCH): the slow
+    // checkpoint report (S2) needs the elapsed solve time to show the user.
+    Profiler solve_wall_timer;
+    solve_wall_timer.Start();
     SolverResult solve_result =
         SolveModel(solver_input, var_indexer, solve_options, diagnosis_armed ? &retained_model : nullptr);
+    solve_wall_timer.End();
 
     // Per-decide-variable labels + is-aux flags for column provenance. Both failure
     // terminals need them (UNBOUNDED names the runaway variable; INFEASIBLE carries
@@ -5815,7 +5890,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // exists; keep the plain static infeasible error as the fallback.
         ThrowDecideSolveError(terminal_result);
     }
-    case DiagnosisTerminal::TIME_LIMIT: // slow terminal lands at R6
+    case DiagnosisTerminal::TIME_LIMIT:
+        // S2: under `auto`, print the checkpoint report (what was found + how far it
+        // can still improve + elapsed/memory) before surfacing the outcome. The
+        // interactive continue loop (S3) and returning the incumbent rows (S4) are
+        // not wired yet, so the statement still errors after the report.
+        PrintDecideTimeoutReport(solve_result, solve_wall_timer.Elapsed(), ResolveDecideTimeLimit());
+        ThrowDecideSolveError(solve_result);
     case DiagnosisTerminal::UNDIAGNOSED:
         // Mode off, or a status no engine covers yet: the plain static solver error.
         ThrowDecideSolveError(solve_result);

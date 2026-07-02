@@ -4,8 +4,10 @@
 and `off`. Under `auto` a failed solve is diagnosed automatically wherever an engine
 exists; `off` suppresses diagnosis and reproduces the plain static solver error.
 Today the unbounded and infeasible engines exist, so a fired diagnosis throws the
-short pointer error ("Details: SELECT * FROM decide_diagnostics()"); slow/time-limit
-still falls through to the static solver error even under `auto`.
+short pointer error ("Details: SELECT * FROM decide_diagnostics()"). The slow/time-limit
+terminal prints a checkpoint report under `auto` (see test_query_diagnostics_slow) and
+then still surfaces the static solver error; `off` reproduces the plain error with no
+report.
 
 These tests run under both backends. They use `execute_raw` (one `-c` statement)
 because every assertion here is observable from the failing statement itself —

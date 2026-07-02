@@ -48,8 +48,11 @@ static constexpr int GRB_USER_OBJ_LIMIT = 15;
 // Attribute name strings
 static constexpr const char *GRB_INT_ATTR_MODELSENSE = "ModelSense";
 static constexpr const char *GRB_INT_ATTR_STATUS = "Status";
+static constexpr const char *GRB_INT_ATTR_SOLCOUNT = "SolCount";
 static constexpr const char *GRB_DBL_ATTR_X = "X";
 static constexpr const char *GRB_DBL_ATTR_OBJVAL = "ObjVal";
+static constexpr const char *GRB_DBL_ATTR_OBJBOUND = "ObjBound";
+static constexpr const char *GRB_DBL_ATTR_MIPGAP = "MIPGap";
 
 //===----------------------------------------------------------------------===//
 // Function pointer table for the Gurobi C API functions DecidB uses

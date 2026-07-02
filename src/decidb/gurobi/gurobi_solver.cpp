@@ -228,9 +228,37 @@ SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
             // disambiguate.
             result.status = SolverStatus::INF_OR_UNBD;
             break;
-        case GRB_TIME_LIMIT:
+        case GRB_TIME_LIMIT: {
             result.status = SolverStatus::TIME_LIMIT;
+            // The best proven bound is always meaningful at the time limit,
+            // independent of whether an incumbent was found.
+            double obj_bound = 0.0;
+            if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJBOUND, &obj_bound) == 0) {
+                result.best_bound = obj_bound;
+            }
+            // Incumbent reads (objective / gap / solution vector) are only valid
+            // when Gurobi found at least one feasible solution; with SolCount == 0
+            // ObjVal/MIPGap succeed but return the -1e100 / 1e100 sentinels, so
+            // gate every incumbent read on SolCount.
+            int sol_count = 0;
+            if (api.getintattr(guard.model, GRB_INT_ATTR_SOLCOUNT, &sol_count) == 0 && sol_count > 0) {
+                result.has_solution = true;
+                double obj_val = 0.0;
+                if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
+                    result.objective_value = obj_val;
+                }
+                double mip_gap = 0.0;
+                if (api.getdblattr(guard.model, GRB_DBL_ATTR_MIPGAP, &mip_gap) == 0) {
+                    result.gap = mip_gap;
+                }
+                vector<double> incumbent(total_vars);
+                if (api.getdblattrarray(guard.model, GRB_DBL_ATTR_X, 0, (int)total_vars,
+                                        incumbent.data()) == 0) {
+                    result.solution = std::move(incumbent);
+                }
+            }
             break;
+        }
         case GRB_ITERATION_LIMIT:
             result.status = SolverStatus::ITERATION_LIMIT;
             break;
