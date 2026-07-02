@@ -44,7 +44,21 @@ caveat — "names the runaway variable, not a single guilty clause" — was **re
 from the user error for concision, so it is no longer the cheaper alternative; any
 context line, if built, stays opt-in detail, not inlined blame.)
 
+## Entity-scoped characterization ignores join-partner columns
+
+Row-scoped escape characterization names real columns from the row's own table
+(`36 of 36 rows where l_shipmode = 'AIR'`), but an **entity-scoped** variable whose
+escaping slice is characterized by a **joined** table's column falls back to the bare
+count (`5 of 100 entities` instead of `… where n_name = 'GERMANY'`). Entity key-column
+harvest only sees the entity's own source table. Extend the harvest to join-partner
+columns referenced in WHEN/objective, or map the join predicate to the entity's own FK.
+Logged in `07_issues/bugs/todo.md`; `xfail` at
+`test/decide/tests/test_query_diagnostics_tpch.py::TestKnownGaps::test_B_entity_escape_should_name_join_column`.
+
 ## Test coverage gaps
 
 Still uncovered: the fresh-connection empty-relation case (a second `decidb` process
 with no prior failed solve in-session).
+
+TPC-H-backed diagnostics coverage (row-scoped partial escape via a real column, total
+escape at scale) now lives in `test/decide/tests/test_query_diagnostics_tpch.py`.
