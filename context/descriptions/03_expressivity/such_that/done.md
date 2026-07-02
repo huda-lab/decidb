@@ -64,6 +64,8 @@ Rejected at execution time: any term whose aggregate-local `WHEN` matches zero r
 - **Per-row constraints**: each row gets its own RHS value from the join — `x <= (SELECT budget FROM Depts WHERE Depts.id = items.dept_id)`.
 - **Aggregate constraints**: the RHS must evaluate to the **same scalar for all rows** (an aggregate constraint compiles to a single inequality, requiring a single RHS). If the RHS varies per row, execution throws: "Aggregate constraint (SUM/AVG) requires a scalar right-hand side, but the RHS evaluates to different values per row".
 
+A data-only *aggregate* RHS (`SUM(x*val) <= SUM(val)`, distinct from a subquery) is instead hoisted into the LHS before binding — see "Data-Only Aggregate RHS in Aggregate Constraints" in [../sql_functions/done.md](../sql_functions/done.md).
+
 **Restriction**: Subqueries cannot reference DECIDE variables (checked at bind time via `ExpressionContainsDecideVariable`).
 
 ---

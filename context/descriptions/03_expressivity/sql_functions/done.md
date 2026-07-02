@@ -21,6 +21,31 @@ In constraints, data-only additive terms inside the aggregate body are supported
 
 **Code**: Validated in `decide_objective_binder.cpp` and `decide_constraints_binder.cpp` — aggregates other than SUM, AVG, MIN, and MAX are rejected with an error.
 
+#### Data-Only Aggregate RHS in Aggregate Constraints
+
+An aggregate constraint may bound the decision aggregate by a **data-only** aggregate on the other side — a `SUM`/`AVG` whose argument references no DECIDE variable:
+
+```sql
+SUCH THAT SUM(x * val) <= SUM(val)          -- pick a subset whose value ≤ the total
+SUCH THAT AVG(x + cost) <= AVG(cost) + 1    -- average stays within 1 of the data mean
+SUCH THAT SUM(x * val) <= SUM(val) PER grp  -- per-group bound (each group its own RHS)
+SUCH THAT SUM(x * weight) <= SUM(b) + 10    -- aggregate plus a scalar offset
+SUCH THAT SUM(x * weight) <= SUM(b) WHEN w  -- RHS aggregate-local WHEN: bound over w-rows
+```
+
+These are handled by a pre-binding rewrite that **hoists each data-only RHS aggregate into the LHS**, negated, leaving only the scalar remainder on the RHS. `SUM(x*val) <= SUM(val)` becomes `SUM(x*val) - SUM(val) <= 0`; `AVG(x+cost) <= AVG(cost) + 1` becomes `AVG(x+cost) - AVG(cost) <= 1`. The moved aggregate is then an ordinary additive **data-only term inside the LHS aggregate** (the same class as `SUM(x + cost)`), so the existing execution path sums it over the constraint's active row set and subtracts it from the bound — inheriting `WHEN`, `PER`, aggregate-local `WHEN`, and `AVG` 1/N scaling with **no execution-layer changes**. Because the RHS aggregate is summed per active group, `PER` constraints naturally carry a **per-group RHS** (each group's `SUM(val)` is its own bound), not one uniform scalar.
+
+A trailing `WHEN` on a bare RHS aggregate (`... <= SUM(b) WHEN w`) is parsed as **aggregate-local** — it scopes only that aggregate — so it is moved wholesale (filter included), correctly producing `SUM(x*weight) <= (SUM(b) WHEN w)`.
+
+**Scope / rejections.** Only data-only `SUM`/`AVG` aggregates are hoisted. Left untouched (so prior behavior is preserved):
+- `MIN`/`MAX` RHS aggregates → still the clean `RHS contains unsupported aggregate 'min'` error (no linear hoist exists).
+- An RHS aggregate referencing a DECIDE variable (`SUM(x) <= SUM(x*val)`) → still the existing "variables on both sides" binder rejection.
+- The internal `count_star()` RHS special case in `TransformToChunkExpression` is unaffected.
+
+**Code**: `RewriteAggregateConstraintRHS` in `src/planner/binder/query_node/bind_select_node.cpp` — walks the SUCH THAT tree (conjunctions + WHEN/PER wrappers, never their conditions/columns); `HoistAggregateComparisonRHS` splits the RHS additive tree (`RhsIsHoistable` / `SplitRhsAdditive`) into aggregate terms (moved to LHS, sign-negated) and scalar terms (kept as the RHS, `0` if none). Runs after the norm/IN rewrites and before `NormalizeDecideConstraints`, so it also covers norm-bounded constraints (`norm(x,1) <= SUM(val)`).
+
+**Tests**: `test/decide/tests/test_cons_rhs_aggregate.py` — parity with the explicit hoisted form and the scalar-bound equivalent, scalar-plus-aggregate RHS, per-group PER bounds, AVG, aggregate-local WHEN, and MIN/MAX rejection. The still-unsupported MIN/MAX path is pinned in `test_error_binder.py::test_data_only_minmax_rhs_aggregate_errors_without_internal`.
+
 ### AVG() — Coefficient Scaling at Execution Time
 
 `AVG(expr)` over decision variables is treated as an aggregate constraint like SUM, but terms are scaled by the row count N at execution time so the model represents the average, not the raw sum.

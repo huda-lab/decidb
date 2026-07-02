@@ -254,15 +254,17 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x * val)
             """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
 
-    def test_data_only_rhs_aggregate_errors_without_internal(self, decidb_cli):
-        """Direct RHS aggregates are still unsupported, but must not throw InternalException."""
+    def test_data_only_minmax_rhs_aggregate_errors_without_internal(self, decidb_cli):
+        """Data-only SUM/AVG RHS aggregates are supported (hoisted to the LHS), but
+        MIN/MAX RHS aggregates remain unsupported — and must surface a clean
+        InvalidInputException, not an InternalException / stack trace."""
         decidb_cli.assert_error("""
                 WITH t AS (SELECT 1 AS id, 10 AS val UNION ALL SELECT 2, 20)
                 SELECT id, val, x FROM t
                 DECIDE x
-                SUCH THAT SUM(x * val) <= SUM(val)
+                SUCH THAT SUM(x * val) <= MIN(val)
                 MAXIMIZE SUM(x * val)
-            """, match=r"DECIDE aggregate constraint RHS contains unsupported aggregate 'sum'")
+            """, match=r"DECIDE aggregate constraint RHS contains unsupported aggregate 'min'")
 
     # --- Unsupported aggregates rejected at DecideBinder::BindAggregate ---
 
