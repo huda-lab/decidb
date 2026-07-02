@@ -38,6 +38,14 @@ struct SymbolicTranslationContext {
     //! Map of placeholder names to original ABS(...) expressions (opaque through normalization)
     unordered_map<string, unique_ptr<ParsedExpression>> abs_map;
 
+    //! Map of placeholder names to original data-only subexpressions that use an
+    //! operator the symbolic algebra doesn't model (e.g. `(id * 7) % 97`). Because
+    //! they reference no DECIDE variable they are per-row constant coefficients;
+    //! we keep them opaque through normalization (like ABS/subqueries) and restore
+    //! the original expression in FromSymbolic so the physical layer evaluates them
+    //! as ordinary data. Unlike abs_map these are data-side, not decide-side.
+    unordered_map<string, unique_ptr<ParsedExpression>> data_map;
+
     //! Constructor
     explicit SymbolicTranslationContext(const case_insensitive_map_t<idx_t> &vars)
         : decide_variables(vars) {}

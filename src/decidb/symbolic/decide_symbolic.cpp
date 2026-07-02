@@ -380,9 +380,21 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                 } else if (func_expr.function_name == "^" || func_expr.function_name == "**") {
                     D_ASSERT(args.size() == 2);
                     return ApplySymbolicPower(args[0], args[1]);
+                } else if (!ExpressionContainsDecideVariable(expr, ctx.decide_variables)) {
+                    // The operator isn't modelled by the symbolic algebra, but this
+                    // subexpression references no DECIDE variable — it's a per-row
+                    // constant. Keep it opaque through normalization (like ABS) and
+                    // let the physical layer evaluate it as ordinary data.
+                    string placeholder = "__DATA_" + to_string(ctx.data_map.size()) + "__";
+                    ctx.data_map[placeholder] = expr.Copy();
+                    return Symbolic(placeholder);
                 } else {
-                    throw InternalException("ToSymbolic: Unsupported operator function: %s",
-                        func_expr.function_name);
+                    throw InvalidInputException(
+                        "The '%s' operator is not supported inside a DECIDE clause. "
+                        "Pre-compute it as a column in a subquery or CTE "
+                        "(e.g. `SELECT (a %s b) AS c FROM ...`) and reference that "
+                        "column in the DECIDE clause instead.",
+                        func_expr.function_name, func_expr.function_name);
                 }
             }
 
@@ -781,6 +793,10 @@ unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslation
         // Check if it's an ABS placeholder
         if (ctx.abs_map.count(name)) {
             return ctx.abs_map[name]->Copy();
+        }
+        // Check if it's a folded data-only subexpression (e.g. `(id * 7) % 97`)
+        if (ctx.data_map.count(name)) {
+            return ctx.data_map[name]->Copy();
         }
         // Treat any plain symbol as a column/variable reference
         return make_uniq_base<ParsedExpression, ColumnRefExpression>(name);

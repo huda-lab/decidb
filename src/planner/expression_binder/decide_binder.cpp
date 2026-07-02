@@ -478,6 +478,14 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			}
 			return true;
 		}
+		// An operator the model doesn't understand (`%`, bitwise ops, …) is still
+		// fine if this subexpression references no DECIDE variable: it's a per-row
+		// constant coefficient. The symbolic layer folds it to a data placeholder
+		// (see ToSymbolicRecursive) and the physical layer evaluates it as data.
+		// Only genuinely variable-bearing uses of an unsupported operator are rejected.
+		if (!ExpressionContainsDecideVariable(expr, variables)) {
+			return true;
+		}
 		error_msg = StringUtil::Format("Unsupported operator '%s' inside DECIDE SUM expression", func.function_name);
 		return false;
 	}

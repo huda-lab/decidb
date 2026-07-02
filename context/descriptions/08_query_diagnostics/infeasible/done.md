@@ -351,7 +351,10 @@ implicit `CAST` the binder inserts around a literal and drops the outer parens, 
 reads `x <> 1`, not `(x <> CAST(1 AS INTEGER))`. `BuildInfeasibleDiagnostic` renders a DROP as
 a dedicated EAV row `subject_kind='clause'`, `subject='x <> 3'`, `attribute='edit_kind'`,
 `value='drop'` (distinct from the LOOSEN `suggested_change`/`amount` pair), and points to the
-dropped clause in the summary. The
+dropped clause in the summary. A single written `<>` that expands per row has one indicator
+(hence one `RemovalRef`) per row, all sharing the same clause label; `ReadElasticEdits`
+**dedupes DROP edits by label** (a `std::set<string>` of already-emitted labels) so the
+relation carries one DROP per user clause, not one per row. The
 `DiagnoseInfeasible` empty-guard now bails only when **both** slacks and removals are empty,
 so a removal-only model is still diagnosed.
 
@@ -514,6 +517,10 @@ when the engine found a combined repair set.
 - Single target → `"…; diagnosis points to clause \`x <= 5\`."`
 - Multiple targets → `"…; diagnosis points to clause \`SUM(x) >= 1\` and clause \`SUM(5*x) <= -1\`."`
 - PER groups → `"…; diagnosis points to grouped clause \`SUM(x) >= 5 PER grp\` for groups \`a\` and \`b\`."`
+  The group list is **capped** (`QuotedGroupList`, `HEADLINE_GROUP_CAP = 3`): with more than
+  three failing groups the headline shows the first three then `… and N more (see
+  decide_diagnostics())`, so a query failing dozens of groups produces a one-line pointer rather
+  than a wall of keys. The relation still carries one row per failing group.
 - CONFLICT_SUMMARY only → `"…; diagnosis points to per-row data in clause \`x >= 5\`."`
 
 Every thrown message still appends `Details: SELECT * FROM decide_diagnostics();`. The table is

@@ -436,7 +436,20 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
 	}
 	auto &expr = *expr_ptr;
 	switch (expr.GetExpressionClass()) {
-    case ExpressionClass::COLUMN_REF:
+    case ExpressionClass::COLUMN_REF: {
+        if (!is_top_expression) {
+            return ExpressionBinder::BindExpression(expr_ptr, depth);
+        }
+        // A bare column at the top level of SUCH THAT is never a valid
+        // constraint. The usual cause is an unparenthesized composite PER
+        // ("PER region, yr"): the comma splits the list and the trailing
+        // column arrives here on its own. Point to the parenthesized form.
+        return BindResult(BinderException::Unsupported(
+            expr, StringUtil::Format(
+                      "'%s' is not a valid SUCH THAT constraint on its own. "
+                      "To group a constraint by multiple columns, parenthesize them: PER (col1, col2).",
+                      expr.ToString())));
+    }
     case ExpressionClass::CONSTANT: {
         if (!is_top_expression) {
             return ExpressionBinder::BindExpression(expr_ptr, depth);

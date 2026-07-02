@@ -128,11 +128,27 @@ static string JoinDiagnosticPhrases(const vector<string> &phrases) {
 }
 
 static string QuotedGroupList(const vector<string> &groups) {
+	// Cap the headline enumeration: with dozens of failing groups, listing every key
+	// inline produces a wall of text. Show the first K, then "and N more"; the full
+	// per-group detail lives in decide_diagnostics(). Relation output is unaffected.
+	static constexpr idx_t HEADLINE_GROUP_CAP = 3;
 	vector<string> quoted;
-	for (const auto &group : groups) {
-		quoted.push_back("`" + group + "`");
+	idx_t shown = std::min<idx_t>(groups.size(), HEADLINE_GROUP_CAP);
+	for (idx_t i = 0; i < shown; i++) {
+		quoted.push_back("`" + groups[i] + "`");
 	}
-	return JoinDiagnosticPhrases(quoted);
+	if (groups.size() <= HEADLINE_GROUP_CAP) {
+		return JoinDiagnosticPhrases(quoted);
+	}
+	// Over the cap: comma-join the shown keys and append the remainder count. Steer
+	// the user to the relation for the exhaustive list.
+	string result;
+	for (idx_t i = 0; i < quoted.size(); i++) {
+		result += (i > 0 ? ", " : "") + quoted[i];
+	}
+	result += " and " + std::to_string(groups.size() - shown) +
+	          " more (see decide_diagnostics())";
+	return result;
 }
 
 static vector<string> BuildDiagnosticTargetPhrases(const vector<ClauseEdit> &edits, bool conflict_only) {

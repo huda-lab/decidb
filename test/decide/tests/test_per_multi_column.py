@@ -502,3 +502,35 @@ def test_multi_column_per_with_integer_variable(
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.per_clause
+@pytest.mark.error
+def test_unparenthesized_multi_column_per_rejected_with_hint(decidb_cli):
+    """`PER a, b` (no parens) is a grammar ambiguity with the constraint-list
+    comma, so it is not a supported form. The trailing column arrives at the
+    binder as a bare-column "constraint" and is rejected with an actionable
+    hint pointing at the parenthesized `PER (col1, col2)` form."""
+    sql = """
+        SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1 PER region, yr
+        MAXIMIZE SUM(x)
+    """
+    # Names the offending column and points at the parenthesized fix.
+    decidb_cli.assert_error(sql, match=r"(?i)parenthesize them: PER \(col1, col2\)")
+
+
+@pytest.mark.per_clause
+@pytest.mark.correctness
+def test_parenthesized_multi_column_per_is_the_supported_form(decidb_cli):
+    """The parenthesized composite PER binds and solves end-to-end — the
+    supported counterpart to the rejected bare form above."""
+    sql = """
+        SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 1 PER (region, yr)
+        MAXIMIZE SUM(x)
+    """
+    rows, cols = decidb_cli.execute(sql)
+    assert len(rows) == 2  # both singleton groups get their x selected

@@ -2,16 +2,6 @@
 
 ## Signed decision variables — finite negative bounds: DONE; free (-∞) domain: deferred
 
-**Implemented (see `done.md` → "Signed variables").** A variable becomes signed
-via an explicit **finite** negative lower bound — `x >= -K`, `x BETWEEN -K AND K`,
-or a negative literal in an `IN` domain. The default stays `[0, +inf)` for any
-variable the query never lowers. The linearizations that were audited and
-addressed: the bound-absorption clamp and the model-builder re-clamp (both
-removed in favor of an "unset" sentinel + resolved-bound copy), and McCormick
-(now emits the full four-corner envelope + widens the aux bound for `L<0`). ABS /
-`norm` L0/L1/Linf / MIN-MAX / `<>` Big-M were verified already sign-safe (their
-Big-M uses `max(|lb|,|ub|)`); the IN rewrite now widens the variable's lower
-bound to the domain minimum for negative literals.
 
 **Deferred — fully-free ($-\infty \ldots +\infty$) domain.** Out of scope by
 design: a signed variable always has a finite lower bound. A truly

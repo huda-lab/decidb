@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <set>
 
 namespace duckdb {
 
@@ -622,11 +623,19 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 	// I4: a removal indicator at 1 means its remove-only `<>` was dropped. The clause
 	// label comes from the indicator column's provenance ("(x <> 3)", recorded at
 	// rewrite time via F6). The set {w = 1} is the minimum-cardinality removal set.
+	// A single written `<>` that expands per row has one indicator (hence one removal)
+	// per row, all sharing the same clause label; dedupe by label so the relation
+	// carries one DROP per user clause, not one per row.
+	std::set<string> dropped_labels;
 	for (const auto &r : removals) {
 		if (solution[r.w_col] > 0.5) {
+			const string &label = columns[r.indicator_col].label;
+			if (!dropped_labels.insert(label).second) {
+				continue;
+			}
 			ClauseEdit e;
 			e.kind = ClauseEditKind::DROP;
-			e.label = columns[r.indicator_col].label;
+			e.label = label;
 			edits.push_back(std::move(e));
 		}
 	}

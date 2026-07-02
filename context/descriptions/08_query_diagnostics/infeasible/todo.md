@@ -38,16 +38,6 @@ identity, and uncorrelated scalar-subquery RHS classification; see `done.md`).
   multi-edit summaries that read as a flat list of equally minimal alternatives.
   Tighten `BuildInfeasibleDiagnostic` and the label/provenance formatting so the
   default error is concise without losing the richer relation rows.
-- **Headline enumerates every failing PER group (no cap).** With dozens of failing
-  groups the "grouped clause … for groups …" phrase lists them all inline (59 keys on
-  `SUM(x) >= 5 PER l_orderkey` over 400 TPC-H orders). Cap the headline list (first K +
-  "and N more"); the relation already carries the full per-group detail. Logged in
-  `07_issues/code_quality/todo.md`; `xfail` at
-  `test_query_diagnostics_tpch.py::TestKnownGaps::test_D2_many_group_headline_should_be_capped`.
-- **`drop` edit duplicated per per-row `<>` expansion.** A single `x <> 1` over an order
-  with N line items emits N identical `drop` rows. Dedupe by `(clause_id, indicator label)`.
-  Logged in `07_issues/code_quality/todo.md`; `xfail` at
-  `test_query_diagnostics_tpch.py::TestKnownGaps::test_G_drop_edit_should_be_deduplicated`.
 
 ## Notes to revisit
 

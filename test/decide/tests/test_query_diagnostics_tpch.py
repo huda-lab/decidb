@@ -11,15 +11,14 @@ Data-dependent expectations (row counts, the failing-group set, the binding
 literal) are **computed from the same database** rather than hard-coded, so the
 assertions stay valid if the fixture data changes.
 
-Four branches are solid and asserted directly (A row escape, C total escape,
-D per-group loosen, F per-row conflict). Four are known gaps, logged in
-`context/descriptions/07_issues/` and marked `xfail` here — the test states the
-*desired* behavior so the marker can be removed when the gap is closed:
+Six branches are solid and asserted directly (A row escape, C total escape,
+D per-group loosen, F per-row conflict, D2 capped group headline, G deduplicated
+`drop` edit). Two remain known gaps, logged in `context/descriptions/07_issues/`
+and marked `xfail` here — the test states the *desired* behavior so the marker
+can be removed when the gap is closed:
 
   * B  entity-scoped escape ignores join-partner columns   -> bugs/todo.md
-  * D2 headline enumerates every failing group (no cap)     -> code_quality/todo.md
   * E  least-change reports a degenerate "require nothing"  -> bugs/todo.md
-  * G  `drop` edit duplicated once per per-row `<>` row      -> code_quality/todo.md
 
 Runs under both backends.
 """
@@ -198,6 +197,33 @@ class TestSolidBranches:
         )
         assert cm and cm.group(2) == total
 
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_D2_many_group_headline_is_capped(self, request, cli_fixture):
+        """With dozens of failing groups the headline summarizes + truncates
+        ('... and N more') instead of listing every group key inline. The full
+        per-group detail stays in decide_diagnostics()."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 400 "
+            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
+        )
+        headline = _headline(_diagnose(cli, sql))
+        # a capped headline references the overflow instead of enumerating all groups
+        assert "more" in headline
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_G_drop_edit_is_deduplicated(self, request, cli_fixture):
+        """A single `x <> 1` clause over an order with several line items yields
+        one `drop` edit, not one per row."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey = 1 "
+            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+        assert len(drops) == 1
+
 
 # --------------------------------------------------------------------------- #
 # known gaps — desired behavior asserted, xfail until the logged issue is fixed
@@ -224,23 +250,6 @@ class TestKnownGaps:
         assert "n_name = 'GERMANY'" in _attr(rows, "variable", "affected_entities")
 
     @pytest.mark.xfail(
-        reason="code_quality/todo.md: headline enumerates every failing PER group (no cap)",
-        strict=False,
-    )
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_D2_many_group_headline_should_be_capped(self, request, cli_fixture):
-        """With dozens of failing groups the headline should summarize + truncate
-        (e.g. '... and N more'), not list every group key inline."""
-        cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 400 "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
-        )
-        headline = _headline(_diagnose(cli, sql))
-        # a capped headline references the overflow instead of enumerating all groups
-        assert "more" in headline
-
-    @pytest.mark.xfail(
         reason="bugs/todo.md: least-change reports a degenerate 'require nothing' edit",
         strict=False,
     )
@@ -258,20 +267,3 @@ class TestKnownGaps:
         )
         rows = _rows(_diagnose(cli, sql))
         assert int(_attr(rows, "model", "achievable_objective")) > 0
-
-    @pytest.mark.xfail(
-        reason="code_quality/todo.md: `drop` edit duplicated once per per-row `<>` row",
-        strict=False,
-    )
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_G_drop_edit_should_be_deduplicated(self, request, cli_fixture):
-        """A single `x <> 1` clause over an order with several line items should
-        yield one `drop` edit, not one per row."""
-        cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey = 1 "
-            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
-        )
-        rows = _rows(_diagnose(cli, sql))
-        drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
-        assert len(drops) == 1
