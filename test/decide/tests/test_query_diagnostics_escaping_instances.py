@@ -135,6 +135,22 @@ class TestEscapingInstances:
         assert _attr(rows, "hire", "affected_entities") == "10 of 10 entities where dept = 'A'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_entity_scoped_join_column_escape_rule(self, request, cli_fixture):
+        """A joined dimension column can characterize entity-scoped escapes when
+        that joined value is constant for each entity."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT e.eid, hire FROM ("
+            "SELECT i AS eid, CASE WHEN i <= 10 THEN 1 ELSE 2 END AS rid "
+            "FROM range(1, 31) t(i)) e "
+            "JOIN (VALUES (1, 'A'), (2, 'B')) d(rid, region) ON e.rid = d.rid "
+            "DECIDE e.hire IS REAL SUCH THAT hire <= 50 WHEN region = 'B' "
+            "MAXIMIZE SUM(hire)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert _attr(rows, "hire", "affected_entities") == "10 of 10 entities where region = 'A'"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_select_only_column_is_not_named_colN(self, request, cli_fixture, oracle_solver):
         """C6: a low-cardinality column referenced only in the outer SELECT (never in
         the DECIDE clause) has no source name we ever resolved. Even when it perfectly

@@ -6,27 +6,6 @@ Resolved bugs are moved to `done.md`.
 
 ---
 
-## Unbounded characterization ignores join-partner columns (entity-scoped)
-
-- **Location**: unbounded escaping-instance characterization (`src/decidb/utility/decide_diagnostic.cpp` categorical-group logic + the key-column harvest in `physical_decide.cpp`)
-- **Discovered**: 2026-07-02 while stress-testing diagnostics on real TPC-H joins
-- **Symptom**: For an entity-scoped decision variable whose escaping slice is perfectly characterized by a column from a **joined** table, `decide_diagnostics()` falls back to the bare count (`5 of 100 entities`) instead of naming the slice (`... where n_name = 'GERMANY'`). Row-scoped variables characterized by their *own* table's column work fine (case A: `36 of 36 rows where l_shipmode = 'AIR'`).
-- **Reproduction**:
-  ```sql
-  PRAGMA diagnose_decide='auto';
-  SELECT s.s_suppkey, keep
-  FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-  DECIDE s.keep IS REAL
-  SUCH THAT keep <= 50 WHEN n.n_name <> 'GERMANY'
-  MAXIMIZE SUM(keep);           -- GERMANY suppliers escape; n_name is never named
-  SELECT * FROM decide_diagnostics();
-  ```
-- **Ruled out**: not the categorical-ratio guard — raising `PRAGMA diagnose_decide_categorical_ratio=0.3` (n_name is 25 values / 100 entities = 0.25) still does not surface `n_name`. Entity characterization only harvests columns from the entity's *own* source table.
-- **Why it matters**: on real schemas the discriminating attribute usually lives on a dimension table reached by a join (nation, part, orders…), so the most useful characterization is exactly the one currently dropped.
-- **Where to look next**: extend the entity key-column harvest to include join-partner columns referenced in WHEN/objective, or map the join predicate back to the entity's own FK column for characterization.
-
----
-
 ## Infeasible least-change can report a degenerate "require nothing" edit
 
 - **Location**: elastic engine slack weighting (`src/decidb/utility/decide_diagnostic_engines.cpp`, stage-1 `min Σ wᵢ sᵢ`, uniform `wᵢ = 1`)

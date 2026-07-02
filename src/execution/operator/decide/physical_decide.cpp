@@ -2581,9 +2581,19 @@ struct UnboundedCandidateProvider {
 	//! Entity-scoped candidates cached per scope.
 	std::map<idx_t, vector<ColumnGrouping>> entity_candidates;
 
+	bool ColumnHasHarvestedName(idx_t ci) const {
+		return ci < input_column_names.size() && !input_column_names[ci].empty();
+	}
+
 	//! Build a single-column row grouping, keeping it only if it is categorical
 	//! (2 ≤ distinct ≤ max(min_categories, ratio × denom)).
 	bool BuildRowGrouping(idx_t ci, idx_t denom, ColumnGrouping &out) {
+		// Suppress rules over columns whose source name we never resolved (e.g.
+		// referenced only in the outer SELECT): naming them with a positional
+		// `colN` the user never wrote is worse than staying silent.
+		if (!ColumnHasHarvestedName(ci)) {
+			return false;
+		}
 		BoundReferenceExpression ref(types[ci], ci);
 		vector<const Expression *> keys {&ref};
 		vector<idx_t> row_to_group;
@@ -2593,12 +2603,6 @@ struct UnboundedCandidateProvider {
 		              /*null_excludes=*/false, row_to_group, num_groups, &rep_keys);
 		idx_t cap = std::max(params.min_categories, (idx_t)(params.categorical_ratio * (double)denom));
 		if (num_groups < 2 || num_groups > cap || rep_keys.empty()) {
-			return false;
-		}
-		// Suppress rules over columns whose source name we never resolved (e.g.
-		// referenced only in the outer SELECT): naming them with a positional
-		// `colN` the user never wrote is worse than staying silent.
-		if (ci >= input_column_names.size() || input_column_names[ci].empty()) {
 			return false;
 		}
 		out.column = input_column_names[ci];
@@ -2623,31 +2627,51 @@ struct UnboundedCandidateProvider {
 		return row_candidates;
 	}
 
-	//! Entity-scoped candidate columns = the scope's entity-key columns only (the
-	//! columns constant within an entity); grouping is lifted to entity granularity.
+	//! Lift a row-indexed grouping to entity granularity. The lift is accepted only
+	//! when every joined row for an entity maps to the same categorical group; this
+	//! lets dimension-table labels characterize entity escapes without inventing a
+	//! single value for genuinely one-to-many columns.
+	bool LiftRowGroupingToEntities(const ColumnGrouping &rowcg, const EntityMapping &mapping, idx_t num_entities,
+	                               ColumnGrouping &out) {
+		out.column = rowcg.column;
+		out.group_value = rowcg.group_value;
+		out.instance_to_group.assign(num_entities, DConstants::INVALID_INDEX);
+		vector<bool> seen(num_entities, false);
+		for (idx_t r = 0; r < num_rows && r < mapping.row_to_entity.size() && r < rowcg.instance_to_group.size(); r++) {
+			idx_t e = mapping.row_to_entity[r];
+			if (e >= num_entities) {
+				continue;
+			}
+			idx_t g = rowcg.instance_to_group[r];
+			if (!seen[e]) {
+				out.instance_to_group[e] = g;
+				seen[e] = true;
+			} else if (out.instance_to_group[e] != g) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	//! Entity-scoped candidate columns are any named DECIDE-clause input columns
+	//! whose value is constant within each entity; grouping is lifted to entity
+	//! granularity after the constancy check.
 	vector<ColumnGrouping> &GetEntityCandidates(idx_t scope_idx) {
 		auto found = entity_candidates.find(scope_idx);
 		if (found != entity_candidates.end()) {
 			return found->second;
 		}
 		vector<ColumnGrouping> cands;
-		auto &scope = entity_scopes[scope_idx];
 		auto &mapping = entity_mappings[scope_idx];
 		idx_t num_entities = mapping.num_entities;
-		for (idx_t ci : scope.entity_key_physical_indices) {
+		for (idx_t ci = 0; ci < types.size(); ci++) {
 			ColumnGrouping rowcg;
 			if (!BuildRowGrouping(ci, num_entities, rowcg)) {
 				continue;
 			}
 			ColumnGrouping ecg;
-			ecg.column = rowcg.column;
-			ecg.group_value = std::move(rowcg.group_value);
-			ecg.instance_to_group.assign(num_entities, DConstants::INVALID_INDEX);
-			for (idx_t r = 0; r < num_rows && r < mapping.row_to_entity.size(); r++) {
-				idx_t e = mapping.row_to_entity[r];
-				if (e < num_entities) {
-					ecg.instance_to_group[e] = rowcg.instance_to_group[r];
-				}
+			if (!LiftRowGroupingToEntities(rowcg, mapping, num_entities, ecg)) {
+				continue;
 			}
 			cands.push_back(std::move(ecg));
 		}

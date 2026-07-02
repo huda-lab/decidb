@@ -7,8 +7,7 @@ once. Under `PRAGMA diagnose_decide='auto'`, the infeasible terminal now builds 
 optimization, the **elastic program**, whose optimum is the least-change fix for shipped
 I1/I2 shapes: which user constraints to loosen, and by how much. Shared plumbing it builds
 on (the pragma gate, provenance, the reporting relation) is in `foundations/done.md`.
-The remaining work is user-facing output polish, tracked in `todo.md`; the engine
-itself is shipped.
+The engine itself is shipped; remaining work is tracked in `todo.md`.
 
 ## Engine seam: infeasible
 
@@ -119,11 +118,10 @@ wrongly declaring the query unfixable. As of I2.a multi-instance bounds *are* re
 flag stays `false` in practice and remains as a defensive guard. Likewise, when there are no
 relaxable rows at all, the engine returns invalid (static error).
 
-**Scope (deferred to later phases).** The achievable-objective re-solve (**I3**) has
-shipped — see "stage-2 achievable objective (freeze-budget)" below. The L0/removal dial is
-**I4** (`<>` remove-only depends on it). Full `decide_diagnostics()` rendering (runnable
-rewritten query) is **I5**. All per-shape slack placement and unit conversion
-(**I2.a–I2.e**) has shipped — see "per-shape slack placement" below.
+**Scope.** The achievable-objective re-solve (**I3**, "stage-2 achievable objective
+(freeze-budget)" below), the L0/removal dial (**I4**, `<>` remove-only), lean
+`decide_diagnostics()` reporting (**I5**), and all per-shape slack placement and unit
+conversion (**I2.a–I2.e**, "per-shape slack placement" below) are shipped.
 
 ## Elastic engine: per-shape slack placement (shared blocks, PER, multi-instance bounds)
 
@@ -161,9 +159,8 @@ This covers **easy MIN/MAX** (`MAX(e) ≤ K` → per-row `eᵢ ≤ K`, absorbed 
 `SUM(x) ≥ K PER g` emits one row per group, hence one slack per group (clean per-group edits).
 **easy-MAX+PER is the exception:** an easy-MAX cap is absorbed as a column bound, which does
 **not** preserve the PER grouping, so it re-emits as one *global* shared block — the same
-user-facing edit (`K → K + max overshoot`) but without per-group granularity. Per-group
-enrichment for absorbed easy-MAX+PER is a later refinement (it would require carrying group
-keys through bound absorption).
+user-facing edit (`K → K + max overshoot`) but without per-group granularity — see T4 in
+`todo.md`.
 
 **Edit conversion (the D3 helper).** Reading the slack support is centralized in
 `MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (`decide_diagnostic_engines.cpp`), the one
@@ -189,7 +186,7 @@ A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS: there is no single 
   mix). To prefer an *actionable* edit, a data-RHS slack carries a higher objective weight
   (`DIAGNOSTIC_DATA_SLACK_WEIGHT`, `diagnostic_constants.hpp`); the solver loosens editable
   constraints first and reports a data conflict only when editable loosening genuinely cannot
-  restore feasibility. (A coarse stand-in for the I3 lexicographic tie-break.)
+  restore feasibility. (This weight is a coarse stand-in — see T2 in `todo.md`.)
 
 ### I2.d — AVG / strict / quadratic in the user's units
 
@@ -341,8 +338,7 @@ indicator_col}` on `ElasticModel`.
 weights, all in the one stage-1 objective (no extra solve). So the solver prefers any
 loosening and drops a `<>` only when loosening genuinely cannot restore feasibility; the
 support `{i : wᵢ = 1}` is the minimum-cardinality removal set. Like the data-slack weight
-this is a coarse weighted stand-in that rides the future lexicographic-tier conversion (see
-"Notes to revisit" in `todo.md`).
+this is a coarse weighted stand-in — see T2 in `todo.md`.
 
 **Reading + reporting.** `ReadElasticEdits` reads each `RemovalRef`: `w > 0.5` emits a
 `ClauseEdit{kind = DROP, label = columns[indicator_col].label}` (the F6 `x <> 3` string).
@@ -363,7 +359,7 @@ fix (`HasLoosenEdit || HasRemoval`). `BuildStage2Model` **freezes the removal se
 each `w` to its stage-1 value (`col_lower = col_upper`) and extends the budget row over the
 `w` columns too, so the cap stays exactly `S* = stage-1 objective` (which included the
 removal penalty). The reported DROP set is therefore stable between stages; letting `w`
-re-optimize the dropped set is deferred to I5.
+re-optimize the dropped set for the objective is T5 in `todo.md`.
 
 **Pragma.** `diagnose_decide_removal_bigm` (DOUBLE, default `0` = auto-derive, `>= 0`,
 `decide_diagnostic.cpp`) threads through `DecideDiagParams::removal_bigm` into

@@ -113,3 +113,22 @@ via the `retained_session` out-param). A stop with an incumbent (or a proven opt
 a continue) falls through to the shared `SOLVED` success stores with an stderr caveat; a
 stop with no incumbent throws `ThrowDecideSolveError`. Full mechanics + the
 `decide_on_timeout` pragma are in `slow/done.md`.
+
+## Tests
+
+Because `RouteSolveResult` is a pure function, the decision tree is unit-tested in
+isolation in `test/common/test_decidb_router.cpp` — no solver or operator needed:
+
+- **Every classifier leaf, both modes.** `SOLVED`, `UNBOUNDED`, `INFEASIBLE`,
+  `TIME_LIMIT`, and `UNDIAGNOSED` (`ITERATION_LIMIT` / `OTHER`) are checked under both
+  `auto` (each maps to its terminal) and `off` (all collapse to `UNDIAGNOSED`, the plain
+  static error).
+- **Residual `INF_OR_UNBD` by ray sub-signal.** In `auto`, ray-present routes to
+  `UNBOUNDED` and no-ray routes to `INFEASIBLE`; in `off`, both collapse to `UNDIAGNOSED`.
+
+The classifier leaves are stable across the terminal-wiring batches: R5 (infeasible→elastic)
+and R6 (time_limit→slow) both dropped their engine in *behind* an existing leaf without
+editing the classifier, so no new router-level leaf test was needed. R6's finer
+incumbent-vs-no-sol split lives inside the terminal handler (it consults `decide_on_timeout`),
+so its behavioral coverage lives in `test/decide/tests/test_query_diagnostics_slow.py`, not
+here — see `slow/done.md`.

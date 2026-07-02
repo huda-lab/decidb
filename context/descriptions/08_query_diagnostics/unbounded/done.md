@@ -173,7 +173,7 @@ from a total one and a localized modeling error (a sign flip on one category, a
   `a of b rows where c = 'v'`, `; `-joined, strongest first. This is the *sufficient
   direction* ("when `c=v`, the variable escapes in a of b rows"); the `a/b` count is
   always shown so a threshold < 1 stays honest. Rules are an independent **union**
-  across columns/values (conjunctions are future work).
+  across columns/values (conjunctions are tracked in `todo.md`).
 - **Fallback** (single-instance variable, or a scattered escape no categorical
   group characterizes): the bare count `a of b rows` (single-instance variables read
   NULL — nothing to disambiguate). Aux columns are name-only. Entity-scoped variables
@@ -183,10 +183,12 @@ from a total one and a localized modeling error (a sign flip on one category, a
 column; it returns per-group representative values). A column is a candidate when
 `2 ≤ distinct ≤ max(min_categories, ratio × N)` — relative cardinality excludes
 continuous / id-like columns (out of scope by design). **Row-scoped** variables
-scan all input columns; **entity-scoped** variables scan only the scope's
-entity-key columns (the columns constant within an entity), lifting the row
-grouping to entity granularity via the live entity mapping on the `VarIndexer`. The
-pure rule computation is `CharacterizeEscape` (no DuckDB execution types — unit
+scan all named input columns. **Entity-scoped** variables also scan named input
+columns, then lift the row grouping to entity granularity via the live entity
+mapping on the `VarIndexer`; the lift is accepted only when every joined row for
+an entity has the same candidate value. This covers dimension-table labels such
+as supplier→nation while skipping genuinely one-to-many joined columns. The pure
+rule computation is `CharacterizeEscape` (no DuckDB execution types — unit
 tested). Column names are harvested at physical-plan time from the DECIDE clause's
 own `BoundReferenceExpression`s (`plan_decide.cpp`), whose chunk indices survive
 column pruning. Columns referenced only in the outer SELECT carry no harvested
@@ -224,9 +226,9 @@ INTEGER/MILP via the HiGHS `INF_OR_UNBD` path, MINIMIZE improving direction,
 multi-var dedup, `auto` routing, `off` suppression) ·
 `test/decide/tests/test_query_diagnostics_escaping_instances.py` (row-scoped
 partial → categorical rule, total escape, scattered → count fallback,
-entity-scoped → entity-key rule, all three characterization pragmas
-`escape_rate` / `categorical_ratio` / `min_categories` changing what is reported
-plus validating their bounds;
+entity-scoped → entity-key and constant join-column rules, all three
+characterization pragmas `escape_rate` / `categorical_ratio` / `min_categories`
+changing what is reported plus validating their bounds;
 both backends, with oracle-confirmed unbounded constructed cases for the
 cardinality-knob tests) · `test/decide/tests/test_query_diagnostics_relation.py`
 (the renamed EAV `decide_diagnostics()` schema and `diagnosis_id`) ·

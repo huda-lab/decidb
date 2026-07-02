@@ -11,13 +11,13 @@ Data-dependent expectations (row counts, the failing-group set, the binding
 literal) are **computed from the same database** rather than hard-coded, so the
 assertions stay valid if the fixture data changes.
 
-Six branches are solid and asserted directly (A row escape, C total escape,
-D per-group loosen, F per-row conflict, D2 capped group headline, G deduplicated
-`drop` edit). Two remain known gaps, logged in `context/descriptions/07_issues/`
+Seven branches are solid and asserted directly (A row escape, B entity-scoped
+join-column escape, C total escape, D per-group loosen, F per-row conflict,
+D2 capped group headline, G deduplicated `drop` edit). One remains a known gap,
+logged in `context/descriptions/07_issues/`
 and marked `xfail` here — the test states the *desired* behavior so the marker
 can be removed when the gap is closed:
 
-  * B  entity-scoped escape ignores join-partner columns   -> bugs/todo.md
   * E  least-change reports a degenerate "require nothing"  -> bugs/todo.md
 
 Runs under both backends.
@@ -224,21 +224,10 @@ class TestSolidBranches:
         drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
         assert len(drops) == 1
 
-
-# --------------------------------------------------------------------------- #
-# known gaps — desired behavior asserted, xfail until the logged issue is fixed
-# --------------------------------------------------------------------------- #
-@pytest.mark.query_diagnostics
-class TestKnownGaps:
-    @pytest.mark.xfail(
-        reason="bugs/todo.md: entity-scoped escape ignores join-partner columns",
-        strict=False,
-    )
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_B_entity_escape_should_name_join_column(self, request, cli_fixture):
-        """GERMANY suppliers escape; the characterization should name n_name even
-        though it comes from the joined `nation` table. Today it falls back to a
-        bare entity count."""
+    def test_B_entity_escape_names_join_column(self, request, cli_fixture):
+        """GERMANY suppliers escape; the characterization names n_name even
+        though it comes from the joined `nation` table."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT s.s_suppkey, keep FROM supplier s "
@@ -246,9 +235,21 @@ class TestKnownGaps:
             "DECIDE s.keep IS REAL SUCH THAT keep <= 50 WHEN n.n_name <> 'GERMANY' "
             "MAXIMIZE SUM(keep)"
         )
-        rows = _rows(_diagnose(cli, sql))
+        rows = _rows(
+            _diagnose(
+                cli,
+                sql,
+                extra_pragmas="PRAGMA diagnose_decide_categorical_ratio=0.5;\n",
+            )
+        )
         assert "n_name = 'GERMANY'" in _attr(rows, "variable", "affected_entities")
 
+
+# --------------------------------------------------------------------------- #
+# known gaps — desired behavior asserted, xfail until the logged issue is fixed
+# --------------------------------------------------------------------------- #
+@pytest.mark.query_diagnostics
+class TestKnownGaps:
     @pytest.mark.xfail(
         reason="bugs/todo.md: least-change reports a degenerate 'require nothing' edit",
         strict=False,

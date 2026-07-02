@@ -68,8 +68,8 @@ under the "user-facing output is for SQL users" principle; see `unbounded/done.m
 ## Solver behavior (backend reference)
 
 Empirical facts about how the two backends behave on the cases diagnostics cares
-about. Durable reference — the status disambiguation, ray extraction, and the future
-router all rely on these.
+about. Durable reference — the status disambiguation, ray extraction, and the router all
+rely on these.
 
 - **Versions.** Gurobi is runtime-loaded (dlopen), supporting 9.5–13.0 — the version
   is parsed from the lib filename, so there is no fixed Gurobi version. HiGHS is
@@ -96,7 +96,7 @@ router all rely on these.
   MIP. HiGHS `getPrimalRay` returns a ray for LP and MIP (even under the ambiguous
   status, via the LP relaxation), at the cost of an extra LP solve. Neither is
   uniformly better; DeciDB uses the portable box-LP (`unbounded/done.md`) as the
-  solver-agnostic default and treats native rays as future accelerators.
+  solver-agnostic default and treats native rays as optional accelerators.
 
 These facts are the evidence behind the router's inf/unb branch — the ambiguous
 status is real (HiGHS MILP), the feasibility probe stays first, and a residual
@@ -132,14 +132,13 @@ ray is reported with an explicit caveat because feasibility was not established
     `kTimeLimit` maps to `TIME_LIMIT` (previously the `!= kOk` guard threw an INTERNAL
     error first, crashing the diagnosable timeout — see `07_issues/bugs/done.md`). Both
     backends now produce `TIME_LIMIT` with a readable incumbent / bound / gap.
-  - **Manual interrupt (S1) API exists on both, populated-ness at interrupt not yet
-    probed.** Gurobi `GRBterminate` + a callback that returns non-zero; HiGHS
-    `setCallback` / `startCallback` with a user-interrupt callback. The *time-limit*
-    trigger above needs none of this. Whether a manual interrupt yields the same
-    readable incumbent state is a follow-up probe (S1), not yet run.
-  - **Warm-start (S4) API exists on both.** Gurobi `Start` attribute; HiGHS
-    `setSolution`. Effectiveness for the anytime objective→constraint ladder is
-    deferred to the S4 build.
+  - **Manual interrupt API exists on both.** Gurobi `GRBterminate` + a callback that
+    returns non-zero; HiGHS `setCallback` / `startCallback` with a user-interrupt
+    callback. The *time-limit* trigger above needs none of this. (Wiring an on-demand
+    interrupt is tracked in `slow/todo.md`.)
+  - **Warm-start API exists on both.** Gurobi `Start` attribute; HiGHS `setSolution`.
+    (The anytime objective→constraint ladder that would have used it was dropped — see
+    `slow/todo.md`.)
 
 ## Constraint provenance (row → clause)
 

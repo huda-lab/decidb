@@ -4,6 +4,26 @@ Resolved bugs condensed to their generalizable lessons: what broke, why, and wha
 
 ---
 
+## Entity-scoped unbounded diagnostics ignored joined dimension labels
+
+**Broke**: For an entity-scoped variable such as `DECIDE s.keep`, unbounded
+diagnostics named the escaping variable but fell back to a bare count
+(`2 of 50 entities`) when the escaping slice was described by a joined dimension
+column (`n_name = 'GERMANY'`). Row-scoped diagnostics already scanned all named
+input columns; entity-scoped diagnostics scanned only the entity key columns.
+
+**Fix/lesson**: Entity-scoped characterization now scans every named DECIDE-clause
+input column, then lifts the row grouping to entity granularity only if every row
+for an entity has the same candidate value. This keeps useful many-to-one
+dimension labels while rejecting genuinely one-to-many labels that would invent a
+single value for an entity. **Watch for**: widening a diagnostic candidate scan
+without a functional-dependency/constancy guard can produce plausible but false
+explanations.
+
+Pointers: `physical_decide.cpp` (`UnboundedCandidateProvider::LiftRowGroupingToEntities`),
+`test_query_diagnostics_escaping_instances.py` (`test_entity_scoped_join_column_escape_rule`),
+`test_query_diagnostics_tpch.py` (`test_B_entity_escape_names_join_column`).
+
 ## "SUCH THAT rejects composite PER" was a mis-diagnosis — bare `PER a, b` is a grammar ambiguity, not a binder gap
 
 **Broke (allegedly)**: `SUCH THAT SUM(x) >= 1 PER region, yr` failed with `Binder Error: ... does not support 'yr'(COLUMN_REF)`, logged as "the constraint binder only consumes the first PER column." **Reality**: composite PER already works end-to-end via the parenthesized form `PER (region, yr)` — the grammar has a `PER '(' columnrefList ')'` production and `BindPerConstraint` already loops over all columns `children[1..N]`. The bare comma-separated form has no grammar production; the trailing `, yr` is consumed by the `decide_constraint_list ',' item` separator and arrives at the binder as its own bare-column "constraint," which is invalid.
