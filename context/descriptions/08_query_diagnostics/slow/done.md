@@ -69,6 +69,41 @@ Helpers (`PeakProcessMemoryBytes`, `FormatMemory`, `FormatDuration`,
 `PrintDecideTimeoutReport`) and the terminal split live in
 `src/execution/operator/decide/physical_decide.cpp`.
 
+## Relation parity with unbounded / infeasible
+
+The stderr report is a one-shot text block; before this, a timed-out solve left
+`decide_diagnostics()` **empty** and its error carried **no pointer** — unlike the
+unbounded / infeasible terminals, which stash a structured diagnosis and end their error
+with `Details: SELECT * FROM decide_diagnostics();`. Slow now matches them on the paths
+where the solve **fails** (ends the query with an error):
+
+- **`BuildTimeoutDiagnostic`** (`physical_decide.cpp`) builds a `state='slow'`
+  `DecideDiagnostic` — the same facts as the report, as one model-level EAV block
+  (`subject_kind='model'`): `status` (`solution_found` / `no_solution`), and when an
+  incumbent exists `best_objective` + `within_percent_of_best` (the `gap` fraction as a
+  `%` string, matching the report's "within X%"); `best_possible_objective` (the solver's
+  bound) **only when the query has an objective** (`decide_objective` set or a composed
+  MIN/MAX objective) — a pure-feasibility DECIDE has no objective, so the bound is a
+  trivial 0 and is suppressed; always `elapsed`, `peak_memory`. User voice only — the
+  attribute names avoid the forbidden jargon (`best_possible_objective`, not "bound").
+- **Two fail exits stash + point:** the `error`-mode exit and the ask/continue
+  no-incumbent stop now `StashDecideDiagnostic` and throw via `ThrowDecideDiagnosisReady`
+  (headline `DECIDE optimization is slow: <summary> … Details: SELECT * FROM
+  decide_diagnostics();`) instead of the pointer-less `ThrowDecideSolveError`. The summary
+  names the situation and the next step (reduce input / loosen / `SET
+  decide_on_timeout='continue'`), mirroring the unbounded terminal's "name it + prescribe
+  the fix" shape.
+
+**Scope — diagnostics-only, `auto`-gated.** The `TIME_LIMIT` terminal is reached only
+under `diagnose_decide='auto'`; `off` still routes to `UNDIAGNOSED` → the plain
+`ThrowDecideSolveError` (unchanged, no pointer, empty relation). The solve, the
+`ask`/`continue`/`error` mode flow, the interactive loop, the report block, and the
+success/incumbent-return path are untouched. A **caveated success** (an unproven incumbent
+returned as *rows*) still does not populate the relation — that would touch the
+success-delivery / `ClearDecideDiagnostic` path, so it is deferred (see `todo.md`). Tests:
+`TestSlowDiagnosticsRelation` (path 1 populates + points; path 2 marks `no_solution`;
+`off` leaves it empty; both backends).
+
 ## Warm continuation (S3) + stop delivery (S4)
 
 The checkpoint report is not a dead end. Under `diagnose_decide='auto'` the TIME_LIMIT

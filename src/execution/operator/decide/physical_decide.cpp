@@ -2780,6 +2780,47 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
     }
 }
 
+//! Structured mirror of the checkpoint report for decide_diagnostics(): the same facts
+//! (solution quality, best-possible objective, elapsed, peak memory) as one model-level
+//! EAV block, so a timed-out solve populates the relation and points to it exactly like
+//! the unbounded / infeasible terminals do. User-facing voice only — no solver jargon.
+static DecideDiagnostic BuildTimeoutDiagnostic(const SolverResult &result, double elapsed_seconds,
+                                               bool has_objective) {
+    DecideDiagnostic diag;
+    diag.valid = true;
+    diag.state = "slow";
+    auto add = [&](const char *attr, const string &val) {
+        DiagnosticRow row;
+        row.subject_kind = "model";
+        row.attribute = attr;
+        row.value = val;
+        diag.rows.push_back(std::move(row));
+    };
+    if (result.has_solution) {
+        diag.summary = "the solve hit the time limit with a usable but unproven solution — "
+                       "reduce the input size to prove it, or keep solving with "
+                       "SET decide_on_timeout='continue'";
+        add("status", "solution_found");
+        add("best_objective", StringUtil::Format("%g", result.objective_value));
+        add("within_percent_of_best", StringUtil::Format("%.2f%%", result.gap * 100.0));
+    } else {
+        diag.summary = "the solve hit the time limit before finding a solution — reduce the "
+                       "input size or loosen the constraints, or keep searching with "
+                       "SET decide_on_timeout='continue'";
+        add("status", "no_solution");
+    }
+    // The best objective still achievable (the solver's proven bound) — only meaningful
+    // when the query actually optimizes something. A pure-feasibility DECIDE (no
+    // MAXIMIZE / MINIMIZE) has no objective, so the "bound" is a trivial 0; skip it there.
+    // Finite guard also keeps an open-relaxation sentinel out of the relation.
+    if (has_objective && std::isfinite(result.best_bound)) {
+        add("best_possible_objective", StringUtil::Format("%g", result.best_bound));
+    }
+    add("elapsed", FormatDuration(elapsed_seconds));
+    add("peak_memory", FormatMemory(PeakProcessMemoryBytes()));
+    return diag;
+}
+
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
     bool bench = std::getenv("DECIDB_BENCH") != nullptr;
@@ -5951,9 +5992,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // Print the checkpoint once, then error — `error` never returns the
             // incumbent (that is the ask/continue stop behavior below). This is also
             // the non-TTY fallback for `ask`, so it preserves today's report-then-error
-            // behavior for tests / benchmarks / pipes.
+            // behavior for tests / benchmarks / pipes. Stash the structured mirror + point
+            // to decide_diagnostics(), like the unbounded / infeasible terminals.
             PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
-            ThrowDecideSolveError(solve_result);
+            bool has_objective = decide_objective != nullptr || !composed_minmax_objective_terms.empty();
+            DecideDiagnostic diag = BuildTimeoutDiagnostic(solve_result, cum_elapsed, has_objective);
+            StashDecideDiagnostic(context, diag);
+            ThrowDecideDiagnosisReady(diag);
         }
 
         // ask / continue: report at each boundary, then continue or stop.
@@ -6027,8 +6072,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             context.interrupted = false;
             break; // fall through to the shared success stores below
         }
-        // Stopped with nothing found yet: the plain timeout error.
-        ThrowDecideSolveError(solve_result);
+        // Stopped with nothing found yet: stash the structured diagnosis and point to it
+        // (mirrors the error-mode exit above and the unbounded / infeasible terminals).
+        bool no_inc_has_objective = decide_objective != nullptr || !composed_minmax_objective_terms.empty();
+        DecideDiagnostic no_incumbent_diag =
+            BuildTimeoutDiagnostic(solve_result, cum_elapsed, no_inc_has_objective);
+        StashDecideDiagnostic(context, no_incumbent_diag);
+        ThrowDecideDiagnosisReady(no_incumbent_diag);
     }
     case DiagnosisTerminal::UNDIAGNOSED:
         // Mode off, or a status no engine covers yet: the plain static solver error.

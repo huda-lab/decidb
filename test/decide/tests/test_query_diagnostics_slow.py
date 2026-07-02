@@ -41,6 +41,8 @@ assertion. Continue-to-proven-optimum correctness is covered by manual/oracle ch
 
 import os
 import random
+import csv
+import io
 import signal
 import subprocess
 import time
@@ -151,6 +153,57 @@ class TestSlowCheckpointReport:
         assert "with a usable solution" not in low, combined[:800]
         # The plain static solver error still fires.
         assert "time limit" in low, combined[:800]
+
+
+def _slow_diag_rows(cli, sql):
+    """Run the DECIDE + a decide_diagnostics() read on one stdin connection (the timeout
+    throws a pointer error, then the follow-up SELECT reads the stashed diagnosis)."""
+    script = ".mode csv\n" + sql + ";\nSELECT * FROM decide_diagnostics();\n"
+    result = cli.execute_script(script, timeout=30)
+    rows = list(csv.DictReader(io.StringIO(result.stdout)))
+    return result, {r["attribute"]: r["value"] for r in rows if r["subject_kind"] == "model"}
+
+
+@pytest.mark.query_diagnostics
+class TestSlowDiagnosticsRelation:
+    """Relation parity with unbounded/infeasible: a timed-out solve stashes a
+    `state='slow'` diagnosis and the error points to decide_diagnostics()."""
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_path1_populates_relation_and_points_to_it(self, request, cli_fixture):
+        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
+        result, attrs = _slow_diag_rows(cli, _KNAPSACK_SQL)
+        # The error headline is diagnosis-style and points to the relation.
+        err = result.stderr.lower()
+        assert "optimization is slow" in err, result.stderr[:800]
+        assert "select * from decide_diagnostics()" in err, result.stderr[:800]
+        # The relation carries the structured facts, in user voice.
+        assert attrs["status"] == "solution_found", attrs
+        assert float(attrs["best_objective"]) > 0, attrs
+        assert attrs["within_percent_of_best"].endswith("%"), attrs
+        assert "best_possible_objective" in attrs and "elapsed" in attrs and "peak_memory" in attrs
+        for word in _FORBIDDEN_JARGON:
+            assert word not in " ".join(attrs).lower()
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_path2_relation_marks_no_solution(self, request, cli_fixture):
+        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
+        result, attrs = _slow_diag_rows(cli, _MARKET_SPLIT_SQL)
+        assert "optimization is slow" in result.stderr.lower()
+        assert attrs["status"] == "no_solution", attrs
+        # No incumbent → no objective / closeness rows.
+        assert "best_objective" not in attrs and "within_percent_of_best" not in attrs
+        # Market-split is pure feasibility (no MAXIMIZE/MINIMIZE), so the "best possible
+        # objective" is meaningless and must be suppressed.
+        assert "best_possible_objective" not in attrs, attrs
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_off_leaves_relation_empty(self, request, cli_fixture):
+        """`off` gives the plain static error and stashes nothing (no pointer, 0 rows)."""
+        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
+        result, attrs = _slow_diag_rows(cli, "SET diagnose_decide='off'; " + _KNAPSACK_SQL)
+        assert "select * from decide_diagnostics()" not in result.stderr.lower()
+        assert attrs == {}, attrs
 
 
 _STOP_CAVEAT = "best solution found so far"  # stderr caveat on a stop-with-incumbent
