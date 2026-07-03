@@ -125,10 +125,11 @@ class TestSolidBranches:
         assert _attr(rows, "variable", "affected_rows") == f"all {n} rows"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_D_per_group_loosen_only_failing_groups(self, request, cli_fixture):
-        """SUM(x) >= 5 PER l_orderkey: exactly the orders with < 5 line items are
-        infeasible. Each failing group gets its own loosen edit, keyed by the
-        real order key, with amount = 5 - group_size."""
+    def test_D_per_group_query_folds_expanded_breaks_out(self, request, cli_fixture):
+        """SUM(x) >= 5 PER l_orderkey: exactly the orders with < 5 line items are infeasible.
+        T3 query mode (default): the PER clause is ONE SQL literal, so it folds to a single
+        clause-level edit whose amount is the max shortfall across failing groups. Expanded
+        mode breaks it out: one expanded_group edit per failing order, amount = 5 - size."""
         cli = request.getfixturevalue(cli_fixture)
         # group_key -> line count, for the orders that cannot reach 5
         sizes = {
@@ -145,35 +146,46 @@ class TestSolidBranches:
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 40 "
             "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql)
-        rows = _rows(result)
 
-        assert "grouped clause `SUM(x) >= 5 PER l_orderkey`" in _headline(result)
+        # --- query mode: one folded clause edit, amount = worst shortfall ---
+        q = _rows(_diagnose(cli, sql))
+        q_edits = [r for r in q if r["attribute"] == "edit_kind" and r["value"] == "loosen"]
+        assert len(q_edits) == 1
+        subj = "SUM(x) >= 5 PER l_orderkey"
+        assert _attr(q, "clause", "edit_source", subject=subj) == "source_literal"
+        assert _attr(q, "clause", "offset_scope", subject=subj) == "clause"
+        assert int(_attr(q, "clause", "amount", subject=subj)) == max(5 - s for s in sizes.values())
+        assert not [r for r in q if r["attribute"] == "group"]
 
-        # the set of groups carrying a loosen edit == the set of undersized orders
-        reported = {r["value"] for r in rows if r["attribute"] == "group"}
+        # --- expanded mode: one expanded_group edit per failing order ---
+        e = _rows(_diagnose(
+            cli, sql,
+            extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
+        ))
+        reported = {r["value"] for r in e if r["attribute"] == "group"}
         assert reported == set(sizes)
-
-        # per-group edit is a loosen with the right amount and suggested floor
         for gkey, size in sizes.items():
-            subj = f"SUM(x) >= 5 PER l_orderkey [group: {gkey}]"
-            assert _attr(rows, "clause", "edit_kind", subject=subj) == "loosen"
-            assert _attr(rows, "clause", "amount", subject=subj) == str(5 - size)
-            assert _attr(rows, "clause", "suggested_change", subject=subj) == (
+            esubj = f"SUM(x) >= 5 PER l_orderkey [group: {gkey}]"
+            assert _attr(e, "clause", "edit_source", subject=esubj) == "expanded_group"
+            assert _attr(e, "clause", "amount", subject=esubj) == str(5 - size)
+            assert _attr(e, "clause", "suggested_change", subject=esubj) == (
                 f"SUM(x) >= {size} PER l_orderkey"
             )
-
         # once loosened, MAXIMIZE SUM(x) can select every row
-        assert _attr(rows, "model", "achievable_objective") == total_rows
+        assert _attr(e, "model", "achievable_objective") == total_rows
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_F_per_row_conflict_summary(self, request, cli_fixture):
-        """x BOOLEAN but x >= l_quantity: per-row data RHS with no single literal
-        to loosen -> a conflict summary. The headline names a representative
-        `x >= K` clause, the relation echoes that same clause with edit_kind
-        'conflict', and the conflict count's denominator is the row count."""
+    def test_F_per_row_data_query_mode_virtual_offset(self, request, cli_fixture):
+        """T3 query mode (default): x BOOLEAN but x >= l_quantity is a per-row data RHS with
+        no single literal to loosen -> ONE virtual query offset `x >= l_quantity - delta`
+        (delta = max overshoot), tagged edit_source='virtual_offset'. The headline names the
+        data-backed clause by its column name, and the relation carries the offset."""
         cli = request.getfixturevalue(cli_fixture)
-        total = _scalar(cli, "SELECT count(*) FROM lineitem WHERE l_orderkey <= 20")
+        # A BOOLEAN can reach at most 1, so the tightest row (max l_quantity) needs a
+        # -(max-1) offset. Take it from the data, not a hand-computed constant.
+        expected_delta = _scalar(
+            cli, "SELECT max(l_quantity) - 1 FROM lineitem WHERE l_orderkey <= 20"
+        )
 
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 20 "
@@ -182,29 +194,52 @@ class TestSolidBranches:
         result = _diagnose(cli, sql)
         rows = _rows(result)
 
-        # the engine chooses the representative literal K itself; take it from the
-        # headline rather than predicting it, then assert the relation agrees.
-        hm = re.search(r"per-row data in clause `(x >= \d+)`", _headline(result))
-        assert hm, _headline(result)
-        subj = hm.group(1)
-        assert _attr(rows, "clause", "edit_kind", subject=subj) == "conflict"
-        cm = re.fullmatch(
-            r"conflicts in (\d+) of (\d+) rows",
-            _attr(rows, "clause", "conflict", subject=subj),
+        assert "diagnosis points to clause `x >= l_quantity`" in _headline(result)
+        subj = "x >= l_quantity"
+        assert _attr(rows, "clause", "edit_kind", subject=subj) == "loosen"
+        assert _attr(rows, "clause", "edit_source", subject=subj) == "virtual_offset"
+        amount = _attr(rows, "clause", "amount", subject=subj)
+        assert float(amount) == pytest.approx(float(expected_delta))
+        # the suggestion names the column and subtracts exactly that offset (>= loosens down)
+        assert _attr(rows, "clause", "suggested_change", subject=subj) == f"x >= l_quantity - {amount}"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_F_per_row_data_expanded_mode_row_profile(self, request, cli_fixture):
+        """T3 expanded mode: the same data RHS stays per-row, so every conflicting row is an
+        `expanded_row` profile entry rather than one folded virtual offset — a debug view of
+        which generated rows are tight."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 20 "
+            "DECIDE x IS BOOLEAN SUCH THAT x >= l_quantity MAXIMIZE SUM(x)"
         )
-        assert cm and cm.group(2) == total
+        result = _diagnose(
+            cli, sql,
+            extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
+        )
+        rows = _rows(result)
+
+        sources = {r["value"] for r in rows if r["attribute"] == "edit_source"}
+        assert sources == {"expanded_row"}
+        assert all(
+            r["value"] == "row" for r in rows if r["attribute"] == "offset_scope"
+        )
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_D2_many_group_headline_is_capped(self, request, cli_fixture):
-        """With dozens of failing groups the headline summarizes + truncates
-        ('... and N more') instead of listing every group key inline. The full
-        per-group detail stays in decide_diagnostics()."""
+        """In expanded mode, with dozens of failing groups the headline summarizes +
+        truncates ('... and N more') instead of listing every group key inline. The full
+        per-group detail stays in decide_diagnostics(). (Query mode folds to one clause,
+        so the group list only arises in expanded mode.)"""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 400 "
             "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
         )
-        headline = _headline(_diagnose(cli, sql))
+        headline = _headline(_diagnose(
+            cli, sql,
+            extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
+        ))
         # a capped headline references the overflow instead of enumerating all groups
         assert "more" in headline
 

@@ -41,12 +41,17 @@ _EXPECTED_SCHEMA = [
 ]
 
 
-def _diagnose(cli, decide_sql, mode="auto"):
+def _diagnose(cli, decide_sql, mode="auto", scope=None):
     """Run PRAGMA + a failing DECIDE + the relation read on one stdin session.
-    The relation is emitted as CSV so its rows parse unambiguously."""
+    The relation is emitted as CSV so its rows parse unambiguously. `scope` sets the
+    T3 infeasible slack-scope pragma (query | expanded) when given."""
+    scope_pragma = (
+        f"PRAGMA diagnose_decide_infeasible_slack_scope='{scope}';\n" if scope else ""
+    )
     script = (
         ".mode csv\n"
         f"PRAGMA diagnose_decide='{mode}';\n"
+        f"{scope_pragma}"
         f"{decide_sql};\n"
         "SELECT * FROM decide_diagnostics();\n"
     )
@@ -390,14 +395,12 @@ class TestDiagnosticsRelation:
         assert cap["amount"] == "7"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_per_group_reports_one_edit_per_group(self, request, cli_fixture):
-        """PER-group identity: an aggregate `SUM(x) >= 5 PER grp` emits one row per
-        group, so each group gets its own slack — a per-group edit. Both groups now FOLD
-        to the same aggregate clause text `SUM(x) >= 5 PER grp` (not the expanded
-        `x + x`), and a separate `group` row names which group ('a'/'b') the edit applies
-        to. Group 'a' (2 BOOLEAN x, max 2) loosens to >= 2 (amount 3); group 'b' (3 x,
-        max 3) to >= 3 (amount 2). BOOLEAN keeps the domain rigid, so there is no floor
-        competition: the per-group amounts are exact."""
+    def test_infeasible_per_group_query_mode_folds_to_one_edit(self, request, cli_fixture):
+        """T3 query mode (default): a PER aggregate `SUM(x) >= 5 PER grp` is ONE SQL literal
+        the user edits, so all groups fold into a single clause-level edit — the shared
+        slack is the max overshoot across groups. Group 'a' (2 BOOLEAN x, max 2) needs 3;
+        group 'b' (3 x, max 3) needs 2; the fold reports the max, `SUM(x) >= 2 PER grp`
+        (amount 3), with no per-group breakdown in the relation."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) "
@@ -408,29 +411,43 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        assert "diagnosis points to grouped clause `sum(x) >= 5 per grp` for groups `a` and `b`" in err
-        assert "sum(x) >= 2 per grp" not in err
-        assert "sum(x) >= 3 per grp" not in err
+        assert "diagnosis points to clause `sum(x) >= 5 per grp`" in err
         edits = _clause_edits(rows)
-        # Both groups fold to the same aggregate clause text, with the `PER grp` qualifier.
-        # The subject also carries the group label on every EAV row, so clients do not need
-        # to rely on row order to associate suggested_change/amount with a group.
+        assert len(edits) == 1
+        edit = edits[0]
+        assert edit["subject"] == "SUM(x) >= 5 PER grp"
+        assert edit["suggested_change"] == "SUM(x) >= 2 PER grp"
+        assert edit["amount"] == "3"
+        assert edit["edit_source"] == "source_literal"
+        assert edit["offset_scope"] == "clause"
+        # No per-group `group` row in query mode (the clause is one folded edit).
+        assert not [r for r in rows if r["attribute"] == "group"]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_per_group_expanded_mode_reports_per_group(self, request, cli_fixture):
+        """T3 expanded mode: the same PER aggregate breaks out per group — group 'a' loosens
+        to >= 2 (amount 3), group 'b' to >= 3 (amount 2) — each tagged expanded_group/group
+        with a `group` key. This is the per-group profile the query fold summarizes."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) "
+            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto", scope="expanded")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        edits = _clause_edits(rows)
         assert [e["subject"] for e in edits] == [
             "SUM(x) >= 5 PER grp [group: a]",
             "SUM(x) >= 5 PER grp [group: b]",
         ]
-        assert {
-            r["subject"]
-            for r in rows
-            if r["subject_kind"] == "clause"
-        } == {
-            "SUM(x) >= 5 PER grp [group: a]",
-            "SUM(x) >= 5 PER grp [group: b]",
-        }
         by_group = {e["group"]: e for e in edits}
         assert set(by_group) == {"a", "b"}
         assert by_group["a"]["suggested_change"] == "SUM(x) >= 2 PER grp"
         assert by_group["a"]["amount"] == "3"
+        assert by_group["a"]["edit_source"] == "expanded_group"
+        assert by_group["a"]["offset_scope"] == "group"
         assert by_group["b"]["suggested_change"] == "SUM(x) >= 3 PER grp"
         assert by_group["b"]["amount"] == "2"
 
@@ -474,11 +491,11 @@ class TestDiagnosticsRelation:
         assert all("<= 1" not in s and "<= 2" not in s for s in subjects), subjects
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_data_rhs_reports_conflict_summary(self, request, cli_fixture):
-        """I2.c: when the RHS is per-row data (`x >= hi`), there is no single literal to
-        loosen, so the clause reports ONE conflict summary (M of N rows) — not a
-        `suggested_change`/`amount`. A rigid BOOLEAN 0/1 domain forces the data row to
-        be the only thing that could move, so the conflict is deterministic (every row)."""
+    def test_infeasible_data_rhs_query_mode_virtual_offset(self, request, cli_fixture):
+        """T3 query mode (default): a per-row data RHS (`x >= hi`) has no literal to loosen,
+        so the clause reports ONE virtual query offset `x >= hi - delta` (delta = max
+        overshoot) tagged edit_source='virtual_offset', not a dead-end conflict. The RHS
+        column name `hi` is carried through so the suggestion names it."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) "
@@ -488,13 +505,39 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        assert "diagnosis points to per-row data in clause `x >= 5`" in result.stderr.lower()
-        floor = _attrs(rows, "clause", "x >= 5")
-        assert floor["conflict"] == "conflicts in 2 of 2 rows"
-        # I5: a data-RHS conflict carries edit_kind='conflict' (uniform vocabulary).
-        assert floor["edit_kind"] == "conflict"
-        # A data-RHS clause never gets a scalar loosening suggestion.
-        assert "suggested_change" not in floor and "amount" not in floor
+        assert "diagnosis points to clause `x >= hi`" in result.stderr.lower()
+        floor = _attrs(rows, "clause", "x >= hi")
+        assert floor["edit_kind"] == "loosen"
+        assert floor["edit_source"] == "virtual_offset"
+        assert floor["offset_scope"] == "clause"
+        # BOOLEAN can only reach 1, so the floor of 5 needs a -4 offset to become feasible.
+        assert floor["suggested_change"] == "x >= hi - 4"
+        assert floor["amount"] == "4"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_data_rhs_expanded_mode_per_row_profile(self, request, cli_fixture):
+        """T3 expanded mode: the same data RHS stays per-row, so each conflicting row is a
+        separate expanded_row profile entry (a debug view of which generated rows are tight),
+        not a single virtual offset. Here two rows with distinct caps (5, 7) each surface."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,5),(2,7)) t(id, hi) "
+            "DECIDE x IS BOOLEAN SUCH THAT x >= hi MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto", scope="expanded")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        # Each per-row floor is exposed independently, tagged expanded_row/row.
+        sources = {r["value"] for r in rows if r["attribute"] == "edit_source"}
+        assert sources == {"expanded_row"}
+        scopes = {r["value"] for r in rows if r["attribute"] == "offset_scope"}
+        assert scopes == {"row"}
+        # Both distinct floors appear as separate subjects.
+        loosen_subjects = {
+            r["subject"] for r in rows if r["attribute"] == "edit_kind" and r["value"] == "loosen"
+        }
+        assert loosen_subjects == {"x >= 5", "x >= 7"}
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_data_rhs_penalized_prefers_editable_edit(self, request, cli_fixture):
@@ -816,6 +859,24 @@ class TestDiagnosticsRelation:
         # A negative value is rejected at SET time.
         bad = cli.execute_script("PRAGMA diagnose_decide_removal_bigm=-1;\nSELECT 1;\n")
         assert "removal_bigm" in bad.stderr.lower()
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_slack_scope_pragma_validation(self, request, cli_fixture):
+        """T3: the slack-scope pragma accepts only query|expanded (case-insensitive,
+        normalized to lowercase), and rejects anything else at SET time."""
+        cli = request.getfixturevalue(cli_fixture)
+        # Valid values normalize to lowercase.
+        ok = cli.execute_script(
+            ".mode csv\n"
+            "PRAGMA diagnose_decide_infeasible_slack_scope='EXPANDED';\n"
+            "SELECT current_setting('diagnose_decide_infeasible_slack_scope') AS s;\n"
+        )
+        assert "expanded" in ok.stdout
+        # An unknown value is rejected at SET time.
+        bad = cli.execute_script(
+            "PRAGMA diagnose_decide_infeasible_slack_scope='bogus';\nSELECT 1;\n"
+        )
+        assert "slack_scope" in bad.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_mccormick_rows_stay_rigid(self, request, cli_fixture):

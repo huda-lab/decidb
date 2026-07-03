@@ -257,6 +257,12 @@ struct EvaluatedConstraint {
     //! slack (ElasticShape::SHARED_LITERAL); a data RHS stays per-row independent.
     bool rhs_is_shared_literal = false;
 
+    //! Symbolic name of a data-backed (non-shared-literal) RHS expression (`x <= cap_col`
+    //! → "cap_col"). Lets query-mode infeasible diagnosis render a virtual offset
+    //! (`x <= cap_col + delta`) instead of a numeric representative. Empty for a shared
+    //! literal RHS. Stamped onto ConstraintProvenance::rhs_label at the per-row builder site.
+    string rhs_label;
+
     //! True when this is a pure-linear AVG aggregate whose row coefficients were
     //! pre-scaled by 1/N_g for the AVG→SUM rewrite. Propagated to the row provenance
     //! so infeasible diagnosis renders the clause as `AVG(...)` (and the slack is

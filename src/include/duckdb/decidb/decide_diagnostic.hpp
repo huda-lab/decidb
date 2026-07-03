@@ -77,6 +77,11 @@ struct DecideDiagParams {
 	//! Big-M (M₂) used by the infeasible engine to neutralize a dropped `<>` (I4).
 	//! 0 = auto-derive per clause from its existing disjunction Big-M (the usual case).
 	double removal_bigm = 0.0;
+	//! Infeasible slack-scope policy (T3). "query" (default): one slack per SQL-level
+	//! knob — a data-backed RHS (`x <= col`) reports a virtual query offset
+	//! (`x <= col + delta`) plus a conflict profile row. "expanded": one slack per emitted
+	//! relaxable row/group — a diagnostic profile, not a directly pasteable SQL edit.
+	string slack_scope = "query";
 };
 
 //! Structured diagnosis produced by a state engine and rendered by the table
@@ -127,37 +132,43 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes);
 
 //! How an elastic edit reads back to the user.
-//!   LOOSEN          — a single editable knob: loosen `label` to `suggestion` by
-//!                     `amount` (the I1/I2.a/b shapes, plus AVG/strict/quadratic).
-//!   CONFLICT_SUMMARY — a data-RHS clause (`x <= col`) has no single literal to
-//!                     loosen, so we report which clause conflicts and in how many
-//!                     rows (`detail`), not a scalar suggestion (I2.c).
+//!   LOOSEN          — an editable knob: loosen `label` to `suggestion` by `amount`.
+//!                     Covers the I1/I2.a/b literal shapes (plus AVG/strict/quadratic),
+//!                     the T3 query-mode virtual offset over a data RHS
+//!                     (`x <= col + delta`), and the T3 expanded-mode per-row profile
+//!                     entries. `edit_source` distinguishes these.
 //!   DROP            — a remove-only clause (`<>`) cannot be loosened, only removed;
 //!                     `label` names the clause and the fix is to delete it (I4).
-enum class ClauseEditKind : uint8_t { LOOSEN, CONFLICT_SUMMARY, DROP };
+enum class ClauseEditKind : uint8_t { LOOSEN, DROP };
 
 //! One least-change edit the infeasible (elastic) engine found. For LOOSEN: loosen
 //! the constraint as written (`label`, e.g. "x <= 10") to `suggestion` (e.g.
-//! "x <= 12.5") by `amount`. For CONFLICT_SUMMARY: `label` names the clause and
-//! `detail` carries "conflicts in M of N rows" (`suggestion`/`amount` unused). For
-//! DROP: `label` names the remove-only clause to delete (other fields unused). All
-//! fields are pre-formatted strings so the builder is pure layout.
+//! "x <= 12.5") by `amount`. For DROP: `label` names the remove-only clause to delete
+//! (other fields unused). All fields are pre-formatted strings so the builder is pure
+//! layout.
 struct ClauseEdit {
 	ClauseEditKind kind = ClauseEditKind::LOOSEN;
 	string label;      //!< the constraint as the user wrote it
 	string suggestion; //!< the constraint after the minimal loosening (LOOSEN only)
 	string amount;     //!< magnitude of the loosening, formatted (LOOSEN only)
-	string detail;     //!< "conflicts in M of N rows" (CONFLICT_SUMMARY only)
 	string group;      //!< printable PER key of this edit's group (empty if ungrouped);
 	                   //!< emitted as a separate `group` EAV row so folded SUM clauses
 	                   //!< stay distinguishable in the relation
+	//! T3 slack-scope provenance. `edit_source` names how the edit was derived —
+	//! `source_literal` (a literal the user wrote), `virtual_offset` (a query-mode
+	//! synthetic offset over a data RHS, `x <= col + delta`), `expanded_row` /
+	//! `expanded_group` (an expanded-mode per-row / per-group profile entry). Empty ⇒
+	//! the `edit_source` row is omitted (legacy path). `offset_scope` (`clause` / `row`
+	//! / `group`) records the granularity; emitted only when set.
+	string edit_source;
+	string offset_scope;
 };
 
 //! Build the infeasible diagnosis from the minimal edit list the elastic engine
-//! produced (one clause per positive slack, or one conflict summary per data-RHS
-//! clause). The summary points to the relevant clause(s); the concrete edits live in
-//! the EAV rows. Each LOOSEN edit emits `suggested_change` and `amount` rows, each
-//! CONFLICT_SUMMARY edit emits a `conflict` row, keyed by the clause as written.
+//! produced (one edit per positive slack). The summary points to the relevant
+//! clause(s); the concrete edits live in the EAV rows. Each LOOSEN edit emits
+//! `suggested_change` and `amount` rows (plus `edit_source` / `offset_scope`), keyed
+//! by the clause as written.
 //!
 //! `achievable_objective` (I3, the stage-2 freeze-budget re-solve): when non-empty,
 //! emits one `subject_kind='model'`, `attribute='achievable_objective'` row.

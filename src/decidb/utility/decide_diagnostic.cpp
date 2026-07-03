@@ -78,6 +78,20 @@ static void RemovalBigMSetCallback(ClientContext &context, SetScope scope, Value
 	}
 }
 
+static bool IsValidSlackScope(const string &scope) {
+	return scope == "query" || scope == "expanded";
+}
+
+static void SlackScopeSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	string mode = StringUtil::Lower(parameter.ToString());
+	if (!IsValidSlackScope(mode)) {
+		throw InvalidInputException(
+		    "Invalid diagnose_decide_infeasible_slack_scope '" + parameter.ToString() +
+		    "'. Valid scopes: query, expanded.");
+	}
+	parameter = Value(mode); // normalize to lowercase
+}
+
 // L0 (norm(e, 0)) nonzero threshold. The reverse indicator link `ABS(e) >= tol*z`
 // is violated by exactly `tol` at the boundary (e = 0, z = 1); if `tol` were at or
 // below the solver feasibility tolerance (~1e-6) the solver would accept it and the
@@ -151,7 +165,7 @@ static string QuotedGroupList(const vector<string> &groups) {
 	return result;
 }
 
-static vector<string> BuildDiagnosticTargetPhrases(const vector<ClauseEdit> &edits, bool conflict_only) {
+static vector<string> BuildDiagnosticTargetPhrases(const vector<ClauseEdit> &edits) {
 	vector<DiagnosticTarget> targets;
 	for (const auto &edit : edits) {
 		AddDiagnosticTarget(targets, edit);
@@ -160,14 +174,13 @@ static vector<string> BuildDiagnosticTargetPhrases(const vector<ClauseEdit> &edi
 	vector<string> phrases;
 	for (const auto &target : targets) {
 		if (target.has_ungrouped) {
-			string phrase = "clause `" + target.label + "`";
-			phrases.push_back(conflict_only ? "per-row data in " + phrase : phrase);
+			phrases.push_back("clause `" + target.label + "`");
 		}
 		if (!target.groups.empty()) {
 			string phrase = "grouped clause `" + target.label + "` for ";
 			phrase += target.groups.size() == 1 ? "group " : "groups ";
 			phrase += QuotedGroupList(target.groups);
-			phrases.push_back(conflict_only ? "per-row data in " + phrase : phrase);
+			phrases.push_back(phrase);
 		}
 	}
 	return phrases;
@@ -222,6 +235,14 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "diagnosing which clause to remove. 0 (default) auto-derives a sufficient value per "
 	    "clause from its existing formulation; set a positive value only to override. >= 0.",
 	    LogicalType::DOUBLE, Value::DOUBLE(0.0), RemovalBigMSetCallback);
+	config.AddExtensionOption(
+	    "diagnose_decide_infeasible_slack_scope",
+	    "Infeasible diagnosis: slack granularity. query (default): one edit per SQL-level knob "
+	    "— a data-backed RHS (`x <= col`) reports a virtual query offset (`x <= col + delta`) "
+	    "plus a conflict profile. expanded: one edit per emitted relaxable row/group — a "
+	    "diagnostic profile of which generated constraints are tight, not a directly pasteable "
+	    "SQL edit.",
+	    LogicalType::VARCHAR, Value("query"), SlackScopeSetCallback);
 	// L0 nonzero threshold (expressivity knob, registered here with the other DECIDE
 	// session options). norm(e, 0) counts a row as nonzero when |e| >= this value.
 	config.AddExtensionOption(
@@ -276,6 +297,12 @@ DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
 	if (context.TryGetCurrentSetting("diagnose_decide_removal_bigm", value) && !value.IsNull()) {
 		double v = value.GetValue<double>();
 		params.removal_bigm = v < 0.0 ? 0.0 : v;
+	}
+	if (context.TryGetCurrentSetting("diagnose_decide_infeasible_slack_scope", value) && !value.IsNull()) {
+		// The set-callback validates/normalizes; default to "query" defensively on any
+		// unrecognized value written directly to the settings.
+		string scope = StringUtil::Lower(value.ToString());
+		params.slack_scope = IsValidSlackScope(scope) ? scope : "query";
 	}
 	return params;
 }
@@ -446,36 +473,35 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 		return e.group.empty() ? e.label : e.label + " [group: " + e.group + "]";
 	};
 
-	bool conflict_only = true;
-	for (const auto &e : edits) {
-		conflict_only = conflict_only && e.kind == ClauseEditKind::CONFLICT_SUMMARY;
-	}
-	vector<string> phrases = BuildDiagnosticTargetPhrases(edits, conflict_only);
+	vector<string> phrases = BuildDiagnosticTargetPhrases(edits);
 	diag.summary = "the constraints cannot all be satisfied at once";
 	if (!phrases.empty()) {
 		diag.summary += "; diagnosis points to " + JoinDiagnosticPhrases(phrases) + ".";
 	}
 
+	// T3: emit the slack-scope provenance rows (edit_source, offset_scope) for any edit
+	// kind that carries them. Empty fields are omitted so the legacy paths are unchanged.
+	auto emit_source_scope = [&](const string &subject, const ClauseEdit &e) {
+		if (!e.edit_source.empty()) {
+			DiagnosticRow src_row;
+			src_row.subject_kind = "clause";
+			src_row.subject = subject;
+			src_row.attribute = "edit_source";
+			src_row.value = e.edit_source;
+			diag.rows.push_back(std::move(src_row));
+		}
+		if (!e.offset_scope.empty()) {
+			DiagnosticRow scope_row;
+			scope_row.subject_kind = "clause";
+			scope_row.subject = subject;
+			scope_row.attribute = "offset_scope";
+			scope_row.value = e.offset_scope;
+			diag.rows.push_back(std::move(scope_row));
+		}
+	};
+
 	for (const auto &e : edits) {
 		string subject = relation_subject(e);
-		if (e.kind == ClauseEditKind::CONFLICT_SUMMARY) {
-			// I5: every edit carries a uniform edit_kind so the relation is
-			// self-describing — filter attribute='edit_kind' to enumerate all edits.
-			DiagnosticRow kind_row;
-			kind_row.subject_kind = "clause";
-			kind_row.subject = subject;
-			kind_row.attribute = "edit_kind";
-			kind_row.value = "conflict";
-			diag.rows.push_back(std::move(kind_row));
-
-			DiagnosticRow conflict_row;
-			conflict_row.subject_kind = "clause";
-			conflict_row.subject = subject;
-			conflict_row.attribute = "conflict";
-			conflict_row.value = e.detail;
-			diag.rows.push_back(std::move(conflict_row));
-			continue;
-		}
 		if (e.kind == ClauseEditKind::DROP) {
 			// I4: a dedicated structured marker, distinct from the LOOSEN
 			// suggested_change/amount pair. The subject names the clause to delete.
@@ -485,6 +511,7 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 			drop_row.attribute = "edit_kind";
 			drop_row.value = "drop";
 			diag.rows.push_back(std::move(drop_row));
+			emit_source_scope(subject, e);
 			continue;
 		}
 		// LOOSEN: edit_kind='loosen' (I5) + the suggested_change/amount pair.
@@ -519,6 +546,7 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 			group_row.value = e.group;
 			diag.rows.push_back(std::move(group_row));
 		}
+		emit_source_scope(subject, e);
 	}
 	// I3: model-level achievable objective. Single stable attribute (the I5 vocabulary
 	// anchor); the value is the number, or "unbounded" when the relaxed problem has no

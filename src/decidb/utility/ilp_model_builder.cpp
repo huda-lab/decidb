@@ -772,6 +772,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.shape = eval_const.rhs_is_shared_literal
                                               ? ElasticShape::SHARED_LITERAL
                                               : ElasticShape::PER_ROW_DATA;
+                // Carry the data RHS column name (`x <= cap_col`) so query-mode diagnosis
+                // can render a virtual offset (`x <= cap_col + delta`).
+                if (!eval_const.rhs_is_shared_literal) {
+                    constr.provenance.rhs_label = eval_const.rhs_label;
+                }
                 // I4: per-row `<>` disjunction rows carry their indicator (a
                 // row-scoped aux var) so the elastic engine groups the pair per row
                 // and offers removal.

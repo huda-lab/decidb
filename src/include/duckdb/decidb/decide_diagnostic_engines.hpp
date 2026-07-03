@@ -105,7 +105,14 @@ struct ElasticModel {
 //! valid `indicator_col`) instead get a binary removal indicator (I4). `removal_bigm`
 //! is the M₂ used to neutralize a dropped `<>` (0 = auto-derive per clause from its
 //! existing disjunction Big-M).
-ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm = 0.0);
+//!
+//! `slack_scope` (T3) governs how a data-backed RHS (`x <= col`, PER_ROW_DATA) is
+//! slacked: "query" (default) folds a clause's data rows into ONE shared slack (the
+//! amount is the max overshoot = a single virtual query offset `x <= col + delta`);
+//! "expanded" leaves them as independent per-row slacks so the readback can expose the
+//! per-row conflict profile. SHARED_LITERAL knobs fold in both modes.
+ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm = 0.0,
+                               const string &slack_scope = "query");
 
 //! Build the infeasible diagnosis (the elastic least-change fix): build the elastic
 //! program (BuildElasticModel), solve it via the injected callback, and read the

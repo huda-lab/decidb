@@ -66,6 +66,7 @@ struct MultiVarRow {
 	idx_t clause_id = DConstants::INVALID_INDEX;
 	ElasticShape shape = ElasticShape::PER_ROW_DATA;
 	idx_t group_key = DConstants::INVALID_INDEX;
+	string rhs_label = ""; //!< data RHS column name (query-mode virtual offset)
 };
 
 //! A REAL model over `num_vars` variables (each in [0, +inf)) with the given rows.
@@ -88,6 +89,7 @@ SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
 		c.provenance.kind = r.kind;
 		c.provenance.shape = r.shape;
 		c.provenance.group_key = r.group_key;
+		c.provenance.rhs_label = r.rhs_label;
 		m.constraints.push_back(std::move(c));
 	}
 	return m;
@@ -430,39 +432,46 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 12");
 	}
 
-	SECTION("PER: one shared slack per group, not per row and not one across all groups") {
-		// I2.b: an easy-MAX-style clause under PER fans into N_g rows per group, all
-		// tagged SHARED_LITERAL with the same clause_id but distinct group_key. Each
-		// group is its own shared block: group 0 (rows 0,1) → one slack, group 1
-		// (rows 2,3) → another. The runnable edit is one move per group.
+	SECTION("PER SHARED_LITERAL folds by mode: one edit in query, per-group in expanded") {
+		// T3: a PER clause fans into N_g rows per group, all SHARED_LITERAL with the same
+		// clause_id but distinct group_key. query mode is the single SQL literal the user
+		// edits → ONE slack across every group; expanded mode breaks it out per group.
 		SolverModel model = MakeModel(4, {
 		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 0},
 		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 0},
 		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 1},
 		    {3, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 1},
 		});
-		ElasticModel elastic = BuildElasticModel(model);
-
-		// 4 user vars + one shared slack per group = 6 columns.
-		CHECK(elastic.model.num_vars == 6);
-		REQUIRE(elastic.slacks.size() == 2);
-		CHECK(elastic.slacks[0].rows == duckdb::vector<idx_t> {0, 1});
-		CHECK(elastic.slacks[1].rows == duckdb::vector<idx_t> {2, 3});
+		// query (default): one slack spans all four rows (both groups). 4 vars + 1 slack.
+		ElasticModel q = BuildElasticModel(model);
+		CHECK(q.model.num_vars == 5);
+		REQUIRE(q.slacks.size() == 1);
+		CHECK(q.slacks[0].rows == duckdb::vector<idx_t> {0, 1, 2, 3});
+		// expanded: one slack per group. 4 vars + 2 slacks.
+		ElasticModel e = BuildElasticModel(model, 0.0, "expanded");
+		CHECK(e.model.num_vars == 6);
+		REQUIRE(e.slacks.size() == 2);
+		CHECK(e.slacks[0].rows == duckdb::vector<idx_t> {0, 1});
+		CHECK(e.slacks[1].rows == duckdb::vector<idx_t> {2, 3});
 	}
 
-	SECTION("data-RHS rows stay independent size-1 blocks") {
-		// PER_ROW_DATA rows (a data RHS like `x <= col`) have no shared-literal collapse
-		// and must remain independent size-1 blocks — pin that I2.a grouping did not
-		// absorb them. (Aggregate PER rows are SHARED_LITERAL; this is the data path.)
+	SECTION("data-RHS folds by mode: one offset in query, per-row in expanded") {
+		// T3: a data RHS (PER_ROW_DATA, `x <= col`) folds into ONE shared slack (the single
+		// virtual offset) in query mode; in expanded mode its rows stay independent so each
+		// row's overshoot surfaces as its own profile entry.
 		SolverModel model = MakeModel(2, {
 		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA, 0},
 		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA, 1},
 		});
-		ElasticModel elastic = BuildElasticModel(model);
-
-		REQUIRE(elastic.slacks.size() == 2);
-		CHECK(elastic.slacks[0].rows == duckdb::vector<idx_t> {0});
-		CHECK(elastic.slacks[1].rows == duckdb::vector<idx_t> {1});
+		// query (default): one shared slack across both data rows.
+		ElasticModel q = BuildElasticModel(model);
+		REQUIRE(q.slacks.size() == 1);
+		CHECK(q.slacks[0].rows == duckdb::vector<idx_t> {0, 1});
+		// expanded: independent size-1 blocks.
+		ElasticModel e = BuildElasticModel(model, 0.0, "expanded");
+		REQUIRE(e.slacks.size() == 2);
+		CHECK(e.slacks[0].rows == duckdb::vector<idx_t> {0});
+		CHECK(e.slacks[1].rows == duckdb::vector<idx_t> {1});
 	}
 
 	SECTION("USER_MECHANISM and STRUCTURAL rows are never slackened") {
@@ -495,9 +504,40 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(FindRow(diag, "x >= 3", "conflict").empty());
 	}
 
-	SECTION("data-RHS conflict reports a per-clause summary, not a suggestion") {
-		// I2.c: when only data-RHS rows can move (rigid floors force them), report ONE
-		// conflict summary per clause (M of N rows), with no suggested_change/amount.
+	SECTION("query mode folds a data-RHS clause into one virtual offset") {
+		// T3 query mode (default): a data-backed RHS (`x <= cap`) has no literal to loosen,
+		// so its rows fold into one shared slack = a single virtual query offset
+		// `x <= cap + delta` (delta = max overshoot). The rhs_label names the column.
+		SolverInput row_input = MakeRowScopedInput(2);
+		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
+		duckdb::vector<string> row_labels {"x"};
+		duckdb::vector<bool> row_aux {false};
+		SolverModel model = MakeModel(2, {
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA,
+		     DConstants::INVALID_INDEX, "cap"},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::PER_ROW_DATA,
+		     DConstants::INVALID_INDEX, "cap"},
+		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
+		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
+		});
+		InfeasibleDiagnosisInput diag_input {model,   row_indexer, row_labels,
+		                                     row_aux, kNoGlobalLabels, params, false,
+		                                     solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		// One folded edit: max overshoot is 7 (row 1 needs x >= 12 vs cap 5).
+		CHECK(FindRow(diag, "x <= cap", "edit_kind") == "loosen");
+		CHECK(FindRow(diag, "x <= cap", "suggested_change") == "x <= cap + 7");
+		CHECK(FindRow(diag, "x <= cap", "amount") == "7");
+		CHECK(FindRow(diag, "x <= cap", "edit_source") == "virtual_offset");
+		CHECK(FindRow(diag, "x <= cap", "offset_scope") == "clause");
+		CHECK(diag.summary.find("diagnosis points to clause `x <= cap`") != string::npos);
+	}
+
+	SECTION("expanded mode exposes each data-RHS row as its own profile entry") {
+		// T3 expanded mode: the data rows stay per-row, so each conflicting row is a
+		// separate `expanded_row` edit carrying its exact overshoot (3 and 7).
 		SolverInput row_input = MakeRowScopedInput(2);
 		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
 		duckdb::vector<string> row_labels {"x"};
@@ -508,20 +548,26 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
 		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model,   row_indexer, row_labels,
-		                                     row_aux, kNoGlobalLabels, params, false,
-		                                     solve_highs};
+		DecideDiagParams expanded_params = params;
+		expanded_params.slack_scope = "expanded";
+		InfeasibleDiagnosisInput diag_input {model,   row_indexer,     row_labels,
+		                                     row_aux, kNoGlobalLabels, expanded_params,
+		                                     false,   solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		CHECK(FindRow(diag, "x <= 5", "conflict") == "conflicts in 2 of 2 rows");
-		CHECK(FindRow(diag, "x <= 5", "suggested_change").empty());
-		CHECK(FindRow(diag, "x <= 5", "amount").empty());
-		// I5: a data-RHS conflict carries edit_kind='conflict' (uniform vocabulary), and
-		// the summary points to the data-backed problem clause.
-		CHECK(FindRow(diag, "x <= 5", "edit_kind") == "conflict");
-		CHECK(diag.summary.find("diagnosis points to per-row data in clause `x <= 5`") != string::npos);
-		CHECK(diag.summary.find("a possible edit was found") == string::npos);
+		// Two independent per-row edits (subjects differ by their numeric rhs — same 5 here,
+		// so both render `x <= 5`), each tagged expanded_row/row. Assert the tags exist.
+		CHECK(FindRow(diag, "x <= 5", "edit_source") == "expanded_row");
+		CHECK(FindRow(diag, "x <= 5", "offset_scope") == "row");
+		// Both rows conflict: the max overshoot 7 appears as an amount somewhere.
+		bool saw_amount_7 = false;
+		for (const auto &r : diag.rows) {
+			if (r.attribute == "amount" && r.value == "7") {
+				saw_amount_7 = true;
+			}
+		}
+		CHECK(saw_amount_7);
 	}
 
 	SECTION("strict < re-quotes the suggestion against the user's typed literal") {

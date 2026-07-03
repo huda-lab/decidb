@@ -320,6 +320,26 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
 	return e;
 }
 
+//! Build a query-mode virtual-offset LOOSEN edit for a data-backed RHS clause
+//! (`x <= col`): the clause's folded shared slack `delta` becomes one synthetic
+//! query-level offset `x <= col + delta` (`>=` loosens downward → `col - delta`).
+//! `rhs_text` is the RHS column name (`prov.rhs_label`) or a numeric fallback when no
+//! name is available. `edit_source`/`offset_scope` are stamped by the caller.
+ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &lhs,
+                                 const string &rhs_text, char sense, double delta) {
+	string sense_str = SenseStr(sense);
+	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
+	string op = (sense == '>') ? " - " : " + ";
+	string mag = FormatNum(std::fabs(delta));
+	ClauseEdit e;
+	e.kind = ClauseEditKind::LOOSEN;
+	e.label = lhs + " " + sense_str + " " + rhs_text + suffix;
+	e.suggestion = lhs + " " + sense_str + " " + rhs_text + op + mag + suffix;
+	e.amount = mag;
+	e.group = prov.group_label;
+	return e;
+}
+
 } // namespace
 
 DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
@@ -376,10 +396,15 @@ DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
 	return BuildUnboundedDiagnostic(escapes);
 }
 
-ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm) {
+ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
+                               const string &slack_scope) {
 	ElasticModel out;
 	out.model = base;
 	SolverModel &elastic = out.model;
+	// query mode (default) folds a data-backed clause's rows into one shared slack (one
+	// virtual offset `x <= col + delta`); expanded mode keeps them independent so the
+	// readback can expose the per-row profile. SHARED_LITERAL knobs fold in both modes.
+	bool fold_data = slack_scope != "expanded";
 
 	// Rebuild the objective as min Σ sᵢ: zero the user's objective over the existing
 	// columns first (slack obj coeffs are appended as the slacks are added), and drop
@@ -496,20 +521,37 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm) {
 	// STRUCTURAL and stay rigid). One slack per row for `<` / `>`; two for `=`
 	// (decision 3) so it can be violated in either direction while staying linear.
 	//
-	// I2.a: SHARED_LITERAL rows of one (clause_id, group_key) share ONE slack — the
-	// user knob fans into N rows, so the minimal loosening is the max overshoot (a
-	// single `s` with `eᵢ − s ≤ K` is driven to the max), not the sum. PER_ROW_DATA
-	// rows (and any without a clause id) stay independent, one slack each (I1).
-	auto is_shared = [](const ConstraintProvenance &p) {
-		return p.shape == ElasticShape::SHARED_LITERAL && p.clause_id != DConstants::INVALID_INDEX;
+	// T3 folding policy. A user knob fans into N rows; the minimal loosening is the max
+	// overshoot (a single `s` with `eᵢ − s ≤ K` is driven to the max), not the sum.
+	//   - SHARED_LITERAL (a literal cap, a PER/aggregate group row): always folds.
+	//   - PER_ROW_DATA (a data-backed RHS `x <= col`): folds only in query mode, into one
+	//     virtual offset `x <= col + delta`; in expanded mode its rows stay independent so
+	//     the readback exposes the per-row profile.
+	// Rows without a clause id always stay independent.
+	auto folds = [&](const ConstraintProvenance &p) {
+		if (p.clause_id == DConstants::INVALID_INDEX) {
+			return false;
+		}
+		if (p.shape == ElasticShape::SHARED_LITERAL) {
+			return true;
+		}
+		return fold_data && p.shape == ElasticShape::PER_ROW_DATA;
+	};
+	// The block key decides how far a knob folds. In query mode a PER clause is ONE SQL
+	// literal the user edits, so all its groups fold into a single slack (key ignores
+	// group_key). In expanded mode each PER group is its own slack (key includes it), so
+	// the profile breaks out per group.
+	auto block_key = [&](const ConstraintProvenance &p) -> std::pair<idx_t, idx_t> {
+		return fold_data ? std::make_pair(p.clause_id, static_cast<idx_t>(0))
+		                 : std::make_pair(p.clause_id, p.group_key);
 	};
 	std::map<std::pair<idx_t, idx_t>, vector<idx_t>> blocks;
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
 		const auto &row = elastic.constraints[r];
-		if (!IsRelaxableForElastic(row.provenance.kind) || !is_shared(row.provenance)) {
+		if (!IsRelaxableForElastic(row.provenance.kind) || !folds(row.provenance)) {
 			continue;
 		}
-		blocks[{row.provenance.clause_id, row.provenance.group_key}].push_back(r);
+		blocks[block_key(row.provenance)].push_back(r);
 	}
 
 	// Emit in row order: a shared block is emitted once, at its first row (its rows
@@ -520,15 +562,17 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm) {
 		if (!IsRelaxableForElastic(row.provenance.kind)) {
 			continue;
 		}
-		if (is_shared(row.provenance)) {
-			const vector<idx_t> &grp = blocks[{row.provenance.clause_id, row.provenance.group_key}];
+		if (folds(row.provenance)) {
+			const vector<idx_t> &grp = blocks[block_key(row.provenance)];
 			if (grp.front() != r) {
 				continue; // already emitted at the block's first row
 			}
 			// A shared block is one editable literal knob, scale-normalized by its
-			// representative row (members are same-clause instances → equal norms).
+			// representative row (members are same-clause instances → equal norms). A
+			// folded data block (query mode) is still last-resort data → keep the penalty.
 			char sense = elastic.constraints[grp.front()].sense;
-			double w = editable_weight(lin_norm[grp.front()]);
+			double w = is_data_penalized(row.provenance) ? DIAGNOSTIC_DATA_SLACK_WEIGHT
+			                                             : editable_weight(lin_norm[grp.front()]);
 			idx_t pos_col = add_slack(w);
 			idx_t neg_col = (sense == '=') ? add_slack(w) : DConstants::INVALID_INDEX;
 			for (idx_t rr : grp) {
@@ -625,19 +669,26 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm) {
 //! Read the slack support of a solved elastic model into the user-facing edit list.
 //! Every block whose slack exceeds DIAGNOSTIC_RAY_EPSILON is an edit; the amount is the
 //! slack value (`=` reports the net s⁺ − s⁻). A data-RHS clause (`x <= col`) has no
-//! single literal to loosen, so its rows are collapsed into one CONFLICT_SUMMARY per
-//! clause (I2.c). Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
+//! single literal to loosen, so it reads back per the `slack_scope` policy (T3): "query"
+//! folds it into one virtual offset `x <= col + delta`; "expanded" exposes each per-row
+//! slack. Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
 //! appended). Pure in `solution`, so it runs against either the stage-1 or stage-2 solve.
 static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
                                            const vector<RemovalRef> &removals,
                                            const vector<double> &solution,
                                            const SolverModel &orig_model,
-                                           const vector<ColumnProvenance> &columns, bool snap) {
-	struct ConflictAccum {
-		string lhs_sense_rhs; // the clause as written, from its first conflicting row
-		idx_t conflicting = 0;
-	};
-	std::map<idx_t, ConflictAccum> conflicts; // clause_id → accumulator
+                                           const vector<ColumnProvenance> &columns, bool snap,
+                                           const string &slack_scope) {
+	// T3 slack-scope policy.
+	//   query (default): each block is ONE SQL literal knob the user edits, folded across
+	//     PER groups (BuildElasticModel). Editable literals report `source_literal`, a
+	//     data RHS reports a `virtual_offset` (`x <= col + delta`); both are clause-level,
+	//     so any per-group identity is dropped.
+	//   expanded: PER/aggregate groups get one slack each (`expanded_group`, offset_scope
+	//     'group', keeping the group key); a data RHS stays per-row (`expanded_row`,
+	//     offset_scope 'row'); a non-grouped literal has nothing to break out and reports
+	//     `source_literal`.
+	bool expanded = slack_scope == "expanded";
 
 	vector<ClauseEdit> edits;
 	for (const auto &sl : slacks) {
@@ -660,41 +711,56 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		// same LHS/RHS, so the first row is canonical.
 		if (sl.quadratic) {
 			const auto &orig = orig_model.quadratic_constraints[sl.rows.front()];
-			edits.push_back(MakeLoosenEdit(orig.provenance, FormatQuadraticLhs(orig, columns),
-			                               orig.rhs, sl.sense, amount));
+			ClauseEdit e = MakeLoosenEdit(orig.provenance, FormatQuadraticLhs(orig, columns),
+			                              orig.rhs, sl.sense, amount);
+			e.edit_source = "source_literal";
+			e.offset_scope = "clause";
+			edits.push_back(std::move(e));
 			continue;
 		}
 		const ModelConstraint &orig = orig_model.constraints[sl.rows.front()];
 		const ConstraintProvenance &prov = orig.provenance;
 		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA &&
 		                prov.clause_id != DConstants::INVALID_INDEX;
-		if (data_rhs) {
-			auto &acc = conflicts[prov.clause_id];
-			if (acc.conflicting == 0) {
-				acc.lhs_sense_rhs =
-				    FormatLhs(orig, columns) + " " + SenseStr(sl.sense) + " " + FormatNum(orig.rhs);
+		if (expanded) {
+			if (data_rhs) {
+				// The independent per-row slack is that row's exact overshoot, one profile
+				// entry. A debug view, not a directly pasteable edit.
+				ClauseEdit e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
+				e.edit_source = "expanded_row";
+				e.offset_scope = "row";
+				edits.push_back(std::move(e));
+				continue;
 			}
-			acc.conflicting++;
+			// A literal knob. When PER-grouped this block is one group → break it out with
+			// its group key; otherwise there is nothing per-group to expose.
+			ClauseEdit e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
+			if (!prov.group_label.empty()) {
+				e.edit_source = "expanded_group";
+				e.offset_scope = "group";
+			} else {
+				e.edit_source = "source_literal";
+				e.offset_scope = "clause";
+			}
+			edits.push_back(std::move(e));
 			continue;
 		}
-		edits.push_back(MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount));
-	}
-
-	// Emit one conflict summary per data-RHS clause. N = total rows the clause
-	// emitted (not just the conflicting ones), counted over the original model.
-	for (auto &kv : conflicts) {
-		idx_t clause_id = kv.first;
-		idx_t total = 0;
-		for (const auto &row : orig_model.constraints) {
-			if (row.provenance.clause_id == clause_id) {
-				total++;
-			}
-		}
+		// Query mode: the block folds a whole clause (all PER groups) into one edit, so it
+		// is reported clause-level with no single-group identity.
 		ClauseEdit e;
-		e.kind = ClauseEditKind::CONFLICT_SUMMARY;
-		e.label = kv.second.lhs_sense_rhs;
-		e.detail = "conflicts in " + std::to_string(kv.second.conflicting) + " of " +
-		           std::to_string(total) + " rows";
+		if (data_rhs) {
+			// The folded shared slack `delta` is one virtual query-level offset over the
+			// data column (`x <= col + delta`). rhs_label names the column; fall back to
+			// the numeric representative RHS when it is unavailable.
+			string rhs_text = prov.rhs_label.empty() ? FormatNum(orig.rhs) : prov.rhs_label;
+			e = MakeVirtualOffsetEdit(prov, FormatLhs(orig, columns), rhs_text, sl.sense, amount);
+			e.edit_source = "virtual_offset";
+		} else {
+			e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
+			e.edit_source = "source_literal";
+		}
+		e.offset_scope = "clause";
+		e.group.clear(); // folded across groups → clause-level, no single group key
 		edits.push_back(std::move(e));
 	}
 
@@ -831,7 +897,8 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		return DecideDiagnostic();
 	}
 
-	ElasticModel elastic = BuildElasticModel(input.model, input.params.removal_bigm);
+	ElasticModel elastic =
+	    BuildElasticModel(input.model, input.params.removal_bigm, input.params.slack_scope);
 	const vector<BlockSlackRef> &slacks = elastic.slacks;
 
 	// Nothing actionable: fall through to the static error (the user's only constraints
@@ -864,7 +931,8 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
 	                          input.global_variable_labels);
 	vector<ClauseEdit> edits = ReadElasticEdits(slacks, elastic.removals, stage1.solution,
-	                                            input.model, columns, /*snap=*/false);
+	                                            input.model, columns, /*snap=*/false,
+	                                            input.params.slack_scope);
 
 	if (edits.empty()) {
 		return DecideDiagnostic();
@@ -887,7 +955,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		if (stage2.status == SolverStatus::OPTIMAL && !stage2.solution.empty()) {
 			// Report the objective-maximizing minimal fix and the objective it achieves.
 			edits = ReadElasticEdits(slacks, elastic.removals, stage2.solution, input.model, columns,
-			                         /*snap=*/true);
+			                         /*snap=*/true, input.params.slack_scope);
 			if (edits.empty()) {
 				return DecideDiagnostic();
 			}

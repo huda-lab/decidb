@@ -3120,6 +3120,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             eval_const.rhs_is_shared_literal =
                 constraint->rhs_expr->IsFoldable() ||
                 IsSharedScalarSubqueryTag(constraint->rhs_expr->GetAlias());
+            // Capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
+            // infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
+            // genuine data RHS; a shared-literal RHS reports the numeric knob instead.
+            if (!eval_const.rhs_is_shared_literal) {
+                eval_const.rhs_label = constraint->rhs_expr->GetName();
+            }
             eval_const.rhs_values.Reserve(num_rows);
 
             const Expression &transformed_rhs =

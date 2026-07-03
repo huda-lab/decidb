@@ -138,6 +138,11 @@ struct ConstraintProvenance {
     //! (`24710*buy + 56688*buy + …`) when the summed coefficients are data-varying, so there
     //! is no single literal to quote. Empty for uniform-coefficient or non-aggregate rows.
     vector<std::pair<idx_t, string>> weight_labels;
+    //! Symbolic name of a data-backed (PER_ROW_DATA) RHS column (`x <= cap_col` → "cap_col").
+    //! Lets query-mode infeasible diagnosis render a virtual offset (`x <= cap_col + delta`)
+    //! instead of the numeric representative RHS. Empty for a literal/shared RHS or when no
+    //! column name is available (the render then falls back to the numeric representative).
+    string rhs_label;
 };
 
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs
