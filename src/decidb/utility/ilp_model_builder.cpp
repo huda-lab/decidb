@@ -499,6 +499,20 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             return true;
         };
 
+        // Symbolic coefficient labels for a data-weighted aggregate: map each summed decide
+        // variable to its coefficient expression (`buy → l_extendedprice`) so infeasible
+        // diagnosis can render `SUM(buy * l_extendedprice)` rather than the numeric fan-out.
+        auto StampWeightLabels = [&](ConstraintProvenance &prov) {
+            for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
+                idx_t v = eval_const.variable_indices[t];
+                if (v == DConstants::INVALID_INDEX || t >= eval_const.coefficient_labels.size() ||
+                    eval_const.coefficient_labels[t].empty()) {
+                    continue;
+                }
+                prov.weight_labels.emplace_back(v, eval_const.coefficient_labels[t]);
+            }
+        };
+
         auto FixedLinearLhsOffset = [&](const EvaluatedConstraint &ec,
                                         const vector<idx_t> *rows,
                                         idx_t begin,
@@ -587,6 +601,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
                 constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
                 constr.provenance.qualifier = eval_const.qualifier;
+                StampWeightLabels(constr.provenance);
                 // An aggregate's RHS is required to be scalar (one editable knob), so
                 // it is a SHARED_LITERAL, not per-row data. This keeps PER_ROW_DATA
                 // meaning exactly "data RHS" for the conflict-summary path (I2.c).
@@ -687,6 +702,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     constr.provenance.avg_scaled = eval_const.avg_scaled;
                     constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
                     constr.provenance.qualifier = eval_const.qualifier;
+                    StampWeightLabels(constr.provenance);
                     // Scalar RHS per group → one editable knob per group (SHARED_LITERAL),
                     // not per-row data. See site 1 (I2.c).
                     constr.provenance.shape = ElasticShape::SHARED_LITERAL;

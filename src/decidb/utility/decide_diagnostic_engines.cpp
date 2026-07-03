@@ -141,12 +141,14 @@ bool FormatAvgLhs(const vector<int> &indices, const vector<double> &coeffs,
 //! same decide variable, so a plain reconstruction reads `x + x + x`. Collapse the
 //! per-row fan-out back to `SUM(...)`: group terms by decide variable and render any
 //! variable contributing more than one term as `SUM(c*var)` (a variable that appears
-//! once — e.g. a global decide var added to the aggregate — stays as written). Returns
-//! false (caller falls back to the raw reconstruction) when no variable repeats (the row
-//! is not an aggregate fan) or a summed variable has data-varying coefficients
-//! (`SUM(price * x)`: no single literal coefficient to quote).
+//! once — e.g. a global decide var added to the aggregate — stays as written). A summed
+//! variable with data-varying coefficients (`SUM(buy * l_extendedprice)`: no single
+//! literal to quote) renders symbolically as `SUM(var * weight_label)` when the clause
+//! carried a coefficient label through `weight_labels`; without a label it returns false
+//! (caller falls back to the raw reconstruction), as does a row with no aggregate fan.
 bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
-                  const vector<ColumnProvenance> &cols, string &out) {
+                  const vector<ColumnProvenance> &cols,
+                  const vector<std::pair<idx_t, string>> &weight_labels, string &out) {
 	vector<idx_t> order; // distinct variable keys, first-seen order
 	std::map<idx_t, double> coeff_of;
 	std::map<idx_t, idx_t> count_of;
@@ -175,12 +177,19 @@ bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
 			count_of[key]++;
 		}
 	}
+	// A data-varying summed variable has no single literal to quote, but if the clause
+	// carried a symbolic coefficient label (`buy → l_extendedprice`) we can still render
+	// it as `SUM(var * label)`. Look up the label per decide variable.
+	std::map<idx_t, string> label_for;
+	for (const auto &wl : weight_labels) {
+		label_for[wl.first] = wl.second;
+	}
 	bool any_fan = false;
 	for (idx_t key : order) {
 		if (count_of[key] > 1) {
 			any_fan = true;
-			if (!uniform[key]) {
-				return false; // data-varying coefficient: no single literal to quote
+			if (!uniform[key] && label_for.find(key) == label_for.end()) {
+				return false; // data-varying coefficient, no label: fall back to raw
 			}
 		}
 	}
@@ -191,14 +200,24 @@ bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
 	for (idx_t key : order) {
 		double c = coeff_of[key];
 		double ac = std::fabs(c);
-		string term = (ac == 1.0) ? label_of[key] : (FormatNum(ac) + "*" + label_of[key]);
-		if (count_of[key] > 1) {
-			term = "SUM(" + term + ")";
-		}
-		if (s.empty()) {
-			s += (c < 0 ? "-" : "") + term;
+		bool data_varying = count_of[key] > 1 && !uniform[key];
+		string term;
+		if (data_varying) {
+			// `SUM(buy * l_extendedprice)` — quote the variable × its coefficient column.
+			term = "SUM(" + label_of[key] + " * " + label_for[key] + ")";
 		} else {
-			s += (c < 0 ? " - " : " + ") + term;
+			term = (ac == 1.0) ? label_of[key] : (FormatNum(ac) + "*" + label_of[key]);
+			if (count_of[key] > 1) {
+				term = "SUM(" + term + ")";
+			}
+		}
+		// A data-varying weight carries its sign inside the column, so render it additively;
+		// a uniform coefficient keeps its literal sign.
+		bool neg = !data_varying && c < 0;
+		if (s.empty()) {
+			s += (neg ? "-" : "") + term;
+		} else {
+			s += (neg ? " - " : " + ") + term;
 		}
 	}
 	out = s;
@@ -232,7 +251,7 @@ string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenance> &col
 	// Collapse a uniform SUM fan-out to SUM(c*var). PER-grouped aggregates fold too: they
 	// stay distinguishable in the relation via the `group` EAV row + WHEN/PER qualifier
 	// (Facet A), so the old group_key == INVALID gate is gone.
-	if (FormatSumLhs(row.indices, row.coefficients, cols, agg)) {
+	if (FormatSumLhs(row.indices, row.coefficients, cols, row.provenance.weight_labels, agg)) {
 		return agg;
 	}
 	string raw = FormatTerms(row.indices, row.coefficients, cols);
@@ -393,11 +412,66 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm) {
 	// A relaxable row whose RHS is per-row data (`x <= col`) cannot be edited by the
 	// user; loosening it is a conflict, not a fix. Penalize its slack so editable
 	// constraints loosen first (I2.c). Shared/aggregate/literal knobs are editable.
-	auto slack_weight = [](const ConstraintProvenance &p) {
-		return (p.shape == ElasticShape::PER_ROW_DATA && p.clause_id != DConstants::INVALID_INDEX)
-		           ? DIAGNOSTIC_DATA_SLACK_WEIGHT
-		           : 1.0;
+	auto is_data_penalized = [](const ConstraintProvenance &p) {
+		return p.shape == ElasticShape::PER_ROW_DATA && p.clause_id != DConstants::INVALID_INDEX;
 	};
+
+	// Scale-normalized editable slack weights (T1). The stage-1 objective sums slacks
+	// across constraints in incomparable units (`SUM(buy) >= 30` count-units vs
+	// `SUM(buy*price) <= 100` dollar-units); with uniform weights the small-magnitude
+	// row is gutted rather than the genuinely-tight one ("require nothing" edit). Weight
+	// each editable knob by `ref / rms(Aᵢ)`, where `rms(Aᵢ) = √(Σcⱼ²/nnz)` is the row's
+	// root-mean-square coefficient — its *typical* magnitude, invariant to how many terms
+	// it spans. (A plain ‖Aᵢ‖₂ would make a many-variable aggregate floor `x+y ≥ 10`
+	// numerically cheaper to loosen than a single-variable cap purely because it has more
+	// terms, gutting the floor to a degenerate objective-0 fix — RMS removes that
+	// term-count bias while still capturing the data-magnitude mismatch that E needs.)
+	// `ref` = the smallest editable RMS — a common factor (so it never changes *which* row
+	// is chosen, only conditioning) that keeps every editable weight in (0,1], strictly
+	// below the flat data/removal tiers → no tier inversion, and leaves all-equal-coefficient
+	// models (the usual case, RMS=1) at weight 1. Only the EDITABLE tier is normalized; data
+	// (DIAGNOSTIC_DATA_SLACK_WEIGHT) and removal (DIAGNOSTIC_REMOVAL_WEIGHT) stay flat
+	// (cross-tier ordering is T2's lexicographic ladder). RMS is over the ORIGINAL row
+	// coefficients (before slack columns).
+	auto rms_norm = [](const vector<double> &coeffs) {
+		if (coeffs.empty()) {
+			return 0.0;
+		}
+		double s = 0.0;
+		for (double v : coeffs) {
+			s += v * v;
+		}
+		return std::sqrt(s / static_cast<double>(coeffs.size()));
+	};
+	vector<double> lin_norm(elastic.constraints.size(), 0.0);
+	vector<double> qc_norm(elastic.quadratic_constraints.size(), 0.0);
+	double ref_norm = 0.0;
+	bool have_ref = false;
+	auto consider_ref = [&](double n) {
+		if (n > 0.0 && (!have_ref || n < ref_norm)) {
+			ref_norm = n;
+			have_ref = true;
+		}
+	};
+	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
+		const auto &row = elastic.constraints[r];
+		lin_norm[r] = rms_norm(row.coefficients);
+		if (IsRelaxableForElastic(row.provenance.kind) && !is_data_penalized(row.provenance)) {
+			consider_ref(lin_norm[r]);
+		}
+	}
+	for (idx_t qr = 0; qr < elastic.quadratic_constraints.size(); qr++) {
+		const auto &qc = elastic.quadratic_constraints[qr];
+		qc_norm[qr] = rms_norm(qc.linear_coefficients);
+		if (IsRelaxableForElastic(qc.provenance.kind)) {
+			consider_ref(qc_norm[qr]);
+		}
+	}
+	if (!have_ref) {
+		ref_norm = 1.0;
+	}
+	// ref / rms(Aᵢ), guarding a degenerate all-zero row.
+	auto editable_weight = [&](double norm) { return norm > 0.0 ? ref_norm / norm : 1.0; };
 
 	// Wire a (possibly shared) slack into one row by its sense. `<` loosens upward
 	// (Ax − s ≤ b), `>` downward (Ax + s ≥ b), `=` both ways (Ax − s⁺ + s⁻ = b).
@@ -451,17 +525,20 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm) {
 			if (grp.front() != r) {
 				continue; // already emitted at the block's first row
 			}
-			// A shared block is one editable literal knob → weight 1.
+			// A shared block is one editable literal knob, scale-normalized by its
+			// representative row (members are same-clause instances → equal norms).
 			char sense = elastic.constraints[grp.front()].sense;
-			idx_t pos_col = add_slack(1.0);
-			idx_t neg_col = (sense == '=') ? add_slack(1.0) : DConstants::INVALID_INDEX;
+			double w = editable_weight(lin_norm[grp.front()]);
+			idx_t pos_col = add_slack(w);
+			idx_t neg_col = (sense == '=') ? add_slack(w) : DConstants::INVALID_INDEX;
 			for (idx_t rr : grp) {
 				wire(rr, pos_col, neg_col);
 			}
 			out.slacks.push_back({grp, pos_col, neg_col, sense});
 		} else {
 			char sense = row.sense;
-			double w = slack_weight(row.provenance);
+			double w = is_data_penalized(row.provenance) ? DIAGNOSTIC_DATA_SLACK_WEIGHT
+			                                             : editable_weight(lin_norm[r]);
 			idx_t pos_col = add_slack(w);
 			idx_t neg_col = (sense == '=') ? add_slack(w) : DConstants::INVALID_INDEX;
 			wire(r, pos_col, neg_col);
@@ -481,10 +558,11 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm) {
 		}
 		// A quadratic constraint is always reported as a LOOSEN edit (the conflict
 		// summary covers linear data-RHS rows only), so its slack is an editable knob
-		// (weight 1), not penalized as data.
+		// (scale-normalized by its linear part), not penalized as data.
 		char sense = qc.sense;
-		idx_t pos_col = add_slack(1.0);
-		idx_t neg_col = (sense == '=') ? add_slack(1.0) : DConstants::INVALID_INDEX;
+		double w = editable_weight(qc_norm[qr]);
+		idx_t pos_col = add_slack(w);
+		idx_t neg_col = (sense == '=') ? add_slack(w) : DConstants::INVALID_INDEX;
 		qc.linear_indices.push_back(static_cast<int>(pos_col));
 		qc.linear_coefficients.push_back(sense == '>' ? 1.0 : -1.0);
 		if (sense == '=') {

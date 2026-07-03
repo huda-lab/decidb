@@ -11,14 +11,11 @@ Data-dependent expectations (row counts, the failing-group set, the binding
 literal) are **computed from the same database** rather than hard-coded, so the
 assertions stay valid if the fixture data changes.
 
-Seven branches are solid and asserted directly (A row escape, B entity-scoped
-join-column escape, C total escape, D per-group loosen, F per-row conflict,
-D2 capped group headline, G deduplicated `drop` edit). One remains a known gap,
-logged in `context/descriptions/07_issues/`
-and marked `xfail` here — the test states the *desired* behavior so the marker
-can be removed when the gap is closed:
-
-  * E  least-change reports a degenerate "require nothing"  -> bugs/todo.md
+Eight branches are asserted directly (A row escape, B entity-scoped join-column
+escape, C total escape, D per-group loosen, F per-row conflict, D2 capped group
+headline, G deduplicated `drop` edit, and E — scale-normalized slack weights (T1)
+loosen the tight budget instead of gutting the count floor to a degenerate
+"require nothing").
 
 Runs under both backends.
 """
@@ -244,21 +241,12 @@ class TestSolidBranches:
         )
         assert "n_name = 'GERMANY'" in _attr(rows, "variable", "affected_entities")
 
-
-# --------------------------------------------------------------------------- #
-# known gaps — desired behavior asserted, xfail until the logged issue is fixed
-# --------------------------------------------------------------------------- #
-@pytest.mark.query_diagnostics
-class TestKnownGaps:
-    @pytest.mark.xfail(
-        reason="bugs/todo.md: least-change reports a degenerate 'require nothing' edit",
-        strict=False,
-    )
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_E_loosen_should_not_be_degenerate(self, request, cli_fixture):
         """The tight constraint is the dollar budget; loosening the count floor to
-        0 (select nothing, objective 0) is feasible but useless. A good edit keeps
-        a nonzero achievable objective."""
+        0 (select nothing, objective 0) is feasible but useless. Scale-normalized
+        slack weights (T1) loosen the budget instead, keeping a nonzero achievable
+        objective."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT l_orderkey, buy FROM lineitem WHERE l_orderkey <= 100 "

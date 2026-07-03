@@ -3,44 +3,14 @@
 The elastic engine is shipped end to end (I1–I5: slack loosening, per-shape slack
 placement, `<>` removal, stage-2 achievable objective, lean reporting). See `done.md`
 for how it currently works. What remains is a punch-list to make it **production-ready**:
-fix the one correctness gap that has a failing test, replace the two coarse weighting
-stand-ins with principled machinery, close two known granularity gaps, and polish the
-user-facing output.
+replace the two coarse weighting stand-ins with principled machinery, close two known
+granularity gaps, and polish the user-facing output. (T1 — scale-normalized slack
+weights — has shipped; see `done.md` "Scale-normalized editable weights".)
 
 Each task below is individually pickable and carries: **Location** (where to work),
 **Problem** (what's wrong today), **Decision** (the open choice to settle with the user
 before coding), **Test** (the case that proves it), and **Done** (which `done.md` section
 to update on ship). Suggested batches are at the bottom.
-
----
-
-## Correctness
-
-### T1 — Scale-normalized slack weights (fix the degenerate "require nothing" edit)
-
-- **Location**: `decide_diagnostic_engines.cpp` — `add_slack` / `slack_weight` lambdas in
-  `BuildElasticModel` (~`:378–400`); the stage-1 objective is `min Σ wᵢ sᵢ` with uniform
-  `wᵢ = 1` among editable knobs.
-- **Problem**: with two constraints in **incomparable units**, the L1 race sums slacks that
-  are not comparable, so the small-magnitude constraint is gutted rather than the one that
-  is actually tight. `SUM(buy) >= 30 AND SUM(buy*l_extendedprice) <= 100` reports
-  `loosen SUM(buy) >= 30 to >= 0` (select nothing, `achievable_objective = 0`) because 30
-  count-units looks "cheaper" than the thousands of dollar-units needed to relax the budget.
-  Stage 2 cannot rescue it — the bad total-loosening minimizer is chosen at stage 1, then
-  frozen. Logged in `07_issues/bugs/todo.md` (entry 2).
-- **Decision**: normalize each slack by *what* scale? Candidates: RHS magnitude (`1/|bᵢ|`),
-  row-coefficient norm (`1/‖Aᵢ‖₁` or `‖Aᵢ‖₂`), or a combination. And: do we *also* add a
-  degeneracy guard that rejects an edit collapsing the objective to zero and surfaces the
-  objective-preserving alternative instead (the bug's second "where to look next")? These
-  compose — pick normalization as the primary fix and decide whether the guard is a needed
-  backstop or redundant once weights are normalized.
-- **Test**: `test_query_diagnostics_tpch.py::TestKnownGaps::test_E_loosen_should_not_be_degenerate`
-  (currently `xfail`) — remove the marker when it passes on both backends. Add a C++ structural
-  case in `test_decidb_diagnostic_engines.cpp` pinning the normalized weight on a mixed-unit
-  2-row model.
-- **Done**: new subsection under "per-shape slack placement" (or a dedicated "slack weighting"
-  section) in `done.md`; update the `diagnostic_constants.hpp` note that currently calls the
-  weights a "coarse stand-in."
 
 ---
 
@@ -157,17 +127,26 @@ to update on ship). Suggested batches are at the bottom.
 
 ---
 
+## Deferred notes
+
+- **Degeneracy guard (deferred, from T1's decision).** A backstop that rejects any elastic edit
+  collapsing the user's objective to zero and surfaces the objective-preserving alternative
+  instead. Not implemented: T1's scale-normalized weights already steer stage 1 to the
+  genuinely-tight constraint, after which stage-2 objective-maximization keeps
+  `achievable_objective > 0`, so the guard is a redundant second concern with no failing test.
+  Revisit only if a case surfaces where even the geometrically-smallest edit zeroes the objective.
+
+---
+
 ## Suggested batches
 
-- **Batch 1 (production-blocking correctness): T1.** It is the only item with a failing test;
-  it closes the degenerate-edit bug and unblocks the `E` xfail. Ship first.
-- **Batch 2 (user-facing): T3 + T6.** The virtual-knob policy is the biggest expressivity
+- **Batch 1 (user-facing): T3 + T6.** The virtual-knob policy is the biggest expressivity
   win (turns dead-end conflict summaries into actionable edits) and pairs naturally with the
   wording polish, since both touch the reporting layer.
-- **Batch 3 (weighting refactor): T2.** Do after T1 — normalized in-tier weights (T1) and the
-  lexicographic between-tier ladder (T2) compose, and doing T1 first means T2 is a clean
-  swap rather than two changes at once. No failing test forces T2, so it can trail.
-- **Batch 4 (granularity): T4 + T5.** Both are localized refinements to shipped machinery;
+- **Batch 2 (weighting refactor): T2.** Normalized in-tier weights (T1, shipped) and the
+  lexicographic between-tier ladder (T2) compose; with T1 in, T2 is a clean swap. No failing
+  test forces T2, so it can trail.
+- **Batch 3 (granularity): T4 + T5.** Both are localized refinements to shipped machinery;
   low urgency, pick up opportunistically.
 
 

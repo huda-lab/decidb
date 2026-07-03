@@ -206,6 +206,12 @@ struct CoefficientColumn {
 struct EvaluatedConstraint {
     vector<idx_t> variable_indices;           // Which variable for each term
     vector<CoefficientColumn> row_coefficients;  // [term_idx] = coefficient column for that term
+    //! Printable symbolic label of each term's coefficient expression (parallel to
+    //! variable_indices). For a data-weighted aggregate term like `SUM(buy * l_extendedprice)`
+    //! this is `l_extendedprice`, so infeasible diagnosis can render the summed clause
+    //! symbolically instead of dumping the per-row numeric fan-out. Empty entries (constant
+    //! coefficients / non-aggregate rows) fall back to the numeric reconstruction.
+    vector<string> coefficient_labels;
     CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))

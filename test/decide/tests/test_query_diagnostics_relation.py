@@ -888,8 +888,13 @@ class TestInfeasibleHeadlineAndRendering:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ungrouped_weighted_sum_folds_with_uniform_coeff(self, request, cli_fixture):
-        """A uniform-coefficient weighted SUM folds to `SUM(c*x)`; the headline points
-        to both clauses and the achievable objective normalizes `-0` to `0`."""
+        """A uniform-coefficient weighted SUM folds to `SUM(c*x)` (never a raw `x + x`
+        fan-out). The infeasibility (`SUM(x) >= 1` vs `SUM(5*x) <= -1`) is repaired by a
+        single objective-preserving edit: loosen the budget to `<= 5` so one `x` can be
+        chosen (achievable objective 1). Before the boolean bound-absorption fix, `x` was
+        wrongly pinned to 0 (the budget `<= -1` absorbed `x <= -0.2`), which forced a
+        degenerate two-clause objective-0 fix; the bound fix now lets stage 2 keep the
+        floor and reach objective 1 with one edit."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, w, x FROM (VALUES (1,5),(2,5),(3,5)) t(id,w) "
@@ -897,13 +902,33 @@ class TestInfeasibleHeadlineAndRendering:
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
-        assert _attrs(rows, "clause", "SUM(5*x) <= -1")["suggested_change"] == "SUM(5*x) <= 0"
-        # Signed-zero solver read must print as a clean "0", never "-0".
-        assert _attrs(rows, "model", "NULL")["achievable_objective"] == "0"
+        assert _attrs(rows, "clause", "SUM(5*x) <= -1")["suggested_change"] == "SUM(5*x) <= 5"
+        assert _attrs(rows, "model", "NULL")["achievable_objective"] == "1"
         assert "x + x" not in result.stdout
+        # The single objective-preserving fix loosens only the budget clause.
         err = result.stderr.lower()
-        assert "diagnosis points to clause `sum(x) >= 1` and clause `sum(5*x) <= -1`" in err
+        assert "diagnosis points to clause `sum(5*x) <= -1`" in err
         assert " or loosen " not in err
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_data_weighted_sum_renders_symbolic_column(self, request, cli_fixture):
+        """A data-VARYING weighted SUM `SUM(x * p)` has no single literal coefficient to
+        quote, but the binder carries the coefficient column name `p` through to the
+        diagnosis, so the clause renders symbolically as `SUM(x * p)` instead of dumping
+        the per-row numeric fan-out (`10*x + 20*x + 30*x`)."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, p, x FROM (VALUES (1,10),(2,20),(3,30)) t(id,p) "
+            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 3 AND SUM(x * p) <= 5 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        cap = _attrs(rows, "clause", "SUM(x * p) <= 5")
+        assert cap["edit_kind"] == "loosen"
+        assert cap["suggested_change"] == "SUM(x * p) <= 30"
+        # The symbolic column name replaces the raw per-row numeric fan-out.
+        assert "10*x" not in result.stdout
+        assert "20*x" not in result.stdout
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ne_drop_label_is_clean(self, request, cli_fixture):

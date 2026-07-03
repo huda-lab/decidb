@@ -332,6 +332,38 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(b1.neg_col != DConstants::INVALID_INDEX);
 	}
 
+	SECTION("BuildElasticModel scale-normalizes editable slack weights (T1)") {
+		// Two editable single-term rows in incomparable units: a count floor (coeff 1,
+		// RMS = 1) and a "budget" (coeff 1000, RMS = 1000). Uniform weights would sum
+		// their slacks as one currency and gut the small-magnitude floor; normalization
+		// weights each knob by ref/rms(A) — the root-mean-square coefficient, so the
+		// weight tracks the typical coefficient magnitude, not the term count. ref = min
+		// editable RMS = 1, so w_floor = 1/1 = 1 and w_budget = 1/1000. Both stay strictly
+		// below the flat data tier (no tier inversion). The end-to-end "loosen the budget,
+		// not the floor" flip is pinned by the Python TPC-H degenerate-edit test on real
+		// multi-variable data.
+		SolverModel model = MakeModel(2, {
+		    {0, 1.0, '>', 30.0, ConstraintKind::USER_PARAMETER},
+		    {1, 1000.0, '<', 100.0, ConstraintKind::USER_PARAMETER},
+		});
+		ElasticModel elastic = BuildElasticModel(model);
+
+		REQUIRE(elastic.slacks.size() == 2);
+		const auto &floor_block = elastic.slacks[0];
+		const auto &budget_block = elastic.slacks[1];
+		CHECK(floor_block.rows == duckdb::vector<idx_t> {0});
+		CHECK(budget_block.rows == duckdb::vector<idx_t> {1});
+		double w_floor = elastic.model.obj_coeffs[floor_block.pos_col];
+		double w_budget = elastic.model.obj_coeffs[budget_block.pos_col];
+		CHECK(w_floor == Approx(1.0));
+		CHECK(w_budget == Approx(0.001));
+		// The large-coefficient row is cheaper to loosen per native unit, and both
+		// editable weights sit below the data-penalty tier.
+		CHECK(w_budget < w_floor);
+		CHECK(w_floor < DIAGNOSTIC_DATA_SLACK_WEIGHT);
+		CHECK(w_budget < DIAGNOSTIC_DATA_SLACK_WEIGHT);
+	}
+
 	SECTION("BuildElasticModel shares ONE slack across a SHARED_LITERAL block") {
 		// I2.a structure: three rows of one clause (clause_id 0), tagged SHARED_LITERAL,
 		// must collapse to a single shared slack column wired into all three rows — not

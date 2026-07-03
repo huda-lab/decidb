@@ -132,6 +132,12 @@ struct ConstraintProvenance {
     //! appended to the reconstructed clause label so it is fully recognizable. Empty when
     //! the clause has no WHEN/PER qualifier (Facet C).
     string qualifier;
+    //! Symbolic coefficient label per summed decide variable, for a data-weighted aggregate
+    //! (`SUM(buy * l_extendedprice)`): `decide_var_idx → "l_extendedprice"`. Lets infeasible
+    //! diagnosis render `SUM(buy * l_extendedprice)` instead of the per-row numeric fan-out
+    //! (`24710*buy + 56688*buy + …`) when the summed coefficients are data-varying, so there
+    //! is no single literal to quote. Empty for uniform-coefficient or non-aggregate rows.
+    vector<std::pair<idx_t, string>> weight_labels;
 };
 
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs

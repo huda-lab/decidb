@@ -2963,9 +2963,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         DataChunk chunk;
         chunk.Initialize(context, gstate.data.Types());
 
-        // Store variable indices for all terms (before scanning data)
+        // Store variable indices for all terms (before scanning data). Capture each term's
+        // symbolic coefficient label too (`l_extendedprice` for `buy * l_extendedprice`) so
+        // infeasible diagnosis can render a data-weighted SUM clause symbolically instead of
+        // dumping the per-row numeric fan-out.
         for (auto &term : constraint->lhs_terms) {
             eval_const.variable_indices.push_back(term.variable_index);
+            eval_const.coefficient_labels.push_back(term.coefficient ? term.coefficient->GetName()
+                                                                      : string());
         }
 
         vector<TermFilterState> term_filters(constraint->lhs_terms.size());
@@ -5946,13 +5951,30 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // comment in TraverseBoundsConstraints). Using is_binary here would reset the 0/1
         // upper to +inf and silently turn the variable unbounded.
         for (idx_t var = 0; var < decide_variables.size(); var++) {
-            if (var < is_boolean_var.size() && is_boolean_var[var]) {
-                continue;
-            }
+            bool is_bool = var < is_boolean_var.size() && is_boolean_var[var];
             idx_t num_instances = var_indexer.NumInstances(var);
             for (idx_t inst = 0; inst < num_instances; inst++) {
                 idx_t col = var_indexer.Get(var, inst);
-                if (col >= retained_model.num_vars || retained_model.is_binary[col]) {
+                if (col >= retained_model.num_vars) {
+                    continue;
+                }
+                if (is_bool) {
+                    // A BOOLEAN's intrinsic domain is [0,1], but DecidePropagateImpliedBounds
+                    // can tighten it by absorbing a user row — e.g. `buy_i ≤ K/priceᵢ` from a
+                    // budget `SUM(priceᵢ·buyᵢ) ≤ K`. With a fractional upper (<1) an INTEGER
+                    // buy is silently pinned to 0, so the relaxable budget can never be
+                    // exercised and the only "fix" is gutting the other constraint. Revert to
+                    // [0,1] so the (now-slackable) row is the sole enforcer — but never open
+                    // past 1, which would unbound the variable.
+                    if (retained_model.col_lower[col] > 0.0) {
+                        retained_model.col_lower[col] = 0.0;
+                    }
+                    if (retained_model.col_upper[col] < 1.0) {
+                        retained_model.col_upper[col] = 1.0;
+                    }
+                    continue;
+                }
+                if (retained_model.is_binary[col]) {
                     continue;
                 }
                 if (retained_model.col_lower[col] > 0.0) {

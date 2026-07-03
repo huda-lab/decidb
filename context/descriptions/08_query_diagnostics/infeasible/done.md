@@ -187,6 +187,53 @@ A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS: there is no single 
   (`DIAGNOSTIC_DATA_SLACK_WEIGHT`, `diagnostic_constants.hpp`); the solver loosens editable
   constraints first and reports a data conflict only when editable loosening genuinely cannot
   restore feasibility. (This weight is a coarse stand-in — see T2 in `todo.md`.)
+- **Scale-normalized editable weights (T1).** Within the editable tier the stage-1 objective sums
+  slacks across constraints in *incomparable units* — e.g. `SUM(buy) >= 30` (count) vs
+  `SUM(buy*l_extendedprice) <= 100` (dollars). With a uniform weight of 1 the raw sum makes the
+  small-magnitude row look cheapest, so the solver gutted the count floor to `>= 0` (select
+  nothing, `achievable_objective = 0`) instead of loosening the genuinely-tight budget — a
+  degenerate "require nothing" edit. Each **editable** slack is now weighted `ref / rms(Aᵢ)`
+  (`BuildElasticModel`, `decide_diagnostic_engines.cpp`), where `rms(Aᵢ) = √(Σcⱼ²/nnz)` is the
+  row's **root-mean-square coefficient** — its *typical* magnitude. Dividing by it makes the
+  objective track how far the constraint boundary moves *per unit of decision*, so the
+  large-coefficient budget (barely off in normalized terms) is the cheaper edit. RMS (not the plain
+  L2 norm `‖Aᵢ‖₂`) is deliberate: L2 grows with the number of terms, so it would make a
+  many-variable aggregate floor (`x + y >= 10`, √2) numerically cheaper to loosen than a
+  single-variable cap (`x <= 0`, 1) purely for having more terms — reintroducing the degenerate
+  "gut the floor" preference. RMS is invariant to term count (both those rows have RMS 1), so it
+  removes that bias while still capturing the data-magnitude mismatch E needs. `ref` = the smallest
+  editable RMS; being a common factor it never changes *which* row wins (only conditioning), keeps
+  every editable weight in `(0, 1]` (strictly below the flat data/removal tiers → no tier
+  inversion), and leaves the usual all-equal-coefficient model at weight 1. This is a **within-tier**
+  normalization only: data (`DIAGNOSTIC_DATA_SLACK_WEIGHT`) and removal (`DIAGNOSTIC_REMOVAL_WEIGHT`)
+  tiers stay flat — exact *between*-tier ordering is T2's lexicographic ladder. `BuildStage2Model`
+  reads the slack weights back from the elastic objective, so the freeze budget `S*` inherits the
+  normalized weights automatically. Why not RHS-norm (`1/|b|`): the budget needs a *large absolute*
+  loosening (100 → thousands), so dividing by the small RHS leaves it expensive and does not fix the
+  degeneracy; coefficient-magnitude does. Structural weight assertion in
+  `test_decidb_diagnostic_engines.cpp`; end-to-end flip on real TPC-H data in
+  `test_query_diagnostics_tpch.py::test_E_loosen_should_not_be_degenerate` (both backends).
+- **Boolean bound-absorption revert (bundled with T1).** T1's weights are only *reachable* once the
+  diagnosis model can actually exercise the loosened constraint. `DecidePropagateImpliedBounds`
+  tightens a variable's column box by absorbing a user row — e.g. `SUM(buy * price) <= 100` implies
+  `buyᵢ ≤ 100/priceᵢ`. For a BOOLEAN (lowered to INTEGER with a `[0,1]` box) a fractional upper
+  (`≤ 0.1`) silently pins the variable to **0**, so the (now-relaxable) budget can never be
+  exercised and the only "fix" is gutting the *other* clause — the same degenerate symptom, from a
+  different cause. The diagnosis bound-reset loop (`physical_decide.cpp`) already reverts absorbed
+  tightenings for non-boolean columns; it now also reverts them for booleans — resetting the box to
+  `[0,1]` (upper → 1 if `< 1`, lower → 0 if `> 0`) instead of skipping them — so the slackable row
+  is the sole enforcer. Never opens past 1 (that would unbound the variable). With this, E loosens
+  the budget and reaches a nonzero objective; without it, T1's normalized weights point at the right
+  clause but the model still can't buy anything.
+- **Data-weighted SUM renders symbolically (`SUM(buy * l_extendedprice)`).** A data-VARYING summed
+  term has no single literal coefficient to quote, so it used to fall back to the raw per-row
+  numeric fan-out (`24710*buy + 56688*buy + …`). The coefficient's source-column name is now carried
+  from the binder (`Term::coefficient->GetName()` at evaluation in `physical_decide.cpp`) through
+  `EvaluatedConstraint::coefficient_labels` → `ConstraintProvenance::weight_labels`
+  (`ilp_model_builder.cpp`, stamped at the aggregate emission sites) → `FormatSumLhs`, which renders
+  `SUM(var * label)` when a fanned variable is data-varying and a label is present (else it still
+  falls back to the raw form). Uniform-coefficient sums are unaffected (they still fold to
+  `SUM(c*var)`).
 
 ### I2.d — AVG / strict / quadratic in the user's units
 
@@ -198,15 +245,16 @@ A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS: there is no single 
   (inner coeff = stored coeff × the variable's term count) instead of rendering `0.5*x + 0.5*x`.
 - **SUM.** An aggregate `SUM` over rows emits one solver column per row for the same decide
   variable, so a plain reconstruction reads `x + x + x`. `FormatSumLhs` collapses the per-row
-  fan-out back to `SUM(c*var)` — uniform coefficient only (`SUM(price * x)`, data-varying, falls
-  back to the raw reconstruction). **PER-grouped aggregates fold too** (the old
-  `group_key == INVALID` gate is gone): `SUM(x) >= 5 PER grp` renders both groups as
-  `SUM(x) >= 5 PER grp`, kept distinguishable by the `group` EAV row + `PER grp` qualifier (see
-  "PER-group identity" below). A **single-row / WHEN aggregate group** has no fan-out for
-  `FormatSumLhs` to fold, so `FormatLhs` wraps the reconstruction in `SUM(...)` explicitly when
-  `provenance.is_aggregate` and there is no multi-column fan (`HasVarFan`) — `SUM(x) >= 99 WHEN
-  g='a'` renders `SUM(x) >= 99 …`, not a bare `x >= 99`. A multi-row data-varying SUM keeps its
-  raw `2*x + 3*x` form.
+  fan-out back to `SUM(c*var)` for a uniform coefficient, and to `SUM(var * col)` for a
+  **data-varying** coefficient (`SUM(buy * l_extendedprice)`) using the symbolic column name carried
+  in `provenance.weight_labels` (see the "data-weighted SUM renders symbolically" note above); it
+  only falls back to the raw numeric reconstruction when a data-varying term has *no* label.
+  **PER-grouped aggregates fold too** (the old `group_key == INVALID` gate is gone): `SUM(x) >= 5
+  PER grp` renders both groups as `SUM(x) >= 5 PER grp`, kept distinguishable by the `group` EAV row
+  + `PER grp` qualifier (see "PER-group identity" below). A **single-row / WHEN aggregate group** has
+  no fan-out for `FormatSumLhs` to fold, so `FormatLhs` wraps the reconstruction in `SUM(...)`
+  explicitly when `provenance.is_aggregate` and there is no multi-column fan (`HasVarFan`) —
+  `SUM(x) >= 99 WHEN g='a'` renders `SUM(x) >= 99 …`, not a bare `x >= 99`.
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which now also sets
   `provenance.strict` + `provenance.typed_k` (the user's literal). `MakeLoosenEdit` re-quotes the

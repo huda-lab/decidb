@@ -4,6 +4,43 @@ Resolved bugs condensed to their generalizable lessons: what broke, why, and wha
 
 ---
 
+## Infeasible least-change reported a degenerate "require nothing" edit
+
+**Broke**: With two editable constraints in *incomparable units* — a count floor
+`SUM(buy) >= 30` and a dollar budget `SUM(buy*l_extendedprice) <= 100` — the infeasible
+diagnosis reported `loosen SUM(buy) >= 30 to >= 0` (`achievable_objective = 0`, "select
+nothing") instead of loosening the genuinely-tight budget. **Two independent causes**,
+both pointing at the same degenerate edit, which is why it looked like a pure units
+problem: (1) the elastic engine's stage-1 objective `min Σ wᵢ sᵢ` (uniform `wᵢ = 1`)
+summed slacks as one currency, so 30 count-units looked cheaper than the thousands of
+dollar-units to relax the budget; and (2) `DecidePropagateImpliedBounds` had absorbed the
+budget into the column box as `buyᵢ ≤ 100/priceᵢ ≈ 0.1`, and the diagnosis bound-reset
+loop skipped BOOLEAN columns — so every integer `buy` was pinned to 0 and the budget could
+never be exercised even after being made relaxable.
+
+**Fix/lesson**: (1) Weight each editable slack `ref / rms(Aᵢ)`, where `rms(Aᵢ) =
+√(Σcⱼ²/nnz)` is the row's root-mean-square coefficient (T1). This makes the objective track
+the loosening *per unit of decision*, so the large-coefficient budget is the cheaper edit.
+RMS, not the plain L2 norm `‖Aᵢ‖₂`: L2 grows with the term count, so it would make a
+many-variable aggregate floor cheaper to loosen than a single-variable cap purely for
+having more terms — reintroducing the degeneracy on a different query. (2) The diagnosis
+bound-reset now reverts an absorbed tightening on a BOOLEAN back to its `[0,1]` box
+(upper → 1, lower → 0) instead of skipping it, so the slackable row is the sole enforcer.
+**Watch for**: a "least total slack" race across rows in different units is
+scale-dependent (normalize by RMS coefficient — RHS normalization `1/|b|` does *not* fix a
+row needing a large absolute loosening); and a presolve/bound-absorption tightening baked
+into a variable's box will silently veto a constraint the diagnosis is trying to relax —
+revert absorbed box tightenings (booleans included) in the diagnosis model.
+
+Pointers: `decide_diagnostic_engines.cpp` (`BuildElasticModel`, editable slack weighting +
+`FormatSumLhs`), `physical_decide.cpp` (diagnosis bound-reset boolean box revert),
+`diagnostic_constants.hpp`, `test_decidb_diagnostic_engines.cpp` (weight structural case),
+`test_query_diagnostics_tpch.py` (`test_E_loosen_should_not_be_degenerate`),
+`test_query_diagnostics_relation.py` (`test_data_weighted_sum_renders_symbolic_column`,
+`test_ungrouped_weighted_sum_folds_with_uniform_coeff`).
+
+---
+
 ## Entity-scoped unbounded diagnostics ignored joined dimension labels
 
 **Broke**: For an entity-scoped variable such as `DECIDE s.keep`, unbounded
