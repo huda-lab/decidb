@@ -7,8 +7,9 @@ once. Under `PRAGMA diagnose_decide='auto'`, the infeasible terminal now builds 
 optimization, the **elastic program**, whose optimum is the least-change fix for shipped
 I1/I2 shapes: which user constraints to loosen, and by how much. Shared plumbing it builds
 on (the pragma gate, provenance, the reporting relation) is in `foundations/done.md`.
-The engine itself is shipped, including the T2 lexicographic repair ladder; remaining work is
-tracked in `todo.md`.
+The engine itself is shipped, including the T2 lexicographic repair ladder and T4
+objective-best DROP-set re-optimization with its source-order tie-break (both backends name
+the same drop under an objective tie); deferred follow-ups are tracked in `todo.md`.
 
 ## Engine seam: infeasible
 
@@ -481,10 +482,27 @@ relation carries one DROP per user clause, not one per row. The
 so a removal-only model is still diagnosed.
 
 **Stage-2 composition (I3).** Stage 2 runs when there is an objective **and** an actionable
-fix (`HasLoosenEdit || HasRemoval`). `BuildStage2Model` **freezes the removal set** by pinning
-each `w` to its stage-1 value (`col_lower = col_upper`) and carries the solved tier budgets
-`R ≤ R*`, `D ≤ D*`, and `E ≤ E*`. The reported DROP set is therefore stable between stages;
-letting `w` re-optimize the dropped set for the objective is T4 in `todo.md`.
+fix (`HasLoosenEdit || HasRemoval`). `BuildStage2Model` freezes the solved tier budgets
+`R ≤ R*`, `D ≤ D*`, and `E ≤ E*`, but does **not** pin individual repair variables. For
+remove-only `<>` clauses, stage 2 (2a) can therefore re-optimize the DROP set under the
+minimum-cardinality removal budget and report the objective-best equally minimal DROP set.
+
+**Stage-2b source-order tie-break (solver-agnostic determinism).** When the objective is
+*indifferent* between two equally-minimal DROP sets (e.g. the conflict is on `x` but the
+objective only involves a free `y`), stage 2a has no objective reason to prefer either `<>`,
+so the solver picks one arbitrarily — and Gurobi and HiGHS can name **different** clauses.
+`BuildTieBreakModel` removes that ambiguity with one extra lexicographic pass: freeze the
+objective at its stage-2a optimum with a one-sided row (`obj ≥ Z*` for MAXIMIZE / `≤ Z*` for
+MINIMIZE, tiny tolerance so the stage-2a point stays feasible), then minimize `Σ rank·w` over
+the removals, `rank` ascending by source order (`removals` is ordered by ascending indicator
+column). Among all objective-optimal minimal repairs this prefers to drop the
+**earliest-declared** `<>`, so both backends report the same clause. The stage-2a achievable
+objective `Z*` is what gets reported (the tie-break's own objective is just the ranking sum).
+The pass is skipped — keeping the stage-2a result — when there are `< 2` removals (no tie to
+break) or the objective is quadratic (freezing it would need a quadratic row; an exact tie
+there is rarer still). Residual: two *different* min-cardinality sets with an equal rank-sum
+(only possible at cardinality `≥ 2`) can still tie, since linear ranks are not a total order
+over sets; the common single-drop tie is fully deterministic.
 
 **Pragma.** `diagnose_decide_removal_bigm` (DOUBLE, default `0` = auto-derive, `>= 0`,
 `decide_diagnostic.cpp`) threads through `DecideDiagParams::removal_bigm` into
@@ -496,11 +514,16 @@ override replaces M₂; a pinned-`<>` must-drop reports `edit_kind='drop'`; a lo
 conflict prefers the LOOSEN and never drops; an **aggregate `<>`** whose disjunction binary is
 a global-block column is named via the `global_variable_labels` channel (not `var_labels`) and
 reported as a drop. Python differential (`test_query_diagnostics_relation.py`, both backends):
-`x <> 0 AND x <> 1` on a BOOLEAN drops exactly one `<>` (min cardinality), with the achievable
-objective differential-checked against a re-solve of the fixed query; `SUM(x) <> 0 AND SUM(x)
-<> 1` (aggregate) drops exactly one *named* aggregate `<>`, also differential-checked; `x <> 5
-AND 5 ≤ x ≤ 5` prefers loosening; the pragma override produces the same drop and a negative
-value is rejected at SET time.
+`x <> 0 AND x <> 1` on a BOOLEAN drops exactly one `<>` (min cardinality) and chooses the
+objective-best drop (`x <> 0` for `MINIMIZE SUM(x)`, `x <> 1` for `MAXIMIZE SUM(x)`), with the
+reported objective differential-checked against an independent re-solve of the fixed query;
+`SUM(x) <> 0 AND SUM(x) <> 1` (aggregate) does the same while keeping the dropped aggregate
+`<>` named; **two independent BOOLEANs** each with `<> 0 AND <> 1` drop the objective-best `<>`
+per variable (a minimum-cardinality-2 set, differential-checked); an **objective-indifferent
+tie** (`x <> 0 AND x <> 1 AND y ≤ 5 MAXIMIZE SUM(y)`, where the objective only touches the free
+`y`) drops the earliest-declared `x <> 0` on **both** backends — the solver-agnostic tie-break
+guarantee; `x <> 5 AND 5 ≤ x ≤ 5` prefers loosening; the pragma override produces the same drop
+and a negative value is rejected at SET time.
 
 ## Elastic engine: stage-2 achievable objective (freeze-budget)
 

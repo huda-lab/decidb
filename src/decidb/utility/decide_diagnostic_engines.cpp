@@ -954,19 +954,12 @@ static void AddTierBudgetRow(SolverModel &model, const vector<BlockSlackRef> &sl
 //! user's original objective so the re-solve optimizes among all minimal repairs.
 static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<BlockSlackRef> &slacks,
                                     const vector<RemovalRef> &removals,
-                                    const vector<double> &stage1_solution, const SolverModel &original,
-                                    const vector<TierBudget> &budgets) {
+                                    const SolverModel &original, const vector<TierBudget> &budgets) {
 	SolverModel stage2 = elastic;
 
-	// I4: freeze the removal set. Pin each removal binary to its stage-1 value (0/1)
-	// so stage 2 cannot pick a different set of clauses to drop — the reported DROP set
-	// is stable between stages. Letting stage 2 swap the drop set is T4.
-	for (const auto &r : removals) {
-		double w = stage1_solution[r.w_col] > 0.5 ? 1.0 : 0.0;
-		stage2.col_lower[r.w_col] = w;
-		stage2.col_upper[r.w_col] = w;
-	}
-
+	// Freeze the lexicographic repair budgets, not individual repair variables.
+	// For remove-only `<>` clauses this keeps R <= R* while letting stage 2 choose
+	// the objective-best equally minimal DROP set.
 	for (const auto &budget : budgets) {
 		AddTierBudgetRow(stage2, slacks, removals, budget);
 	}
@@ -984,6 +977,54 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 	stage2.maximize = original.maximize;
 
 	return stage2;
+}
+
+//! Stage-2b source-order tie-break (solver-agnostic determinism). Stage 2 finds the best
+//! achievable objective among minimal repairs, but when the objective is *indifferent*
+//! between two equally-minimal DROP sets the solver picks one arbitrarily — so Gurobi and
+//! HiGHS can name different clauses. This pass removes that ambiguity: freeze the objective
+//! at its stage-2a optimum, then, among all drop sets that still hit it, prefer to drop the
+//! **earliest-declared** `<>` (`removals` is ordered by ascending indicator column, i.e.
+//! source order). Both backends then report the same clause.
+//!
+//! Only meaningful with >= 2 removable clauses, and only applied to linear objectives — a
+//! quadratic objective would need a quadratic freeze row, and an exact tie there is rarer
+//! still, so it keeps the stage-2a result. Returns false (skip the extra solve) otherwise.
+static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<RemovalRef> &removals,
+                               double objective_value) {
+	if (removals.size() < 2 || tiebreak.has_quadratic_obj) {
+		return false;
+	}
+	// Freeze the objective at its stage-2a optimum with a one-sided row (the stage-2a
+	// point stays feasible, so the pass can never be infeasible). A tiny tolerance guards
+	// against the solver reporting the optimum with rounding error.
+	ModelConstraint freeze;
+	for (idx_t j = 0; j < tiebreak.obj_coeffs.size(); j++) {
+		if (tiebreak.obj_coeffs[j] != 0.0) {
+			freeze.indices.push_back(static_cast<int>(j));
+			freeze.coefficients.push_back(tiebreak.obj_coeffs[j]);
+		}
+	}
+	if (freeze.indices.empty()) {
+		return false; // constant objective: nothing to preserve, nothing to tie-break against
+	}
+	double eps = 1e-6 * (1.0 + std::fabs(objective_value));
+	freeze.sense = tiebreak.maximize ? '>' : '<';
+	freeze.rhs = tiebreak.maximize ? objective_value - eps : objective_value + eps;
+	freeze.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
+	tiebreak.constraints.push_back(std::move(freeze));
+
+	// New objective: minimize Σ rank·w over removals, rank ascending by source order. The
+	// removal cardinality is already pinned at R* by the stage-1 budget row carried into
+	// this model, so this only reselects *which* clauses to drop — preferring the earliest.
+	for (auto &c : tiebreak.obj_coeffs) {
+		c = 0.0;
+	}
+	for (idx_t i = 0; i < removals.size(); i++) {
+		tiebreak.obj_coeffs[removals[i].w_col] = static_cast<double>(i + 1);
+	}
+	tiebreak.maximize = false;
+	return true;
 }
 
 DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
@@ -1065,18 +1106,32 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	// the edit so the edit and the objective agree.
 	if (HasObjective(input.model) && (HasLoosenEdit(edits) || HasRemoval(edits))) {
 		SolverModel stage2_model = BuildStage2Model(elastic.model, slacks, elastic.removals,
-		                                            stage1.solution, input.model, budgets);
+		                                            input.model, budgets);
 		SolverResult stage2 = input.solve_model(stage2_model);
 
 		if (stage2.status == SolverStatus::OPTIMAL && !stage2.solution.empty()) {
-			// Report the objective-maximizing minimal fix and the objective it achieves.
-			edits = ReadElasticEdits(slacks, elastic.removals, stage2.solution, input.model, columns,
+			// The objective-maximizing minimal fix and the objective it achieves.
+			double achievable = stage2.objective_value;
+			vector<double> repair_solution = std::move(stage2.solution);
+
+			// Stage-2b: when the objective ties between equally-minimal DROP sets, reselect
+			// the drop set by source order so both backends name the same clause. Keep the
+			// stage-2a achievable objective for reporting (the tie-break's own objective is
+			// just Σ rank·w). Falls back to the stage-2a set on skip or non-optimal.
+			SolverModel tiebreak_model = stage2_model;
+			if (BuildTieBreakModel(tiebreak_model, elastic.removals, achievable)) {
+				SolverResult tiebreak = input.solve_model(tiebreak_model);
+				if (tiebreak.status == SolverStatus::OPTIMAL && !tiebreak.solution.empty()) {
+					repair_solution = std::move(tiebreak.solution);
+				}
+			}
+
+			edits = ReadElasticEdits(slacks, elastic.removals, repair_solution, input.model, columns,
 			                         /*snap=*/true, input.params.slack_scope);
 			if (edits.empty()) {
 				return DecideDiagnostic();
 			}
-			return BuildInfeasibleDiagnostic(
-			    edits, FormatNum(SnapDiagnosticValue(stage2.objective_value)));
+			return BuildInfeasibleDiagnostic(edits, FormatNum(SnapDiagnosticValue(achievable)));
 		}
 		if (stage2.status == SolverStatus::UNBOUNDED || stage2.status == SolverStatus::INF_OR_UNBD) {
 			// The minimal fix is valid but the relaxed problem has no finite optimum.

@@ -70,6 +70,23 @@ def _attrs(rows, subject_kind, subject):
     }
 
 
+def _resolve_objective(cli, sql, drop_sqls, columns):
+    """Oracle for the achievable objective a drop-repair reports: rebuild the query with
+    each clause in `drop_sqls` removed, re-solve it independently, and return the summed
+    value of `columns` over the result rows. Compares diagnosis output to a real re-solve,
+    never a hand-computed constant."""
+    fixed_sql = sql
+    for clause in drop_sqls:
+        fixed_sql = (
+            fixed_sql.replace(f"{clause} AND ", "")
+            if f"{clause} AND " in fixed_sql
+            else fixed_sql.replace(f" AND {clause}", "")
+        )
+    fixed = list(csv.DictReader(io.StringIO(
+        cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+    return sum(sum(float(r[c]) for c in columns) for r in fixed)
+
+
 def _clause_edits(rows):
     """Group the EAV clause rows into one dict per edit. Each edit's rows are emitted as
     a contiguous run starting at `edit_kind`, so a new `edit_kind` row opens a new edit.
@@ -801,16 +818,23 @@ class TestDiagnosticsRelation:
         assert cap["amount"] == "10000000"
         assert not [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
 
+    @pytest.mark.parametrize("objective, expected_drop, drop_sql, expected_objective", [
+        ("MINIMIZE SUM(x)", "x <> 0", "x <> 0", "0"),
+        ("MAXIMIZE SUM(x)", "x <> 1", "x <> 1", "1"),
+    ])
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_ne_must_drop_reports_drop(self, request, cli_fixture):
-        """I4 must-drop: `x <> 0 AND x <> 1` on a BOOLEAN forbids both values of the rigid
-        {0,1} domain, so no loosening helps — the only fix is to drop exactly one `<>`
-        (the minimum-cardinality removal set). The achievable objective after the drop is
+    def test_infeasible_ne_must_drop_reports_objective_best_drop(
+        self, request, cli_fixture, objective, expected_drop, drop_sql, expected_objective
+    ):
+        """T4: `x <> 0 AND x <> 1` on a BOOLEAN must drop exactly one `<>`, and stage 2
+        chooses the objective-best minimum-cardinality DROP set rather than freezing the
+        stage-1 arbitrary choice: `x <> 0` under MINIMIZE (pins x=0), `x <> 1` under
+        MAXIMIZE (pins x=1). The reported objective is both the expected literal AND
         differential-checked against an independent re-solve of the fixed query."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+            f"DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 {objective}"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -819,37 +843,29 @@ class TestDiagnosticsRelation:
         drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
         assert len(drops) == 1, rows  # minimum-cardinality: exactly one dropped
         dropped = drops[0]["subject"]
-        assert "<>" in dropped
-        assert f"diagnosis points to clause `{dropped.lower()}`" in result.stderr.lower()
-
-        # Differential: rebuild the query with the dropped `<>` removed, re-solve, and
-        # confirm the achievable objective the diagnosis reported matches. Which `<>` is
-        # dropped is solver-arbitrary, so map the reported subject back to its literal.
-        n = re.search(r"<>\D*(\d+)", dropped).group(1)
-        clause = f"x <> {n}"
-        fixed_sql = (
-            sql.replace(f"{clause} AND ", "")
-            if f"{clause} AND " in sql
-            else sql.replace(f" AND {clause}", "")
-        )
-        fixed = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
-        objective = sum(float(r["x"]) for r in fixed)
+        assert dropped == expected_drop
+        assert f"diagnosis points to clause `{expected_drop}`" in result.stderr.lower()
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
-        assert float(reported) == pytest.approx(objective)
+        assert reported == expected_objective
+        # Oracle: re-solve the query with the dropped `<>` removed and confirm the match.
+        assert float(reported) == pytest.approx(
+            _resolve_objective(cli, sql, [drop_sql], ["x"]))
 
+    @pytest.mark.parametrize("objective, expected_drop, drop_sql, expected_objective", [
+        ("MINIMIZE SUM(x)", "sum(x) <> 0", "SUM(x) <> 0", "0"),
+        ("MAXIMIZE SUM(x)", "sum(x) <> 1", "SUM(x) <> 1", "1"),
+    ])
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_aggregate_ne_must_drop_is_named(self, request, cli_fixture):
-        """I4 follow-up — aggregate `<>` (`SUM(x) <> K`). Its disjunction binary is a
-        global-block column, so naming a dropped one requires the global-label channel.
-        `SUM(x) <> 0 AND SUM(x) <> 1` on a single BOOLEAN forbids both achievable sums,
-        so the only fix is to drop exactly one aggregate `<>` — and it must be *named*
-        (`(sum(x) <> 0)`), not an empty subject. The achievable objective after the drop
-        is differential-checked against an independent re-solve of the fixed query."""
+    def test_infeasible_aggregate_ne_must_drop_is_named_and_objective_best(
+        self, request, cli_fixture, objective, expected_drop, drop_sql, expected_objective
+    ):
+        """T4 plus I4 aggregate naming: aggregate `<>` indicators live in the global
+        block, so the DROP must stay *named* while stage 2 chooses the objective-best
+        minimum-cardinality aggregate DROP set. Objective is differential-checked."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) <> 0 AND SUM(x) <> 1 MINIMIZE SUM(x)"
+            f"DECIDE x IS BOOLEAN SUCH THAT SUM(x) <> 0 AND SUM(x) <> 1 {objective}"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -860,21 +876,82 @@ class TestDiagnosticsRelation:
         dropped = drops[0]["subject"]
         assert dropped.strip(), "dropped aggregate `<>` must be named, not empty"
         assert "<>" in dropped and "sum" in dropped.lower(), dropped
-
-        # Differential: rebuild with the dropped aggregate `<>` removed, re-solve, and
-        # confirm the reported achievable objective. Which clause is dropped is arbitrary.
-        n = re.search(r"<>\D*(\d+)", dropped).group(1)
-        clause = f"SUM(x) <> {n}"
-        fixed_sql = (
-            sql.replace(f"{clause} AND ", "")
-            if f"{clause} AND " in sql
-            else sql.replace(f" AND {clause}", "")
-        )
-        fixed = list(csv.DictReader(io.StringIO(
-            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
-        objective = sum(float(r["x"]) for r in fixed)
+        assert dropped == expected_drop
+        assert f"diagnosis points to clause `{expected_drop}`" in result.stderr.lower()
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
-        assert float(reported) == pytest.approx(objective)
+        assert reported == expected_objective
+        # Oracle: re-solve with the dropped aggregate `<>` removed and confirm the match.
+        assert float(reported) == pytest.approx(
+            _resolve_objective(cli, sql, [drop_sql], ["x"]))
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_objective_indifferent_drop_tie_is_solver_agnostic(
+        self, request, cli_fixture
+    ):
+        """T4 tie-break — solver-agnostic determinism when the objective is *indifferent*
+        between two equally-minimal DROP sets. The conflict is on `x` (`x <> 0 AND x <> 1`
+        on a BOOLEAN), but the objective only involves the free `y`, so stage 2 has no
+        objective reason to prefer either `<>` — the achievable objective is 5 whichever is
+        dropped. Without a tie-break Gurobi and HiGHS name *different* clauses; the stage-2b
+        source-order tie-break makes both drop the earliest-declared `x <> 0`. Asserting the
+        SAME clause on both backends is the solver-agnosticism guarantee.
+
+        (Stage 1 has no objective, so its arbitrary pick cannot be forced from SQL; that both
+        backends — which seed stage 1 differently — report the same objective-best drop is the
+        available evidence that stage 2, not stage 1, selects what is reported.)"""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x, y FROM (VALUES (1)) t(id) "
+            "DECIDE x IS BOOLEAN, y IS INTEGER SUCH THAT x <> 0 AND x <> 1 AND y <= 5 "
+            "MAXIMIZE SUM(y)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+        assert len(drops) == 1, rows  # minimum-cardinality: exactly one dropped
+        assert drops[0]["subject"] == "x <> 0", rows  # earliest-declared, both backends
+        assert "diagnosis points to clause `x <> 0`" in result.stderr.lower()
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        assert reported == "5"  # objective is unaffected by which `<>` is dropped
+        # Oracle: dropping either `<>` yields the same objective; check the reported one.
+        assert float(reported) == pytest.approx(
+            _resolve_objective(cli, sql, ["x <> 0"], ["y"]))
+
+    @pytest.mark.parametrize("objective, expected_drops, expected_objective", [
+        ("MINIMIZE SUM(x) + SUM(y)", ["x <> 0", "y <> 0"], "0"),
+        ("MAXIMIZE SUM(x) + SUM(y)", ["x <> 1", "y <> 1"], "2"),
+    ])
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_must_drop_multiple_reports_objective_best_set(
+        self, request, cli_fixture, objective, expected_drops, expected_objective
+    ):
+        """T4 at cardinality > 1 — the objective-best *set*, not just a single drop. Two
+        independent BOOLEANs, each with a contradictory `<> 0 AND <> 1`, so the only fix is
+        to drop exactly one `<>` per variable (minimum cardinality 2). Stage 2 picks the
+        objective-best drop per variable: `<> 0` under MINIMIZE (pins each to 0), `<> 1`
+        under MAXIMIZE (pins each to 1). Objective is differential-checked."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x, y FROM (VALUES (1)) t(id) "
+            "DECIDE x IS BOOLEAN, y IS BOOLEAN SUCH THAT "
+            f"x <> 0 AND x <> 1 AND y <> 0 AND y <> 1 {objective}"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        drops = sorted(
+            r["subject"] for r in rows
+            if r["attribute"] == "edit_kind" and r["value"] == "drop"
+        )
+        assert drops == sorted(expected_drops), rows  # exactly two, objective-best per var
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        assert reported == expected_objective
+        # Oracle: re-solve with both dropped `<>` removed and confirm the match.
+        assert float(reported) == pytest.approx(
+            _resolve_objective(cli, sql, expected_drops, ["x", "y"]))
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_removal_bigm_pragma_override_and_validation(self, request, cli_fixture):
