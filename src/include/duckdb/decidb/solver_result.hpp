@@ -45,8 +45,8 @@ struct SolverResult {
 	//! Objective value of `solution`, in the model's own sense (no sign flip).
 	//! The proven optimum at `OPTIMAL`; the best-so-far incumbent objective at
 	//! `TIME_LIMIT` (only meaningful when `has_solution`); left 0.0 otherwise.
-	//! The infeasible engine's stage-2 re-solve reads this as the achievable objective
-	//! (and stage-1 as the total loosening S*).
+	//! The infeasible engine's stage-2 re-solve reads this as the achievable objective.
+	//! Stage-1 repair budgets are read back from the solved repair variables.
 	double objective_value = 0.0;
 	//! Unbounded ray (filled by U2; empty for F1).
 	vector<double> ray;

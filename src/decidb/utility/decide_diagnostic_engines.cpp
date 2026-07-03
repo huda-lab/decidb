@@ -406,9 +406,10 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	// readback can expose the per-row profile. SHARED_LITERAL knobs fold in both modes.
 	bool fold_data = slack_scope != "expanded";
 
-	// Rebuild the objective as min Σ sᵢ: zero the user's objective over the existing
-	// columns first (slack obj coeffs are appended as the slacks are added), and drop
-	// any quadratic objective — stage 1 only minimizes loosening.
+	// Rebuild the objective as an empty repair objective: zero the user's objective over
+	// the existing columns first (slack/removal columns are appended with 0 here), and
+	// drop any quadratic objective. DiagnoseInfeasible sets one tier objective per
+	// lexicographic pass.
 	for (auto &c : elastic.obj_coeffs) {
 		c = 0.0;
 	}
@@ -419,25 +420,24 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	elastic.nonconvex_quadratic = false;
 	elastic.maximize = false;
 
-	// Append a REAL, non-negative, uncapped slack column with the given objective
-	// weight (sᵢ≥0 REAL even for integer RHS — decision 4). Editable knobs use
-	// weight 1; data-RHS slacks are penalized so the solver prefers an actionable
-	// edit (DIAGNOSTIC_DATA_SLACK_WEIGHT).
-	auto add_slack = [&](double weight) -> idx_t {
+	// Append a REAL, non-negative, uncapped slack column (sᵢ≥0 REAL even for
+	// integer RHS — decision 4). The repair objective coefficient is attached later
+	// by the active lexicographic tier.
+	auto add_slack = [&]() -> idx_t {
 		idx_t c = elastic.num_vars;
 		elastic.col_lower.push_back(0.0);
 		elastic.col_upper.push_back(1e30);
 		elastic.is_integer.push_back(false);
 		elastic.is_binary.push_back(false);
-		elastic.obj_coeffs.push_back(weight);
+		elastic.obj_coeffs.push_back(0.0);
 		elastic.num_vars++;
 		return c;
 	};
 
 	// A relaxable row whose RHS is per-row data (`x <= col`) cannot be edited by the
-	// user; loosening it is a conflict, not a fix. Penalize its slack so editable
-	// constraints loosen first (I2.c). Shared/aggregate/literal knobs are editable.
-	auto is_data_penalized = [](const ConstraintProvenance &p) {
+	// user; loosening it is a conflict, not a source-literal edit. It gets its own
+	// lexicographic tier. Shared/aggregate/literal knobs are editable.
+	auto is_data_offset = [](const ConstraintProvenance &p) {
 		return p.shape == ElasticShape::PER_ROW_DATA && p.clause_id != DConstants::INVALID_INDEX;
 	};
 
@@ -452,12 +452,10 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	// terms, gutting the floor to a degenerate objective-0 fix — RMS removes that
 	// term-count bias while still capturing the data-magnitude mismatch that E needs.)
 	// `ref` = the smallest editable RMS — a common factor (so it never changes *which* row
-	// is chosen, only conditioning) that keeps every editable weight in (0,1], strictly
-	// below the flat data/removal tiers → no tier inversion, and leaves all-equal-coefficient
-	// models (the usual case, RMS=1) at weight 1. Only the EDITABLE tier is normalized; data
-	// (DIAGNOSTIC_DATA_SLACK_WEIGHT) and removal (DIAGNOSTIC_REMOVAL_WEIGHT) stay flat
-	// (cross-tier ordering is T2's lexicographic ladder). RMS is over the ORIGINAL row
-	// coefficients (before slack columns).
+	// is chosen, only conditioning) that keeps every editable weight in (0,1], and leaves
+	// all-equal-coefficient models (the usual case, RMS=1) at weight 1. Only the EDITABLE
+	// tier is normalized; data offsets and removals are separate lexicographic tiers. RMS
+	// is over the ORIGINAL row coefficients (before slack columns).
 	auto rms_norm = [](const vector<double> &coeffs) {
 		if (coeffs.empty()) {
 			return 0.0;
@@ -481,7 +479,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
 		const auto &row = elastic.constraints[r];
 		lin_norm[r] = rms_norm(row.coefficients);
-		if (IsRelaxableForElastic(row.provenance.kind) && !is_data_penalized(row.provenance)) {
+		if (IsRelaxableForElastic(row.provenance.kind) && !is_data_offset(row.provenance)) {
 			consider_ref(lin_norm[r]);
 		}
 	}
@@ -568,25 +566,29 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 				continue; // already emitted at the block's first row
 			}
 			// A shared block is one editable literal knob, scale-normalized by its
-			// representative row (members are same-clause instances → equal norms). A
-			// folded data block (query mode) is still last-resort data → keep the penalty.
+			// representative row (members are same-clause instances → equal norms), or
+			// one folded data offset in query mode.
 			char sense = elastic.constraints[grp.front()].sense;
-			double w = is_data_penalized(row.provenance) ? DIAGNOSTIC_DATA_SLACK_WEIGHT
-			                                             : editable_weight(lin_norm[grp.front()]);
-			idx_t pos_col = add_slack(w);
-			idx_t neg_col = (sense == '=') ? add_slack(w) : DConstants::INVALID_INDEX;
+			bool data_offset = is_data_offset(row.provenance);
+			ElasticRepairTier tier = data_offset ? ElasticRepairTier::DATA_OFFSET
+			                                     : ElasticRepairTier::EDITABLE_LOOSEN;
+			double w = data_offset ? 1.0 : editable_weight(lin_norm[grp.front()]);
+			idx_t pos_col = add_slack();
+			idx_t neg_col = (sense == '=') ? add_slack() : DConstants::INVALID_INDEX;
 			for (idx_t rr : grp) {
 				wire(rr, pos_col, neg_col);
 			}
-			out.slacks.push_back({grp, pos_col, neg_col, sense});
+			out.slacks.push_back({grp, pos_col, neg_col, sense, tier, w});
 		} else {
 			char sense = row.sense;
-			double w = is_data_penalized(row.provenance) ? DIAGNOSTIC_DATA_SLACK_WEIGHT
-			                                             : editable_weight(lin_norm[r]);
-			idx_t pos_col = add_slack(w);
-			idx_t neg_col = (sense == '=') ? add_slack(w) : DConstants::INVALID_INDEX;
+			bool data_offset = is_data_offset(row.provenance);
+			ElasticRepairTier tier = data_offset ? ElasticRepairTier::DATA_OFFSET
+			                                     : ElasticRepairTier::EDITABLE_LOOSEN;
+			double w = data_offset ? 1.0 : editable_weight(lin_norm[r]);
+			idx_t pos_col = add_slack();
+			idx_t neg_col = (sense == '=') ? add_slack() : DConstants::INVALID_INDEX;
 			wire(r, pos_col, neg_col);
-			out.slacks.push_back({{r}, pos_col, neg_col, sense});
+			out.slacks.push_back({{r}, pos_col, neg_col, sense, tier, w});
 		}
 	}
 
@@ -605,25 +607,26 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		// (scale-normalized by its linear part), not penalized as data.
 		char sense = qc.sense;
 		double w = editable_weight(qc_norm[qr]);
-		idx_t pos_col = add_slack(w);
-		idx_t neg_col = (sense == '=') ? add_slack(w) : DConstants::INVALID_INDEX;
+		idx_t pos_col = add_slack();
+		idx_t neg_col = (sense == '=') ? add_slack() : DConstants::INVALID_INDEX;
 		qc.linear_indices.push_back(static_cast<int>(pos_col));
 		qc.linear_coefficients.push_back(sense == '>' ? 1.0 : -1.0);
 		if (sense == '=') {
 			qc.linear_indices.push_back(static_cast<int>(neg_col));
 			qc.linear_coefficients.push_back(1.0);
 		}
-		out.slacks.push_back({{qr}, pos_col, neg_col, sense, /*quadratic=*/true});
+		out.slacks.push_back({{qr}, pos_col, neg_col, sense, ElasticRepairTier::EDITABLE_LOOSEN, w,
+		                      /*quadratic=*/true});
 	}
 
 	// I4: the removal dial. A remove-only `<>` cannot be loosened — its two Big-M
 	// disjunction rows (USER_MECHANISM, so the loosening passes above skipped them)
 	// share one `indicator_col`. Group them by it and add ONE binary `w` per `<>`,
 	// wired into each row with a ±M₂ coefficient (sign by sense, like a slack) so
-	// w=1 makes both rows vacuous — the clause is dropped. Penalize W·w
-	// (DIAGNOSTIC_REMOVAL_WEIGHT, above the slack weights) so dropping is a last
-	// resort. M₂ defaults to the clause's own disjunction Big-M (|row coeff on
-	// indicator_col|, provably enough to neutralize either side), overridable.
+	// w=1 makes both rows vacuous — the clause is dropped. The removal tier minimizes
+	// Σw before any data/editable tier, so dropping is a last resort without a fixed
+	// cross-tier weight. M₂ defaults to the clause's own disjunction Big-M (|row coeff
+	// on indicator_col|, provably enough to neutralize either side), overridable.
 	std::map<idx_t, vector<idx_t>> rem_groups;
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
 		idx_t ind = elastic.constraints[r].provenance.indicator_col;
@@ -646,13 +649,13 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 				}
 			}
 		}
-		// One binary removal indicator w ∈ {0,1}, penalized W.
+		// One binary removal indicator w ∈ {0,1}.
 		idx_t w_col = elastic.num_vars;
 		elastic.col_lower.push_back(0.0);
 		elastic.col_upper.push_back(1.0);
 		elastic.is_integer.push_back(true);
 		elastic.is_binary.push_back(true);
-		elastic.obj_coeffs.push_back(DIAGNOSTIC_REMOVAL_WEIGHT);
+		elastic.obj_coeffs.push_back(0.0);
 		elastic.num_vars++;
 		// Wire ±M₂·w into each disjunction row (same sign convention as a slack).
 		for (idx_t r : grp) {
@@ -827,50 +830,146 @@ static bool HasObjective(const SolverModel &model) {
 	return false;
 }
 
-//! Stage-2 freeze-budget model (I3): start from the stage-1 elastic model (slacks
-//! already wired), cap the total loosening at S*, and restore the user's original
-//! objective so the re-solve maximizes it among all minimal-loosening fixes. The budget
-//! row reuses the stage-1 slack weights — read back from the elastic model's objective
-//! coefficients — so it freezes exactly the stage-1 objective ≤ S*.
+struct TierBudget {
+	ElasticRepairTier tier;
+	double value = 0.0;
+	bool active = false;
+};
+
+static double SlackTierCoefficient(const BlockSlackRef &sl, ElasticRepairTier tier) {
+	if (sl.tier != tier) {
+		return 0.0;
+	}
+	if (tier == ElasticRepairTier::EDITABLE_LOOSEN) {
+		return sl.weight;
+	}
+	return 1.0;
+}
+
+static bool AppendTierTerms(ModelConstraint &row, const vector<BlockSlackRef> &slacks,
+                            const vector<RemovalRef> &removals, ElasticRepairTier tier) {
+	for (const auto &sl : slacks) {
+		double coeff = SlackTierCoefficient(sl, tier);
+		if (coeff == 0.0) {
+			continue;
+		}
+		row.indices.push_back(static_cast<int>(sl.pos_col));
+		row.coefficients.push_back(coeff);
+		if (sl.neg_col != DConstants::INVALID_INDEX) {
+			row.indices.push_back(static_cast<int>(sl.neg_col));
+			row.coefficients.push_back(coeff);
+		}
+	}
+	if (tier == ElasticRepairTier::REMOVAL) {
+		for (const auto &r : removals) {
+			row.indices.push_back(static_cast<int>(r.w_col));
+			row.coefficients.push_back(1.0);
+		}
+	}
+	return !row.indices.empty();
+}
+
+//! True iff `tier` owns at least one repair knob. An empty tier contributes nothing to the
+//! lexicographic ladder, so its pass is skipped entirely (no solve, no budget row).
+static bool TierHasTerms(const vector<BlockSlackRef> &slacks, const vector<RemovalRef> &removals,
+                         ElasticRepairTier tier) {
+	if (tier == ElasticRepairTier::REMOVAL) {
+		return !removals.empty();
+	}
+	for (const auto &sl : slacks) {
+		if (sl.tier == tier) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &slacks,
+                             const vector<RemovalRef> &removals, ElasticRepairTier tier) {
+	for (auto &c : model.obj_coeffs) {
+		c = 0.0;
+	}
+	model.q_rows.clear();
+	model.q_cols.clear();
+	model.q_vals.clear();
+	model.has_quadratic_obj = false;
+	model.nonconvex_quadratic = false;
+	model.maximize = false;
+
+	ModelConstraint objective_terms;
+	if (!AppendTierTerms(objective_terms, slacks, removals, tier)) {
+		return;
+	}
+	for (idx_t i = 0; i < objective_terms.indices.size(); i++) {
+		idx_t col = static_cast<idx_t>(objective_terms.indices[i]);
+		model.obj_coeffs[col] = objective_terms.coefficients[i];
+	}
+}
+
+static double ComputeTierValue(const vector<double> &solution, const vector<BlockSlackRef> &slacks,
+                               const vector<RemovalRef> &removals, ElasticRepairTier tier) {
+	double value = 0.0;
+	for (const auto &sl : slacks) {
+		double coeff = SlackTierCoefficient(sl, tier);
+		if (coeff == 0.0) {
+			continue;
+		}
+		value += coeff * solution[sl.pos_col];
+		if (sl.neg_col != DConstants::INVALID_INDEX) {
+			value += coeff * solution[sl.neg_col];
+		}
+	}
+	if (tier == ElasticRepairTier::REMOVAL) {
+		for (const auto &r : removals) {
+			value += solution[r.w_col];
+		}
+	}
+	return std::max(0.0, value);
+}
+
+static TierBudget MakeTierBudget(const vector<double> &solution, const vector<BlockSlackRef> &slacks,
+                                 const vector<RemovalRef> &removals, ElasticRepairTier tier) {
+	ModelConstraint terms;
+	bool active = AppendTierTerms(terms, slacks, removals, tier);
+	return {tier, active ? ComputeTierValue(solution, slacks, removals, tier) : 0.0, active};
+}
+
+static void AddTierBudgetRow(SolverModel &model, const vector<BlockSlackRef> &slacks,
+                             const vector<RemovalRef> &removals, const TierBudget &budget) {
+	if (!budget.active) {
+		return;
+	}
+	ModelConstraint row;
+	if (!AppendTierTerms(row, slacks, removals, budget.tier)) {
+		return;
+	}
+	row.sense = '<';
+	row.rhs = budget.value;
+	row.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
+	model.constraints.push_back(std::move(row));
+}
+
+//! Stage-2 freeze-budget model (I3): start from the elastic model (repair knobs already
+//! wired), cap each solved lexicographic repair tier at its optimum, and restore the
+//! user's original objective so the re-solve optimizes among all minimal repairs.
 static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<BlockSlackRef> &slacks,
                                     const vector<RemovalRef> &removals,
                                     const vector<double> &stage1_solution, const SolverModel &original,
-                                    double s_star) {
+                                    const vector<TierBudget> &budgets) {
 	SolverModel stage2 = elastic;
 
 	// I4: freeze the removal set. Pin each removal binary to its stage-1 value (0/1)
 	// so stage 2 cannot pick a different set of clauses to drop — the reported DROP set
-	// is stable between stages. The fixed W·w terms then become a constant in the budget.
+	// is stable between stages. Letting stage 2 swap the drop set is T4.
 	for (const auto &r : removals) {
 		double w = stage1_solution[r.w_col] > 0.5 ? 1.0 : 0.0;
 		stage2.col_lower[r.w_col] = w;
 		stage2.col_upper[r.w_col] = w;
 	}
 
-	// Budget row: Σ wᵢ sᵢ + Σ W·wⱼ ≤ S*. Build it while the elastic objective coefficients
-	// still hold the slack/removal weights (editable 1, data DIAGNOSTIC_DATA_SLACK_WEIGHT,
-	// removal DIAGNOSTIC_REMOVAL_WEIGHT). Including the (now-fixed) removal columns keeps the
-	// cap exactly equal to the stage-1 objective S* = Σ wᵢ sᵢ + Σ W·wⱼ, so the loosening
-	// budget is frozen even though the objective included the removal penalty. The cap is
-	// exactly S*: the stage-1 optimum sits on it, and the backend feasibility tolerance
-	// supplies the cushion that keeps the re-solve feasible. The reported amounts are
-	// snapped past that tolerance — see SnapDiagnosticValue.
-	ModelConstraint budget;
-	for (const auto &sl : slacks) {
-		budget.indices.push_back(static_cast<int>(sl.pos_col));
-		budget.coefficients.push_back(elastic.obj_coeffs[sl.pos_col]);
-		if (sl.neg_col != DConstants::INVALID_INDEX) {
-			budget.indices.push_back(static_cast<int>(sl.neg_col));
-			budget.coefficients.push_back(elastic.obj_coeffs[sl.neg_col]);
-		}
+	for (const auto &budget : budgets) {
+		AddTierBudgetRow(stage2, slacks, removals, budget);
 	}
-	for (const auto &r : removals) {
-		budget.indices.push_back(static_cast<int>(r.w_col));
-		budget.coefficients.push_back(elastic.obj_coeffs[r.w_col]);
-	}
-	budget.sense = '<';
-	budget.rhs = s_star;
-	budget.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
 
 	// Restore the user's original objective. The slack columns (appended past the
 	// original variables) get zero objective weight, so the achievable objective the
@@ -884,15 +983,14 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 	stage2.nonconvex_quadratic = original.nonconvex_quadratic;
 	stage2.maximize = original.maximize;
 
-	stage2.constraints.push_back(std::move(budget));
 	return stage2;
 }
 
 DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
-	// Build the elastic program — give every relaxable user constraint a
-	// non-negative slack that lets its RHS stretch, minimize the total loosening,
-	// and read which constraints to loosen (the positive-slack support) and by how
-	// much. The minimal edit list is the least-change fix.
+	// Build the elastic program — give every relaxable user constraint a non-negative
+	// slack that lets its RHS stretch, and every remove-only `<>` a drop switch. Stage 1
+	// then solves the repair objective lexicographically: minimize removals, then data
+	// offsets, then editable loosening.
 	if (!input.solve_model) {
 		return DecideDiagnostic();
 	}
@@ -908,25 +1006,48 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		return DecideDiagnostic();
 	}
 
-	SolverResult stage1 = input.solve_model(elastic.model);
+	SolverModel stage1_model = elastic.model;
+	vector<TierBudget> budgets;
+	SolverResult stage1;
+	const ElasticRepairTier tier_order[] = {
+	    ElasticRepairTier::REMOVAL,
+	    ElasticRepairTier::DATA_OFFSET,
+	    ElasticRepairTier::EDITABLE_LOOSEN,
+	};
+	for (auto tier : tier_order) {
+		// Skip a tier with no repair knobs: an empty pass would solve a zero-objective
+		// feasibility problem whose result we discard. At least one tier is always
+		// populated (we returned early when both slacks and removals are empty), so the
+		// first surviving pass still detects an elastic-infeasible conflict.
+		if (!TierHasTerms(slacks, elastic.removals, tier)) {
+			continue;
+		}
+		SetTierObjective(stage1_model, slacks, elastic.removals, tier);
+		SolverResult pass = input.solve_model(stage1_model);
 
-	if (stage1.status == SolverStatus::INFEASIBLE) {
-		// The elastic program is itself infeasible: the conflict reaches rigid rows.
-		// Only claim that when every user constraint was actually made relaxable — if
-		// the operator punted a multi-instance bound (I2 scope), stay honest and fall
-		// through to the static error rather than wrongly declaring it unfixable.
-		if (input.has_unhandled_user_bounds) {
+		if (pass.status == SolverStatus::INFEASIBLE) {
+			// The elastic program is itself infeasible: the conflict reaches rigid rows.
+			// Only claim that when every user constraint was actually made relaxable — if
+			// the operator punted a multi-instance bound (I2 scope), stay honest and fall
+			// through to the static error rather than wrongly declaring it unfixable.
+			if (input.has_unhandled_user_bounds) {
+				return DecideDiagnostic();
+			}
+			return BuildElasticInfeasibleDiagnostic();
+		}
+		if (pass.status != SolverStatus::OPTIMAL || pass.solution.empty()) {
 			return DecideDiagnostic();
 		}
-		return BuildElasticInfeasibleDiagnostic();
-	}
-	if (stage1.status != SolverStatus::OPTIMAL || stage1.solution.empty()) {
-		return DecideDiagnostic();
+
+		TierBudget budget = MakeTierBudget(pass.solution, slacks, elastic.removals, tier);
+		AddTierBudgetRow(stage1_model, slacks, elastic.removals, budget);
+		budgets.push_back(budget);
+		stage1 = std::move(pass);
 	}
 
-	// Read the stage-1 slack support: every row with a positive slack is an edit, the
-	// slack value is the loosening amount. Label clauses over user-facing column names
-	// (global_variable_labels names aggregate `<>` indicators so a dropped one is named).
+	// Read the final lexicographic pass's repair support. Label clauses over user-facing
+	// column names (global_variable_labels names aggregate `<>` indicators so a dropped
+	// one is named).
 	vector<ColumnProvenance> columns =
 	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
 	                          input.global_variable_labels);
@@ -938,18 +1059,13 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		return DecideDiagnostic();
 	}
 
-	// I3 — stage-2 freeze-budget re-solve. Only when there is a real objective AND an
-	// editable knob to loosen: a constant objective has nothing to report, and a
-	// data-RHS-only conflict has no actionable edit, so an achievable-objective number
-	// would be misleading. Among ALL minimal-loosening fixes (budget frozen at S*),
-	// re-solve the user's objective and report the best one — the stage-2 slacks become the
-	// edit so the edit and the objective agree.
+	// I3 — stage-2 freeze-budget re-solve. Only when there is a real objective and a
+	// reported repair. Among ALL lexicographically minimal fixes (tier budgets frozen),
+	// re-solve the user's objective and report the best one — the stage-2 slacks become
+	// the edit so the edit and the objective agree.
 	if (HasObjective(input.model) && (HasLoosenEdit(edits) || HasRemoval(edits))) {
-		// stage-1 ObjVal = Σ wᵢ sᵢ + Σ W·wⱼ; the budget freezes both loosening and the
-		// (pinned) removal set, so the cap stays consistent with this S*.
-		double s_star = stage1.objective_value;
 		SolverModel stage2_model = BuildStage2Model(elastic.model, slacks, elastic.removals,
-		                                            stage1.solution, input.model, s_star);
+		                                            stage1.solution, input.model, budgets);
 		SolverResult stage2 = input.solve_model(stage2_model);
 
 		if (stage2.status == SolverStatus::OPTIMAL && !stage2.solution.empty()) {

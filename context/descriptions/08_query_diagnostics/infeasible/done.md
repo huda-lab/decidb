@@ -7,7 +7,8 @@ once. Under `PRAGMA diagnose_decide='auto'`, the infeasible terminal now builds 
 optimization, the **elastic program**, whose optimum is the least-change fix for shipped
 I1/I2 shapes: which user constraints to loosen, and by how much. Shared plumbing it builds
 on (the pragma gate, provenance, the reporting relation) is in `foundations/done.md`.
-The engine itself is shipped; remaining work is tracked in `todo.md`.
+The engine itself is shipped, including the T2 lexicographic repair ladder; remaining work is
+tracked in `todo.md`.
 
 ## Engine seam: infeasible
 
@@ -51,14 +52,20 @@ INFEASIBLE arms (previously inline in the unbounded arm only).
 I1 fills the seam: on an infeasible solve under `auto`, `DiagnoseInfeasible` builds and
 solves a **second** optimization — the *elastic program* — whose optimum is the
 least-change fix. Each relaxable user constraint gets a non-negative slack that lets its
-RHS stretch; minimizing the total loosening, the positive-slack support names the
-constraints to edit and the slack values are the amounts.
+RHS stretch; `<>` clauses get binary removal switches. Stage 1 solves the repair in
+lexicographic passes: first minimize removal cardinality, then data-RHS virtual offsets, then
+editable source-literal loosening. A tier with no repair knobs is skipped (no solve) — the
+common editable-only conflict runs a single pass. The final positive repair support names the
+constraints to edit and the slack/switch values are the amounts.
 
 ```
-stage 1:   min  Σ wᵢ sᵢ              (uniform wᵢ = 1)
-           s.t. Aᵢ x ≤ bᵢ + sᵢ ,  sᵢ ≥ 0    (relaxable rows + relaxable single-instance bounds)
-                structural / mechanism rows rigid
-           →  support {i : s*ᵢ > 0} names the edits; s*ᵢ is the amount
+stage 1R:  R* = min Σ wᵢ                         (remove-only <> switches)
+stage 1D:  D* = min Σ s_data       subject to R ≤ R*
+stage 1E:  E* = min Σ αᵢ s_edit    subject to R ≤ R*, D ≤ D*
+
+           Aᵢ x ≤ bᵢ + sᵢ ,  sᵢ ≥ 0              (relaxable rows + bounds)
+           structural / mechanism rows rigid unless covered by a removal switch
+           →  final repair support names the edits; s*ᵢ / w*ᵢ are the amounts
 ```
 
 **Operator / engine split.** The engine is solver-agnostic and free of DuckDB
@@ -85,9 +92,10 @@ stage 1:   min  Σ wᵢ sᵢ              (uniform wᵢ = 1)
   constraint binder before this pass, so they follow the same absorption and re-emission
   path as `x <= 5`. `has_unhandled_user_bounds` therefore stays `false`.
 - **Engine (`decide_diagnostic_engines.cpp`, `DiagnoseInfeasible`).** Pure model math.
-  Copies the model, rebuilds the objective as `min Σ sᵢ` (zeroes the user objective, drops
-  the quadratic objective, `maximize=false`), and adds a slack to every relaxable **linear**
-  row (`IsRelaxableForElastic` ⇒ `USER_PARAMETER`). Quadratic rows and
+  Copies the model, clears the user objective for the repair passes (zeroes linear objective,
+  drops the quadratic objective, `maximize=false`), and adds a slack to every relaxable **linear**
+  row (`IsRelaxableForElastic` ⇒ `USER_PARAMETER`). The active repair objective is installed
+  per lexicographic tier. Quadratic rows and
   `STRUCTURAL`/`USER_MECHANISM` rows stay rigid — quadratic-RHS slack is I2; ABS pin rows
   are already `USER_PARAMETER` and are picked up automatically while their envelopes
   (`STRUCTURAL`) stay rigid. **Slack direction (decision 3):** `≤` → `−s` (`Ax − s ≤ b`),
@@ -147,8 +155,8 @@ the rest of the engine are unchanged. `BuildElasticModel(base, removal_bigm, sla
 - **`block_key()`** — query mode keys a block by `clause_id` alone (so all PER groups of a
   clause collapse into one slack = the single literal edit); expanded mode keys by
   `(clause_id, group_key)` (so each PER group is its own slack). A folded data block still
-  carries `DIAGNOSTIC_DATA_SLACK_WEIGHT` (data stays the penalized last-resort tier in both
-  modes — only the *grouping* changes by mode, never the weight ladder).
+  belongs to the data-offset lexicographic tier in both modes — only the *grouping* changes by
+  mode, never the tier.
 
 **Readback (`ReadElasticEdits`, threaded with `slack_scope`).** Per block:
 
@@ -243,7 +251,8 @@ for a quadratic constraint. A `ClauseEdit` carries a `ClauseEditKind` (`LOOSEN` 
 A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS with no single literal to
 "loosen to K". Under the T3 slack-scope policy it reports a **virtual offset** in query mode
 (`x <= col + delta`) or a **per-row profile** in expanded mode (see "Slack-scope policy"), and
-the data slack stays penalized so an editable literal is always preferred. Two parts:
+the data offset lives in a separate lexicographic tier, so an editable literal is always
+preferred when it can restore feasibility. Two parts:
 
 - **Reporting.** `ReadElasticEdits` reads a data-RHS block per the slack-scope mode: query mode
   emits **one `virtual_offset` LOOSEN** for the folded clause (`x <= col + delta`), expanded mode
@@ -252,10 +261,10 @@ the data slack stays penalized so an editable literal is always preferred. Two p
   which is gone — a data conflict is now actionable.)
 - **Editable-knob preference.** In a degenerate infeasibility an editable knob and a data row can
   be equally-optimal fixes, and the solver would split arbitrarily (a messy, non-deterministic
-  mix). To prefer an *actionable* edit, a data-RHS slack carries a higher objective weight
-  (`DIAGNOSTIC_DATA_SLACK_WEIGHT`, `diagnostic_constants.hpp`); the solver loosens editable
-  constraints first and reports a data conflict only when editable loosening genuinely cannot
-  restore feasibility. (This weight is a coarse stand-in — see T2 in `todo.md`.)
+  mix). To prefer an *actionable* edit, stage 1 solves data offsets before editable loosening:
+  it first freezes the minimum removal count, then freezes the minimum data-offset total, then
+  minimizes editable loosening. Data conflicts surface only when editable loosening cannot
+  restore feasibility with data offset total `D = 0`.
 - **Scale-normalized editable weights (T1).** Within the editable tier the stage-1 objective sums
   slacks across constraints in *incomparable units* — e.g. `SUM(buy) >= 30` (count) vs
   `SUM(buy*l_extendedprice) <= 100` (dollars). With a uniform weight of 1 the raw sum makes the
@@ -272,12 +281,10 @@ the data slack stays penalized so an editable literal is always preferred. Two p
   "gut the floor" preference. RMS is invariant to term count (both those rows have RMS 1), so it
   removes that bias while still capturing the data-magnitude mismatch E needs. `ref` = the smallest
   editable RMS; being a common factor it never changes *which* row wins (only conditioning), keeps
-  every editable weight in `(0, 1]` (strictly below the flat data/removal tiers → no tier
-  inversion), and leaves the usual all-equal-coefficient model at weight 1. This is a **within-tier**
-  normalization only: data (`DIAGNOSTIC_DATA_SLACK_WEIGHT`) and removal (`DIAGNOSTIC_REMOVAL_WEIGHT`)
-  tiers stay flat — exact *between*-tier ordering is T2's lexicographic ladder. `BuildStage2Model`
-  reads the slack weights back from the elastic objective, so the freeze budget `S*` inherits the
-  normalized weights automatically. Why not RHS-norm (`1/|b|`): the budget needs a *large absolute*
+  every editable weight in `(0, 1]`, and leaves the usual all-equal-coefficient model at weight 1.
+  This is a **within-editable-tier** normalization only: data offsets and removals are separate
+  lexicographic tiers, while editable slack refs carry the `ref / rms(Aᵢ)` coefficient used by the
+  editable pass and the stage-2 `E*` budget. Why not RHS-norm (`1/|b|`): the budget needs a *large absolute*
   loosening (100 → thousands), so dividing by the small RHS leaves it expensive and does not fix the
   degeneracy; coefficient-magnitude does. Structural weight assertion in
   `test_decidb_diagnostic_engines.cpp`; end-to-end flip on real TPC-H data in
@@ -381,7 +388,7 @@ remove-only; actual removal is the **I4** L0 dial — I2 only confirms the rigid
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): one shared slack spans all N
 rows with the correct sign; a PER `SHARED_LITERAL` clause folds to one block in query and
 one-per-group in expanded; a data RHS folds to one block in query and stays independent per-row
-in expanded; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a penalized data slack
+in expanded; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a data-offset tier
 defers to an editable knob; a query-mode data RHS folds to one virtual offset; strict re-quotes
 against `typed_k`; an AVG row renders `AVG(x)` with the raw slack; a quadratic constraint slacks
 its linear part only with Q untouched. C++ behavioral: a shared block with rigid floors reports
@@ -391,7 +398,8 @@ overshoot; aggregate `SUM(x) >= 5 PER grp` folds to one `SUM(x) >= 5 PER grp` ed
 and breaks out per group (`[group: a]` / `[group: b]` with `group` rows) in expanded mode;
 a single-row `SUM(x) >= 99 WHEN grp='a'` keeps its `SUM(...)` wrapper and clean WHEN qualifier; a
 BOOLEAN model loosens its SUM target, never its 0/1 domain (regression guard); a data-RHS clause
-reports a named virtual offset (query) / per-row profile (expanded); a penalized data row defers to an editable edit; reversed bounds are
+reports a named virtual offset (query) / per-row profile (expanded); a data-offset row defers
+to an editable edit; reversed bounds are
 reported as their canonical absorbed form; AVG/strict re-quote (single-row SUM keeps its wrapper:
 `SUM(x) > 10`, including strict quadratic); quadratic and McCormick gated to Gurobi; `<>` and
 McCormick rows stay rigid.
@@ -452,12 +460,11 @@ provably enough to neutralize whichever side `z` selects), overridable by the
 `diagnose_decide_removal_bigm` pragma. The wiring is recorded in a `RemovalRef {rows, w_col,
 indicator_col}` on `ElasticModel`.
 
-**Last-resort weighting (B1).** `w` is penalized `DIAGNOSTIC_REMOVAL_WEIGHT` (`1e6`,
-`diagnostic_constants.hpp`), stacked **above** the editable (`1`) and data (`1e3`) slack
-weights, all in the one stage-1 objective (no extra solve). So the solver prefers any
-loosening and drops a `<>` only when loosening genuinely cannot restore feasibility; the
-support `{i : wᵢ = 1}` is the minimum-cardinality removal set. Like the data-slack weight
-this is a coarse weighted stand-in — see T2 in `todo.md`.
+**Removal tier (B1/T2).** `w` has no baked-in objective coefficient in the elastic model. Stage
+1 first minimizes `R = Σ wᵢ`, so the support `{i : wᵢ = 1}` is a minimum-cardinality removal
+set before the engine considers data offsets or editable slack. The next passes freeze
+`R = R*`, minimize data offsets `D`, freeze `D = D*`, and finally minimize editable loosening
+`E`. So dropping a `<>` is a last resort without a fixed Big-M-style objective weight.
 
 **Reading + reporting.** `ReadElasticEdits` reads each `RemovalRef`: `w > 0.5` emits a
 `ClauseEdit{kind = DROP, label = columns[indicator_col].label}` (the F6 `x <> 3` string).
@@ -475,17 +482,16 @@ so a removal-only model is still diagnosed.
 
 **Stage-2 composition (I3).** Stage 2 runs when there is an objective **and** an actionable
 fix (`HasLoosenEdit || HasRemoval`). `BuildStage2Model` **freezes the removal set** by pinning
-each `w` to its stage-1 value (`col_lower = col_upper`) and extends the budget row over the
-`w` columns too, so the cap stays exactly `S* = stage-1 objective` (which included the
-removal penalty). The reported DROP set is therefore stable between stages; letting `w`
-re-optimize the dropped set for the objective is T5 in `todo.md`.
+each `w` to its stage-1 value (`col_lower = col_upper`) and carries the solved tier budgets
+`R ≤ R*`, `D ≤ D*`, and `E ≤ E*`. The reported DROP set is therefore stable between stages;
+letting `w` re-optimize the dropped set for the objective is T4 in `todo.md`.
 
 **Pragma.** `diagnose_decide_removal_bigm` (DOUBLE, default `0` = auto-derive, `>= 0`,
 `decide_diagnostic.cpp`) threads through `DecideDiagParams::removal_bigm` into
-`BuildElasticModel`. The objective weight `W` stays internal.
+`BuildElasticModel`.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): a `<>` pair gets one binary
-`w` wired `−M₂`/`+M₂` with `obj = DIAGNOSTIC_REMOVAL_WEIGHT` and a `RemovalRef`; the pragma
+`w` wired `−M₂`/`+M₂` with zero baked-in objective coefficient and a `RemovalRef`; the pragma
 override replaces M₂; a pinned-`<>` must-drop reports `edit_kind='drop'`; a loosenable
 conflict prefers the LOOSEN and never drops; an **aggregate `<>`** whose disjunction binary is
 a global-block column is named via the `global_variable_labels` channel (not `var_labels`) and
@@ -499,23 +505,20 @@ value is rejected at SET time.
 ## Elastic engine: stage-2 achievable objective (freeze-budget)
 
 I3 reports the **achievable objective** the user gets after the minimal fix — and the
-specific edit that achieves it. Stage 1 (above) finds the least *total* loosening `S*`, but
-when that minimum is non-unique it returns an **arbitrary** minimizer whose edit need not be
-the one best for the user's objective. Stage 2 is a second lexicographic tier: among all
-min-loosening fixes, pick the one that maximizes the user's original objective, and report
-**that** edit so the edit and the objective agree.
+specific edit that achieves it. Stage 1 (above) finds the lexicographically least repair
+budgets `(R*, D*, E*)`, but when that minimum is non-unique it returns an **arbitrary**
+minimizer whose edit need not be the one best for the user's objective. Stage 2 is a final
+lexicographic tier: among all fixes within those repair budgets, pick the one that maximizes
+the user's original objective, and report **that** edit so the edit and the objective agree.
 
 **Method (freeze the budget, not the amounts).** `BuildStage2Model`
 (`decide_diagnostic_engines.cpp`) starts from the stage-1 elastic model (slacks already
 wired) and:
-- adds a rigid **budget row** `Σ wᵢ sᵢ ≤ S*` over the slack columns. The weights are read
-  back from the elastic model's objective coefficients (editable `1`, data
-  `DIAGNOSTIC_DATA_SLACK_WEIGHT`), so the row freezes *exactly* the stage-1 objective. `S*`
-  is `stage1.objective_value` (the stage-1 solve minimized `Σ wᵢ sᵢ`, so its objective value
-  *is* the total loosening). The cap is exactly `S*`, no explicit ε: the stage-1 optimum sits
-  on the boundary and the **backend feasibility tolerance** supplies the cushion that keeps
-  the re-solve feasible (this is decision 1 — "pick against the backend feasibility
-  tolerance" — realized by letting that tolerance *be* the tolerance).
+- adds rigid **budget rows** for every active stage-1 tier: `R ≤ R*` over removal columns,
+  `D ≤ D*` over data-offset slack columns, and `E ≤ E*` over editable slack columns using the
+  same `ref / rms(Aᵢ)` coefficients as the editable pass. Equality blocks count both
+  directional slacks (`s⁺ + s⁻`). The caps are exact stage-1 tier optima; the backend
+  feasibility tolerance supplies the only cushion that keeps the re-solve feasible.
 - **restores the user's original objective** (linear `obj_coeffs`, the quadratic objective
   `q_*` / `has_quadratic_obj` / `nonconvex_quadratic`, and the `maximize` sense), with the
   slack columns set to zero objective weight so the reported objective is exactly `cᵀx` over
@@ -540,15 +543,16 @@ precision. The stage-1 read is exact and is **not** snapped.
 **Objective value plumbing.** `SolverResult` carries `objective_value`, populated on
 `OPTIMAL` by both backends in the model's own sense (`gurobi_solver.cpp` via
 `GRB_DBL_ATTR_OBJVAL` — a new `getdblattr` scalar getter was added to the loader;
-`deterministic_naive.cpp` via HiGHS `getInfo().objective_function_value`). The engine reads
-it for both `S*` (stage 1) and the achievable objective (stage 2) — ground truth, no `cᵀx`
-re-derivation and no quadratic-convention guessing.
+`deterministic_naive.cpp` via HiGHS `getInfo().objective_function_value`). The engine still
+reads the stage-2 achievable objective directly from this field; stage-1 tier budgets are
+computed from the solved repair variables so the same coefficient logic feeds readback and
+the `R*`/`D*`/`E*` freezes.
 
 **Reporting.** `BuildInfeasibleDiagnostic` has two optional arguments
 (`achievable_objective`, `unbounded_after_fix`). When set it emits one EAV row
-`subject_kind='model'`, `attribute='achievable_objective'`, `value=<number>`. `S*` itself is
-**not** surfaced (decision 4), and the stderr headline remains a clause pointer rather than
-an objective report.
+`subject_kind='model'`, `attribute='achievable_objective'`, `value=<number>`. The repair
+budgets themselves are **not** surfaced (decision 4), and the stderr headline remains a
+clause pointer rather than an objective report.
 
 **Stage-2 unbounded (decision 2).** If the relaxed region is unbounded in the objective
 direction (`UNBOUNDED` / `INF_OR_UNBD`), there is no finite optimum: the engine keeps the

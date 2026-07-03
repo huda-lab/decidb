@@ -1,7 +1,6 @@
 #include "catch.hpp"
 
 #include "duckdb/decidb/decide_diagnostic_engines.hpp"
-#include "duckdb/decidb/diagnostic_constants.hpp"
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb.hpp"
 
@@ -319,8 +318,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(elastic.model.num_vars == 4);
 		CHECK(elastic.model.col_lower.size() == 4);
 		CHECK(elastic.model.obj_coeffs.size() == 4);
-		// Objective is min Σ sᵢ: the user var carries weight 0, each slack weight 1.
+		// The transform only wires repair knobs; lexicographic pass objectives are set later.
 		CHECK(elastic.model.obj_coeffs[0] == 0.0);
+		CHECK(elastic.model.obj_coeffs[1] == 0.0);
+		CHECK(elastic.model.obj_coeffs[2] == 0.0);
+		CHECK(elastic.model.obj_coeffs[3] == 0.0);
 		CHECK(!elastic.model.maximize);
 
 		REQUIRE(elastic.slacks.size() == 2);
@@ -340,10 +342,10 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// their slacks as one currency and gut the small-magnitude floor; normalization
 		// weights each knob by ref/rms(A) — the root-mean-square coefficient, so the
 		// weight tracks the typical coefficient magnitude, not the term count. ref = min
-		// editable RMS = 1, so w_floor = 1/1 = 1 and w_budget = 1/1000. Both stay strictly
-		// below the flat data tier (no tier inversion). The end-to-end "loosen the budget,
-		// not the floor" flip is pinned by the Python TPC-H degenerate-edit test on real
-		// multi-variable data.
+		// editable RMS = 1, so w_floor = 1/1 = 1 and w_budget = 1/1000. These are now
+		// per-tier coefficients recorded on the slack refs, not flat model objective
+		// coefficients. The end-to-end "loosen the budget, not the floor" flip is pinned by
+		// the Python TPC-H degenerate-edit test on real multi-variable data.
 		SolverModel model = MakeModel(2, {
 		    {0, 1.0, '>', 30.0, ConstraintKind::USER_PARAMETER},
 		    {1, 1000.0, '<', 100.0, ConstraintKind::USER_PARAMETER},
@@ -355,15 +357,17 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		const auto &budget_block = elastic.slacks[1];
 		CHECK(floor_block.rows == duckdb::vector<idx_t> {0});
 		CHECK(budget_block.rows == duckdb::vector<idx_t> {1});
-		double w_floor = elastic.model.obj_coeffs[floor_block.pos_col];
-		double w_budget = elastic.model.obj_coeffs[budget_block.pos_col];
+		CHECK(floor_block.tier == ElasticRepairTier::EDITABLE_LOOSEN);
+		CHECK(budget_block.tier == ElasticRepairTier::EDITABLE_LOOSEN);
+		double w_floor = floor_block.weight;
+		double w_budget = budget_block.weight;
 		CHECK(w_floor == Approx(1.0));
 		CHECK(w_budget == Approx(0.001));
-		// The large-coefficient row is cheaper to loosen per native unit, and both
-		// editable weights sit below the data-penalty tier.
+		// The large-coefficient row is cheaper to loosen per native unit; the built model's
+		// objective is still empty because tier objectives are installed per pass.
 		CHECK(w_budget < w_floor);
-		CHECK(w_floor < DIAGNOSTIC_DATA_SLACK_WEIGHT);
-		CHECK(w_budget < DIAGNOSTIC_DATA_SLACK_WEIGHT);
+		CHECK(elastic.model.obj_coeffs[floor_block.pos_col] == 0.0);
+		CHECK(elastic.model.obj_coeffs[budget_block.pos_col] == 0.0);
 	}
 
 	SECTION("BuildElasticModel shares ONE slack across a SHARED_LITERAL block") {
@@ -383,6 +387,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(elastic.slacks.size() == 2);
 		CHECK(elastic.slacks[0].rows == duckdb::vector<idx_t> {0, 1, 2});
 		CHECK(elastic.slacks[1].rows == duckdb::vector<idx_t> {3});
+		CHECK(elastic.slacks[0].tier == ElasticRepairTier::EDITABLE_LOOSEN);
+		CHECK(elastic.slacks[1].tier == ElasticRepairTier::EDITABLE_LOOSEN);
 		// The shared slack column appears in all three rows of clause 0.
 		idx_t shared_col = elastic.slacks[0].pos_col;
 		for (idx_t r : {0u, 1u, 2u}) {
@@ -447,12 +453,15 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(q.model.num_vars == 5);
 		REQUIRE(q.slacks.size() == 1);
 		CHECK(q.slacks[0].rows == duckdb::vector<idx_t> {0, 1, 2, 3});
+		CHECK(q.slacks[0].tier == ElasticRepairTier::EDITABLE_LOOSEN);
 		// expanded: one slack per group. 4 vars + 2 slacks.
 		ElasticModel e = BuildElasticModel(model, 0.0, "expanded");
 		CHECK(e.model.num_vars == 6);
 		REQUIRE(e.slacks.size() == 2);
 		CHECK(e.slacks[0].rows == duckdb::vector<idx_t> {0, 1});
 		CHECK(e.slacks[1].rows == duckdb::vector<idx_t> {2, 3});
+		CHECK(e.slacks[0].tier == ElasticRepairTier::EDITABLE_LOOSEN);
+		CHECK(e.slacks[1].tier == ElasticRepairTier::EDITABLE_LOOSEN);
 	}
 
 	SECTION("data-RHS folds by mode: one offset in query, per-row in expanded") {
@@ -467,11 +476,16 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		ElasticModel q = BuildElasticModel(model);
 		REQUIRE(q.slacks.size() == 1);
 		CHECK(q.slacks[0].rows == duckdb::vector<idx_t> {0, 1});
+		CHECK(q.slacks[0].tier == ElasticRepairTier::DATA_OFFSET);
+		CHECK(q.slacks[0].weight == 1.0);
+		CHECK(q.model.obj_coeffs[q.slacks[0].pos_col] == 0.0);
 		// expanded: independent size-1 blocks.
 		ElasticModel e = BuildElasticModel(model, 0.0, "expanded");
 		REQUIRE(e.slacks.size() == 2);
 		CHECK(e.slacks[0].rows == duckdb::vector<idx_t> {0});
 		CHECK(e.slacks[1].rows == duckdb::vector<idx_t> {1});
+		CHECK(e.slacks[0].tier == ElasticRepairTier::DATA_OFFSET);
+		CHECK(e.slacks[1].tier == ElasticRepairTier::DATA_OFFSET);
 	}
 
 	SECTION("USER_MECHANISM and STRUCTURAL rows are never slackened") {
@@ -486,10 +500,10 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(elastic.model.num_vars == 1); // no slack columns added
 	}
 
-	SECTION("data-RHS slack is penalized so an editable knob loosens first") {
+	SECTION("data-RHS slack is a separate tier so an editable knob loosens first") {
 		// I2.c: an editable cap (SHARED_LITERAL) and a data floor (PER_ROW_DATA) both
-		// conflict with a rigid pin; the data slack carries a higher weight, so the
-		// solver loosens the editable cap and leaves the data row alone.
+		// conflict with a rigid pin; the lexicographic data tier is frozen at zero before
+		// editable loosening, so the solver loosens the editable cap and leaves data alone.
 		SolverModel model = MakeModel(1, {
 		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
 		    {0, 1.0, '>', 3.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::PER_ROW_DATA},
@@ -785,8 +799,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	}
 
 	// I4 — the L0 / removal dial. A remove-only `<>` cannot be loosened; instead the
-	// elastic transform gives its disjunction pair one binary `w` (penalized above the
-	// slack weights) that, set to 1, drops the clause.
+	// elastic transform gives its disjunction pair one binary `w` that, set to 1, drops
+	// the clause. The removal tier minimizes Σw before data/editable tiers.
 	SECTION("BuildElasticModel adds a binary removal indicator for a `<>` clause") {
 		// The two USER_MECHANISM rows share indicator_col 1; they get no slack but a
 		// single binary w wired ±M₂ by sense (auto M₂ = the disjunction Big-M = 14).
@@ -798,14 +812,15 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		const auto &rem = elastic.removals[0];
 		CHECK(rem.rows == duckdb::vector<idx_t> {0, 1});
 		CHECK(rem.indicator_col == 1);
-		// One binary column appended (w = col 2), penalized DIAGNOSTIC_REMOVAL_WEIGHT.
+		// One binary column appended (w = col 2); its objective coefficient is set only
+		// during the removal-tier pass.
 		CHECK(elastic.model.num_vars == 3);
 		CHECK(rem.w_col == 2);
 		CHECK(elastic.model.is_binary[2]);
 		CHECK(elastic.model.is_integer[2]);
 		CHECK(elastic.model.col_lower[2] == 0.0);
 		CHECK(elastic.model.col_upper[2] == 1.0);
-		CHECK(elastic.model.obj_coeffs[2] == DIAGNOSTIC_REMOVAL_WEIGHT);
+		CHECK(elastic.model.obj_coeffs[2] == 0.0);
 		// w neutralizes each row with the disjunction Big-M, sign by sense.
 		CHECK(CoeffOn(elastic.model.constraints[0], 2) == -14.0); // `<` row
 		CHECK(CoeffOn(elastic.model.constraints[1], 2) == 14.0);  // `>` row
@@ -857,8 +872,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 	SECTION("prefer-loosen: a loosenable knob is chosen over dropping a `<>`") {
 		// x is pinned to 3 by a rigid floor and an EDITABLE cap, with x <> 3 forbidding
-		// it. Loosening the cap (cost 1) or dropping the `<>` (cost W) both work, so the
-		// engine loosens and never drops (verifies removal weight > slack weight).
+		// it. Loosening the cap or dropping the `<>` both work, so the engine loosens
+		// and never drops because the minimum removal count is zero.
 		SolverModel model = MakeNotEqualModel();
 		ModelConstraint cap; // editable x <= 3
 		cap.indices = {0};

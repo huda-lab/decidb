@@ -60,17 +60,27 @@ struct InfeasibleDiagnosisInput {
 	std::function<SolverResult(const SolverModel &model)> solve_model;
 };
 
+enum class ElasticRepairTier {
+	REMOVAL,
+	DATA_OFFSET,
+	EDITABLE_LOOSEN
+};
+
 //! A slack wired into one or more relaxable rows of the elastic program. A block
 //! may span N matrix rows that share ONE editable user knob (SHARED_LITERAL shapes:
 //! easy MIN/MAX, per-row literal, multi-instance bound) so the minimal slack is the
 //! max overshoot across the block, not the sum. For `=` rows two slacks are used
 //! (s⁺, s⁻); `neg_col` is INVALID for `<` / `>` (one-sided loosening). A size-1
-//! block is the simple-shape (I1) case.
+//! block is the simple-shape (I1) case. `tier`/`weight` drive the lexicographic
+//! stage-1 repair objective: data offsets use raw slack, editable loosening uses
+//! the T1 scale-normalized weight.
 struct BlockSlackRef {
 	vector<idx_t> rows;                      //!< Row indices this slack spans (≥1).
 	idx_t pos_col;                           //!< Positive slack column in the elastic model.
 	idx_t neg_col = DConstants::INVALID_INDEX; //!< Negative slack column (`=` rows only).
 	char sense;                              //!< '<', '>', or '=' (uniform across the block).
+	ElasticRepairTier tier = ElasticRepairTier::EDITABLE_LOOSEN;
+	double weight = 1.0;
 	//! When true, `rows` index `model.quadratic_constraints` (slack on the linear
 	//! RHS only, never Q — I2.d); otherwise they index `model.constraints`.
 	bool quadratic = false;
@@ -80,8 +90,9 @@ struct BlockSlackRef {
 //! (I4). `<>` cannot be loosened — only dropped — so a single binary `w` is wired
 //! into both Big-M disjunction rows with a ±M₂ coefficient (sign by sense): w=1
 //! makes both rows vacuous (the clause is dropped). The pair is identified by a
-//! shared `indicator_col` (the `<>` disjunction binary). Penalizing W·w (above the
-//! editable/data slack weights) makes removal a last resort.
+//! shared `indicator_col` (the `<>` disjunction binary). The lexicographic stage-1
+//! repair objective minimizes the removal tier first, so removal stays a last resort
+//! without a Big-M-style objective weight.
 struct RemovalRef {
 	vector<idx_t> rows;        //!< Rows of this `<>` disjunction (the pair sharing the indicator).
 	idx_t w_col;               //!< The binary removal column in the elastic model.
@@ -89,7 +100,7 @@ struct RemovalRef {
 };
 
 //! The elastic program built from a base model: the transformed SolverModel (user
-//! objective zeroed, slacks appended, `min Σ sᵢ`) plus the slack→row wiring needed
+//! objective zeroed, slacks/removal switches appended) plus the repair-knob wiring needed
 //! to read the result back. Pure function of the base model — the structural test
 //! seam for the elastic transform.
 struct ElasticModel {

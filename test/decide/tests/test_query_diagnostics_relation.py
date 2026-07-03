@@ -540,10 +540,10 @@ class TestDiagnosticsRelation:
         assert loosen_subjects == {"x >= 5", "x >= 7"}
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_data_rhs_penalized_prefers_editable_edit(self, request, cli_fixture):
+    def test_infeasible_data_rhs_tier_prefers_editable_edit(self, request, cli_fixture):
         """I2.c: when an editable knob (`x <= 5`) AND a data floor (`x >= lo`) both
-        conflict, the data slack is penalized, so the solver loosens the editable cap
-        and leaves the data row alone — a clean single edit, no conflict row."""
+        conflict, the data-offset tier is frozen at zero before editable loosening, so the
+        solver loosens the editable cap and leaves the data row alone."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,12)) t(id, lo) "
@@ -556,6 +556,27 @@ class TestDiagnosticsRelation:
         assert cap["suggested_change"] == "x <= 12"
         assert cap["amount"] == "7"
         assert not [r for r in rows if r["attribute"] == "conflict"]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_lexicographic_data_vs_large_editable_slack(self, request, cli_fixture):
+        """T2: a large editable slack still beats a small data virtual offset. The old
+        summed ladder could prefer `x >= demand - 1` because 1 * 1e3 < 10000; the
+        lexicographic D tier must stay at zero and loosen the source literal instead."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,1)) t(id, demand) "
+            "DECIDE x IS REAL SUCH THAT 10000*x <= 0 AND x >= demand MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        cap = _attrs(rows, "clause", "10000*x <= 0")
+        assert cap["edit_kind"] == "loosen"
+        assert cap["edit_source"] == "source_literal"
+        assert cap["suggested_change"] == "10000*x <= 10000"
+        assert cap["amount"] == "10000"
+        assert not [r for r in rows if r["attribute"] == "edit_source" and r["value"] == "virtual_offset"]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_foldable_rhs_cap_is_editable(self, request, cli_fixture):
@@ -651,7 +672,7 @@ class TestDiagnosticsRelation:
     def test_infeasible_avg_reports_raw_slack_and_avg_label(self, request, cli_fixture):
         """I2.d: an AVG constraint is stored pre-scaled by 1/N, so the engine renders
         the clause as `AVG(x)` (not `0.33*x + ...`) and reports the slack in the user's
-        AVG units. A penalized data floor (`x >= lo`) forces AVG(x) up to 10, so the
+        AVG units. A data-offset floor (`x >= lo`) forces AVG(x) up to 10, so the
         edit is `AVG(x) <= 5` → `AVG(x) <= 10` (raw amount 5)."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
@@ -670,7 +691,7 @@ class TestDiagnosticsRelation:
         """I2.d: `SUM(x) < 10` (integer, single row) is built as `<= 9` (δ baked in). The
         reported edit must re-quote against the user's typed `10` and render `<`, not the
         δ-adjusted `<=`. The single-row aggregate keeps its `SUM(...)` wrapper (Facet B). A
-        penalized data floor forces the strict cap to loosen by 6 → `SUM(x) < 16`."""
+        data-offset floor forces the strict cap to loosen by 6 → `SUM(x) < 16`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,15)) t(id, lo) "
@@ -686,7 +707,7 @@ class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_strict_greater_than_requotes_typed_literal(self, request, cli_fixture):
         """I2.d: the `>` mirror of the strict re-quote. `SUM(x) > 10` (single row, built as
-        `>= 11`) loosens downward against a penalized data cap → `SUM(x) > 2`. The
+        `>= 11`) loosens downward against a data-offset cap → `SUM(x) > 2`. The
         single-row aggregate keeps its `SUM(...)` wrapper (Facet B)."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
@@ -703,7 +724,7 @@ class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_quadratic_loosens_linear_rhs(self, request, cli_fixture):
         """I2.d: a quadratic constraint (`POWER(x,2) <= 4`) gets a slack on its linear
-        RHS only; loosening it (against a penalized data floor) re-quotes the clause as
+        RHS only; loosening it (against a data-offset floor) re-quotes the clause as
         `POWER(x, 2) <= 100`. QCQP is Gurobi-only (HiGHS cannot solve it)."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
@@ -741,9 +762,9 @@ class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_ne_prefers_loosen_over_drop(self, request, cli_fixture):
         """I4 prefer-loosen: `<>` is remove-only, and I4 now offers a removal dial for it,
-        but dropping is the last resort (its weight sits above the slack weights). The
-        conflict `x <> 5 AND 5 <= x <= 5` can be fixed either by dropping the `<>` or by
-        loosening an editable bound, so the engine loosens the bound and never drops."""
+        but dropping is the last resort (the removal tier is minimized first). The conflict
+        `x <> 5 AND 5 <= x <= 5` can be fixed either by dropping the `<>` or by loosening an
+        editable bound, so the engine loosens the bound and never drops."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1)) t(id) "
@@ -757,6 +778,27 @@ class TestDiagnosticsRelation:
         subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
         assert subjects, "expected an editable-bound edit"
         assert all("<>" not in s for s in subjects), subjects
+        assert not [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_lexicographic_removal_vs_large_loosen(self, request, cli_fixture):
+        """T2: a huge editable loosening still beats dropping `<>`. The old weighted
+        ladder could prefer DROP because 1e6 < 10000000; lexicographic repair keeps the
+        removal count at zero whenever a source-literal loosening can restore feasibility."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,5)) t(id, lo) "
+            "DECIDE x IS INTEGER SUCH THAT x <> 5 AND x >= lo "
+            "AND 10000000*x <= 50000000 MINIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        cap = _attrs(rows, "clause", "10000000*x <= 50000000")
+        assert cap["edit_kind"] == "loosen"
+        assert cap["suggested_change"] == "10000000*x <= 60000000"
+        assert cap["amount"] == "10000000"
         assert not [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
