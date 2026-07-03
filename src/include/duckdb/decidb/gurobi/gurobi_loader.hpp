@@ -85,6 +85,10 @@ struct GurobiAPI {
 
 	// Solve and query
 	int (*optimize)(void *model);
+	// Optional (loaded best-effort): requests early termination of a running optimize()
+	// from another thread. Thread-safe per Gurobi. NULL if the symbol was not found —
+	// callers must gate on it (mid-solve interrupt degrades to boundary-only).
+	void (*terminate)(void *model);
 	int (*getintattr)(void *model, const char *attrname, int *valueP);
 	int (*getdblattr)(void *model, const char *attrname, double *valueP);
 	int (*getdblattrarray)(void *model, const char *attrname, int start, int len, double *values);

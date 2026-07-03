@@ -5825,6 +5825,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // classifier (status + mode → terminal); the operator owns the engine call,
     // stash, and throw for each terminal. TIME_LIMIT still shares the static-error
     // path until its engine lands (R6).
+    // Set when a caveated success (an unproven incumbent returned as rows) has stashed a
+    // `state='slow'` diagnosis it wants to survive: the success epilogue's blanket
+    // ClearDecideDiagnostic must then spare it, so the quality stays queryable.
+    bool keep_slow_diagnosis = false;
     switch (RouteSolveResult(solve_result, diagnose_mode)) {
     case DiagnosisTerminal::SOLVED:
         break; // fall through to the success stores below
@@ -5988,6 +5992,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         double cum_elapsed = solve_wall_timer.Elapsed();
         double cum_budget = chunk;
 
+        bool has_objective = decide_objective != nullptr || !composed_minmax_objective_terms.empty();
+
         if (eff_on_timeout == "error") {
             // Print the checkpoint once, then error — `error` never returns the
             // incumbent (that is the ask/continue stop behavior below). This is also
@@ -5995,10 +6001,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // behavior for tests / benchmarks / pipes. Stash the structured mirror + point
             // to decide_diagnostics(), like the unbounded / infeasible terminals.
             PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
-            bool has_objective = decide_objective != nullptr || !composed_minmax_objective_terms.empty();
             DecideDiagnostic diag = BuildTimeoutDiagnostic(solve_result, cum_elapsed, has_objective);
             StashDecideDiagnostic(context, diag);
             ThrowDecideDiagnosisReady(diag);
+        }
+
+        // Mid-chunk Ctrl-C: in `continue` mode (auto-resume, where Ctrl-C is the *only* way
+        // to stop) let a resumed chunk be cut short the instant the query is interrupted,
+        // instead of waiting for the next boundary. Scoped to `continue`: `ask` already stops
+        // the user at each prompt, so it keeps the boundary-only behavior (and stays free of
+        // the watcher thread). The session polls this during its solve; a backend that cannot
+        // interrupt mid-solve (HiGHS today) ignores it. Only continuation chunks are affected.
+        if (retained_session && eff_on_timeout == "continue") {
+            retained_session->SetInterruptPoll([&context]() { return context.interrupted.load(); });
         }
 
         // ask / continue: report at each boundary, then continue or stop.
@@ -6064,6 +6079,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 // SQL NOTICE channel, so this rides on stderr with the report.
                 fprintf(stderr,
                         "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
+                // Also stash the quality as a queryable `state='slow'` diagnosis and keep it
+                // past the success epilogue, so `SELECT * FROM decide_diagnostics()` answers
+                // "how good is the solution I got" after a caveated stop (the stderr caveat is
+                // one-shot). A proven-OPTIMAL stop skips this — nothing to caveat. A caveated
+                // success has an incumbent, so bucket-B does not run (feasibility is proven).
+                StashDecideDiagnostic(context,
+                                      BuildTimeoutDiagnostic(solve_result, cum_elapsed, has_objective));
+                keep_slow_diagnosis = true;
             }
             // If a Ctrl-C in continue mode broke the loop, the interrupt is now handled
             // (we stopped solving and have a result to return); clear it so the rows
@@ -6074,9 +6097,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
         // Stopped with nothing found yet: stash the structured diagnosis and point to it
         // (mirrors the error-mode exit above and the unbounded / infeasible terminals).
-        bool no_inc_has_objective = decide_objective != nullptr || !composed_minmax_objective_terms.empty();
         DecideDiagnostic no_incumbent_diag =
-            BuildTimeoutDiagnostic(solve_result, cum_elapsed, no_inc_has_objective);
+            BuildTimeoutDiagnostic(solve_result, cum_elapsed, has_objective);
         StashDecideDiagnostic(context, no_incumbent_diag);
         ThrowDecideDiagnosisReady(no_incumbent_diag);
     }
@@ -6086,8 +6108,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     }
 
     // Success: invalidate any diagnosis stashed by an earlier failed solve on this
-    // connection, so decide_diagnostics() no longer reports a now-resolved failure.
-    ClearDecideDiagnostic(context);
+    // connection, so decide_diagnostics() no longer reports a now-resolved failure —
+    // unless this very solve is a caveated success that just stashed its own quality
+    // diagnosis (keep_slow_diagnosis), which the user should still be able to query.
+    if (!keep_slow_diagnosis) {
+        ClearDecideDiagnostic(context);
+    }
     gstate.ilp_solution = std::move(solve_result.solution);
     // Move the indexer onto gstate now that solve is complete; readback in
     // Execute() needs it to outlive solver_input.

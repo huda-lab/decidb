@@ -230,6 +230,11 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	api.addqconstr = reinterpret_cast<decltype(api.addqconstr)>(GetSym(handle, "GRBaddqconstr"));
 	// Not required — bilinear constraints will error if this is missing and needed
 
+	// Optional: GRBterminate (mid-solve interrupt). Present in all modern Gurobi, but
+	// loaded best-effort so a missing symbol never breaks solving — the mid-chunk Ctrl-C
+	// feature just falls back to interrupting at the next chunk boundary.
+	api.terminate = reinterpret_cast<decltype(api.terminate)>(GetSym(handle, "GRBterminate"));
+
 	return true;
 }
 

@@ -23,6 +23,8 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/decidb/solver_result.hpp"
 
+#include <functional>
+
 namespace duckdb {
 
 struct SolverModel;
@@ -44,6 +46,16 @@ public:
 	//! Resume the live solver for another `time_limit_seconds` chunk. The MIP tree
 	//! and incumbent from the previous chunk are preserved (warm resume).
 	virtual SolverResult Continue(double time_limit_seconds) = 0;
+
+	//! Install a poll the session checks *during* a solve so a running chunk can be cut
+	//! short (mid-chunk Ctrl-C) instead of only at the chunk boundary. `poll()` returning
+	//! true requests early termination; the chunk then returns its best-so-far as a
+	//! TIME_LIMIT result, exactly like a natural time-limit stop. The base is a no-op:
+	//! a backend that cannot interrupt mid-solve (or lacks the symbol) simply keeps the
+	//! boundary-only behavior — the poll never changes a solve's *outcome*, only *when* it
+	//! returns. Set once by the operator before the continuation loop.
+	virtual void SetInterruptPoll(std::function<bool()> poll) {
+	}
 };
 
 //! Create a fresh session for the given backend (mirrors SolvePreparedModel's

@@ -5,7 +5,11 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/gurobi/gurobi_loader.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <functional>
+#include <thread>
 
 namespace duckdb {
 
@@ -66,9 +70,16 @@ public:
         return RunAndReadback(time_limit_seconds);
     }
 
+    void SetInterruptPoll(std::function<bool()> poll) override {
+        should_interrupt = std::move(poll);
+    }
+
 private:
     GurobiGuard guard;
     idx_t total_vars = 0;
+    //! When set (continuation only), a watcher thread polls this during optimize() and
+    //! calls GRBterminate() to cut the chunk short; empty = boundary-only (the default).
+    std::function<bool()> should_interrupt;
 
     void Load(const SolverModel &ilp);
     SolverResult RunAndReadback(double time_limit_seconds);
@@ -208,7 +219,30 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
         api.setdblparam(model_env, "TimeLimit", time_limit_seconds);
     }
 
+    // Mid-solve interrupt: while optimize() blocks, a watcher thread polls `should_interrupt`
+    // and calls GRBterminate() (thread-safe) to end the chunk early on Ctrl-C — otherwise the
+    // interrupt would only be seen at the next chunk boundary. Gated on the poll being set
+    // (continuation only) AND the optional terminate symbol being present; absent either, this
+    // is a no-op and the solve runs exactly as before. optimize() then returns status
+    // GRB_INTERRUPTED, mapped to TIME_LIMIT below (a stop-with-best-so-far, like a real limit).
+    std::atomic<bool> solve_finished {false};
+    std::thread interrupt_watcher;
+    if (should_interrupt && api.terminate) {
+        interrupt_watcher = std::thread([this, &api, &solve_finished]() {
+            while (!solve_finished.load(std::memory_order_relaxed)) {
+                if (should_interrupt()) {
+                    api.terminate(guard.model);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            }
+        });
+    }
     int error = api.optimize(guard.model);
+    solve_finished.store(true, std::memory_order_relaxed);
+    if (interrupt_watcher.joinable()) {
+        interrupt_watcher.join();
+    }
     if (error) {
         throw InvalidInputException("Gurobi optimization call failed: %s",
                                     api.geterrormsg(guard.env));
@@ -264,6 +298,8 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
             // disambiguate.
             result.status = SolverStatus::INF_OR_UNBD;
             break;
+        case GRB_INTERRUPTED: // mid-solve Ctrl-C (terminate): a stop-with-best-so-far, exactly
+                              // like a time-limit stop — read the incumbent the same way.
         case GRB_TIME_LIMIT: {
             result.status = SolverStatus::TIME_LIMIT;
             // The best proven bound is always meaningful at the time limit,

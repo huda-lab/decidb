@@ -127,9 +127,34 @@ in `RegisterDecideDiagnosticOptions`, read via `GetDecideOnTimeoutMode`:
 - **`continue`** — auto-resume every chunk with no prompt until the solver finishes on
   its own (proven optimum → success rows; a definitive infeasible/unbounded → error).
   The query-interrupt flag (`ClientContext::interrupted`, set by Ctrl-C) is polled at
-  each chunk boundary, so Ctrl-C breaks the loop at the **next** checkpoint (v1 has no
-  mid-chunk interrupt — see `todo.md`). On that break the interrupt is cleared so the
-  incumbent rows still flow instead of aborting the query.
+  each chunk boundary **and, on Gurobi, mid-chunk** (see below). On a break the interrupt
+  is cleared so the incumbent rows still flow instead of aborting the query.
+
+### Mid-chunk Ctrl-C (Gurobi)
+
+Boundary-only polling means a Ctrl-C waits out the rest of the current chunk (up to a full
+`ResolveDecideTimeLimit()` late). To cut a running chunk short the instant it is interrupted:
+
+- **`SolverSession::SetInterruptPoll(std::function<bool()>)`** (`solver_session.hpp`) — the
+  operator installs a poll reading `context.interrupted` once, right before the continuation
+  loop, **scoped to `continue`** (`physical_decide.cpp`). `ask` is left untouched: it already
+  stops the user at each prompt, and — found empirically — a watcher thread contending with the
+  interactive `getline` destabilizes the prompt, so `ask` keeps the boundary-only path.
+- **`GurobiSession`** (`gurobi_solver.cpp`) — while `optimize()` blocks, a watcher `std::thread`
+  polls every 25 ms and calls **`GRBterminate()`** (thread-safe) when the poll trips; the thread
+  is joined right after `optimize()` returns. `optimize()` then reports `GRB_INTERRUPTED`, which
+  is mapped to `SolverStatus::TIME_LIMIT` (same incumbent readback) — so the chunk returns its
+  best-so-far exactly like a natural limit stop, and the existing boundary check breaks and
+  delivers the rows with **zero operator-logic change** beyond installing the poll. Measured
+  latency: ~0.06 s (vs. waiting out the chunk).
+- **`GRBterminate` is loaded best-effort** (optional symbol, like `GRBaddqconstr`); if absent
+  the watcher is never spawned and behavior degrades to boundary-only. **HiGHS** does not
+  override `SetInterruptPoll` (no thread-safe terminate), so it stays boundary-only — the
+  solver-agnostic fallback. The **first chunk** (inside `SolveModel`, before the poll is
+  installed) is not yet interruptible; only continuation chunks are (`todo.md`).
+- **No regression surface:** the poll is installed only on the `continue` retained session, so
+  every other solve — the first chunk, `ask`, `error`, normal solves, and all diagnostic
+  re-solves (`SolvePreparedModel`) — spawns no watcher and runs byte-for-byte as before.
 
 **Every continue restarts the timer.** Each chunk is a fresh `ResolveDecideTimeLimit()`
 budget; the operator tracks *cumulative* elapsed and re-prints the report every boundary

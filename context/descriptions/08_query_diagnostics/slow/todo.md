@@ -5,34 +5,40 @@ in-operator warm-continuation loop with the `decide_on_timeout` pragma (S3), the
 success-with-incumbent stop delivery (S4), and the terminal wiring (S5). See `done.md`
 for how it all works. Only deferred / out-of-scope items remain below.
 
-## Deferred — touches a non-diagnostic path
+## Remaining sub-items (small)
 
-- **Populate `decide_diagnostics()` on a caveated success (returned unproven incumbent).**
-  As of the relation-parity change, a timed-out solve that *fails* (error mode / no-incumbent
-  stop) now stashes a `state='slow'` diagnosis and points to `decide_diagnostics()`, mirroring
-  the unbounded / infeasible terminals. A stop that *succeeds* by returning the unproven
-  incumbent as rows (`ask` `s`, `continue` Ctrl-C) does **not** — the success delivery path
-  unconditionally `ClearDecideDiagnostic`s (`physical_decide.cpp`, end of `Finalize`), so the
-  quality (best-possible objective, within-%, elapsed) is only on the stderr caveat, not
-  queryable. Surfacing it there would mean stashing on a *successful* solve and teaching the
-  clear step to spare a slow diagnosis — a change to the success path, not just diagnostics, so
-  it is out of scope for the relation-parity change. Revisit if users want to query "how good
-  was the solution I got" after a caveated stop.
+- **Mid-solve Ctrl-C: HiGHS + first chunk.** Shipped 2026-07-03 for **`continue` mode on
+  Gurobi** (a watcher thread calls `GRBterminate`; see `done.md`). Two gaps remain: **HiGHS**
+  stays boundary-only (its interrupt needs the `setCallback`/`startCallback` path, not a
+  thread-safe terminate) — the solver-agnostic *fallback*; and the **first chunk** (run inside
+  `SolveModel`, before the operator installs the poll) is not interruptible — only continuation
+  chunks are. Both are minor: HiGHS is the slow non-recommended backend, and continue users set
+  small chunks, so the first chunk is short.
 - **Minor: report-block time rendering rounds sub-second limits.** `FormatDuration` prints one
   decimal, so `DECIDB_TIME_LIMIT=0.05` shows "hit the 0.1s time limit" / "elapsed 0.1s". Cosmetic,
   and `FormatDuration` is shared, so leave it unless it misleads.
 
 ## Superseded / deferred (out of scope)
 
-- **Instantaneous Ctrl-C checkpoint: deferred (planned follow-up).** Today `continue`
-  mode polls `ClientContext::interrupted` only at each chunk boundary, so Ctrl-C stops at
-  the **next** checkpoint (up to one full chunk later), not mid-solve. Interrupting the
-  solve *immediately* needs a solver-callback interrupt (Gurobi `GRBterminate` / HiGHS
-  `setCallback`+`startCallback`, both confirmed to exist) plus coordination with DuckDB's
-  own SIGINT handler. Add this so a long chunk can be cut short on demand.
-- **Bucket B elastic-as-classifier: deferred.** Running the elastic engine on a
-  no-solution timeout to decide "hard vs infeasible" is a nice future refinement; v1 just
-  reports "no solution yet" and offers to continue.
-- **Diverging-bound → unbounded hand-off: deferred.** An unbounded MILP that reaches the
-  limit (incumbent + bound running to ∞) could route to `unbounded/`. Rare (unbounded is
-  normally caught pre-timeout via ray extraction); revisit if it shows up.
+- **Bucket B elastic-as-classifier: attempted 2026-07-03, reverted — provably non-viable.**
+  The idea was to run the elastic model on a no-solution timeout to classify hard-vs-infeasible.
+  Implemented and tested, then removed, because it cannot conclude on the very problems that
+  reach this state: a no-incumbent timeout means *finding a feasible point is hard*, and the
+  elastic classifier's two possible verdicts each require solving something at least as hard —
+  a "feasible" verdict needs a zero-slack point (a feasible point of the original, the exact
+  task that just timed out), and an "infeasible" verdict needs to prove min-slack > 0 (prove
+  infeasibility, which if quick would have fired the INFEASIBLE terminal *before* the timeout).
+  Empirically: an N=40 feasible market-split stayed "undetermined" at 0.3s / 1s / 3s (the
+  elastic is exactly as hard as the original). So it added a full extra solve's latency for a
+  verdict it essentially never produces. Revisit only if a *cheap* infeasibility certificate
+  (not a full elastic re-solve) becomes available.
+- **Diverging-bound → unbounded hand-off: deferred — assessed as not a reachable state.**
+  The idea was to route an unbounded MILP that reaches the limit (incumbent + bound running
+  to ∞) to `unbounded/`. On investigation this does not occur: both backends flag
+  unboundedness at presolve / root as `UNBOUNDED` / `INF_OR_UNBD` **independent of the time
+  limit**, and the router already sends those (with a ray) to the unbounded terminal — so a
+  `TIME_LIMIT` result never carries a non-finite bound. And even if it did, an MILP time-out
+  has **no ray**, so the unbounded engine's core (name the escaping variable via the ray)
+  could not run; the best a hand-off could do is a generic "looks unbounded" note. Detection
+  would be untestable dead code (no way to construct a solve that reaches this state).
+  Revisit **only** if a real query is observed hitting `TIME_LIMIT` with a diverging bound.
