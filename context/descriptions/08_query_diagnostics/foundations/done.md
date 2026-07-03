@@ -348,11 +348,14 @@ as a fixed-schema relation.
   `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
   The infeasible engine populates clause/model rows (`BuildInfeasibleDiagnostic` —
-  see `infeasible/done.md`) for loosen/drop/conflict edits and achievable-objective
-  metadata. It adds one more option, `diagnose_decide_removal_bigm` (DOUBLE,
-  default `0` = auto-derive, `>= 0`): the Big-M used to neutralize a dropped `<>`
-  in the I4 removal dial (see `infeasible/done.md`), threaded via
-  `DecideDiagParams::removal_bigm`.
+  see `infeasible/done.md`) for loosen/drop edits and achievable-objective
+  metadata. It adds two more options: `diagnose_decide_removal_bigm` (DOUBLE,
+  default `0` = auto-derive, `>= 0`) — the Big-M used to neutralize a dropped `<>`
+  in the I4 removal dial, threaded via `DecideDiagParams::removal_bigm`; and
+  `diagnose_decide_infeasible_slack_scope` (VARCHAR, `query` default / `expanded`)
+  — the T3 slack-scope policy selecting a folded SQL-level edit vs. the per-row /
+  per-group profile, threaded via `DecideDiagParams::slack_scope` (see
+  `infeasible/done.md`).
 
 Tested in `test/decide/tests/test_query_diagnostics_relation.py` (both backends) and
 `test/common/test_decidb_diagnostic_engines.cpp` (a clause-shaped stub row).

@@ -102,11 +102,11 @@ by reconstructing its algebra from the **original** row's coefficients over user
 column names (`BuildColumnProvenance`) — `x <= 5` → suggestion `x <= 10` — so no source
 expression text needs threading. `BuildInfeasibleDiagnostic` emits, per edit, EAV rows
 `subject_kind='clause'`, `subject=<clause as written>`, `attribute='suggested_change' |
-'amount'`, plus a one-line summary. The summary only points to the relevant clause target
-(for example, "diagnosis points to clause `x <= 5`"); suggested changes, amounts, conflict
-counts, groups, and achievable-objective facts stay in `decide_diagnostics()`. A
-data-RHS-only conflict points to the data-backed clause, and PER-group edits point to the
-grouped clause plus the affected group keys.
+'amount' | 'edit_source' | 'offset_scope'`, plus a one-line summary. The summary only points
+to the relevant clause target (for example, "diagnosis points to clause `x <= 5`"); suggested
+changes, amounts, edit sources, groups, and achievable-objective facts stay in
+`decide_diagnostics()`. How a fanout clause (data RHS, PER aggregate) reads back is governed
+by the slack-scope pragma — see "Slack-scope policy: query vs expanded" below.
 
 **Elastic-infeasible signal.** If the elastic program is *itself* infeasible, the conflict
 reaches rigid rows → `BuildElasticInfeasibleDiagnostic` renders a distinct outcome
@@ -122,6 +122,72 @@ relaxable rows at all, the engine returns invalid (static error).
 (freeze-budget)" below), the L0/removal dial (**I4**, `<>` remove-only), lean
 `decide_diagnostics()` reporting (**I5**), and all per-shape slack placement and unit
 conversion (**I2.a–I2.e**, "per-shape slack placement" below) are shipped.
+
+## Slack-scope policy: query vs expanded (T3)
+
+The `diagnose_decide_infeasible_slack_scope` session pragma (VARCHAR, default `query`,
+validated at SET time in `decide_diagnostic.cpp`; read into `DecideDiagParams::slack_scope`)
+answers two different user questions with the same engine:
+
+- **`query` (default)** — *"What single SQL rule do I change?"* Every knob that fans out
+  (a PER clause across its groups, a data-backed RHS across its rows, a multi-instance cap)
+  folds into **one** slack. The reported edit corresponds to the single literal the user
+  would edit. A data RHS with no literal to loosen reports a **virtual offset**.
+- **`expanded`** — *"Which generated rows/groups are actually tight?"* PER/aggregate groups
+  get one slack each (`edit_source='expanded_group'`, `offset_scope='group'`); a data RHS
+  stays per-row (`edit_source='expanded_row'`, `offset_scope='row'`), each conflicting row
+  exposing its exact overshoot. A debug/profile view, not necessarily a pasteable SQL edit.
+
+**Mechanism (one folding rule, two block keys).** The policy lives entirely in
+`BuildElasticModel` + `ReadElasticEdits` (`decide_diagnostic_engines.cpp`); the operator and
+the rest of the engine are unchanged. `BuildElasticModel(base, removal_bigm, slack_scope)`:
+
+- **`folds()`** — a `SHARED_LITERAL` knob always folds; a `PER_ROW_DATA` row folds **only in
+  query mode** (in expanded mode its rows stay independent, one slack each).
+- **`block_key()`** — query mode keys a block by `clause_id` alone (so all PER groups of a
+  clause collapse into one slack = the single literal edit); expanded mode keys by
+  `(clause_id, group_key)` (so each PER group is its own slack). A folded data block still
+  carries `DIAGNOSTIC_DATA_SLACK_WEIGHT` (data stays the penalized last-resort tier in both
+  modes — only the *grouping* changes by mode, never the weight ladder).
+
+**Readback (`ReadElasticEdits`, threaded with `slack_scope`).** Per block:
+
+- **query** — one clause-level edit with the group identity dropped (`offset_scope='clause'`,
+  no `group` row). A data RHS → a `virtual_offset` LOOSEN (`MakeVirtualOffsetEdit`:
+  `x <= col + delta` / `>=` → `col - delta`, where `col` is `ConstraintProvenance::rhs_label`,
+  the RHS column name carried from the binder — fall back to the numeric representative RHS
+  when absent). Any other literal knob → `source_literal`.
+- **expanded** — a data RHS → `expanded_row` per conflicting row; a PER-grouped literal →
+  `expanded_group` per group (keeping the group key); an ungrouped literal → `source_literal`.
+
+**Reporting contract (frozen EAV vocabulary, additive to I5).** Every LOOSEN edit carries
+`edit_source ∈ {source_literal, virtual_offset, expanded_row, expanded_group}` and
+`offset_scope ∈ {clause, row, group}` (emitted by `BuildInfeasibleDiagnostic` when set). The
+old `CONFLICT_SUMMARY` edit kind (the data-RHS `"conflicts in M of N rows"` dead-end) is
+**removed** — a data conflict is now an actionable `virtual_offset` (query) or an
+`expanded_row` profile (expanded). The stderr headline stays a lean clause pointer (**T5**):
+in query mode it points to the folded clause (`diagnosis points to clause \`SUM(x) >= 5 PER
+grp\``), never a per-group list; the per-group breakdown and all amounts/sources live in
+`decide_diagnostics()`.
+
+**easy-MAX + PER is one global cap, correctly.** `MAX(x) <= K PER g` is mathematically
+`x <= K` for **every** row, so the optimizer's easy-MIN/MAX rewrite strips the (vacuous) PER
+wrapper (`decide_optimizer.cpp`, `RewriteMinMaxInConstraint`) and the cap is absorbed as one
+uniform column bound. There is genuinely no per-group *cap* to break out — the diagnosis
+reports the single global edit (`x <= K` → `x <= K + max overshoot`) in **both** modes, which
+is exactly right. (This resolves the former "easy-MAX+PER collapses" note: it was not a bug,
+just the uniform cap surfacing. Preserving a per-group *overshoot profile* would require
+carrying the stripped PER key as a diagnosis-only side channel through the optimizer — not
+done, since it risks the empty-group/WHEN semantics the strip protects.)
+
+**Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): `BuildElasticModel` folds a
+PER `SHARED_LITERAL` clause into one block in query mode and one-per-group in expanded; a data
+RHS folds to one block in query and stays independent per-row in expanded. Python differential
+(`test_query_diagnostics_relation.py`, both backends): data-RHS query virtual offset (named
+column) + expanded per-row profile; PER-aggregate query fold (one clause edit) + expanded
+per-group; option validation for the pragma. TPC-H (`test_query_diagnostics_tpch.py`): the
+`SUM(x) >= 5 PER l_orderkey` case folds in query and breaks out per failing order in expanded;
+`x >= l_quantity` reports the named virtual offset in query and per-row in expanded.
 
 ## Elastic engine: per-shape slack placement (shared blocks, PER, multi-instance bounds)
 
@@ -148,39 +214,42 @@ single scalar knob), so `PER_ROW_DATA` means *exactly* "data RHS"; the absorbed-
 tags its rows `SHARED_LITERAL`. Quadratic constraints leave the default and are always treated as
 editable (see I2.d below).
 
-**Grouping.** `BuildElasticModel` groups relaxable `SHARED_LITERAL` rows by
-`(clause_id, group_key)` into one block → **one shared slack** wired into all N rows
-(`=` blocks get one shared `s⁺` and one shared `s⁻` — dual shared slacks). With `eᵢ − s ≤ K`
-on every row the single `s` is driven to the **max overshoot**, so the reported edit is the
-max (not the per-row sum) and the global "which clause to relax" race is not skewed ≈N×.
+**Grouping (mode-aware — see "Slack-scope policy" above).** `BuildElasticModel` groups
+relaxable rows into blocks via `folds()` + `block_key()`. A `SHARED_LITERAL` block gets **one
+shared slack** wired into all N rows (`=` blocks get one shared `s⁺` and one shared `s⁻`); with
+`eᵢ − s ≤ K` on every row the single `s` is driven to the **max overshoot**, so the reported
+edit is the max (not the per-row sum) and the "which clause to relax" race is not skewed ≈N×.
 This covers **easy MIN/MAX** (`MAX(e) ≤ K` → per-row `eᵢ ≤ K`, absorbed as a shared cap),
 **per-row literal** constraints, and **multi-instance bounds** (`x ≤ K` over N instances).
-**PER** keys on `(clause_id, group_key)`, so each group is its own block: an aggregate
-`SUM(x) ≥ K PER g` emits one row per group, hence one slack per group (clean per-group edits).
-**easy-MAX+PER is the exception:** an easy-MAX cap is absorbed as a column bound, which does
-**not** preserve the PER grouping, so it re-emits as one *global* shared block — the same
-user-facing edit (`K → K + max overshoot`) but without per-group granularity — see T4 in
-`todo.md`.
+For **PER**, the block key depends on the mode: **query** keys by `clause_id` alone, so all
+groups of `SUM(x) ≥ K PER g` fold into one slack = the single literal edit; **expanded** keys
+by `(clause_id, group_key)`, so each group is its own slack (per-group profile). **easy-MAX +
+PER** re-emits as one global cap in both modes — correctly, because the easy rewrite makes the
+cap uniform `x ≤ K` across groups (the optimizer strips the vacuous PER; see "Slack-scope
+policy").
 
 **Edit conversion (the D3 helper).** Reading the slack support is centralized in
-`MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (`decide_diagnostic_engines.cpp`), the one
-place per-shape rendering lives: it renders the sense, re-quotes a strict `<`/`>` against the
-typed literal, and formats the suggestion. The LHS is rendered shape-aware by `FormatLhs` —
-plain `FormatTerms`, AVG-collapsing (`FormatAvgLhs`), or SUM-collapsing (`FormatSumLhs`) —
-or `FormatQuadraticLhs` for a quadratic constraint. A `ClauseEdit` carries a
-`ClauseEditKind` (`LOOSEN` vs `CONFLICT_SUMMARY`, `decide_diagnostic.hpp`) so the builder emits
-either a `suggested_change`/`amount` pair or a single `conflict` row.
+`MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (a literal knob) and
+`MakeVirtualOffsetEdit(provenance, lhs, rhs_text, sense, delta)` (a query-mode data offset,
+`x <= col + delta`) in `decide_diagnostic_engines.cpp` — the one place per-shape rendering
+lives: they render the sense, re-quote a strict `<`/`>` against the typed literal, and format
+the suggestion. The LHS is rendered shape-aware by `FormatLhs` — plain `FormatTerms`,
+AVG-collapsing (`FormatAvgLhs`), or SUM-collapsing (`FormatSumLhs`) — or `FormatQuadraticLhs`
+for a quadratic constraint. A `ClauseEdit` carries a `ClauseEditKind` (`LOOSEN` vs `DROP`,
+`decide_diagnostic.hpp`) plus `edit_source` / `offset_scope` provenance.
 
-### I2.c — data-RHS conflict summary + editable-knob preference
+### I2.c — data-RHS editable-knob preference
 
-A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS: there is no single literal to
-"loosen to K", so editing the query cannot fix it row-by-row. Two parts:
+A `PER_ROW_DATA` clause (`x <= col`) has a per-row data RHS with no single literal to
+"loosen to K". Under the T3 slack-scope policy it reports a **virtual offset** in query mode
+(`x <= col + delta`) or a **per-row profile** in expanded mode (see "Slack-scope policy"), and
+the data slack stays penalized so an editable literal is always preferred. Two parts:
 
-- **Reporting.** `DiagnoseInfeasible` partitions the positive-slack blocks: data-RHS blocks are
-  grouped by `clause_id` and emit **one `CONFLICT_SUMMARY` per clause** — `subject` = the clause
-  as written, `attribute='conflict'`, `value="conflicts in M of N rows"` (N = total rows the
-  clause emitted) — never a `suggested_change`/`amount`. The user-facing decision was *one
-  summary row per clause* (name the clause, no per-row spam).
+- **Reporting.** `ReadElasticEdits` reads a data-RHS block per the slack-scope mode: query mode
+  emits **one `virtual_offset` LOOSEN** for the folded clause (`x <= col + delta`), expanded mode
+  emits **one `expanded_row` LOOSEN per conflicting row**. Either way it names the clause, not
+  per-row spam. (This replaces the former `CONFLICT_SUMMARY` "conflicts in M of N rows" dead-end,
+  which is gone — a data conflict is now actionable.)
 - **Editable-knob preference.** In a degenerate infeasibility an editable knob and a data row can
   be equally-optimal fixes, and the solver would split arbitrarily (a messy, non-deterministic
   mix). To prefer an *actionable* edit, a data-RHS slack carries a higher objective weight
@@ -296,9 +365,10 @@ The objective PER path passes a throwaway labels vector (objective groups are no
 clause key). **Composite PER keys** (`PER (region, year)`) are handled by the join and reachable
 through `SUCH THAT` in the parenthesized form. The **unparenthesized** comma-list form
 (`PER region, year`) is rejected by the constraint binder, which only consumes the first column
-(a pre-existing limitation, logged in `07_issues/bugs/todo.md`). **easy-MAX + PER** stays a
-single global block (absorbed as a column bound, which does not preserve the PER grouping) — see
-the per-shape section above.
+(a pre-existing limitation, logged in `07_issues/bugs/todo.md`). **easy-MAX + PER** correctly
+re-emits as one global cap: the easy rewrite makes `MAX(x) <= K PER g` the uniform `x <= K`
+(the optimizer strips the vacuous PER), so there is no per-group cap to break out — see
+"Slack-scope policy: query vs expanded" above.
 
 ### I2.e — rigid shapes confirmed
 
@@ -309,18 +379,19 @@ through those rigid rows falls through to the static error (the empty-block guar
 remove-only; actual removal is the **I4** L0 dial — I2 only confirms the rigid behavior.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): one shared slack spans all N
-rows with the correct sign; distinct groups → distinct blocks; data-RHS rows stay independent
-size-1 blocks; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a penalized data slack
-defers to an editable knob; a data-RHS conflict reports a per-clause summary; strict re-quotes
+rows with the correct sign; a PER `SHARED_LITERAL` clause folds to one block in query and
+one-per-group in expanded; a data RHS folds to one block in query and stays independent per-row
+in expanded; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a penalized data slack
+defers to an editable knob; a query-mode data RHS folds to one virtual offset; strict re-quotes
 against `typed_k`; an AVG row renders `AVG(x)` with the raw slack; a quadratic constraint slacks
 its linear part only with Q untouched. C++ behavioral: a shared block with rigid floors reports
 the max overshoot (7), one edit, not the sum (10). Python differential
 (`test_query_diagnostics_relation.py`): easy-MAX and multi-instance bound report total = max
-overshoot; aggregate `SUM(x) >= 5 PER grp` reports one exact edit per group, each folded to
-`SUM(x) >= 5 PER grp` with a group-qualified subject (`[group: a]` / `[group: b]`) plus a structured
-`group` row; a single-row `SUM(x) >= 99 WHEN grp='a'` keeps its `SUM(...)` wrapper and clean WHEN qualifier; a
+overshoot; aggregate `SUM(x) >= 5 PER grp` folds to one `SUM(x) >= 5 PER grp` edit in query mode
+and breaks out per group (`[group: a]` / `[group: b]` with `group` rows) in expanded mode;
+a single-row `SUM(x) >= 99 WHEN grp='a'` keeps its `SUM(...)` wrapper and clean WHEN qualifier; a
 BOOLEAN model loosens its SUM target, never its 0/1 domain (regression guard); a data-RHS clause
-reports a conflict summary; a penalized data row defers to an editable edit; reversed bounds are
+reports a named virtual offset (query) / per-row profile (expanded); a penalized data row defers to an editable edit; reversed bounds are
 reported as their canonical absorbed form; AVG/strict re-quote (single-row SUM keeps its wrapper:
 `SUM(x) > 10`, including strict quadratic); quadratic and McCormick gated to Gurobi; `<>` and
 McCormick rows stay rigid.
@@ -451,10 +522,11 @@ wired) and:
   the user's variables. Stage 1 had zeroed and dropped the objective; stage 2 needs it back.
 
 `DiagnoseInfeasible` runs stage 2 only when there is a **real objective** (`HasObjective`)
-**and** an editable `LOOSEN` or `DROP` edit (`HasLoosenEdit || HasRemoval`): a constant
-objective has nothing to report, and a data-RHS-only conflict has no actionable edit, so an
-achievable-objective number would be misleading (those cases fall back to the stage-1 edit
-list unchanged).
+**and** a `LOOSEN` or `DROP` edit (`HasLoosenEdit || HasRemoval`): a constant objective has
+nothing to report, so it falls back to the stage-1 edit list unchanged. A data-RHS clause is
+now an actionable `LOOSEN` (a query-mode virtual offset or an expanded per-row edit), so it
+*does* exercise stage 2 and reports an achievable objective — the former data-only carve-out
+(when data reported a non-actionable conflict) is gone.
 
 **Reading the result.** On `OPTIMAL`, the stage-2 slacks are re-read into the edit list
 (`ReadElasticEdits`, the shared stage-1/stage-2 reader) and the objective value is reported.
@@ -558,19 +630,19 @@ makes two refinements and **locks the vocabulary**.
 stderr headline short: it points to the relevant clause target(s) and leaves the actual edits to
 `decide_diagnostics()`. This avoids implying that one listed clause is independently sufficient
 when the engine found a combined repair set.
-- Single target → `"…; diagnosis points to clause \`x <= 5\`."`
+- Single target → `"…; diagnosis points to clause \`x <= 5\`."` (a data RHS folds to its
+  clause too, e.g. `"…; diagnosis points to clause \`x >= hi\`."` in query mode)
 - Multiple targets → `"…; diagnosis points to clause \`SUM(x) >= 1\` and clause \`SUM(5*x) <= -1\`."`
-- PER groups → `"…; diagnosis points to grouped clause \`SUM(x) >= 5 PER grp\` for groups \`a\` and \`b\`."`
-  The group list is **capped** (`QuotedGroupList`, `HEADLINE_GROUP_CAP = 3`): with more than
-  three failing groups the headline shows the first three then `… and N more (see
-  decide_diagnostics())`, so a query failing dozens of groups produces a one-line pointer rather
-  than a wall of keys. The relation still carries one row per failing group.
-- CONFLICT_SUMMARY only → `"…; diagnosis points to per-row data in clause \`x >= 5\`."`
+- PER groups (**expanded mode only** — query mode folds a PER clause to one clause pointer with
+  no group list) → `"…; diagnosis points to grouped clause \`SUM(x) >= 5 PER grp\` for groups
+  \`a\` and \`b\`."` The group list is **capped** (`QuotedGroupList`, `HEADLINE_GROUP_CAP = 3`):
+  with more than three failing groups the headline shows the first three then `… and N more (see
+  decide_diagnostics())`. The relation still carries one row per failing group.
 
 Every thrown message still appends `Details: SELECT * FROM decide_diagnostics();`. The table is
-the source of truth for `edit_kind`, `suggested_change`, `amount`, `conflict`, `group`, and
-`achievable_objective`. `BuildElasticInfeasibleDiagnostic` (the "loosening cannot fix it" path)
-is untouched — the cue does not apply when no edit was found.
+the source of truth for `edit_kind`, `suggested_change`, `amount`, `edit_source`, `offset_scope`,
+`group`, and `achievable_objective`. `BuildElasticInfeasibleDiagnostic` (the "loosening cannot
+fix it" path) is untouched — the cue does not apply when no edit was found.
 
 **Why no runnable rewritten query.** The original plan envisioned emitting a copy-paste rewritten
 DECIDE query. It was deliberately dropped: the engine has no access to the original SQL text (it
@@ -579,25 +651,28 @@ works on `SolverModel` rows, and clause labels are *reconstructed* + canonicaliz
 partial would duplicate what the table already carries. The table is the source of truth; the
 headline is only a lean pointer.
 
-**Frozen EAV vocabulary.** Every edit row now carries a uniform `attribute='edit_kind'`, so
+**Frozen EAV vocabulary.** Every edit row carries a uniform `attribute='edit_kind'`, so
 filtering `attribute='edit_kind'` enumerates all edits and their kinds — the relation is
 self-describing:
-- `subject_kind='clause'`: `edit_kind` ∈ {`loosen`, `drop`, `conflict`}; plus `suggested_change`
-  + `amount` (LOOSEN only), `conflict` = `"conflicts in M of N rows"` (CONFLICT_SUMMARY only),
-  `group` = the PER key value (LOOSEN on a PER-grouped clause only — disambiguates two folded
-  `SUM(x)` edits that share the same `subject`).
+- `subject_kind='clause'`: `edit_kind` ∈ {`loosen`, `drop`}; plus `suggested_change` + `amount`
+  (LOOSEN only), `edit_source` ∈ {`source_literal`, `virtual_offset`, `expanded_row`,
+  `expanded_group`} and `offset_scope` ∈ {`clause`, `row`, `group`} (T3, the slack-scope
+  provenance), `group` = the PER key value (expanded-mode PER edits only — disambiguates
+  per-group edits that share the same folded `subject`).
 - `subject_kind='model'`: `achievable_objective` (the I3 number, or `'unbounded'`),
   `elastic_infeasible` (`'true'`, the loosening-cannot-fix-it verdict).
 
-These strings are stable. Previously only DROP carried `edit_kind`; I5 added `loosen` and
-`conflict` so the three edit kinds are uniform.
+These strings are stable. The former `conflict` edit kind (data-RHS dead-end) was **removed** by
+T3 — a data conflict is now a `loosen` with `edit_source='virtual_offset'` (query) or
+`'expanded_row'` (expanded).
 
 **Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): the loosen section asserts the clause
 pointer (`"diagnosis points to clause \`x <= 5\`"`) and `edit_kind='loosen'`; the must-drop
-section asserts the pointer to `"(x <> 3)"`; the data-conflict section asserts
-`edit_kind='conflict'` and the per-row data pointer. Python differential
-(`test_query_diagnostics_relation.py`): a loosen case asserts `edit_kind='loosen'`; the data-RHS
-conflict asserts `edit_kind='conflict'`.
+section asserts the pointer to `"(x <> 3)"`; the query-mode data section asserts a
+`virtual_offset` edit and the expanded section asserts per-row `expanded_row` edits. Python
+differential (`test_query_diagnostics_relation.py`): a loosen case asserts `edit_kind='loosen'`;
+the data-RHS query case asserts `edit_source='virtual_offset'`, the expanded case
+`edit_source='expanded_row'`.
 
 ## Tests
 

@@ -32,14 +32,16 @@ incumbent?) — and routes to exactly one terminal. The states below are its lea
 ```
 
 - `[router/](router/)` — the **spine**: the dispatch tree above and the inf/unb
-`check ray` disambiguation. The seam, the unbounded terminal, and the infeasible
-terminal are wired; the `time_limit` terminal is a distinct leaf in the classifier
-but has no engine behind it yet, so it currently falls through to the static error.
+`check ray` disambiguation. All four terminals are wired — solved, unbounded,
+infeasible, and time_limit (the slow engine, R6) — each an engine dropped behind an
+existing classifier leaf without editing the classifier.
 - `[unbounded/](unbounded/)` — terminal `failed → unbounded`: names the escaping
 variable via the ray and prescribes a bound (**tighten** a too-open region).
 - `[infeasible/](infeasible/)` ★ — terminal `failed → infeasible`: elastic
 relaxation (**loosen** a too-small region). The flagship engine — fully shipped
-(I1–I5, plus aggregate `<>` removal).
+(I1–I5, aggregate `<>` removal, and the T3 two-mode slack-scope policy: `query`
+folds each knob to one SQL edit / turns data conflicts into virtual offsets,
+`expanded` exposes the per-row / per-group profile).
 - `[slow/](slow/)` — terminal `time_limit`: **shipped**. A solve that hits the limit
 returns `SolverStatus::TIME_LIMIT`, prints a plain-language checkpoint report, and — per
 the `decide_on_timeout` pragma (ask / error / continue) — resumes the **same warm solver**
@@ -74,6 +76,10 @@ Sticky session pragma with two modes: `auto` (default — diagnose whichever fai
 state the solve lands in, wherever an engine exists) and `off` (suppress diagnosis;  
 reproduce the plain static solver error). Diagnosis only ever runs when the solve  
 *actually* fails, so leaving `auto` on costs nothing on a successful solve.
+
+A second sticky pragma, `diagnose_decide_infeasible_slack_scope` (`query` default /
+`expanded`), selects how the infeasible engine reports a knob that fans out — one
+folded SQL-level edit vs. the per-row / per-group profile. See `infeasible/done.md`.
 
 ---
 
@@ -315,9 +321,13 @@ Details: SELECT * FROM decide_diagnostics();
 
 
 
-### I5 — CONFLICT_SUMMARY (per-row data RHS)
+### I5 — virtual offset (per-row data RHS, query mode)
 
-RHS is per-row data (x >= hi); no single literal to loosen, reports an M-of-N conflict.
+RHS is per-row data (`x >= hi`); there is no literal to loosen, so query mode (default) reports
+one **virtual query offset** `x >= hi - delta` (`edit_source='virtual_offset'`, delta = the max
+shortfall), naming the data column. This is the T3 slack-scope policy — see
+`infeasible/done.md`. (`PRAGMA diagnose_decide_infeasible_slack_scope='expanded'` instead
+exposes one `expanded_row` profile entry per conflicting row.)
 
 ```sql
 SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) DECIDE x IS BOOLEAN SUCH THAT x >= hi MAXIMIZE SUM(x)
@@ -326,55 +336,76 @@ SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) DECIDE x IS BOOLEAN SUCH THAT x
 **Default output (stderr headline):**
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to per-row data in clause `x >= 5`.
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `x >= hi`.
 Details: SELECT * FROM decide_diagnostics();
 ```
 
 `decide_diagnostics()` **relation:**
 
 ```
-┌──────────────┬────────────┬──────────────┬─────────┬───────────┬──────────────────────────┐
-│ diagnosis_id │   state    │ subject_kind │ subject │ attribute │          value           │
-├──────────────┼────────────┼──────────────┼─────────┼───────────┼──────────────────────────┤
-│ 1            │ infeasible │ clause       │ x >= 5  │ edit_kind │ conflict                 │
-│ 1            │ infeasible │ clause       │ x >= 5  │ conflict  │ conflicts in 2 of 2 rows │
-└──────────────┴────────────┴──────────────┴─────────┴───────────┴──────────────────────────┘
+┌──────────────┬────────────┬──────────────┬─────────┬──────────────────────┬────────────────┐
+│ diagnosis_id │   state    │ subject_kind │ subject │      attribute       │     value      │
+├──────────────┼────────────┼──────────────┼─────────┼──────────────────────┼────────────────┤
+│ 1            │ infeasible │ clause       │ x >= hi │ edit_kind            │ loosen         │
+│ 1            │ infeasible │ clause       │ x >= hi │ suggested_change     │ x >= hi - 4    │
+│ 1            │ infeasible │ clause       │ x >= hi │ amount               │ 4              │
+│ 1            │ infeasible │ clause       │ x >= hi │ edit_source          │ virtual_offset │
+│ 1            │ infeasible │ clause       │ x >= hi │ offset_scope         │ clause         │
+│ 1            │ infeasible │ model        │ NULL    │ achievable_objective │ 2              │
+└──────────────┴────────────┴──────────────┴─────────┴──────────────────────┴────────────────┘
 ```
 
 ---
 
-### I6 — PER-group LOOSEN edits
+### I6 — PER-group: query folds to one edit, expanded breaks out per group
 
-Each PER group gets its own slack. The grouped clause subject includes the group key, and the
-structured `group` row is still emitted.
+A PER aggregate `SUM(x) >= 5 PER grp` is **one SQL literal** the user edits. Under the T3
+slack-scope policy, **query mode (default)** folds every group into one clause-level edit whose
+amount is the worst shortfall across groups (group `a` needs 3, group `b` needs 2 → the fold
+reports 3). **expanded mode** breaks it out into one `expanded_group` edit per group.
 
 ```sql
 SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)
 ```
 
-**Default output (stderr headline):**
+**Query mode (default) — stderr headline + relation:**
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to grouped clause `SUM(x) >= 5 PER grp` for groups `a` and `b`.
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `SUM(x) >= 5 PER grp`.
 Details: SELECT * FROM decide_diagnostics();
 ```
 
-`decide_diagnostics()` **relation:**
+```
+┌──────────────┬────────────┬──────────────┬─────────────────────┬──────────────────────┬─────────────────────┐
+│ diagnosis_id │   state    │ subject_kind │       subject       │      attribute       │        value        │
+├──────────────┼────────────┼──────────────┼─────────────────────┼──────────────────────┼─────────────────────┤
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp │ edit_kind            │ loosen              │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp │ suggested_change     │ SUM(x) >= 2 PER grp │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp │ amount               │ 3                   │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp │ edit_source          │ source_literal      │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp │ offset_scope         │ clause              │
+│ 1            │ infeasible │ model        │ NULL                │ achievable_objective │ 5                   │
+└──────────────┴────────────┴──────────────┴─────────────────────┴──────────────────────┴─────────────────────┘
+```
+
+**Expanded mode** (`PRAGMA diagnose_decide_infeasible_slack_scope='expanded'`) — one edit per
+group, tagged `expanded_group` with the `group` key; the headline lists the failing groups
+(capped at 3):
 
 ```
-┌──────────────┬────────────┬──────────────┬────────────────────────────────┬──────────────────────┬─────────────┐
-│ diagnosis_id │   state    │ subject_kind │            subject             │      attribute       │   value     │
-├──────────────┼────────────┼──────────────┼────────────────────────────────┼──────────────────────┼─────────────┤
-│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ edit_kind            │ loosen      │
-│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ suggested_change     │ SUM(x) >= 2 │
-│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ amount               │ 3           │
-│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ group                │ a           │
-│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ edit_kind            │ loosen      │
-│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ suggested_change     │ SUM(x) >= 3 │
-│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ amount               │ 2           │
-│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ group                │ b           │
-│ 1            │ infeasible │ model        │ NULL                           │ achievable_objective │ 5           │
-└──────────────┴────────────┴──────────────┴────────────────────────────────┴──────────────────────┴─────────────┘
+┌──────────────┬────────────┬──────────────┬────────────────────────────────┬──────────────────────┬─────────────────────┐
+│ diagnosis_id │   state    │ subject_kind │            subject             │      attribute       │        value        │
+├──────────────┼────────────┼──────────────┼────────────────────────────────┼──────────────────────┼─────────────────────┤
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ suggested_change     │ SUM(x) >= 2 PER grp │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ amount               │ 3                   │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ group                │ a                   │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ edit_source          │ expanded_group      │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ suggested_change     │ SUM(x) >= 3 PER grp │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ amount               │ 2                   │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ group                │ b                   │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ edit_source          │ expanded_group      │
+│ 1            │ infeasible │ model        │ NULL                           │ achievable_objective │ 5                   │
+└──────────────┴────────────┴──────────────┴────────────────────────────────┴──────────────────────┴─────────────────────┘
 ```
 
 ---
