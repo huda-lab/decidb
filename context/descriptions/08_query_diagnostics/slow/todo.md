@@ -1,7 +1,13 @@
 # Query Diagnostics — Slow (remaining work)
 
-The slow-solve engine is shipped; see `done.md` for current behavior. This file keeps one
-follow-up idea that is not specified yet.
+The slow-solve engine is shipped; see `done.md` for current behavior. This file keeps the
+follow-up ideas that are not specified yet.
+
+## Bucket B elastic-as-classifier
+
+Running the elastic engine on a no-solution timeout to decide "hard vs infeasible" is a
+possible future refinement; today the terminal just reports "no solution yet" and offers
+to continue.
 
 ## Diverging incumbent at timeout — possible unboundedness signal
 

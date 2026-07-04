@@ -37,7 +37,7 @@ and the migration off today's scattered logic.
 | solved | Normal success; no diagnosis. |
 | failed → unbounded | `find ray`, then **report** the escaping variables + forced remedy (the shipped unbounded engine). |
 | failed → infeasible | `elastic` (the infeasible engine), then **report** the relaxation. |
-| failed → inf/unb → ray **found** | **report exactly as standard unbounded** (name the escaping variables + prescribe a bound), with one added query-error caveat: *the problem may still be infeasible*. The diagnostics relation is unchanged. |
+| failed → inf/unb → ray **found** | **report exactly as standard unbounded** (name the escaping variables + prescribe a bound), with one added query-error caveat: *It may instead be infeasible.* The diagnostics relation is unchanged. |
 | failed → inf/unb → ray **not found** | `elastic`, then **report** (no improving direction exists, so it resolves toward infeasible). |
 | time_limit → **incumbent** present | **report** the incumbent + optimality gap. |
 | time_limit → **no sol** | **report slow** (no feasible solution found within the limit). |
@@ -54,7 +54,7 @@ resolves toward infeasibility.
 A found ray means unbounded *if a feasible point exists* — and the inf/unb path is
 exactly the case where the solver never established feasibility. The router does
 not pay for a separate feasibility check on the found branch; instead it reports as
-standard unbounded and always appends *"the problem may still be infeasible."* The
+standard unbounded and always appends *"It may instead be infeasible."* The
 caveat is therefore inherent to inf/unb (not specific to integer models, though a
 MILP gives a second reason it can hold).
 
@@ -72,8 +72,8 @@ incrementally as those engines exist:
 - **elastic / infeasible** engine — **shipped** (`infeasible/`): the `infeasible`
   and inf/unb-`not found` branches run the elastic engine and report the
   least-change relaxation when one is available.
-- **slow / time_limit** handling — **not built** (`slow/`): the `incumbent`/`no sol`
-  split and its reports are future work.
+- **slow / time_limit** handling — **shipped** (`slow/`): the `incumbent`/`no sol`
+  split, the checkpoint report, and the `decide_on_timeout` continuation loop.
 
 The `diagnose_decide` setting still gates the whole router: `auto` (default) runs
 it on a failed solve; `off` suppresses it and reproduces the plain static solver

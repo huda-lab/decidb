@@ -14,8 +14,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/solver_input.hpp"
 
-#include <map>
-
 namespace duckdb {
 
 //! Maps (decide_var_idx, row) pairs to flat solver variable indices.
@@ -101,8 +99,9 @@ struct ConstraintProvenance {
     //! User parameter vs rigid mechanism/structural row (see ConstraintKind).
     ConstraintKind kind = ConstraintKind::USER_PARAMETER;
     //! Elastic-diagnosis shape (I2): does this row share ONE slack with its
-    //! (clause_id, group_key) siblings, or get its own? Default PER_ROW_DATA.
-    ElasticShape shape = ElasticShape::PER_ROW_DATA;
+    //! (clause_id, group_key) siblings, or get its own? Relaxable user-clause
+    //! rows must be stamped explicitly by the builder site.
+    ElasticShape shape = ElasticShape::UNSET;
     //! True when the row's coefficients were pre-scaled by 1/N_g for an AVG rewrite.
     //! The slack is then already in the user's AVG units (report the raw slack).
     bool avg_scaled = false;
@@ -206,26 +205,6 @@ struct SolverModel {
     static SolverModel Build(SolverInput &input, const VarIndexer &indexer);
 };
 
-enum class ConstraintRowType : uint8_t { LINEAR, QUADRATIC };
-
-struct ConstraintRowRef {
-	ConstraintRowType type = ConstraintRowType::LINEAR;
-	idx_t index = DConstants::INVALID_INDEX;
-};
-
-//! Reverse index over linear and quadratic constraint rows. `by_clause` groups all
-//! emitted rows for a clause; `by_clause_group` narrows to one PER/WHEN group.
-struct ClauseRowIndex {
-	std::map<idx_t, vector<ConstraintRowRef>> by_clause;
-	std::map<std::pair<idx_t, idx_t>, vector<ConstraintRowRef>> by_clause_group;
-};
-
-//! Reverse index: user clause_id / (clause_id, group_key) → emitted row refs (F2/B3).
-//! Rows with INVALID clause ids are skipped. Ordered maps keep reporting/tests
-//! deterministic. Structural rows are retained in the index and filtered by
-//! provenance.kind by consumers that need relaxable-only rows.
-ClauseRowIndex BuildClauseRowIndex(const SolverModel &model);
-
 //! What a flat solver column represents to the user (F6 variable provenance —
 //! the column-side complement of ConstraintProvenance):
 //!   USER       — a user decision variable; `label` is its name.
@@ -248,8 +227,8 @@ struct ColumnProvenance {
     idx_t instance = DConstants::INVALID_INDEX;
 };
 
-//! Reverse map: flat solver column index → ColumnProvenance (F6). The column-side
-//! complement of BuildClauseRowIndex. Pure (no planner/Expression dependency): the
+//! Reverse map: flat solver column index → ColumnProvenance (F6).
+//! Pure (no planner/Expression dependency): the
 //! caller pre-extracts per-decide-variable labels (user name or aux source
 //! expression) and an is-aux flag. Output is sized `indexer.total_vars`; every
 //! entry defaults to GLOBAL_AUX (the global block stays unnamed), then the row /

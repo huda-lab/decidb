@@ -4,7 +4,7 @@
 // duckdb/decidb/decide_diagnostic.hpp
 //
 // F5: the shared, structured diagnostic reporting surface. A state engine
-// (currently unbounded or infeasible; slow later) populates a DecideDiagnostic,
+// (unbounded, infeasible, or slow) populates a DecideDiagnostic,
 // it is stashed per-connection, and the decide_diagnostics() table function reads
 // it back as a fixed-schema relation. See
 // context/descriptions/08_query_diagnostics/.
@@ -90,7 +90,6 @@ struct DecideDiagnostic {
 	bool valid = false;                       //!< false => nothing diagnosed yet
 	int64_t diagnosis_id = 0;                 //!< per-connection diagnosis id; ties together
 	                                          //!< every row produced by the same failed solve
-	SolverStatus status = SolverStatus::OTHER;
 	string state;                             //!< "unbounded" / "infeasible" / "slow"
 	string summary;                           //!< one-line human summary (the stderr pointer)
 	vector<DiagnosticRow> rows;
@@ -187,6 +186,14 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 //! not a minimal edit list.
 DecideDiagnostic BuildElasticInfeasibleDiagnostic();
 
+//! User-facing reason for an unbounded solve whose diagnosis could not produce a
+//! named runaway variable. The physical operator computes the booleans from the
+//! retained solve state; this helper keeps the precedence unit-testable:
+//! timeout first, then non-linear empty-ray limitation, then neutral empty-ray,
+//! then internal-helper escape.
+string BuildUnboundedDiagnosisUnavailableReason(bool diagnostic_timed_out, bool ray_empty,
+                                                bool has_nonlinear_terms);
+
 //! Store `diag` on the connection so decide_diagnostics() can read it next statement.
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag);
 
@@ -241,7 +248,7 @@ double GetDecideL0Tolerance(ClientContext &context);
 DecideDiagParams GetDecideDiagnosticParams(ClientContext &context);
 
 //! Filter predicate: does `mode` request a diagnosis for a solve that ended in
-//! `status`? (none => never; auto => any diagnosable state; otherwise exact match.)
+//! `status`? (off => never; auto => any diagnosable state.)
 bool DiagnosisApplies(const string &mode, SolverStatus status);
 
 //! Whether `mode` should pre-arm diagnosis work before the solve. Under `auto`,

@@ -49,7 +49,7 @@ residual `INF_OR_UNBD`. The router then treats residual `INF_OR_UNBD` as:
 
 - **ray present** → route to the existing unbounded terminal. The stashed
   `decide_diagnostics()` rows stay exactly the standard unbounded rows; the
-  thrown query error appends the caveat `the problem may still be infeasible.`
+  thrown query error appends the caveat `It may instead be infeasible.`
 - **no ray** → route to the infeasible terminal (the elastic engine; see below).
 
 `diagnose_decide='off'` still suppresses both branches and returns the plain
@@ -65,8 +65,9 @@ static `INF_OR_UNBD` error.
   run `DiagnoseUnbounded`, stash + `ThrowDecideDiagnosisReady` on a populated
   diagnosis, else `ThrowUnboundedDiagnosisUnavailable` (see `unbounded/done.md`).
 - `INFEASIBLE` → build the elastic-engine input and run `DiagnoseInfeasible`, stash +
-  `ThrowDecideDiagnosisReady` on a valid diagnosis, else `ThrowDecideSolveError` (see
-  "Terminals: infeasible (elastic)" below).
+  `ThrowDecideDiagnosisReady` on a valid diagnosis. If a diagnostic helper solve hits its
+  smaller helper budget, throw a one-line "diagnosis ran out of time" variant; otherwise
+  fall through to `ThrowDecideSolveError` (see "Terminals: infeasible (elastic)" below).
 - `TIME_LIMIT` → the slow engine: print the checkpoint report and, per
   `decide_on_timeout`, stop (`error`), prompt (`ask`, interactive only), or auto-resume
   the warm solver (`continue`); a stop with an incumbent falls through to the `SOLVED`
@@ -95,8 +96,9 @@ R5 wired the `INFEASIBLE` terminal to the **elastic engine**. In the
 slackable rows, resets implied bound tightenings to the intrinsic domain, builds the
 `InfeasibleDiagnosisInput` (the retained `SolverModel` + indexer + labels + an injected
 solve callback), and calls `DiagnoseInfeasible`. A valid diagnosis is stashed and
-surfaced (`ThrowDecideDiagnosisReady`); otherwise the arm falls through to
-`ThrowDecideSolveError`. A residual `INF_OR_UNBD` (empty ray) is normalized to
+surfaced (`ThrowDecideDiagnosisReady`); a helper-solve timeout reports that diagnosis ran
+out of time; otherwise the arm falls through to `ThrowDecideSolveError`. A residual
+`INF_OR_UNBD` (empty ray) is normalized to
 `INFEASIBLE` here before the message is built. The engine itself — the elastic program,
 per-shape slack placement, removal dial, and stage-2 achievable objective — is
 documented in `infeasible/done.md`.

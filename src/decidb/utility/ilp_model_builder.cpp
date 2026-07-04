@@ -967,6 +967,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer);
                 qc.provenance.clause_id = clause_id; // F2 site 5: quadratic aggregate, ungrouped
                 qc.provenance.kind = eval_const.kind;
+                qc.provenance.shape = ElasticShape::SHARED_LITERAL;
                 qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
                 qc.provenance.qualifier = eval_const.qualifier;
                 model.quadratic_constraints.push_back(std::move(qc));
@@ -991,6 +992,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         qc.provenance.group_label = eval_const.group_labels[g];
                     }
                     qc.provenance.kind = eval_const.kind;
+                    qc.provenance.shape = ElasticShape::SHARED_LITERAL;
                     qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
                     qc.provenance.qualifier = eval_const.qualifier;
                     model.quadratic_constraints.push_back(std::move(qc));
@@ -1009,6 +1011,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 qc.provenance.group_key =
                     has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 qc.provenance.kind = eval_const.kind;
+                qc.provenance.shape = eval_const.rhs_is_shared_literal
+                                          ? ElasticShape::SHARED_LITERAL
+                                          : ElasticShape::PER_ROW_DATA;
+                if (!eval_const.rhs_is_shared_literal) {
+                    qc.provenance.rhs_label = eval_const.rhs_label;
+                }
                 model.quadratic_constraints.push_back(std::move(qc));
             }
         }
@@ -1092,39 +1100,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     }
 
     return model;
-}
-
-ClauseRowIndex BuildClauseRowIndex(const SolverModel &model) {
-    ClauseRowIndex index;
-    for (idx_t row = 0; row < model.constraints.size(); row++) {
-        const auto &provenance = model.constraints[row].provenance;
-        idx_t clause_id = provenance.clause_id;
-        if (clause_id == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        ConstraintRowRef ref;
-        ref.type = ConstraintRowType::LINEAR;
-        ref.index = row;
-        index.by_clause[clause_id].push_back(ref);
-        if (provenance.group_key != DConstants::INVALID_INDEX) {
-            index.by_clause_group[{clause_id, provenance.group_key}].push_back(ref);
-        }
-    }
-    for (idx_t row = 0; row < model.quadratic_constraints.size(); row++) {
-        const auto &provenance = model.quadratic_constraints[row].provenance;
-        idx_t clause_id = provenance.clause_id;
-        if (clause_id == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        ConstraintRowRef ref;
-        ref.type = ConstraintRowType::QUADRATIC;
-        ref.index = row;
-        index.by_clause[clause_id].push_back(ref);
-        if (provenance.group_key != DConstants::INVALID_INDEX) {
-            index.by_clause_group[{clause_id, provenance.group_key}].push_back(ref);
-        }
-    }
-    return index;
 }
 
 vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,

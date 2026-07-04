@@ -755,7 +755,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		DecideDiagnostic diag;
 		diag.valid = true;
-		diag.status = SolverStatus::INFEASIBLE;
 		diag.state = "infeasible";
 		diag.summary = "test infeasible summary";
 		DiagnosticRow row;
@@ -780,22 +779,35 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	SECTION("inf-or-unbounded caveat is query-message only") {
 		DecideDiagnostic diag;
 		diag.valid = true;
-		diag.status = SolverStatus::UNBOUNDED;
 		diag.state = "unbounded";
 		diag.summary = "The objective is unbounded because x can grow without bound.";
 
 		try {
-			ThrowDecideDiagnosisReady(diag, "the problem may still be infeasible.");
+			ThrowDecideDiagnosisReady(diag, "It may instead be infeasible.");
 			FAIL("expected ThrowDecideDiagnosisReady to throw");
 		} catch (const InvalidInputException &ex) {
 			string message = ex.what();
 			CHECK(message.find("The objective is unbounded because x can grow without bound.") != string::npos);
-			CHECK(message.find("the problem may still be infeasible.") != string::npos);
+			CHECK(message.find("It may instead be infeasible.") != string::npos);
 			CHECK(message.find("SELECT * FROM decide_diagnostics()") != string::npos);
 		}
 
 		CHECK(diag.summary == "The objective is unbounded because x can grow without bound.");
-		CHECK(diag.summary.find("the problem may still be infeasible.") == string::npos);
+		CHECK(diag.summary.find("It may instead be infeasible.") == string::npos);
+	}
+
+	SECTION("unbounded unavailable reason distinguishes empty linear rays") {
+		CHECK(BuildUnboundedDiagnosisUnavailableReason(true, true, true) ==
+		      "diagnosis ran out of time before it could identify the runaway variable.");
+		CHECK(BuildUnboundedDiagnosisUnavailableReason(false, true, true) ==
+		      "a non-linear term prevents naming the variable.");
+
+		string linear_reason = BuildUnboundedDiagnosisUnavailableReason(false, true, false);
+		CHECK(linear_reason == "the runaway variable could not be identified.");
+		CHECK(linear_reason.find("non-linear") == string::npos);
+
+		CHECK(BuildUnboundedDiagnosisUnavailableReason(false, false, false) ==
+		      "the runaway is an internal helper variable.");
 	}
 
 	// I4 — the L0 / removal dial. A remove-only `<>` cannot be loosened; instead the

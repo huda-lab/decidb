@@ -1,5 +1,6 @@
 #include "duckdb/decidb/decide_diagnostic_engines.hpp"
 
+#include "duckdb/common/assert.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/decidb/diagnostic_constants.hpp"
 
@@ -437,6 +438,14 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	// A relaxable row whose RHS is per-row data (`x <= col`) cannot be edited by the
 	// user; loosening it is a conflict, not a source-literal edit. It gets its own
 	// lexicographic tier. Shared/aggregate/literal knobs are editable.
+	auto has_explicit_shape = [](const ConstraintProvenance &p) {
+		return p.shape == ElasticShape::PER_ROW_DATA || p.shape == ElasticShape::SHARED_LITERAL;
+	};
+	auto assert_explicit_shape = [&](const ConstraintProvenance &p) {
+		if (IsRelaxableForElastic(p.kind) && p.clause_id != DConstants::INVALID_INDEX) {
+			D_ASSERT(has_explicit_shape(p));
+		}
+	};
 	auto is_data_offset = [](const ConstraintProvenance &p) {
 		return p.shape == ElasticShape::PER_ROW_DATA && p.clause_id != DConstants::INVALID_INDEX;
 	};
@@ -478,6 +487,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	};
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
 		const auto &row = elastic.constraints[r];
+		assert_explicit_shape(row.provenance);
 		lin_norm[r] = rms_norm(row.coefficients);
 		if (IsRelaxableForElastic(row.provenance.kind) && !is_data_offset(row.provenance)) {
 			consider_ref(lin_norm[r]);
@@ -485,6 +495,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	}
 	for (idx_t qr = 0; qr < elastic.quadratic_constraints.size(); qr++) {
 		const auto &qc = elastic.quadratic_constraints[qr];
+		assert_explicit_shape(qc.provenance);
 		qc_norm[qr] = rms_norm(qc.linear_coefficients);
 		if (IsRelaxableForElastic(qc.provenance.kind)) {
 			consider_ref(qc_norm[qr]);

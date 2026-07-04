@@ -586,6 +586,27 @@ class TestDiagnosticsRelation:
         assert by_group["b"]["amount"] == "2"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_per_group_expanded_mode_preserves_empty_string_group(
+        self, request, cli_fixture
+    ):
+        """B4: an empty-string PER key is a real group value, not the ungrouped case."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,''),(2,'a')) t(id, grp) "
+            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 2 PER grp MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto", scope="expanded")
+
+        rows = _rows(result)
+        edits = _clause_edits(rows)
+        by_group = {e["group"]: e for e in edits}
+        assert set(by_group) == {"''", "a"}
+        assert by_group["''"]["subject"] == "SUM(x) >= 2 PER grp [group: '']"
+        assert by_group["''"]["edit_source"] == "expanded_group"
+        assert by_group["''"]["offset_scope"] == "group"
+        assert by_group["''"]["suggested_change"] == "SUM(x) >= 1 PER grp"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_single_row_when_group_keeps_sum_wrapper(self, request, cli_fixture):
         """Facet B/C: a single-row aggregate group keeps its `SUM(...)` wrapper and the
         WHEN qualifier in the label. `SUM(x) >= 99 WHEN grp='a'` matches one BOOLEAN row

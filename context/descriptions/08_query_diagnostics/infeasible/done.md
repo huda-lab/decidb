@@ -30,11 +30,14 @@ of a solved ray, alongside the `VarIndexer`, per-variable labels / is-aux flags,
 `DecideDiagParams`, and an **injected solve callback**
 `std::function<SolverResult(const SolverModel &)>`. The callback lets the engine run the
 elastic re-solve without depending on the operator or the solver facade — `Finalize` binds
-it to `SolvePreparedModel` on the primary solve's backend (`SelectSolverBackend` is
-deterministic, so the re-solve uses the same backend). This keeps the engine
+it to the prepared-model solver on the primary solve's backend (`SelectSolverBackend` is
+deterministic, so the re-solve uses the same backend), with the diagnostic helper budget
+`min(60s, primary solve limit)` and the same interrupt poll as the primary solve. If any
+elastic pass hits that helper budget, the operator reports that diagnosis ran out of time
+instead of hiding the attempt behind the generic static error. This keeps the engine
 solver-agnostic and unit-testable, the same boundary as the unbounded engine's
-`get_candidates` injection. The engine will build its own `ClauseRowIndex` from the model
-(`BuildClauseRowIndex` is pure), so that index is not carried in the input.
+`get_candidates` injection. No clause→row index is carried in the input — the engine reads
+each row's `provenance` directly off the model.
 
 **Model retention.** `SolveModel` builds the `SolverModel` as a local and discards it —
 only the `SolverResult` returns — and `SolverModel::Build` *moves* the global constraints
@@ -221,16 +224,18 @@ objective, and adds slacks, returning the transformed model + a `vector<BlockSla
 reproduces I1 exactly.** `DiagnoseInfeasible` calls it, solves via the injected callback, and
 reads each block back. Exposing it is also the structural test seam.
 
-**Shape marker (`ConstraintProvenance::shape`, `decide.hpp::ElasticShape`).** `SHARED_LITERAL`
-= the RHS is one editable literal `K` shared across every row the clause emits;
-`PER_ROW_DATA` = genuine per-row **data** RHS (`x <= col`). Set in `ilp_model_builder.cpp`:
-the per-row builder tags a row `SHARED_LITERAL` when `EvaluatedConstraint::rhs_is_shared_literal`
-(set in `physical_decide.cpp` when `rhs_expr` is a `BOUND_CONSTANT`, is foldable, or carries the
-`SHARED_SCALAR_SUBQUERY_TAG` alias — see "uncorrelated scalar-subquery RHS" below), else `PER_ROW_DATA`;
-the **aggregate** sites tag their rows `SHARED_LITERAL` directly (an aggregate's RHS is always a
-single scalar knob), so `PER_ROW_DATA` means *exactly* "data RHS"; the absorbed-bound re-emission
-tags its rows `SHARED_LITERAL`. Quadratic constraints leave the default and are always treated as
-editable (see I2.d below).
+**Shape marker (`ConstraintProvenance::shape`, `decide.hpp::ElasticShape`).** `UNSET` is the
+invalid default; `BuildElasticModel` asserts that every relaxable row with a user `clause_id`
+has been stamped explicitly. `SHARED_LITERAL` = the RHS is one editable literal `K` shared
+across every row the clause emits; `PER_ROW_DATA` = genuine per-row **data** RHS (`x <= col`).
+Set in `ilp_model_builder.cpp`: the per-row builder tags a row `SHARED_LITERAL` when
+`EvaluatedConstraint::rhs_is_shared_literal` (set in `physical_decide.cpp` when `rhs_expr` is a
+`BOUND_CONSTANT`, is foldable, or carries the `SHARED_SCALAR_SUBQUERY_TAG` alias — see
+"uncorrelated scalar-subquery RHS" below), else `PER_ROW_DATA`; the **aggregate** sites tag
+their rows `SHARED_LITERAL` directly (an aggregate's RHS is always a single scalar knob), so
+`PER_ROW_DATA` means *exactly* "data RHS"; the absorbed-bound re-emission tags its rows
+`SHARED_LITERAL`. Quadratic aggregate rows are stamped `SHARED_LITERAL`; quadratic per-row rows
+are stamped from the same shared-literal-vs-data RHS rule before I2.d slacks the linear RHS.
 
 **Grouping (mode-aware — see "Slack-scope policy" above).** `BuildElasticModel` groups
 relaxable rows into blocks via `folds()` + `block_key()`. A `SHARED_LITERAL` block gets **one
@@ -363,7 +368,8 @@ all carried on `ConstraintProvenance` (no change to PER solve logic):
   out-param and stores the per-group representative values on the cache entry; the post-WHEN
   remap to consecutive `0..K'` reindexes the labels in lockstep (a new `mapped` id is pushed at
   exactly `out_group_labels.size()`, so labels stay aligned with the dense ordinals).
-  `FormatPerGroupKey` joins composite columns with `, `; NULL renders `"NULL"`. Threaded through
+  `FormatPerGroupKey` joins composite columns with `, `; NULL renders `"NULL"` and an actual
+  empty-string key renders `"''"` so it is not confused with "ungrouped." Threaded through
   `EvaluatedConstraint::group_labels` → stamped on `provenance.group_label` at the aggregate-PER
   emission sites (`ilp_model_builder.cpp`). The diagnosis uses it twice: every EAV row for the
   edit gets a self-identifying subject (`SUM(x) >= 5 PER grp [group: a]`), and the structured

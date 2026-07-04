@@ -396,14 +396,18 @@ group, tagged `expanded_group` with the `group` key; the headline lists the fail
 ┌──────────────┬────────────┬──────────────┬────────────────────────────────┬──────────────────────┬─────────────────────┐
 │ diagnosis_id │   state    │ subject_kind │            subject             │      attribute       │        value        │
 ├──────────────┼────────────┼──────────────┼────────────────────────────────┼──────────────────────┼─────────────────────┤
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ edit_kind            │ loosen              │
 │ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ suggested_change     │ SUM(x) >= 2 PER grp │
 │ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ amount               │ 3                   │
 │ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ group                │ a                   │
 │ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ edit_source          │ expanded_group      │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: a] │ offset_scope         │ group               │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ edit_kind            │ loosen              │
 │ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ suggested_change     │ SUM(x) >= 3 PER grp │
 │ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ amount               │ 2                   │
 │ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ group                │ b                   │
 │ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ edit_source          │ expanded_group      │
+│ 1            │ infeasible │ clause       │ SUM(x) >= 5 PER grp [group: b] │ offset_scope         │ group               │
 │ 1            │ infeasible │ model        │ NULL                           │ achievable_objective │ 5                   │
 └──────────────┴────────────┴──────────────┴────────────────────────────────┴──────────────────────┴─────────────────────┘
 ```

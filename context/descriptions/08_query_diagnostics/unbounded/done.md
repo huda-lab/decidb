@@ -131,8 +131,8 @@ lives in the opt-in relation, not the error.
   suppressed diagnosis is reminded how to get the per-variable detail back. (Under
   the `auto` default this branch is not reached for UNBOUNDED: the solve is diagnosed
   and throws the `Details:` pointer instead.) The unbounded static branch is the
-  only one that advertises how to re-enable diagnosis; infeasible now has its own
-  elastic engine under `auto`, while slow stays silent until its engine exists.
+  only one that advertises how to re-enable diagnosis; infeasible (elastic engine)
+  and slow (time-limit terminal) each run their own engine under `auto`.
 - **The relation pointer.** When a diagnosis is stashed, the thrown error ends with
   *"Details: SELECT * FROM decide_diagnostics();"* (`ThrowDecideDiagnosisReady`,
   `decide_diagnostic.cpp`). The stash is per-connection, so a fresh connection gets
@@ -150,12 +150,13 @@ lives in the opt-in relation, not the error.
   only via internal auxiliaries) falls through even though diagnosis was active. The
   error must not point the user back at `diagnose_decide='auto'` — it is already on.
   `ThrowUnboundedDiagnosisUnavailable` (`decide_diagnostic.cpp`) instead names the
-  reason and keeps the fix: *"DECIDE optimization is unbounded: a non-linear term
-  prevents naming the variable. Add an upper bound, e.g. SUCH THAT x <= <cap>."*
-  (empty ray ⇒ quadratic; `BuildUnboundedRayFallbackModel` declines quadratics) or
-  *"…the runaway is an internal helper variable…"* (present ray, only internal
-  auxiliaries escaped). The re-run advert is reached only when diagnosis was turned
-  `off`; `physical_decide.cpp` picks the reason at that fall-through.
+  reason and keeps the fix. `physical_decide.cpp` picks the reason from the retained
+  model and helper status: a helper timeout reports that diagnosis ran out of time; an
+  empty ray plus a quadratic objective/constraint reports that a non-linear term prevents
+  naming the variable; an empty ray on a purely linear model uses the neutral *"the runaway
+  variable could not be identified"* fallback; and a present ray that only names internal
+  auxiliaries reports *"the runaway is an internal helper variable."* The re-run advert is
+  reached only when diagnosis was turned `off`.
 
 ## `affected_rows` / `affected_entities` — characterizing which rows escape
 

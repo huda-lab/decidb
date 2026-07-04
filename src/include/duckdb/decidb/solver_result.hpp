@@ -52,6 +52,11 @@ struct SolverResult {
 	double objective_value = 0.0;
 	//! Unbounded ray (filled by U2; empty for F1).
 	vector<double> ray;
+	//! True when an internal diagnostic helper solve (INF_OR_UNBD probe or portable
+	//! ray fallback) hit its diagnostic budget before producing a definitive result.
+	//! The primary status is still reported normally; this bit lets the operator say
+	//! diagnosis ran out of time instead of falling back to a misleading static error.
+	bool diagnostic_timed_out = false;
 	//! Backend-native status code, surfaced in the OTHER catch-all message.
 	int raw_status = 0;
 	//! TIME_LIMIT only: true when the backend found a feasible incumbent by the
@@ -79,9 +84,10 @@ struct SolverResult {
 };
 
 //! Throws the default user-facing DECIDE error for a non-optimal `result`.
-//! Single home for the message text that both backends used to duplicate; the
-//! operator calls this when no diagnosis pragma is active (manual-first). The
-//! F4 pragma will later gate this call.
+//! Single home for the message text that both backends used to duplicate. The
+//! operator calls this on the UNDIAGNOSED terminal only — `diagnose_decide` is
+//! `off`, or the status has no engine (ITERATION_LIMIT / OTHER); every diagnosed
+//! failure throws the `decide_diagnostics()` pointer error instead.
 [[noreturn]] void ThrowDecideSolveError(const SolverResult &result);
 
 } // namespace duckdb

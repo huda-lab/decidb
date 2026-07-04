@@ -337,7 +337,12 @@ static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, idx_t gid
 		if (!s.empty()) {
 			s += ", ";
 		}
-		s += v.IsNull() ? "NULL" : v.ToString();
+		if (v.IsNull()) {
+			s += "NULL";
+		} else {
+			string rendered = v.ToString();
+			s += rendered.empty() ? "''" : rendered;
+		}
 	}
 	return s;
 }
@@ -5883,6 +5888,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     if (diagnosis_armed) {
         solve_options.interrupt_poll = [&context]() { return context.interrupted.load(); };
     }
+    SolveModelOptions diagnostic_solve_options;
+    diagnostic_solve_options.time_limit_seconds =
+        ResolveDecideDiagnosticTimeLimit(solve_options.time_limit_seconds);
+    diagnostic_solve_options.interrupt_poll = solve_options.interrupt_poll;
 
     // Reconcile the `<>` label channel with the final global-var count. Only the
     // aggregate-`<>` site labels its global z (for the infeasible removal dial),
@@ -5932,8 +5941,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Route the solve outcome to its diagnosis terminal. RouteSolveResult is a pure
     // classifier (status + mode → terminal); the operator owns the engine call,
-    // stash, and throw for each terminal. TIME_LIMIT still shares the static-error
-    // path until its engine lands (R6).
+    // stash, and throw for each terminal.
     // Set when a caveated success (an unproven incumbent returned as rows) has stashed a
     // `state='slow'` diagnosis it wants to survive: the success epilogue's blanket
     // ClearDecideDiagnostic must then spare it, so the quality stays queryable.
@@ -5966,14 +5974,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // Diagnosis was requested but produced no per-variable content. Say why it
         // is unavailable rather than throwing the generic "enable diagnosis and
         // re-run" advert — that advert is misleading here, since the mode is already
-        // on and re-running cannot help. An empty ray is the quadratic signal
-        // (BuildUnboundedRayFallback declines quadratic models, so no ray was
-        // extracted); a present ray that named nothing means only internal
-        // auxiliaries escaped.
-        string reason =
-            solve_result.ray.empty()
-                ? "a non-linear term prevents naming the variable."
-                : "the runaway is an internal helper variable.";
+        // on and re-running cannot help. An empty ray is a non-linear limitation only
+        // when the retained model is actually non-linear; otherwise use a neutral
+        // "could not identify" reason. A present ray that named nothing means only
+        // internal auxiliaries escaped.
+        bool has_nonlinear_terms =
+            retained_model.has_quadratic_obj || !retained_model.quadratic_constraints.empty();
+        string reason = BuildUnboundedDiagnosisUnavailableReason(
+            solve_result.diagnostic_timed_out, solve_result.ray.empty(), has_nonlinear_terms);
         // This failure produced no diagnosis of its own; clear any stash left by an
         // earlier failed solve so decide_diagnostics() cannot be misread as being
         // about this query (A4).
@@ -6103,11 +6111,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
+        bool diagnostic_solve_timed_out = terminal_result.diagnostic_timed_out;
         InfeasibleDiagnosisInput diag_input {
             retained_model, var_indexer, var_labels, var_is_aux,
             solver_input.global_variable_labels, diag_params,
             has_unhandled_user_bounds,
-            [backend](const SolverModel &m) { return SolvePreparedModel(m, backend); },
+            [backend, diagnostic_solve_options, &diagnostic_solve_timed_out](const SolverModel &m) {
+                SolverResult result = SolvePreparedModel(m, backend, diagnostic_solve_options);
+                if (result.status == SolverStatus::TIME_LIMIT) {
+                    diagnostic_solve_timed_out = true;
+                }
+                return result;
+            },
         };
         DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
         if (diag.valid && !diag.rows.empty()) {
@@ -6118,6 +6133,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // exists; keep the plain static infeasible error as the fallback. No new
         // diagnosis was stashed, so clear any stale one from an earlier failure (A4).
         ClearDecideDiagnostic(context);
+        if (diagnostic_solve_timed_out) {
+            string state = solve_result.status == SolverStatus::INF_OR_UNBD ? "infeasible or unbounded"
+                                                                            : "infeasible";
+            throw InvalidInputException(
+                "DECIDE optimization is " + state +
+                ": diagnosis ran out of time before it could find a least-change repair.");
+        }
         ThrowDecideSolveError(terminal_result);
     }
     case DiagnosisTerminal::TIME_LIMIT: {

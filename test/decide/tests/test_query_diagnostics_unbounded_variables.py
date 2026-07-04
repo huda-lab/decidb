@@ -73,7 +73,7 @@ class TestUnboundedVariableDiagnostics:
         assert "variable x can grow without bound" in result.stderr.lower()
         # A4: and prescribes the forced remedy (add a bound) without a number.
         assert "add an upper bound, e.g. such that x <= <cap>" in result.stderr.lower()
-        assert "the problem may still be infeasible." not in result.stderr.lower()
+        assert "it may instead be infeasible." not in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_unbounded_integer_var_named(self, request, cli_fixture):
@@ -88,7 +88,7 @@ class TestUnboundedVariableDiagnostics:
         result = _diagnose(cli, sql)
         rows = _rows(result)
         assert _attrs(rows, "n")["grows_toward"] == "+inf"
-        assert "the problem may still be infeasible." not in result.stderr.lower()
+        assert "it may instead be infeasible." not in result.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_multiple_escaping_vars_each_named_once(self, request, cli_fixture):

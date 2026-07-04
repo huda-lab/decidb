@@ -44,14 +44,16 @@ inline bool IsRelaxableForElastic(ConstraintKind kind) {
 
 //! How a relaxable row maps to a single user-editable knob, for elastic (infeasible)
 //! diagnosis. Drives whether the rows a clause emits share ONE slack or get one each.
+//!   UNSET          — invalid for a relaxable user-clause row; builder sites must stamp
+//!                    one of the explicit shapes below.
 //!   PER_ROW_DATA   — the RHS is per-row data, or the rows are genuinely independent:
 //!                    one slack per row, no single-knob edit (rolled into a conflict
-//!                    summary). The safe default.
+//!                    summary).
 //!   SHARED_LITERAL — one user literal RHS fans into N rows (easy MIN/MAX `MAX(e)<=K`,
 //!                    a per-row constraint with a constant RHS, a multi-instance bound):
 //!                    the N rows of a (clause_id, group_key) block share ONE slack, so
 //!                    the reported edit is the max overshoot, not the sum.
-enum class ElasticShape : uint8_t { PER_ROW_DATA, SHARED_LITERAL };
+enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_LITERAL };
 
 //! Tag used to identify WHEN-conditional constraints throughout the pipeline
 static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";

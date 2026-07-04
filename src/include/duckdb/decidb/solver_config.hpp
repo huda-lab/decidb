@@ -23,6 +23,11 @@ namespace duckdb {
 //! feasible incumbent, mapped to SolverStatus::TIME_LIMIT.
 constexpr double DECIDE_DEFAULT_TIME_LIMIT_SECONDS = 300.0;
 
+//! Diagnostic follow-up solves are bounded separately from the primary solve. A
+//! failed primary solve should not be followed by several full-length internal
+//! re-solves before the user sees a result.
+constexpr double DECIDE_DIAGNOSTIC_TIME_LIMIT_SECONDS = 60.0;
+
 //! Resolve the per-solve time limit shared by both solver backends. Returns the
 //! default unless the user overrides it via the global `DECIDB_TIME_LIMIT`
 //! environment variable (seconds, double); non-positive or unparseable values are
@@ -42,6 +47,13 @@ inline double ResolveDecideTimeLimit() {
 		}
 	}
 	return time_limit;
+}
+
+//! Resolve the budget for one diagnostic follow-up solve. It is capped at the
+//! smaller of the primary solve's configured budget and the diagnostic cap.
+inline double ResolveDecideDiagnosticTimeLimit(double primary_time_limit = -1.0) {
+	double limit = primary_time_limit > 0.0 ? primary_time_limit : ResolveDecideTimeLimit();
+	return limit < DECIDE_DIAGNOSTIC_TIME_LIMIT_SECONDS ? limit : DECIDE_DIAGNOSTIC_TIME_LIMIT_SECONDS;
 }
 
 } // namespace duckdb

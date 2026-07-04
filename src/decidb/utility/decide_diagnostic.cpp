@@ -414,7 +414,6 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	D_ASSERT(!escapes.empty());
 	DecideDiagnostic diag;
 	diag.valid = true;
-	diag.status = SolverStatus::UNBOUNDED;
 	diag.state = "unbounded";
 
 	string names;
@@ -464,7 +463,6 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	D_ASSERT(!edits.empty());
 	DecideDiagnostic diag;
 	diag.valid = true;
-	diag.status = SolverStatus::INFEASIBLE;
 	diag.state = "infeasible";
 
 	// Summary: keep stderr as a pointer to the relevant query clauses. Suggestions,
@@ -564,7 +562,6 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 DecideDiagnostic BuildElasticInfeasibleDiagnostic() {
 	DecideDiagnostic diag;
 	diag.valid = true;
-	diag.status = SolverStatus::INFEASIBLE;
 	diag.state = "infeasible";
 	diag.summary = "the constraints cannot all be satisfied at once, and loosening your SUCH THAT "
 	               "limits cannot fix it — the conflict involves a fixed part of the query.";
@@ -574,6 +571,20 @@ DecideDiagnostic BuildElasticInfeasibleDiagnostic() {
 	row.value = "true";
 	diag.rows.push_back(std::move(row));
 	return diag;
+}
+
+string BuildUnboundedDiagnosisUnavailableReason(bool diagnostic_timed_out, bool ray_empty,
+                                                bool has_nonlinear_terms) {
+	if (diagnostic_timed_out) {
+		return "diagnosis ran out of time before it could identify the runaway variable.";
+	}
+	if (ray_empty && has_nonlinear_terms) {
+		return "a non-linear term prevents naming the variable.";
+	}
+	if (ray_empty) {
+		return "the runaway variable could not be identified.";
+	}
+	return "the runaway is an internal helper variable.";
 }
 
 void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag) {

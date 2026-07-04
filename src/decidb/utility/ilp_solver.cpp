@@ -29,8 +29,21 @@ double ComputeLinearObjectiveValue(const SolverModel &model, const vector<double
 	return objective;
 }
 
+SolveModelOptions MakeDiagnosticSolveOptions(const SolveModelOptions &options) {
+	SolveModelOptions diagnostic_options;
+	diagnostic_options.time_limit_seconds = ResolveDecideDiagnosticTimeLimit(options.time_limit_seconds);
+	diagnostic_options.interrupt_poll = options.interrupt_poll;
+	return diagnostic_options;
+}
+
+bool DidDiagnosticSolveStopEarly(const SolverResult &result) {
+	return result.status == SolverStatus::TIME_LIMIT;
+}
+
 void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backend,
-                                   const SolveModelOptions &options, SolverResult &result) {
+                                   const SolveModelOptions &options,
+                                   const SolveModelOptions &diagnostic_options,
+                                   SolverResult &result) {
 	if (!options.extract_unbounded_ray ||
 	    (result.status != SolverStatus::UNBOUNDED && result.status != SolverStatus::INF_OR_UNBD)) {
 		return;
@@ -41,7 +54,11 @@ void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backe
 		return;
 	}
 
-	SolverResult ray_result = SolvePreparedModel(ray_model, backend);
+	SolverResult ray_result = SolvePreparedModel(ray_model, backend, diagnostic_options);
+	if (DidDiagnosticSolveStopEarly(ray_result)) {
+		result.diagnostic_timed_out = true;
+		return;
+	}
 	if (ray_result.status != SolverStatus::OPTIMAL || ray_result.solution.size() != model.num_vars) {
 		return;
 	}
@@ -79,14 +96,18 @@ SolverBackend SelectSolverBackend() {
     return SolverBackend::HIGHS;
 }
 
+SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
+                                const SolveModelOptions &options) {
+	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
+	auto session = CreateSolverSession(backend);
+	if (options.interrupt_poll) {
+		session->SetInterruptPoll(options.interrupt_poll);
+	}
+	return session->Solve(model, time_limit);
+}
+
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend) {
-    switch (backend) {
-    case SolverBackend::GUROBI:
-        return GurobiSolver::Solve(model);
-    case SolverBackend::HIGHS:
-        return DeterministicNaive::Solve(model);
-    }
-    throw InternalException("Unknown DECIDE solver backend");
+	return SolvePreparedModel(model, backend, SolveModelOptions());
 }
 
 unique_ptr<SolverSession> CreateSolverSession(SolverBackend backend) {
@@ -100,15 +121,20 @@ unique_ptr<SolverSession> CreateSolverSession(SolverBackend backend) {
 }
 
 static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBackend backend,
+                                          const SolveModelOptions &diagnostic_options,
                                           const SolverResult &original) {
     if (original.status != SolverStatus::INF_OR_UNBD) {
         return original;
     }
 
     SolverModel probe_model = MakeZeroObjectiveProbeModel(model);
-    SolverResult probe_result = SolvePreparedModel(probe_model, backend);
+    SolverResult probe_result = SolvePreparedModel(probe_model, backend, diagnostic_options);
 
     SolverResult disambiguated = original;
+    if (DidDiagnosticSolveStopEarly(probe_result)) {
+        disambiguated.diagnostic_timed_out = true;
+        return disambiguated;
+    }
     switch (probe_result.status) {
     case SolverStatus::OPTIMAL:
         disambiguated.status = SolverStatus::UNBOUNDED;
@@ -154,6 +180,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 	// Solve on a live session (the warm-continuation substrate). The first chunk
 	// uses the caller's requested limit, or the shared default when unset (<0).
 	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
+	SolveModelOptions diagnostic_options = MakeDiagnosticSolveOptions(options);
 	auto session = CreateSolverSession(backend);
 	// Install the interrupt poll before the first solve so a user Ctrl-C cuts the
 	// *initial* solve short (not just continuation chunks). The poll is a session
@@ -162,8 +189,8 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 		session->SetInterruptPoll(options.interrupt_poll);
 	}
 	SolverResult result = session->Solve(model, time_limit);
-	result = DisambiguateInfOrUnbd(model, backend, result);
-	AttachUnboundedRayIfRequested(model, backend, options, result);
+	result = DisambiguateInfOrUnbd(model, backend, diagnostic_options, result);
+	AttachUnboundedRayIfRequested(model, backend, options, diagnostic_options, result);
 	// Hand the live session to the continuation loop if one asked for it, so a
 	// time-limit stop can Continue() the same warm solver. Done before moving the
 	// model (the session keeps its own copy of the model data, so the two are

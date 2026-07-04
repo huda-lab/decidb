@@ -253,8 +253,8 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
     HighsModelStatus model_status = highs.getModelStatus();
     if (model_status != HighsModelStatus::kOptimal) {
         // Map the raw model status to a normalized SolverStatus and return it
-        // (no solution). The operator surfaces the default error (manual-first)
-        // or routes it to diagnosis when a diagnose pragma is active.
+        // (no solution). The operator either surfaces the default error under
+        // diagnose_decide='off' or routes it to diagnosis under auto.
         SolverResult result;
         result.raw_status = (int)model_status;
         switch (model_status) {

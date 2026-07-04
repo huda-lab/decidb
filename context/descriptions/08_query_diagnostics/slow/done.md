@@ -44,7 +44,9 @@ incumbent fields on `SolverResult`:
 On a `TIME_LIMIT` result, `PhysicalDecide::Finalize` routes through
 `RouteSolveResult` to the `TIME_LIMIT` terminal (under `auto`; `off` still gets the
 plain static error). The terminal prints a plain-language status block to **stderr**
-and then — until S3/S4 land — falls through to the existing timeout error. Two shapes,
+and then follows the `decide_on_timeout` policy described below: `error` throws the
+slow-diagnosis pointer, interactive `ask` can resume or stop, and `continue` resumes
+automatically until a final outcome or user interrupt. The status block has two shapes,
 split on `has_solution`:
 
 - **Solution found (path 1):**
@@ -122,10 +124,14 @@ under `diagnose_decide='auto'`; `off` still routes to `UNDIAGNOSED` → the plai
 `ThrowDecideSolveError` (unchanged, no pointer, empty relation). The solve, the
 `ask`/`continue`/`error` mode flow, the interactive loop, the report block, and the
 success/incumbent-return path are untouched. A **caveated success** (an unproven incumbent
-returned as *rows*) still does not populate the relation — that would touch the
-success-delivery / `ClearDecideDiagnostic` path, so it is deferred (see `todo.md`). Tests:
+returned as *rows*) also populates the relation: the stop-with-incumbent path stashes the
+same `BuildTimeoutDiagnostic` quality block and flags it (`keep_slow_diagnosis`,
+`physical_decide.cpp`) so the success epilogue's blanket `ClearDecideDiagnostic` spares
+it — after the rows return, `SELECT * FROM decide_diagnostics()` still answers "how good
+is the solution I got" (the stderr caveat is one-shot). Tests:
 `TestSlowDiagnosticsRelation` (path 1 populates + points; path 2 marks `no_solution`;
-`off` leaves it empty; both backends).
+`off` leaves it empty; both backends) and `TestSlowContinuation::
+test_caveated_success_populates_relation`.
 
 ## Warm continuation (S3) + stop delivery (S4)
 
@@ -197,9 +203,10 @@ instant it is interrupted (rather than waiting out the chunk).
 - **Watcher cost.** Because the poll is armed on every diagnosed solve (default `auto`), each
   such solve now spawns the watcher `std::thread` for the duration of `optimize()` and joins it
   immediately after — negligible (a 25 ms-polling sleeper), and the price of Ctrl-C working on
-  any query. Solves with diagnosis `off`, and the internal diagnostic re-solves
-  (`SolvePreparedModel`, used by the infeasible / unbounded engines), are **not** armed and
-  spawn no watcher.
+  any query. Solves with diagnosis `off` are **not** armed and spawn no watcher. Internal
+  diagnostic re-solves (`SolvePreparedModel`, used by the `INF_OR_UNBD` probe, unbounded ray
+  fallback, and infeasible elastic passes) reuse the same interrupt poll when diagnosis is armed,
+  but with their own smaller helper budget (`min(60s, primary solve limit)`).
 
 **Every continue restarts the timer.** Each chunk is a fresh `ResolveDecideTimeLimit()`
 budget; the operator tracks *cumulative* elapsed and re-prints the report every boundary
@@ -264,4 +271,3 @@ stashed relation records `stopped_by=user_interrupt` + `status=solution_found`. 
 asserted **boundary-only** (probed 2026-07-04): a mid-first-solve SIGINT is reported as a
 time-limit stop (never "stopped at your request") yet still delivers the incumbent at the
 boundary — the solver-agnostic fallback.
-

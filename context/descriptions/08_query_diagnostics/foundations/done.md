@@ -11,9 +11,12 @@ so callers branch on the outcome. This gates the whole area.
 - **`SolverResult` + `SolverStatus`** (`src/include/duckdb/decidb/solver_result.hpp`).
   `SolverStatus = {OPTIMAL, INFEASIBLE, UNBOUNDED, INF_OR_UNBD, TIME_LIMIT,
   ITERATION_LIMIT, OTHER}`; `SolverResult { status, solution, objective_value, ray,
-  raw_status, has_solution, best_bound, gap }`.
+  diagnostic_timed_out, raw_status, has_solution, best_bound, gap }`.
   `ray` is populated only on the unbounded ray-extraction path; `raw_status` carries
-  the backend-native code for the `OTHER` message.
+  the backend-native code for the `OTHER` message. `diagnostic_timed_out` is set only
+  when an internal diagnostic helper solve (the `INF_OR_UNBD` probe or ray fallback)
+  hits its helper budget before producing a usable result, so the operator can say
+  diagnosis ran out of time instead of silently falling to the static error.
   - **Timeout incumbent fields (S1).** `solution` + `objective_value` carry the proven
     optimum at `OPTIMAL` **and** the best-so-far incumbent at `TIME_LIMIT` (when one was
     found) — so a caller must branch on `status` / `has_solution`, not on solution
@@ -40,6 +43,15 @@ so callers branch on the outcome. This gates the whole area.
 - **The `SolveModel` facade** returns `SolverResult` and no longer throws on solver
   status (`ilp_solver.cpp`). The default user-facing error text is a single helper,
   `ThrowDecideSolveError(const SolverResult &)`.
+- **Diagnostic helper solves are capped and interrupt-aware.** `ResolveDecideDiagnosticTimeLimit`
+  (`solver_config.hpp`) returns `min(60s, primary_solve_limit)`. The prepared-model
+  overload `SolvePreparedModel(model, backend, options)` applies that budget and the
+  same interrupt poll as the primary solve. It is used by the zero-objective
+  `INF_OR_UNBD` probe, the portable box-LP ray fallback, and the infeasible engine's
+  elastic re-solves (tier passes, stage 2, and tie-break), so diagnosis cannot add
+  several full 300s chunks after an already-slow failed solve. A helper `TIME_LIMIT`
+  is reported as "diagnosis ran out of time" rather than being hidden behind the
+  generic static error.
 - **`INF_OR_UNBD` first goes through the existing feasibility probe.** A ray (improving
   recession direction) is *necessary but not sufficient* for unboundedness — the
   region must also be feasible (an infeasible problem can still admit an improving
@@ -52,8 +64,8 @@ so callers branch on the outcome. This gates the whole area.
     probe *itself* returns neither OPTIMAL nor INFEASIBLE (a zero-objective model
     can't be unbounded, so this means the solver could not decide feasibility at all
     — error/limit), the status stays `INF_OR_UNBD`. Under `auto`, the router runs
-    check-ray: ray present reuses the unbounded terminal with the caveat `the problem
-    may still be infeasible.`, and no ray routes to the infeasible terminal. Under
+    check-ray: ray present reuses the unbounded terminal with the caveat `It may
+    instead be infeasible.`, and no ray routes to the infeasible terminal. Under
     `off`, it still falls to the static `ThrowDecideSolveError` `INF_OR_UNBD` branch.
 - **Pre-solve model-builder infeasibility is normalized.** Contradictory normalized
   rows and contradictory accumulated bounds throw `DecideInfeasibleModelException`
@@ -165,8 +177,10 @@ user-clause level instead of raw rows.
   `SolverInput::constraints` (`INVALID_INDEX` for synthetic rows); `group_key` is the
   PER/WHEN group id at emission (or row id for per-row, INVALID when ungrouped); `kind`
   is the row role. The trailing fields (added in I2) drive the elastic engine's slack
-  placement: `shape` (`ElasticShape::SHARED_LITERAL` vs `PER_ROW_DATA`) decides whether
-  a clause's rows share **one** slack; `avg_scaled` / `strict` / `typed_k` carry the
+  placement: `shape` (`ElasticShape::UNSET` / `SHARED_LITERAL` / `PER_ROW_DATA`) decides
+  whether a clause's rows share **one** slack; `UNSET` is the invalid default, and
+  `BuildElasticModel` asserts that any relaxable user-clause row has been explicitly
+  stamped before diagnosis reads it. `avg_scaled` / `strict` / `typed_k` carry the
   per-shape unit info for reporting (see `infeasible/done.md`).
 - **Single row-role enum:** `ConstraintKind = { USER_PARAMETER, USER_MECHANISM,
   STRUCTURAL }` (`duckdb/common/enums/decide.hpp`). `USER_PARAMETER` carries a
@@ -187,13 +201,10 @@ user-clause level instead of raw rows.
   `PhysicalDecide` stamps generated McCormick / ABS envelope rows as `STRUCTURAL`;
   generated `<>` and hard MIN/MAX mechanism rows as `USER_MECHANISM`; and composed
   MIN/MAX outer user pins as `USER_PARAMETER`.
-- **`BuildClauseRowIndex(const SolverModel&)`** is the reverse index. It returns
-  `ClauseRowIndex { by_clause, by_clause_group }`, where each value is a list of
-  `ConstraintRowRef { type, index }`. `type` distinguishes linear matrix rows from
-  quadratic rows; `by_clause_group` keys `(clause_id, group_key)` for PER/per-row
-  elastic slack placement.
-
-Tested in `test/common/test_decidb_constraint_provenance.cpp`.
+Tested in `test/common/test_decidb_constraint_provenance.cpp`. (A standalone
+clause-row reverse index shipped with F2 but no consumer ever materialized — the
+elastic engine walks `provenance` directly — so it was removed; consumers that need
+clause → row lookup group by `provenance.clause_id` inline.)
 
 ## Variable provenance (column → name / instance)
 
