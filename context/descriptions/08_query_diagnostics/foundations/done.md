@@ -211,7 +211,9 @@ it represents, so the unbounded diagnosis names escaping variables.
   ColumnProvenance` map. The provenance retains the variable's **instance**
   identity (entity id for entity-scoped, row for row-scoped) — the hook the
   unbounded `affected_rows` characterization resolves to a categorical rule
-  set (`unbounded/done.md`). Global-block columns default to GLOBAL_AUX (unnamed).
+  set (`unbounded/done.md`). Global-block columns default to GLOBAL_AUX (unnamed)
+  unless named through `SolverInput::global_variable_labels` (aggregate `<>`
+  indicators, composed MIN/MAX z's — see `infeasible/done.md`).
 
 Tested in `test/common/test_decidb_variable_provenance.cpp`.
 

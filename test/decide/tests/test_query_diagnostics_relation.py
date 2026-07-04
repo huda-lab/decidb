@@ -399,6 +399,37 @@ class TestDiagnosticsRelation:
         assert float(reported) == pytest.approx(objective)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_no_objective_loosen_tie_is_solver_agnostic(
+        self, request, cli_fixture
+    ):
+        """A5 tie-break on loosen edits — the same cap/floor tie as the stage-2 test but
+        WITHOUT an objective, so stage 2 cannot arbitrate: any split of the 10 units of
+        loosening across `x <= 0`, `y <= 0`, and `x + y >= 10` is an equally-minimal
+        repair, and each backend used to name a different clause (Gurobi loosened
+        `x <= 0`, HiGHS the floor; an LP tie can even split one repair fractionally
+        across two clauses). The rank-weighted tie-break re-solves under the frozen tier
+        budgets and concentrates the repair on the lowest-ranked clause — ranks follow
+        slack emission order: matrix rows in declaration order first, then re-emitted
+        absorbed bounds — so both backends report the single floor edit. Asserting the
+        SAME clause on both backends is the solver-agnosticism guarantee."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x, y FROM (VALUES (1)) t(id) "
+            "DECIDE x IS REAL, y IS REAL SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        edits = _clause_edits(rows)
+        # One clause carries the whole repair — never a fractional split across two.
+        assert len(edits) == 1, rows
+        assert edits[0]["subject"] == "y + x >= 10", rows  # same clause on both backends
+        assert edits[0]["suggested_change"] == "y + x >= 0"
+        assert "diagnosis points to clause `y + x >= 10`" in result.stderr.lower()
+        _apply_reported_fix(cli, sql, rows, {"y + x >= 10": "x + y >= 10"})
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_between_bound_is_loosened(self, request, cli_fixture):
         """BETWEEN is now tracked for re-emission too (it was absorbed but untracked).
         `x BETWEEN 0 AND 5` against `2*x >= 30` loosens the upper side to 15; the
@@ -1348,6 +1379,30 @@ class TestInfeasibleHeadlineAndRendering:
         assert attrs["suggested_change"] == "x <= 1234567890"
         assert attrs["amount"] == "1234567889"
         _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_composed_minmax_clause_is_named(self, request, cli_fixture):
+        """A3 — the composed MIN/MAX outer pin is a constraint over an internal global
+        z variable; the z carries its user source text (`MAX(x)`) so the diagnosis
+        renders `SUM(x) + MAX(x) <= -1`, never an internal column name like `col3` —
+        in the relation subject, the suggested change, and the headline pointer."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT x FROM (VALUES (1),(2),(3)) t(id) "
+            "DECIDE x IS INTEGER SUCH THAT MAX(x) + SUM(x) <= -1 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        edits = _clause_edits(rows)
+        assert len(edits) == 1, rows
+        subject = edits[0]["subject"]
+        assert "MAX(x)" in subject and "SUM(x)" in subject, subject
+        assert f"diagnosis points to clause `{subject.lower()}`" in result.stderr.lower()
+        # No internal column name anywhere a user reads.
+        for text in (result.stdout, result.stderr):
+            assert not re.search(r"\bcol\d+\b", text), text
+        _apply_reported_fix(cli, sql, rows, {subject: "MAX(x) + SUM(x) <= -1"})
 
 
 @pytest.mark.query_diagnostics

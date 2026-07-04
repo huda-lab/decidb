@@ -7,9 +7,11 @@ once. Under `PRAGMA diagnose_decide='auto'`, the infeasible terminal now builds 
 optimization, the **elastic program**, whose optimum is the least-change fix for shipped
 I1/I2 shapes: which user constraints to loosen, and by how much. Shared plumbing it builds
 on (the pragma gate, provenance, the reporting relation) is in `foundations/done.md`.
-The engine itself is shipped, including the T2 lexicographic repair ladder and T4
-objective-best DROP-set re-optimization with its source-order tie-break (both backends name
-the same drop under an objective tie); deferred follow-ups are tracked in `todo.md`.
+The engine itself is shipped, including the T2 lexicographic repair ladder, T4
+objective-best DROP-set re-optimization, and the stage-2b rank tie-break over **every**
+repair kind — removals, editable loosens, and data offsets, with or without an objective —
+so both backends name the same clause on a repair tie; deferred follow-ups are tracked in
+`todo.md`.
 
 ## Engine seam: infeasible
 
@@ -444,18 +446,23 @@ instance), and sources both the removal Big-M and the label.
 The previously-INVALID clause_id of these rows is untouched, so no existing clause-id consumer
 is disturbed.
 
-**Label channel for global-block indicators (aggregate `<>`).** A per-row `<>` indicator is a
-decide-var column, so `BuildColumnProvenance` already names it from `var_labels`. An aggregate
-`<>` binary lives in the global block, which `BuildColumnProvenance` otherwise leaves unnamed —
-so a dropped aggregate `<>` would have an empty subject. `SolverInput::global_variable_labels`
-(parallel to `global_variable_types`) carries the clause text `SUM(x) <> K` — looked up from
-`aux_var_expressions` at the aggregate-`<>` site and empty for every other global aux (MIN/MAX,
-McCormick). It is reconciled to the final global-var count with one `resize(num_global_vars)`
-before `SolveModel` (the aggregate-`<>` globals are allocated first, so the labels form a
-contiguous prefix and the trailing MIN/MAX globals pad with ""). `BuildColumnProvenance` takes
-it as an optional argument and writes the labels onto the global-block columns; the infeasible
-engine forwards it through `InfeasibleDiagnosisInput::global_variable_labels`. The DROP edit
-then reads `columns[indicator_col].label` uniformly for both shapes.
+**Label channel for global-block columns (aggregate `<>`, composed MIN/MAX).** A per-row `<>`
+indicator is a decide-var column, so `BuildColumnProvenance` already names it from `var_labels`.
+An aggregate `<>` binary lives in the global block, which `BuildColumnProvenance` otherwise
+leaves unnamed — so a dropped aggregate `<>` would have an empty subject.
+`SolverInput::global_variable_labels` (parallel to `global_variable_types`) carries the user
+source text of a labeled global: the clause text `SUM(x) <> K` for an aggregate-`<>` binary
+(looked up from `aux_var_expressions` at that site), and the aggregate text `MAX(x)` for a
+composed-MIN/MAX z (both the constraint and objective allocation sites in
+`physical_decide.cpp` build it from the term's `agg_name` + `inner_expr->ToString()`, padding
+the label vector to the z's ordinal first since earlier allocation sites may be unlabeled) —
+so the composed outer pin renders `SUM(x) + MAX(x) <= -1`, never an internal `colN`. Other
+global aux (single-term MIN/MAX objective z, McCormick) stay unlabeled. The vector is
+reconciled to the final global-var count with one `resize(num_global_vars)` before
+`SolveModel`. `BuildColumnProvenance` takes it as an optional argument and writes the labels
+onto the global-block columns; the infeasible engine forwards it through
+`InfeasibleDiagnosisInput::global_variable_labels`. The DROP edit then reads
+`columns[indicator_col].label` uniformly for both shapes.
 
 **Mechanic (all-or-nothing binary, no separate gate row).** Because `<>` removal is binary,
 `BuildElasticModel` (`decide_diagnostic_engines.cpp`), after the loosening + quadratic
@@ -493,22 +500,32 @@ fix (`HasLoosenEdit || HasRemoval`). `BuildStage2Model` freezes the solved tier 
 remove-only `<>` clauses, stage 2 (2a) can therefore re-optimize the DROP set under the
 minimum-cardinality removal budget and report the objective-best equally minimal DROP set.
 
-**Stage-2b source-order tie-break (solver-agnostic determinism).** When the objective is
-*indifferent* between two equally-minimal DROP sets (e.g. the conflict is on `x` but the
-objective only involves a free `y`), stage 2a has no objective reason to prefer either `<>`,
-so the solver picks one arbitrarily — and Gurobi and HiGHS can name **different** clauses.
-`BuildTieBreakModel` removes that ambiguity with one extra lexicographic pass: freeze the
-objective at its stage-2a optimum with a one-sided row (`obj ≥ Z*` for MAXIMIZE / `≤ Z*` for
-MINIMIZE, tiny tolerance so the stage-2a point stays feasible), then minimize `Σ rank·w` over
-the removals, `rank` ascending by source order (`removals` is ordered by ascending indicator
-column). Among all objective-optimal minimal repairs this prefers to drop the
-**earliest-declared** `<>`, so both backends report the same clause. The stage-2a achievable
-objective `Z*` is what gets reported (the tie-break's own objective is just the ranking sum).
-The pass is skipped — keeping the stage-2a result — when there are `< 2` removals (no tie to
-break) or the objective is quadratic (freezing it would need a quadratic row; an exact tie
-there is rarer still). Residual: two *different* min-cardinality sets with an equal rank-sum
-(only possible at cardinality `≥ 2`) can still tie, since linear ranks are not a total order
-over sets; the common single-drop tie is fully deterministic.
+**Stage-2b rank tie-break (solver-agnostic determinism, all repair kinds).** When the repair
+choice is *indifferent* between two equally-minimal repairs — two DROP sets, or an LP that can
+put the same loosening on either of two clauses (or split it fractionally across both where
+one edit suffices) — the solver picks arbitrarily, and Gurobi and HiGHS can name **different**
+clauses. `BuildTieBreakModel` removes that ambiguity with one extra pass over every repair
+knob: when a stage-2a objective exists, freeze it at its optimum with a one-sided row (`obj ≥
+Z*` for MAXIMIZE / `≤ Z*` for MINIMIZE — the rhs is **exact**, no tolerance cushion: any eps of
+objective room is monetized by the rank objective, which would shave eps of repair onto a
+lower-ranked slack and split the edit; the stage-2a point attains `Z*` to machine precision,
+and a rounding pathology just makes the pass non-optimal, keeping the stage-2a repair). Then
+minimize the rank-weighted repair sum: each removal `w` gets its 1-based rank, each slack gets
+its tier coefficient (editable slacks: the T1 scale weight) times its 1-based rank, ranks
+ascending in emission order (`removals` by indicator column; `slacks` by row — matrix rows in
+declaration order, then re-emitted absorbed bounds, whose original declaration position is not
+recorded). The tier budget rows carried into the model pin each tier's total, so the pass only
+reselects *which* clauses carry the repair — concentrating it on the lowest-ranked clause is
+the unique optimum, and both backends report the same edit. On the **no-objective path** (no
+user objective, or a data-only repair that skips stage 2) the same pass runs directly on the
+budget-frozen stage-1 model with no freeze row; its solution is re-read with `snap=false` like
+the stage-1 read. The stage-2a achievable objective `Z*` is what gets reported (the tie-break's
+own objective is just the ranking sum). The pass is skipped — keeping the prior result — when
+no tier owns `≥ 2` knobs (budgets pin cross-tier trades, so no naming tie is possible) or, on
+the freeze path, when the objective is quadratic (freezing it would need a quadratic row; an
+exact tie there is rarer still). Residual: two *different* min-cardinality sets with an equal
+rank-sum (only possible at cardinality `≥ 2`) can still tie, since linear ranks are not a total
+order over sets; the common single-drop and single-loosen ties are fully deterministic.
 
 **Pragma.** `diagnose_decide_removal_bigm` (DOUBLE, default `0` = auto-derive, `>= 0`,
 `decide_diagnostic.cpp`) threads through `DecideDiagParams::removal_bigm` into
@@ -596,7 +613,11 @@ objective `10` — loosening `y` would give `0`; a stage-2-unbounded case (`MAXI
 (`test_query_diagnostics_relation.py`): the same shape end-to-end on both backends, with the
 reported objective checked against an independent re-solve of the fixed query (the edit
 applied), never a hand-computed value. Existing infeasible tests that carry an objective now
-exercise stage 2 transparently — their reported edits are unchanged.
+exercise stage 2 transparently — their reported edits are unchanged. The **no-objective
+loosen tie** (`x <= 0 AND y <= 0 AND x + y >= 10` with no MAXIMIZE — Gurobi and HiGHS used to
+name different clauses) reports the same single floor edit on both backends
+(`test_infeasible_no_objective_loosen_tie_is_solver_agnostic`), the stage-2b guarantee for
+loosen repairs.
 
 ## Elastic engine: column-bound conflicts (intrinsic reset, inverted box, type-domain errors)
 

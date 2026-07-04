@@ -979,49 +979,81 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 	return stage2;
 }
 
-//! Stage-2b source-order tie-break (solver-agnostic determinism). Stage 2 finds the best
-//! achievable objective among minimal repairs, but when the objective is *indifferent*
-//! between two equally-minimal DROP sets the solver picks one arbitrarily — so Gurobi and
-//! HiGHS can name different clauses. This pass removes that ambiguity: freeze the objective
-//! at its stage-2a optimum, then, among all drop sets that still hit it, prefer to drop the
-//! **earliest-declared** `<>` (`removals` is ordered by ascending indicator column, i.e.
-//! source order). Both backends then report the same clause.
+//! Stage-2b source-order tie-break (solver-agnostic determinism). The lexicographic repair
+//! objective can be *indifferent* between two equally-minimal repairs — two DROP sets, or
+//! an LP that can put the same loosening on either of two clauses (or split it fractionally
+//! across both where one edit suffices). The solver then picks arbitrarily, so Gurobi and
+//! HiGHS can name different clauses. This pass removes that ambiguity: freeze the user
+//! objective at its stage-2a optimum (when there is one), then, among all repairs that
+//! still hit it under the frozen tier budgets, minimize a rank-weighted repair sum — every
+//! knob keeps its tier coefficient (editable slacks: the T1 scale weight) scaled by its
+//! 1-based rank in emission order (`removals` ascend by indicator column and `slacks` by
+//! row: matrix rows in declaration order, then re-emitted absorbed bounds, whose original
+//! declaration position is not recorded). Under a pinned tier budget, concentrating the
+//! repair on the lowest-ranked clause is then the unique optimum, so both backends report
+//! the same edit.
 //!
-//! Only meaningful with >= 2 removable clauses, and only applied to linear objectives — a
-//! quadratic objective would need a quadratic freeze row, and an exact tie there is rarer
-//! still, so it keeps the stage-2a result. Returns false (skip the extra solve) otherwise.
-static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<RemovalRef> &removals,
+//! Only meaningful when some tier owns >= 2 knobs (the budget rows pin each tier's total,
+//! so cross-tier reshuffling is impossible), and the freeze only applies to linear
+//! objectives — a quadratic objective would need a quadratic freeze row, and an exact tie
+//! there is rarer still, so it keeps the stage-2a result. Returns false (skip the extra
+//! solve) otherwise. `freeze_objective` is false on the no-objective path, where there is
+//! nothing to preserve but a repair tie is just as solver-arbitrary.
+static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef> &slacks,
+                               const vector<RemovalRef> &removals, bool freeze_objective,
                                double objective_value) {
-	if (removals.size() < 2 || tiebreak.has_quadratic_obj) {
+	idx_t editable_knobs = 0;
+	idx_t data_knobs = 0;
+	for (const auto &sl : slacks) {
+		(sl.tier == ElasticRepairTier::DATA_OFFSET ? data_knobs : editable_knobs)++;
+	}
+	if (removals.size() < 2 && editable_knobs < 2 && data_knobs < 2) {
 		return false;
 	}
-	// Freeze the objective at its stage-2a optimum with a one-sided row (the stage-2a
-	// point stays feasible, so the pass can never be infeasible). A tiny tolerance guards
-	// against the solver reporting the optimum with rounding error.
-	ModelConstraint freeze;
-	for (idx_t j = 0; j < tiebreak.obj_coeffs.size(); j++) {
-		if (tiebreak.obj_coeffs[j] != 0.0) {
-			freeze.indices.push_back(static_cast<int>(j));
-			freeze.coefficients.push_back(tiebreak.obj_coeffs[j]);
+	if (freeze_objective) {
+		if (tiebreak.has_quadratic_obj) {
+			return false;
 		}
+		// Freeze the objective at its stage-2a optimum with a one-sided row. The rhs is
+		// EXACT — no tolerance cushion: any eps of objective room is monetized by the
+		// rank objective, which would shave eps of repair onto a lower-ranked slack and
+		// split the edit (`x <= 9.999989` plus a phantom second clause). The stage-2a
+		// point attains the value read from the solver's own solution to machine
+		// precision, well inside both backends' feasibility tolerance; if a rounding
+		// pathology ever makes the row unattainable the pass just returns non-optimal
+		// and the caller keeps the stage-2a repair.
+		ModelConstraint freeze;
+		for (idx_t j = 0; j < tiebreak.obj_coeffs.size(); j++) {
+			if (tiebreak.obj_coeffs[j] != 0.0) {
+				freeze.indices.push_back(static_cast<int>(j));
+				freeze.coefficients.push_back(tiebreak.obj_coeffs[j]);
+			}
+		}
+		if (freeze.indices.empty()) {
+			return false; // constant objective: nothing to preserve, nothing to tie-break against
+		}
+		freeze.sense = tiebreak.maximize ? '>' : '<';
+		freeze.rhs = objective_value;
+		freeze.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
+		tiebreak.constraints.push_back(std::move(freeze));
 	}
-	if (freeze.indices.empty()) {
-		return false; // constant objective: nothing to preserve, nothing to tie-break against
-	}
-	double eps = 1e-6 * (1.0 + std::fabs(objective_value));
-	freeze.sense = tiebreak.maximize ? '>' : '<';
-	freeze.rhs = tiebreak.maximize ? objective_value - eps : objective_value + eps;
-	freeze.provenance.kind = ConstraintKind::STRUCTURAL; // rigid: never slacked or edited
-	tiebreak.constraints.push_back(std::move(freeze));
 
-	// New objective: minimize Σ rank·w over removals, rank ascending by source order. The
-	// removal cardinality is already pinned at R* by the stage-1 budget row carried into
-	// this model, so this only reselects *which* clauses to drop — preferring the earliest.
+	// New objective: minimize the rank-weighted repair sum. Each tier's total is already
+	// pinned at its stage-1 optimum by the budget rows carried into this model, so this
+	// only reselects *which* clauses carry the repair — preferring the earliest.
 	for (auto &c : tiebreak.obj_coeffs) {
 		c = 0.0;
 	}
 	for (idx_t i = 0; i < removals.size(); i++) {
 		tiebreak.obj_coeffs[removals[i].w_col] = static_cast<double>(i + 1);
+	}
+	for (idx_t i = 0; i < slacks.size(); i++) {
+		const auto &sl = slacks[i];
+		double coeff = SlackTierCoefficient(sl, sl.tier) * static_cast<double>(i + 1);
+		tiebreak.obj_coeffs[sl.pos_col] = coeff;
+		if (sl.neg_col != DConstants::INVALID_INDEX) {
+			tiebreak.obj_coeffs[sl.neg_col] = coeff;
+		}
 	}
 	tiebreak.maximize = false;
 	return true;
@@ -1114,12 +1146,14 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 			double achievable = stage2.objective_value;
 			vector<double> repair_solution = std::move(stage2.solution);
 
-			// Stage-2b: when the objective ties between equally-minimal DROP sets, reselect
-			// the drop set by source order so both backends name the same clause. Keep the
-			// stage-2a achievable objective for reporting (the tie-break's own objective is
-			// just Σ rank·w). Falls back to the stage-2a set on skip or non-optimal.
+			// Stage-2b: when the objective ties between equally-minimal repairs (DROP sets
+			// or loosen edits), reselect the repair by source order so both backends name
+			// the same clause. Keep the stage-2a achievable objective for reporting (the
+			// tie-break's own objective is just the rank-weighted repair sum). Falls back
+			// to the stage-2a repair on skip or non-optimal.
 			SolverModel tiebreak_model = stage2_model;
-			if (BuildTieBreakModel(tiebreak_model, elastic.removals, achievable)) {
+			if (BuildTieBreakModel(tiebreak_model, slacks, elastic.removals,
+			                       /*freeze_objective=*/true, achievable)) {
 				SolverResult tiebreak = input.solve_model(tiebreak_model);
 				if (tiebreak.status == SolverStatus::OPTIMAL && !tiebreak.solution.empty()) {
 					repair_solution = std::move(tiebreak.solution);
@@ -1141,6 +1175,25 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		}
 		// Defensive: the stage-1 point satisfies the budget by construction, so stage 2
 		// is feasible. On any other status fall back to the stage-1 edit, no objective.
+	} else {
+		// No stage 2 (no objective, or a data-only repair): a tie between equally-minimal
+		// repairs is still solver-arbitrary, so run the same source-order tie-break
+		// directly on the budget-frozen stage-1 model (every active tier's budget row was
+		// appended as the lexicographic ladder ran). Falls back to the stage-1 edit on
+		// skip or non-optimal.
+		SolverModel tiebreak_model = stage1_model;
+		if (BuildTieBreakModel(tiebreak_model, slacks, elastic.removals,
+		                       /*freeze_objective=*/false, 0.0)) {
+			SolverResult tiebreak = input.solve_model(tiebreak_model);
+			if (tiebreak.status == SolverStatus::OPTIMAL && !tiebreak.solution.empty()) {
+				vector<ClauseEdit> tie_edits =
+				    ReadElasticEdits(slacks, elastic.removals, tiebreak.solution, input.model,
+				                     columns, /*snap=*/false, input.params.slack_scope);
+				if (!tie_edits.empty()) {
+					edits = std::move(tie_edits);
+				}
+			}
+		}
 	}
 	return BuildInfeasibleDiagnostic(edits);
 }

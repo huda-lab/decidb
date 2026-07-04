@@ -5476,6 +5476,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 vector<Term> inner_terms;
                 vector<vector<double>> per_term_coefs;
                 idx_t z_idx = DConstants::INVALID_INDEX;
+                string label; //!< User source text (`MAX(x)`) naming this term's global z.
             };
             vector<TermAnalysis> analyses;
 
@@ -5493,6 +5494,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ta.agg_name = term.agg_name;
                 ta.sign = term.sign;
                 ta.is_easy = term.is_easy;
+                if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
+                    ta.label = StringUtil::Upper(term.agg_name) + "(" + term.inner_expr->ToString() + ")";
+                }
 
                 ExtractTerms(*term.inner_expr, ta.inner_terms);
                 for (auto &inner_t : ta.inner_terms) {
@@ -5529,6 +5533,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 solver_input.global_lower_bounds.push_back(-1e30);
                 solver_input.global_upper_bounds.push_back(1e30);
                 solver_input.global_obj_coeffs.push_back(0.0);
+                // Name the z through the global label channel (as the aggregate-`<>` site
+                // does) so a diagnosis renders `MAX(x)`, never an internal column name.
+                // Pad first: earlier allocation sites may not have pushed labels.
+                solver_input.global_variable_labels.resize(ta.z_idx - var_indexer.global_block_start);
+                solver_input.global_variable_labels.push_back(ta.label);
             }
             // Also reject empty WHEN on composed SUM/AVG terms for consistency
             // with the reject-all rule. Without the check, an empty SUM just
@@ -5687,6 +5696,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             vector<Term> inner_terms;
             vector<vector<double>> per_term_coefs;
             idx_t z_idx = DConstants::INVALID_INDEX;
+            string label; //!< User source text (`MAX(x)`) naming this term's global z.
         };
         vector<ObjTermAnalysis> obj_analyses;
 
@@ -5705,6 +5715,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ta.agg_name = term.agg_name;
                 ta.sign = term.sign;
                 ta.is_easy = term.is_easy;
+                if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
+                    ta.label = StringUtil::Upper(term.agg_name) + "(" + term.inner_expr->ToString() + ")";
+                }
                 ExtractTerms(*term.inner_expr, ta.inner_terms);
                 for (auto &inner_t : ta.inner_terms) {
                     ta.per_term_coefs.push_back(EvaluateTermCoefsObj(inner_t));
@@ -5741,6 +5754,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             solver_input.global_lower_bounds.push_back(-1e30);
             solver_input.global_upper_bounds.push_back(1e30);
             solver_input.global_obj_coeffs.push_back(0.0);
+            // Name the z through the global label channel (as the aggregate-`<>` site
+            // does) so a diagnosis renders `MAX(x)`, never an internal column name.
+            // Pad first: earlier allocation sites may not have pushed labels.
+            solver_input.global_variable_labels.resize(ta.z_idx - var_indexer.global_block_start);
+            solver_input.global_variable_labels.push_back(ta.label);
         }
         // Mirror the SUM/AVG empty-set rejection from the composed constraint path.
         for (auto &ta : obj_analyses) {
