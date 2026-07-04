@@ -1311,9 +1311,10 @@ static constexpr double ABSORBED_LOWER_UNSET = -1e30;
 //! absorbed into the column-bound arrays instead of emitted as a matrix row, so it
 //! carries no provenance and is invisible to the elastic engine. The infeasible
 //! diagnosis re-emits these as USER_PARAMETER slackable rows (I1, decision 1a). One
-//! spec per user-written direction: BETWEEN yields two (lower + upper). BOOLEAN /
-//! default non-negativity bounds are NOT recorded — only bounds a user expression
-//! produced.
+//! spec per user-written direction: BETWEEN yields two (lower + upper). Intrinsic
+//! domains are NOT recorded — default non-negativity never is, and a bound on a
+//! BOOLEAN is skipped only when it merely restates the 0/1 box (`>= 0` / `<= 1`);
+//! a genuine BOOLEAN pin (`x <= 0`, `x >= 1`, `x = 1`) IS recorded.
 struct UserBoundSpec {
     idx_t decide_var_idx; //!< index into op.decide_variables
     char sense;           //!< '<' (<= K), '>' (>= K), '=' (== K)
@@ -2141,9 +2142,21 @@ public:
                             // surviving signal is op.is_boolean_var. The 0/1 box is the
                             // variable's intrinsic domain, never a loosenable parameter:
                             // apply it to the column bounds but do NOT record it for
-                            // elastic re-emission.
-                            bool record_user_bound =
-                                !(var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx]);
+                            // elastic re-emission. A genuine user PIN on a BOOLEAN
+                            // (`x <= 0`, `x >= 1`, `x = 1`) tightens the box and IS
+                            // recorded — erasing it made the elastic model diverge from
+                            // the user's query (wrong or missing infeasible diagnoses).
+                            bool is_bool_var =
+                                var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx];
+                            auto RecordBound = [&](char sense, double k) {
+                                if (is_bool_var) {
+                                    // Skip only domain restatements: an upper at/above 1
+                                    // or a lower at/below 0 does not tighten [0,1].
+                                    if (sense == '<' && k >= 1.0) return false;
+                                    if (sense == '>' && k <= 0.0) return false;
+                                }
+                                return true;
+                            };
                             bool absorbed = true;
                             // Apply bound based on comparison type. Each absorbed
                             // direction is also recorded as a UserBoundSpec so the
@@ -2151,10 +2164,10 @@ public:
                             // the spec carries the same integer-strict normalization.
                             if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
-                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '<', bound_value});
+                                if (RecordBound('<', bound_value)) user_absorbed_bounds.push_back({var_idx, '<', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
-                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '>', bound_value});
+                                if (RecordBound('>', bound_value)) user_absorbed_bounds.push_back({var_idx, '>', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
                                 // Intersect (like `<=`/`>=`), never overwrite: two equalities
                                 // on one variable (`x = 5 AND x = 10`) must invert the box
@@ -2162,18 +2175,18 @@ public:
                                 // resolved to the last value written.
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
-                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '=', bound_value});
+                                if (RecordBound('=', bound_value)) user_absorbed_bounds.push_back({var_idx, '=', bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_LESSTHAN && is_integer_var) {
                                 // x < bound → x <= bound-1 for integers. REAL strict
                                 // inequality has no valid absorption — leave it for
                                 // the constraint path which rejects with a clear error.
                                 // Carry strict + typed_k so the diagnosis re-quotes `< bound`.
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value - 1.0);
-                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '<', bound_value - 1.0, true, bound_value});
+                                if (RecordBound('<', bound_value - 1.0)) user_absorbed_bounds.push_back({var_idx, '<', bound_value - 1.0, true, bound_value});
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHAN && is_integer_var) {
                                 // x > bound → x >= bound+1 for integers.
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value + 1.0);
-                                if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '>', bound_value + 1.0, true, bound_value});
+                                if (RecordBound('>', bound_value + 1.0)) user_absorbed_bounds.push_back({var_idx, '>', bound_value + 1.0, true, bound_value});
                             } else {
                                 absorbed = false;
                             }
@@ -2209,8 +2222,18 @@ public:
                         bool is_integer_var =
                             (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
                              op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
-                        bool record_user_bound =
-                            !(var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx]);
+                        // Same BOOLEAN rule as the COMPARISON arm: record a side only
+                        // when it tightens the intrinsic [0,1] box (a genuine user pin),
+                        // never when it merely restates the domain.
+                        bool is_bool_var =
+                            var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx];
+                        auto RecordBound = [&](char sense, double k) {
+                            if (is_bool_var) {
+                                if (sense == '<' && k >= 1.0) return false;
+                                if (sense == '>' && k <= 0.0) return false;
+                            }
+                            return true;
+                        };
 
                         auto ExtractBound = [](const Expression *e) -> double {
                             while (e->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -2242,14 +2265,14 @@ public:
                             double lo_typed = lo;
                             if (lo_strict) lo += 1.0;
                             lower_bounds[var_idx] = std::max(lower_bounds[var_idx], lo);
-                            if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '>', lo, lo_strict, lo_typed});
+                            if (RecordBound('>', lo)) user_absorbed_bounds.push_back({var_idx, '>', lo, lo_strict, lo_typed});
                         }
                         if (!std::isnan(hi)) {
                             bool hi_strict = !between.upper_inclusive && is_integer_var;
                             double hi_typed = hi;
                             if (hi_strict) hi -= 1.0;
                             upper_bounds[var_idx] = std::min(upper_bounds[var_idx], hi);
-                            if (record_user_bound) user_absorbed_bounds.push_back({var_idx, '<', hi, hi_strict, hi_typed});
+                            if (RecordBound('<', hi)) user_absorbed_bounds.push_back({var_idx, '<', hi, hi_strict, hi_typed});
                         }
                     }
                 }
@@ -5954,24 +5977,33 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // (a size-1 block). Only genuine user bounds reach here — a variable's
         // intrinsic domain (BOOLEAN 0/1, default non-negativity) is never recorded in
         // user_absorbed_bounds (see TraverseBoundsConstraints), so it stays rigid.
+        // A BOOLEAN pin (`x <= 0`, `x >= 1`, `x = 1`) IS recorded; its column is
+        // opened only back to the intrinsic [0,1] — never past it — so the pin
+        // becomes loosenable while the 0/1 domain itself stays rigid.
+        // C3: if a recorded bound cannot be re-emitted (its column is missing from
+        // the retained model), the elastic model is missing a user constraint —
+        // flag it so the engine won't claim an elastic-infeasible verdict.
+        bool has_unhandled_user_bounds = false;
         idx_t synthetic_clause_id = solver_input.constraints.size();
         for (const auto &b : gstate.user_absorbed_bounds) {
             idx_t num_instances = var_indexer.NumInstances(b.decide_var_idx);
             idx_t bound_clause_id = synthetic_clause_id++;
+            bool bound_is_bool = b.decide_var_idx < is_boolean_var.size() &&
+                                 is_boolean_var[b.decide_var_idx];
             for (idx_t inst = 0; inst < num_instances; inst++) {
                 idx_t col = var_indexer.Get(b.decide_var_idx, inst);
-                if (col >= retained_model.num_vars || retained_model.is_binary[col]) {
-                    // BOOLEAN 0/1 is structural, not a loosenable parameter; leave rigid.
+                if (col >= retained_model.num_vars) {
+                    has_unhandled_user_bounds = true;
                     continue;
                 }
-                // Relax the rigid column bound for the direction this spec enforces
-                // (1e30 / -1e30 = the model's ±infinity), so the bound is enforced
-                // only by the loosenable row.
+                // Relax the rigid column bound for the direction this spec enforces,
+                // so the bound is enforced only by the loosenable row: to the model's
+                // ±infinity (1e30 / -1e30), or for a BOOLEAN to its intrinsic [0,1].
                 if (b.sense == '<' || b.sense == '=') {
-                    retained_model.col_upper[col] = 1e30;
+                    retained_model.col_upper[col] = bound_is_bool ? 1.0 : 1e30;
                 }
                 if (b.sense == '>' || b.sense == '=') {
-                    retained_model.col_lower[col] = -1e30;
+                    retained_model.col_lower[col] = bound_is_bool ? 0.0 : -1e30;
                 }
                 ModelConstraint row;
                 row.indices.push_back(static_cast<int>(col));
@@ -6001,7 +6033,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         //   - the intrinsic default (lower 0 / upper +inf) is unchanged;
         //   - an implied tightening (lower>0 / upper<+inf) is reverted — its backing row
         //     (USER_PARAMETER slackable, or STRUCTURAL still-rigid) continues to enforce it.
-        // BOOLEAN columns are left as-is so the intrinsic 0/1 box stays rigid. NOTE: a
+        // BOOLEAN columns reset only within [0,1] so the intrinsic box stays rigid. NOTE: a
         // BOOLEAN is lowered to an INTEGER carrying a [0,1] box, so `is_binary[col]` is
         // FALSE for it — `is_boolean_var[var]` is the only reliable signal (see the
         // comment in TraverseBoundsConstraints). Using is_binary here would reset the 0/1
@@ -6045,7 +6077,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         InfeasibleDiagnosisInput diag_input {
             retained_model, var_indexer, var_labels, var_is_aux,
             solver_input.global_variable_labels, diag_params,
-            /*has_unhandled_user_bounds=*/false,
+            has_unhandled_user_bounds,
             [backend](const SolverModel &m) { return SolvePreparedModel(m, backend); },
         };
         DecideDiagnostic diag = DiagnoseInfeasible(diag_input);

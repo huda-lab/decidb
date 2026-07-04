@@ -105,6 +105,49 @@ def _clause_edits(rows):
     return edits
 
 
+def _apply_reported_fix(cli, sql, rows, subject_to_sql=None):
+    """E1 apply-the-fix harness: apply every reported edit to the SQL (loosen —
+    replace the clause with its suggested_change; drop — remove the clause) and
+    assert the edited query actually solves. This checks the core promise that the
+    least-change edit restores a usable solution by re-running the query, never by
+    trusting the diagnosis. `subject_to_sql` maps a rendered clause subject to the
+    literal SQL fragment when the two differ (BETWEEN sides, reversed bounds,
+    MAX(x) composition, subquery/foldable RHS, whitespace). Returns the edited SQL
+    so callers can oracle-check the achievable objective against it."""
+    subject_to_sql = subject_to_sql or {}
+    fixed_sql = sql
+    edited = False
+    for edit in _clause_edits(rows):
+        clause = subject_to_sql.get(edit["subject"], edit["subject"])
+        if edit["edit_kind"] == "drop":
+            assert f"{clause} AND " in fixed_sql or f" AND {clause}" in fixed_sql, (
+                f"cannot locate dropped clause {clause!r} in:\n{fixed_sql}"
+            )
+            fixed_sql = (
+                fixed_sql.replace(f"{clause} AND ", "", 1)
+                if f"{clause} AND " in fixed_sql
+                else fixed_sql.replace(f" AND {clause}", "", 1)
+            )
+            edited = True
+        elif "suggested_change" in edit:
+            assert clause in fixed_sql, f"cannot locate {clause!r} in:\n{fixed_sql}"
+            fixed_sql = fixed_sql.replace(clause, edit["suggested_change"], 1)
+            edited = True
+    assert edited, f"diagnosis reported no applicable edit:\n{rows}"
+    result = cli.execute_script(".mode csv\n" + fixed_sql + ";\n")
+    errors = [
+        line for line in result.stderr.strip().splitlines()
+        if line and not line.startswith("Warning:")
+    ]
+    assert not errors, (
+        f"edited query still fails:\n{fixed_sql}\n" + "\n".join(errors)
+    )
+    assert list(csv.DictReader(io.StringIO(result.stdout))), (
+        f"edited query returned no rows:\n{fixed_sql}"
+    )
+    return fixed_sql
+
+
 def _diagnosis_marker(stdout, label):
     match = re.search(rf"{label}=(\d+):(\d+):(\d+)", stdout)
     assert match, f"Missing {label!r} diagnosis marker in stdout:\n{stdout}"
@@ -294,6 +337,7 @@ class TestDiagnosticsRelation:
         }
         # Exactly one of the two contradictory bounds is loosened to meet the other.
         assert edits in ({"x >= 5": "x >= 1"}, {"x <= 1": "x <= 5"}), edits
+        _apply_reported_fix(cli, sql, rows)
 
     # I1: the elastic engine turns an infeasible solve into the least-change fix.
     # These cases have a UNIQUE minimizer (the `2*x` coefficient breaks the L1 tie),
@@ -318,6 +362,7 @@ class TestDiagnosticsRelation:
         attrs = _attrs(rows, "clause", "x <= 5")
         assert attrs["suggested_change"] == "x <= 15"
         assert attrs["amount"] == "10"
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_stage2_picks_objective_best_edit(self, request, cli_fixture):
@@ -370,6 +415,7 @@ class TestDiagnosticsRelation:
         attrs = _attrs(rows, "clause", "x <= 5")
         assert attrs["suggested_change"] == "x <= 15"
         assert attrs["amount"] == "10"
+        _apply_reported_fix(cli, sql, rows, {"x <= 5": "x BETWEEN 0 AND 5"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_easy_max_shares_one_slack_max_overshoot(self, request, cli_fixture):
@@ -391,6 +437,7 @@ class TestDiagnosticsRelation:
         amounts = [float(r["value"]) for r in rows if r["attribute"] == "amount"]
         assert sum(amounts) == pytest.approx(7.0)
         assert _attrs(rows, "clause", "x <= 5")
+        _apply_reported_fix(cli, sql, rows, {"x <= 5": "MAX(x) <= 5"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_multi_instance_bound_shares_one_slack(self, request, cli_fixture):
@@ -411,6 +458,7 @@ class TestDiagnosticsRelation:
         amounts = [float(r["value"]) for r in rows if r["attribute"] == "amount"]
         assert sum(amounts) == pytest.approx(7.0)
         assert _attrs(rows, "clause", "x <= 5")
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_reversed_bound_is_absorbed_and_reported(self, request, cli_fixture):
@@ -429,6 +477,7 @@ class TestDiagnosticsRelation:
         cap = _attrs(rows, "clause", "x <= 5")
         assert cap["suggested_change"] == "x <= 12"
         assert cap["amount"] == "7"
+        _apply_reported_fix(cli, sql, rows, {"x <= 5": "5 >= x"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_per_group_query_mode_folds_to_one_edit(self, request, cli_fixture):
@@ -458,6 +507,7 @@ class TestDiagnosticsRelation:
         assert edit["offset_scope"] == "clause"
         # No per-group `group` row in query mode (the clause is one folded edit).
         assert not [r for r in rows if r["attribute"] == "group"]
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_per_group_expanded_mode_reports_per_group(self, request, cli_fixture):
@@ -506,6 +556,9 @@ class TestDiagnosticsRelation:
         edit = _attrs(rows, "clause", "SUM(x) >= 99 WHEN grp = 'a'")
         assert edit["edit_kind"] == "loosen"
         assert edit["suggested_change"] == "SUM(x) >= 1 WHEN grp = 'a'"
+        _apply_reported_fix(
+            cli, sql, rows, {"SUM(x) >= 99 WHEN grp = 'a'": "SUM(x) >= 99 WHEN grp='a'"}
+        )
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_boolean_loosens_constraint_not_domain(self, request, cli_fixture):
@@ -525,6 +578,92 @@ class TestDiagnosticsRelation:
         subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
         assert subjects, "expected at least one suggested_change edit"
         assert all("<= 1" not in s and "<= 2" not in s for s in subjects), subjects
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_boolean_pin_floor_is_diagnosed(self, request, cli_fixture):
+        """A1 (silent-failure repro): a genuine user pin on a BOOLEAN (`x >= 1`) used
+        to be erased from the elastic model — absorbed into the 0/1 box and never
+        re-emitted — so this trivially diagnosable conflict fell through to the bare
+        static error with an empty relation. Pinning all 3 x to 1 conflicts with
+        `SUM(x) <= 2`; the engine must produce a diagnosis whose edit names one of
+        the two user clauses, and applying it must make the query solve."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT x >= 1 AND SUM(x) <= 2 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
+        assert subjects and subjects <= {"x >= 1", "SUM(x) <= 2"}, subjects
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_boolean_pin_cap_edit_restores_feasibility(self, request, cli_fixture):
+        """A1 (actively-wrong-edit repro): with the BOOLEAN pin `x <= 0` erased, the
+        elastic model reached `SUM(x) + SUM(y) >= 9` by silently setting the erased x
+        to 1 and reported `y <= 1` -> `y <= 2` — an edit that leaves the real query
+        INFEASIBLE. With the pin re-emitted, whatever edit set is reported must
+        restore feasibility, and the reported achievable objective must match an
+        independent re-solve of the edited query."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) "
+            "DECIDE x IS BOOLEAN, y IS INTEGER SUCH THAT x <= 0 AND y <= 1 "
+            "AND SUM(y) >= 5 AND SUM(x) + SUM(y) >= 9 MAXIMIZE SUM(y)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        fixed_sql = _apply_reported_fix(cli, sql, rows)
+        # Oracle: the promised objective is achievable on the edited query.
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        fixed = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(sum(float(r["y"]) for r in fixed))
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_boolean_equality_pin_is_diagnosed(self, request, cli_fixture):
+        """A1, `=` shape: an equality pin `x = 1` on a BOOLEAN is a genuine user
+        constraint (not the domain), so it must reach the elastic model and yield a
+        diagnosis whose edit restores feasibility."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT x = 1 AND SUM(x) <= 2 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_boolean_domain_restatement_stays_rigid(self, request, cli_fixture):
+        """A1 guard: a user-written `x <= 1 AND x >= 0` on a BOOLEAN merely restates
+        the intrinsic 0/1 domain and must NOT become an editable knob — widening the
+        box (`x <= 2`) is never an honest fix for a BOOLEAN. The only edit loosens
+        the SUM floor."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x IS BOOLEAN SUCH THAT x <= 1 AND x >= 0 AND SUM(x) >= 3 "
+            "MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
+        assert subjects == {"SUM(x) >= 3"}, subjects
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_data_rhs_query_mode_virtual_offset(self, request, cli_fixture):
@@ -549,6 +688,7 @@ class TestDiagnosticsRelation:
         # BOOLEAN can only reach 1, so the floor of 5 needs a -4 offset to become feasible.
         assert floor["suggested_change"] == "x >= hi - 4"
         assert floor["amount"] == "4"
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_data_rhs_expanded_mode_per_row_profile(self, request, cli_fixture):
@@ -592,6 +732,7 @@ class TestDiagnosticsRelation:
         assert cap["suggested_change"] == "x <= 12"
         assert cap["amount"] == "7"
         assert not [r for r in rows if r["attribute"] == "conflict"]
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_lexicographic_data_vs_large_editable_slack(self, request, cli_fixture):
@@ -613,6 +754,7 @@ class TestDiagnosticsRelation:
         assert cap["suggested_change"] == "10000*x <= 10000"
         assert cap["amount"] == "10000"
         assert not [r for r in rows if r["attribute"] == "edit_source" and r["value"] == "virtual_offset"]
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_foldable_rhs_cap_is_editable(self, request, cli_fixture):
@@ -635,6 +777,7 @@ class TestDiagnosticsRelation:
         assert cap["suggested_change"] == "x <= 10"
         assert cap["amount"] == "5"
         assert not [r for r in rows if r["attribute"] == "conflict"]
+        _apply_reported_fix(cli, sql, rows, {"x <= 5": "x <= 2 + 3"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_uncorrelated_subquery_cap_is_editable(self, request, cli_fixture):
@@ -656,6 +799,7 @@ class TestDiagnosticsRelation:
         assert cap["suggested_change"] == "x <= 10"
         assert cap["amount"] == "5"
         assert not [r for r in rows if r["attribute"] == "conflict"]
+        _apply_reported_fix(cli, sql, rows, {"x <= 5": "x <= (SELECT 5)"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_correlated_subquery_cap_stays_per_row(self, request, cli_fixture):
@@ -684,6 +828,7 @@ class TestDiagnosticsRelation:
             and r["subject"].startswith("x <=")
             and r["attribute"] == "suggested_change"
         ]
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_single_absorbed_bound_vs_row(self, request, cli_fixture):
@@ -703,6 +848,7 @@ class TestDiagnosticsRelation:
         cap = _attrs(rows, "clause", "x <= 4")
         assert cap["suggested_change"] == "x <= 15"
         assert cap["amount"] == "11"
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_avg_reports_raw_slack_and_avg_label(self, request, cli_fixture):
@@ -721,6 +867,7 @@ class TestDiagnosticsRelation:
         avg = _attrs(rows, "clause", "AVG(x) <= 5")
         assert avg["suggested_change"] == "AVG(x) <= 10"
         assert avg["amount"] == "5"
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_strict_less_than_requotes_typed_literal(self, request, cli_fixture):
@@ -739,6 +886,7 @@ class TestDiagnosticsRelation:
         edit = _attrs(rows, "clause", "SUM(x) < 10")
         assert edit["suggested_change"] == "SUM(x) < 16"
         assert edit["amount"] == "6"
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_strict_greater_than_requotes_typed_literal(self, request, cli_fixture):
@@ -756,6 +904,7 @@ class TestDiagnosticsRelation:
         edit = _attrs(rows, "clause", "SUM(x) > 10")
         assert edit["suggested_change"] == "SUM(x) > 2"
         assert edit["amount"] == "8"
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_quadratic_loosens_linear_rhs(self, request, cli_fixture):
@@ -775,6 +924,16 @@ class TestDiagnosticsRelation:
         assert edit["suggested_change"].startswith("POWER(x, 2) <= 100")
         # amount ≈ 96 (10² − 4), allowing for solver tolerance.
         assert abs(float(edit["amount"]) - 96.0) < 1e-3
+        # Known wart (logged in 07_issues/bugs/todo.md): this shape also reports a
+        # zero-amount no-op edit on the data floor whose suggestion leaks the binder's
+        # implicit CAST (`x >= CAST(lo AS DOUBLE) - 0`) — un-appliable SQL, since SUCH
+        # THAT rejects explicit CAST. Quarantine it here so the harness verifies the
+        # real edit; drop the filter once the bug is fixed.
+        _apply_reported_fix(
+            cli, sql,
+            [r for r in rows if r["subject"] != "x >= CAST(lo AS DOUBLE)"],
+            {"POWER(x, 2) <= 4": "POWER(x,2) <= 4"},
+        )
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_strict_quadratic_requotes_typed_literal(self, request, cli_fixture):
@@ -794,6 +953,7 @@ class TestDiagnosticsRelation:
         edit = _attrs(rows, "clause", "POWER(x, 2) < 10")
         assert edit["suggested_change"] == "POWER(x, 2) < 17"
         assert edit["amount"] == "7"
+        _apply_reported_fix(cli, sql, rows, {"POWER(x, 2) < 10": "POWER(x,2) < 10"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_ne_prefers_loosen_over_drop(self, request, cli_fixture):
@@ -815,6 +975,7 @@ class TestDiagnosticsRelation:
         assert subjects, "expected an editable-bound edit"
         assert all("<>" not in s for s in subjects), subjects
         assert not [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_lexicographic_removal_vs_large_loosen(self, request, cli_fixture):
@@ -836,6 +997,7 @@ class TestDiagnosticsRelation:
         assert cap["suggested_change"] == "10000000*x <= 60000000"
         assert cap["amount"] == "10000000"
         assert not [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("objective, expected_drop, drop_sql, expected_objective", [
         ("MINIMIZE SUM(x)", "x <> 0", "x <> 0", "0"),
@@ -1035,6 +1197,7 @@ class TestDiagnosticsRelation:
         subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
         assert subjects, "expected an editable-bound edit"
         assert any(s in ("x >= 5", "y >= 5") for s in subjects), subjects
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_diagnosis_suppressed_when_off(self, request, cli_fixture):
@@ -1084,6 +1247,7 @@ class TestInfeasibleHeadlineAndRendering:
         assert attrs["suggested_change"] == "SUM(x) >= 3"
         assert "x + x" not in result.stdout
         assert "diagnosis points to clause `sum(x) >= 999999`" in result.stderr.lower()
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ungrouped_weighted_sum_folds_with_uniform_coeff(self, request, cli_fixture):
@@ -1108,6 +1272,7 @@ class TestInfeasibleHeadlineAndRendering:
         err = result.stderr.lower()
         assert "diagnosis points to clause `sum(5*x) <= -1`" in err
         assert " or loosen " not in err
+        _apply_reported_fix(cli, sql, rows, {"SUM(5*x) <= -1": "SUM(x * w) <= -1"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_data_weighted_sum_renders_symbolic_column(self, request, cli_fixture):
@@ -1128,6 +1293,7 @@ class TestInfeasibleHeadlineAndRendering:
         # The symbolic column name replaces the raw per-row numeric fan-out.
         assert "10*x" not in result.stdout
         assert "20*x" not in result.stdout
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ne_drop_label_is_clean(self, request, cli_fixture):
@@ -1145,6 +1311,7 @@ class TestInfeasibleHeadlineAndRendering:
         assert "cast" not in dropped[0].lower() and "(" not in dropped[0]
         assert re.fullmatch(r"x <> [01]", dropped[0]), dropped[0]
         assert f"diagnosis points to clause `{dropped[0].lower()}`" in result.stderr.lower()
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_three_edits_all_pointed_to_in_headline(self, request, cli_fixture):
@@ -1156,10 +1323,15 @@ class TestInfeasibleHeadlineAndRendering:
             "DECIDE x IS REAL,y IS REAL,z IS REAL "
             "SUCH THAT x<=1 AND x>=5 AND y<=1 AND y>=5 AND z<=1 AND z>=5 MAXIMIZE SUM(x+y+z)"
         )
-        err = _diagnose(cli, sql).stderr.lower()
+        result = _diagnose(cli, sql)
+        err = result.stderr.lower()
         assert "diagnosis points to clause `x <= 1`, clause `y <= 1`, and clause `z <= 1`" in err
         assert "loosen `x <= 1` to `x <= 5`" not in err
         assert " or loosen " not in err
+        _apply_reported_fix(
+            cli, sql, _rows(result),
+            {"x <= 1": "x<=1", "y <= 1": "y<=1", "z <= 1": "z<=1"},
+        )
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_large_magnitude_suggestion_is_exact(self, request, cli_fixture):
@@ -1171,9 +1343,11 @@ class TestInfeasibleHeadlineAndRendering:
             "DECIDE x IS REAL SUCH THAT x <= 1 AND x >= 1234567890 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
-        attrs = _attrs(_rows(result), "clause", "x <= 1")
+        rows = _rows(result)
+        attrs = _attrs(rows, "clause", "x <= 1")
         assert attrs["suggested_change"] == "x <= 1234567890"
         assert attrs["amount"] == "1234567889"
+        _apply_reported_fix(cli, sql, rows)
 
 
 @pytest.mark.query_diagnostics
@@ -1188,7 +1362,11 @@ class TestEqualityBoundConflict:
         sql = f"SELECT id,x FROM (VALUES (1)) t(id) DECIDE x IS REAL SUCH THAT {clause} MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
         assert "infeasible" in result.stderr.lower()
-        assert {r["state"] for r in _rows(result)} == {"infeasible"}
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        # The subject renders `=` as `==` (logged wart, see 07_issues/bugs/todo.md);
+        # the applied suggestion (`x == 10`) still parses — `==` is a DuckDB alias.
+        _apply_reported_fix(cli, sql, rows, {"x == 5": "x = 5", "x == 10": "x = 10"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize("clause,expected", [("x = 5 AND x = 5", 5.0), ("x = -3", -3.0)])

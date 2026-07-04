@@ -88,10 +88,17 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to R ≤ R*, D ≤ D*
   variable is lowered to an INTEGER with synthesized `x >= 0` / `x <= 1` domain constraints
   (so its runtime type is INTEGER — indistinguishable by type from a genuine integer bound),
   so `TraverseBoundsConstraints` consults `op.is_boolean_var` (threaded from `LogicalDecide`)
-  and **does not record** the domain bounds in `user_absorbed_bounds`; only genuine user
-  bounds are re-emitted. Reversed user bounds such as `5 >= x` are flipped by the
+  and skips recording a BOOLEAN bound **only when it merely restates the domain** (an upper
+  `>= 1` or a lower `<= 0` after integer-strict normalization). A genuine BOOLEAN **pin**
+  (`x <= 0`, `x >= 1`, `x = 1`) IS recorded and re-emitted like any other user bound — its
+  column is opened only back to the intrinsic `[0,1]` (never to ±1e30), so the pin becomes
+  loosenable while the 0/1 domain itself stays rigid. (Erasing pins wholesale made the
+  elastic model diverge from the user's query: silently missing diagnoses, or edits that
+  left the real query infeasible.) Reversed user bounds such as `5 >= x` are flipped by the
   constraint binder before this pass, so they follow the same absorption and re-emission
-  path as `x <= 5`. `has_unhandled_user_bounds` therefore stays `false`.
+  path as `x <= 5`. `has_unhandled_user_bounds` is now computed for real by the re-emission
+  loop: it turns `true` only if a recorded bound's column is missing from the retained model
+  (expected never in practice), keeping the elastic-infeasible verdict honest.
 - **Engine (`decide_diagnostic_engines.cpp`, `DiagnoseInfeasible`).** Pure model math.
   Copies the model, clears the user objective for the repair passes (zeroes linear objective,
   drops the quadratic objective, `maximize=false`), and adds a slack to every relaxable **linear**
@@ -602,15 +609,17 @@ domain rigid:
 
 - **Intrinsic reset (the elastic box carries only the intrinsic domain).** In the
   `DiagnosisTerminal::INFEASIBLE` arm, after re-emitting absorbed bounds as slackable rows (the
-  decision-1a loop above), a second pass resets every **non-BOOLEAN** decide column's *implied*
-  tightenings back to intrinsic: `col_lower > 0 → 0`, `col_upper < +∞ → +∞`. This is safe —
+  decision-1a loop above), a second pass resets every decide column's *implied* tightenings back
+  to intrinsic — non-BOOLEAN: `col_lower > 0 → 0`, `col_upper < +∞ → +∞`; BOOLEAN: back to
+  `[0,1]` (`col_lower > 0 → 0`, `col_upper < 1 → 1`), never past 1. This is safe —
   propagation only ever tightens (raises lower / lowers upper), and every implied tightening has
   a backing row (`USER_PARAMETER` slackable, or `STRUCTURAL` still-rigid) that keeps enforcing it.
   This is what lets `x <= 2+3` (a foldable cap copied into `col_upper`) be loosened by its row
-  instead of pinned by the box. **BOOLEAN columns are skipped via `is_boolean_var[var]`, not
+  instead of pinned by the box. **BOOLEAN columns are detected via `is_boolean_var[var]`, not
   `is_binary[col]`** — a BOOLEAN is lowered to an INTEGER carrying a `[0,1]` box, so `is_binary`
   is `false` for it; gating on `is_binary` would reset its upper to `+∞` and silently make it
-  unbounded.
+  unbounded. The decision-1a re-emission loop uses the same signal: an absorbed BOOLEAN pin's
+  column opens only to `[0,1]` for the pinned direction (a non-BOOLEAN opens to ±1e30).
 - **Inverted-box survival (`SolverInput::tolerate_infeasible_bounds`).** Two opposite absorbed
   bounds (`x <= 4 AND x >= 10`) invert the box (`col_lower > col_upper`). Without help,
   `SolverModel::Build` throws before `retained_model` is populated, so the engine never sees the
@@ -710,4 +719,9 @@ with a non-helping relaxable row renders the elastic-infeasible row; the
 `has_unhandled_user_bounds` flag suppresses that claim (invalid → static error); and an
 all-rigid model returns invalid. End-to-end differential coverage (both backends, vs
 `oracle_solver`, including absorbed-bound and BETWEEN cases) is in
-`test/decide/tests/test_query_diagnostics_relation.py`.
+`test/decide/tests/test_query_diagnostics_relation.py`. That file's `_apply_reported_fix`
+harness (E1) guards the core least-change promise mechanically: for each asserted infeasible
+diagnosis it applies every reported edit to the SQL (loosen → replace the clause with its
+`suggested_change`; drop → remove the clause) and asserts the edited query actually solves.
+BOOLEAN user-pin coverage (E3: `x >= 1`, `x = 1`, `x <= 0` pins, plus a domain-restatement
+guard asserting `x <= 1 AND x >= 0` never becomes an editable knob) lives there too.

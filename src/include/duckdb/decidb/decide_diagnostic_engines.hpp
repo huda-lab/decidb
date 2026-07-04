@@ -47,10 +47,12 @@ struct InfeasibleDiagnosisInput {
 	const DecideDiagParams &params;
 
 	//! True when the operator absorbed a user bound it could not re-emit as a
-	//! slackable row for this engine — today, a bound on a multi-instance variable
-	//! (its shared-slack form is I2). The bound stays rigid in `model`, so if the
-	//! elastic program is infeasible the engine must NOT claim a structural conflict
-	//! ("can't be fixed by loosening"); it falls through to the static error instead.
+	//! slackable row for this engine (the variable's column is missing from the
+	//! retained model). The bound stays rigid in `model`, so if the elastic program
+	//! is infeasible the engine must NOT claim a structural conflict ("can't be
+	//! fixed by loosening"); it falls through to the static error instead. Set by
+	//! the re-emission loop in PhysicalDecide's INFEASIBLE arm; expected to stay
+	//! false in practice (every absorbed bound, BOOLEAN pins included, is re-emitted).
 	bool has_unhandled_user_bounds = false;
 
 	//! Solve a (transformed) model with the same backend as the primary solve.
