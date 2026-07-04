@@ -4,6 +4,43 @@ Resolved bugs condensed to their generalizable lessons: what broke, why, and wha
 
 ---
 
+## Infeasible diagnosis rendered equality as DuckDB alias `==`
+
+**Broke**: Infeasible diagnostic clause rendering used the internal equality spelling
+`==` (`x == 5` -> `x == 8`) even when the SQL user wrote `=`. DuckDB accepts `==`, but the
+diagnosis relation and suggested edit are user-facing SQL, so the rendered subject did not
+match the query text and the apply-the-fix harness needed a special subject override.
+
+**Fix/lesson**: Diagnostic renderers should prefer standard SQL spelling over internal or
+accepted-alias spellings. `SenseStr` now renders equality as `=`, and the relation/apply-fix
+tests assert the suggested edit is directly pasteable. **Watch for**: any diagnostic label
+that comes from solver/model notation should be translated back to the user's SQL surface
+before reaching `decide_diagnostics()`.
+
+Pointers: `decide_diagnostic_engines.cpp` (`SenseStr`), `test_decidb_diagnostic_engines.cpp`,
+`test_query_diagnostics_relation.py` (`TestEqualityBoundConflict`).
+
+## Quadratic infeasible diagnosis leaked no-op edits and implicit RHS casts
+
+**Broke**: A QCQP infeasible query with a data-backed linear floor
+(`POWER(x,2) <= 4 AND x >= lo`) reported the real quadratic loosening plus a second
+zero-amount virtual offset on the data floor. That no-op edit survived the pre-snap epsilon
+filter, then rounded to `0` for display. The same row rendered the data RHS from
+`rhs_expr->GetName()`, leaking the binder's implicit `CAST(lo AS DOUBLE)` into a suggested
+SQL edit that `SUCH THAT` cannot accept.
+
+**Fix/lesson**: Filter display-snapped slack amounts too, not only raw solver amounts, so
+sub-tolerance stage-2 noise cannot become an actionable-looking `amount = 0` edit. Also,
+provenance labels intended for user SQL must use a diagnostic renderer, not raw bound
+expression names: data RHS labels now unwrap top-level binder casts before storage.
+**Watch for**: stage-2 repair re-solves can introduce tiny nonzero slacks while optimizing
+the user's objective; every readback path that snaps values for display needs a post-snap
+reportability check.
+
+Pointers: `decide_diagnostic_engines.cpp` (`ReadElasticEdits`), `physical_decide.cpp`
+(`RenderDiagnosticRhsLabel`), `test_query_diagnostics_relation.py`
+(`test_infeasible_quadratic_loosens_linear_rhs`).
+
 ## Infeasible least-change reported a degenerate "require nothing" edit
 
 **Broke**: With two editable constraints in *incomparable units* — a count floor

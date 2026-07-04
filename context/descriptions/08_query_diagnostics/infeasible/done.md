@@ -741,7 +741,7 @@ the data-RHS query case asserts `edit_source='virtual_offset'`, the expanded cas
 `test/common/test_decidb_diagnostic_engines.cpp` — SECTIONs drive `DiagnoseInfeasible`
 against the bundled HiGHS backend on one-variable models: a relaxable cap conflicting with
 a rigid floor reports the unique minimal loosening (`x <= 5` → `x <= 10`, amount 5); an
-equality row loosens via its two-sided slack (`x == 5` → `x == 8`); a rigid-only conflict
+equality row loosens via its two-sided slack (`x = 5` → `x = 8`); a rigid-only conflict
 with a non-helping relaxable row renders the elastic-infeasible row; the
 `has_unhandled_user_bounds` flag suppresses that claim (invalid → static error); and an
 all-rigid model returns invalid. End-to-end differential coverage (both backends, vs

@@ -993,16 +993,9 @@ class TestDiagnosticsRelation:
         assert edit["suggested_change"].startswith("POWER(x, 2) <= 100")
         # amount ≈ 96 (10² − 4), allowing for solver tolerance.
         assert abs(float(edit["amount"]) - 96.0) < 1e-3
-        # Known wart (logged in 07_issues/bugs/todo.md): this shape also reports a
-        # zero-amount no-op edit on the data floor whose suggestion leaks the binder's
-        # implicit CAST (`x >= CAST(lo AS DOUBLE) - 0`) — un-appliable SQL, since SUCH
-        # THAT rejects explicit CAST. Quarantine it here so the harness verifies the
-        # real edit; drop the filter once the bug is fixed.
-        _apply_reported_fix(
-            cli, sql,
-            [r for r in rows if r["subject"] != "x >= CAST(lo AS DOUBLE)"],
-            {"POWER(x, 2) <= 4": "POWER(x,2) <= 4"},
-        )
+        assert not [r for r in rows if "CAST(lo AS DOUBLE)" in r["subject"]]
+        assert not [r for r in rows if r["attribute"] == "amount" and float(r["value"]) == 0.0]
+        _apply_reported_fix(cli, sql, rows, {"POWER(x, 2) <= 4": "POWER(x,2) <= 4"})
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_strict_quadratic_requotes_typed_literal(self, request, cli_fixture):
@@ -1457,9 +1450,7 @@ class TestEqualityBoundConflict:
         assert "infeasible" in result.stderr.lower()
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        # The subject renders `=` as `==` (logged wart, see 07_issues/bugs/todo.md);
-        # the applied suggestion (`x == 10`) still parses — `==` is a DuckDB alias.
-        _apply_reported_fix(cli, sql, rows, {"x == 5": "x = 5", "x == 10": "x = 10"})
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize("clause,expected", [("x = 5 AND x = 5", 5.0), ("x = -3", -3.0)])

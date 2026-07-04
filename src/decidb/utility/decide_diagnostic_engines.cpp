@@ -294,7 +294,7 @@ string FormatQuadraticLhs(const SolverModel::QuadraticConstraint &qc,
 }
 
 const char *SenseStr(char sense) {
-	return sense == '<' ? "<=" : (sense == '>' ? ">=" : "==");
+	return sense == '<' ? "<=" : (sense == '>' ? ">=" : "=");
 }
 
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
@@ -719,6 +719,9 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		// stage-1 read is exact (no budget constraint) and passes through untouched.
 		if (snap) {
 			amount = SnapDiagnosticValue(amount);
+			if (std::fabs(amount) <= DIAGNOSTIC_RAY_EPSILON) {
+				continue;
+			}
 		}
 		// Label the clause from the block's representative ORIGINAL row (orig_model,
 		// before slacks were appended). For a shared-slack block all rows render the

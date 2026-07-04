@@ -488,6 +488,12 @@ static string RenderWhenPredicate(const Expression &expr) {
 	return cur->ToString();
 }
 
+//! User-facing rendering of a data-backed RHS for diagnosis labels: unwrap top-level
+//! implicit casts from binding so `x >= lo` does not report `x >= CAST(lo AS DOUBLE)`.
+static string RenderDiagnosticRhsLabel(const Expression &expr) {
+	return UnwrapBoundCasts(expr)->ToString();
+}
+
 static bool IsBoundMultiply(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		return false;
@@ -3194,7 +3200,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
             // genuine data RHS; a shared-literal RHS reports the numeric knob instead.
             if (!eval_const.rhs_is_shared_literal) {
-                eval_const.rhs_label = constraint->rhs_expr->GetName();
+                eval_const.rhs_label = RenderDiagnosticRhsLabel(*constraint->rhs_expr);
             }
             eval_const.rhs_values.Reserve(num_rows);
 

@@ -255,8 +255,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		CHECK(FindRow(diag, "x == 5", "suggested_change") == "x == 8");
-		CHECK(FindRow(diag, "x == 5", "amount") == "3");
+		CHECK(FindRow(diag, "x = 5", "suggested_change") == "x = 8");
+		CHECK(FindRow(diag, "x = 5", "amount") == "3");
 	}
 
 	SECTION("elastic-infeasible when loosening cannot fix a rigid conflict") {
