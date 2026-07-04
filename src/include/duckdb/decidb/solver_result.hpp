@@ -66,6 +66,11 @@ struct SolverResult {
 	//! `best_bound` (Gurobi `MIPGap` / HiGHS `mip_gap`), as a fraction. Only
 	//! meaningful when `has_solution`.
 	double gap = 0.0;
+	//! TIME_LIMIT only: true when the stop was a user Ctrl-C (`GRB_INTERRUPTED`),
+	//! not the wall-clock limit. Drives report wording ("you stopped it" vs "hit
+	//! the … time limit"), not routing — an interrupt reuses the whole TIME_LIMIT
+	//! terminal. Gurobi-only; HiGHS has no thread-safe terminate, so it never sets it.
+	bool user_interrupted = false;
 };
 
 //! Throws the default user-facing DECIDE error for a non-optimal `result`.

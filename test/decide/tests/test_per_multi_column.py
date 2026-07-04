@@ -507,18 +507,19 @@ def test_multi_column_per_with_integer_variable(
 @pytest.mark.per_clause
 @pytest.mark.error
 def test_unparenthesized_multi_column_per_rejected_with_hint(decidb_cli):
-    """`PER a, b` (no parens) is a grammar ambiguity with the constraint-list
-    comma, so it is not a supported form. The trailing column arrives at the
-    binder as a bare-column "constraint" and is rejected with an actionable
-    hint pointing at the parenthesized `PER (col1, col2)` form."""
+    """`PER a, b` (no parens) is a grammar ambiguity, so it is not a
+    supported form. The comma is rejected by the parser with a hint pointing
+    at the parenthesized `PER (col1, col2)` form."""
     sql = """
         SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1 PER region, yr
         MAXIMIZE SUM(x)
     """
-    # Names the offending column and points at the parenthesized fix.
-    decidb_cli.assert_error(sql, match=r"(?i)parenthesize them: PER \(col1, col2\)")
+    decidb_cli.assert_error(
+        sql,
+        match=r"(?i)comma-separated SUCH THAT constraints are not supported",
+    )
 
 
 @pytest.mark.per_clause

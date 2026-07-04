@@ -34,6 +34,12 @@ struct SolveModelOptions {
 	//! shared default" (ResolveDecideTimeLimit). The slow-solve continuation loop
 	//! sets this so the first chunk uses the same limit later Continue() chunks do.
 	double time_limit_seconds = -1.0;
+	//! Installed on the session before the first solve, so a user Ctrl-C interrupts
+	//! the *initial* solve — not only continuation chunks after a timeout. The poll
+	//! is a session member, so it persists across Continue() automatically. Empty =
+	//! boundary-only (no mid-solve interrupt). Gurobi honors it via a watcher thread;
+	//! HiGHS (no thread-safe terminate) ignores it.
+	std::function<bool()> interrupt_poll;
 };
 
 //! Resolve the backend DeciDB should use for this solve, honoring the

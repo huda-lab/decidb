@@ -128,7 +128,7 @@ struct ConstraintProvenance {
     //! per-row fan-out to key on (distinct from SHARED_LITERAL, which a per-row constant
     //! bound also carries) (Facet B).
     bool is_aggregate = false;
-    //! WHEN/PER qualifier text (`PER grp`, `PER region, year`, or a `WHEN` predicate)
+    //! WHEN/PER qualifier text (`PER grp`, `PER (region, year)`, or a `WHEN` predicate)
     //! appended to the reconstructed clause label so it is fully recognizable. Empty when
     //! the clause has no WHEN/PER qualifier (Facet C).
     string qualifier;

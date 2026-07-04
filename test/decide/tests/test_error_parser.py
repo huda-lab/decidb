@@ -42,3 +42,12 @@ class TestParserErrors:
                 DECIDE x SUCH THAT x IS CONTINUOUS
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"syntax error.*CONTINUOUS")
+
+    def test_comma_separated_constraints_rejected(self, decidb_cli):
+        """Top-level SUCH THAT constraints must be separated with AND."""
+        decidb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x IS BOOLEAN
+                SUCH THAT x <= 1, SUM(x) <= 10
+                MAXIMIZE SUM(x) LIMIT 1
+            """, match=r"(?i)comma-separated SUCH THAT constraints are not supported")

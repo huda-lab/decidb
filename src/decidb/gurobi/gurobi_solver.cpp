@@ -299,7 +299,10 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
             result.status = SolverStatus::INF_OR_UNBD;
             break;
         case GRB_INTERRUPTED: // mid-solve Ctrl-C (terminate): a stop-with-best-so-far, exactly
-                              // like a time-limit stop — read the incumbent the same way.
+                              // like a time-limit stop — read the incumbent the same way, but
+                              // flag it so the report says "you stopped it", not "hit the limit".
+            result.user_interrupted = true;
+            // fall through
         case GRB_TIME_LIMIT: {
             result.status = SolverStatus::TIME_LIMIT;
             // The best proven bound is always meaningful at the time limit,

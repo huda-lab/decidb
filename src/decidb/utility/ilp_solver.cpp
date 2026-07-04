@@ -155,6 +155,12 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 	// uses the caller's requested limit, or the shared default when unset (<0).
 	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
 	auto session = CreateSolverSession(backend);
+	// Install the interrupt poll before the first solve so a user Ctrl-C cuts the
+	// *initial* solve short (not just continuation chunks). The poll is a session
+	// member, so it carries into every later Continue() when the session is retained.
+	if (options.interrupt_poll) {
+		session->SetInterruptPoll(options.interrupt_poll);
+	}
 	SolverResult result = session->Solve(model, time_limit);
 	result = DisambiguateInfOrUnbd(model, backend, result);
 	AttachUnboundedRayIfRequested(model, backend, options, result);

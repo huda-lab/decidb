@@ -441,9 +441,9 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
             return ExpressionBinder::BindExpression(expr_ptr, depth);
         }
         // A bare column at the top level of SUCH THAT is never a valid
-        // constraint. The usual cause is an unparenthesized composite PER
-        // ("PER region, yr"): the comma splits the list and the trailing
-        // column arrives here on its own. Point to the parenthesized form.
+        // constraint. Top-level commas are rejected by the parser, but keep
+        // the PER hint here for malformed single-column inputs and older
+        // prepared parse trees that surface a bare grouping key.
         return BindResult(BinderException::Unsupported(
             expr, StringUtil::Format(
                       "'%s' is not a valid SUCH THAT constraint on its own. "

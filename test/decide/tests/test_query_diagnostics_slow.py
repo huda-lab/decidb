@@ -355,3 +355,105 @@ class TestSlowContinuation:
         assert "usable solution (not proven best)" not in combined, combined[:800]
         assert _report_count(result.stderr + result.stdout) == 0, combined[:800]
         assert "time limit" in combined, combined[:800]
+
+
+_STOP_REQUEST = "stopped at your request"  # interrupt report wording (vs "hit the … time limit")
+
+
+def _interrupt_run(cli, script, delay, timeout=30):
+    """Launch `script` via -c and send SIGINT after `delay` seconds; return
+    (proc, out, err, latency) where latency is wall time from the signal to exit."""
+    proc = subprocess.Popen(
+        [cli.exe, cli.db, "-readonly", "-c", script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, **(cli.env or {})},
+    )
+    time.sleep(delay)
+    t = time.time()
+    proc.send_signal(signal.SIGINT)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+    return proc, out, err, time.time() - t
+
+
+@pytest.mark.query_diagnostics
+class TestSlowFirstSolveInterrupt:
+    """Ctrl-C is a *peer* trigger into the slow branch, decoupled from the time limit: a
+    user interrupt on the FIRST (normal) solve cuts it short and routes into the slow
+    terminal with the best-so-far — instead of aborting the query — even when the wall-clock
+    limit is nowhere near. On Gurobi the stop is attributed to the user (`GRBterminate` →
+    `GRB_INTERRUPTED`), so the report says "stopped at your request", not "hit the … time
+    limit". HiGHS has no thread-safe terminate, so its first-solve interrupt is boundary-only
+    (the documented solver-agnostic fallback) and is reported as a time-limit stop.
+
+    A generous DECIDB_TIME_LIMIT (20s) keeps the first chunk boundary far away, so a fast
+    stop after the ~1s signal proves the *first solve itself* was interrupted mid-solve —
+    a boundary-only path would have to wait out the remaining ~19s."""
+
+    def test_first_solve_interrupt_returns_incumbent_gurobi(self, decidb_cli_gurobi):
+        """Gurobi, continue mode: SIGINT during the first solve returns the incumbent with
+        the interrupt wording (not a timeout), fast (mid-solve, not at the far boundary)."""
+        cli = _slow_cli(decidb_cli_gurobi, 20)
+        proc, out, err, latency = _interrupt_run(
+            cli, "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL, delay=1.0
+        )
+        low = err.lower()
+        assert proc.returncode == 0, err[:1000]
+        assert out.strip(), "expected incumbent rows after a first-solve interrupt"
+        assert _STOP_REQUEST in low, err[:1000]
+        assert _STOP_CAVEAT in low, err[:1000]
+        # Attributed to the user, not the clock — the whole point of the peer trigger.
+        assert "time limit" not in low, err[:1000]
+        # Mid-first-solve terminate returns fast; a boundary-only stop would sit out ~19s.
+        assert latency < 5.0, f"interrupt took {latency:.2f}s — expected a mid-solve stop"
+
+    def test_first_solve_interrupt_error_mode_gurobi(self, decidb_cli_gurobi):
+        """Gurobi, default (ask→error over a pipe): the first-solve interrupt reports
+        "stopped at your request" and then errors — never delivering the incumbent."""
+        cli = _slow_cli(decidb_cli_gurobi, 20)
+        proc, out, err, _ = _interrupt_run(cli, _KNAPSACK_SQL, delay=1.0)
+        low = err.lower()
+        assert _STOP_REQUEST in low, err[:1000]
+        assert "time limit" not in low, err[:1000]
+        assert _STOP_CAVEAT not in low, "error mode never returns the incumbent"
+        # Surfaces the diagnosis as an error pointing at the relation, and delivers no rows.
+        # (The CLI's own exit code under -c + SIGINT is an unreliable signal, so assert on
+        # the emitted error + empty stdout instead.)
+        assert "optimization is slow" in low, err[:1000]
+        assert not out.strip(), "error mode delivers no incumbent rows"
+
+    def test_first_solve_interrupt_relation_gurobi(self, decidb_cli_gurobi):
+        """Gurobi: after a first-solve interrupt the stashed diagnosis records the cause as a
+        user interrupt (stopped_by=user_interrupt), queryable via decide_diagnostics()."""
+        cli = _slow_cli(decidb_cli_gurobi, 20)
+        proc, out, err, _ = _interrupt_run(
+            cli,
+            "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL
+            + "; SELECT attribute || '=' || value AS diag FROM decide_diagnostics();",
+            delay=1.0,
+        )
+        assert proc.returncode == 0, err[:1000]
+        assert _STOP_REQUEST in err.lower(), err[:1000]
+        assert "stopped_by=user_interrupt" in out, out[-800:]
+        assert "status=solution_found" in out, out[-800:]
+
+    def test_first_solve_interrupt_highs_boundary_only(self, decidb_cli_highs):
+        """HiGHS has no thread-safe terminate, so a mid-first-solve SIGINT is *not* seen
+        until the chunk boundary: the stop is attributed to the time limit (not the user),
+        yet the incumbent is still delivered at the boundary — the solver-agnostic fallback.
+        Probed 2026-07-04: a 0.7s signal into a 2s chunk waits out the chunk, then returns
+        rows with the "time limit" wording."""
+        cli = _slow_cli(decidb_cli_highs, 2)
+        proc, out, err, _ = _interrupt_run(
+            cli, "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL, delay=0.7
+        )
+        low = err.lower()
+        assert proc.returncode == 0, err[:1000]
+        assert out.strip(), "fallback still delivers the incumbent at the boundary"
+        assert _STOP_CAVEAT in low, err[:1000]
+        # HiGHS cannot attribute the stop to the user → reported as a time-limit stop.
+        assert "time limit" in low, err[:1000]
+        assert _STOP_REQUEST not in low, err[:1000]

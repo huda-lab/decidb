@@ -310,7 +310,7 @@ decide_constraint_list:
 			decide_constraint_item
 				{ $$ = $1; }
 			| decide_constraint_list ',' decide_constraint_item
-				{ $$ = makeAndExpr($1, $3, @2); }
+				{ ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("comma-separated SUCH THAT constraints are not supported; use AND between constraints. For multi-column PER, use PER (col1, col2)."), parser_errposition(@2))); }
 			| decide_constraint_list AND decide_constraint_item
 				{ $$ = makeAndExpr($1, $3, @2); }
 		;

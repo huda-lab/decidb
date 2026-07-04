@@ -199,6 +199,21 @@ def test_explain_per_integer(decidb_cli):
     assert "PER" in out
 
 
+@pytest.mark.explain
+@pytest.mark.per_clause
+def test_explain_multi_column_per_parenthesized(decidb_cli):
+    """EXPLAIN prints multi-column PER in the supported parenthesized syntax."""
+    sql = """
+        SELECT l_orderkey, l_returnflag, l_linestatus, x
+        FROM lineitem WHERE l_orderkey < 100
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
+        MAXIMIZE SUM(x)
+    """
+    out = _explain_json(decidb_cli, sql)
+    assert "PER (l_returnflag, l_linestatus)" in out, out
+
+
 # ===================================================================
 # WHEN + PER combined
 # ===================================================================

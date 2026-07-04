@@ -252,6 +252,6 @@ WHEN + PER composition is supported: `MINIMIZE MAX(SUM(x * hours)) WHEN active =
 
 - **Aggregate-only**: PER requires an aggregate constraint, such as `SUM(...)`, `AVG(...)`, or an additive expression of aggregate terms. Per-row constraints are rejected.
 - **Column references only**: Each PER column must be a simple column reference, not an expression or decision variable.
-- **Multi-column PER must be parenthesized**: use `PER (col1, col2)`, not `PER col1, col2`. In `SUCH THAT` the comma separates constraints, so an unparenthesized trailing column is parsed as its own (invalid) constraint and rejected with a hint to add the parentheses. The parentheses are required to disambiguate the grouping key from the constraint list.
+- **Multi-column PER must be parenthesized**: use `PER (col1, col2)`, not `PER col1, col2`. Top-level `SUCH THAT` constraints are separated only by `AND`; a comma in the constraint list is rejected by the parser. The parentheses are required to disambiguate the grouping key from the surrounding constraint syntax.
 - **Constant RHS**: The right-hand side must be constant across groups.
 - **NULL handling**: Rows where any PER column is NULL are excluded.

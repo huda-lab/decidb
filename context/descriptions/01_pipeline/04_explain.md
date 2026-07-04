@@ -57,7 +57,7 @@ DuckDB binds multiple `SUCH THAT` constraints into a single `BoundConjunctionExp
 
 1. **AND nodes** — recurse into each child
 2. **WHEN wrappers** (`alias == WHEN_CONSTRAINT_TAG`) — extract the condition from `children[1]`, recurse into `children[0]`, and append ` WHEN <condition>` to each leaf
-3. **PER wrappers** (`alias == PER_CONSTRAINT_TAG`) — extract column names from `children[1..N]`, recurse into `children[0]`, and append ` PER <columns>` to each leaf
+3. **PER wrappers** (`alias == PER_CONSTRAINT_TAG`) — extract column names from `children[1..N]`, recurse into `children[0]`, and append ` PER col` for one column or ` PER (col1, col2)` for multiple columns to each leaf
 4. **Leaf nodes** (comparisons, aggregates) — emit `expr.GetName()`
 
 This produces one line per constraint with WHEN/PER suffixes, e.g.:

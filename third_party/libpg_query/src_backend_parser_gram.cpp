@@ -1344,7 +1344,7 @@ static PGNode *makeLimitPercent(PGNode *limit_percent);
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 18 "third_party/libpg_query/grammar/grammar.y"
+#line 24 "third_party/libpg_query/grammar/grammar.y"
 {
 	core_YYSTYPE		core_yystype;
 	/* these fields must match core_YYSTYPE: */
@@ -2643,11 +2643,11 @@ static const yytype_int16 yyrhs[] =
 /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
 static const yytype_uint16 yyrline[] =
 {
-       0,   524,   524,   540,   552,   561,   562,   563,   564,   565,
-     566,   567,   568,   569,   570,   571,   572,   573,   574,   575,
-     576,   577,   578,   579,   580,   581,   582,   583,   584,   585,
-     586,   587,   588,   589,   590,   591,   592,   593,   594,   595,
-     596,   597,   598,   599,   600,   601,   603,     9,    18,    27,
+       0,   530,   530,   546,   558,   567,   568,   569,   570,   571,
+     572,   573,   574,   575,   576,   577,   578,   579,   580,   581,
+     582,   583,   584,   585,   586,   587,   588,   589,   590,   591,
+     592,   593,   594,   595,   596,   597,   598,   599,   600,   601,
+     602,   603,   604,   605,   606,   607,   609,     9,    18,    27,
       36,    45,    54,    63,    72,    85,    87,    93,    94,    99,
      103,   107,   118,   126,   130,   139,   148,   157,   166,   175,
      184,   192,   200,   209,   218,   227,   236,   253,   262,   271,
@@ -21151,14 +21151,14 @@ yyreduce:
   switch (yyn)
     {
         case 2:
-#line 525 "third_party/libpg_query/grammar/grammar.y"
+#line 531 "third_party/libpg_query/grammar/grammar.y"
     {
 				pg_yyget_extra(yyscanner)->parsetree = (yyvsp[(1) - (1)].list);
 			;}
     break;
 
   case 3:
-#line 541 "third_party/libpg_query/grammar/grammar.y"
+#line 547 "third_party/libpg_query/grammar/grammar.y"
     {
 					if ((yyvsp[(1) - (3)].list) != NIL)
 					{
@@ -21173,7 +21173,7 @@ yyreduce:
     break;
 
   case 4:
-#line 553 "third_party/libpg_query/grammar/grammar.y"
+#line 559 "third_party/libpg_query/grammar/grammar.y"
     {
 					if ((yyvsp[(1) - (1)].node) != NULL)
 						(yyval.list) = list_make1(makeRawStmt((yyvsp[(1) - (1)].node), 0));
@@ -21183,7 +21183,7 @@ yyreduce:
     break;
 
   case 46:
-#line 603 "third_party/libpg_query/grammar/grammar.y"
+#line 609 "third_party/libpg_query/grammar/grammar.y"
     { (yyval.node) = NULL; ;}
     break;
 
@@ -25267,7 +25267,7 @@ yyreduce:
 
   case 564:
 #line 313 "third_party/libpg_query/grammar/statements/select.y"
-    { (yyval.node) = makeAndExpr((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node), (yylsp[(2) - (3)])); ;}
+    { ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("comma-separated SUCH THAT constraints are not supported; use AND between constraints. For multi-column PER, use PER (col1, col2)."), parser_errposition((yylsp[(2) - (3)])))); ;}
     break;
 
   case 565:

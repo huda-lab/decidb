@@ -2,11 +2,12 @@
 
 > Router terminal: **time_limit** (incumbent → report+gap · no sol → report slow). See `router/README.md`.
 
-"Slow" = a solve that reaches the time limit without a proven optimum. It is **not**
-a relax/reformulate engine like infeasible: it reports what the solver already found
-and — under `decide_on_timeout` — offers to keep solving on the **same warm solver**
-(the search resumes, it never restarts), returning the best-so-far rows when the user
-stops. No query is edited or rerun.
+"Slow" = a solve stopped before a proven optimum — the wall-clock **time limit** expiring,
+or a **user Ctrl-C** on any armed solve (a peer trigger, decoupled from the time limit; see
+"Ctrl-C as a peer trigger"). It is **not** a relax/reformulate engine like infeasible: it
+reports what the solver already found and — under `decide_on_timeout` — offers to keep solving
+on the **same warm solver** (the search resumes, it never restarts), returning the best-so-far
+rows when the user stops. No query is edited or rerun.
 
 **Shared time limit (both backends).** The per-solve wall-clock cap is resolved in
 one solver-agnostic place — `ResolveDecideTimeLimit()` in
@@ -54,13 +55,23 @@ split on `has_solution`:
     elapsed 300s · peak memory 1.2 GB
   ```
 
+**Timeout vs. interrupt wording.** The two stop causes share one best-so-far readback but
+must not read the same to the user. When the stop was a user Ctrl-C
+(`SolverResult::user_interrupted`, Gurobi only), the report opener becomes **"DECIDE stopped
+at your request …"** instead of **"DECIDE hit the 300s time limit …"** (both the
+solution-found and no-solution shapes); everything else (closeness, elapsed, peak memory) is
+identical. HiGHS never sets the flag, so its boundary-only interrupt keeps the time-limit
+wording.
+
 Details:
 
 - **Voice.** Obeys the user-output rule — no "incumbent"/"gap"/"bound" solver words.
   The `gap` fraction is rendered as a percentage ("within 0.09%").
 - **Elapsed** is measured by an always-on `Profiler` wrapped around the `SolveModel`
-  call (independent of `DECIDB_BENCH`), reported via `FormatDuration` (integer seconds
-  when whole, one decimal otherwise).
+  call (independent of `DECIDB_BENCH`), reported via `FormatDuration`: integer seconds
+  when whole (`300s`), one decimal for larger fractional values (`1.5s`), and two
+  significant figures for sub-second values so a small limit keeps its digits (`0.05s`,
+  `elapsed 0.056s`) instead of rounding up to a misleading `0.1s`.
 - **Peak memory** is whole-process peak RSS via `getrusage(RUSAGE_SELF).ru_maxrss`,
   normalized (bytes on macOS, KiB on Linux) and formatted by `FormatMemory`. Honest
   caveat: whole-process, not solve-only — it is the number that answers "will
@@ -79,13 +90,16 @@ where the solve **fails** (ends the query with an error):
 
 - **`BuildTimeoutDiagnostic`** (`physical_decide.cpp`) builds a `state='slow'`
   `DecideDiagnostic` — the same facts as the report, as one model-level EAV block
-  (`subject_kind='model'`): `status` (`solution_found` / `no_solution`), and when an
-  incumbent exists `best_objective` + `within_percent_of_best` (the `gap` fraction as a
-  `%` string, matching the report's "within X%"); `best_possible_objective` (the solver's
-  bound) **only when the query has an objective** (`decide_objective` set or a composed
-  MIN/MAX objective) — a pure-feasibility DECIDE has no objective, so the bound is a
-  trivial 0 and is suppressed; always `elapsed`, `peak_memory`. User voice only — the
-  attribute names avoid the forbidden jargon (`best_possible_objective`, not "bound").
+  (`subject_kind='model'`): `stopped_by` (`user_interrupt` / `time_limit`), `status`
+  (`solution_found` / `no_solution`), and when an incumbent exists `best_objective` +
+  `within_percent_of_best` (the `gap` fraction as a `%` string, matching the report's "within
+  X%"); `best_possible_objective` (the solver's bound) **only when the query has an objective**
+  (`decide_objective` set or a composed MIN/MAX objective) — a pure-feasibility DECIDE has no
+  objective, so the bound is a trivial 0 and is suppressed; always `elapsed`, `peak_memory`.
+  User voice only — the attribute names avoid the forbidden jargon (`best_possible_objective`,
+  not "bound"). The `summary` also has an interrupt variant ("the solve was still improving when
+  you stopped it …" / "you stopped the solve before it found a solution …"), phrased to stay
+  coherent after the "DECIDE optimization is slow:" error headline.
 - **Two fail exits stash + point:** the `error`-mode exit and the ask/continue
   no-incumbent stop now `StashDecideDiagnostic` and throw via `ThrowDecideDiagnosisReady`
   (headline `DECIDE optimization is slow: <summary> … Details: SELECT * FROM
@@ -130,31 +144,53 @@ in `RegisterDecideDiagnosticOptions`, read via `GetDecideOnTimeoutMode`:
   each chunk boundary **and, on Gurobi, mid-chunk** (see below). On a break the interrupt
   is cleared so the incumbent rows still flow instead of aborting the query.
 
-### Mid-chunk Ctrl-C (Gurobi)
+### Ctrl-C as a peer trigger (Gurobi) — first solve + continuation
 
-Boundary-only polling means a Ctrl-C waits out the rest of the current chunk (up to a full
-`ResolveDecideTimeLimit()` late). To cut a running chunk short the instant it is interrupted:
+Ctrl-C is an **independent trigger into the slow branch**, decoupled from the time limit: a
+user interrupt on *any* armed solve — the **first (normal) solve**, not just a continuation
+chunk after a timeout — cuts it short and routes into the `TIME_LIMIT` terminal with the
+best-so-far, instead of aborting the query. On Gurobi it also stops the running solve the
+instant it is interrupted (rather than waiting out the chunk).
 
+- **`SolveModelOptions::interrupt_poll`** (`ilp_solver.hpp`) — the operator arms it whenever
+  diagnosis is armed (`diagnosis_armed`, in `physical_decide.cpp`), decoupled from
+  `decide_on_timeout` / the retained session, reading `context.interrupted`. `SolveModel`
+  installs it on the session **before the first `Solve`** (`ilp_solver.cpp`), so the initial
+  solve is interruptible. The poll is a session member, so it **persists into every
+  `Continue()`** when the session is retained — `continue` keeps its mid-chunk interrupt for
+  free.
 - **`SolverSession::SetInterruptPoll(std::function<bool()>)`** (`solver_session.hpp`) — the
-  operator installs a poll reading `context.interrupted` once, right before the continuation
-  loop, **scoped to `continue`** (`physical_decide.cpp`). `ask` is left untouched: it already
-  stops the user at each prompt, and — found empirically — a watcher thread contending with the
-  interactive `getline` destabilizes the prompt, so `ask` keeps the boundary-only path.
+  install point. In the continuation loop, `ask` **resets it to boundary-only**
+  (`SetInterruptPoll({})`, `physical_decide.cpp`): `ask` already stops the user at each prompt,
+  and — found empirically — a watcher thread contending with the interactive `getline`
+  destabilizes the prompt. (The entry interrupt already fired *before* the loop, so first-solve
+  Ctrl-C still routes in; only *within* the `ask` loop is it boundary-only.) `continue` leaves
+  the inherited poll in place.
 - **`GurobiSession`** (`gurobi_solver.cpp`) — while `optimize()` blocks, a watcher `std::thread`
   polls every 25 ms and calls **`GRBterminate()`** (thread-safe) when the poll trips; the thread
   is joined right after `optimize()` returns. `optimize()` then reports `GRB_INTERRUPTED`, which
-  is mapped to `SolverStatus::TIME_LIMIT` (same incumbent readback) — so the chunk returns its
-  best-so-far exactly like a natural limit stop, and the existing boundary check breaks and
-  delivers the rows with **zero operator-logic change** beyond installing the poll. Measured
-  latency: ~0.06 s (vs. waiting out the chunk).
-- **`GRBterminate` is loaded best-effort** (optional symbol, like `GRBaddqconstr`); if absent
-  the watcher is never spawned and behavior degrades to boundary-only. **HiGHS** does not
-  override `SetInterruptPoll` (no thread-safe terminate), so it stays boundary-only — the
-  solver-agnostic fallback. The **first chunk** (inside `SolveModel`, before the poll is
-  installed) is not yet interruptible; only continuation chunks are (`todo.md`).
-- **No regression surface:** the poll is installed only on the `continue` retained session, so
-  every other solve — the first chunk, `ask`, `error`, normal solves, and all diagnostic
-  re-solves (`SolvePreparedModel`) — spawns no watcher and runs byte-for-byte as before.
+  sets `SolverResult::user_interrupted` and maps to `SolverStatus::TIME_LIMIT` (same incumbent
+  readback) — so the solve returns its best-so-far exactly like a natural limit stop and the
+  existing routing/loop logic is unchanged, while the flag lets the report distinguish "you
+  stopped it" from "the clock ran out." Measured latency: ~0.06 s (vs. waiting out the chunk).
+- **The rare OPTIMAL-as-Ctrl-C-lands race:** if the watcher terminates just as Gurobi proves
+  the optimum, the solve returns `OPTIMAL` with `context.interrupted` still set — which would
+  make the executor abort a query that actually succeeded. The operator clears
+  `context.interrupted` on the SOLVED path too (guarded on the poll being armed), mirroring the
+  clear the `TIME_LIMIT` terminal already does on its incumbent-stop path.
+- **Solver-agnostic fallback — HiGHS is boundary-only.** `GRBterminate` is loaded best-effort
+  (optional symbol, like `GRBaddqconstr`); if absent the watcher is never spawned. **HiGHS** does
+  not override `SetInterruptPoll` (no thread-safe terminate), so it **ignores the poll during a
+  solve**: a mid-first-solve Ctrl-C is not seen until the chunk boundary (its own time limit),
+  and the stop is then reported as a **time-limit** stop (`user_interrupted` stays false), yet
+  the incumbent is still delivered at the boundary. Probed 2026-07-04: a 0.7 s signal into a 2 s
+  chunk waits out the chunk, then returns rows with the "time limit" wording.
+- **Watcher cost.** Because the poll is armed on every diagnosed solve (default `auto`), each
+  such solve now spawns the watcher `std::thread` for the duration of `optimize()` and joins it
+  immediately after — negligible (a 25 ms-polling sleeper), and the price of Ctrl-C working on
+  any query. Solves with diagnosis `off`, and the internal diagnostic re-solves
+  (`SolvePreparedModel`, used by the infeasible / unbounded engines), are **not** armed and
+  spawn no watcher.
 
 **Every continue restarts the timer.** Each chunk is a fresh `ResolveDecideTimeLimit()`
 budget; the operator tracks *cumulative* elapsed and re-prints the report every boundary
@@ -202,4 +238,15 @@ Continue-to-proven-optimum correctness is covered by manual/oracle checks (the t
 window that both backends time-out-then-finish quickly is too narrow for a stable CI
 assertion). Instances are sized with margin so the asserted branch is stable across
 machines.
+
+First-solve Ctrl-C (`TestSlowFirstSolveInterrupt`): a **generous** `DECIDB_TIME_LIMIT` (20s)
+keeps the first boundary far away, so a fast stop after a ~1s SIGINT proves the *first solve
+itself* was interrupted mid-solve (a boundary-only path would wait out ~19s). Gurobi-only
+assertions: `continue` mode returns the incumbent with the **"stopped at your request"**
+wording (not "time limit") + caveat, rc 0, latency < 5s; default (ask→error over a pipe)
+reports the interrupt then errors via `decide_diagnostics()` without delivering rows; the
+stashed relation records `stopped_by=user_interrupt` + `status=solution_found`. HiGHS is
+asserted **boundary-only** (probed 2026-07-04): a mid-first-solve SIGINT is reported as a
+time-limit stop (never "stopped at your request") yet still delivers the incumbent at the
+boundary — the solver-agnostic fallback.
 

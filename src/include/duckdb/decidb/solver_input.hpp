@@ -282,7 +282,7 @@ struct EvaluatedConstraint {
     //! ConstraintProvenance::group_label at the aggregate-PER emission sites.
     vector<string> group_labels;
 
-    //! WHEN/PER qualifier text for this clause (`PER grp`, `WHEN g='a' PER region, year`),
+    //! WHEN/PER qualifier text for this clause (`PER grp`, `WHEN g='a' PER (region, year)`),
     //! same for every group. Stamped onto ConstraintProvenance::qualifier so infeasible
     //! diagnosis can append it to the reconstructed clause label. Empty when unqualified.
     string qualifier;

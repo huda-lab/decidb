@@ -9,7 +9,8 @@ Tests live in:
 
 `test_error_parser.py`, all expecting `decidb.ParserException`: DECIDE without
 SUCH THAT, DECIDE without a variable name, MAXIMIZE/MINIMIZE without an
-objective expression, `IS <unknown-type>`.
+objective expression, `IS <unknown-type>`, comma-separated `SUCH THAT`
+constraints.
 
 ## Binder errors
 

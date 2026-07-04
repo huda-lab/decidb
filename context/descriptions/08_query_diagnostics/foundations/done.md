@@ -132,10 +132,14 @@ ray is reported with an explicit caveat because feasibility was not established
     `kTimeLimit` maps to `TIME_LIMIT` (previously the `!= kOk` guard threw an INTERNAL
     error first, crashing the diagnosable timeout — see `07_issues/bugs/done.md`). Both
     backends now produce `TIME_LIMIT` with a readable incumbent / bound / gap.
-  - **Manual interrupt API exists on both.** Gurobi `GRBterminate` + a callback that
-    returns non-zero; HiGHS `setCallback` / `startCallback` with a user-interrupt
-    callback. The *time-limit* trigger above needs none of this. (Wiring an on-demand
-    interrupt is tracked in `slow/todo.md`.)
+  - **Manual interrupt API — Gurobi wired, HiGHS not.** Ctrl-C is a peer trigger into the
+    slow branch on *any* armed solve (first solve included), decoupled from the time limit —
+    see `slow/done.md` ("Ctrl-C as a peer trigger"). Gurobi uses **`GRBterminate`** from a
+    watcher thread (thread-safe), mapping `GRB_INTERRUPTED → TIME_LIMIT` with a
+    `user_interrupted` flag for the wording. HiGHS's interrupt would need the
+    `setCallback` / `startCallback` path (no thread-safe terminate), which is **not** wired,
+    so HiGHS stays boundary-only: a mid-solve Ctrl-C is seen only at the chunk boundary and
+    reported as a time-limit stop — the solver-agnostic fallback.
   - **Warm-start API exists on both.** Gurobi `Start` attribute; HiGHS `setSolution`.
     (The anytime objective→constraint ladder that would have used it was dropped — see
     `slow/todo.md`.)

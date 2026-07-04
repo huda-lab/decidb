@@ -1091,11 +1091,18 @@ static void CollectTaggedExpressionStringsPhysical(const Expression &expr, vecto
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
 			string per_suffix = " PER ";
+			bool parenthesize = conj.children.size() > 2;
+			if (parenthesize) {
+				per_suffix += "(";
+			}
 			for (idx_t i = 1; i < conj.children.size(); i++) {
 				if (i > 1) {
 					per_suffix += ", ";
 				}
 				per_suffix += conj.children[i]->GetName();
+			}
+			if (parenthesize) {
+				per_suffix += ")";
 			}
 			vector<string> inner;
 			CollectTaggedExpressionStringsPhysical(*conj.children[0], inner);
@@ -2753,7 +2760,12 @@ static string FormatMemory(double bytes) {
 }
 
 //! Seconds, integer when whole (300s), one decimal for sub-limit probe values (1.5s).
+//! Sub-second values keep their significant digits (0.05s) — one decimal would round a
+//! small time limit up to a misleading 0.1s (or down to 0.0s).
 static string FormatDuration(double seconds) {
+    if (seconds != 0.0 && std::fabs(seconds) < 1.0) {
+        return StringUtil::Format("%.2gs", seconds);
+    }
     if (std::fabs(seconds - std::round(seconds)) < 0.05) {
         return StringUtil::Format("%.0fs", std::round(seconds));
     }
@@ -2768,15 +2780,26 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
     string tail = StringUtil::Format("  elapsed %s · peak memory %s\n",
                                      FormatDuration(elapsed_seconds).c_str(),
                                      FormatMemory(PeakProcessMemoryBytes()).c_str());
+    // A user Ctrl-C and a wall-clock timeout share the same best-so-far readback, but
+    // must not read the same to the user: "you stopped it" vs "the clock ran out".
     if (result.has_solution) {
         // gap is a fraction on both backends; render as a percentage.
         string closeness = StringUtil::Format("  best objective so far: %g  (within %.2f%% of the best possible)\n",
                                               result.objective_value, result.gap * 100.0);
-        fprintf(stderr, "DECIDE hit the %s time limit with a usable solution (not proven best).\n%s%s",
-                limit_str.c_str(), closeness.c_str(), tail.c_str());
+        if (result.user_interrupted) {
+            fprintf(stderr, "DECIDE stopped at your request with a usable solution (not proven best).\n%s%s",
+                    closeness.c_str(), tail.c_str());
+        } else {
+            fprintf(stderr, "DECIDE hit the %s time limit with a usable solution (not proven best).\n%s%s",
+                    limit_str.c_str(), closeness.c_str(), tail.c_str());
+        }
     } else {
-        fprintf(stderr, "DECIDE hit the %s time limit without finding a solution yet.\n%s",
-                limit_str.c_str(), tail.c_str());
+        if (result.user_interrupted) {
+            fprintf(stderr, "DECIDE stopped at your request before finding a solution yet.\n%s", tail.c_str());
+        } else {
+            fprintf(stderr, "DECIDE hit the %s time limit without finding a solution yet.\n%s",
+                    limit_str.c_str(), tail.c_str());
+        }
     }
 }
 
@@ -2796,17 +2819,29 @@ static DecideDiagnostic BuildTimeoutDiagnostic(const SolverResult &result, doubl
         row.value = val;
         diag.rows.push_back(std::move(row));
     };
+    // Summaries read after the "DECIDE optimization is slow:" headline, so the interrupt
+    // variants are phrased to stay coherent with that prefix (the stderr report already
+    // carries the primary "stopped at your request" line).
+    add("stopped_by", result.user_interrupted ? "user_interrupt" : "time_limit");
     if (result.has_solution) {
-        diag.summary = "the solve hit the time limit with a usable but unproven solution — "
-                       "reduce the input size to prove it, or keep solving with "
-                       "SET decide_on_timeout='continue'";
+        diag.summary = result.user_interrupted
+                           ? "the solve was still improving when you stopped it — keep solving "
+                             "with SET decide_on_timeout='continue', or reduce the input size to "
+                             "prove the best"
+                           : "the solve hit the time limit with a usable but unproven solution — "
+                             "reduce the input size to prove it, or keep solving with "
+                             "SET decide_on_timeout='continue'";
         add("status", "solution_found");
         add("best_objective", StringUtil::Format("%g", result.objective_value));
         add("within_percent_of_best", StringUtil::Format("%.2f%%", result.gap * 100.0));
     } else {
-        diag.summary = "the solve hit the time limit before finding a solution — reduce the "
-                       "input size or loosen the constraints, or keep searching with "
-                       "SET decide_on_timeout='continue'";
+        diag.summary = result.user_interrupted
+                           ? "you stopped the solve before it found a solution — keep searching "
+                             "with SET decide_on_timeout='continue', or reduce the input size / "
+                             "loosen the constraints"
+                           : "the solve hit the time limit before finding a solution — reduce the "
+                             "input size or loosen the constraints, or keep searching with "
+                             "SET decide_on_timeout='continue'";
         add("status", "no_solution");
     }
     // The best objective still achievable (the solver's proven bound) — only meaningful
@@ -3220,11 +3255,18 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     q += " ";
                 }
                 q += "PER ";
+                bool parenthesize = constraint->per_columns.size() > 1;
+                if (parenthesize) {
+                    q += "(";
+                }
                 for (idx_t i = 0; i < constraint->per_columns.size(); i++) {
                     if (i > 0) {
                         q += ", ";
                     }
                     q += constraint->per_columns[i]->GetName();
+                }
+                if (parenthesize) {
+                    q += ")";
                 }
             }
         }
@@ -5785,6 +5827,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // The first solve chunk uses the same per-chunk budget every Continue() chunk will,
     // so elapsed climbs in even multiples (300s, 600s, ...) across the loop.
     solve_options.time_limit_seconds = ResolveDecideTimeLimit();
+    // Ctrl-C is a peer trigger into the slow branch: arm the interrupt poll on the
+    // *first* solve (decoupled from the timeout mode / retained session), so a user
+    // interrupt on any armed solve cuts it short and routes into the TIME_LIMIT
+    // terminal with the best-so-far — instead of aborting the query. `off` stays plain
+    // (no poll). Gurobi honors it mid-solve; HiGHS stays boundary-only.
+    if (diagnosis_armed) {
+        solve_options.interrupt_poll = [&context]() { return context.interrupted.load(); };
+    }
 
     // Reconcile the `<>` label channel with the final global-var count. Only the
     // aggregate-`<>` site labels its global z (for the infeasible removal dial),
@@ -6034,14 +6084,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             ThrowDecideDiagnosisReady(diag);
         }
 
-        // Mid-chunk Ctrl-C: in `continue` mode (auto-resume, where Ctrl-C is the *only* way
-        // to stop) let a resumed chunk be cut short the instant the query is interrupted,
-        // instead of waiting for the next boundary. Scoped to `continue`: `ask` already stops
-        // the user at each prompt, so it keeps the boundary-only behavior (and stays free of
-        // the watcher thread). The session polls this during its solve; a backend that cannot
-        // interrupt mid-solve (HiGHS today) ignores it. Only continuation chunks are affected.
-        if (retained_session && eff_on_timeout == "continue") {
-            retained_session->SetInterruptPoll([&context]() { return context.interrupted.load(); });
+        // The interrupt poll installed on the first solve persists on the retained session
+        // into every Continue() chunk, so `continue` keeps its mid-chunk Ctrl-C for free.
+        // `ask`, though, stops the user at each prompt already, and a watcher thread
+        // contending with the interactive getline destabilizes the prompt (found
+        // empirically) — so reset it to boundary-only here. The entry interrupt already
+        // fired *before* this loop, so first-solve Ctrl-C still routed us in; only within
+        // the ask loop is it boundary-only. HiGHS ignores the poll either way.
+        if (retained_session && eff_on_timeout == "ask") {
+            retained_session->SetInterruptPoll({});
         }
 
         // ask / continue: report at each boundary, then continue or stop.
@@ -6133,6 +6184,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     case DiagnosisTerminal::UNDIAGNOSED:
         // Mode off, or a status no engine covers yet: the plain static solver error.
         ThrowDecideSolveError(solve_result);
+    }
+
+    // We are past the switch, so we are delivering rows (every failure terminal threw).
+    // With the interrupt poll armed, the rare race where a user Ctrl-C landed just as the
+    // solver proved OPTIMAL leaves `context.interrupted` set — which would make the
+    // executor abort a query that actually succeeded. Clear it so the rows flow. (The
+    // TIME_LIMIT terminal already clears it on its incumbent-stop path; this covers the
+    // SOLVED path. Guarded on the poll being armed, so nothing else changes.)
+    if (solve_options.interrupt_poll) {
+        context.interrupted = false;
     }
 
     // Success: invalidate any diagnosis stashed by an earlier failed solve on this

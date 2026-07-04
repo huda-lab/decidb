@@ -362,7 +362,7 @@ all carried on `ConstraintProvenance` (no change to PER solve logic):
   row order to associate `suggested_change`/`amount` with a group.
 - **`is_aggregate`** — set from `eval_const.lhs_is_aggregate` at the aggregate emission sites;
   drives the single-row / WHEN `SUM(...)` wrapper in `FormatLhs` (see I2.d SUM above).
-- **`qualifier`** — the `PER grp` / `WHEN <pred>` text, computed once per clause at the
+- **`qualifier`** — the `PER grp` / `PER (region, year)` / `WHEN <pred>` text, computed once per clause at the
   WHEN/PER eval site (`physical_decide.cpp`) and appended to the reconstructed label by
   `MakeLoosenEdit`. PER keys reuse the expression `GetName()` the EXPLAIN path uses; a WHEN
   predicate is rendered by `RenderWhenPredicate`, which unwraps the binder's implicit literal
@@ -372,8 +372,7 @@ all carried on `ConstraintProvenance` (no change to PER solve logic):
 The objective PER path passes a throwaway labels vector (objective groups are not diagnosed by
 clause key). **Composite PER keys** (`PER (region, year)`) are handled by the join and reachable
 through `SUCH THAT` in the parenthesized form. The **unparenthesized** comma-list form
-(`PER region, year`) is rejected by the constraint binder, which only consumes the first column
-(a pre-existing limitation, logged in `07_issues/bugs/todo.md`). **easy-MAX + PER** correctly
+(`PER region, year`) is rejected by the parser; use `PER (region, year)`. **easy-MAX + PER** correctly
 re-emits as one global cap: the easy rewrite makes `MAX(x) <= K PER g` the uniform `x <= K`
 (the optimizer strips the vacuous PER), so there is no per-group cap to break out — see
 "Slack-scope policy: query vs expanded" above.

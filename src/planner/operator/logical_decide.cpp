@@ -54,11 +54,18 @@ void LogicalDecide::CollectTaggedExpressionStrings(const Expression &expr, vecto
 		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
 			// PER wrapper: child[0] is the constraint, children[1..N] are PER columns
 			string per_suffix = " PER ";
+			bool parenthesize = conj.children.size() > 2;
+			if (parenthesize) {
+				per_suffix += "(";
+			}
 			for (idx_t i = 1; i < conj.children.size(); i++) {
 				if (i > 1) {
 					per_suffix += ", ";
 				}
 				per_suffix += conj.children[i]->GetName();
+			}
+			if (parenthesize) {
+				per_suffix += ")";
 			}
 			// Recurse into child[0]; append PER suffix to each leaf
 			vector<string> inner;
