@@ -14,6 +14,8 @@
 
 #include "duckdb/common/common.hpp"
 
+#include <limits>
+
 namespace duckdb {
 
 //! Outcome of a solve, normalized across backends (Gurobi / HiGHS).
@@ -59,13 +61,16 @@ struct SolverResult {
 	//! (`-1e100` / `inf` / `nan`), so they are read only when this is true.
 	bool has_solution = false;
 	//! TIME_LIMIT only: the solver's best proven bound on the objective (Gurobi
-	//! `ObjBound` / HiGHS `mip_dual_bound`). Always meaningful at the time limit
-	//! regardless of `has_solution`; bounds how far the incumbent can still improve.
-	double best_bound = 0.0;
+	//! `ObjBound` / HiGHS `mip_dual_bound`); bounds how far the incumbent can
+	//! still improve. NaN when no bound exists — LP/QP timeouts (neither backend
+	//! proves a bound there), a failed attribute read, or a solver infinity
+	//! sentinel. Report writers must skip the bound when `!std::isfinite`.
+	double best_bound = std::numeric_limits<double>::quiet_NaN();
 	//! TIME_LIMIT only: relative optimality gap between `objective_value` and
 	//! `best_bound` (Gurobi `MIPGap` / HiGHS `mip_gap`), as a fraction. Only
-	//! meaningful when `has_solution`.
-	double gap = 0.0;
+	//! meaningful when `has_solution`; NaN whenever `best_bound` is unavailable
+	//! (same cases as above). Report writers must skip it when `!std::isfinite`.
+	double gap = std::numeric_limits<double>::quiet_NaN();
 	//! TIME_LIMIT only: true when the stop was a user Ctrl-C (`GRB_INTERRUPTED`),
 	//! not the wall-clock limit. Drives report wording ("you stopped it" vs "hit
 	//! the … time limit"), not routing — an interrupt reuses the whole TIME_LIMIT

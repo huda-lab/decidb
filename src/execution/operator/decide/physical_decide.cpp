@@ -2806,9 +2806,12 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
     // A user Ctrl-C and a wall-clock timeout share the same best-so-far readback, but
     // must not read the same to the user: "you stopped it" vs "the clock ran out".
     if (result.has_solution) {
-        // gap is a fraction on both backends; render as a percentage.
-        string closeness = StringUtil::Format("  best objective so far: %g  (within %.2f%% of the best possible)\n",
-                                              result.objective_value, result.gap * 100.0);
+        // gap is a fraction on both backends; render as a percentage. It is NaN when
+        // no proven bound exists (LP/QP timeouts, failed reads) — claim nothing then.
+        string closeness = std::isfinite(result.gap)
+                               ? StringUtil::Format("  best objective so far: %g  (within %.2f%% of the best possible)\n",
+                                                    result.objective_value, result.gap * 100.0)
+                               : StringUtil::Format("  best objective so far: %g\n", result.objective_value);
         if (result.user_interrupted) {
             fprintf(stderr, "DECIDE stopped at your request with a usable solution (not proven best).\n%s%s",
                     closeness.c_str(), tail.c_str());
@@ -2856,7 +2859,11 @@ static DecideDiagnostic BuildTimeoutDiagnostic(const SolverResult &result, doubl
                              "SET decide_on_timeout='continue'";
         add("status", "solution_found");
         add("best_objective", StringUtil::Format("%g", result.objective_value));
-        add("within_percent_of_best", StringUtil::Format("%.2f%%", result.gap * 100.0));
+        // NaN gap = no proven bound (LP/QP timeouts, failed reads) — omit the row
+        // rather than print "nan%" or overstate an unproven incumbent as proven.
+        if (std::isfinite(result.gap)) {
+            add("within_percent_of_best", StringUtil::Format("%.2f%%", result.gap * 100.0));
+        }
     } else {
         diag.summary = result.user_interrupted
                            ? "you stopped the solve before it found a solution — keep searching "

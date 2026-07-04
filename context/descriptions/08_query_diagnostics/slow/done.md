@@ -31,9 +31,13 @@ incumbent fields on `SolverResult`:
 - **S1 — incumbent fields.** At `GRB_TIME_LIMIT` / `kTimeLimit` the backends fill
   `has_solution`, `best_bound`, `gap`, and (when `has_solution`) the incumbent
   `solution` vector + `objective_value`. `has_solution` gates the incumbent reads so
-  the `-1e100` / `inf` / `nan` no-incumbent sentinels never leak; `best_bound` is always
-  read. Field-by-field mapping and the "gap is a fraction on both backends" note are in
-  `foundations/done.md` (Structured solver result / Time-limit behavior).
+  the `-1e100` / `inf` / `nan` no-incumbent sentinels never leak; `best_bound` / `gap`
+  default to **NaN ("unavailable")** and are populated only when a proven bound exists —
+  MIP timeouts. On LP/QP timeouts (where Gurobi's `ObjBound` is the ±1e100 sentinel and
+  HiGHS's `mip_dual_bound` is a 0 default) they stay NaN, and every report/relation
+  writer skips the bound/closeness output when `!std::isfinite`. Field-by-field mapping
+  and the "gap is a fraction on both backends" note are in `foundations/done.md`
+  (Structured solver result / Time-limit behavior).
 
 ## Checkpoint report (S2)
 
@@ -66,7 +70,10 @@ wording.
 Details:
 
 - **Voice.** Obeys the user-output rule — no "incumbent"/"gap"/"bound" solver words.
-  The `gap` fraction is rendered as a percentage ("within 0.09%").
+  The `gap` fraction is rendered as a percentage ("within 0.09%"). When `gap` is NaN
+  (no proven bound — LP/QP timeouts), the path-1 line drops the parenthetical and
+  prints only "best objective so far: N" — the report never claims closeness it
+  cannot prove.
 - **Elapsed** is measured by an always-on `Profiler` wrapped around the `SolveModel`
   call (independent of `DECIDB_BENCH`), reported via `FormatDuration`: integer seconds
   when whole (`300s`), one decimal for larger fractional values (`1.5s`), and two
@@ -93,9 +100,11 @@ where the solve **fails** (ends the query with an error):
   (`subject_kind='model'`): `stopped_by` (`user_interrupt` / `time_limit`), `status`
   (`solution_found` / `no_solution`), and when an incumbent exists `best_objective` +
   `within_percent_of_best` (the `gap` fraction as a `%` string, matching the report's "within
-  X%"); `best_possible_objective` (the solver's bound) **only when the query has an objective**
-  (`decide_objective` set or a composed MIN/MAX objective) — a pure-feasibility DECIDE has no
-  objective, so the bound is a trivial 0 and is suppressed; always `elapsed`, `peak_memory`.
+  X%" — omitted when `gap` is NaN, i.e. no proven bound); `best_possible_objective` (the
+  solver's bound) **only when the query has an objective** (`decide_objective` set or a
+  composed MIN/MAX objective) **and the bound is finite** — a pure-feasibility DECIDE has no
+  objective and an LP/QP timeout has no proven bound (NaN), so both are suppressed; always
+  `elapsed`, `peak_memory`.
   User voice only — the attribute names avoid the forbidden jargon (`best_possible_objective`,
   not "bound"). The `summary` also has an interrupt variant ("the solve was still improving when
   you stopped it …" / "you stopped the solve before it found a solution …"), phrased to stay
@@ -226,6 +235,12 @@ live model env via `getenv_model`), `HighsSession` (`deterministic_naive.cpp`).
 in ~1s) drives path 1; a seeded random market-split (feasibility-hard, no incumbent
 within the limit) drives path 2; `off` is asserted to suppress the report; the report is
 checked free of solver jargon.
+
+Timeout honesty (`TestNonMipTimeoutHonesty`): a 200k-var LP (both backends) and a
+convex QP (Gurobi-only) at `DECIDB_TIME_LIMIT=0.001` assert that no proven-bound output
+is fabricated — no "within …% of the best possible" line, no `best_possible_objective` /
+`within_percent_of_best` relation rows, and no `1e+100` / `nan` in the output — while a
+MIP-timeout regression case asserts the real bound + closeness still appear.
 
 Continuation (`TestSlowContinuation`): interactive `ask` is driven through a
 pseudo-terminal (`DecidBCli.execute_interactive`, so `isatty` is true) — `s` stops and

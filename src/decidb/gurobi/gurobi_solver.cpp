@@ -4,6 +4,7 @@
 #include "duckdb/decidb/solver_session.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/gurobi/gurobi_loader.hpp"
+#include "duckdb/decidb/diagnostic_constants.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -305,10 +306,13 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
             // fall through
         case GRB_TIME_LIMIT: {
             result.status = SolverStatus::TIME_LIMIT;
-            // The best proven bound is always meaningful at the time limit,
-            // independent of whether an incumbent was found.
+            // A proven bound only exists for MIP timeouts; on an LP/QP timeout
+            // ObjBound reads back the ±1e100 infinity sentinel (which is finite,
+            // so it would sail through downstream isfinite guards). Keep the NaN
+            // "unavailable" default unless the read succeeds with a real value.
             double obj_bound = 0.0;
-            if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJBOUND, &obj_bound) == 0) {
+            if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJBOUND, &obj_bound) == 0 &&
+                std::isfinite(obj_bound) && std::fabs(obj_bound) < EFFECTIVE_INFINITY) {
                 result.best_bound = obj_bound;
             }
             // Incumbent reads (objective / gap / solution vector) are only valid
@@ -322,8 +326,13 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
                 if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
                     result.objective_value = obj_val;
                 }
+                // MIPGap is unavailable on LP/QP models (the read fails) and is
+                // the 1e100 sentinel when no bound exists yet; keep NaN in both
+                // cases so the report omits the closeness claim instead of
+                // asserting "within 0.00%" on an unproven incumbent.
                 double mip_gap = 0.0;
-                if (api.getdblattr(guard.model, GRB_DBL_ATTR_MIPGAP, &mip_gap) == 0) {
+                if (api.getdblattr(guard.model, GRB_DBL_ATTR_MIPGAP, &mip_gap) == 0 &&
+                    std::isfinite(mip_gap) && mip_gap < EFFECTIVE_INFINITY) {
                     result.gap = mip_gap;
                 }
                 vector<double> incumbent(total_vars);

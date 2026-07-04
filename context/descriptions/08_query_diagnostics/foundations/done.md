@@ -22,11 +22,17 @@ so callers branch on the outcome. This gates the whole area.
     `primal_solution_status == kSolutionStatusFeasible`); it **gates** the incumbent reads
     (`solution` / `objective_value` / `gap`) because with no incumbent those attributes
     return solver sentinels (`-1e100` / `inf` / `nan`). `best_bound` (Gurobi `ObjBound` /
-    HiGHS `mip_dual_bound`) is always meaningful at the limit regardless. `gap` (Gurobi
-    `MIPGap` / HiGHS `mip_gap`) is a **fraction** on *both* backends — HiGHS's `mip_gap`
-    doc string reads "(%)" but the stored value is `|primal − dual| / |primal|`, not a
-    percentage. Populated in the `GRB_TIME_LIMIT` / `kTimeLimit` branches
-    (`gurobi_solver.cpp`, `deterministic_naive.cpp`).
+    HiGHS `mip_dual_bound`) and `gap` **default to NaN ("unavailable")** and are only
+    populated when a proven bound actually exists — i.e. on **MIP** timeouts. On an LP/QP
+    timeout Gurobi's `ObjBound` reads back the ±1e100 infinity sentinel (finite, so it
+    would pass an `isfinite` guard downstream) and HiGHS's `mip_dual_bound` holds its 0
+    default; both backends therefore reject sentinel/non-finite values (Gurobi: magnitude
+    `>= EFFECTIVE_INFINITY`; HiGHS additionally gates on the model having an integer
+    variable) and leave NaN. Report writers must skip bound/gap output when
+    `!std::isfinite`. `gap` (Gurobi `MIPGap` / HiGHS `mip_gap`) is a **fraction** on
+    *both* backends — HiGHS's `mip_gap` doc string reads "(%)" but the stored value is
+    `|primal − dual| / |primal|`, not a percentage. Populated in the `GRB_TIME_LIMIT` /
+    `kTimeLimit` branches (`gurobi_solver.cpp`, `deterministic_naive.cpp`).
 - **Backends map-and-return** instead of throwing on solver status
   (`gurobi_solver.cpp`, `deterministic_naive.cpp`). HiGHS `kUnboundedOrInfeasible`
   (status 9) maps to `INF_OR_UNBD`. Genuine internal/API errors (NaN/Inf,
@@ -115,12 +121,16 @@ ray is reported with an explicit caveat because feasibility was not established
   | incumbent present? | `SolCount > 0` | `primal_solution_status == 2` (feasible) |
   | incumbent vector | `X` array (only when `SolCount > 0`) | `getSolution().col_value` (only when feasible) |
   | incumbent objective | `ObjVal` | `getInfo().objective_function_value` |
-  | best bound | `ObjBound` — **always finite/meaningful** | `getInfo().mip_dual_bound` — **always finite/meaningful** |
-  | gap | `MIPGap` (only when incumbent) | `getInfo().mip_gap` (only when incumbent) |
+  | best bound | `ObjBound` — finite/meaningful **for MIPs** | `getInfo().mip_dual_bound` — finite/meaningful **for MIPs** |
+  | gap | `MIPGap` (only when incumbent, MIP) | `getInfo().mip_gap` (only when incumbent, MIP) |
 
-  - **The best bound is the reliable routing key on both backends** — meaningful in
-    both buckets (e.g. the same market-split model reports bound `27` on Gurobi *and*
-    HiGHS). This is what S3's "route by best bound" reads.
+  - **The best bound is the reliable routing key on both backends *for MIPs*** —
+    meaningful in both buckets (e.g. the same market-split model reports bound `27` on
+    Gurobi *and* HiGHS). This is what S3's "route by best bound" reads. On **LP/QP**
+    timeouts neither backend proves a bound: Gurobi's `ObjBound` read succeeds but
+    returns the ±1e100 infinity sentinel, and HiGHS's `mip_dual_bound` silently holds
+    its 0 default (probed 2026-07-04, 200k-var LP at `DECIDB_TIME_LIMIT=0.001`). The
+    backends keep the NaN "unavailable" default in `SolverResult` for those cases.
   - **Sentinels must be gated on the incumbent-presence flag, not the read's error
     code.** With no incumbent, Gurobi's `ObjVal`/`MIPGap` reads *succeed* (error 0)
     but return `-1e100` / `1e100`; HiGHS returns `objective_function_value = inf` and

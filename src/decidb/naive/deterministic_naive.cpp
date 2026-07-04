@@ -2,6 +2,7 @@
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/solver_config.hpp"
 #include "duckdb/decidb/solver_session.hpp"
+#include "duckdb/decidb/diagnostic_constants.hpp"
 #include "duckdb/common/exception.hpp"
 #include "Highs.h"
 
@@ -30,6 +31,10 @@ public:
 private:
     Highs highs;
     idx_t total_vars = 0;
+    //! Whether the loaded model has any integer variable. HiGHS only populates
+    //! `mip_dual_bound` / `mip_gap` for MIP solves; on an LP/QP timeout they hold
+    //! defaults (0 / nan) that must not be read back as a proven bound.
+    bool is_mip = false;
 
     void Load(const SolverModel &model);
     SolverResult RunAndReadback(double time_limit_seconds);
@@ -47,8 +52,10 @@ void HighsSession::Load(const SolverModel &model) {
     // RunAndReadback(), so a warm Continue() can extend it without a reload.
 
     vector<HighsVarType> var_types(total_vars);
+    is_mip = false;
     for (idx_t i = 0; i < total_vars; i++) {
         var_types[i] = model.is_integer[i] ? HighsVarType::kInteger : HighsVarType::kContinuous;
+        is_mip = is_mip || model.is_integer[i];
     }
 
     ObjSense sense = model.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
@@ -266,17 +273,25 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
         case HighsModelStatus::kTimeLimit: {
             result.status = SolverStatus::TIME_LIMIT;
             const HighsInfo& info = highs.getInfo();
-            // The best proven bound is always meaningful at the time limit,
-            // independent of whether an incumbent was found.
-            result.best_bound = info.mip_dual_bound;
+            // A proven bound only exists for MIP timeouts: on an LP/QP timeout
+            // `mip_dual_bound` still holds its 0 default, which would read back
+            // as a confident (and wrong) "best possible objective". Keep the NaN
+            // "unavailable" default there and for non-finite values.
+            if (is_mip && std::isfinite(info.mip_dual_bound) &&
+                std::fabs(info.mip_dual_bound) < EFFECTIVE_INFINITY) {
+                result.best_bound = info.mip_dual_bound;
+            }
             // Incumbent reads (objective / gap / solution vector) are only valid
             // when HiGHS found a feasible solution; otherwise objective_function_value
             // is inf, mip_gap is nan, and col_value is garbage — so gate on the
-            // primal-solution status.
+            // primal-solution status. `mip_gap` additionally needs a MIP bound to
+            // be meaningful (an LP feasible-at-timeout would read back nan).
             if (info.primal_solution_status == kSolutionStatusFeasible) {
                 result.has_solution = true;
                 result.objective_value = info.objective_function_value;
-                result.gap = info.mip_gap;
+                if (is_mip && std::isfinite(info.mip_gap) && info.mip_gap < EFFECTIVE_INFINITY) {
+                    result.gap = info.mip_gap;
+                }
                 const HighsSolution& incumbent = highs.getSolution();
                 if (incumbent.col_value.size() >= total_vars) {
                     result.solution.assign(incumbent.col_value.begin(),

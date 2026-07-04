@@ -206,6 +206,72 @@ class TestSlowDiagnosticsRelation:
         assert attrs == {}, attrs
 
 
+def _large_lp_sql():
+    """200k-var continuous LP with an objective: big enough that neither backend can
+    finish within a ~1ms limit, and — being an LP — neither backend has a proven
+    bound at the timeout. Guards against fabricated 'best possible' output (Gurobi's
+    1e+100 ObjBound sentinel is finite; HiGHS's mip_dual_bound holds a 0 default)."""
+    inner = "SELECT id, ((id%97)+1) AS w FROM range(1,200001) t(id)"
+    return (
+        f"SELECT id, x FROM ({inner}) DECIDE x IS REAL "
+        "SUCH THAT x >= 0 AND x <= 1000 AND SUM(w*x) <= 100000000 MAXIMIZE SUM(x)"
+    )
+
+
+def _large_qp_sql():
+    """Same scale with a convex quadratic objective (Gurobi-only test): the QP
+    timeout path must be as bound-honest as the LP one."""
+    inner = "SELECT id, ((id%97)+1) AS w FROM range(1,200001) t(id)"
+    return (
+        f"SELECT id, x FROM ({inner}) DECIDE x IS REAL "
+        "SUCH THAT x >= 0 AND x <= 1000 AND SUM(w*x) >= 10000000 "
+        "MINIMIZE SUM(POWER(x - w, 2))"
+    )
+
+
+_LARGE_LP_SQL = _large_lp_sql()
+_LARGE_QP_SQL = _large_qp_sql()
+
+
+@pytest.mark.query_diagnostics
+class TestNonMipTimeoutHonesty:
+    """A2/E2: on an LP/QP timeout no backend proves a bound, so the report and the
+    relation must claim nothing — no 'within …% of the best possible' line, no
+    best_possible_objective / within_percent_of_best rows, and no solver infinity
+    sentinel (1e+100) or nan leaking into user output. Whether an incumbent exists
+    at an LP timeout differs per backend (HiGHS's simplex has a feasible point,
+    Gurobi reports none), so only the bound/gap claims are asserted, not the path."""
+
+    def _assert_no_fabricated_bound(self, result, attrs):
+        combined = (result.stderr + result.stdout).lower()
+        assert "time limit" in combined, combined[:800]
+        assert "of the best possible" not in combined, combined[:800]
+        assert "1e+100" not in combined and "nan" not in combined, combined[:800]
+        assert "best_possible_objective" not in attrs, attrs
+        assert "within_percent_of_best" not in attrs, attrs
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_lp_timeout_no_fabricated_bound(self, request, cli_fixture):
+        cli = _slow_cli(request.getfixturevalue(cli_fixture), 0.001)
+        result, attrs = _slow_diag_rows(cli, _LARGE_LP_SQL)
+        self._assert_no_fabricated_bound(result, attrs)
+
+    def test_qp_timeout_no_fabricated_bound_gurobi(self, decidb_cli_gurobi):
+        cli = _slow_cli(decidb_cli_gurobi, 0.001)
+        result, attrs = _slow_diag_rows(cli, _LARGE_QP_SQL)
+        self._assert_no_fabricated_bound(result, attrs)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_mip_timeout_still_reports_bound(self, request, cli_fixture):
+        """Regression guard: the MIP timeout keeps its real bound + closeness output."""
+        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
+        result, attrs = _slow_diag_rows(cli, _KNAPSACK_SQL)
+        combined = (result.stderr + result.stdout).lower()
+        assert "of the best possible" in combined, combined[:800]
+        assert attrs["within_percent_of_best"].endswith("%"), attrs
+        assert "best_possible_objective" in attrs, attrs
+
+
 _STOP_CAVEAT = "best solution found so far"  # stderr caveat on a stop-with-incumbent
 _PROMPT = "keep improving it"  # interactive continuation prompt (lowercased)
 
