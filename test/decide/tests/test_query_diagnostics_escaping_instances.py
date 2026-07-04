@@ -151,15 +151,16 @@ class TestEscapingInstances:
         assert _attr(rows, "hire", "affected_entities") == "10 of 10 entities where region = 'A'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_select_only_column_is_not_named_colN(self, request, cli_fixture, oracle_solver):
-        """C6: a low-cardinality column referenced only in the outer SELECT (never in
-        the DECIDE clause) has no source name we ever resolved. Even when it perfectly
-        characterizes the escaping slice, we suppress the rule rather than printing a
-        positional `colN` the user never wrote -> the report falls back to the count.
+    def test_select_only_aliased_column_is_named(self, request, cli_fixture, oracle_solver):
+        """T2: a low-cardinality column referenced only in the outer SELECT (never in the
+        DECIDE clause) is still named when the user gave it an explicit `AS` alias — that
+        alias is a user-written identifier, back-filled from the child projection. The rule
+        it perfectly characterizes is reported rather than suppressed to a bare count.
 
-        Here `zone` splits rows 1-25 ('A') vs 26-100 ('B'); the cap is driven by `id`,
-        so exactly the zone='A' rows escape. `zone` is selected but never referenced in
-        WHEN/objective/decision, so it carries no harvested name."""
+        Here `zone` splits rows 1-25 ('A') vs 26-100 ('B'); the cap is driven by `id`, so
+        exactly the zone='A' rows escape. `zone` never appears in WHEN/objective/decision,
+        so it is not harvested from the clause — only its projection alias supplies the
+        name. All 25 zone='A' rows escape, so the rule reads `25 of 25 rows where zone='A'`."""
         _assert_oracle_unbounded(
             oracle_solver, "diagnostic_select_only_column", 100, range(1, 26)
         )
@@ -173,8 +174,35 @@ class TestEscapingInstances:
         )
         rows = _rows(_diagnose(cli, sql))
         value = _attr(rows, "buy", "affected_rows")
+        assert value == "25 of 25 rows where zone = 'A'", value
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_select_only_unaliased_computed_column_stays_suppressed(
+        self, request, cli_fixture, oracle_solver
+    ):
+        """T2 negative: the back-fill only recovers user-written names. A computed
+        projection expression with NO `AS` alias carries only a generated name (its
+        ToString), which we must never surface — even when it perfectly characterizes the
+        escaping slice. So the same `i <= 25` split, left unaliased and pulled through
+        `SELECT *`, is suppressed to the bare count rather than printing a machine name.
+
+        Structurally identical to the aliased case (rows 1-25 escape), but the CASE has no
+        alias, so the report falls back to `25 of 100 rows`."""
+        _assert_oracle_unbounded(
+            oracle_solver, "diagnostic_select_only_column", 100, range(1, 26)
+        )
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT * FROM ("
+            "SELECT i AS id, CASE WHEN i <= 25 THEN 'A' ELSE 'B' END, "
+            "i * 1.0 AS w FROM range(1, 101) t(i)) "
+            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN id > 25 "
+            "MAXIMIZE SUM(buy * w)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        value = _attr(rows, "buy", "affected_rows")
         assert value == "25 of 100 rows", value
-        assert "col" not in value, f"positional colN leaked into report: {value}"
+        assert "where" not in value, f"generated name leaked into report: {value}"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_escape_rate_pragma_changes_reporting(self, request, cli_fixture):

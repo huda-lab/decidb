@@ -189,15 +189,20 @@ mapping on the `VarIndexer`; the lift is accepted only when every joined row for
 an entity has the same candidate value. This covers dimension-table labels such
 as supplier→nation while skipping genuinely one-to-many joined columns. The pure
 rule computation is `CharacterizeEscape` (no DuckDB execution types — unit
-tested). Column names are harvested at physical-plan time from the DECIDE clause's
-own `BoundReferenceExpression`s (`plan_decide.cpp`), whose chunk indices survive
-column pruning. Columns referenced only in the outer SELECT carry no harvested
-name (we never saw the identifier the user wrote); a categorical candidate over
-such an unnamed column is **suppressed** rather than labeled with a positional
-`colN` the user never typed (`build_row_grouping` returns false on an empty name) —
-the variable then falls back to the bare count. Such columns are usually
-high-cardinality and excluded by the categorical cap anyway; suppression covers the
-low-cardinality case where the cap would otherwise let an unnamed column through.
+tested). Column names are resolved at physical-plan time (`plan_decide.cpp`) in two
+passes, both keyed to chunk indices that survive column pruning. First, names are
+harvested from the DECIDE clause's own `BoundReferenceExpression`s (WHEN / PER /
+objective / constraint / entity-key columns). Second, any still-unnamed slot is
+**back-filled from the child projection's user-written names** — a column referenced
+only in the outer SELECT (never in the clause) is named from the child projection
+expression when the name is a user-written identifier: an explicit `AS name` alias, or
+a bare source-column reference. A computed projection expression with no alias carries
+only a generated name (its `ToString`), which is deliberately dropped — a categorical
+candidate over such a still-unnamed column is **suppressed** rather than labeled with a
+machine name the user never typed (`build_row_grouping` returns false on an empty name),
+and the variable falls back to the bare count. The projection back-fill is captured
+before `CreatePlan` (like `child_bindings`) because `CreatePlan` moves the projection's
+`expressions` vector out.
 
 **Pragma knobs** (extension options, `decide_diagnostic.cpp`):
 `diagnose_decide_escape_rate` (default 0.8), `diagnose_decide_categorical_ratio`
@@ -206,7 +211,11 @@ small tables still qualify).
 
 `PER` is covered only indirectly: we never map escaping instances onto PER groups,
 but if escape aligns with a column a `PER`/`WHEN` clause uses, the categorical scan
-surfaces it on its own.
+surfaces it on its own. This is the whole of the group story by design — escape
+localized to a PER/WHEN group is reported by the generic categorical scan when the
+group key is a low-cardinality column; the engine does not otherwise map escapes onto
+group structure, and it never phrases the result as blame on the group's clause (the
+ray cannot finger a guilty clause — see the load-bearing limit above).
 
 ## Load-bearing limit — names a variable, not a guilty clause
 
@@ -228,10 +237,13 @@ multi-var dedup, `auto` routing, `off` suppression) ·
 partial → categorical rule, total escape, scattered → count fallback,
 entity-scoped → entity-key and constant join-column rules, all three
 characterization pragmas `escape_rate` / `categorical_ratio` / `min_categories`
-changing what is reported plus validating their bounds;
+changing what is reported plus validating their bounds; a SELECT-only column named
+from its user-written projection alias vs. an unaliased computed column that stays
+suppressed to the bare count;
 both backends, with oracle-confirmed unbounded constructed cases for the
 cardinality-knob tests) · `test/decide/tests/test_query_diagnostics_relation.py`
-(the renamed EAV `decide_diagnostics()` schema and `diagnosis_id`) ·
+(the renamed EAV `decide_diagnostics()` schema and `diagnosis_id`, plus per-connection
+stash isolation: a failed solve on one connection leaves a fresh connection empty) ·
 `test/common/test_decidb_diagnostic_engines.cpp` (`DiagnoseUnbounded` with injected
 grouping and a clause-shaped EAV stub row) · `test/common/test_decidb_escape_characterization.cpp`
 (the pure `CharacterizeEscape` core: threshold gating, union/sort, all-escape,

@@ -151,6 +151,25 @@ class TestDiagnosticsRelation:
         assert rows == []
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_fresh_connection_sees_no_prior_diagnosis(self, request, cli_fixture):
+        """Lifecycle isolation (T6): the diagnosis stash is per-connection, so a
+        failed DECIDE on one connection must never leak into a fresh one. Fail a
+        DECIDE on connection A (which stashes a diagnosis, then closes), then open
+        a separate connection B and assert decide_diagnostics() is empty — the
+        stash is neither shared across connections nor persisted to the (shared,
+        read-only) database file. Each CLI invocation is its own process, so the
+        two scripts genuinely run on distinct connections."""
+        cli = request.getfixturevalue(cli_fixture)
+        # Connection A: a failing DECIDE stashes an unbounded diagnosis, then exits.
+        conn_a = _diagnose(cli, _UNBOUNDED_SQL)
+        assert _rows(conn_a), "connection A should have stashed a diagnosis to read back"
+        # Connection B: a brand-new process with no prior failed solve on it.
+        conn_b = cli.execute_script(
+            ".mode csv\nSELECT * FROM decide_diagnostics();\n"
+        )
+        assert _rows(conn_b) == []
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_no_diagnosis_stashed_when_off(self, request, cli_fixture):
         """With diagnosis turned `off`, an unbounded DECIDE stashes nothing."""
         cli = request.getfixturevalue(cli_fixture)

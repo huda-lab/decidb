@@ -2,6 +2,7 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -19,6 +20,27 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // column_ids, which is why base-table entity scopes worked and subquery /
     // CTE-backed scopes silently collapsed to a single entity.
     auto child_bindings = op.children[0]->GetColumnBindings();
+    // Capture user-written column names off the child projection BEFORE CreatePlan
+    // moves its `expressions` vector out (same reason as child_bindings above). These
+    // back-fill names for columns that appear ONLY in the outer SELECT — never in the
+    // DECIDE clause — so the unbounded diagnosis can characterize an escaping slice by
+    // them. We keep only names the user actually wrote: an explicit `AS name` alias, or
+    // a bare source-column reference. A computed projection expression with no alias
+    // carries only a generated name (its ToString), which we deliberately drop so the
+    // diagnosis never prints a label the user never typed.
+    vector<string> child_userwritten_names(child_bindings.size(), string());
+    if (op.children[0]->type == LogicalOperatorType::LOGICAL_PROJECTION) {
+        auto &child_proj = op.children[0]->Cast<LogicalProjection>();
+        for (idx_t i = 0; i < child_proj.expressions.size() && i < child_userwritten_names.size();
+             i++) {
+            auto &expr = *child_proj.expressions[i];
+            if (expr.HasAlias()) {
+                child_userwritten_names[i] = expr.GetAlias();
+            } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                child_userwritten_names[i] = expr.Cast<BoundColumnRefExpression>().GetName();
+            }
+        }
+    }
     auto child_plan = CreatePlan(*op.children[0]);
     auto decide_op = make_uniq<PhysicalDecide>(
         op.types, op.estimated_cardinality, std::move(child_plan),
@@ -89,9 +111,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // BoundReferenceExpressions whose `index` is the position in the child data chunk
     // — exactly the indexing of gstate.data — so this aligns directly and survives
     // pruning (decision-variable references stay BoundColumnRef and are skipped).
-    // Columns only in the outer SELECT (not the DECIDE clause) are left with an empty
-    // name: we never saw the source identifier the user wrote, so we have nothing
-    // truthful to print. The unbounded diagnosis suppresses categorical rules over
+    // Columns only in the outer SELECT (not the DECIDE clause) get no name from this
+    // harvest; they are back-filled below from the child projection's user-written
+    // names. Anything still empty after that (a computed column with no user alias) is
+    // left blank on purpose: the unbounded diagnosis suppresses categorical rules over
     // unnamed columns rather than inventing a positional `colN` the user never typed.
     decide_op->input_column_names.assign(child_bindings.size(), string());
     std::function<void(const Expression &)> harvest = [&](const Expression &e) {
@@ -113,6 +136,15 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     for (auto &e : op.entity_key_expressions) {
         if (e) {
             harvest(*e);
+        }
+    }
+    // Back-fill SELECT-only columns from the child projection's user-written names.
+    // Only slots the DECIDE-clause harvest left empty are touched, so a name the user
+    // referenced in the clause always wins over the raw projection alias.
+    for (idx_t i = 0; i < decide_op->input_column_names.size() && i < child_userwritten_names.size();
+         i++) {
+        if (decide_op->input_column_names[i].empty()) {
+            decide_op->input_column_names[i] = child_userwritten_names[i];
         }
     }
     return std::move(decide_op);
