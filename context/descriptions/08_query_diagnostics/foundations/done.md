@@ -323,12 +323,19 @@ as a fixed-schema relation.
   (`src/include/duckdb/decidb/decide_diagnostic.hpp`). The state is a
   `ClientContextState` stashed under key `decide_diagnostics`; the failing DECIDE
   mutates it before throwing, so it survives into the next statement **on the same
-  connection**. **Lifecycle:** the stash holds *the most recent diagnosed failure
-  on the connection, until the next successful solve clears it.* A successful
-  DECIDE (`OPTIMAL` in `PhysicalDecide::Finalize`) calls `ClearDecideDiagnostic`,
-  which invalidates `latest` (so `decide_diagnostics()` returns 0 rows) — a stale
-  diagnosis never lingers after the user fixes the query. The per-connection id
-  counter is left intact so ids stay monotonic across solves.
+  connection**. **Lifecycle:** the stash holds *the diagnosis of the most recent
+  DECIDE failure on the connection that actually produced one — otherwise it is
+  empty.* A successful DECIDE (`OPTIMAL` in `PhysicalDecide::Finalize`) calls
+  `ClearDecideDiagnostic`, which invalidates `latest` (so `decide_diagnostics()`
+  returns 0 rows) — a stale diagnosis never lingers after the user fixes the query.
+  The same clear runs on every failure path that throws *without* stashing a new
+  diagnosis — `diagnose_decide='off'`, a status no engine covers, an unbounded solve
+  the engine can't name a variable for, an infeasible solve the elastic engine
+  declines to report on, and a `continue`-mode timeout resume that lands on a
+  definitive INFEASIBLE/UNBOUNDED — so an earlier failure's diagnosis can never be
+  misread as belonging to a later, undiagnosed one (`PhysicalDecide::FinalizeInternal`,
+  `physical_decide.cpp`). The per-connection id counter is left intact so ids stay
+  monotonic across solves.
 - **`decide_diagnostics()` table function** (registered in
   `system_functions.cpp`, implemented in `decide_diagnostic.cpp`) with fixed schema
   `(diagnosis_id BIGINT, state, subject_kind, subject, attribute, value)`. The

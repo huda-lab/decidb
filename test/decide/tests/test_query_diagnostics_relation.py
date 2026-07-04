@@ -248,6 +248,23 @@ class TestDiagnosticsRelation:
         assert "rows=1" not in result.stdout
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_undiagnosed_failure_clears_stale_diagnosis(self, request, cli_fixture):
+        """A4/E5: a diagnosed failure stashes rows, then turning diagnosis `off` and
+        hitting a second failure must not leave the first failure's rows looking
+        like they belong to the second — the stash is cleared, not left stale."""
+        cli = request.getfixturevalue(cli_fixture)
+        script = (
+            ".mode csv\n"
+            "PRAGMA diagnose_decide='auto';\n"
+            f"{_UNBOUNDED_SQL};\n"  # stashes an unbounded diagnosis (and errors)
+            "PRAGMA diagnose_decide='off';\n"
+            f"{_UNBOUNDED_SQL};\n"  # fails again, undiagnosed -> must clear the stash
+            "SELECT 'rows=' || count(*) AS diag FROM decide_diagnostics();\n"
+        )
+        result = cli.execute_script(script)
+        assert "rows=0" in result.stdout
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_repeated_failures_replace_rows_and_advance_diagnosis_id(
         self, request, cli_fixture
     ):

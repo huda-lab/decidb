@@ -5974,6 +5974,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             solve_result.ray.empty()
                 ? "a non-linear term prevents naming the variable."
                 : "the runaway is an internal helper variable.";
+        // This failure produced no diagnosis of its own; clear any stash left by an
+        // earlier failed solve so decide_diagnostics() cannot be misread as being
+        // about this query (A4).
+        ClearDecideDiagnostic(context);
         ThrowUnboundedDiagnosisUnavailable(reason);
     }
     case DiagnosisTerminal::INFEASIBLE: {
@@ -6111,7 +6115,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             ThrowDecideDiagnosisReady(diag);
         }
         // The elastic engine can still decline to report when no actionable relaxation
-        // exists; keep the plain static infeasible error as the fallback.
+        // exists; keep the plain static infeasible error as the fallback. No new
+        // diagnosis was stashed, so clear any stale one from an earlier failure (A4).
+        ClearDecideDiagnostic(context);
         ThrowDecideSolveError(terminal_result);
     }
     case DiagnosisTerminal::TIME_LIMIT: {
@@ -6201,7 +6207,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             if (solve_result.status != SolverStatus::TIME_LIMIT) {
                 // A resume can only reach a definitive INFEASIBLE/UNBOUNDED when no
                 // incumbent ever existed (an incumbent proves feasibility); surface it
-                // as the plain solver error.
+                // as the plain solver error. No new diagnosis was stashed for this
+                // resume, so clear any stale one from an earlier failure (A4).
+                ClearDecideDiagnostic(context);
                 ThrowDecideSolveError(solve_result);
             }
             // else: another time-limit stop — loop and re-report with fresh numbers.
@@ -6240,6 +6248,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     }
     case DiagnosisTerminal::UNDIAGNOSED:
         // Mode off, or a status no engine covers yet: the plain static solver error.
+        // Clear any stash left by an earlier failed solve so decide_diagnostics()
+        // cannot be misread as being about this query (A4).
+        ClearDecideDiagnostic(context);
         ThrowDecideSolveError(solve_result);
     }
 
