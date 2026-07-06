@@ -386,6 +386,14 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				                               StringUtil::Upper(func_name_lower));
 				return false;
 			}
+			if (!ExpressionContainsDecideVariable(expr, variables)) {
+				// Data-only named scalar function on table columns (e.g. mod(id, 97),
+				// floor(price)). It folds into a per-row coefficient during
+				// symbolization and contributes no DECIDE variable. Data-only
+				// aggregates (SUM/AVG/MIN/MAX of columns only) were already rejected
+				// above — they require a DECIDE variable — so they never reach here.
+				return true;
+			}
 			error_msg = StringUtil::Format("Unsupported function '%s' inside DECIDE SUM expression", func.function_name);
 			return false;
 		}

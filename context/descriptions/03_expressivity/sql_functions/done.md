@@ -158,7 +158,7 @@ This covers (non-exhaustive) `SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND
 
 **POWER exponent check**: The same pre-pass rejects `POWER(base, exp)` / `POW(base, exp)` / `base ** exp` when `base` contains a DECIDE variable and `exp` is not a constant numeric equal to `2`. That covers fractional exponents (`POWER(x, 0.5)`), negative exponents (`POWER(x, -1)`), higher-integer exponents (`POWER(x, 3)`), degenerate exponents (`POWER(x, 0)`, `POWER(x, 1)`), and non-constant exponents (`POWER(x, x)`, `POWER(x, col)`). Previously these tripped `InternalException: FromSymbolic: Non-integer exponents are not supported` during symbolic normalization (which happens before binding), exposing a C++ stack trace. The pre-pass now catches all non-2 cases with the same error messages used by the existing `ValidateQuadraticPower` whitelist inside SUM, so error-text tests stay consistent across SUM and non-SUM contexts.
 
-**Known limitation (pre-existing, out of scope for this rejection)**: `SUM(f(col) * x)` where `f` is an arbitrary named scalar *function* on a data column (`mod()`, `floor()`, …) still trips the symbolic normalizer because `ToSymbolicRecursive` doesn't know those functions. Folding arbitrary data-only scalar functions before normalization is a separate improvement. Data-only *operators* outside the modelled set (`%`, bitwise) **do** fold now — see "Data-only operators the algebra doesn't model" under Arithmetic Operators. Ordinary arithmetic data-only subterms such as `SUM(x + cost)` and `SUM(q * (price + x))` are supported in aggregate constraints.
+**Data-only named scalar functions now fold too**: `SUM(f(col) * x)` where `f` is an arbitrary named scalar *function* on data columns (`mod()`, `floor()`, …) folds to a per-row coefficient, exactly like data-only operators — see "Data-only operators the algebra doesn't model" under Arithmetic Operators. Only the variable-bearing case (`f(x)`) is rejected. Ordinary arithmetic data-only subterms such as `SUM(x + cost)` and `SUM(q * (price + x))` are supported in aggregate constraints.
 
 ---
 
@@ -266,23 +266,28 @@ MINIMIZE SUM(POWER(x / weight - 1, 2))     -- OK: data-column divisor in QP
 - QP linearity check: `IsLinearInDecideVars` in the same file accepts `/` when the divisor is decide-var-free, so quadratic patterns like `POWER(x/2 - 1, 2)` reach the QP extractor.
 - Symbolic normalization: `FromSymbolic` in `src/decidb/symbolic/decide_symbolic.cpp` recognises negative-integer Power exponents (which the symbolic library produces for `x / w` as `x * w^-1`) and rebuilds them as `1.0 / base^|k|`. Without this round-trip, `SUM(x / col)` would crash with `Non-integer exponents are not supported in DECIDE normalization`.
 
-### Data-only operators the algebra doesn't model (`%`, bitwise, …)
+### Data-only operators and named functions the algebra doesn't model (`%`, bitwise, `mod()`, `floor()`, …)
 
-The symbolic algebra only understands a fixed set of operators (`+ - * / ^ **`). Any other operator — `%`, bitwise ops — is rejected inside a DECIDE clause **only when it touches a decision variable**. When the operator's operands reference no DECIDE variable, the whole subexpression is a per-row constant, so it folds to a data placeholder and the physical layer evaluates it as an ordinary coefficient:
+The symbolic algebra only understands a fixed set of operators (`+ - * / ^ **`) plus a handful of named forms (`abs`, `power`, aggregates). Any *other* operator — `%`, bitwise ops — or *named scalar function* — `mod()`, `floor()`, `sqrt()`, … — is rejected inside a DECIDE clause **only when it touches a decision variable**. When the operands reference no DECIDE variable, the whole subexpression is a per-row constant, so it folds to a data placeholder and the physical layer evaluates it as an ordinary coefficient:
 
 ```sql
 SUCH THAT SUM(((id * 7) % 97) * x) <= 3   -- OK: `(id*7)%97` is a per-row coefficient
 MAXIMIZE SUM(((id * 7) % 97) * x)         -- OK: same, in an objective
+SUCH THAT SUM(mod(id, 5) * x) <= 3        -- OK: named function, data-only coefficient
+MAXIMIZE SUM(floor(price) * x)            -- OK: same, in an objective
 SUCH THAT SUM((x % 97)) <= 3              -- rejected: `%` wraps a decision variable
+SUCH THAT SUM(mod(x, 5)) <= 3             -- rejected: function wraps a decision variable
 ```
 
-This is the same "fold data-only subterms" idea already applied to `x + cost` and `x / col`, generalized to operators outside the modelled set. It does **not** cover arbitrary named scalar *functions* on data (`mod()`, `floor()`, …) — those still trip the symbolic layer (see the known-limitation note in the non-linear-scalar section) and remain a separate improvement.
+This is the same "fold data-only subterms" idea already applied to `x + cost` and `x / col`, generalized to operators *and* named scalar functions outside the modelled set.
 
-**Code**:
-- Bind-time: the unsupported-operator arm of `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide_binder.cpp` returns success (instead of an error) when `ExpressionContainsDecideVariable` is false for the subexpression.
-- Symbolic fold: the `is_operator` fallback in `ToSymbolicRecursive` (`src/decidb/symbolic/decide_symbolic.cpp`) stores the data-only subexpression in `SymbolicTranslationContext::data_map` under a `__DATA_N__` placeholder — mirroring `abs_map`/`subquery_map`, but classified as data (not decide-side) — and `FromSymbolic` restores the original expression on the way back.
+**Not covered — data-only aggregates as coefficients**: `SUM(avg(col) * x)` is a different beast — the inner aggregate needs row-set semantics, not a per-row fold. It is *not* handled here (the fold only fires on non-aggregate functions; aggregate names are dispatched earlier). The `sum`/`min`/`max` forms are rejected at bind time; the `avg` form is currently mis-evaluated — tracked in `07_issues/bugs/todo.md`.
 
-**Tests**: `test/decide/tests/test_error_unsupported_operator.py` — `test_modulo_data_coefficient_matches_oracle` (oracle-verified optimum), `test_modulo_data_coefficient_in_constraint_runs`, and the `TestUnsupportedOperatorOverVariableRejection` cases pinning that a variable-bearing `%` still errors without a stack trace.
+**Code** (operators and functions share the mechanism):
+- Bind-time: `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide_binder.cpp` returns success (instead of an error) when `ExpressionContainsDecideVariable` is false — both in the unsupported-operator arm and in the unsupported-named-function arm.
+- Symbolic fold: the `is_operator` fallback **and** the unsupported-named-function fallback in `ToSymbolicRecursive` (`src/decidb/symbolic/decide_symbolic.cpp`) store the data-only subexpression in `SymbolicTranslationContext::data_map` under a `__DATA_N__` placeholder — mirroring `abs_map`/`subquery_map`, but classified as data (not decide-side) — and `FromSymbolic` restores the original expression on the way back.
+
+**Tests**: `test/decide/tests/test_error_unsupported_operator.py` — operator forms (`test_modulo_data_coefficient_matches_oracle`, `test_modulo_data_coefficient_in_constraint_runs`), function forms (`test_mod_function_data_coefficient_matches_oracle` oracle-verified, `test_floor_function_data_coefficient_in_constraint`), and the `TestUnsupportedOperatorOverVariableRejection` cases pinning that a variable-bearing `%` or `mod()` still errors without a stack trace.
 
 ### Per-row linear LHS (`+ const`, `- col`, `/ const`, unary `-`)
 

@@ -438,6 +438,15 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                 string placeholder = "__ABS_" + to_string(ctx.abs_map.size()) + "__";
                 ctx.abs_map[placeholder] = expr.Copy();
                 return Symbolic(placeholder);
+            } else if (!ExpressionContainsDecideVariable(expr, ctx.decide_variables)) {
+                // Named scalar function over table columns only (e.g. mod(id, 97),
+                // floor(price)). Not modelled by the symbolic algebra, but data-only —
+                // fold it to a per-row data placeholder, mirroring the is_operator
+                // data-only path above and ABS. FromSymbolic restores the original
+                // expression, and the physical layer evaluates it as ordinary data.
+                string placeholder = "__DATA_" + to_string(ctx.data_map.size()) + "__";
+                ctx.data_map[placeholder] = expr.Copy();
+                return Symbolic(placeholder);
             } else {
                 throw InternalException("ToSymbolic: Unsupported function: %s", func_expr.function_name);
             }
