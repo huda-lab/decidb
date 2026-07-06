@@ -88,12 +88,27 @@ The Gurobi backend caps solve time so a hard MIQP/QCQP cannot hang the session i
 
 **Code pointer**: `src/decidb/gurobi/gurobi_solver.cpp` (`GurobiSolver::Solve`, environment setup — the `TimeLimit` / `DECIDB_TIME_LIMIT` block, and the `GRB_TIME_LIMIT` status branch).
 
-The HiGHS fallback recognizes the `kTimeLimit` status when reporting results but does not yet set an explicit limit — see `todo.md`.
+The HiGHS fallback also enforces a limit: `RunAndReadback` calls `highs.setOptionValue("time_limit", time_limit_seconds)` per chunk (`src/decidb/naive/deterministic_naive.cpp`), sharing the same budget the facade resolves for Gurobi, and returns the best feasible incumbent on `kTimeLimit`. Neither backend can hang the session on a hard model.
 
 ---
 
-## Matrix Reduction
+## Constraint-to-Bound Absorption
 
-Beyond the implied-bound propagation above, no matrix-level structural optimizations (constraint-to-bound conversion, row pruning) are implemented yet. The constraint matrix assembled by `SolverModel::Build()` is passed as-is to the solver. Both Gurobi and HiGHS perform their own internal presolve (variable fixing, constraint reduction, bound propagation), but DeciDB does not otherwise exploit problem structure to shrink the matrix before handing it off.
+Single-variable constraints are absorbed directly into a variable's column bounds instead of being emitted as matrix rows. A bound is O(1) per variable in the solver, whereas each matrix constraint adds a row to the tableau — so `x <= 5` should never cost a row.
 
-The optimizations in `todo.md` aim to make the ILP smaller and tighter before the solver sees it — fewer constraints and tighter bounds.
+**What is absorbed** (`TraverseBoundsConstraints`, `physical_decide.cpp`): a comparison whose LHS is a bare DECIDE variable (cast-wrapped is unwrapped) and whose RHS is a constant.
+- `x <= K` → upper bound; `x >= K` → lower bound; `x = K` → intersect both (never overwrite, so `x = 5 AND x = 10` correctly inverts the box and is caught).
+- `x < K` / `x > K` on an INTEGER/BIGINT variable → normalized to `x <= K-1` / `x >= K+1`; a REAL strict inequality is left for the constraint path to reject.
+- `x BETWEEN a AND b` → both bounds at once.
+- Multiple constraints on one variable take the **tightest** (`std::min`/`std::max` combiners).
+
+**What is NOT absorbed** (stays a per-row/matrix constraint, by design):
+- **WHEN-conditional** bounds (`x <= 0 WHEN cond`) — the `WHEN_CONSTRAINT_TAG` branch is skipped entirely, so a conditional bound never leaks into the global column bound; it is applied per matching row instead.
+- **PER** wrappers recurse only into the wrapped constraint, not the grouping columns.
+- **Multi-variable** LHS (e.g. `x - 3*z₁ - 5*z₂ = 0` from the `IN` rewrite) — only a single bare variable qualifies.
+
+**Mechanism**: the absorption runs in `DecideGlobalSinkState`'s constructor, filling `absorbed_lower_bounds` / `absorbed_upper_bounds` (lower initialized to the `ABSORBED_LOWER_UNSET` sentinel so an explicit negative bound is honored rather than clamped to 0). Absorbed comparison expressions are recorded in `absorbed_bound_exprs` and skipped during matrix emission. Each absorbed direction is also recorded as a `UserBoundSpec` in `user_absorbed_bounds` so the infeasible-diagnosis engine can re-emit it as a slackable `USER_PARAMETER` row — the bound stays visible to diagnostics even though it never became a matrix row. A user bound that contradicts a variable's intrinsic domain (a non-negative variable's `<= -1`, a BOOLEAN's `>= 2`) raises a precise static error here rather than reaching the elastic engine.
+
+**Tests**: correctness is oracle-verified in `test_cons_perrow.py` and `test_var_real.py` / `test_var_multi.py`; the WHEN-not-globally-absorbed contract in `test_when_perrow.py` (`x <= 0 WHEN …`, `x = 1 WHEN …`); the diagnostics re-emission in `test_error_infeasible.py`.
+
+Beyond this and the implied-bound propagation above, no further matrix-level structural reduction (row pruning / constraint push-down) is implemented — those remain in `../rewrite_passes/todo.md` and `../future_work/todo.md`. Both Gurobi and HiGHS still run their own internal presolve on whatever matrix `SolverModel::Build()` hands off.
