@@ -86,7 +86,9 @@ SUM(x * v) <= 12 WHEN (NOT w)
 SUM(x * v) WHEN (tier = 'high') <= 10
 ```
 
-See `../when/todo.md` for the grammar-asymmetry limitation (constraint-side error messages for this case are misleading).
+**Actionable parser hint.** The raw bison error for these shapes (`syntax error at or near "NOT"` / `"<="`) is uninformative on its own, so DECIDE queries whose syntax error names one of the WHEN-breaking tokens get a one-line hint appended: *"wrap the WHEN condition in parentheses — e.g. WHEN (a = b), WHEN (NOT flag), or WHEN (a + b > 5)."* The augmentation lives in `src/decidb/utility/decide_parse_hints.cpp` (`MaybeAppendDecideWhenHint`), called from `src/parser/parser.cpp` at the syntax-error throw site; it is gated on the query containing `DECIDE` + `WHEN` and the error naming a break token, so it never fires on unrelated syntax errors. Pinned by `test_when_grammar.py::test_when_unparen_error_carries_paren_hint`.
+
+See `../when/todo.md` for the remaining grammar-asymmetry limitation (the objective-side reassociator still handles more shapes than the constraint side; widening the grammar is the deeper, unshipped fix).
 
 ### Expression-level and Aggregate-local WHEN Do Not Mix
 

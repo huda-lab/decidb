@@ -23,19 +23,3 @@ Optimizations that make the ILP matrix smaller, tighter, or safer to solve.
 4. Handle interactions: if multiple constraints bound the same variable, take the tightest
 
 **Benefit**: Reduces matrix rows (fewer constraints for solver to process) and improves solver numerical stability.
-
----
-
-## 2. HiGHS Time Limit
-
-**Priority**: Medium
-
-**Motivation**: The Gurobi backend now caps solve time (see `done.md` — 300s default, overridable via `DECIDB_TIME_LIMIT`). The HiGHS backend recognizes the `kTimeLimit` status when reporting results, but does not set an explicit `time_limit` option, so it runs with the HiGHS default (effectively unbounded). A hard problem on the HiGHS fallback path can still hang the session.
-
-**Implementation**:
-- HiGHS: `highs.setOptionValue("time_limit", seconds)` before `highs.run()`
-- Read the same `DECIDB_TIME_LIMIT` env override the Gurobi backend uses, so both backends share one knob and one default
-- HiGHS already returns the best feasible solution on `kTimeLimit`; only the option needs to be set
-
-**Code locations to modify**:
-- `src/decidb/naive/deterministic_naive.cpp` — add `highs.setOptionValue("time_limit", ...)` call alongside the existing `log_to_console` setup

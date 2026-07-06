@@ -583,3 +583,28 @@ def test_constraint_unparen_eq_message_sentinel(decidb_cli):
         """,
         match=r'syntax error at or near "<="',
     )
+
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.error_parser
+@pytest.mark.error
+def test_when_unparen_error_carries_paren_hint(decidb_cli):
+    """The bare bison syntax error on an unparenthesized WHEN condition is
+    augmented with an actionable parenthesization hint (MaybeAppendDecideWhenHint).
+
+    This pins the hint text so it is not silently dropped. If the grammar is
+    widened so unparenthesized WHEN conditions parse, delete this test.
+    """
+    decidb_cli.assert_error(
+        """
+        SELECT id, val, w, x FROM (
+            VALUES (1, 10.0, true),
+                   (2,  5.0, false)
+        ) t(id, val, w)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * val) WHEN NOT w <= 8
+        MAXIMIZE SUM(x * val)
+        """,
+        match=r"wrap the WHEN condition in parentheses",
+    )

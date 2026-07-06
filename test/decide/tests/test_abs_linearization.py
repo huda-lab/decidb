@@ -915,3 +915,180 @@ def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn):
     assert abs(decidb_obj - expected) <= 1e-4, (
         f"Objective mismatch: DecidB={decidb_obj:.6f}, expected={expected:.6f}"
     )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_abs_constraint_per_row_hard_ge(decidb_cli, duckdb_conn):
+    """Per-row hard direction ``ABS(x - l_quantity) >= K`` (Big-M sign-indicator path).
+
+    Oracle-verified by closed form. K is chosen strictly greater than every
+    l_quantity, so the near branch (``x <= qty - K``) is negative and infeasible
+    for every row; each row is forced onto the far branch ``x >= qty + K``.
+    MINIMIZE SUM(x) then pins ``x_i = qty_i + K`` exactly. A wrong Big-M sign
+    would admit ``x_i`` inside the forbidden band and undershoot the optimum.
+    Complements C33-C37 in stress_queries (smoke-only) with an oracle check.
+    """
+    qtys = [
+        r[0]
+        for r in duckdb_conn.execute(
+            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3"
+        ).fetchall()
+    ]
+    k = max(qtys) + 10.0
+    ub = 2.0 * max(qtys) + k + 10.0
+    sql = f"""
+        SELECT l_quantity, x
+        FROM lineitem WHERE l_orderkey <= 3
+        DECIDE x IS REAL
+        SUCH THAT x <= {ub} AND ABS(x - l_quantity) >= {k}
+        MINIMIZE SUM(x)
+    """
+    rows, cols = decidb_cli.execute(sql)
+    ci = {name: i for i, name in enumerate(cols)}
+    for row in rows:
+        qty = float(row[ci["l_quantity"]])
+        x = float(row[ci["x"]])
+        assert abs(x - (qty + k)) <= 1e-4, (
+            f"expected x={qty + k:.4f}, got {x:.4f} (qty={qty})"
+        )
+        assert abs(x - qty) >= k - 1e-4, f"hard ABS constraint violated: |{x}-{qty}| < {k}"
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_abs_constraint_per_row_hard_eq(decidb_cli, duckdb_conn):
+    """Per-row ``ABS(x - l_quantity) = K`` exactly (both Big-M bounds active).
+
+    Equality pins ``x_i`` to one of ``qty_i +/- K``. MINIMIZE SUM(x) selects the
+    lower root ``qty_i - K`` where it stays non-negative, else the upper root
+    ``qty_i + K`` (rows with ``qty < K``, e.g. the qty=2 lineitem in order 3).
+    Verifies the equality path exercises both the lower- and upper-envelope
+    Big-M constraints, not just one direction.
+    """
+    k = 5.0
+    qtys = [
+        r[0]
+        for r in duckdb_conn.execute(
+            "SELECT CAST(l_quantity AS DOUBLE) FROM lineitem WHERE l_orderkey <= 3"
+        ).fetchall()
+    ]
+    ub = max(qtys) + k + 10.0
+    sql = f"""
+        SELECT l_quantity, x
+        FROM lineitem WHERE l_orderkey <= 3
+        DECIDE x IS REAL
+        SUCH THAT x <= {ub} AND ABS(x - l_quantity) = {k}
+        MINIMIZE SUM(x)
+    """
+    rows, cols = decidb_cli.execute(sql)
+    ci = {name: i for i, name in enumerate(cols)}
+    for row in rows:
+        qty = float(row[ci["l_quantity"]])
+        x = float(row[ci["x"]])
+        expected = qty - k if qty - k >= 0.0 else qty + k
+        assert abs(x - expected) <= 1e-4, (
+            f"expected x={expected:.4f}, got {x:.4f} (qty={qty})"
+        )
+        assert abs(abs(x - qty) - k) <= 1e-4, f"ABS equality violated: ||{x}-{qty}| - {k}|"
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_abs_constraint_aggregate_hard_ge(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """Aggregate hard direction ``SUM(ABS(x - l_quantity)) >= K``.
+
+    This is the sign-indicator path where each ``d_i`` must be pinned to exactly
+    ``|x_i - qty_i|`` (both Big-M bounds), otherwise the aggregate lower bound is
+    trivially satisfiable by letting the auxiliaries float up. K is set above the
+    dispersion at ``x = 0`` (``SUM(qty)``), so the constraint binds and the solver
+    must push some ``x_i`` away from their quantities. Oracle mirrors the pinned
+    Big-M model from ``test_abs_maximize_objective_basic``.
+    """
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey <= 3
+    """).fetchall()
+    qtys = [r[0] for r in data]
+    n = len(qtys)
+    ub = 500.0
+    k = sum(qtys) + 100.0  # strictly above the x=0 dispersion, so the bound binds
+    m = ub + max(qtys)  # safe bound on |x_i - qty_i| for x in [0, ub]
+
+    sql = f"""
+        SELECT l_quantity, x
+        FROM lineitem WHERE l_orderkey <= 3
+        DECIDE x IS REAL
+        SUCH THAT x <= {ub} AND SUM(ABS(x - l_quantity)) >= {k}
+        MINIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("abs_constraint_agg_hard_ge")
+    xnames = [f"x_{i}" for i in range(n)]
+    dnames = [f"d_{i}" for i in range(n)]
+    ynames = [f"y_{i}" for i in range(n)]
+    for xn in xnames:
+        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=ub)
+    for dn in dnames:
+        oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
+    for yn in ynames:
+        oracle_solver.add_variable(yn, VarType.BINARY)
+
+    two_m = 2.0 * m
+    for i in range(n):
+        qty = qtys[i]
+        # Lower envelope: d_i >= |x_i - qty_i|
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, xnames[i]: -1.0}, ">=", -qty, name=f"abs_pos_{i}",
+        )
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, xnames[i]: 1.0}, ">=", qty, name=f"abs_neg_{i}",
+        )
+        # Upper envelope (sign indicator): pin d_i = |x_i - qty_i|
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, xnames[i]: -1.0, ynames[i]: two_m}, "<=",
+            -qty + two_m, name=f"abs_ub1_{i}",
+        )
+        oracle_solver.add_constraint(
+            {dnames[i]: 1.0, xnames[i]: 1.0, ynames[i]: -two_m}, "<=",
+            qty, name=f"abs_ub2_{i}",
+        )
+    # SUM(d_i) >= K
+    oracle_solver.add_constraint(
+        {dnames[i]: 1.0 for i in range(n)}, ">=", k, name="agg_hard",
+    )
+    oracle_solver.set_objective(
+        {xnames[i]: 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    assert result.status == SolverStatus.OPTIMAL
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    # DecidB must respect the aggregate hard bound
+    total_dev = sum(
+        abs(float(row[ci["x"]]) - float(row[ci["l_quantity"]])) for row in decidb_rows
+    )
+    assert total_dev >= k - 1e-3, f"aggregate ABS lower bound violated: {total_dev} < {k}"
+
+    decidb_obj = sum(float(row[ci["x"]]) for row in decidb_rows)
+    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+    )
+
+    perf_tracker.record(
+        "abs_constraint_agg_hard_ge", decidb_time, build_time,
+        result.solve_time_seconds, n, n * 3, 1 + n * 4,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )

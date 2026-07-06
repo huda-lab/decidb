@@ -50,4 +50,6 @@ SUM(x * value) <= 12 WHEN (a + b > 5)
 
 **Practical guidance**: always parenthesize non-trivial WHEN conditions. The objective-side reassociator works only on the simplest comparison-of-aggregate shape; everything else fails on either side.
 
-**Potential fixes**: (a) extend `ReassociateObjectiveWhenComparison()` to cover constraints (would handle `WHEN x = y` on the constraint side); (b) widen the `decide_when_condition` grammar to admit `NOT`, comparisons, and arithmetic directly (requires `make grammar-build`) — this is the cleanest fix but touches the regenerated parser; (c) at minimum, improve the constraint-side parser error to hint that WHEN conditions need parentheses.
+**Potential fixes**: (a) extend `ReassociateObjectiveWhenComparison()` to cover constraints (would handle `WHEN x = y` on the constraint side); (b) widen the `decide_when_condition` grammar to admit `NOT`, comparisons, and arithmetic directly (requires `make grammar-build`) — this is the cleanest fix but touches the regenerated parser.
+
+**Fix (c) shipped.** The parser error now carries an actionable parenthesization hint (`MaybeAppendDecideWhenHint`, `src/decidb/utility/decide_parse_hints.cpp`, called from `src/parser/parser.cpp`) — see `done.md` → "Actionable parser hint". This addresses the *messaging* half of the asymmetry; the underlying grammar restriction (needing parens at all) remains, so (a)/(b) are still the deeper fixes. The sentinel test in `test_when_grammar.py` stays valid because the hint is appended to — not a replacement for — the original `syntax error` text.

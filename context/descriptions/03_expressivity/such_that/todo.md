@@ -45,9 +45,9 @@ Easy-direction composed already uses a `z_k` auxiliary (see `03_expressivity/suc
 
 See `05_testing/min_max/todo.md` for the full matrix — several of these will flip from `assert_error` to oracle-verified positive tests when the hard direction lands.
 
-### Related orthogonal limitation: empty-WHEN on hard-direction MIN/MAX
+### Related orthogonal limitation: empty-WHEN on hard-direction MIN/MAX — resolved
 
-Silently produces wrong answers today (the `z_k` auxiliary has no linking constraints and floats free). Covered in detail in `05_testing/min_max/todo.md` — blocked on the same design decision (infeasibility vs. bind-time rejection vs. silent-skip).
+This used to silently produce wrong answers (the `z_k` auxiliary floated free with no linking constraints). It is now rejected before the solver runs by the empty-aggregate guard (`physical_decide.cpp:1064`), which fires on every empty aggregate regardless of shape or direction. Constraint- and objective-side coverage lives in `test_edge_cases.py`; see `05_testing/when/todo.md` → "Empty WHEN on MIN/MAX constraints — fixed and covered".
 
 ---
 
