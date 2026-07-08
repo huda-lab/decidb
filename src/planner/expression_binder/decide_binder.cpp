@@ -275,7 +275,7 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 			throw BinderException(
 			    "An aggregate over table columns (e.g. AVG(col), MIN(col)) cannot multiply a "
 			    "decision variable. Pre-compute it as a scalar in a subquery or CTE and reference "
-			    "that value, or move it to the right-hand side of the constraint.");
+			    "that value.");
 		} else if (func.is_operator && func.function_name == "/") {
 			// Division is only linear when the divisor contains no decide
 			// variable. x / y (decide vars in divisor) is non-linear; catch

@@ -74,10 +74,15 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 		if (agg.function.name == "count_star") {
 			return make_uniq_base<Expression, BoundConstantExpression>(Value::BIGINT(num_rows));
 		}
+		// Note: don't surface agg.function.name here — an AVG on the RHS is rewritten
+		// to sum/count before this point, so the internal name would misleadingly read
+		// "sum" for a query that wrote AVG. Give concrete, actionable forms instead.
 		throw InvalidInputException(
-		    "DECIDE aggregate constraint RHS contains unsupported aggregate '%s'. "
-		    "Use a scalar RHS expression, or compute aggregate bounds in a scalar subquery.",
-		    agg.function.name);
+		    "DECIDE constraint right-hand side: this data aggregate can't be reduced to a "
+		    "scalar bound. Additive forms work (`<= AVG(col)`, `<= SUM(col) + 5`); a scalar "
+		    "multiple (`2 * AVG(col)`) or MIN/MAX/COUNT does not. Pre-compute it in a scalar "
+		    "subquery (`<= (SELECT 2 * AVG(col) FROM t)`) or move the aggregate to the "
+		    "left-hand side.");
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		auto &comp = expr.Cast<BoundComparisonExpression>();
 		auto left = TransformToChunkExpression(*comp.left, context, num_rows);

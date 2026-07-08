@@ -1276,6 +1276,32 @@ def test_composed_minmax_scalar_mult_hard_min(decidb_cli):
 
 
 @pytest.mark.min_max
+@pytest.mark.correctness
+def test_composed_minmax_scalar_mult_hard_max(decidb_cli):
+    """`SUM(x*v) + MAX(2 * x * v) >= K` — hard-direction composed MAX with a scalar
+    factor inside the inner expression. Discriminates the ExtractCoefficient fix:
+    the `2` must survive.
+
+    v=[10,5], MINIMIZE SUM(x). With the 2 applied, row1 alone gives
+    SUM(x*v)=10 + MAX(2*x*v)=20 = 30 >= 25 — one row suffices. If the 2 were
+    dropped, MAX would be 10, row1 gives 20 < 25 and no single row works, forcing
+    two rows. So the optimum count is 1 iff the scalar is correctly applied.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1,10.0),(2,5.0)) t(id,v)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x * v) + MAX(2 * x * v) >= 25
+        MINIMIZE SUM(x)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    chosen = [(float(r[ci["v"]]), int(r[ci["x"]])) for r in rows]
+    n_sel = sum(xv for _, xv in chosen)
+    assert n_sel == 1, f"expected exactly 1 row (scalar 2 applied), got {chosen}"
+    sel_v = [v for v, xv in chosen if xv == 1]
+    assert sum(sel_v) + 2 * max(sel_v) >= 25 - 1e-6
+
+
+@pytest.mark.min_max
 @pytest.mark.error_binder
 def test_composed_minmax_per_wrapper_rejected(decidb_cli):
     """PER on a composed MIN/MAX constraint is rejected in v1."""

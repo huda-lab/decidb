@@ -6,7 +6,7 @@ Covers boundary conditions that other test files don't exercise:
   - Constraint RHS = 0 (forces all decision vars to 0)
   - Negative objective coefficients
   - Zero rows (empty result after WHERE) — returns empty result like SQL
-  - Feasibility problem (no MAXIMIZE/MINIMIZE) — xfail, grammar support pending
+  - Feasibility problem (no MAXIMIZE/MINIMIZE) — returns any feasible solution
   - NULL values in coefficient columns — error: NULLs rejected with COALESCE hint
 """
 
@@ -585,9 +585,8 @@ def test_maximize_max_objective_when_empty(decidb_cli):
 
     Hard-case formulation: global z + per-row binary indicators y_i with
     SUM(y_i) >= 1 pinning z to one row's value. Empty row set means no
-    indicator can satisfy SUM(y) >= 1 → the model is infeasible. Today
-    DecidB silently returns OPTIMAL because the indicator block is skipped
-    when there are zero matching rows.
+    indicator can satisfy SUM(y) >= 1 → the model is infeasible. Rejected
+    before the solver by the empty-aggregate guard (`physical_decide.cpp`).
     """
     sql = """
         SELECT id, val, x FROM (
@@ -656,7 +655,8 @@ def test_minimize_min_objective_when_empty(decidb_cli):
 
     Mirror of `test_maximize_max_objective_when_empty` for the MIN side.
     Per-row binary indicators y_i with SUM(y_i) >= 1; empty row set means
-    no indicator → infeasible. Currently silently returns OPTIMAL.
+    no indicator → infeasible. Rejected before the solver by the
+    empty-aggregate guard.
     """
     sql = """
         SELECT id, val, x FROM (
@@ -671,14 +671,12 @@ def test_minimize_min_objective_when_empty(decidb_cli):
 
 # ----- Empty-WHEN on the CONSTRAINT side (mirrors the four objective tests above) -----
 #
-# Same root bug as the objective-side tests: a WHEN filter that matches zero
-# rows leaves the MIN/MAX auxiliary `z` (or `z_k` per term in the composed
-# path) unpinned. Hard-direction shapes are observably infeasible by math
-# (MIN(∅) = +∞, MAX(∅) = −∞); easy-direction composed shapes happen to
-# coincide with the math but the SUM term inside the same constraint is
-# silently vacated rather than enforced. See
-# `context/descriptions/05_testing/min_max/todo.md` and
-# `context/descriptions/05_testing/when/todo.md`.
+# A WHEN filter that matches zero rows used to leave the MIN/MAX auxiliary `z`
+# (or `z_k` per term in the composed path) unpinned — silently wrong. All such
+# shapes (hard-direction, and composed where the SUM term would otherwise be
+# vacated) are now rejected before the solver by the empty-aggregate guard.
+# See `context/descriptions/05_testing/when/todo.md`
+# ("Empty WHEN on MIN/MAX constraints — fixed and covered").
 
 
 @pytest.mark.edge_case
@@ -688,7 +686,8 @@ def test_minimize_min_objective_when_empty(decidb_cli):
 @pytest.mark.error_infeasible
 def test_max_when_empty_constraint_hard(decidb_cli):
     """`(MAX(x*val) WHEN <never>) >= K` — hard direction. MAX(∅) = −∞ < K
-    so semantically infeasible. Currently silently OPTIMAL with arbitrary x.
+    so semantically infeasible. Rejected before the solver by the
+    empty-aggregate guard.
     """
     sql = """
         SELECT id, val, x FROM (
@@ -708,7 +707,8 @@ def test_max_when_empty_constraint_hard(decidb_cli):
 @pytest.mark.error_infeasible
 def test_min_when_empty_constraint_hard(decidb_cli):
     """`(MIN(x*val) WHEN <never>) <= K` — hard direction. MIN(∅) = +∞ > K
-    so semantically infeasible. Currently silently OPTIMAL with arbitrary x.
+    so semantically infeasible. Rejected before the solver by the
+    empty-aggregate guard.
     """
     sql = """
         SELECT id, val, x FROM (
@@ -727,15 +727,12 @@ def test_min_when_empty_constraint_hard(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
 def test_sum_plus_max_when_empty_silently_vacates_constraint(decidb_cli):
-    """`SUM(x*val) + (MAX(x*val) WHEN <never>) <= K` — composed easy
-    direction. The doc reports the entire constraint is silently vacated:
-    the SUM term should still bind even when the MAX term has empty WHEN.
-
-    On `(VALUES (1, 10.0), (2, 7.0))` with K=5, the SUM term alone is binding
-    (SUM=17 > 5 if both x=1, so the constraint should force x_1+x_2 ≤ 0
-    if MAX vanishes, or be infeasible per the root-todo's "reject empty"
-    directive). Currently DecidB picks x=[1,1] (SUM=17), confirming the
-    constraint is a no-op.
+    """`SUM(x*val) + (MAX(x*val) WHEN <never>) <= K` — composed constraint with
+    an empty-WHEN MAX term. This used to silently vacate the *entire* constraint
+    (the SUM term stopped binding), returning x=[1,1] with SUM=17 > K=5. It is
+    now rejected before the solver by the empty-aggregate guard, so the SUM term
+    can never be silently dropped. (The test name is kept for continuity with the
+    original bug report; the behavior it pins is now the rejection.)
     """
     sql = """
         SELECT id, val, x FROM (

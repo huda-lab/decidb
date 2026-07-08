@@ -115,5 +115,23 @@ def test_rhs_minmax_still_rejected(decidb_cli):
     """MIN/MAX RHS aggregates are not hoisted — a clean error, no stack trace."""
     decidb_cli.assert_error(
         _DATA.format(cons="SUM(x * weight) <= MIN(b)"),
-        match=r"unsupported aggregate 'min'",
+        match=r"can't be reduced to a scalar bound.*MIN/MAX/COUNT",
     )
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.error
+def test_rhs_scalar_times_avg_error_is_not_misleading(decidb_cli):
+    """`<= 2 * AVG(b)` isn't hoistable (the hoist only walks additive trees), so it
+    errors. The message must be actionable and must NOT surface the internal name
+    'sum' — AVG is rewritten to sum/count before the error site, and quoting that
+    would name an aggregate the user never wrote."""
+    result = decidb_cli.execute_raw(_DATA.format(cons="SUM(x * weight) <= 2 * AVG(b)"))
+    combined = result.stderr + result.stdout
+    assert "can't be reduced to a scalar bound" in combined, combined[:400]
+    assert "unsupported aggregate 'sum'" not in combined, (
+        "error still leaks the misleading internal 'sum' name"
+    )
+    # No internal-error path either.
+    for tok in ("INTERNAL Error", "Stack Trace"):
+        assert tok not in combined, f"found {tok!r}: {combined[:400]}"

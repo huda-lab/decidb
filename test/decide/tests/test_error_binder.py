@@ -69,6 +69,17 @@ class TestBinderErrors:
             match=r"aggregate over table columns .* cannot multiply a decision variable",
         )
 
+    def test_data_only_aggregate_coefficient_rejected_in_objective(self, decidb_cli):
+        """The same rejection applies in an objective (`ValidateDecideNoNonLinearScalar`
+        runs on both constraints and objectives), and the message stays context-neutral
+        (no 'move it to the RHS' — an objective has no RHS)."""
+        decidb_cli.assert_error("""
+                SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
+                DECIDE x IS BOOLEAN
+                SUCH THAT SUM(x) <= 1
+                MAXIMIZE SUM(avg(p) * x)
+            """, match=r"aggregate over table columns .* cannot multiply a decision variable")
+
     def test_data_only_aggregate_rhs_still_allowed(self, decidb_cli):
         """Guard against over-rejecting: a data-only aggregate is fine as a constraint
         RHS (`SUM(x) <= AVG(p)`), and a genuine DECIDE aggregate `AVG(x * p)` is fine —
@@ -303,7 +314,7 @@ class TestBinderErrors:
                 DECIDE x
                 SUCH THAT SUM(x * val) <= MIN(val)
                 MAXIMIZE SUM(x * val)
-            """, match=r"DECIDE aggregate constraint RHS contains unsupported aggregate 'min'")
+            """, match=r"can't be reduced to a scalar bound.*MIN/MAX/COUNT")
 
     # --- Unsupported aggregates rejected at DecideBinder::BindAggregate ---
 

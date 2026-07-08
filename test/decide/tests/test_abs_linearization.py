@@ -1092,3 +1092,108 @@ def test_abs_constraint_aggregate_hard_ge(decidb_cli, duckdb_conn, oracle_solver
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_abs_min_geq_per_row_hard(decidb_cli):
+    """``MIN(ABS(x - 5)) >= K`` — easy-MIN strip to per-row hard ABS.
+
+    ``MIN(...) >= K`` means *every* row's ``|x - 5| >= K``. With ``x in [4, 20]``
+    the near branch (``x <= 2``) is excluded, so each row is forced to ``x >= 8``;
+    MINIMIZE SUM(x) pins every ``x`` at exactly 8 (``|8 - 5| = 3``). Exercises the
+    MIN-strip → per-row Big-M sign-indicator path over ABS auxiliaries.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, x FROM (VALUES (1),(2),(3)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x >= 4 AND x <= 20 AND MIN(ABS(x - 5)) >= 3
+        MINIMIZE SUM(x)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    xs = [float(r[ci["x"]]) for r in rows]
+    assert xs, "no rows returned"
+    for xv in xs:
+        assert abs(xv - 8.0) <= 1e-4, f"expected all x=8, got {xs}"
+        assert abs(xv - 5.0) >= 3.0 - 1e-4
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_abs_max_geq_aggregate_hard(decidb_cli):
+    """``MAX(ABS(x - 5)) >= K`` — aggregate hard MAX layered over ABS Big-M.
+
+    ``MAX(...) >= K`` means *at least one* row's ``|x - 5| >= K``. This stacks the
+    outer hard-MAX indicator (``SUM(y) >= 1``) on top of each row's ABS
+    sign-indicator — the non-trivial interaction. With ``x in [4, 20]`` only one
+    row must reach ``x = 8`` (``|.| = 3``); MINIMIZE SUM(x) keeps the other two at
+    4, so SUM = 8 + 4 + 4 = 16 and exactly one row satisfies ``|x - 5| >= 3``.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, x FROM (VALUES (1),(2),(3)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x >= 4 AND x <= 20 AND MAX(ABS(x - 5)) >= 3
+        MINIMIZE SUM(x)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    xs = [float(r[ci["x"]]) for r in rows]
+    assert abs(sum(xs) - 16.0) <= 1e-3, f"expected SUM=16, got {xs}"
+    satisfied = [xv for xv in xs if abs(xv - 5.0) >= 3.0 - 1e-4]
+    assert len(satisfied) == 1, f"expected exactly one row with |x-5|>=3, got {xs}"
+    assert max(abs(xv - 5.0) for xv in xs) >= 3.0 - 1e-4
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_abs_between_both_bounds(decidb_cli):
+    """``ABS(x - 5) BETWEEN 2 AND 8`` — both bounds at once.
+
+    The upper bound ``|x - 5| <= 8`` is easy (two linear rows); the lower bound
+    ``|x - 5| >= 2`` is hard (disjunction → Big-M sign indicator). Feasible set is
+    ``x in [-3, 3] U [7, 13]``; with ``x <= 20`` and non-negativity, MAXIMIZE
+    SUM(x) pins every ``x`` at the top of the upper band, ``x = 13``.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, x FROM (VALUES (1),(2)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x <= 20 AND ABS(x - 5) BETWEEN 2 AND 8
+        MAXIMIZE SUM(x)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    xs = [float(r[ci["x"]]) for r in rows]
+    assert xs, "no rows returned"
+    for xv in xs:
+        assert abs(xv - 13.0) <= 1e-4, f"expected x=13, got {xv}"
+        dev = abs(xv - 5.0)
+        assert 2.0 - 1e-4 <= dev <= 8.0 + 1e-4
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_abs_on_both_sides(decidb_cli):
+    """``ABS(x - 3) <= ABS(x - 9)`` — ABS on both sides of the comparison.
+
+    Feasible where ``x`` is at least as close to 3 as to 9, i.e. ``x <= 6`` (the
+    midpoint). MAXIMIZE SUM(x) with ``x <= 20`` pins ``x = 6``
+    (``|6 - 3| = |6 - 9| = 3``).
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, x FROM (VALUES (1),(2)) t(id)
+        DECIDE x IS REAL
+        SUCH THAT x <= 20 AND ABS(x - 3) <= ABS(x - 9)
+        MAXIMIZE SUM(x)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    xs = [float(r[ci["x"]]) for r in rows]
+    assert xs, "no rows returned"
+    for xv in xs:
+        assert abs(xv - 6.0) <= 1e-4, f"expected x=6, got {xv}"
+        assert abs(xv - 3.0) <= abs(xv - 9.0) + 1e-4
