@@ -3,37 +3,28 @@
 ---
 
 
-## Negative Variable Domains (Unrestricted Variables)
+## Negative Variable Domains
 
-**Priority: Medium**
+**Finite negative domains already work; only the fully-free (-∞) domain is a real gap.**
 
-Currently all variable types have a non-negative default lower bound (0). This prevents expressing problems where variables naturally range over negative values (e.g., regression coefficients, profit/loss deltas, temperature deviations).
+The earlier premise here — "all variables have a non-negative lower bound of 0, so negative values can't be expressed" — is outdated. A finite negative domain is expressible today with an explicit lower bound, which constraint absorption folds into an O(1) column bound (no matrix row, no `x_pos - x_neg` split):
 
 ```sql
--- NOT YET SUPPORTED
-DECIDE x IS REAL UNRESTRICTED          -- domain: (-inf, +inf)
-DECIDE delta IS INTEGER UNRESTRICTED   -- domain: (..., -1, 0, 1, ...)
+DECIDE x IS REAL    SUCH THAT x >= -10 AND x <= 10   -- domain [-10, 10], works
+DECIDE d IS INTEGER SUCH THAT d >= -5                -- domain [-5, +inf), works
 ```
 
-**Workaround**: Split a variable into positive and negative parts (`x_pos - x_neg`) but this doubles the variable count and requires manual constraint bookkeeping.
+Signed variables with finite negative bounds shipped (see `03_expressivity/decide/done.md`); the absorption is documented in `04_optimizer/matrix_efficiency/done.md` → "Constraint-to-Bound Absorption".
 
-**Design note**: Requires changes to default bounds in `ilp_model_builder.cpp` (lower bound `-1e30` instead of `0`) and a new grammar token for the `UNRESTRICTED` modifier. Solver backends already support unrestricted variables natively.
+The one genuine remaining gap is the **fully-free `(-∞, +∞)` domain** (a truly unbounded-below variable, e.g. an opt-in `IS REAL UNBOUNDED` / `FREE`). This is **deliberately deferred by design** — an unbounded-below variable is the case most likely to make objectives unbounded — and is tracked in `03_expressivity/decide/todo.md` (it also gates the `-∞` escape branch of the unbounded diagnostics, `08_query_diagnostics/unbounded/todo.md`). Not restated as an active task here.
 
 ---
 
-## Explicit Variable Bound Syntax
+## Explicit Variable Bound Syntax (`IN [a, b]`) — sugar only, deprioritized
 
-**Priority: Medium**
+`DECIDE x IS INTEGER IN [0, 100]` would be pure **syntactic sugar** over `SUCH THAT x >= 0 AND x <= 100`. Both the clarity-vs and the original efficiency argument ("bounds are O(1), constraint rows are not") are now moot: constraint absorption already turns `x >= a AND x <= b` into the exact same O(1) column bounds (`04_optimizer/matrix_efficiency/done.md`), and every domain the syntax could express — including negative ones (above) — already works via constraints. So this buys only conciseness, at the cost of a checked-in generated-parser regen.
 
-Currently variable bounds come from type defaults and simple constraint extraction (the model builder intersects explicit bounds from constraints like `x >= 5`). An explicit bound syntax would be clearer and more efficient — bounds are O(1) per variable in the solver, while constraint rows are not.
-
-```sql
--- NOT YET SUPPORTED
-DECIDE x IS INTEGER IN [0, 100]
-DECIDE y IS REAL IN [-10, 10]
-```
-
-**Design note**: This overlaps with "negative variable domains" — explicit bounds would subsume UNRESTRICTED as a special case of `IN [-inf, +inf]`. See also `04_optimizer/matrix_efficiency/` for the bound-extraction optimization that partially addresses this from the optimizer side.
+Left here only as an optional ergonomic nicety, low priority. Not planned. If revisited, it should reuse the existing bound arrays (`absorbed_*_bounds`), not add a parallel bound path.
 
 ---
 
