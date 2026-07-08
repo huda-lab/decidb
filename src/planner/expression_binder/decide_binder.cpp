@@ -234,6 +234,28 @@ static void ValidatePowerExponent(const FunctionExpression &func,
 	}
 }
 
+// True if `expr` contains an aggregate over table columns only (no DECIDE
+// variable anywhere in its argument) — e.g. `AVG(price)`, `MIN(cost)`. Such a
+// value needs the whole row set, so it is a scalar the query must pre-compute,
+// not a per-row coefficient. Recurses so nested forms (`AVG(p) * 2`) are caught.
+static bool ContainsDataOnlyAggregate(ClientContext &context, const ParsedExpression &expr,
+                                      const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (IsAggregateFunctionName(context, func) &&
+		    !ExpressionContainsDecideVariable(expr, variables)) {
+			return true;
+		}
+	}
+	bool found = false;
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		if (ContainsDataOnlyAggregate(context, child, variables)) {
+			found = true;
+		}
+	});
+	return found;
+}
+
 void ValidateDecideNoNonLinearScalar(ClientContext &context,
                                      const ParsedExpression &expr,
                                      const case_insensitive_map_t<idx_t> &variables) {
@@ -241,6 +263,19 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 		auto &func = expr.Cast<const FunctionExpression>();
 		if (IsPowerFunction(func)) {
 			ValidatePowerExponent(func, variables);
+		} else if (func.is_operator && func.function_name == "*" &&
+		           ExpressionContainsDecideVariable(expr, variables) &&
+		           ContainsDataOnlyAggregate(context, expr, variables)) {
+			// A data-only aggregate multiplied by a decision variable
+			// (`SUM(avg(p) * x)`) is not a per-row coefficient: the aggregate
+			// spans all rows. Symbolic normalization would silently distribute the
+			// variable into it (`avg(p)*x` -> `avg(p*x)`, a different constraint) and
+			// return a wrong optimum, so reject it here — before normalization —
+			// consistent with the direct `SUM(sum(p) * x)` rejection.
+			throw BinderException(
+			    "An aggregate over table columns (e.g. AVG(col), MIN(col)) cannot multiply a "
+			    "decision variable. Pre-compute it as a scalar in a subquery or CTE and reference "
+			    "that value, or move it to the right-hand side of the constraint.");
 		} else if (func.is_operator && func.function_name == "/") {
 			// Division is only linear when the divisor contains no decide
 			// variable. x / y (decide vars in divisor) is non-linear; catch

@@ -49,6 +49,45 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"does not support")
 
+    @pytest.mark.parametrize("agg", ["avg", "min", "max", "sum"])
+    def test_data_only_aggregate_coefficient_rejected(self, decidb_cli, agg):
+        """A data-only aggregate (`AVG(p)`, `MIN(p)`, … over columns only) used as a
+        coefficient on a decision variable is rejected before symbolic normalization.
+
+        Regression: `SUM(avg(p) * x)` used to slip through — the SymEngine round-trip
+        distributed the variable into the aggregate (`avg(p)*x` -> `avg(p*x)`), a
+        different constraint, and returned a silently wrong optimum. `sum` was already
+        rejected (with a cryptic nested-SUM message); now all four reject uniformly.
+        """
+        decidb_cli.assert_error(
+            f"""
+                SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
+                DECIDE x IS BOOLEAN
+                SUCH THAT SUM({agg}(p) * x) <= 3
+                MAXIMIZE SUM(x)
+            """,
+            match=r"aggregate over table columns .* cannot multiply a decision variable",
+        )
+
+    def test_data_only_aggregate_rhs_still_allowed(self, decidb_cli):
+        """Guard against over-rejecting: a data-only aggregate is fine as a constraint
+        RHS (`SUM(x) <= AVG(p)`), and a genuine DECIDE aggregate `AVG(x * p)` is fine —
+        only using the data aggregate as a *coefficient* is rejected."""
+        rows, _ = decidb_cli.execute("""
+            SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
+            DECIDE x IS BOOLEAN
+            SUCH THAT SUM(x) <= avg(p)
+            MAXIMIZE SUM(x)
+        """)
+        assert rows  # solved, not rejected
+        rows2, _ = decidb_cli.execute("""
+            SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
+            DECIDE x IS BOOLEAN
+            SUCH THAT AVG(x * p) >= 5
+            MAXIMIZE SUM(x)
+        """)
+        assert rows2
+
     def test_sum_with_in_not_allowed(self, decidb_cli):
         """SUM(x) IN (...) is not a valid constraint form.
 

@@ -281,7 +281,7 @@ SUCH THAT SUM(mod(x, 5)) <= 3             -- rejected: function wraps a decision
 
 This is the same "fold data-only subterms" idea already applied to `x + cost` and `x / col`, generalized to operators *and* named scalar functions outside the modelled set.
 
-**Not covered — data-only aggregates as coefficients**: `SUM(avg(col) * x)` is a different beast — the inner aggregate needs row-set semantics, not a per-row fold. It is *not* handled here (the fold only fires on non-aggregate functions; aggregate names are dispatched earlier). The `sum`/`min`/`max` forms are rejected at bind time; the `avg` form is currently mis-evaluated — tracked in `07_issues/bugs/todo.md`.
+**Rejected — data-only aggregates as coefficients**: `SUM(avg(col) * x)` is a different beast — the inner aggregate needs the whole row set, not a per-row fold — so it is rejected (not folded here). A data-only aggregate (`avg`/`min`/`max`/`sum` over columns only) multiplied by a decision variable is caught in `ValidateDecideNoNonLinearScalar` before symbolic normalization (which would otherwise distribute the variable into the aggregate and silently miscompute it). All four aggregates reject uniformly with a friendly "pre-compute it as a scalar or move it to the RHS" message. A data-only aggregate as a constraint *RHS* (`SUM(x) <= AVG(col)`) stays supported.
 
 **Code** (operators and functions share the mechanism):
 - Bind-time: `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide_binder.cpp` returns success (instead of an error) when `ExpressionContainsDecideVariable` is false — both in the unsupported-operator arm and in the unsupported-named-function arm.
