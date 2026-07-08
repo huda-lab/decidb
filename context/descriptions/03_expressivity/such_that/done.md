@@ -42,15 +42,20 @@ forms with a non-DECIDE/non-aggregate left side are flipped before validation:
 `SUM(x) <= 10`. This applies before simple bounds are absorbed into column
 bounds, so diagnostics still see the canonical user bound shape.
 
-**Composed `MIN`/`MAX` in the LHS** — an additive LHS may mix `MIN`/`MAX` terms with `SUM`/`AVG` terms. Each `MIN`/`MAX` becomes a continuous global auxiliary pinned per row; the outer constraint is linear in `{x, z_k}`.
+**Composed `MIN`/`MAX` in the LHS (both directions)** — an additive LHS may mix `MIN`/`MAX` terms with `SUM`/`AVG` terms. Each `MIN`/`MAX` becomes a continuous global auxiliary `z_k` pinned per row; the outer constraint is linear in `{x, z_k}`.
 
 ```sql
-SUM(x * v) + MAX(x * v) <= 20                       -- no filter on either term
+SUM(x * v) + MAX(x * v) <= 20                       -- easy: MAX pushed down by <=
+SUM(x * v) + MAX(x * v) >= 40                       -- hard: MAX pushed up by >=
+SUM(x * v) + MIN(x * v) <= 25                       -- hard: MIN pushed down by <=
 SUM(x * v) + (MAX(x * v) WHEN critical) <= 20       -- aggregate-local WHEN on one term
 MIN(x * v) WHEN tier_a + MIN(x * v) WHEN tier_b >= 15
+(2 * MIN(x * v) WHEN w) + SUM(x * v) <= 20          -- scalar factor folds into the inner expr
 ```
 
-v1 scope: easy-direction terms only (`<=` pushes MAX down / MIN up by `>=`). Rejected at bind time: subtraction (`MAX - MIN`), scalar multiplication (`2 * MIN(...)`), outer `WHEN`/`PER` wrappers, equality (`=`), and hard-direction terms (`MAX` pushed up by `>=`). See also `../maximize_minimize/done.md` for composed objectives.
+**Directions.** Every `MIN`/`MAX` term gets the same base one-sided *envelope* pin — `z_k >= inner` for `MAX`, `z_k <= inner` for `MIN`, per active row. In the **easy** direction (`MAX` pushed down by `<=`, `MIN` pushed up by `>=`) the outer pressure drives `z_k` to the extreme, so the envelope alone is exact. In the **hard** direction the outer pushes `z_k` the wrong way, so the envelope is augmented with an *indicator layer*: one binary `y_i` per active row, `SUM(y_i) >= 1`, and a Big-M link on the opposite side (`z_k <= inner_i + M(1−y_i)` for `MAX`, `z_k >= inner_i − M(1−y_i)` for `MIN`) so `z_k` is pinned to the true `MAX`/`MIN`. `M` is the signed spread of the inner expression over the term's active rows (same formula as the flat hard-`MIN`/`MAX` `compute_big_m`). Emitted by `EmitComposedHardMinMaxIndicators` (`physical_decide.cpp`), shared by the constraint and objective paths.
+
+Still rejected at bind time (separate v2 shapes): subtraction (`MAX - MIN`), outer `WHEN`/`PER` wrappers, non-constant RHS, and equality (`=`) outer comparison. Scalar multiplication (`2 * MIN(...)`) now works — the symbolic `K*WHEN` fold collapses it into `MIN(2*x*v)`; a companion fix to `ExtractCoefficientWithoutVariable` stopped it dropping the nested `2` (the un-normalized `(2*x)*v` reaches the composed path directly). See also `../maximize_minimize/done.md` for composed objectives.
 
 Rejected at execution time: any term whose aggregate-local `WHEN` matches zero rows — without this, the per-term `z_k` auxiliary has no pinning constraints and floats free, silently vacating the entire additive constraint. See `../when/done.md` → "Empty Row Sets" for the full rule.
 

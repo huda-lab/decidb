@@ -779,7 +779,23 @@ unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const E
             for (auto &child : func.children) {
                 if (!ContainsVariable(*child, var_idx)) {
                     filtered_children.push_back(child->Copy());
+                    continue;
                 }
+                // Child contains the variable: recurse to keep its non-variable
+                // scalar/data factors — `(2*x)` yields `2`, a bare `x` yields `1`.
+                // Dropping the whole child (the previous behavior) silently lost
+                // nested coefficients like the `2` in `(2*x)*v`, which reaches here
+                // un-normalized on the composed MIN/MAX path. The already-normalized
+                // `x*(2*v)` form is unchanged (its variable child is the bare `x`).
+                auto sub = ExtractCoefficientWithoutVariable(*child, var_idx);
+                if (sub->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+                    auto &cv = sub->Cast<BoundConstantExpression>().value;
+                    if (!cv.IsNull() && cv.type().IsNumeric() &&
+                        cv.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0) {
+                        continue; // bare variable contributes no scalar factor
+                    }
+                }
+                filtered_children.push_back(std::move(sub));
             }
 
             if (filtered_children.empty()) {
@@ -5422,13 +5438,103 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
     }
 
+    // Shared hard-direction indicator layer for one composed MIN/MAX term whose
+    // global auxiliary is `z_idx`. The caller emits the base one-sided envelope pin
+    // (z >= inner for MAX / z <= inner for MIN) for BOTH directions; that alone
+    // suffices for the easy direction (the outer pressure drives z to the extreme).
+    // The hard direction adds, per active row, a binary y_i, a SUM(y_i) >= 1 pin,
+    // and a Big-M link on the *opposite* envelope side so z is pinned to the actual
+    // MIN/MAX rather than floating:
+    //   MAX: z <= inner_i + M(1 - y_i)  ->  z - sum(c*var) + M*y_i <= M + const
+    //   MIN: z >= inner_i - M(1 - y_i)  ->  z - sum(c*var) - M*y_i >= -M + const
+    // M is the signed spread of `inner` over the term's active rows (identical
+    // formula to compute_big_m: global_max - global_min), which always dominates
+    // |z - inner_i|; constant inner terms cancel in the spread. This mirrors the
+    // flat (non-composed) hard MIN/MAX emission (PATH A) so both share one M model.
+    auto EmitComposedHardMinMaxIndicators =
+        [&](idx_t z_idx, bool is_max, const vector<Term> &inner_terms,
+            const vector<vector<double>> &per_term_coefs, const vector<bool> &filter_mask,
+            const string &label) {
+        bool unbounded = false;
+        double global_max = 0.0, global_min = 0.0;
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (!filter_mask[row]) continue;
+            double row_max = 0.0, row_min = 0.0;
+            for (idx_t it = 0; it < inner_terms.size(); it++) {
+                idx_t v = inner_terms[it].variable_index;
+                if (v == DConstants::INVALID_INDEX) continue; // constant cancels in spread
+                double c = per_term_coefs[it][row];
+                if (std::abs(c) < 1e-15) continue;
+                double lb = solver_input.lower_bounds[v];
+                double ub = solver_input.upper_bounds[v];
+                if (ub >= 1e20 || lb <= -1e20) { unbounded = true; continue; }
+                if (c > 0.0) { row_max += c * ub; row_min += c * lb; }
+                else { row_max += c * lb; row_min += c * ub; }
+            }
+            global_max = std::max(global_max, row_max);
+            global_min = std::min(global_min, row_min);
+        }
+        double M = global_max - global_min;
+        if (unbounded) M = std::max(M, DECIDE_BIGM_FALLBACK);
+
+        SolverInput::RawConstraint sum_y;
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (!filter_mask[row]) continue;
+            idx_t y_idx = var_indexer.global_block_start + solver_input.num_global_vars;
+            solver_input.num_global_vars += 1;
+            solver_input.global_variable_types.push_back(LogicalType::BOOLEAN);
+            solver_input.global_lower_bounds.push_back(0.0);
+            solver_input.global_upper_bounds.push_back(1.0);
+            solver_input.global_obj_coeffs.push_back(0.0);
+            solver_input.global_variable_labels.resize(y_idx - var_indexer.global_block_start);
+            solver_input.global_variable_labels.push_back(label);
+
+            sum_y.indices.push_back((int)y_idx);
+            sum_y.coefficients.push_back(1.0);
+
+            SolverInput::RawConstraint link;
+            link.indices.push_back((int)z_idx);
+            link.coefficients.push_back(1.0);
+            double row_const = 0.0;
+            for (idx_t it = 0; it < inner_terms.size(); it++) {
+                idx_t v = inner_terms[it].variable_index;
+                double c = per_term_coefs[it][row];
+                if (v == DConstants::INVALID_INDEX) {
+                    row_const += c;
+                } else {
+                    link.indices.push_back((int)var_indexer.Get(v, row));
+                    link.coefficients.push_back(-c);
+                }
+            }
+            if (is_max) {
+                link.indices.push_back((int)y_idx);
+                link.coefficients.push_back(M);
+                link.sense = '<';
+                link.rhs = M + row_const;
+            } else {
+                link.indices.push_back((int)y_idx);
+                link.coefficients.push_back(-M);
+                link.sense = '>';
+                link.rhs = -M + row_const;
+            }
+            link.kind = ConstraintKind::USER_PARAMETER;
+            solver_input.global_constraints.push_back(std::move(link));
+        }
+        sum_y.sense = '>';
+        sum_y.rhs = 1.0;
+        sum_y.kind = ConstraintKind::USER_PARAMETER;
+        solver_input.global_constraints.push_back(std::move(sum_y));
+    };
+
     // ================================================================
     // Composed MIN/MAX constraints: additive LHS mixing SUM/AVG/MIN/MAX.
     // Each MIN/MAX term gets a global auxiliary z_k pinned by per-row
     // constraints. The outer composed constraint is emitted as a
     // RawConstraint summing SUM/AVG contributions + z_k references.
-    // v1 scope: easy cases only (MAX pushed down / MIN pushed up),
-    // constant RHS, no outer WHEN/PER wrappers.
+    // Both directions are supported: the easy direction (MAX pushed down /
+    // MIN pushed up) needs only the one-sided envelope pin; the hard
+    // direction adds the per-row indicator layer above. Constant RHS,
+    // no outer WHEN/PER wrappers.
     // ================================================================
     if (!composed_minmax_constraints.empty()) {
         // Helper: evaluate a Term's per-row coefficient (scaled by term.sign)
@@ -5521,17 +5627,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 analyses.push_back(std::move(ta));
             }
 
-            // Allocate global z_k for each MIN/MAX term. Reject hard cases in v1.
+            // Allocate global z_k for each MIN/MAX term. Both directions supported:
+            // hard terms get the indicator layer emitted after the base envelope pin.
             for (auto &ta : analyses) {
                 if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
-                if (!ta.is_easy) {
-                    throw BinderException(
-                        "Composed MIN/MAX in DECIDE v1 supports only easy-direction "
-                        "MIN/MAX terms (MAX pushed down by <=, MIN pushed up by >=). "
-                        "The '%s' term here requires Big-M indicator linearization, "
-                        "which is not yet implemented for composed expressions.",
-                        ta.agg_name);
-                }
                 // Reject empty WHEN on composed MIN/MAX terms: without this the
                 // z_k auxiliary floats free (no per-row pinning), silently
                 // vacating the entire additive constraint.
@@ -5561,13 +5660,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 RejectEmptyAggregate(cnt, ta.agg_name.c_str(), "composed constraint");
             }
 
-            // Emit per-row pinning constraints for each MIN/MAX term.
+            // Emit the base one-sided envelope pin for each MIN/MAX term (both
+            // directions): MAX → z_k >= inner_expr per row (z_k >= max), MIN →
+            // z_k <= inner_expr per row (z_k <= min). For the easy direction the
+            // outer pressure drives z_k to the extreme; the hard direction adds an
+            // indicator layer below to pin z_k to the actual MIN/MAX.
             for (auto &ta : analyses) {
                 if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
                 bool is_max = (ta.agg_name == "max");
-                // Easy case:
-                //   MAX pushed down: z_k >= inner_expr  (solver drives z_k to max)
-                //   MIN pushed up:   z_k <= inner_expr  (solver drives z_k to min)
                 char sense = is_max ? '>' : '<';
                 for (idx_t row = 0; row < num_rows; row++) {
                     if (!ta.filter_mask[row]) continue;
@@ -5590,6 +5690,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     rc.rhs = row_rhs;
                     solver_input.global_constraints.push_back(std::move(rc));
                 }
+            }
+
+            // Hard-direction terms: add the indicator layer so z_k is pinned to the
+            // actual MIN/MAX (the outer constraint pushes z_k the "wrong" way, so the
+            // base envelope pin alone would let it float).
+            for (auto &ta : analyses) {
+                if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
+                if (ta.is_easy) continue;
+                EmitComposedHardMinMaxIndicators(ta.z_idx, ta.agg_name == "max",
+                                                 ta.inner_terms, ta.per_term_coefs,
+                                                 ta.filter_mask, ta.label);
             }
 
             // Build the outer composed RawConstraint
@@ -5745,14 +5856,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // Allocate z_k per MIN/MAX term. v1 rejects hard direction.
         for (auto &ta : obj_analyses) {
             if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
-            if (!ta.is_easy) {
-                throw BinderException(
-                    "Composed MIN/MAX objective in DECIDE v1 supports only "
-                    "easy-direction terms (MAXIMIZE+MIN or MINIMIZE+MAX). "
-                    "The '%s' term here requires indicator linearization, "
-                    "which is not yet implemented for composed objectives.",
-                    ta.agg_name);
-            }
             // Reject empty WHEN on composed MIN/MAX objective terms: without
             // this the z_k floats free and the objective silently ignores the
             // missing piece.
@@ -5807,6 +5910,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 rc.rhs = row_rhs;
                 solver_input.global_constraints.push_back(std::move(rc));
             }
+        }
+
+        // Hard-direction terms: add the indicator layer. Without it a hard term
+        // (MAXIMIZE+MAX / MINIMIZE+MIN) leaves z_k unpinned on the side the
+        // objective drives it, making the objective unbounded.
+        for (auto &ta : obj_analyses) {
+            if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
+            if (ta.is_easy) continue;
+            EmitComposedHardMinMaxIndicators(ta.z_idx, ta.agg_name == "max",
+                                             ta.inner_terms, ta.per_term_coefs,
+                                             ta.filter_mask, ta.label);
         }
 
         // Populate objective coefficients. For MIN/MAX terms, the obj coef on z_k

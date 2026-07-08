@@ -1212,17 +1212,26 @@ def test_min_plus_min_geq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
 
 
 @pytest.mark.min_max
-@pytest.mark.when_constraint
-@pytest.mark.error_binder
-def test_composed_minmax_hard_rejected(decidb_cli):
-    """Composed MIN/MAX in hard direction (e.g. MAX(...) pushed up) should
-    raise a BinderException in v1 — indicator linearization not yet implemented."""
-    decidb_cli.assert_error("""
-        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+@pytest.mark.correctness
+def test_composed_minmax_hard_max_constraint(decidb_cli):
+    """Hard-direction composed MAX constraint: SUM(x*v) + MAX(x*v) >= K.
+
+    `>=` pushes the MAX term the "wrong" way, so z is pinned to the true MAX by
+    the per-row indicator layer (SUM(y)>=1 + Big-M link). Without it z floats to
+    +inf and the solver picks nothing. v=[10,20,30]: one row v gives total 2v, so
+    v=20 (40) and v=30 (60) are feasible alone, v=10 (20) is not; 0 rows gives
+    0 < 40. MINIMIZE SUM(x) => exactly one row, satisfying the bound.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1,10.0),(2,20.0),(3,30.0)) t(id,v)
         DECIDE x IS BOOLEAN
-        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w >= 3
-        MAXIMIZE SUM(x * v)
-    """, match=r"easy-direction|hard|not yet implemented")
+        SUCH THAT SUM(x * v) + MAX(x * v) >= 40
+        MINIMIZE SUM(x)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
+    assert len(chosen) == 1, f"expected exactly 1 row, got {chosen}"
+    assert sum(chosen) + max(chosen) >= 40 - 1e-6
 
 
 @pytest.mark.min_max
@@ -1238,23 +1247,32 @@ def test_composed_minmax_subtraction_rejected(decidb_cli):
 
 
 @pytest.mark.min_max
-@pytest.mark.error_binder
-def test_composed_minmax_scalar_mult_rejected(decidb_cli):
-    """`(2 * MIN(x * v) WHEN w) + SUM(x * v) <= K` — composed MIN/MAX
-    constraints in v1 still don't support hard-direction MIN terms (a
-    `MIN(...) <= K` style bound that needs Big-M indicator linearization).
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_composed_minmax_scalar_mult_hard_min(decidb_cli):
+    """`(2 * MIN(x*v) WHEN w) + SUM(x*v) <= K` — hard-direction composed MIN with
+    a scalar multiplier.
 
-    The query used to be rejected here for "scalar multiplication of an
-    aggregate term" by the composed walker; the symbolic normalizer's
-    K*WHEN fold now collapses `2 * (MIN(...) WHEN w)` into
-    `WHEN(MIN(2 * x * v), w)` before the walker runs, so the rejection
-    that fires now is the upstream "Big-M MIN term" limitation."""
-    decidb_cli.assert_error("""
-        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+    The symbolic K*WHEN fold collapses `2 * (MIN(x*v) WHEN w)` into
+    `WHEN(MIN(2*x*v), w)`, and the hard-MIN indicator layer pins z to the true MIN
+    of the scaled inner expression. Regression for two things at once: hard-
+    direction support, and the ExtractCoefficient fix that stopped dropping the
+    `2` in the un-normalized `(2*x)*v`.
+
+    rows v=[10,5], w=true. Fold => MIN(2*x*v) + SUM(x*v) <= 20. Both selected:
+    MIN(20,10)=10 + SUM 15 = 25 > 20 (infeasible). Row1 alone: MIN(20,0)=0 +
+    SUM 10 = 10 (feasible). Row2 alone: obj 5. MAXIMIZE SUM(x*v) => row1 only,
+    objective 10.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1,10.0,true),(2,5.0,true)) t(id,v,w)
         DECIDE x IS BOOLEAN
         SUCH THAT (2 * MIN(x * v) WHEN w) + SUM(x * v) <= 20
         MAXIMIZE SUM(x * v)
-    """, match=r"requires Big-M indicator linearization")
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    obj = sum(float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1)
+    assert abs(obj - 10.0) <= 1e-6, f"expected obj 10 (row1 only), got {obj}"
 
 
 @pytest.mark.min_max
@@ -1458,11 +1476,44 @@ def test_maximize_min_plus_sum_composed_objective(
 @pytest.mark.obj_maximize
 @pytest.mark.when_objective
 @pytest.mark.error_binder
-def test_composed_minmax_objective_hard_rejected(decidb_cli):
-    """MAXIMIZE MAX(...) + SUM(...) — MAX pushed UP is hard direction; v1 rejects."""
-    decidb_cli.assert_error("""
-        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+def test_composed_minmax_objective_hard_max(decidb_cli):
+    """MAXIMIZE MAX(x*v) WHEN w + SUM(x*v) — MAX pushed UP is the hard objective
+    direction. Without the indicator layer z_k floats up and the objective is
+    unbounded; the layer pins z_k to the true MAX so the optimum is finite.
+
+    rows v=[10,5], w=true, SUM(x)>=1. Selecting both maximizes both terms:
+    SUM(x*v)=15 + MAX(x*v)=10 = 25.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1,10.0,true),(2,5.0,true)) t(id,v,w)
         DECIDE x IS BOOLEAN
         SUCH THAT SUM(x) >= 1
         MAXIMIZE MAX(x * v) WHEN w + SUM(x * v)
-    """, match=r"easy-direction|hard|not yet implemented")
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
+    assert set(chosen) == {10.0, 5.0}, f"expected both rows, got {chosen}"
+    assert abs((sum(chosen) + max(chosen)) - 25.0) <= 1e-6
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_composed_minmax_objective_hard_min(decidb_cli):
+    """MINIMIZE SUM(x*v) + MIN(x*v) — MIN pushed DOWN is the hard objective
+    direction. If z_k were not pinned below the objective would be unbounded
+    (z_k -> -inf); the indicator layer pins it to the true MIN.
+
+    v=[10,5,3], SUM(x)>=2 (pick >=2 rows). Any 2-row pick leaves one row
+    unselected so MIN(x*v)=0; MINIMIZE then picks the two smallest, {3,5}, for
+    objective SUM(x*v)=8 (MIN term 0). Row v=10 stays out.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1,10.0),(2,5.0),(3,3.0)) t(id,v)
+        DECIDE x IS BOOLEAN
+        SUCH THAT SUM(x) >= 2
+        MINIMIZE SUM(x * v) + MIN(x * v)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
+    assert set(chosen) == {5.0, 3.0}, f"expected the two smallest, got {chosen}"

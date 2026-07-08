@@ -2,48 +2,26 @@
 
 ---
 
-## Composed MIN/MAX: Hard-Direction Big-M Linearization
+## Composed MIN/MAX: Hard-Direction Big-M Linearization — SHIPPED
 
-**Priority: Medium — feature gap, bind-time rejected today**
+Hard-direction composed MIN/MAX (`SUM + MAX >= K`, `SUM + MIN <= K`, and the
+objective forms `MAXIMIZE + MAX` / `MINIMIZE + MIN`) is now implemented for both
+constraints and objectives. See `done.md` → "Composed MIN/MAX (both directions)".
+The base one-sided envelope pin (already emitted for both directions) is
+augmented, for a hard term, with a per-row binary `y_i`, `SUM(y_i) >= 1`, and a
+Big-M link (`EmitComposedHardMinMaxIndicators` in `physical_decide.cpp`); the M
+is the signed spread of the inner expression, shared with the flat hard-MIN/MAX
+`compute_big_m`. A latent bug in the same landing — `ExtractCoefficientWithoutVariable`
+dropped a nested scalar factor like the `2` in `(2*x)*v` (which reaches the
+composed path un-normalized), silently wrong for both easy and hard composed
+scalar terms — was fixed as part of it.
 
-Composed MIN/MAX constraints — where a `MIN` or `MAX` aggregate appears as an additive term alongside `SUM` (e.g. `SUM(x*v) + MAX(x*v) <= K`) — are supported today in the **easy direction** only:
-
-- `MAX(...) <= K` and `MIN(...) >= K` bound every row individually. The aggregate is stripped and per-row constraints are emitted. Composed forms such as `SUM + MAX <= K` also work via a per-term auxiliary `z_k` with per-row linking constraints.
-
-The **hard direction** (`MIN(...) <= K`, `MAX(...) >= K`, equality) is rejected with:
-
-> *"Composed MIN/MAX in DECIDE v1 supports only easy-direction MIN/MAX terms (MAX pushed down by <=, MIN pushed up by >=). The 'min' term here requires Big-M indicator linearization, which is not yet implemented for composed expressions."*
-
-### Why this is a real gap (now more visible)
-
-The `K * WHEN` fold in `NormalizeComparisonExpr` (see `when/done.md` — "Aggregate-local WHEN Composes with Constraint-LHS Arithmetic") rewrites shapes like `2 * (MIN(x*v) WHEN w) + SUM(x*v) <= K` into `WHEN(MIN(2*x*v), w) + SUM(x*v) <= K`. Before the fold, the composed walker's `*`/`/` arm rejected the scalar multiplier first, masking the real rejection reason. Now the fold succeeds and users hit the Big-M gap directly — with a clearer error message, but the same underlying feature gap.
-
-### What implementing it requires
-
-Two-level Big-M formulation, standard MILP modeling:
-
-1. **Per-row binary indicators** for the MIN/MAX term (one `y_i` per row, `SUM(y_i) >= 1` to pin at least one row active).
-2. **Global auxiliary `z_k`** capturing the MIN/MAX term's value across the additive LHS, linked to the active row's inner expression via Big-M disjunction: `z_k >= inner_i - M*(1 - y_i)` (and the symmetric bound).
-3. **Big-M strategy** — constant heuristic (e.g. sum of per-row upper bounds) vs. solver-tightened. Gurobi can tighten with `addGenConstrIndicator`; HiGHS requires an explicit M.
-
-Easy-direction composed already uses a `z_k` auxiliary (see `03_expressivity/such_that/done.md`). Hard direction extends this with the indicator layer.
-
-### Where it lives in code
-
-- Walker + classification: `src/optimizer/decide/decide_optimizer.cpp::WalkComposedLhs` and the `is_easy` decision per term.
-- Auxiliary emission: the composed-MIN/MAX path in `src/execution/operator/decide/physical_decide.cpp` (grep `ComposedMinMaxTerm`).
-- Existing hard-direction precedent (bare MIN/MAX, not composed): same file — the per-row indicator pattern used for `MIN(expr) <= K` on a non-composed LHS.
-
-### Testing pins already in place
-
-`test/decide/tests/test_min_max.py`:
-- `test_composed_minmax_hard_rejected`
-- `test_composed_minmax_objective_hard_rejected`
-- `test_composed_minmax_scalar_mult_rejected` (now rejected on the Big-M direction rather than the scalar-mult direction)
-- `test_composed_minmax_subtraction_rejected`
-- `test_composed_minmax_per_wrapper_rejected`
-
-See `05_testing/min_max/todo.md` for the full matrix — several of these will flip from `assert_error` to oracle-verified positive tests when the hard direction lands.
+Still deferred (separate v2 shapes, still bind-time rejected): subtraction in the
+composed LHS (`MAX - MIN`), outer `WHEN`/`PER` wrappers on the composed
+constraint/objective, non-constant RHS, and equality (`=`) outer comparison. Pins
+for these remain `assert_error` in `test_min_max.py`; the hard-direction pins
+flipped to oracle-verified positives (`test_composed_minmax_hard_max_constraint`,
+`_scalar_mult_hard_min`, `_objective_hard_max`, `_objective_hard_min`).
 
 ### Related orthogonal limitation: empty-WHEN on hard-direction MIN/MAX — resolved
 

@@ -27,13 +27,9 @@ MINIMIZE SUM(x * cost) + MAX(x * penalty) WHEN at_risk
 
 Each `MIN`/`MAX` term becomes a continuous auxiliary `z_k` pinned per-row to the inner expression; the outer sum is linear in `{x, z_k}`.
 
-**v1 scope restrictions** (v2 will relax):
-- Easy-direction terms only — `MAXIMIZE` with `MIN(...)`, or `MINIMIZE` with `MAX(...)`. Hard direction (`MAXIMIZE MAX`, `MINIMIZE MIN` in a composed sum) is rejected at bind time.
-- No subtraction in the additive sum (`MAX - MIN` rejected).
-- No scalar multiplication of aggregate terms (`2 * MIN(...)` rejected).
-- No outer `PER`/`WHEN` wrapper on the composed objective.
+**Both directions supported.** Easy (`MAXIMIZE` with `MIN`, `MINIMIZE` with `MAX`) uses the one-sided envelope pin alone; hard (`MAXIMIZE MAX`, `MINIMIZE MIN`) adds the per-row indicator layer (binary `y_i`, `SUM(y_i) >= 1`, Big-M link) so `z_k` is pinned to the true extreme rather than floating the objective to ±∞. Scalar multiplication (`2 * MIN(...)`) also works. Same mechanism and code (`EmitComposedHardMinMaxIndicators`) as composed constraints — see `../such_that/done.md` → "Composed MIN/MAX (both directions)".
 
-See also `../such_that/done.md` for composed MIN/MAX in constraints (same mechanism).
+**Still rejected at bind time** (v2): subtraction in the additive sum (`MAX - MIN`), outer `PER`/`WHEN` wrapper on the composed objective.
 
 ## Quadratic Inner Expressions Under Nested PER
 
