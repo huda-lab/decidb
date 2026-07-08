@@ -334,6 +334,11 @@ preferred when it can restore feasibility. Two parts:
   every linear term is AVG-scaled, propagated at the aggregate provenance sites in
   `ilp_model_builder.cpp`); `FormatLhs` then collapses the `1/N`-scaled terms back to `AVG(x)`
   (inner coeff = stored coeff × the variable's term count) instead of rendering `0.5*x + 0.5*x`.
+  A **data-varying** AVG coefficient (`AVG(buy * p_retailprice)`, price differs per row) has no
+  single literal to re-quote, so `FormatAvgLhs` bails and the row renders through `FormatSumLhs` —
+  but `FormatLhs` passes `agg_name = "AVG"` for any `avg_scaled` row, so the wrapper stays `AVG(...)`
+  rather than mislabeling the user's AVG constraint (and its suggested edit, quoted in AVG units) as
+  `SUM`.
 - **SUM.** An aggregate `SUM` over rows emits one solver column per row for the same decide
   variable, so a plain reconstruction reads `x + x + x`. `FormatSumLhs` collapses the per-row
   fan-out back to `SUM(c*var)` for a uniform coefficient, and to `SUM(var * col)` for a

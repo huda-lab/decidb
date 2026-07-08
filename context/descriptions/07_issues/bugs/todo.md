@@ -6,20 +6,6 @@ Resolved bugs are moved to `done.md`.
 
 ---
 
-## Infeasible diagnosis renders a data-weighted AVG clause as `SUM(...)`
-
-**Location**: `FormatLhs` / `FormatSumLhs` fold in the infeasible engine's clause reconstruction (see `08_query_diagnostics/infeasible/done.md` § I2.d), likely the `provenance.avg_scaled` collapse path vs. the data-varying-coefficient `FormatSumLhs` path.
-
-**Symptom**: on an infeasible `SUCH THAT AVG(buy * p_retailprice) >= 5000` (BOOLEAN `buy`, TPC-H `part`, 8 rows), the diagnosis names the clause `SUM(buy * p_retailprice) >= 5000` and suggests `SUM(buy * p_retailprice) >= 904.5`. The **amount is in AVG units** (904.5 is the achievable AVG; the achievable SUM is 7236), so the suggestion as displayed is a *different, wrong* constraint — a user who applies the literal edit `SUM(...) >= 904.5` writes a constraint that does not correspond to the diagnosis. A pure `AVG(buy) >= 5` renders correctly as `AVG(buy) >= 1`, so the break is specific to **data-varying coefficients** inside AVG: the avg-scaled row appears to fall through to the `FormatSumLhs` data-varying rendering (`SUM(var * col)`) instead of the AVG collapse.
-
-**Why it matters**: the suggested_change is the product's core promise (the smallest edit, quoted in the user's own units and syntax); here it's mislabeled and numerically inconsistent with the shown aggregate.
-
-**Repro**: `SELECT p_partkey, buy FROM part WHERE p_partkey <= 8 DECIDE buy IS BOOLEAN SUCH THAT AVG(buy * p_retailprice) >= 5000 MAXIMIZE SUM(buy);` on the repo `decidb.db`, Gurobi, `diagnose_decide='auto'`.
-
-**Discovered**: 2026-07-08, while generating the query-diagnostics README example catalog (mini-report task).
-
----
-
 ## Data-only `AVG(col)` as a coefficient multiplier is silently miscomputed
 
 **Location**: `src/planner/expression_binder/decide_binder.cpp` (SUM-argument validation, `avg` branch ~line 378) + AVG→SUM optimizer rewrite.

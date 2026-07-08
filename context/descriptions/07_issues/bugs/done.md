@@ -4,6 +4,12 @@ Resolved bugs condensed to their generalizable lessons: what broke, why, and wha
 
 ---
 
+## Infeasible diagnosis mislabeled a data-weighted `AVG` clause as `SUM`
+
+**Broke**: `FormatLhs` (`decide_diagnostic_engines.cpp`) renders an AVG-rewritten row (`provenance.avg_scaled`) via `FormatAvgLhs`, which collapses the 1/N-scaled fan-out back to `AVG(inner)` — but only when the per-variable coefficient is *uniform*. A **data-varying** coefficient (`AVG(buy * p_retailprice)`, price differs per row) made `FormatAvgLhs` bail, and the row fell through to `FormatSumLhs`, which hardcoded a `"SUM("` wrapper. So an infeasible `AVG(buy * p_retailprice) >= 5000` was diagnosed and *suggested* as `SUM(buy * p_retailprice) >= 904.5`. The inner (`buy * p_retailprice`) and the number (904.5, the achievable AVG) were correct — only the aggregate label was wrong — but since 904.5 is in AVG units, the displayed `SUM(...) >= 904.5` is a *different, wrong* constraint. The suggested edit is the area's core promise (smallest edit in the user's own units/syntax), so a mislabel that a user applies literally corrupts their query.
+
+**Fix/lesson**: Thread an `agg_name` through `FormatSumLhs` (default `"SUM"`), and in `FormatLhs` pass `"AVG"` whenever `provenance.avg_scaled` — so a data-varying AVG that can't take the clean `FormatAvgLhs` path still renders as `AVG(...)` (the same Facet-B fallback wrapper too). The inner terms and RHS were already correct; only the wrapper label changed. **Watch for**: the aggregate *label* and the numeric *value* live in different code paths — a rendering fallback that hardcodes an aggregate name will silently disagree with a value computed in another aggregate's units. Any clause reconstruction must carry the aggregate identity, not re-guess it. Tests: `test_query_diagnostics_relation.py::TestInfeasibleReporting::test_infeasible_data_varying_avg_keeps_avg_label` (both backends). Found in the query-diagnostics README example catalog.
+
 ## Infeasible diagnosis rendered equality as DuckDB alias `==`
 
 **Broke**: Infeasible diagnostic clause rendering used the internal equality spelling

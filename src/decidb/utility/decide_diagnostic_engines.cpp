@@ -149,7 +149,8 @@ bool FormatAvgLhs(const vector<int> &indices, const vector<double> &coeffs,
 //! (caller falls back to the raw reconstruction), as does a row with no aggregate fan.
 bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
                   const vector<ColumnProvenance> &cols,
-                  const vector<std::pair<idx_t, string>> &weight_labels, string &out) {
+                  const vector<std::pair<idx_t, string>> &weight_labels, string &out,
+                  const char *agg_name = "SUM") {
 	vector<idx_t> order; // distinct variable keys, first-seen order
 	std::map<idx_t, double> coeff_of;
 	std::map<idx_t, idx_t> count_of;
@@ -205,11 +206,14 @@ bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
 		string term;
 		if (data_varying) {
 			// `SUM(buy * l_extendedprice)` — quote the variable × its coefficient column.
-			term = "SUM(" + label_of[key] + " * " + label_for[key] + ")";
+			// `agg_name` is "AVG" for an AVG-rewritten row whose data-varying coefficient
+			// blocked the clean FormatAvgLhs path — keep the aggregate the user wrote
+			// instead of mislabeling it "SUM".
+			term = string(agg_name) + "(" + label_of[key] + " * " + label_for[key] + ")";
 		} else {
 			term = (ac == 1.0) ? label_of[key] : (FormatNum(ac) + "*" + label_of[key]);
 			if (count_of[key] > 1) {
-				term = "SUM(" + term + ")";
+				term = string(agg_name) + "(" + term + ")";
 			}
 		}
 		// A data-varying weight carries its sign inside the column, so render it additively;
@@ -249,10 +253,15 @@ string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenance> &col
 	if (row.provenance.avg_scaled && FormatAvgLhs(row.indices, row.coefficients, cols, agg)) {
 		return agg;
 	}
+	// An AVG-rewritten row whose coefficient is data-varying can't produce a clean
+	// FormatAvgLhs, but it must still render as AVG(...) — otherwise the diagnosis and its
+	// suggested edit mislabel the user's AVG constraint as SUM (the value is already in AVG
+	// units, so the SUM label makes the suggestion a different, wrong constraint).
+	const char *agg_name = row.provenance.avg_scaled ? "AVG" : "SUM";
 	// Collapse a uniform SUM fan-out to SUM(c*var). PER-grouped aggregates fold too: they
 	// stay distinguishable in the relation via the `group` EAV row + WHEN/PER qualifier
 	// (Facet A), so the old group_key == INVALID gate is gone.
-	if (FormatSumLhs(row.indices, row.coefficients, cols, row.provenance.weight_labels, agg)) {
+	if (FormatSumLhs(row.indices, row.coefficients, cols, row.provenance.weight_labels, agg, agg_name)) {
 		return agg;
 	}
 	string raw = FormatTerms(row.indices, row.coefficients, cols);
@@ -260,7 +269,7 @@ string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenance> &col
 	// to fold, so wrap the reconstruction in SUM(...) explicitly. Only when there is no fan
 	// — a multi-row data-varying SUM keeps its raw `2*x + 3*x` form (documented I2.d).
 	if (row.provenance.is_aggregate && !HasVarFan(row.indices, cols)) {
-		return "SUM(" + raw + ")";
+		return string(agg_name) + "(" + raw + ")";
 	}
 	return raw;
 }

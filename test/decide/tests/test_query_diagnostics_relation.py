@@ -939,6 +939,33 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_data_varying_avg_keeps_avg_label(self, request, cli_fixture):
+        """I2.d regression: a *data-varying* AVG coefficient (`AVG(x * w)`, w a
+        column) can't take the clean FormatAvgLhs path, but it must still render as
+        `AVG(...)` — not `SUM(...)`. The value is already in AVG units, so a SUM
+        label makes the suggested edit a different, wrong constraint.
+
+        w=[10,20,30], x BOOLEAN: max AVG(x*w) is all selected = 20 < 100, so the
+        constraint is infeasible; the loosen is `AVG(x * w) >= 20` (amount 80).
+        """
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, w, x FROM (VALUES (1,10),(2,20),(3,30)) t(id, w) "
+            "DECIDE x IS BOOLEAN SUCH THAT AVG(x * w) >= 100 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        # The clause and its suggested edit both name AVG, never SUM.
+        assert not any(str(r["subject"]).startswith("SUM(") for r in rows), (
+            "data-varying AVG was mislabeled as SUM in the diagnosis"
+        )
+        avg = _attrs(rows, "clause", "AVG(x * w) >= 100")
+        assert avg["suggested_change"] == "AVG(x * w) >= 20"
+        assert avg["amount"] == "80"
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_strict_less_than_requotes_typed_literal(self, request, cli_fixture):
         """I2.d: `SUM(x) < 10` (integer, single row) is built as `<= 9` (δ baked in). The
         reported edit must re-quote against the user's typed `10` and render `<`, not the
