@@ -10,7 +10,9 @@ DeciDB can express several classes of mathematical optimization problems. The pr
 
 All variables declared `IS REAL`, with a linear objective and linear constraints.
 
-Standard form: minimize c^T x, subject to Ax <= b, x >= 0
+Model form: minimize c^T x, subject to Ax <= b and l <= x <= u. DeciDB
+defaults l to 0, but an explicit finite negative lower bound makes a variable
+signed.
 
 ```sql
 SELECT id, ROUND(x, 2) FROM data
@@ -25,7 +27,9 @@ Supported by both Gurobi and HiGHS.
 
 All variables declared `IS INTEGER` and/or `IS BOOLEAN`, with a linear objective and linear constraints. This is the **default** problem class — `DECIDE x` without a type annotation defaults to `IS INTEGER`.
 
-Standard form: minimize c^T x, subject to Ax <= b, x in Z^n_+
+Model form: minimize c^T x, subject to Ax <= b, x in Z^n, and l <= x <= u.
+INTEGER variables default l to 0, but support explicit finite negative lower
+bounds; BOOLEAN variables remain in [0, 1].
 
 ```sql
 SELECT * FROM items
@@ -53,7 +57,9 @@ Supported by both Gurobi and HiGHS.
 
 All variables declared `IS REAL` (continuous), with a quadratic objective and linear constraints.
 
-Standard form: minimize (1/2) x^T Q x + c^T x, subject to Ax <= b, x >= 0
+Model form: minimize (1/2) x^T Q x + c^T x, subject to Ax <= b and
+l <= x <= u. DeciDB defaults l to 0, but supports explicit finite negative
+lower bounds.
 
 **Convex QP** (MINIMIZE with PSD Q, or MAXIMIZE with NSD Q): Supported by both Gurobi and HiGHS.
 
@@ -290,14 +296,22 @@ MAXIMIZE SUM(-1 * POWER(x - target, 2))    -- explicit -1 multiplication
 - sign = +1.0 for positive quadratic, sign = -1.0 for negated quadratic
 - The Q matrix is stored in COO (Coordinate) format in `SolverModel`, then converted to CSC for HiGHS
 
-### All Variables Are Non-Negative
+### Variable Bounds and Signed Domains
 
-All variable types have a default lower bound of 0:
+Variable types have these default bounds:
+
 - BOOLEAN: [0, 1]
 - INTEGER: [0, 1e30]
 - REAL: [0, 1e30]
 
-DeciDB cannot currently express problems requiring negative variable values (see [todo.md](todo.md)).
+For INTEGER and REAL, 0 is a default rather than an intrinsic floor. An
+explicit finite negative lower bound such as `x >= -10`, `x BETWEEN -10 AND
+10`, or a negative literal in an `IN` domain makes the variable signed. Bound
+absorption stores the resulting domain directly as solver column bounds.
+
+A fully-free `(-inf, +inf)` domain is not supported; signed variables must have
+a finite lower bound. See [decide/done.md](../decide/done.md) for the detailed
+semantics and limitations.
 
 ### Big-M Linearization Is Transparent
 

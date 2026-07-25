@@ -108,6 +108,18 @@ void GurobiSession::Load(const SolverModel &ilp) {
     if (ilp.nonconvex_quadratic) {
         api.setintparam(guard.env, "NonConvex", 2);
     }
+    // A quadratic constraint switches Gurobi from its fast QP solver to the barrier
+    // over a second-order-cone reformulation of BOTH the objective and the constraint.
+    // At scale the barrier reaches the optimum early but then oscillates in the dual
+    // for many extra iterations, often stopping at "sub-optimal termination". Raising
+    // NumericFocus makes the barrier careful enough to converge to a true optimum —
+    // empirically several times faster than the default's stalled solve, and it removes
+    // the sub-optimal stop. Gated on quadratic constraints so the fast pure-QP-objective
+    // path (no such reformulation) is left untouched. Gurobi-only: HiGHS rejects
+    // quadratic constraints upstream, so nothing reaches this code on that backend.
+    if (!ilp.quadratic_constraints.empty()) {
+        api.setintparam(guard.env, "NumericFocus", 2);
+    }
     error = api.startenv(guard.env);
     if (error) {
         throw InternalException("Failed to start Gurobi environment (error %d). "
@@ -346,6 +358,31 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
         case GRB_ITERATION_LIMIT:
             result.status = SolverStatus::ITERATION_LIMIT;
             break;
+        case GRB_SUBOPTIMAL: {
+            // Gurobi could not satisfy optimality tolerances (typically a numerically
+            // hard barrier on a QCP/SOC model) but a feasible solution IS available.
+            // Read it back and return it as a feasible-but-unproven result rather than
+            // discarding it; the operator delivers the rows with a "not proven best"
+            // caveat. Guard on SolCount and a successful vector read: if no usable
+            // incumbent exists (should not happen for SUBOPTIMAL), fall back to the
+            // generic error path so we never route an empty solution to success.
+            int sol_count = 0;
+            vector<double> incumbent(total_vars);
+            if (api.getintattr(guard.model, GRB_INT_ATTR_SOLCOUNT, &sol_count) == 0 && sol_count > 0 &&
+                api.getdblattrarray(guard.model, GRB_DBL_ATTR_X, 0, (int)total_vars,
+                                    incumbent.data()) == 0) {
+                result.status = SolverStatus::SUBOPTIMAL;
+                result.has_solution = true;
+                result.solution = std::move(incumbent);
+                double obj_val = 0.0;
+                if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
+                    result.objective_value = obj_val;
+                }
+            } else {
+                result.status = SolverStatus::OTHER;
+            }
+            break;
+        }
         default:
             result.status = SolverStatus::OTHER;
             break;

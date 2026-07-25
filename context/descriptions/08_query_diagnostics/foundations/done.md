@@ -10,18 +10,28 @@ so callers branch on the outcome. This gates the whole area.
 
 - **`SolverResult` + `SolverStatus`** (`src/include/duckdb/decidb/solver_result.hpp`).
   `SolverStatus = {OPTIMAL, INFEASIBLE, UNBOUNDED, INF_OR_UNBD, TIME_LIMIT,
-  ITERATION_LIMIT, OTHER}`; `SolverResult { status, solution, objective_value, ray,
+  SUBOPTIMAL, ITERATION_LIMIT, OTHER}`; `SolverResult { status, solution, objective_value, ray,
   diagnostic_timed_out, raw_status, has_solution, best_bound, gap }`.
   `ray` is populated only on the unbounded ray-extraction path; `raw_status` carries
   the backend-native code for the `OTHER` message. `diagnostic_timed_out` is set only
   when an internal diagnostic helper solve (the `INF_OR_UNBD` probe or ray fallback)
   hits its helper budget before producing a usable result, so the operator can say
   diagnosis ran out of time instead of silently falling to the static error.
+  - **`SUBOPTIMAL` (feasible-but-unproven).** Gurobi's `GRB_SUBOPTIMAL` (status 13): a
+    feasible solution exists but the solver stopped without proving optimality — in
+    practice a numerically hard barrier on a QCP/SOC reformulation that stalls before
+    satisfying optimality tolerances. It carries the incumbent exactly like the timeout
+    fields below (`solution` / `objective_value` / `has_solution`), and the router
+    (`decide_router.cpp`) sends it to the **SOLVED** success terminal so the operator
+    delivers the rows with a plain "not proven best" stderr caveat rather than erroring.
+    Gurobi-only — HiGHS rejects quadratic constraints upstream, so it never reaches here.
+    (Historically such statuses were rewritten to `OPTIMAL`; the current soundness rule
+    never relabels a non-optimal termination as optimal — it carries a distinct status.)
   - **Timeout incumbent fields (S1).** `solution` + `objective_value` carry the proven
-    optimum at `OPTIMAL` **and** the best-so-far incumbent at `TIME_LIMIT` (when one was
-    found) — so a caller must branch on `status` / `has_solution`, not on solution
-    emptiness, to know whether a value is proven best. `has_solution` is true iff the
-    backend found a feasible incumbent by the limit (Gurobi `SolCount > 0` / HiGHS
+    optimum at `OPTIMAL` **and** the best-so-far incumbent at `TIME_LIMIT` / `SUBOPTIMAL`
+    (when one was found) — so a caller must branch on `status` / `has_solution`, not on
+    solution emptiness, to know whether a value is proven best. `has_solution` is true iff the
+    backend found a feasible incumbent (Gurobi `SolCount > 0` / HiGHS
     `primal_solution_status == kSolutionStatusFeasible`); it **gates** the incumbent reads
     (`solution` / `objective_value` / `gap`) because with no incumbent those attributes
     return solver sentinels (`-1e100` / `inf` / `nan`). `best_bound` (Gurobi `ObjBound` /
@@ -75,7 +85,8 @@ so callers branch on the outcome. This gates the whole area.
   backend-reported infeasibility, instead of bypassing diagnostics with a direct
   builder error.
 - **The throw lives in the operator.** `PhysicalDecide::Finalize`
-  (`physical_decide.cpp`) branches on status: optimal → store the solution;
+  (`physical_decide.cpp`) branches on status: optimal → store the solution
+  (`SUBOPTIMAL` also stores it, with a "not proven best" caveat); other
   non-optimal → the pragma gate decides whether to diagnose or call
   `ThrowDecideSolveError`. This is the single gated call site.
 

@@ -6073,6 +6073,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     bool keep_slow_diagnosis = false;
     switch (RouteSolveResult(solve_result, diagnose_mode)) {
     case DiagnosisTerminal::SOLVED:
+        if (solve_result.status == SolverStatus::SUBOPTIMAL) {
+            // A feasible incumbent returned without a proof of optimality (a numerically
+            // hard QCP where the barrier stopped before satisfying tolerances). Deliver
+            // the rows, but say plainly they are not proven best — the same caveat as an
+            // early time-limit stop. There is no live SQL NOTICE channel, so it rides on
+            // stderr with the results.
+            fprintf(stderr,
+                    "DECIDE is returning a feasible solution — the solver could not prove it is the best possible.\n");
+        }
         break; // fall through to the success stores below
     case DiagnosisTerminal::UNBOUNDED: {
         vector<string> var_labels;

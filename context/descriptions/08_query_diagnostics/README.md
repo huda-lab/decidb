@@ -32,25 +32,25 @@ incumbent?) — and routes to exactly one terminal. The states below are its lea
 ```
 
 - `[router/](router/)` — the **spine**: the dispatch tree above and the inf/unb
-`check ray` disambiguation. All four terminals are wired — solved, unbounded,
-infeasible, and time_limit (the slow engine, R6) — each an engine dropped behind an
-existing classifier leaf without editing the classifier.
+  `check ray` disambiguation. All four terminals are wired — solved, unbounded,
+  infeasible, and time_limit (the slow engine, R6) — each an engine dropped behind an
+  existing classifier leaf without editing the classifier.
 - `[unbounded/](unbounded/)` — terminal `failed → unbounded`: names the escaping
-variable via the ray and prescribes a bound (**tighten** a too-open region).
+  variable via the ray and prescribes a bound (**tighten** a too-open region).
 - `[infeasible/](infeasible/)` ★ — terminal `failed → infeasible`: elastic
-relaxation (**loosen** a too-small region). The flagship engine — fully shipped
-(I1–I5, aggregate `<>` removal, and the T3 two-mode slack-scope policy: `query`
-folds each knob to one SQL edit / turns data conflicts into virtual offsets,
-`expanded` exposes the per-row / per-group profile).
+  relaxation (**loosen** a too-small region). The flagship engine — fully shipped
+  (I1–I5, aggregate `<>` removal, and the T3 two-mode slack-scope policy: `query`
+  folds each knob to one SQL edit / turns data conflicts into virtual offsets,
+  `expanded` exposes the per-row / per-group profile).
 - `[slow/](slow/)` — terminal `time_limit`: **shipped**. A solve that hits the limit
-returns `SolverStatus::TIME_LIMIT`, prints a plain-language checkpoint report, and — per
-the `decide_on_timeout` pragma (ask / error / continue) — resumes the **same warm solver**
-for more wall-clock, returning the best-so-far rows when the user stops. Not a
-relax/reformulate engine; it reports and continues. (`off` is a master mute → plain
-error.)
+  returns `SolverStatus::TIME_LIMIT`, prints a plain-language checkpoint report, and — per
+  the `decide_on_timeout` pragma (ask / error / continue) — resumes the **same warm solver**
+  for more wall-clock, returning the best-so-far rows when the user stops. Not a
+  relax/reformulate engine; it reports and continues. (`off` is a master mute → plain
+  error.)
 - `[foundations/](foundations/)` — the **substrate** every terminal sits on (not
-a terminal): structured solver result, constraint + variable provenance, the
-`diagnose_decide` gate, the solver-behavior reference, the reporting relation.
+  a terminal): structured solver result, constraint + variable provenance, the
+  `diagnose_decide` gate, the solver-behavior reference, the reporting relation.
 
 Infeasible and unbounded are mirror images — loosen a too-small region vs. tighten a
 too-open one; slow is a runtime event masking the other states.
@@ -59,22 +59,20 @@ too-open one; slow is a runtime event masking the other states.
 
 - **Least-change** — propose the smallest edit, not a rewrite.
 - **On by default** — `PRAGMA diagnose_decide` is `auto` by default: a failed solve
-is diagnosed automatically wherever an engine exists. Set `off` to suppress and
-get the plain static error. We never edit the user's query; a diagnosis only ever
-*describes* the failure and prescribes a remedy.
+  is diagnosed automatically wherever an engine exists. Set `off` to suppress and
+  get the plain static error. We never edit the user's query; a diagnosis only ever
+  *describes* the failure and prescribes a remedy.
 - **Solver-agnostic** — everything works on Gurobi and HiGHS. We build the
-elastic model in our own model builder so both backends solve it natively;
-Gurobi `feasRelax` is an *accelerator*, never a dependency.
+  elastic model in our own model builder so both backends solve it natively;
+  Gurobi `feasRelax` is an *accelerator*, never a dependency.
 - **Differential testing** — every phase tests against `oracle_solver` on
-constructed cases, never hand-computed answers.
-
-
+  constructed cases, never hand-computed answers.
 
 ## Invocation — `PRAGMA diagnose_decide`
 
-Sticky session pragma with two modes: `auto` (default — diagnose whichever failed  
-state the solve lands in, wherever an engine exists) and `off` (suppress diagnosis;  
-reproduce the plain static solver error). Diagnosis only ever runs when the solve  
+Sticky session pragma with two modes: `auto` (default — diagnose whichever failed
+state the solve lands in, wherever an engine exists) and `off` (suppress diagnosis;
+reproduce the plain static solver error). Diagnosis only ever runs when the solve
 *actually* fails, so leaving `auto` on costs nothing on a successful solve.
 
 A second sticky pragma, `diagnose_decide_infeasible_slack_scope` (`query` default /
@@ -83,9 +81,7 @@ folded SQL-level edit vs. the per-row / per-group profile. See `infeasible/done.
 
 ---
 
-
-
-# What users can expect 
+# What users can expect
 
 A DECIDE query can end four ways: it **solves**, it is **unbounded** (something can
 grow forever), it is **infeasible** (the constraints contradict each other), or it is
@@ -130,8 +126,6 @@ MAXIMIZE SUM(buy * p_retailprice);
 ```
 
 ---
-
-
 
 ## Unbounded — something can grow forever
 
@@ -200,8 +194,6 @@ Details: SELECT * FROM decide_diagnostics();
 └──────────────┴───────────┴──────────────┴─────────┴───────────────┴───────────────────────────────────────────────┘
 ```
 
-
-
 ### U3 — an entity-level variable, characterized by a joined column
 
 A per-supplier variable (`s.capacity`) escapes only for European suppliers — the
@@ -232,8 +224,6 @@ Details: SELECT * FROM decide_diagnostics();
 └──────────────┴───────────┴──────────────┴──────────┴───────────────────┴───────────────────────────────────────────┘
 ```
 
-
-
 ### U4 — when the variable can't be named
 
 A non-linear objective (here a `POWER` term) prevents identifying the runaway
@@ -254,8 +244,6 @@ Invalid Input Error: DECIDE optimization is unbounded: a non-linear term prevent
 ```
 
 ---
-
-
 
 ## Infeasible — the constraints can't all hold at once
 
@@ -297,14 +285,10 @@ Details: SELECT * FROM decide_diagnostics();
 └──────────────┴────────────┴──────────────┴───────────┴──────────────────────┴────────────────┘
 ```
 
-
-
 ### I2 — an impossible average target, suggested in your own units
 
 Even buying every part, the average spend tops out at 904.5 — the target 5000 is out
 of reach. The suggestion is quoted as an `AVG` bound, in the same units you wrote.
-
-
 
 ```sql
 SELECT p_partkey, buy
@@ -332,8 +316,6 @@ Details: SELECT * FROM decide_diagnostics();
 │ 1            │ infeasible │ model        │ NULL                             │ achievable_objective │ 8                                 │
 └──────────────┴────────────┴──────────────┴──────────────────────────────────┴──────────────────────┴───────────────────────────────────┘
 ```
-
-
 
 ### I3 — when two constraints must both give
 
@@ -372,8 +354,6 @@ Details: SELECT * FROM decide_diagnostics();
 └──────────────┴────────────┴──────────────┴─────────────────────────────────┴──────────────────────┴──────────────────────────────────┘
 ```
 
-
-
 ### I4 — when only removing a clause helps
 
 A BOOLEAN forbidden from being 0 *and* from being 1 has no legal value left. No
@@ -399,8 +379,6 @@ Details: SELECT * FROM decide_diagnostics();
 │ 1            │ infeasible │ model        │ NULL       │ achievable_objective │ 0     │
 └──────────────┴────────────┴──────────────┴────────────┴──────────────────────┴───────┘
 ```
-
-
 
 ### I5 — when the conflict is in your data
 
@@ -463,8 +441,6 @@ Details: SELECT * FROM decide_diagnostics();
 │ 1            │ infeasible │ model        │ NULL       │ achievable_objective │ 34943        │
 └──────────────┴────────────┴──────────────┴────────────┴──────────────────────┴──────────────┘
 ```
-
-
 
 ### I6 — a PER group that can't keep up
 
@@ -534,8 +510,6 @@ line rather than guessing.
 
 ---
 
-
-
 ## When the solver can't tell (rare)
 
 Occasionally a solver's first answer is the ambiguous "infeasible *or* unbounded".
@@ -546,8 +520,6 @@ with the caveat `It may instead be infeasible.` appended, or the infeasible
 diagnosis.
 
 ---
-
-
 
 ## Slow — the time limit expires first
 
@@ -647,8 +619,6 @@ Details: SELECT * FROM decide_diagnostics();
 └──────────────┴───────┴──────────────┴─────────┴─────────────┴─────────────┘
 ```
 
-
-
 ### S3 — keep solving, stop when satisfied
 
 Same query as S1 with `SET decide_on_timeout='continue';` — the solve resumes past
@@ -715,8 +685,6 @@ returned.)
 
 ---
 
-
-
 ## Turning it off
 
 `PRAGMA diagnose_decide='off'` suppresses every diagnosis: no reports, no
@@ -736,4 +704,3 @@ MAXIMIZE SUM(buy * p_retailprice);
 ```
 Invalid Input Error: DECIDE optimization is unbounded: a decision variable can grow without bound. Add an upper bound, e.g. SUCH THAT x <= <cap>. For the variable, set PRAGMA diagnose_decide='auto' and re-run.
 ```
-

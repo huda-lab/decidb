@@ -74,58 +74,154 @@ Timers use DuckDB's `Profiler` class (`src/include/duckdb/common/profiler.hpp`).
 
 ## Benchmark Query Set
 
-Nine queries run at all default database sizes. Query files live in `benchmark/decide/queries/*.sql` and use `${NAME}` placeholders for size-specific coefficients. The runner resolves placeholders before execution, fails fast on unresolved `${...}` tokens, and stores both the resolved SQL and coefficient map in each result entry.
+Eleven queries run at all default database sizes. The set is designed to cover the DECIQL expressivity surface (problem classes, variable types, constraint/objective forms, SQL functions, WHEN/PER) with the **fewest queries** — each query deliberately bundles several features, recorded in a `-- TAGS:` header comment in its `.sql` file. Query files live in `benchmark/decide/queries/*.sql` and use `${NAME}` placeholders for size-specific coefficients; the runner resolves them before execution, fails fast on unresolved `${...}` tokens, and stores both the resolved SQL and coefficient map in each result entry.
+
+**Scale tiers.** The linear / LP / feasibility queries (Q1, Q2, Q4, Q8, Q11) run at full scale (500K–1M rows). The MILP-with-per-row-binaries and QP/QCQP queries are **row-limited** via `${..._ROW_LIMIT}` because their auxiliary variables — Big-M indicators, L0 count indicators, McCormick/QCQP terms — grow with the row count and do not scale to 1M. Q3/Q5/Q10 are moderate (20K–100K); Q6 smaller; Q9 smallest of the MILPs (the hard-MAX indicators couple globally, so it is the least scalable); Q7 (non-convex, Gurobi `NonConvex=2`) is smallest.
 
 | Query | File | Features Exercised |
 |-------|------|--------------------|
-| Q1 | `q1_linear_knapsack.sql` | Boolean knapsack, SUM constraint, linear objective |
-| Q2 | `q2_abs_minmax.sql` | REAL decision variable, ABS linearization, hard MAX condition |
-| Q3 | `q3_avg_when.sql` | AVG rewrite, WHEN-filtered aggregate, continuous decision variable |
-| Q4 | `q4_nested_per_objective.sql` | PER grouping, nested aggregate objective, MINIMIZE MAX |
-| Q5 | `q5_linear_stress.sql` | Boolean multi-constraint knapsack, larger linear stress case |
-| Q6 | `q6_domain_ne_between.sql` | INTEGER domain, IN, BETWEEN, not-equal aggregate |
-| Q7 | `q7_entity_scope_join.sql` | Join input, entity-scoped DECIDE variable, PER by order priority |
-| Q8 | `q8_boolean_bilinear.sql` | Two Boolean decision variables, bilinear terms over an ordered orders prefix |
-| Q9 | `q9_quadratic_gurobi.sql` | REAL variable, quadratic norm constraint, quadratic objective |
+| Q1 | `q1_ilp_selection.sql` | Boolean ILP selection; MAXIMIZE SUM + WHEN-on-objective; AVG constraint; WHEN + aggregate-local WHEN; multi-column PER |
+| Q2 | `q2_integer_domains.sql` | INTEGER + default-type vars; BETWEEN, IN(var), `<>` per-row + aggregate, division, unary-minus, strict `>`; uncorrelated + correlated subqueries; data-only aggregate RHS; `%` fold |
+| Q3 | `q3_abs_norms.sql` | REAL signed domain; MINIMIZE; ABS lower-envelope; norm L1 / L∞ / L0 (moderate — L0 is one binary per row) |
+| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) + nested-PER objective; composed MIN/MAX-in-LHS; easy MAX constraint (full scale — heaviest large query) |
+| Q5 | `q5_qp_qcqp.sql` | Convex QP + QCQP; quadratic + mixed linear/quadratic objective; norm L2; aggregate quadratic constraint (moderate, Gurobi) |
+| Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); WHEN+PER (row-limited) |
+| Q7 | `q7_nonconvex.sql` | MIQP + non-convex QP + non-convex bilinear; per-row quadratic constraint (small, Gurobi `NonConvex=2`) |
+| Q8 | `q8_feasibility_join.sql` | Feasibility (no objective); entity-scoped variable over a join; multi-column PER; WHEN+PER; IS NOT NULL |
+| Q9 | `q9_maximize_max.sql` | MAXIMIZE MAX (hard, Big-M); equality constraint (small — hard-MAX indicators couple globally) |
+| Q10 | `q10_maximize_abs.sql` | MAXIMIZE SUM(ABS) + ABS Path-B `>=` constraint (Big-M; row-limited, but per-row-independent so scales further than Q9) |
+| Q11 | `q11_lp_allocation.sql` | Pure LP continuous allocation; MAXIMIZE AVG |
 
 ### Coefficients
 
+`${..._ROW_LIMIT}` placeholders set the row prefix for row-limited queries; the remaining placeholders are constraint bounds sized to keep each query feasible and non-trivial at each scale.
+
 | Placeholder | Medium | Large |
 |---|---:|---:|
-| `Q1_QTY_CAP` | 833 | 1667 |
-| `Q2_ABS_CAP` | 333 | 667 |
-| `Q3_R_QTY_CAP` | 333 | 667 |
-| `Q5_QTY_CAP` | 8333 | 16667 |
-| `Q5_COUNT_CAP` | 833 | 1667 |
-| `Q5_DISCOUNT_CAP` | 83333 | 166667 |
-| `Q6_PRICE_CAP` | 90691505 | 182337938 |
-| `Q6_NE_SUM` | 255 | 510 |
-| `Q7_QTY_CAP` | 5000 | 10000 |
-| `Q7_PRIORITY_CAP` | 100 | 200 |
-| `Q8_CHOOSE_CAP` | 128 | 255 |
-| `Q8_EXPEDITE_CAP` | 64 | 128 |
-| `Q8_PAIR_PRICE_CAP` | 13603726 | 27350691 |
-| `Q8_ROW_LIMIT` | 2048 | 4096 |
-| `Q9_SSE_CAP` | 752545 | 1504661 |
+| `Q1_QTY_CAP` | 3829286 | 7660945 |
+| `Q1_R_QTY_CAP` | 1260000 | 2520000 |
+| `Q1_GRP_CAP` | 62500 | 125000 |
+| `Q1_LOCAL_CAP` | 5420000000 | 10900000000 |
+| `Q2_NE_SUM` | 127500 | 255000 |
+| `Q2_PRICE_CAP` | 9070000000 | 18200000000 |
+| `Q2_MOD_CAP` | 1147500 | 2295000 |
+| `Q3_ROW_LIMIT` | 20000 | 40000 |
+| `Q3_ABS_CAP` | 150000 | 300000 |
+| `Q4_QTY_CAP` | 2500000 | 5000000 |
+| `Q5_ROW_LIMIT` | 50000 | 100000 |
+| `Q5_SSE_CAP` | 38700000 | 77400000 |
+| `Q6_ROW_LIMIT` | 8192 | 16384 |
+| `Q6_PICK_CAP` | 4096 | 8192 |
+| `Q6_BILIN_CAP` | 204800 | 409600 |
+| `Q6_GRP_CAP` | 80000 | 160000 |
+| `Q7_ROW_LIMIT` | 1024 | 2048 |
+| `Q7_BILIN_CAP` | 40960 | 81920 |
+| `Q7_PICK_CAP` | 512 | 1024 |
+| `Q9_ROW_LIMIT` | 5000 | 10000 |
+| `Q10_ROW_LIMIT` | 50000 | 100000 |
+| `Q10_SUM_CAP` | 750000 | 1500000 |
+| `Q10_ABS_FLOOR` | 125000 | 250000 |
+| `Q11_BUDGET` | 51000000000 | 102000000000 |
+
+Q8 carries no placeholders (its feasibility bounds are fixed literals); Q4's composed-constraint cap and Q9's cardinality/price bounds are likewise inline literals held constant across sizes.
 
 ### Coverage Matrix
 
-| Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 |
-|---------|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| IS BOOLEAN | x | | | x | x | | x | x | |
-| IS INTEGER | | | | | | x | | | |
-| IS REAL | | x | | | | | | | x |
-| ABS linearization | | x | | | | | | | |
-| MIN/MAX | | x | | x | | | | | |
-| AVG rewrite | | | x | | | | | | |
-| WHEN filtering | | | x | | | | | | |
-| PER grouping | | | | x | | | x | | |
-| Join input | | | | | | | x | | |
-| Domain constraints | | | | | | x | | | |
-| Not-equal aggregate | | | | | | x | | | |
-| Bilinear terms | | | | | | | | x | |
-| Quadratic terms | | | | | | | | | x |
-| Multiple constraints | | x | x | x | x | x | x | x | x |
+Cells mark which query exercises each feature. Queries pack multiple features, so most columns are dense.
+
+**Variable types**
+
+| Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
+| IS BOOLEAN | x | | | x | | x | x | x | x | | |
+| IS INTEGER (explicit) | | x | | | | | | | | | |
+| IS REAL | | | x | | x | x | x | | | x | x |
+| Default type (bare `DECIDE x`) | | x | | | | | | | | | |
+| Multiple variables | | x | | | | x | x | | | | |
+| Entity/table-scoped | | | | | | | | x | | | |
+| Signed / negative domain | | | x | | | | | | | | |
+
+**Problem classes**
+
+| Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
+| LP | | | | | | | | | | | x |
+| ILP | x | x | | x | | | | | x | | |
+| MILP | | | x | | | x | | | | x | |
+| QP (convex) | | | | | x | | | | | | |
+| QP (non-convex) | | | | | | | x | | | | |
+| MIQP | | | | | | | x | | | | |
+| QCQP | | | | | x | | x | | | | |
+| Bilinear (McCormick) | | | | | | x | | | | | |
+| Bilinear (non-convex) | | | | | | | x | | | | |
+| Feasibility (no objective) | | | | | | | | x | | | |
+
+**Constraint forms**
+
+| Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
+| Equality `=` | | | | | | | | | x | | |
+| Strict `>` / `<` | | x | | | | | | | | | |
+| `<>` per-row | | x | | | | | | | | | |
+| `<>` aggregate | | x | | | | | | | | | |
+| BETWEEN | | x | x | | | | | | | x | |
+| IN (decision var) | | x | | | | | | | | | |
+| Per-row linear LHS (`/`, unary `-`) | | x | | | | | | | | | |
+| Uncorrelated subquery | | x | | | | | | | | | |
+| Correlated subquery | | x | | | | | | | | | |
+| Data-only aggregate RHS | | x | | | | | | | | | |
+| Data-only operator fold (`%`) | | x | | | | | | | | | |
+| Composed MIN/MAX in LHS | | | | x | | | | | | | |
+| Quadratic constraint (aggregate) | | | | | x | | | | | | |
+| Quadratic constraint (per-row) | | | | | | | x | | | | |
+| Bilinear constraint | | | | | | x | x | | | | |
+
+**Objectives**
+
+| Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
+| MAXIMIZE SUM | x | x | | | | x | | | | | |
+| MINIMIZE (SUM / quadratic) | | | x | | x | | | | | | |
+| MINIMIZE MAX (easy) | | | | x | | | | | | | |
+| MAXIMIZE MAX (hard, Big-M) | | | | | | | | | x | | |
+| MAXIMIZE SUM(ABS) | | | | | | | | | | x | |
+| Nested-PER objective | | | | x | | | | | | | |
+| Quadratic objective | | | | | x | | x | | | | |
+| Bilinear objective | | | | | | x | | | | | |
+| Mixed linear + quadratic | | | | | x | | | | | | |
+| WHEN on objective | x | | | | | | | | | | |
+| AVG objective | | | | | | | | | | | x |
+
+**SQL functions**
+
+| Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
+| AVG | x | | | | | | | | | | x |
+| MIN / MAX | | | | x | | | | | x | | |
+| ABS (lower-envelope) | | | x | | | | | | | | |
+| ABS (Big-M) | | | | | | | | | | x | |
+| POWER (quadratic) | | | | | x | | x | | | | |
+| norm L1 | | | x | | | | | | | | |
+| norm L2 | | | | | x | | | | | | |
+| norm L∞ | | | x | | | | | | | | |
+| norm L0 | | | x | | | | | | | | |
+| Bilinear (var × var) | | | | | | x | x | | | | |
+| Division | | x | | | | | | | | | |
+
+**WHEN / PER**
+
+| Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
+| WHEN on constraint | x | | | | | x | | x | | | |
+| WHEN on objective | x | | | | | | | | | | |
+| Aggregate-local WHEN | x | | | | | | | | | | |
+| WHEN + PER composition | | | | | | x | | x | | | |
+| PER single-column | | | | x | | x | | x | | | |
+| PER multi-column | x | | | | | | | x | | | |
+| PER on objective (nested) | | | | x | | | | | | | |
+| IS NULL / IS NOT NULL | | | | | | | | x | | | |
+
+**Deliberate omissions.** Two objective forms are left uncovered to keep the count at 11: `MAXIMIZE MIN` (easy) — mechanically identical to Q4's `MINIMIZE MAX`; and `MINIMIZE MIN` (hard) — the symmetric twin of Q9's `MAXIMIZE MAX`. Adding either costs a whole query (one objective per query) for a construct whose linearization is already exercised.
 
 ## Output
 
@@ -135,14 +231,14 @@ After each run, `view_results.py` displays colored stage-proportion bars:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Q1: linear_knapsack
-  SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, x
+Q1: ilp_selection
+  SELECT l_orderkey, l_linenumber, ..., keep
   FROM lineitem
-  DECIDE x IS BOOLEAN
-  SUCH THAT SUM(x * l_quantity) <= 833
-  MAXIMIZE SUM(x * l_extendedprice);
+  DECIDE keep IS BOOLEAN
+  SUCH THAT SUM(keep * l_quantity) <= 3829286 ...
+  MAXIMIZE SUM(keep * l_extendedprice) WHEN l_linestatus = 'F';
 
-  medium  │ 500K rows │ 500K vars │ 3 constraints │ 0.45s
+  medium  │ 500K rows │ 500K vars │ ... │ 1.73s
   ██░░░░░░░░░░░░████████████████████████████████████░░░░░░
    opt       model              solver              other
 ```
@@ -172,12 +268,12 @@ Saved to `benchmark/decide/results/{commit}.json` (or `dirty.json` for uncommitt
   "queries": [
     {
       "query": "Q1",
-      "description": "linear_knapsack",
+      "description": "ilp_selection",
       "size": "medium",
-      "sql": "SELECT l_orderkey ... SUCH THAT SUM(x * l_quantity) <= 833 ...",
+      "sql": "SELECT l_orderkey ... SUCH THAT SUM(keep * l_quantity) <= 3829286 ...",
       "coefficients": {
-        "Q1_QTY_CAP": 833,
-        "Q2_ABS_CAP": 333
+        "Q1_QTY_CAP": 3829286,
+        "Q1_GRP_CAP": 62500
       },
       "runs": [...],
       "stats": {
@@ -243,15 +339,17 @@ benchmark/decide/
 ├── run_benchmarks.py          # Orchestration script
 ├── view_results.py            # Visual results viewer
 ├── queries/
-│   ├── q1_linear_knapsack.sql
-│   ├── q2_abs_minmax.sql
-│   ├── q3_avg_when.sql
-│   ├── q4_nested_per_objective.sql
-│   ├── q5_linear_stress.sql
-│   ├── q6_domain_ne_between.sql
-│   ├── q7_entity_scope_join.sql
-│   ├── q8_boolean_bilinear.sql
-│   ├── q9_quadratic_gurobi.sql
+│   ├── q1_ilp_selection.sql
+│   ├── q2_integer_domains.sql
+│   ├── q3_abs_norms.sql
+│   ├── q4_minmax_nested.sql
+│   ├── q5_qp_qcqp.sql
+│   ├── q6_bilinear_mccormick.sql
+│   ├── q7_nonconvex.sql
+│   ├── q8_feasibility_join.sql
+│   ├── q9_maximize_max.sql
+│   ├── q10_maximize_abs.sql
+│   ├── q11_lp_allocation.sql
 │   └── manual.sql.example
 ├── databases/                 # Generated TPC-H DBs (gitignored)
 │   ├── medium.db              # SF=0.085, exactly 500K lineitem rows

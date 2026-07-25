@@ -18,6 +18,12 @@ DiagnosisTerminal RouteSolveResult(const SolverResult &result, const string &mod
 	switch (result.status) {
 	case SolverStatus::OPTIMAL:
 		return DiagnosisTerminal::SOLVED;
+	case SolverStatus::SUBOPTIMAL:
+		// A feasible-but-unproven incumbent (Gurobi stopped without proving optimality
+		// on a numerically hard QCP). It is a usable answer, so deliver it as a success;
+		// the operator adds the "not proven best" caveat. The backend guarantees a
+		// solution is present whenever it reports SUBOPTIMAL.
+		return DiagnosisTerminal::SOLVED;
 	case SolverStatus::UNBOUNDED:
 		return DiagnosisApplies(mode, result.status) ? DiagnosisTerminal::UNBOUNDED
 		                                             : DiagnosisTerminal::UNDIAGNOSED;

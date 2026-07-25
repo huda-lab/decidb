@@ -28,6 +28,12 @@ enum class SolverStatus {
 	UNBOUNDED,
 	INF_OR_UNBD,
 	TIME_LIMIT,
+	//! A feasible solution is available but the solver could not prove it optimal
+	//! (Gurobi GRB_SUBOPTIMAL — a numerically hard barrier on a QCP/SOC model that
+	//! stops before satisfying optimality tolerances). Carries `solution` /
+	//! `objective_value` / `has_solution` like the TIME_LIMIT incumbent; the operator
+	//! delivers the rows with a "not proven best" caveat instead of discarding them.
+	SUBOPTIMAL,
 	ITERATION_LIMIT,
 	OTHER
 };
@@ -39,14 +45,15 @@ struct SolverResult {
 	//! Normalized terminal status of the solve.
 	SolverStatus status = SolverStatus::OTHER;
 	//! Solution vector (size = num_rows * num_decide_vars). Populated at
-	//! `status == OPTIMAL` (the proven optimum) and at `status == TIME_LIMIT`
-	//! when the backend found a feasible incumbent (`has_solution`); empty
-	//! otherwise. Callers must therefore branch on `status` / `has_solution`,
-	//! not on emptiness alone, to know whether a value is proven optimal.
+	//! `status == OPTIMAL` (the proven optimum), at `status == TIME_LIMIT` when the
+	//! backend found a feasible incumbent (`has_solution`), and at
+	//! `status == SUBOPTIMAL` (feasible but unproven); empty otherwise. Callers must
+	//! therefore branch on `status` / `has_solution`, not on emptiness alone, to know
+	//! whether a value is proven optimal.
 	vector<double> solution;
 	//! Objective value of `solution`, in the model's own sense (no sign flip).
 	//! The proven optimum at `OPTIMAL`; the best-so-far incumbent objective at
-	//! `TIME_LIMIT` (only meaningful when `has_solution`); left 0.0 otherwise.
+	//! `TIME_LIMIT` / `SUBOPTIMAL` (only meaningful when `has_solution`); left 0.0 otherwise.
 	//! The infeasible engine's stage-2 re-solve reads this as the achievable objective.
 	//! Stage-1 repair budgets are read back from the solved repair variables.
 	double objective_value = 0.0;
@@ -59,9 +66,10 @@ struct SolverResult {
 	bool diagnostic_timed_out = false;
 	//! Backend-native status code, surfaced in the OTHER catch-all message.
 	int raw_status = 0;
-	//! TIME_LIMIT only: true when the backend found a feasible incumbent by the
-	//! time limit (Gurobi `SolCount > 0` / HiGHS `primal_solution_status ==
-	//! feasible`). Gates the incumbent reads (`solution`, `objective_value`,
+	//! TIME_LIMIT / SUBOPTIMAL: true when the backend found a feasible incumbent
+	//! (TIME_LIMIT by the time limit; SUBOPTIMAL when the solver stopped without a
+	//! proof of optimality). Gurobi `SolCount > 0` / HiGHS `primal_solution_status ==
+	//! feasible`. Gates the incumbent reads (`solution`, `objective_value`,
 	//! `gap`) — with no incumbent those attributes return solver sentinels
 	//! (`-1e100` / `inf` / `nan`), so they are read only when this is true.
 	bool has_solution = false;

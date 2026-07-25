@@ -237,9 +237,11 @@ void ThrowDecideSolveError(const SolverResult &result) {
             "DECIDE optimization hit the iteration limit. Simplify the constraints.");
     case SolverStatus::OTHER:
     case SolverStatus::OPTIMAL:
-        // OTHER, or OPTIMAL passed here in error: fall through to the generic
-        // message. (The switch lists every enum value so -Wswitch flags any
-        // future addition; control still reaches the throw below.)
+    case SolverStatus::SUBOPTIMAL:
+        // OTHER, or OPTIMAL / SUBOPTIMAL passed here in error: fall through to the
+        // generic message. (SUBOPTIMAL routes to the SOLVED success terminal, so it
+        // never reaches this error path in practice — it is listed only so -Wswitch
+        // flags any future addition; control still reaches the throw below.)
         break;
     }
     throw InvalidInputException("DECIDE optimization failed (solver status %d).", result.raw_status);
