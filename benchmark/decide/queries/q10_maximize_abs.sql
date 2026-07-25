@@ -1,4 +1,7 @@
--- Q10  MAXIMIZE ABS + ABS Path-B constraint (Big-M; row-limited: sign binaries scale with rows)
+-- Q10  MAXIMIZE ABS + ABS Path-B constraint (Big-M; full lineitem scale)
+-- NOTE: the ABS sign binaries scale with rows (5 vars/row → 5M vars at 1M rows), but they
+--       are per-row independent, so cost stays near-linear. Measured 2026-07-26: 500K rows
+--       30.3s, 1M rows 73.3s — the heaviest query in the suite.
 -- TAGS: type=REAL; class=MILP; obj=MAXIMIZE-SUM(ABS);
 --       func=ABS-in-MAXIMIZE(Big-M),ABS-PathB(Big-M >= constraint)
 SELECT l_orderkey, l_linenumber, l_quantity, adj

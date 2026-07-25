@@ -1,4 +1,6 @@
 -- Q3  ABS & norms, signed domain (moderate scale: L0 adds one binary per row)
+-- NOTE: the L0 covering MILP is the scale limiter. Measured 2026-07-26: 60K rows 13.3s,
+--       120K 26.4s, 250K >60s. 120K (large) is the practical ceiling.
 -- TAGS: type=REAL,signed-domain; class=MILP; obj=MINIMIZE;
 --       func=ABS-PathA(<=),ABS-in-MINIMIZE,norm-L1,norm-Linf,norm-L0
 -- NOTE: L0 (a covering-type MILP) and the ABS Big-M hard-direction (>=) explode when

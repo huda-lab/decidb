@@ -76,20 +76,42 @@ Timers use DuckDB's `Profiler` class (`src/include/duckdb/common/profiler.hpp`).
 
 Eleven queries run at all default database sizes. The set is designed to cover the DECIQL expressivity surface (problem classes, variable types, constraint/objective forms, SQL functions, WHEN/PER) with the **fewest queries** — each query deliberately bundles several features, recorded in a `-- TAGS:` header comment in its `.sql` file. Query files live in `benchmark/decide/queries/*.sql` and use `${NAME}` placeholders for size-specific coefficients; the runner resolves them before execution, fails fast on unresolved `${...}` tokens, and stores both the resolved SQL and coefficient map in each result entry.
 
-**Scale tiers.** The linear / LP / feasibility queries (Q1, Q2, Q4, Q8, Q11) run at full scale (500K–1M rows). The MILP-with-per-row-binaries and QP/QCQP queries are **row-limited** via `${..._ROW_LIMIT}` because their auxiliary variables — Big-M indicators, L0 count indicators, McCormick/QCQP terms — grow with the row count and do not scale to 1M. Q3/Q5/Q10 are moderate (20K–100K); Q6 smaller; Q9 smallest of the MILPs (the hard-MAX indicators couple globally, so it is the least scalable); Q7 (non-convex, Gurobi `NonConvex=2`) is smallest.
+**Scale tiers.** Every query runs at the largest size that completes in reasonable time, established by measurement (2026-07-26) rather than assumption. Three things bound a query's size:
+
+1. **Table cardinality.** Only `lineitem` is pinned to 500K/1M. Queries over `orders` (Q2, Q6, Q7) top out at 127.5K/255K and those over `partsupp` (Q11) at 68K/136K. These are at full table scale — they are not row-limited, they are on smaller tables.
+2. **Solver cost that grows superlinearly with rows.** Q3 (L0 covering MILP), Q5 (QCQP barrier), and Q9 (hard-MAX Big-M indicators, which couple globally) hit a wall well below 500K and stay row-limited via `${..._ROW_LIMIT}`.
+3. **Nothing** — Q1, Q4, Q8, Q10 run the full 500K/1M `lineitem`.
+
+Measured ceilings (largest size completing under 60s, medium DB):
+
+| Query | Medium / Large | Wall (med / large) | Bound by |
+|---|---|---|---|
+| Q1, Q4, Q8 | 500K / 1M | — | full `lineitem` |
+| Q10 | 500K / 1M | 30.3s / 73.3s | full `lineitem` (heaviest in the suite) |
+| Q2 | 127.5K / 255K | — | full `orders` |
+| Q6 | 127.5K / 255K | 15.2s / 39.9s | full `orders` |
+| Q7 | 127.5K / 255K | 3.3s / 7.1s | full `orders` |
+| Q11 | 68K / 136K | — | full `partsupp` |
+| Q3 | 60K / 120K | 13.3s / 26.4s | L0 MILP — 250K exceeds 60s |
+| Q5 | 50K / 100K | 3.7s / 9.2s | QCQP barrier — 125K exceeds 60s |
+| Q9 | 7.5K / 15K | 5.3s / 29.8s | hard-MAX Big-M — 30K exceeds 60s |
+
+A full run (3 iterations × 2 sizes) takes roughly 17 minutes at these settings. Q10, Q6, and Q4 account for most of it. When iterating on a single optimization, prefer `--sizes medium --queries <subset>`.
+
+**Raising a limit requires re-measuring.** Q7 sat at 1024 rows for a long time on the assumption that Gurobi `NonConvex=2` explodes with row count; it does not — the non-convex structure there is per-row independent and 127.5K rows solves in 3.3s. Conversely Q9 goes from 1.7s at 5K to over 60s at 30K. The per-query `-- NOTE:` headers record each measured curve; treat them as data, not as guesses.
 
 | Query | File | Features Exercised |
 |-------|------|--------------------|
 | Q1 | `q1_ilp_selection.sql` | Boolean ILP selection; MAXIMIZE SUM + WHEN-on-objective; AVG constraint; WHEN + aggregate-local WHEN; multi-column PER |
 | Q2 | `q2_integer_domains.sql` | INTEGER + default-type vars; BETWEEN, IN(var), `<>` per-row + aggregate, division, unary-minus, strict `>`; uncorrelated + correlated subqueries; data-only aggregate RHS; `%` fold |
-| Q3 | `q3_abs_norms.sql` | REAL signed domain; MINIMIZE; ABS lower-envelope; norm L1 / L∞ / L0 (moderate — L0 is one binary per row) |
-| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) + nested-PER objective; composed MIN/MAX-in-LHS; easy MAX constraint (full scale — heaviest large query) |
-| Q5 | `q5_qp_qcqp.sql` | Convex QP + QCQP; quadratic + mixed linear/quadratic objective; norm L2; aggregate quadratic constraint (moderate, Gurobi) |
-| Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); WHEN+PER (row-limited) |
-| Q7 | `q7_nonconvex.sql` | MIQP + non-convex QP + non-convex bilinear; per-row quadratic constraint (small, Gurobi `NonConvex=2`) |
+| Q3 | `q3_abs_norms.sql` | REAL signed domain; MINIMIZE; ABS lower-envelope; norm L1 / L∞ / L0 (row-limited — L0 is one binary per row) |
+| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) + nested-PER objective; composed MIN/MAX-in-LHS; easy MAX constraint (full scale) |
+| Q5 | `q5_qp_qcqp.sql` | Convex QP + QCQP; quadratic + mixed linear/quadratic objective; norm L2; aggregate quadratic constraint (row-limited, Gurobi) |
+| Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); WHEN+PER (full `orders` scale) |
+| Q7 | `q7_nonconvex.sql` | MIQP + non-convex QP + non-convex bilinear; per-row quadratic constraint (full `orders` scale, Gurobi `NonConvex=2`) |
 | Q8 | `q8_feasibility_join.sql` | Feasibility (no objective); entity-scoped variable over a join; multi-column PER; WHEN+PER; IS NOT NULL |
-| Q9 | `q9_maximize_max.sql` | MAXIMIZE MAX (hard, Big-M); equality constraint (small — hard-MAX indicators couple globally) |
-| Q10 | `q10_maximize_abs.sql` | MAXIMIZE SUM(ABS) + ABS Path-B `>=` constraint (Big-M; row-limited, but per-row-independent so scales further than Q9) |
+| Q9 | `q9_maximize_max.sql` | MAXIMIZE MAX (hard, Big-M); equality constraint (row-limited — hard-MAX indicators couple globally, least scalable query) |
+| Q10 | `q10_maximize_abs.sql` | MAXIMIZE SUM(ABS) + ABS Path-B `>=` constraint (Big-M; full scale — per-row-independent sign binaries, 5M vars at 1M rows; heaviest query in the suite) |
 | Q11 | `q11_lp_allocation.sql` | Pure LP continuous allocation; MAXIMIZE AVG |
 
 ### Coefficients
@@ -105,22 +127,22 @@ Eleven queries run at all default database sizes. The set is designed to cover t
 | `Q2_NE_SUM` | 127500 | 255000 |
 | `Q2_PRICE_CAP` | 9070000000 | 18200000000 |
 | `Q2_MOD_CAP` | 1147500 | 2295000 |
-| `Q3_ROW_LIMIT` | 20000 | 40000 |
-| `Q3_ABS_CAP` | 150000 | 300000 |
+| `Q3_ROW_LIMIT` | 60000 | 120000 |
+| `Q3_ABS_CAP` | 450000 | 900000 |
 | `Q4_QTY_CAP` | 2500000 | 5000000 |
 | `Q5_ROW_LIMIT` | 50000 | 100000 |
 | `Q5_SSE_CAP` | 38700000 | 77400000 |
-| `Q6_ROW_LIMIT` | 8192 | 16384 |
-| `Q6_PICK_CAP` | 4096 | 8192 |
-| `Q6_BILIN_CAP` | 204800 | 409600 |
-| `Q6_GRP_CAP` | 80000 | 160000 |
-| `Q7_ROW_LIMIT` | 1024 | 2048 |
-| `Q7_BILIN_CAP` | 40960 | 81920 |
-| `Q7_PICK_CAP` | 512 | 1024 |
-| `Q9_ROW_LIMIT` | 5000 | 10000 |
-| `Q10_ROW_LIMIT` | 50000 | 100000 |
-| `Q10_SUM_CAP` | 750000 | 1500000 |
-| `Q10_ABS_FLOOR` | 125000 | 250000 |
+| `Q6_ROW_LIMIT` | 127500 | 255000 |
+| `Q6_PICK_CAP` | 63750 | 127500 |
+| `Q6_BILIN_CAP` | 3187500 | 6375000 |
+| `Q6_GRP_CAP` | 1245117 | 2490234 |
+| `Q7_ROW_LIMIT` | 127500 | 255000 |
+| `Q7_BILIN_CAP` | 5100000 | 10200000 |
+| `Q7_PICK_CAP` | 63750 | 127500 |
+| `Q9_ROW_LIMIT` | 7500 | 15000 |
+| `Q10_ROW_LIMIT` | 500000 | 1000000 |
+| `Q10_SUM_CAP` | 7500000 | 15000000 |
+| `Q10_ABS_FLOOR` | 1250000 | 2500000 |
 | `Q11_BUDGET` | 51000000000 | 102000000000 |
 
 Q8 carries no placeholders (its feasibility bounds are fixed literals); Q4's composed-constraint cap and Q9's cardinality/price bounds are likewise inline literals held constant across sizes.

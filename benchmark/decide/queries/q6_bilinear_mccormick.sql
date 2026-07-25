@@ -1,4 +1,7 @@
--- Q6  Bilinear McCormick, MILP (moderate scale, row-limited)
+-- Q6  Bilinear McCormick, MILP (full orders scale)
+-- NOTE: bounded by the orders cardinality (127.5K medium / 255K large), not by solver
+--       cost — measured 2026-07-26 at 15.2s / 39.9s. Reaching 500K/1M would require
+--       moving off orders, which would change what the query tests.
 -- TAGS: type=BOOLEAN,REAL,multiple-vars; class=MILP,bilinear-McCormick;
 --       obj=MAXIMIZE-bilinear(b*x); cons=bilinear-constraint; when+per=WHEN+PER-composition
 SELECT o_orderkey, o_totalprice, o_orderpriority, pick, boost
