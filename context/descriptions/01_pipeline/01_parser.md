@@ -12,9 +12,11 @@ The Parser and Symbolic Layer is the entry point for the `DECIDE` clause. Its pr
 DeciDB integrates `SymbolicC++` to perform algebraic manipulations. The translation pipeline is as follows:
 
 1.  **DuckDB to Symbolic**: The `ToSymbolicRecursive` function traverses the DuckDB `ParsedExpression` tree.
-    -   `ColumnRef` (decision variable) $\rightarrow$ `Symbolic Variable`
-    -   `ColumnRef` (normal column) $\rightarrow$ `Symbolic Constant` (treated as opaque for now)
+    -   `ColumnRef` (decision variable) $\rightarrow$ `Symbolic Variable`, named by the **unqualified** variable name. `bind_select_node.cpp` always registers that form (the qualified `T.x` spelling is an alias for the same index), so `keepS` and `S.keepS` canonicalize to one symbol and the `decide_variables.count(name)` classification used by `SymbolicContainsDecideVariable` / `CollectDecideFactors` keeps working.
+    -   `ColumnRef` (normal column) $\rightarrow$ `Symbolic Constant` (treated as opaque for now), named by its **full dotted path**, lowercased (`t1.w`). The original reference is stashed in `SymbolicTranslationContext::column_map` and restored by copy in `FromSymbolic`.
     -   `Operator` (+, -, *) $\rightarrow$ `Symbolic Operation`
+
+    A `Symbolic` symbol carries only a name, so naming a data column by `GetColumnName()` alone would drop its qualifier on the way back out — two same-named columns from different tables would collapse into one symbol, and the rebuilt bare reference would be rejected as ambiguous. Keying by full path keeps them distinct; restoring by copy is lossless for multi-part paths (`catalog.schema.table.column`) and for quoted identifiers containing a dot, neither of which survives splitting a dotted string. Lowercasing the path matches DuckDB's case-insensitive identifier resolution, so `T1.W` and `t1.w` stay one symbol.
 
 2.  **Normalization**: The symbolic engine simplifies the expression. This involves:
     -   Expanding parentheses: `2 * (x + 5)` $\rightarrow$ `2x + 10`
@@ -140,4 +142,4 @@ ColId '.' ColId IS variable_type
 
 When the parser encounters a dotted name in the `DECIDE` clause (e.g., `DECIDE drivers.assigned IS BOOLEAN`), it produces a qualified `PGColumnRef` with a two-part name list — the first part is the table alias, the second is the variable name. This is the same `PGColumnRef` structure DuckDB uses for qualified column references (e.g., `t.col`), so no new AST node types are required.
 
-The symbolic layer treats the qualified variable name as an opaque identifier during normalization, preserving the table prefix through algebraic simplification. The binder (not the parser) is responsible for resolving the table alias and validating that the referenced table exists in the query's bind context.
+During normalization the symbolic layer canonicalizes a decision variable to its **unqualified** name, so `S.keepS` and `keepS` are the same symbol (§2). The table prefix is therefore not carried through algebraic simplification, and does not need to be: `bind_select_node.cpp` registers the unqualified name for every variable and rejects two variables that share one (`Duplicate DECIDE variable name`), so the unqualified form always resolves to the right variable. This is the opposite of the rule for *data* columns, which are keyed by full path precisely because two tables may expose the same column name. The binder (not the parser) is responsible for resolving the table alias and validating that the referenced table exists in the query's bind context.

@@ -159,6 +159,11 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
 	}
+	// Rows as actually handed to the backend, for the benchmark's model-size metric. Read
+	// off the built model because the pre-expansion inputs are not a row count at all: one
+	// per-row spec becomes a row per data row, one PER spec a row per group. Captured here,
+	// before any `std::move(model)` below.
+	idx_t built_constraint_rows = model.constraints.size() + model.quadratic_constraints.size();
 	// Under diagnosis (tolerate_infeasible_bounds), Build keeps an inverted column box
 	// (col_lower > col_upper) instead of throwing, so the model can be retained for the
 	// elastic engine. But the box IS infeasible, and some backends reject it at load
@@ -169,6 +174,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 			if (model.col_lower[col] > model.col_upper[col]) {
 				SolverResult result;
 				result.status = SolverStatus::INFEASIBLE;
+				result.model_constraint_rows = built_constraint_rows;
 				if (retained_model) {
 					*retained_model = std::move(model);
 				}
@@ -203,6 +209,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 	if (retained_model) {
 		*retained_model = std::move(model);
 	}
+	result.model_constraint_rows = built_constraint_rows;
 	return result;
 }
 

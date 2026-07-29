@@ -46,6 +46,22 @@ struct SymbolicTranslationContext {
     //! as ordinary data. Unlike abs_map these are data-side, not decide-side.
     unordered_map<string, unique_ptr<ParsedExpression>> data_map;
 
+    //! Map of qualified column paths (`t1.w`, lowercased) to the original column
+    //! reference. A `Symbolic` symbol carries only a name, so a qualified column
+    //! written in a constraint or objective would otherwise come back out of
+    //! FromSymbolic as a bare `ColumnRefExpression(GetColumnName())` — losing the
+    //! qualifier and becoming ambiguous when two tables in the FROM share a column
+    //! name. Keying the symbol by full path keeps distinct columns distinct in the
+    //! algebra; restoring by copy is lossless for multi-part paths
+    //! (`catalog.schema.table.column`) and quoted identifiers, which splitting a
+    //! dotted string on '.' would not be.
+    //!
+    //! DECIDE variables are deliberately NOT routed through here: they are
+    //! canonicalized to their unqualified name, which `bind_select_node.cpp`
+    //! always registers (the qualified form is only an alias), so `keepS` and
+    //! `S.keepS` stay one symbol and `decide_variables.count(name)` keeps working.
+    unordered_map<string, unique_ptr<ParsedExpression>> column_map;
+
     //! Constructor
     explicit SymbolicTranslationContext(const case_insensitive_map_t<idx_t> &vars)
         : decide_variables(vars) {}

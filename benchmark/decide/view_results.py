@@ -172,9 +172,23 @@ def render_query_group(query_name: str, entries: list[dict]) -> str:
         if total_vars:
             metric_parts.append(f"{format_count(total_vars)} vars")
 
-        total_cons = stages.get("total_constraints")
-        if total_cons is not None:
-            metric_parts.append(f"{int(total_cons)} constraints")
+        # Model size in two units, never summed. `total_constraint_rows` is what the solver
+        # actually received (a per-row clause expands to one row per data row, a PER clause
+        # to one row per group), so it is the figure to read for matrix pressure;
+        # `total_constraint_specs` is the clause-level count that points at the DECIDE
+        # clause responsible. Runs recorded before the split carry only the old
+        # `total_constraints`, which summed the two units and reported neither — show it
+        # flagged rather than silently comparing it against a row count.
+        total_rows = stages.get("total_constraint_rows")
+        total_specs = stages.get("total_constraint_specs")
+        legacy_cons = stages.get("total_constraints")
+        if total_rows is not None:
+            part = f"{format_count(total_rows)} constraint rows"
+            if total_specs is not None:
+                part += f" ({int(total_specs)} specs)"
+            metric_parts.append(part)
+        elif legacy_cons is not None:
+            metric_parts.append(f"{int(legacy_cons)} constraints (pre-split, mixed unit)")
 
         rss_kb = stats.get("median_peak_rss_kb")
         if rss_kb:

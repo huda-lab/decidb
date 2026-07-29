@@ -382,6 +382,89 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_entity_scoped_label_drops_accumulated_coefficient(
+        self, request, cli_fixture
+    ):
+        """An entity-scoped variable maps every joined row of an entity onto ONE solver
+        column, so the builder accumulates rather than fanning out. Here each region owns
+        exactly 5 nation rows, so `SUM(keepR)` reaches the matrix as `5*keepR` — one index,
+        coefficient 5, no fan-out for the reconstruction to fold. The label must still read
+        as written (`SUM(keepR)`, never `SUM(5*keepR)`), or the suggested edit is not
+        pasteable and leaks the entity/row-scope distinction the user never asked about."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT r_name, keepR "
+            "FROM nation n JOIN region r ON n.n_regionkey = r.r_regionkey "
+            "DECIDE r.keepR IS BOOLEAN "
+            "SUCH THAT SUM(keepR) >= 6 PER r.r_name "
+            "MAXIMIZE SUM(keepR)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        subject = "SUM(keepR) >= 6 PER r_name"
+        assert any(r["subject"] == subject for r in rows), (
+            "clause label must quote the written coefficient, not the accumulated one:\n"
+            + "\n".join(sorted({r["subject"] for r in rows if r["subject_kind"] == "clause"}))
+        )
+        attrs = _attrs(rows, "clause", subject)
+        assert attrs["suggested_change"] == "SUM(keepR) >= 5 PER r_name"
+        _apply_reported_fix(cli, sql, rows, {subject: "SUM(keepR) >= 6 PER r.r_name"})
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_entity_scoped_label_survives_mixed_multiplicity(
+        self, request, cli_fixture
+    ):
+        """Same fold, harder shape: one PER group holding several entities with *different*
+        join multiplicities (nations per region own 50-72 customers each), so the accumulated
+        coefficients differ across columns of the same variable. The reconstruction reads
+        that spread as a data-varying weight and renders the coefficient's source text —
+        `SUM(keepN * 1)`. Guards the branch a coefficient-of-1 gate would miss, since no
+        column here carries the user's written 1."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT n_name, keepN "
+            "FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey "
+            "JOIN region r ON n.n_regionkey = r.r_regionkey "
+            "DECIDE n.keepN IS BOOLEAN "
+            "SUCH THAT SUM(keepN) >= 1000 PER r.r_name "
+            "MAXIMIZE SUM(keepN)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        subject = "SUM(keepN) >= 1000 PER r_name"
+        assert any(r["subject"] == subject for r in rows), (
+            "mixed-multiplicity group must not render as a data-varying weight:\n"
+            + "\n".join(sorted({r["subject"] for r in rows if r["subject_kind"] == "clause"}))
+        )
+        _apply_reported_fix(cli, sql, rows, {subject: "SUM(keepN) >= 1000 PER r.r_name"})
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_row_scoped_label_unaffected_by_fold_rendering(
+        self, request, cli_fixture
+    ):
+        """Guard on the two tests above: a row-scoped variable genuinely fans out over its
+        rows, so it never takes the accumulating build path and must keep rendering through
+        the existing fan-out fold. Pins that the entity-scoped fix did not reroute the
+        common case."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, grp, buy FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, grp) "
+            "DECIDE buy IS BOOLEAN "
+            "SUCH THAT SUM(buy) >= 5 PER grp "
+            "MAXIMIZE SUM(buy)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        attrs = _attrs(rows, "clause", "SUM(buy) >= 5 PER grp")
+        assert attrs["suggested_change"] == "SUM(buy) >= 1 PER grp"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_stage2_picks_objective_best_edit(self, request, cli_fixture):
         """I3: two editable caps `x <= 0` and `y <= 0` tie with the floor `x + y >= 10`
         on total loosening (S* = 10), so the minimal fix is non-unique. Stage 2 freezes

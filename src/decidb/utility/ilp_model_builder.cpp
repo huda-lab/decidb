@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <numeric>
 #include <unordered_map>
 #include <unordered_set>
@@ -513,6 +514,55 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
         };
 
+        // Written per-term coefficients, for the accumulating path only. There the row's
+        // coefficient is a *sum* over the folded rows (entity-scoped vars collapse many
+        // rows onto one column), so the reconstruction cannot recover what the user typed
+        // from the matrix alone.
+        //
+        // `coefficient_labels[t]` is the source text of the term's coefficient expression
+        // (physical_decide.cpp:3069) — "1" for a bare `SUM(keepS)`, "l_extendedprice" for
+        // `SUM(buy * l_extendedprice)`. A label that is wholly a number therefore *is* the
+        // written coefficient; anything else is data-varying and has no single value to
+        // quote (weight_labels covers that case). The column's own `IsUniform()` only
+        // catches the Scalar representation — a written constant usually materializes
+        // dense — so the label is the reliable discriminator.
+        auto ParseLiteralCoefficient = [](const string &label, double &value) -> bool {
+            if (label.empty()) {
+                return false;
+            }
+            const char *begin = label.c_str();
+            char *end = nullptr;
+            double parsed = std::strtod(begin, &end);
+            if (end != begin + label.size() || !std::isfinite(parsed)) {
+                return false;
+            }
+            value = parsed;
+            return true;
+        };
+        // Computed once per clause, not per group: the PER path below emits one constraint
+        // per group and would otherwise rebuild this (and its scratch set) for every one.
+        // Empty unless the clause is an aggregate that takes the accumulating path, which
+        // is the only case whose matrix coefficients are folded totals.
+        vector<FoldedAggTerm> clause_folded_terms;
+        if (is_aggregate && !CanUseRowScopedFastPath(eval_const)) {
+            std::unordered_set<idx_t> seen;
+            for (idx_t t = 0; t < eval_const.variable_indices.size(); t++) {
+                idx_t v = eval_const.variable_indices[t];
+                if (v == DConstants::INVALID_INDEX || !seen.insert(v).second) {
+                    continue;
+                }
+                FoldedAggTerm term;
+                term.decide_var_idx = v;
+                if (eval_const.row_coefficients[t].IsUniform()) {
+                    term.has_unit = true;
+                    term.unit = eval_const.row_coefficients[t].Get(0);
+                } else if (t < eval_const.coefficient_labels.size()) {
+                    term.has_unit = ParseLiteralCoefficient(eval_const.coefficient_labels[t], term.unit);
+                }
+                clause_folded_terms.push_back(term);
+            }
+        }
+
         auto FixedLinearLhsOffset = [&](const EvaluatedConstraint &ec,
                                         const vector<idx_t> *rows,
                                         idx_t begin,
@@ -602,6 +652,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
                 constr.provenance.qualifier = eval_const.qualifier;
                 StampWeightLabels(constr.provenance);
+                constr.provenance.folded_terms = clause_folded_terms;
                 // An aggregate's RHS is required to be scalar (one editable knob), so
                 // it is a SHARED_LITERAL, not per-row data. This keeps PER_ROW_DATA
                 // meaning exactly "data RHS" for the conflict-summary path (I2.c).
@@ -703,6 +754,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
                     constr.provenance.qualifier = eval_const.qualifier;
                     StampWeightLabels(constr.provenance);
+                    constr.provenance.folded_terms = clause_folded_terms;
                     // Scalar RHS per group → one editable knob per group (SHARED_LITERAL),
                     // not per-row data. See site 1 (I2.c).
                     constr.provenance.shape = ElasticShape::SHARED_LITERAL;

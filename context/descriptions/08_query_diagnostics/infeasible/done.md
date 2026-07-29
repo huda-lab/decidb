@@ -351,6 +351,26 @@ preferred when it can restore feasibility. Two parts:
   no fan-out for `FormatSumLhs` to fold, so `FormatLhs` wraps the reconstruction in `SUM(...)`
   explicitly when `provenance.is_aggregate` and there is no multi-column fan (`HasVarFan`) —
   `SUM(x) >= 99 WHEN g='a'` renders `SUM(x) >= 99 …`, not a bare `x >= 99`.
+- **Entity-scoped SUM (the fold).** An **entity-scoped** variable (`DECIDE S.keepS`) maps every
+  joined row of an entity onto *one* solver column, so the builder **accumulates** instead of
+  fanning out: `SUM(keepS)` over two alert rows of one sensor reaches the matrix as a single index
+  with coefficient `2`. The per-row fan-out every rule above keys on is then structurally absent,
+  and reconstructing from the matrix quotes arithmetic the user never wrote — `SUM(2*keepS)` when
+  the group holds one entity, or `SUM(keepS * 1)` when the group mixes join multiplicities (the
+  differing per-entity totals read as a data-varying weight, so the coefficient's *source text*
+  gets rendered as if it were a column). Both fail the pasteable-edit test and leak the
+  entity/row-scope distinction. The accumulating build sites therefore stamp
+  `provenance.folded_terms` — the coefficient the user actually wrote per summed decide variable,
+  taken from `CoefficientColumn::IsUniform()` or, when the constant materializes dense, from a
+  numeric `coefficient_labels` entry (that label is the coefficient expression's source text, so a
+  wholly-numeric label *is* the written coefficient). `FormatLhs` consults `FormatFoldedSumLhs`
+  **before** the matrix-inference paths, since those misread accumulated rows; it declines
+  (returning false) for any row it cannot reconstruct whole — an auxiliary column, an unstamped
+  variable, or a data-varying term with no symbolic name — leaving the paths below unchanged.
+  `folded_terms` is populated only on the accumulating path, so a row-scoped fan-out never diverts
+  there. AVG rows are excluded: their coefficients are additionally 1/N pre-scaled, so the recorded
+  unit is not quotable in AVG units. Genuinely data-weighted entity clauses still render
+  symbolically (`SUM(keepS * cost)`).
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which now also sets
   `provenance.strict` + `provenance.typed_k` (the user's literal). `MakeLoosenEdit` re-quotes the
@@ -756,4 +776,12 @@ harness (E1) guards the core least-change promise mechanically: for each asserte
 diagnosis it applies every reported edit to the SQL (loosen → replace the clause with its
 `suggested_change`; drop → remove the clause) and asserts the edited query actually solves.
 BOOLEAN user-pin coverage (E3: `x >= 1`, `x = 1`, `x <= 0` pins, plus a domain-restatement
-guard asserting `x <= 1 AND x >= 0` never becomes an editable knob) lives there too.
+guard asserting `x <= 1 AND x >= 0` never becomes an editable knob) lives there too. The
+entity-scoped fold has three label tests in the same file, all on TPC-H so the CLI stays
+read-only: one entity per group (`SUM(keepR) >= 6 PER r_name` over region ⋈ nation, where each
+region folds 5 rows onto one column) must not render `SUM(5*keepR)`; mixed multiplicities in one
+group (`SUM(keepN) >= 1000 PER r_name` over customer ⋈ nation ⋈ region, where nations carry
+50-72 customers each) must not render `SUM(keepN * 1)`; and a row-scoped `SUM(buy) >= 5 PER grp`
+pins that the fan-out path is unchanged. Each entity case runs `_apply_reported_fix`, so the
+label is proven pasteable, not just pretty. The genuinely data-weighted entity clause
+(`SUM(keepS * cost)`) is verified manually only — no automated case yet.

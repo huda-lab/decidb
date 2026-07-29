@@ -81,18 +81,21 @@ def main() -> None:
     names = [q.strip() for q in args.queries.split(",") if q.strip()]
     results = []
     print(f"label={args.label}  db={args.db}  iters={args.iters}\n")
-    header = f"{'query':6} {'solver_ms':>10} {'model_ms':>9} {'vars':>9} {'cons':>7} {'objective':>18}"
+    header = f"{'query':6} {'solver_ms':>10} {'model_ms':>9} {'vars':>9} {'rows':>9} {'objective':>18}"
     print(header)
     print("-" * len(header))
     for name in names:
         sql = query_file(name).read_text()
-        solver_ms, model_ms, vars_, cons, obj = [], [], None, None, None
+        solver_ms, model_ms, vars_, cons, specs, obj = [], [], None, None, None, None
         for _ in range(args.iters):
             out, stages = run_once(args.db, sql)
             solver_ms.append(stages.get("solver_ms", float("nan")))
             model_ms.append(stages.get("model_construction_ms", float("nan")))
             vars_ = int(stages.get("total_variables", 0))
-            cons = int(stages.get("total_constraints", 0))
+            # Matrix rows as built, not the clause-spec count: a Big-M reformulation is
+            # judged on the rows it adds, and the spec count cannot see them.
+            cons = int(stages.get("total_constraint_rows", 0))
+            specs = int(stages.get("total_constraint_specs", 0))
             if obj is None:
                 obj = objective(name, out)
         entry = {
@@ -100,13 +103,14 @@ def main() -> None:
             "median_solver_ms": statistics.median(solver_ms),
             "median_model_ms": statistics.median(model_ms),
             "total_variables": vars_,
-            "total_constraints": cons,
+            "total_constraint_rows": cons,
+            "total_constraint_specs": specs,
             "objective": obj,
             "solver_ms_runs": solver_ms,
         }
         results.append(entry)
         print(f"{name:6} {entry['median_solver_ms']:>10.1f} "
-              f"{entry['median_model_ms']:>9.1f} {vars_:>9} {cons:>7} {obj:>18.2f}")
+              f"{entry['median_model_ms']:>9.1f} {vars_:>9} {cons:>9} {obj:>18.2f}")
 
     out_path = SCRIPT_DIR / "results" / f"bigm_{args.label}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)

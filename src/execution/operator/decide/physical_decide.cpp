@@ -5971,7 +5971,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Capture model size before solve (solver may move data)
     size_t bench_total_vars = var_indexer.total_vars;
-    size_t bench_total_constraints = solver_input.constraints.size() + solver_input.global_constraints.size();
+    // Clause-level model size: the number of constraint *specs* the operator hands the
+    // builder. A per-row spec still expands to one row per data row and a PER spec to one
+    // row per group, so this is not a matrix row count — the row count is read back off
+    // the built model (`solve_result.model_constraint_rows`) after the solve below.
+    size_t bench_constraint_specs = solver_input.constraints.size() + solver_input.global_constraints.size();
 
     if (bench) {
         model_timer.End();
@@ -6081,6 +6085,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // stderr with the results.
             fprintf(stderr,
                     "DECIDE is returning a feasible solution — the solver could not prove it is the best possible.\n");
+            // Machine-readable twin of the caveat above, for the test harness only. The
+            // caveat's wording is owned by the user-facing-output principle and will keep
+            // moving; a suite that greps its prose silently stops matching (it already did
+            // once, turning the QCQP retry into a flake). Tests key on this instead, and
+            // `decidb_cli.py` strips DECIDB_STATUS lines before classifying stderr. Gated
+            // on the env var so user-facing output is unchanged — same pattern as
+            // DECIDB_BENCH instrumentation.
+            if (std::getenv("DECIDB_STATUS_MARKERS")) {
+                fprintf(stderr, "DECIDB_STATUS: SUBOPTIMAL\n");
+            }
         }
         break; // fall through to the success stores below
     case DiagnosisTerminal::UNBOUNDED: {
@@ -6437,7 +6451,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         fprintf(stderr, "DECIDB_BENCH: model_construction_ms=%.2f\n", model_timer.Elapsed() * 1000.0);
         fprintf(stderr, "DECIDB_BENCH: solver_ms=%.2f\n", solver_timer.Elapsed() * 1000.0);
         fprintf(stderr, "DECIDB_BENCH: total_variables=%zu\n", bench_total_vars);
-        fprintf(stderr, "DECIDB_BENCH: total_constraints=%zu\n", bench_total_constraints);
+        // Two separate units, never summed: `specs` is the clause-level view (which DECIDE
+        // clause to look at), `rows` is what the solver actually received (where the matrix
+        // pressure is). The old `total_constraints` added the two and reported neither.
+        fprintf(stderr, "DECIDB_BENCH: total_constraint_specs=%zu\n", bench_constraint_specs);
+        fprintf(stderr, "DECIDB_BENCH: total_constraint_rows=%zu\n",
+                (size_t)solve_result.model_constraint_rows);
         fprintf(stderr, "DECIDB_BENCH: num_rows=%zu\n", (size_t)num_rows);
     }
 

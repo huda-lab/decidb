@@ -87,6 +87,16 @@ public:
 	}
 };
 
+//! One summed decide variable of an aggregate LHS, paired with the coefficient the user
+//! wrote for it. `has_unit` is false when that coefficient is data-varying
+//! (`SUM(keepS * price)`): there is no literal to quote, and the render falls back to the
+//! symbolic name in `ConstraintProvenance::weight_labels`. See `folded_terms`.
+struct FoldedAggTerm {
+    idx_t decide_var_idx = DConstants::INVALID_INDEX;
+    double unit = 1.0;
+    bool has_unit = false;
+};
+
 //! Row → clause provenance carried by every emitted constraint (F2). Lets diagnosis
 //! report at the user-clause level instead of at raw matrix rows.
 struct ConstraintProvenance {
@@ -142,6 +152,17 @@ struct ConstraintProvenance {
     //! instead of the numeric representative RHS. Empty for a literal/shared RHS or when no
     //! column name is available (the render then falls back to the numeric representative).
     string rhs_label;
+    //! Per-term coefficient the user actually wrote, for an aggregate row whose terms *fold*
+    //! onto fewer solver columns than there are contributing rows. An entity-scoped variable
+    //! (`DECIDE S.keepS`) maps every joined row of an entity onto ONE column, so the builder
+    //! accumulates instead of fanning out: `SUM(keepS)` over two rows of one sensor arrives
+    //! as a single index with coefficient 2. The fan-out that `FormatSumLhs` keys on is then
+    //! structurally absent, and the reconstruction quotes a constant the user never typed
+    //! (`SUM(2*keepS)`, or `SUM(keepS * 1)` when the group mixes multiplicities). Recording
+    //! the written coefficient lets the diagnosis quote the clause as written.
+    //! Populated only on the accumulating build path; empty for row-scoped fan-out rows,
+    //! which `FormatSumLhs` already folds correctly.
+    vector<FoldedAggTerm> folded_terms;
 };
 
 //! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs

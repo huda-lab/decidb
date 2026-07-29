@@ -236,6 +236,31 @@ rm test/decide/results/oracle_cache.json
 3. Add appropriate markers (feature marker + `correctness` meta marker)
 4. The oracle cache updates automatically on the next run
 
+### Never assert on user-facing message text
+
+Error messages, caveats and diagnostic prose are owned by the user-facing-output principle
+(see `CLAUDE.md`) and get reworded whenever the wording can be made clearer or less jargon-y.
+A test that greps them silently stops matching — it does not fail loudly, it just stops doing
+its job. That already happened once: the QCQP retry in `test_quadratic_constraints.py` matched
+`solver status 13|[Ss]uboptimal`, the caveat was reworded to *"DECIDE is returning a feasible
+solution — the solver could not prove it is the best possible"*, and the file turned into an
+intermittent red.
+
+To recognize a **solver terminal**, use the marker channel instead of the prose:
+
+- DeciDB emits `DECIDB_STATUS: <TERMINAL>` on stderr when `DECIDB_STATUS_MARKERS` is set
+  (currently `SUBOPTIMAL` only; `physical_decide.cpp`, SOLVED arm). Gated on the env var so
+  user-facing output is byte-identical without it.
+- `DecidBCli.execute` sets that env var, strips marker lines before classifying stderr, and
+  exposes the terminal as `DecidBCliError.status`. Branch on `e.status == "SUBOPTIMAL"`, never
+  on `str(e)`.
+- `execute_raw` / `execute_script` / `execute_interactive` deliberately do **not** request
+  markers: their callers classify raw stderr themselves and would read a marker line as an
+  error. If a new terminal needs surfacing there, strip it at the call site first.
+
+Asserting that an error *is about* the right thing (`assert "quadratic" in msg.lower()`) is
+still fine — that is a coarse topic check, not a dependency on exact wording.
+
 ## Performance Results
 
 After each run, a summary table is printed and a JSON file is saved to

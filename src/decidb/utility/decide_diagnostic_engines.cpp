@@ -229,6 +229,79 @@ bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
 	return true;
 }
 
+//! Aggregate LHS for a row built on the *accumulating* path, where each matrix coefficient
+//! is a sum over folded rows rather than the coefficient the user wrote. An entity-scoped
+//! variable collapses every joined row of an entity onto one column, so `SUM(keepS)` over
+//! two rows of a sensor reaches the matrix as `2*keepS` — there is no fan-out for
+//! `FormatSumLhs` to key on, and the accumulated constant is not quotable. Render straight
+//! from the per-term coefficients the builder recorded (`ConstraintProvenance::folded_terms`)
+//! so the label reads as written: `SUM(keepS)`, `SUM(3*keepS)`, `SUM(keepS * price)`.
+//! Returns false if any column of the row is not covered by a recorded term, or if a
+//! data-varying term has no symbolic name — the caller then falls back to the raw
+//! reconstruction, i.e. to today's behaviour.
+bool FormatFoldedSumLhs(const vector<int> &indices, const vector<FoldedAggTerm> &folded,
+                        const vector<ColumnProvenance> &cols,
+                        const vector<std::pair<idx_t, string>> &weight_labels, string &out,
+                        const char *agg_name) {
+	std::map<idx_t, const FoldedAggTerm *> term_of;
+	for (const auto &t : folded) {
+		term_of[t.decide_var_idx] = &t;
+	}
+	std::map<idx_t, string> label_for;
+	for (const auto &wl : weight_labels) {
+		label_for[wl.first] = wl.second;
+	}
+
+	vector<idx_t> order; // distinct decide variables, first-seen order
+	std::map<idx_t, string> name_of;
+	for (int col : indices) {
+		// An auxiliary column carries no user-written term, so the row is not fully
+		// reconstructible from `folded_terms` — bail rather than quote half of it.
+		if (col < 0 || static_cast<idx_t>(col) >= cols.size() ||
+		    cols[col].decide_var_idx == DConstants::INVALID_INDEX) {
+			return false;
+		}
+		idx_t v = cols[col].decide_var_idx;
+		if (term_of.find(v) == term_of.end()) {
+			return false;
+		}
+		if (name_of.find(v) == name_of.end()) {
+			name_of[v] = ColLabel(cols, col);
+			order.push_back(v);
+		}
+	}
+	if (order.empty()) {
+		return false;
+	}
+
+	string s;
+	for (idx_t v : order) {
+		const auto &t = *term_of[v];
+		string term;
+		bool neg = false;
+		if (t.has_unit) {
+			double ac = std::fabs(t.unit);
+			term = (ac == 1.0) ? name_of[v] : (FormatNum(ac) + "*" + name_of[v]);
+			neg = t.unit < 0;
+		} else {
+			auto it = label_for.find(v);
+			if (it == label_for.end()) {
+				return false; // data-varying with no symbolic name to quote
+			}
+			// A data-varying weight carries its sign per row, so render it additively.
+			term = name_of[v] + " * " + it->second;
+		}
+		term = string(agg_name) + "(" + term + ")";
+		if (s.empty()) {
+			s += (neg ? "-" : "") + term;
+		} else {
+			s += (neg ? " - " : " + ") + term;
+		}
+	}
+	out = s;
+	return true;
+}
+
 //! True if some decide variable contributes more than one term (an aggregate fan-out over
 //! multiple solver columns). Lets a single-contribution aggregate group be wrapped in
 //! SUM(...) (Facet B) without disturbing a multi-row data-varying fan, which stays as its
@@ -261,6 +334,18 @@ string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenance> &col
 	// Collapse a uniform SUM fan-out to SUM(c*var). PER-grouped aggregates fold too: they
 	// stay distinguishable in the relation via the `group` EAV row + WHEN/PER qualifier
 	// (Facet A), so the old group_key == INVALID gate is gone.
+	// A row off the accumulating build path carries per-entity *totals*, not the coefficients
+	// the user wrote, so every matrix-inference path below misreads it — either as a literal
+	// the user never typed (`SUM(2*keepS)`) or, when the totals differ across entities, as a
+	// data-varying weight (`SUM(keepS * 1)`). Render from the recorded per-term coefficients
+	// first. `folded_terms` is non-empty only for accumulated rows, so a row-scoped fan-out
+	// never diverts here; and the call declines whenever it cannot reconstruct the whole row,
+	// leaving the paths below to handle it exactly as before.
+	if (!row.provenance.avg_scaled && !row.provenance.folded_terms.empty() &&
+	    FormatFoldedSumLhs(row.indices, row.provenance.folded_terms, cols, row.provenance.weight_labels, agg,
+	                       agg_name)) {
+		return agg;
+	}
 	if (FormatSumLhs(row.indices, row.coefficients, cols, row.provenance.weight_labels, agg, agg_name)) {
 		return agg;
 	}

@@ -60,14 +60,29 @@ DECIDB_BENCH: optimizer_ms=0.01         # DecideOptimizer rewrite passes
 DECIDB_BENCH: model_construction_ms=32  # ILP/QP model building
 DECIDB_BENCH: solver_ms=1448            # SolveModel() call (Gurobi or HiGHS)
 DECIDB_BENCH: total_variables=9965      # num_rows * num_decide_vars plus auxiliaries
-DECIDB_BENCH: total_constraints=5       # per-row + global constraints
+DECIDB_BENCH: total_constraint_specs=5  # clause-level: constraint specs handed to the builder
+DECIDB_BENCH: total_constraint_rows=19934  # matrix rows the solver actually received
 DECIDB_BENCH: num_rows=9965
 ```
+
+**The two constraint counts are different units — never add them.** A *spec* is one DECIDE
+clause as the operator hands it to the builder; a per-row spec expands to one matrix *row* per
+data row and a PER spec to one row per group, so the row count can be orders of magnitude
+larger. Read `total_constraint_rows` for matrix pressure (it is what the solver receives, and
+the only figure comparable across queries) and `total_constraint_specs` to trace pressure back
+to the clause that caused it. Q4 on `decidb.db` reports 60,182 specs against 120,360 rows: the
+`MAX(keep * l_quantity) <= 45` easy-direction rewrite contributes a row per data row while
+counting as a single spec.
+
+Runs recorded before this split emit a single `total_constraints` that *summed* the two units
+and therefore reported neither. `view_results.py` still displays it, flagged `pre-split, mixed
+unit`; do not compare it against a `total_constraint_rows` figure.
 
 The Python runner parses these lines and includes them in the result JSON. It wraps DeciDB with `/usr/bin/time`; on macOS it uses `time -l` when available for RSS, and falls back to `time -p` when sandbox restrictions prevent resource collection.
 
 **Source locations:**
-- `src/execution/operator/decide/physical_decide.cpp` - model_construction_ms, solver_ms, total_variables, total_constraints, num_rows
+- `src/execution/operator/decide/physical_decide.cpp` - model_construction_ms, solver_ms, total_variables, total_constraint_specs, num_rows
+- `src/decidb/utility/ilp_solver.cpp` - total_constraint_rows (read off the built model as `SolverResult::model_constraint_rows`, since only the post-`Build` model knows the expanded row count)
 - `src/optimizer/decide/decide_optimizer.cpp` - optimizer_ms
 
 Timers use DuckDB's `Profiler` class (`src/include/duckdb/common/profiler.hpp`). They are gated behind `std::getenv("DECIDB_BENCH")`.
@@ -307,7 +322,8 @@ Saved to `benchmark/decide/results/{commit}.json` (or `dirty.json` for uncommitt
           "model_construction_ms": 5.2,
           "solver_ms": 420.0,
           "total_variables": 500000,
-          "total_constraints": 3,
+          "total_constraint_specs": 3,
+          "total_constraint_rows": 1000002,
           "num_rows": 500000
         }
       }

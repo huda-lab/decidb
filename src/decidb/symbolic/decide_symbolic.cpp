@@ -203,6 +203,14 @@ bool IsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t
     return variables.count(name) > 0;
 }
 
+//! Symbol name for a data column reference: the full dotted path, lowercased.
+//! Lowercasing matches DuckDB's case-insensitive identifier resolution, so
+//! `T1.W` and `t1.w` stay one symbol; the original reference is restored from
+//! `ctx.column_map` by copy, so the folded case is never user-visible.
+static string ColumnRefSymbolName(const ColumnRefExpression &colref) {
+    return StringUtil::Lower(StringUtil::Join(colref.column_names, "."));
+}
+
 //===--------------------------------------------------------------------===//
 // ToSymbolic Implementation
 //===--------------------------------------------------------------------===//
@@ -254,8 +262,22 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
         
         case ExpressionClass::COLUMN_REF: {
             auto &colref = expr.Cast<ColumnRefExpression>();
-            const auto &name = colref.GetColumnName();
-            return Symbolic(name);
+            if (IsDecideVariable(expr, ctx.decide_variables)) {
+                // Canonicalize to the unqualified name: it is always registered as a
+                // DECIDE variable (the qualified `T.x` form is an alias for the same
+                // index), so `keepS` and `S.keepS` unify to a single symbol and the
+                // `decide_variables.count(name)` classification below keeps working.
+                return Symbolic(colref.GetColumnName());
+            }
+            // Data column: key the symbol by its full dotted path so two same-named
+            // columns from different tables do not collapse into one symbol, and
+            // stash the original reference for a lossless restore in FromSymbolic.
+            auto path = ColumnRefSymbolName(colref);
+            auto entry = ctx.column_map.find(path);
+            if (entry == ctx.column_map.end()) {
+                ctx.column_map[path] = expr.Copy();
+            }
+            return Symbolic(path);
         }
         
         case ExpressionClass::OPERATOR: {
@@ -806,6 +828,11 @@ unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslation
         // Check if it's a folded data-only subexpression (e.g. `(id * 7) % 97`)
         if (ctx.data_map.count(name)) {
             return ctx.data_map[name]->Copy();
+        }
+        // Check if it's a qualified data column (`t1.w`) — restore the original
+        // reference so the qualifier survives the round trip
+        if (ctx.column_map.count(name)) {
+            return ctx.column_map[name]->Copy();
         }
         // Treat any plain symbol as a column/variable reference
         return make_uniq_base<ParsedExpression, ColumnRefExpression>(name);

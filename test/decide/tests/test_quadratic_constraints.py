@@ -31,12 +31,19 @@ def _expect_gurobi(func, _retries=3):
 
     The tight ``POWER(expr, 2) <= 0`` (equality-via-quadratic) constraints used
     here are non-convex knife-edge surfaces. Gurobi intermittently returns
-    status 13 (SUBOPTIMAL) — a feasible incumbent it could not *prove* optimal —
-    and DeciDB then soundly declines to return it (it never relabels a
-    non-OPTIMAL termination as OPTIMAL; see ``gurobi_solver.cpp``). That is a
-    legitimate transient outcome, not a correctness bug. We retry to get a
-    proven-OPTIMAL solve (so the assertion still runs in the common case) and
-    only ``skip`` if every attempt hits SUBOPTIMAL.
+    status 13 (SUBOPTIMAL) — a feasible incumbent it could not *prove* optimal.
+    DeciDB returns those rows with a caveat on stderr rather than relabelling the
+    termination as OPTIMAL, and ``DecidBCli.execute`` surfaces any stderr as an
+    error, so the caveat reaches us as a ``DecidBCliError``. That is a legitimate
+    transient outcome, not a correctness bug: we retry for a proven-OPTIMAL solve
+    (so the oracle assertion still runs in the common case) and only ``skip`` if
+    every attempt hits SUBOPTIMAL.
+
+    The SUBOPTIMAL case is recognised by ``DecidBCliError.status``, set from the
+    ``DECIDB_STATUS:`` marker line. Do **not** match the caveat's prose here: that
+    text is owned by the user-facing-output principle and is reworded freely. It was
+    reworded once already, which silently disabled this retry and turned the file
+    into an intermittent failure.
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -45,16 +52,15 @@ def _expect_gurobi(func, _retries=3):
             try:
                 return func(*args, **kwargs)
             except DecidBCliError as e:
-                msg = str(e)
-                if re.search(r"solver status 13|[Ss]uboptimal", msg):
-                    last_suboptimal = msg
+                if e.status == "SUBOPTIMAL":
+                    last_suboptimal = str(e)
                     continue  # Gurobi nondeterminism — retry for a proven optimum
-                assert re.search(r"[Qq]uadratic|[Gg]urobi", msg), \
+                assert re.search(r"[Qq]uadratic|[Gg]urobi", str(e)), \
                     f"Unexpected error (expected quadratic/Gurobi rejection): {e}"
                 return
         pytest.skip(
-            "Gurobi returned SUBOPTIMAL (status 13) on this non-convex QCQP on "
-            f"every attempt — nondeterministic, not a correctness failure: {last_suboptimal}")
+            "Gurobi returned SUBOPTIMAL on this non-convex QCQP on every attempt "
+            f"— nondeterministic, not a correctness failure: {last_suboptimal}")
     return wrapper
 
 

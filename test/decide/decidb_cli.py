@@ -18,11 +18,33 @@ import subprocess
 from pathlib import Path
 
 
-class DecidBCliError(Exception):
-    """Raised when the DecidB CLI reports an error via stderr."""
+#: Prefix of the machine-readable terminal marker DeciDB emits on stderr when
+#: ``DECIDB_STATUS_MARKERS`` is set (see the SUBOPTIMAL arm of ``physical_decide.cpp``).
+#: The marker exists so tests never have to match user-facing prose, which is reworded
+#: freely for voice and has silently broken a suite before.
+_STATUS_MARKER_PREFIX = "DECIDB_STATUS:"
 
-    def __init__(self, message: str) -> None:
+
+def _extract_status(stderr: str) -> str | None:
+    """Return the terminal named by a DECIDB_STATUS marker line, if stderr has one."""
+    for line in stderr.splitlines():
+        if line.startswith(_STATUS_MARKER_PREFIX):
+            return line[len(_STATUS_MARKER_PREFIX):].strip()
+    return None
+
+
+class DecidBCliError(Exception):
+    """Raised when the DecidB CLI reports an error via stderr.
+
+    ``status`` carries the machine-readable terminal from a ``DECIDB_STATUS:`` marker
+    line when the CLI emitted one (currently only ``"SUBOPTIMAL"``), else ``None``.
+    Tests branch on it instead of grepping the user-facing message, whose wording is
+    deliberately owned by the user-facing-output principle and changes over time.
+    """
+
+    def __init__(self, message: str, status: str | None = None) -> None:
         self.message = message
+        self.status = status
         super().__init__(f"DecidB CLI error: {message}")
 
 
@@ -49,10 +71,18 @@ class DecidBCli:
         self.db = db_path
         self.env = env
 
-    def _subprocess_env(self) -> dict[str, str] | None:
-        if not self.env:
+    def _subprocess_env(self, *, status_markers: bool = False) -> dict[str, str] | None:
+        # `status_markers` asks DeciDB for machine-readable terminal lines. Only
+        # ``execute`` sets it: that method classifies stderr itself and strips the
+        # markers first, whereas ``execute_raw`` / ``execute_script`` /
+        # ``execute_interactive`` hand raw stderr to callers who do their own
+        # classification and would read a marker line as an error.
+        overlay = dict(self.env or {})
+        if status_markers:
+            overlay.setdefault("DECIDB_STATUS_MARKERS", "1")
+        if not overlay:
             return None
-        return {**os.environ, **self.env}
+        return {**os.environ, **overlay}
 
     def execute(
         self, sql: str, *, timeout: float = 120
@@ -72,18 +102,22 @@ class DecidBCli:
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=self._subprocess_env(),
+            env=self._subprocess_env(status_markers=True),
         )
 
         stderr = proc.stderr.strip()
-        # Filter known solver warnings (not errors)
+        # Filter known solver warnings (not errors), and lift out any DECIDB_STATUS
+        # marker so the terminal is available structurally instead of by grepping the
+        # user-facing message.
         if stderr:
+            status = _extract_status(stderr)
             error_lines = [
                 line for line in stderr.splitlines()
                 if not line.startswith("Warning:")
+                and not line.startswith(_STATUS_MARKER_PREFIX)
             ]
             if error_lines:
-                raise DecidBCliError("\n".join(error_lines))
+                raise DecidBCliError("\n".join(error_lines), status=status)
 
         stdout = proc.stdout
         # Find the JSON array start — skip any solver preamble on stdout

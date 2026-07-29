@@ -70,6 +70,17 @@ public:
     return (ii_ != n_);
   }
 
+  // libc++ shipped with newer Xcode Command Line Tools implements
+  // std::__tree::__insert_range_unique with `__first == __last` rather than
+  // `__first != __last`, so the std::map range constructor used by the
+  // generated parquet_types.cpp requires operator== on this iterator.
+  // Mirrors operator!= above; const so it also binds to const iterators.
+  bool operator==(const TEnumIterator& end) const {
+    THRIFT_UNUSED_VARIABLE(end);
+    assert(end.n_ == -1);
+    return (ii_ == n_);
+  }
+
   std::pair<int, const char*> operator*() const { return std::make_pair(enums_[ii_], names_[ii_]); }
 
 private:
