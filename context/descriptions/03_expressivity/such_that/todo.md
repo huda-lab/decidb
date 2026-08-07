@@ -2,6 +2,45 @@
 
 ---
 
+## `IS BETWEEN` — accept the optional `IS` before `BETWEEN`
+
+**Priority: High — paper-facing, but small. Stage-1 grammar batch (with
+`../decide/todo.md` → "Clause order", "Declaration surface syntax", "Query-wide `scalar`")
+— one `make grammar-build` cycle.**
+
+The draft spells the bounded-range constraint with an `IS`:
+
+```sql
+ship is between 0 and capacity * open        -- Figure 1, line 7
+quantity is between 0 and upperBound         -- §4.1.4, knapsack example
+```
+
+Only the bare form parses today: `such that ship IS BETWEEN 0 and capacity` →
+`syntax error at or near "BETWEEN"`. Everything else about the construct already works,
+including a decision variable inside the bound — `such that ship BETWEEN 0 and capacity *
+open` binds and solves (verified against `build/release/decidb`, 2026-08-07). So this is a
+spelling, not semantics: the only gap is the optional keyword.
+
+**Work**: accept an optional `IS` before `BETWEEN` in the decide constraint grammar. Keep
+the bare form — it is what every existing test and doc example uses, and `A1`'s
+both-orders decision applies here too: neither spelling is deprecated.
+
+Scope it to the `DECIDE` constraint grammar rather than DuckDB's general `a_expr`. `IS` is
+heavily overloaded in the base grammar (`IS NULL`, `IS DISTINCT FROM`, `IS NOT …`, and the
+`x IS INTEGER` decide-variable declaration), so widening `a_expr` invites conflicts for a
+construct only the draft's decision clauses use.
+
+**Test**: `test/decide/tests/test_cons_between.py` — parametrize the existing cases over
+both spellings and assert identical results.
+
+**Docs on completion**: `../../00_project_overview/syntax_reference.md` §3 ("Between"),
+`done.md`.
+
+**Raised**: 2026-08-07, sweeping the submitted CIDR'27 paper against the codebase
+(`../../todo.md` → A4).
+
+---
+
 ## Composed MIN/MAX: Hard-Direction Big-M Linearization — SHIPPED
 
 Hard-direction composed MIN/MAX (`SUM + MAX >= K`, `SUM + MIN <= K`, and the

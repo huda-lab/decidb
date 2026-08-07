@@ -12,13 +12,14 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
 | [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, SOCP |
-| [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, row-scoped/table-scoped, linearity | *(no planned features)* |
-| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`) | *(no planned features)* |
+| [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, row-scoped/table-scoped, linearity | Clause order (`DECIDE` before `FROM`), `(BOOL)`/`(INT)` type form, query-wide `scalar`, relation-qualified reducer `SUM(D: expr)` — all paper §3 |
+| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`) | `IS BETWEEN` spelling (paper §3) |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition + aggregate-local filters) | *(no planned features)* |
 | [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
 | [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | division |
 | [bilinear/](bilinear/) | Bool×anything (McCormick), non-convex (Q matrix), bilinear constraints, data coefficients, WHEN composition | *(no planned features)* |
+| [diagnose/](diagnose/) | *(nothing implemented — no `done.md`)* | `DIAGNOSE <query>` statement prefix (paper §5); today's surface is `PRAGMA diagnose_decide` + `decide_diagnostics()` |
 
 ---
 
@@ -56,6 +57,12 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `AVG()` over decision variables | Yes (coefficient scaling) | — |
 | `ABS()` | Yes (linearized) | — |
 | `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | — |
+| `DIAGNOSE <query>` prefix | No (paper §5; `PRAGMA diagnose_decide='auto'` today) | [diagnose/todo.md](diagnose/todo.md) |
+| Relation-qualified reducer `SUM(D: expr)` | No (paper §3.2; aggregates run over join-result rows today) | [decide/todo.md](decide/todo.md) |
+| `DECIDE` before `FROM` (paper clause order) | No (paper Figure 1; `SELECT…FROM…DECIDE` only today — both orders will be accepted) | [decide/todo.md](decide/todo.md) |
+| `DECIDE x(BOOL)` / `x(INT)` type form | No (paper §3.1; `IS BOOLEAN` / `IS INTEGER` only today — both forms will be accepted) | [decide/todo.md](decide/todo.md) |
+| `DECIDE scalar x(INT)` (query-wide) | No (paper §3.1; row-scoped and table-scoped only today) | [decide/todo.md](decide/todo.md) |
+| `IS BETWEEN a AND b` | No (paper Figure 1; bare `BETWEEN` only today — both spellings will be accepted) | [such_that/todo.md](such_that/todo.md) |
 
 ### Problem Classification
 
@@ -65,8 +72,21 @@ For a complete taxonomy of what mathematical optimization problem classes DeciDB
 
 ## Development Priorities
 
-All previously planned expressivity priorities are implemented (see the status matrix above). **Remaining**:
-- **Row-varying RHS with PER** — see [per/todo.md](per/todo.md)
+All previously planned expressivity priorities are implemented (see the status matrix above).
+**Remaining** — the queue is now driven by the submitted CIDR'27 paper; the full
+paper-vs-code sweep and its staging order live in [`../todo.md`](../todo.md).
+
+**Stage 1 — grammar batch** (one `make grammar-build` cycle; both orders and both spellings
+accepted, nothing deprecated, no existing query migrates):
+- **Clause order: `DECIDE` before `FROM`** — largest of the four; watch the `in_decide_clause` lexer flag. [decide/todo.md](decide/todo.md)
+- **Parenthesized type form `x(BOOL)` / `x(INT)`** — [decide/todo.md](decide/todo.md)
+- **Query-wide `scalar` decisions** — keyword, settled by the draft. [decide/todo.md](decide/todo.md)
+- **`IS BETWEEN` spelling** — smallest. [such_that/todo.md](such_that/todo.md)
+
+**After stage 1:**
+- **Relation-qualified reducer `SUM(D: expr)`** — paper-facing; small grammar edit, real work is the de-duplication stage and multi-relation keys. [decide/todo.md](decide/todo.md)
+- **Row-varying RHS with PER** — with the sibling constraint shapes in `../todo.md` group B. [per/todo.md](per/todo.md)
+- **`DIAGNOSE` statement prefix** — deferred to the diagnostics stage; blocked on one semantic decision. [diagnose/todo.md](diagnose/todo.md)
 
 ---
 

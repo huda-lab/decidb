@@ -1,3 +1,180 @@
+\section{The \decidb architecture}
+% architecture overview - A
+\label{Architecture}
+
+A decision query is a SQL query with three extra clauses. \decide declares unknowns, \suchthat gives rules they must satisfy, and \minimize/\maximize say which of the possible assignments is best. We call these clauses the \textit{decision clauses}. Section \ref{sec:language} describes how a user would write \textit{decision clauses}; this section describes how the system goes from the query to the output.
+
+Concretely, our goal is to transform a query into a mathematical program (MP) --- variables, constraints, and an objective --- that a solver like \gb or \highs can accept and solve. To this end, we need our selected database system (\duckdb) to take on extra tasks related to the \textit{decision clauses} at each stage of its pipeline. We add to the native parser, binder, planner, optimizer, and the physical layer to allow us to output a valid MP to pass onto a solver, and retrieve a solution to the specified query. We expand on each of these layers in the following sections.
+
+\subsection{Why \duckdb}
+\label{sec:operator}
+
+A solver takes arrays of numbers specifying an MP: (1) for each variable, bounds and a type; (2) for the objective, one number per variable; (3) for each constraint, the terms on its left-hand side and the bound on its right.
+
+These arrays are columns of the query result. Consider line~10 of Example \ref{ex:relief}: \texttt{sum(ship) <= stock per depotID}. Each joined row contributes one term to one constraint, and the row already carries everything the term needs: (1) the number multiplying the variable (in this case a constant 1 but it could be a row varying attribute like $sum(unit\_cost*ship)$ in the objective); (2) the variable it multiplies (the row's own $ship$); and (3) the constraint it belongs to (the row's depot, since per $depotID$ generates one constraint per depot). Building the constraint matrix is therefore reading three columns off the candidate rows. \duckdb produces them in batches, where a row-based database would hand us one row at a time.
+
+However, any column store would give us this. What \duckdb adds is that it is a C++ library we build inside rather than a server \decidb connects to as a client. MonetDB, ClickHouse, and the cloud warehouses run as a separate process, whereas \duckdb compiles into our binary along with \gb and \highs\footnote{Gurobi and HiGHS distinction \hatim{todo}}. The arrays we build are therefore already in the solver's address space and we pass it a pointer, where against a server we would serialize every coefficient across a connection and rebuild the program on the other side. Keeping the program in memory pays off again when one query needs more than one solve: the diagnostic programs of Section~\ref{sec:diagnostics} is are example of this case.
+
+\hatim{Should I add a small figure showing the shape of the constraint matrix here?}
+
+\subsection{From query to logical operator}
+\label{sec:pipeline}
+
+This section follows a decision query from the query string to a plan that is ready to execute. The parser, the binder, and the planner work to create an ordinary \duckdb query plan with our \textit{decide operator} in it (Figure \ref{fig:pipeline}).
+
+\input{figures/pipeline_nodes}
+
+\subsubsection{Parser}
+The parser turns the query text into a parse tree. In \texttt{sum(unit\_cost*ship)},  \texttt{unit\_cost} and \texttt{ship} are children of $*$, and $*$ a child of \texttt{sum(.)}.
+
+The parser recognises the decision clauses, which we add to \duckdb's grammar. The alternative is to pass on a structure closer to what the solver understands directly (like nested subqueries) but this is opaque to the binder, planner, and optimizer, whereas a clause in the grammar becomes a node that each of them can inspect and rewrite easily.
+
+It rejects what the grammar does not allow: clause order, clause placement, and the type vocabulary. \texttt{\decide x(TEXT)} fails here, since a solver assigns numbers and there is nothing to assign to a text decision.
+
+\when and \per become parents of the constraint they modify, with the attribute they are keyed on as a second child. \texttt{sum(ship) <= stock per depotID} produces a \per node whose children are \texttt{depotID} and the subtree of the inequality. Neither modifier is acted on here: \when is a predicate over columns that are not yet resolved, and how many constraints \per generates depends on data that has not been read.
+
+What the parser cannot do is tell a decision from a stored column — \texttt{sum(ship)} and \texttt{sum(unit\_cost)} are both a function over a column reference. Telling them apart needs the \decide list and the tables in \texttt{FROM}, both of which are resolved in the binder.
+
+\subsubsection{Binder}
+
+The binder resolves names against the tables in \texttt{FROM}. This is where a decision column and a stored column first become distinguishable, so every step that depends on that distinction happens here or later.
+
+The binder registers each declaration as a column of the \decide operator's output, with the name, type, and relation scope the user gave it. \texttt{D.open(BOOL)} becomes a Boolean column scoped to \texttt{Depots}. Registering decisions as columns is what lets the rest of SQL treat them as ordinary: \texttt{open} resolves the way \texttt{stock} does, and no operator above the \decide operator needs a special case for it.
+
+It rejects the errors that only the surrounding scope reveals: a decision whose name collides with a column already in scope, a declaration repeated in the \decide list, or a qualifier such as \texttt{D.} naming a table absent from \texttt{FROM}. The parser cannot catch these because it has not seen \texttt{FROM}.
+
+The binder then canonicalizes each constraint so that the decisions stand on the left and the rest on the right. Line~11 of Example~\ref{ex:relief}, \texttt{demand - sum(ship) <= max\_shortfall per regionID}, becomes \texttt{-sum(ship) - max\_shortfall <= -demand per regionID}. \texttt{max\_shortfall} moves left because it is a decision, and \texttt{demand} moves right because the data fixes it. This is the shape of a row of the constraint matrix, so from here on every stage can read the terms off the left and the bound off the right without working out which is which.
+
+Finally, the declared type fixes each variable's integrality — whether it must take a whole number. It does not fix the range the variable may take, which follows from the constraints and is settled during model construction.
+
+\subsubsection{Planner}
+
+The planner builds the query plan and places the \decide operator in it. The operator goes above the scans, joins, and the \texttt{WHERE} filter, and below \texttt{GROUP BY}, \texttt{HAVING}, and the \texttt{SELECT} projection. Its position follows from what the \textit{decision clauses} mean: they apply to the rows the query selects, so everything that determines which rows those are must run first, and everything that consumes the result must run after.
+
+Two things follow from the position. The first is that relational filtering shrinks the mathematical program. A row that \texttt{WHERE} discards never reaches the operator and so never becomes a variable, which means the query optimizer's ordinary work — pushing filters down, ordering joins — reduces the size of the program before it is built.
+
+The second is composition. Because the decision columns are ordinary output columns of an ordinary operator, \texttt{GROUP BY} can group on the decision \texttt{ship}, \texttt{SELECT} can project it, and a decision query can be nested inside another query. A query whose subqueries each carry decision clauses plans one \decide operator per subquery.
+
+What the planner does not decide is whether this is the right position. It is the position the clauses' meaning implies, and it is always correct, but a \decide operator whose constraints reference only one side of a join may be able to move below it. Whether it does is the optimizer's decision.
+
+\section{The \decidb architecture}
+% architecture overview - A
+\label{Architecture}
+
+A decision query is a SQL query with three extra clauses. \decide declares unknowns, \suchthat gives rules they must satisfy, and \minimize/\maximize say which of the possible assignments is best. We call these clauses the \textit{decision clauses}. Section \ref{sec:language} describes how a user would write \textit{decision clauses}; this section describes how the system goes from the query to the output.
+
+Concretely, our goal is to transform a query into a mathematical program (MP) --- variables, constraints, and an objective --- that a solver like \gb or \highs can accept and solve. To this end, we need our selected database system (\duckdb) to take on extra tasks related to the \textit{decision clauses} at each stage of its pipeline. We add to the native parser, binder, planner, optimizer, and the physical layer to allow us to output a valid MP to pass onto a solver, and retrieve a solution to the specified query. We expand on each of these layers in the following sections.
+
+\subsection{Why \duckdb}
+\label{sec:operator}
+
+A solver takes arrays of numbers specifying an MP: (1) for each variable, bounds and a type; (2) for the objective, one number per variable; (3) for each constraint, the terms on its left-hand side and the bound on its right.
+
+These arrays are columns of the query result. Consider line~10 of Example \ref{ex:relief}: \texttt{sum(ship) <= stock per depotID}. Each joined row contributes one term to one constraint, and the row already carries everything the term needs: (1) the number multiplying the variable (in this case a constant 1 but it could be a row varying attribute like $sum(unit\_cost*ship)$ in the objective); (2) the variable it multiplies (the row's own $ship$); and (3) the constraint it belongs to (the row's depot, since per $depotID$ generates one constraint per depot). Building the constraint matrix is therefore reading three columns off the candidate rows. \duckdb produces them in batches, where a row-based database would hand us one row at a time.
+
+However, any column store would give us this. What \duckdb adds is that it is a C++ library we build inside rather than a server \decidb connects to as a client. MonetDB, ClickHouse, and the cloud warehouses run as a separate process, whereas \duckdb compiles into our binary along with \gb and \highs\footnote{Gurobi and HiGHS distinction \hatim{todo}}. The arrays we build are therefore already in the solver's address space and we pass it a pointer, where against a server we would serialize every coefficient across a connection and rebuild the program on the other side. Keeping the program in memory pays off again when one query needs more than one solve: the diagnostic programs of Section~\ref{sec:diagnostics} is are example of this case.
+
+\hatim{Should I add a small figure showing the shape of the constraint matrix here?}
+
+\subsection{From query to logical operator}
+\label{sec:pipeline}
+
+This section follows a decision query from the query string to a plan that is ready to execute. The parser, the binder, and the planner work to create an ordinary \duckdb query plan with our \textit{decide operator} in it (Figure \ref{fig:pipeline}).
+
+\input{figures/pipeline_nodes}
+
+\subsubsection{Parser}
+The parser turns the query text into a parse tree. In \texttt{sum(unit\_cost*ship)},  \texttt{unit\_cost} and \texttt{ship} are children of $*$, and $*$ a child of \texttt{sum(.)}.
+
+The parser recognises the decision clauses, which we add to \duckdb's grammar. The alternative is to pass on a structure closer to what the solver understands directly (like nested subqueries) but this is opaque to the binder, planner, and optimizer, whereas a clause in the grammar becomes a node that each of them can inspect and rewrite easily.
+
+It rejects what the grammar does not allow: clause order, clause placement, and the type vocabulary. \texttt{\decide x(TEXT)} fails here, since a solver assigns numbers and there is nothing to assign to a text decision.
+
+\when and \per become parents of the constraint they modify, with the attribute they are keyed on as a second child. \texttt{sum(ship) <= stock per depotID} produces a \per node whose children are \texttt{depotID} and the subtree of the inequality. Neither modifier is acted on here: \when is a predicate over columns that are not yet resolved, and how many constraints \per generates depends on data that has not been read.
+
+What the parser cannot do is tell a decision from a stored column — \texttt{sum(ship)} and \texttt{sum(unit\_cost)} are both a function over a column reference. Telling them apart needs the \decide list and the tables in \texttt{FROM}, both of which are resolved in the binder.
+
+\subsubsection{Binder}
+
+The binder resolves names against the tables in \texttt{FROM}. This is where a decision column and a stored column first become distinguishable, so every step that depends on that distinction happens here or later.
+
+The binder registers each declaration as a column of the \decide operator's output, with the name, type, and relation scope the user gave it. \texttt{D.open(BOOL)} becomes a Boolean column scoped to \texttt{Depots}. Registering decisions as columns is what lets the rest of SQL treat them as ordinary: \texttt{open} resolves the way \texttt{stock} does, and no operator above the \decide operator needs a special case for it.
+
+It rejects the errors that only the surrounding scope reveals: a decision whose name collides with a column already in scope, a declaration repeated in the \decide list, or a qualifier such as \texttt{D.} naming a table absent from \texttt{FROM}. The parser cannot catch these because it has not seen \texttt{FROM}.
+
+The binder then canonicalizes each constraint so that the decisions stand on the left and the rest on the right. Line~11 of Example~\ref{ex:relief}, \texttt{demand - sum(ship) <= max\_shortfall per regionID}, becomes \texttt{-sum(ship) - max\_shortfall <= -demand per regionID}. \texttt{max\_shortfall} moves left because it is a decision, and \texttt{demand} moves right because the data fixes it. This is the shape of a row of the constraint matrix, so from here on every stage can read the terms off the left and the bound off the right without working out which is which.
+
+Finally, the declared type fixes each variable's integrality — whether it must take a whole number. It does not fix the range the variable may take, which follows from the constraints and is settled during model construction.
+
+\subsubsection{Planner}
+
+The planner builds the query plan and places the \decide operator in it. The operator goes above the scans, joins, and the \texttt{WHERE} filter, and below \texttt{GROUP BY}, \texttt{HAVING}, and the \texttt{SELECT} projection. Its position follows from what the \textit{decision clauses} mean: they apply to the rows the query selects, so everything that determines which rows those are must run first, and everything that consumes the result must run after.
+
+Two things follow from the position. The first is that relational filtering shrinks the mathematical program. A row that \texttt{WHERE} discards never reaches the operator and so never becomes a variable, which means the query optimizer's ordinary work — pushing filters down, ordering joins — reduces the size of the program before it is built.
+
+The second is composition. Because the decision columns are ordinary output columns of an ordinary operator, \texttt{GROUP BY} can group on the decision \texttt{ship}, \texttt{SELECT} can project it, and a decision query can be nested inside another query. A query whose subqueries each carry decision clauses plans one \decide operator per subquery.
+
+What the planner does not decide is whether this is the right position. It is the position the clauses' meaning implies, and it is always correct, but a \decide operator whose constraints reference only one side of a join may be able to move below it. Whether it does is the optimizer's decision.
+
+\section{The \decidb architecture}
+% architecture overview - A
+\label{Architecture}
+
+A decision query is a SQL query with three extra clauses. \decide declares unknowns, \suchthat gives rules they must satisfy, and \minimize/\maximize say which of the possible assignments is best. We call these clauses the \textit{decision clauses}. Section \ref{sec:language} describes how a user would write \textit{decision clauses}; this section describes how the system goes from the query to the output.
+
+Concretely, our goal is to transform a query into a mathematical program (MP) --- variables, constraints, and an objective --- that a solver like \gb or \highs can accept and solve. To this end, we need our selected database system (\duckdb) to take on extra tasks related to the \textit{decision clauses} at each stage of its pipeline. We add to the native parser, binder, planner, optimizer, and the physical layer to allow us to output a valid MP to pass onto a solver, and retrieve a solution to the specified query. We expand on each of these layers in the following sections.
+
+\subsection{Why \duckdb}
+\label{sec:operator}
+
+A solver takes arrays of numbers specifying an MP: (1) for each variable, bounds and a type; (2) for the objective, one number per variable; (3) for each constraint, the terms on its left-hand side and the bound on its right.
+
+These arrays are columns of the query result. Consider line~10 of Example \ref{ex:relief}: \texttt{sum(ship) <= stock per depotID}. Each joined row contributes one term to one constraint, and the row already carries everything the term needs: (1) the number multiplying the variable (in this case a constant 1 but it could be a row varying attribute like $sum(unit\_cost*ship)$ in the objective); (2) the variable it multiplies (the row's own $ship$); and (3) the constraint it belongs to (the row's depot, since per $depotID$ generates one constraint per depot). Building the constraint matrix is therefore reading three columns off the candidate rows. \duckdb produces them in batches, where a row-based database would hand us one row at a time.
+
+However, any column store would give us this. What \duckdb adds is that it is a C++ library we build inside rather than a server \decidb connects to as a client. MonetDB, ClickHouse, and the cloud warehouses run as a separate process, whereas \duckdb compiles into our binary along with \gb and \highs\footnote{Gurobi and HiGHS distinction \hatim{todo}}. The arrays we build are therefore already in the solver's address space and we pass it a pointer, where against a server we would serialize every coefficient across a connection and rebuild the program on the other side. Keeping the program in memory pays off again when one query needs more than one solve: the diagnostic programs of Section~\ref{sec:diagnostics} is are example of this case.
+
+\hatim{Should I add a small figure showing the shape of the constraint matrix here?}
+
+\subsection{From query to logical operator}
+\label{sec:pipeline}
+
+This section follows a decision query from the query string to a plan that is ready to execute. The parser, the binder, and the planner work to create an ordinary \duckdb query plan with our \textit{decide operator} in it (Figure \ref{fig:pipeline}).
+
+\input{figures/pipeline_nodes}
+
+\subsubsection{Parser}
+The parser turns the query text into a parse tree. In \texttt{sum(unit\_cost*ship)},  \texttt{unit\_cost} and \texttt{ship} are children of $*$, and $*$ a child of \texttt{sum(.)}.
+
+The parser recognises the decision clauses, which we add to \duckdb's grammar. The alternative is to pass on a structure closer to what the solver understands directly (like nested subqueries) but this is opaque to the binder, planner, and optimizer, whereas a clause in the grammar becomes a node that each of them can inspect and rewrite easily.
+
+It rejects what the grammar does not allow: clause order, clause placement, and the type vocabulary. \texttt{\decide x(TEXT)} fails here, since a solver assigns numbers and there is nothing to assign to a text decision.
+
+\when and \per become parents of the constraint they modify, with the attribute they are keyed on as a second child. \texttt{sum(ship) <= stock per depotID} produces a \per node whose children are \texttt{depotID} and the subtree of the inequality. Neither modifier is acted on here: \when is a predicate over columns that are not yet resolved, and how many constraints \per generates depends on data that has not been read.
+
+What the parser cannot do is tell a decision from a stored column — \texttt{sum(ship)} and \texttt{sum(unit\_cost)} are both a function over a column reference. Telling them apart needs the \decide list and the tables in \texttt{FROM}, both of which are resolved in the binder.
+
+\subsubsection{Binder}
+
+The binder resolves names against the tables in \texttt{FROM}. This is where a decision column and a stored column first become distinguishable, so every step that depends on that distinction happens here or later.
+
+The binder registers each declaration as a column of the \decide operator's output, with the name, type, and relation scope the user gave it. \texttt{D.open(BOOL)} becomes a Boolean column scoped to \texttt{Depots}. Registering decisions as columns is what lets the rest of SQL treat them as ordinary: \texttt{open} resolves the way \texttt{stock} does, and no operator above the \decide operator needs a special case for it.
+
+It rejects the errors that only the surrounding scope reveals: a decision whose name collides with a column already in scope, a declaration repeated in the \decide list, or a qualifier such as \texttt{D.} naming a table absent from \texttt{FROM}. The parser cannot catch these because it has not seen \texttt{FROM}.
+
+The binder then canonicalizes each constraint so that the decisions stand on the left and the rest on the right. Line~11 of Example~\ref{ex:relief}, \texttt{demand - sum(ship) <= max\_shortfall per regionID}, becomes \texttt{-sum(ship) - max\_shortfall <= -demand per regionID}. \texttt{max\_shortfall} moves left because it is a decision, and \texttt{demand} moves right because the data fixes it. This is the shape of a row of the constraint matrix, so from here on every stage can read the terms off the left and the bound off the right without working out which is which.
+
+Finally, the declared type fixes each variable's integrality — whether it must take a whole number. It does not fix the range the variable may take, which follows from the constraints and is settled during model construction.
+
+\subsubsection{Planner}
+
+The planner builds the query plan and places the \decide operator in it. The operator goes above the scans, joins, and the \texttt{WHERE} filter, and below \texttt{GROUP BY}, \texttt{HAVING}, and the \texttt{SELECT} projection. Its position follows from what the \textit{decision clauses} mean: they apply to the rows the query selects, so everything that determines which rows those are must run first, and everything that consumes the result must run after.
+
+Two things follow from the position. The first is that relational filtering shrinks the mathematical program. A row that \texttt{WHERE} discards never reaches the operator and so never becomes a variable, which means the query optimizer's ordinary work — pushing filters down, ordering joins — reduces the size of the program before it is built.
+
+The second is composition. Because the decision columns are ordinary output columns of an ordinary operator, \texttt{GROUP BY} can group on the decision \texttt{ship}, \texttt{SELECT} can project it, and a decision query can be nested inside another query. A query whose subqueries each carry decision clauses plans one \decide operator per subquery.
+
+What the planner does not decide is whether this is the right position. It is the position the clauses' meaning implies, and it is always correct, but a \decide operator whose constraints reference only one side of a join may be able to move below it. Whether it does is the optimizer's decision.
+
 # Query Diagnostics
 
 Turning failed or useless DECIDE solves into actionable diagnoses. SQL always
