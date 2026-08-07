@@ -287,7 +287,7 @@ SUCH THAT
                         Copy
                       </button>
                     </div>
-                    <pre class="language-sql"><code>DECIDE x IS BOOLEAN</code></pre>
+                    <pre class="language-sql"><code>DECIDE x(BOOL)</code></pre>
                   </div>
                 </div>
 
@@ -304,7 +304,7 @@ SUCH THAT
                         Copy
                       </button>
                     </div>
-                    <pre class="language-sql"><code>DECIDE quantity IS INTEGER</code></pre>
+                    <pre class="language-sql"><code>DECIDE quantity(INT)</code></pre>
                   </div>
                 </div>
 
@@ -321,7 +321,7 @@ SUCH THAT
                         Copy
                       </button>
                     </div>
-                    <pre class="language-sql"><code>DECIDE amount IS REAL</code></pre>
+                    <pre class="language-sql"><code>DECIDE amount(REAL)</code></pre>
                   </div>
                 </div>
               </div>
@@ -339,7 +339,7 @@ SUCH THAT
                   </button>
                 </div>
                 <pre class="language-sql"><code>-- Two variables per row: include or not, and how many
-DECIDE x IS BOOLEAN, quantity IS INTEGER</code></pre>
+DECIDE x(BOOL), quantity(INT)</code></pre>
               </div>
 
               <h3 class="text-xl font-semibold text-fg mb-4">Table-Scoped Variables</h3>
@@ -358,7 +358,7 @@ DECIDE x IS BOOLEAN, quantity IS INTEGER</code></pre>
 SELECT n.name, s.shift_date, keepN
 FROM nurses n
 JOIN shifts s ON n.id = s.nurse_id
-DECIDE n.keepN IS BOOLEAN
+DECIDE n.keepN(BOOL)
 SUCH THAT SUM(keepN * s.hours) <= 100
 MAXIMIZE SUM(keepN * n.skill_score);</code></pre>
               </div>
@@ -380,7 +380,7 @@ MAXIMIZE SUM(keepN * n.skill_score);</code></pre>
                 </div>
                 <pre class="language-sql"><code>SELECT id, price, x, (x * price) AS cost
 FROM Products
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT SUM(x * price) <= 1000
 MAXIMIZE SUM(x * profit);</code></pre>
               </div>
@@ -698,7 +698,7 @@ SUCH THAT SUM(POWER(x - target, 2)) <= 1000</code></pre>
                 </div>
                 <pre class="language-sql"><code>SELECT id, value, weight, x
 FROM Items
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * weight) <= 100
     AND SUM(x * volume) <= 50
@@ -848,7 +848,7 @@ MINIMIZE SUM(POWER(x - target, 2)) + SUM(c * x)</code></pre>
                   </button>
                 </div>
                 <pre class="language-sql"><code>-- Want to select as many items as possible?
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 100
 MAXIMIZE SUM(x);</code></pre>
               </div>
@@ -870,7 +870,7 @@ MAXIMIZE SUM(x);</code></pre>
                 </div>
                 <pre class="language-sql"><code>SELECT id, x
 FROM Items
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * weight) <= 50
     AND SUM(x) = 3;</code></pre>
@@ -997,7 +997,7 @@ SUCH THAT
                       <div class="code-block">
                         <div class="code-header"><span class="language-label">SQL</span></div>
                         <pre class="language-sql text-xs"><code>SELECT * FROM Products
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);</code></pre>
                       </div>
@@ -1011,7 +1011,7 @@ MAXIMIZE SUM(x * value);</code></pre>
                         <pre class="language-sql text-xs"><code>SELECT * FROM Products
 WHERE category = 'electronics'
   AND in_stock = true
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);</code></pre>
                       </div>
@@ -1059,7 +1059,7 @@ MAXIMIZE SUM(x * value);</code></pre>
                     <pre class="language-sql text-sm"><code>SELECT o.id, p.name, x
 FROM Orders o
 JOIN Products p ON o.product_id = p.id
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT SUM(x * p.weight) <= 100
 MAXIMIZE SUM(x * p.profit);</code></pre>
                   </div>

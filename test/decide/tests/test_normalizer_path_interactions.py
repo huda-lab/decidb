@@ -90,7 +90,7 @@ def test_quadratic_objective_with_when(decidb_cli, oracle_solver):
         SELECT id, t, ROUND(x, 4) AS x FROM (
             VALUES (1, 5.0, true), (2, 8.0, false), (3, 3.0, true)
         ) data(id, t, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 10
         MINIMIZE SUM(POWER(x - t, 2)) WHEN w
     """
@@ -132,7 +132,7 @@ def test_quadratic_constraint_with_when_and_constant_offset(decidb_cli, oracle_s
         SELECT id, x FROM (
             VALUES (1, true), (2, false), (3, true)
         ) data(id, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT (SUM(POWER(x, 2)) WHEN w) + 3 <= 50
             AND x <= 10
         MAXIMIZE SUM(x)
@@ -177,7 +177,7 @@ def test_bilinear_constraint_with_when(decidb_cli, oracle_solver):
         SELECT id, x, y FROM (
             VALUES (1, true), (2, false), (3, true)
         ) data(id, w)
-        DECIDE x IS BOOLEAN, y IS REAL
+        DECIDE x(BOOL), y(REAL)
         SUCH THAT SUM(x * y) WHEN w <= 8
             AND y <= 5
         MAXIMIZE SUM(x * y)
@@ -232,7 +232,7 @@ def test_bilinear_constraint_with_when_and_constant_offset(decidb_cli, oracle_so
         SELECT id, x, y FROM (
             VALUES (1, true), (2, false), (3, true)
         ) data(id, w)
-        DECIDE x IS BOOLEAN, y IS REAL
+        DECIDE x(BOOL), y(REAL)
         SUCH THAT (SUM(x * y) WHEN w) + 3 <= 11
             AND y <= 5
         MAXIMIZE SUM(x * y)
@@ -296,7 +296,7 @@ def test_composed_sum_plus_min_with_when(decidb_cli, oracle_solver):
         SELECT id, x FROM (
             VALUES (1, 10.0, true), (2, 5.0, true), (3, 7.0, false)
         ) data(id, v, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + (MIN(x * v) WHEN w) >= 5
         MAXIMIZE SUM(x * v)
     """

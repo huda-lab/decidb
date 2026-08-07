@@ -40,12 +40,12 @@ A bounds check (`solution_idx < ilp_solution.size()`) provides a fallback of 0.0
 
 Solution values are projected with type-appropriate handling to deal with solver floating-point imprecision (e.g., a solver might return 0.9999999 instead of 1 for an integer variable):
 
-### BOOLEAN (`IS BOOLEAN`)
+### BOOLEAN (`BOOL`)
 - Output type: `bool`
 - Projection: `solution_value >= 0.5` (threshold comparison)
 - A solver value of 0.9999 becomes `true`; 0.0001 becomes `false`
 
-### INTEGER (`IS INTEGER`)
+### INTEGER (`INT`)
 - Output type: `int32_t`
 - Projection: `static_cast<int32_t>(std::round(solution_value))`
 - Rounding handles solver imprecision (e.g., 2.9999 becomes 3)
@@ -54,7 +54,7 @@ Solution values are projected with type-appropriate handling to deal with solver
 - Output type: `int64_t`
 - Projection: `static_cast<int64_t>(std::round(solution_value))`
 
-### DOUBLE (`IS REAL`)
+### DOUBLE (`REAL`)
 - Output type: `double`
 - Projection: Direct assignment, no rounding
 - Preserves the solver's exact floating-point result

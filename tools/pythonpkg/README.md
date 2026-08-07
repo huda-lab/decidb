@@ -28,7 +28,7 @@ prob.solve()
 SELECT id, value, weight, x
 FROM Items
 WHERE category = 'electronics'
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);
@@ -60,7 +60,7 @@ conn.execute("""
 result = conn.execute("""
     SELECT id, value, weight, x
     FROM Items
-    DECIDE x IS BOOLEAN
+    DECIDE x(BOOL)
     SUCH THAT
         SUM(x * weight) <= 50
     MAXIMIZE SUM(x * value)

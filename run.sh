@@ -12,7 +12,7 @@ cd build/release
 # SELECT p_partkey, make, buy, promo
 # FROM part
 # WHERE p_size <= 5
-# DECIDE make IS REAL, buy IS REAL, promo IS REAL
+# DECIDE make(REAL), buy(REAL), promo(REAL)
 # SUCH THAT make >= 0 AND buy >= 0 AND promo >= 0
 #      AND make <= 500
 #      AND make + buy >= 50
@@ -31,7 +31,7 @@ cd build/release
 SELECT p_partkey, p_mfgr, buy
 FROM part
 WHERE p_size <= 5
-DECIDE buy IS REAL
+DECIDE buy(REAL)
 SUCH THAT buy >= 0
      AND SUM(buy * p_retailprice) <= 100000 WHEN p_mfgr <> 'Manufacturer#1'
 MAXIMIZE SUM(buy * p_retailprice * 0.10);

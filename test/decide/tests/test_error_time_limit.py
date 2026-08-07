@@ -40,7 +40,7 @@ _PATHOLOGICAL_MIQP_SQL = """
     SELECT l_orderkey, l_linenumber, qty
     FROM lineitem
     WHERE l_orderkey < 100
-    DECIDE qty IS INTEGER
+    DECIDE qty(INT)
     SUCH THAT qty <= 10 AND SUM(qty) = 30
     MINIMIZE SUM(POWER(qty - 2, 2))
 """
@@ -49,7 +49,7 @@ _PATHOLOGICAL_MIQP_SQL = """
 # Used to verify the env-var read path doesn't break normal workloads.
 _FAST_QUERY_SQL = """
     SELECT s_suppkey, x FROM supplier
-    DECIDE x IS BOOLEAN
+    DECIDE x(BOOL)
     SUCH THAT SUM(x) = 5
     MAXIMIZE SUM(x * s_acctbal)
     LIMIT 10

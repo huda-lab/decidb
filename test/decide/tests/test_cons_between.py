@@ -25,7 +25,7 @@ def test_q10_logic_dependency(decidb_cli, duckdb_conn, oracle_solver, perf_track
         SELECT l_orderkey, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey < 20
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x BETWEEN 0 AND 5
           AND SUM(x * l_extendedprice) <= 10000
         MAXIMIZE SUM(x)
@@ -102,7 +102,7 @@ def test_aggregate_between_standalone(
     )
     decide_sql = f"""
         SELECT id, weight, value, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * weight) BETWEEN 10 AND 15
         MAXIMIZE SUM(x * value)
     """
@@ -163,7 +163,7 @@ def test_real_between_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 20
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x BETWEEN 0.25 AND 3.75
             AND SUM(x) <= 40
         MAXIMIZE SUM(x * l_extendedprice)

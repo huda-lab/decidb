@@ -25,7 +25,7 @@ def test_q09_minimize_cost(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         SELECT s_suppkey, s_acctbal, x
         FROM supplier
         WHERE s_nationkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 10
         MINIMIZE SUM(x * s_acctbal)
     """
@@ -82,7 +82,7 @@ def test_min_cost_supplier(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         SELECT x, ps_partkey, ps_suppkey, ps_supplycost, ps_availqty
         FROM partsupp
         WHERE ps_partkey <= 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * ps_availqty) >= 1000
         MINIMIZE SUM(x * ps_supplycost)
     """
@@ -141,7 +141,7 @@ def test_minimize_count(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_extendedprice) >= 50000
         MINIMIZE SUM(x)
     """

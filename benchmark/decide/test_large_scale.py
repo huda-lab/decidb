@@ -24,7 +24,7 @@ def test_knapsack_large(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 500
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 1000
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -83,7 +83,7 @@ def test_order_selection_large(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         SELECT o_orderkey, o_totalprice, x
         FROM orders
         WHERE o_orderdate >= '1995-01-01' AND o_orderdate < '1996-01-01'
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1000
         MAXIMIZE SUM(x * o_totalprice)
     """

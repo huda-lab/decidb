@@ -10,21 +10,21 @@ SET search_path = 'decidb,main';
 
 # Parse REAL
 statement ok
-SELECT l_quantity FROM lineitem DECIDE x IS REAL SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
 # Parse INTEGER
 statement ok
-SELECT l_quantity FROM lineitem DECIDE x IS INTEGER SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
 # Parse BOOLEAN
 statement ok
-SELECT l_quantity FROM lineitem DECIDE x IS BOOLEAN SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x(BOOL) SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
 # No SUCH THAT
 statement error
-SELECT l_quantity FROM lineitem DECIDE x MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x(INT) MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-Parser Error: syntax error at or near "MAXIMIZE"
+Parser Error: DECIDE requires a SUCH THAT clause
 
 # No DECIDE variable
 statement error
@@ -34,10 +34,10 @@ Parser Error: syntax error at or near "SUCH"
 
 # No objective
 statement ok
-SELECT l_quantity FROM lineitem DECIDE x IS BOOLEAN SUCH THAT x <= 1 LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x(BOOL) SUCH THAT x <= 1 LIMIT 1;
 
 # Unknown variable type
 statement error
-SELECT l_quantity FROM lineitem DECIDE x IS CONTINUOUS SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
+SELECT l_quantity FROM lineitem DECIDE x(CONTINUOUS) SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
 Parser Error: syntax error at or near "CONTINUOUS"

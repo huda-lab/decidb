@@ -17,7 +17,7 @@ class TestBinderErrors:
         """DECIDE variable name clashes with an existing column."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE l_quantity, x
+                DECIDE l_quantity(INT), x(INT)
                 SUCH THAT x IN (1,2,3)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"conflicts with an existing column")
@@ -26,7 +26,7 @@ class TestBinderErrors:
         """Same variable name declared twice."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x, x
+                DECIDE x(INT), x(INT)
                 SUCH THAT x IN (1,2,3)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"Duplicate DECIDE variable")
@@ -35,7 +35,7 @@ class TestBinderErrors:
         """Using an undeclared variable in IN expression."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE y
+                DECIDE y(INT)
                 SUCH THAT x IN (1,2,3)
                 MAXIMIZE SUM(x) LIMIT 1
             """, match=r"does not support IN on")
@@ -44,7 +44,7 @@ class TestBinderErrors:
         """IS NULL is not supported in SUCH THAT."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT x IS NULL
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"does not support")
@@ -62,7 +62,7 @@ class TestBinderErrors:
         decidb_cli.assert_error(
             f"""
                 SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-                DECIDE x IS BOOLEAN
+                DECIDE x(BOOL)
                 SUCH THAT SUM({agg}(p) * x) <= 3
                 MAXIMIZE SUM(x)
             """,
@@ -75,7 +75,7 @@ class TestBinderErrors:
         (no 'move it to the RHS' — an objective has no RHS)."""
         decidb_cli.assert_error("""
                 SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-                DECIDE x IS BOOLEAN
+                DECIDE x(BOOL)
                 SUCH THAT SUM(x) <= 1
                 MAXIMIZE SUM(avg(p) * x)
             """, match=r"aggregate over table columns .* cannot multiply a decision variable")
@@ -86,14 +86,14 @@ class TestBinderErrors:
         only using the data aggregate as a *coefficient* is rejected."""
         rows, _ = decidb_cli.execute("""
             SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) <= avg(p)
             MAXIMIZE SUM(x)
         """)
         assert rows  # solved, not rejected
         rows2, _ = decidb_cli.execute("""
             SELECT id, p, x FROM (VALUES (1,10.0),(2,20.0)) t(id, p)
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT AVG(x * p) >= 5
             MAXIMIZE SUM(x)
         """)
@@ -108,7 +108,7 @@ class TestBinderErrors:
         """
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) IN (1,2,3)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"does not support IN on.*Only simple DECIDE variables are allowed as the IN target")
@@ -117,7 +117,7 @@ class TestBinderErrors:
         """Using a regular column (not a DECIDE var) as a constrained value."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT l_quantity <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"must be one of the DECIDE variables")
@@ -126,7 +126,7 @@ class TestBinderErrors:
         """STDDEV(x) is not supported in objective — only SUM, AVG, MIN, or MAX is allowed."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) <= 5
                 MAXIMIZE STDDEV(x*l_quantity) LIMIT 1
             """, match=r"only SUM, AVG, MIN, or MAX is allowed")
@@ -135,7 +135,7 @@ class TestBinderErrors:
         """SUM over a regular column without DECIDE variable."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(l_quantity) <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"must reference at least one DECIDE variable")
@@ -144,7 +144,7 @@ class TestBinderErrors:
         """Cubic (x*x*x) in SUM is not supported — must reject."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x*x*x) <= 5
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"Triple.*products.*not supported")
@@ -159,7 +159,7 @@ class TestBinderErrors:
         """
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) BETWEEN l_quantity AND 1
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
@@ -170,7 +170,7 @@ class TestBinderErrors:
         # This used to be an error; now valid (x >= y AND x <= 1)
         result, cols = decidb_cli.execute("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x, y
+                DECIDE x(INT), y(INT)
                 SUCH THAT x BETWEEN y AND 1
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """)
@@ -180,7 +180,7 @@ class TestBinderErrors:
         """IN domain constraints on DECIDE variables are not yet supported."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT x IN (1,2,x)
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"IN domain constraints on DECIDE variables are not yet supported")
@@ -189,7 +189,7 @@ class TestBinderErrors:
         """SUM comparison RHS must be a scalar."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) <= l_quantity
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"not a scalar")
@@ -202,7 +202,7 @@ class TestBinderErrors:
         result, cols = decidb_cli.execute("""
                 SELECT l_quantity FROM lineitem
                 WHERE l_orderkey <= 3
-                DECIDE x, y
+                DECIDE x(INT), y(INT)
                 SUCH THAT x <= y AND SUM(y) <= 100
                 MAXIMIZE SUM(x*l_quantity)
             """)
@@ -212,7 +212,7 @@ class TestBinderErrors:
         """SUM = non-scalar expression."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) = l_quantity
                 MAXIMIZE SUM(x) LIMIT 1
             """, match=r"not a scalar")
@@ -225,7 +225,7 @@ class TestBinderErrors:
         "non-aggregate term" by the extractor."""
         rows, cols = decidb_cli.execute("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) <= 3
                 MAXIMIZE SUM(x*l_quantity)+3 LIMIT 1
             """)
@@ -236,7 +236,7 @@ class TestBinderErrors:
         """MAXIMIZE with a bare column (not SUM) is not allowed."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) <= 3
                 MAXIMIZE l_quantity LIMIT 1
             """, match=r"does not support")
@@ -251,7 +251,7 @@ class TestBinderErrors:
         """
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) <= (SELECT l_quantity+x FROM lineitem)
                 MAXIMIZE SUM(x) LIMIT 1
             """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
@@ -267,7 +267,7 @@ class TestBinderErrors:
         decidb_cli.assert_error("""
                 WITH t AS (SELECT 1 AS l_quantity UNION ALL SELECT 2)
                 SELECT l_quantity FROM t
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x) <= (SELECT l_quantity FROM t)
                 MAXIMIZE SUM(x)
             """, match=r"More than one row returned by a subquery")
@@ -283,7 +283,7 @@ class TestBinderErrors:
                 WITH t AS (SELECT 1 AS l_quantity, 'A' AS grp
                     UNION ALL SELECT 2, 'B')
                 SELECT l_quantity, x FROM t
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT x <= 5 PER grp
                 MAXIMIZE SUM(x * l_quantity)
             """, match=r"PER can only be applied to aggregate \(SUM\) constraints")
@@ -299,7 +299,7 @@ class TestBinderErrors:
         decidb_cli.assert_error("""
                 WITH t AS (SELECT 1 AS id, 10 AS val UNION ALL SELECT 2, 20)
                 SELECT id, val, x, y FROM t
-                DECIDE x, y
+                DECIDE x(INT), y(INT)
                 SUCH THAT SUM(x * val) <= SUM(y * val) AND SUM(y) <= 5
                 MAXIMIZE SUM(x * val)
             """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
@@ -311,7 +311,7 @@ class TestBinderErrors:
         decidb_cli.assert_error("""
                 WITH t AS (SELECT 1 AS id, 10 AS val UNION ALL SELECT 2, 20)
                 SELECT id, val, x FROM t
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x * val) <= MIN(val)
                 MAXIMIZE SUM(x * val)
             """, match=r"can't be reduced to a scalar bound.*MIN/MAX/COUNT")
@@ -322,7 +322,7 @@ class TestBinderErrors:
         """Non-whitelisted aggregates (BIT_AND, STRING_AGG, MEDIAN, ...) are rejected in DECIDE clauses."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT BIT_AND(x) >= 0
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"only SUM, AVG, MIN, MAX, or COUNT is allowed")
@@ -331,7 +331,7 @@ class TestBinderErrors:
         """COUNT(x) where x is a DECIDE variable is degenerate (always = row count)."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT COUNT(x) >= 5
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"COUNT over a DECIDE variable is degenerate")
@@ -345,7 +345,7 @@ class TestBinderErrors:
         variable should now be rejected with a uniform error."""
         decidb_cli.assert_error(f"""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
+                DECIDE x(REAL)
                 SUCH THAT {fn}(x) <= 2
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"over a DECIDE variable is not supported")
@@ -356,7 +356,7 @@ class TestBinderErrors:
         Now a clean BinderException."""
         decidb_cli.assert_error(f"""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
+                DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MAXIMIZE SUM({fn}(x)) LIMIT 1
             """, match=r"over a DECIDE variable is not supported")
@@ -366,7 +366,7 @@ class TestBinderErrors:
         ABS used to FATAL the session. The recursive walk catches it."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
+                DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MAXIMIZE SUM(ABS(sqrt(x) - 1)) LIMIT 1
             """, match=r"'sqrt' over a DECIDE variable is not supported")
@@ -380,7 +380,7 @@ class TestBinderErrors:
         """SUM(POWER(x, <non-2>)) — only POWER(expr, 2) is supported."""
         decidb_cli.assert_error(f"""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
+                DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, {exp})) LIMIT 1
             """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
@@ -389,7 +389,7 @@ class TestBinderErrors:
         """POWER(x, x) — exponent is itself a decide var; must be a constant."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
+                DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, x)) LIMIT 1
             """, match=r"POWER exponent.*must be a constant integer")
@@ -398,7 +398,7 @@ class TestBinderErrors:
         """POWER(x, col) — exponent is a table column, not a constant."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
+                DECIDE x(REAL)
                 SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, l_quantity)) LIMIT 1
             """, match=r"POWER exponent.*must be a constant integer")
@@ -407,7 +407,7 @@ class TestBinderErrors:
         """POWER(x, 0.5) <= K as per-row (no SUM) — same clean rejection as inside SUM."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
+                DECIDE x(REAL)
                 SUCH THAT POWER(x, 0.5) <= 3
                 MAXIMIZE SUM(x) LIMIT 1
             """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
@@ -419,7 +419,7 @@ class TestBinderErrors:
         # separate pre-existing question.
         decidb_cli.execute("""
                 SELECT l_quantity, x FROM lineitem WHERE l_orderkey < 10
-                DECIDE x IS BOOLEAN
+                DECIDE x(BOOL)
                 SUCH THAT SUM(x * POWER(l_quantity, 2)) <= 1000
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """)
@@ -430,7 +430,7 @@ class TestBinderErrors:
         message as POWER(x, col). Could be loosened later; defensive for now."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL SUCH THAT x <= 5
+                DECIDE x(REAL) SUCH THAT x <= 5
                 MINIMIZE SUM(POWER(x, CAST(2 AS INTEGER))) LIMIT 1
             """, match=r"POWER exponent.*must be a constant integer")
 
@@ -440,7 +440,7 @@ class TestBinderErrors:
         not slip past the new pre-pass."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL, y IS REAL
+                DECIDE x(REAL), y(REAL)
                 SUCH THAT x <= 5 AND y <= 5
                 MINIMIZE SUM(POWER(x * y, 2)) LIMIT 1
             """, match=r"products of different DECIDE variables|linear in DECIDE variables")
@@ -451,7 +451,7 @@ class TestBinderErrors:
         before we'd subtract an INVALID_INDEX coefficient from NULL."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS REAL
+                DECIDE x(REAL)
                 SUCH THAT x + 3 <= CAST(NULL AS DOUBLE)
                 MAXIMIZE SUM(x) LIMIT 1
             """, match=r"does not support|clause")
@@ -463,7 +463,7 @@ class TestBinderErrors:
         """WHEN condition must not reference DECIDE variables."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT SUM(x * l_quantity) <= 50 WHEN x = 1
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"WHEN conditions cannot reference DECIDE variables")
@@ -473,7 +473,7 @@ class TestBinderErrors:
         """WHEN compound condition must not hide a DECIDE variable."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x
+                DECIDE x(INT)
                 SUCH THAT x <= 1 WHEN (x = 1 AND l_returnflag = 'R')
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"WHEN conditions cannot reference DECIDE variables")
@@ -492,7 +492,7 @@ class TestBinderErrors:
                 SELECT ps_partkey, ps_suppkey, x
                 FROM partsupp
                 WHERE ps_partkey < 10
-                DECIDE x IS INTEGER
+                DECIDE x(INT)
                 SUCH THAT SUM(x * ps_supplycost)
                           <= (SELECT CAST(p_size AS INTEGER) FROM part
                               WHERE p_partkey = ps_partkey)
@@ -512,7 +512,7 @@ class TestBinderErrors:
                 SELECT ps_partkey, ps_suppkey, x
                 FROM partsupp
                 WHERE ps_partkey < 20
-                DECIDE x IS INTEGER
+                DECIDE x(INT)
                 SUCH THAT SUM(x) <= (SELECT CAST(p_size AS INTEGER) FROM part
                                      WHERE p_partkey = ps_partkey)
                           PER ps_suppkey
@@ -530,7 +530,7 @@ class TestBinderErrors:
         decidb_cli.assert_error("""
                 WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
                 SELECT id, x, y FROM t
-                DECIDE x IS REAL, y IS REAL
+                DECIDE x(REAL), y(REAL)
                 SUCH THAT x / y <= 5
                     AND x <= 10
                     AND y <= 10
@@ -543,7 +543,7 @@ class TestBinderErrors:
         decidb_cli.assert_error("""
                 WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
                 SELECT id, x, y FROM t
-                DECIDE x IS REAL, y IS REAL
+                DECIDE x(REAL), y(REAL)
                 SUCH THAT SUM(x / y) <= 5
                     AND x <= 10
                     AND y <= 10
@@ -555,7 +555,7 @@ class TestBinderErrors:
         decidb_cli.assert_error("""
                 WITH t AS (SELECT 1 AS id UNION ALL SELECT 2)
                 SELECT id, x, y FROM t
-                DECIDE x IS REAL, y IS REAL
+                DECIDE x(REAL), y(REAL)
                 SUCH THAT x <= 10 AND y <= 10
                 MAXIMIZE SUM(x / y)
             """, match=r"Division by a DECIDE variable is not supported")

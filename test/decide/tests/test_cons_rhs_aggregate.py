@@ -23,7 +23,7 @@ _DATA = """
                (4, 1, 10.0, 4.0, 5.0, true)
     )
     SELECT id, x FROM k
-    DECIDE x IS BOOLEAN
+    DECIDE x(BOOL)
     SUCH THAT {cons}
     MAXIMIZE SUM(x * profit)
 """
@@ -81,7 +81,7 @@ def test_rhs_avg_matches_scalar(decidb_cli):
             VALUES (1, 4.0, 2.0), (2, 4.0, 2.0), (3, 4.0, 2.0), (4, 4.0, 2.0)
         )
         SELECT id, x FROM k
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT {cons}
         MAXIMIZE SUM(x)
     """

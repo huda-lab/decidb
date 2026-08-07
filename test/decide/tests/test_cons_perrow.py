@@ -24,7 +24,7 @@ def test_q07_row_wise_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp
         WHERE ps_partkey < 20
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 5
           AND SUM(x) <= 100
         MAXIMIZE SUM(x * ps_availqty)
@@ -84,7 +84,7 @@ def test_per_row_lower_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         SELECT ps_partkey, ps_suppkey, ps_supplycost, x
         FROM partsupp
         WHERE ps_partkey < 10
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x >= 1
             AND SUM(x * ps_supplycost) <= 50000
         MAXIMIZE SUM(x)
@@ -142,7 +142,7 @@ def test_reversed_bound_comparisons_are_normalized(decidb_cli):
     rows, cols = decidb_cli.execute("""
         SELECT id, x
         FROM (VALUES (1), (2)) t(id)
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT 5 >= x
             AND 2 <= x
             AND 6 >= SUM(x)
@@ -181,7 +181,7 @@ def test_perrow_linear_lhs_upper_bound(decidb_cli, duckdb_conn, oracle_solver, p
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp
         WHERE ps_partkey < 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT {lhs_sql} <= {rhs_sql}
         MAXIMIZE SUM(x * ps_availqty)
     """
@@ -229,7 +229,7 @@ def test_perrow_unary_minus_lower_bound(decidb_cli, duckdb_conn, oracle_solver, 
     sql = """
         SELECT ps_partkey, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT -x <= -2
             AND x <= 10
         MAXIMIZE SUM(x)
@@ -279,7 +279,7 @@ def test_perrow_data_column_in_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_
     sql = """
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x - ps_availqty <= 1
         MAXIMIZE SUM(x)
     """
@@ -333,7 +333,7 @@ def test_perrow_negative_constant_divisor(decidb_cli, duckdb_conn, oracle_solver
     sql = """
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x / (-2) <= 1
             AND x <= 10
         MAXIMIZE SUM(x)
@@ -380,7 +380,7 @@ def test_perrow_strict_lt_with_offset(decidb_cli, duckdb_conn, oracle_solver, pe
     sql = """
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x + 3 < 10
         MAXIMIZE SUM(x * ps_availqty)
     """
@@ -427,7 +427,7 @@ def test_perrow_integer_with_fractional_coef(decidb_cli, duckdb_conn, oracle_sol
     sql = """
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x / 3 <= 1
         MAXIMIZE SUM(x * ps_availqty)
     """
@@ -472,7 +472,7 @@ def test_perrow_when_plus_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, per
     sql = """
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x + 3 <= 10 WHEN (ps_partkey % 2 = 0)
             AND x <= 20
         MAXIMIZE SUM(x * ps_availqty)
@@ -523,7 +523,7 @@ def test_perrow_division_by_zero_column_errors_cleanly(decidb_cli):
             SELECT 3, 1.0
         )
         SELECT id, x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x / w <= 1
             AND x <= 5
         MAXIMIZE SUM(x)

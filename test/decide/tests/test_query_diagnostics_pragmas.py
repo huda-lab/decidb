@@ -23,13 +23,13 @@ _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 # Cleanly UNBOUNDED LP on both backends: a free REAL var maximized with no upper cap.
 _UNBOUNDED_SQL = (
     "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-    "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
+    "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
 )
 
 # Infeasible: SUM of two booleans cannot reach 3.
 _INFEASIBLE_SQL = (
     "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-    "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
+    "DECIDE x(BOOL) SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
 )
 
 _POINTER = "details: select * from decide_diagnostics()"

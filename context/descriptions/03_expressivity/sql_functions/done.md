@@ -66,7 +66,7 @@ A trailing `WHEN` on a bare RHS aggregate (`... <= SUM(b) WHEN w`) is parsed as 
 ```sql
 SUCH THAT AVG(x * weight) <= 10         -- SUM(x*weight) <= 10*N
 SUCH THAT AVG(x + cost) <= 5            -- fixed AVG(cost) is moved to RHS
-SUCH THAT AVG(x) <= 0.5                 -- at most half the rows selected (BOOLEAN)
+SUCH THAT AVG(x) <= 0.5                 -- at most half the rows selected (BOOL)
 SUCH THAT AVG(x * cost) <= 5 WHEN active -- only among active rows
 SUCH THAT AVG(x * cost) WHEN active + SUM(x * fee) WHEN priority <= 100
 SUCH THAT AVG(x * hours) <= 8 PER emp   -- per-group average
@@ -75,7 +75,7 @@ MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
 
 **Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so DeciDB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead.
 
-**Tests**: `test/decide/tests/test_avg.py` — 11 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOLEAN, INTEGER, non-linear rejection, `<>` with and without WHEN, and no-decide-var passthrough.
+**Tests**: `test/decide/tests/test_avg.py` — 11 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOL, INT, non-linear rejection, `<>` with and without WHEN, and no-decide-var passthrough.
 
 ---
 
@@ -353,7 +353,7 @@ SUCH THAT x IN (0, 1, 3)                -- decision variable domain restriction
 **Complexity**: Adds K binary variables and 2 constraints per IN. For small K (2–5 values) this is cheap. Large K (e.g., 100 values) adds significant model size — consider whether the domain can be expressed as a range constraint instead.
 
 **Optimizations**:
-- `x IN (0, 1)` on BOOLEAN → trivially satisfied, no rewrite
+- `x IN (0, 1)` on BOOL → trivially satisfied, no rewrite
 - `x IN (v)` single value → rewritten to `x = v`
 
 **Code**: `bind_select_node.cpp` (`RewriteInDomain()`), called before constraint binding. IN on aggregates (e.g., `SUM(x) IN (...)`) remains unsupported.
@@ -403,7 +403,7 @@ objectives and constraints.
 | `'inf'` | `MAX(ABS(expr))` | L-infinity (worst deviation) | LP |
 | `0[, M]` | indicator linked so `z=1` iff `|expr| >= tol`; term → `SUM(z)` | L0 / count of nonzeros (exact) | MILP |
 
-- **L0 indicator (exact in every context).** One INTEGER 0/1 indicator `z` per row.
+- **L0 indicator (exact in every context).** One INT 0/1 indicator `z` per row.
   Each term emits **three** linking constraints so `z` is the *exact* nonzero
   indicator, not merely an upper bound:
   - **Forward** (`z = 1` when `expr != 0`): the data-driven pair `M*z >= expr`,

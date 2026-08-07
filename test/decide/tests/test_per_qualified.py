@@ -44,7 +44,7 @@ def test_per_single_qualified_column_in_constraint(
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, n.n_name, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3 PER s.s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -101,7 +101,7 @@ def test_per_multi_column_all_qualified(
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, n.n_regionkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2 PER (s.s_nationkey, n.n_regionkey)
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -159,7 +159,7 @@ def test_per_multi_column_mixed_qualified_and_bare(decidb_cli, duckdb_conn):
     bare_sql = """
         SELECT s.s_suppkey, s.s_acctbal, s_nationkey, n_regionkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2 PER (s_nationkey, n_regionkey)
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -209,7 +209,7 @@ def test_per_qualified_equivalent_to_unqualified(decidb_cli):
     base_sql = """
         SELECT s.s_suppkey, s.s_acctbal, s_nationkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3 PER {per_col}
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -236,7 +236,7 @@ def test_per_qualified_with_table_alias(decidb_cli):
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
         FROM supplier AS s
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2 PER s.s_nationkey
         MAXIMIZE SUM(x * s.s_acctbal)
     """
@@ -258,7 +258,7 @@ def test_per_with_when_qualified_column(decidb_cli):
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3 WHEN s.s_acctbal > 0 PER s.s_nationkey
         MAXIMIZE SUM(x * s.s_acctbal)
     """
@@ -280,7 +280,7 @@ def test_per_qualified_in_objective(decidb_cli):
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(MAX(x * s.s_acctbal)) PER s.s_nationkey
     """
@@ -303,7 +303,7 @@ def test_per_unknown_qualifier_gives_clean_error(decidb_cli):
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, x
         FROM supplier s
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3 PER unknown_table.s_nationkey
         MAXIMIZE SUM(x * s.s_acctbal)
     """

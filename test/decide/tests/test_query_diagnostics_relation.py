@@ -28,7 +28,7 @@ _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
 _UNBOUNDED_SQL = (
     "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-    "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
+    "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
 )
 
 _EXPECTED_SCHEMA = [
@@ -234,7 +234,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         bounded_sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
         )
         script = (
             ".mode csv\n"
@@ -272,7 +272,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         y_sql = (
             "SELECT id, y FROM (VALUES (1), (2)) t(id) "
-            "DECIDE y IS REAL SUCH THAT y >= 0 MAXIMIZE SUM(y)"
+            "DECIDE y(REAL) SUCH THAT y >= 0 MAXIMIZE SUM(y)"
         )
         marker_sql = (
             "SELECT '{label}=' || min(diagnosis_id) || ':' || "
@@ -313,7 +313,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         qp_sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(POWER(x, 2))"
+            "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(POWER(x, 2))"
         )
         result = _diagnose(cli, qp_sql, mode="auto")
         assert "select * from decide_diagnostics()" not in result.stderr.lower()
@@ -341,7 +341,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x >= 5 AND x <= 1 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x >= 5 AND x <= 1 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
         assert "select * from decide_diagnostics()" in result.stderr.lower()
@@ -369,7 +369,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -395,7 +395,7 @@ class TestDiagnosticsRelation:
         sql = (
             "SELECT r_name, keepR "
             "FROM nation n JOIN region r ON n.n_regionkey = r.r_regionkey "
-            "DECIDE r.keepR IS BOOLEAN "
+            "DECIDE r.keepR(BOOL) "
             "SUCH THAT SUM(keepR) >= 6 PER r.r_name "
             "MAXIMIZE SUM(keepR)"
         )
@@ -427,7 +427,7 @@ class TestDiagnosticsRelation:
             "SELECT n_name, keepN "
             "FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey "
             "JOIN region r ON n.n_regionkey = r.r_regionkey "
-            "DECIDE n.keepN IS BOOLEAN "
+            "DECIDE n.keepN(BOOL) "
             "SUCH THAT SUM(keepN) >= 1000 PER r.r_name "
             "MAXIMIZE SUM(keepN)"
         )
@@ -453,7 +453,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, grp, buy FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, grp) "
-            "DECIDE buy IS BOOLEAN "
+            "DECIDE buy(BOOL) "
             "SUCH THAT SUM(buy) >= 5 PER grp "
             "MAXIMIZE SUM(buy)"
         )
@@ -474,7 +474,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x, y FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL, y IS REAL "
+            "DECIDE x(REAL), y(REAL) "
             "SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
@@ -515,7 +515,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x, y FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL, y IS REAL SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10"
+            "DECIDE x(REAL), y(REAL) SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -537,7 +537,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x BETWEEN 0 AND 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -559,7 +559,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1, 8), (2, 12)) t(id, lo) "
-            "DECIDE x IS REAL SUCH THAT x >= lo AND MAX(x) <= 5 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x >= lo AND MAX(x) <= 5 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -580,7 +580,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1, 8), (2, 12)) t(id, lo) "
-            "DECIDE x IS REAL SUCH THAT x <= 5 AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= 5 AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -599,7 +599,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,12)) t(id, lo) "
-            "DECIDE x IS REAL SUCH THAT 5 >= x AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT 5 >= x AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -620,7 +620,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
         err = result.stderr.lower()
@@ -648,7 +648,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto", scope="expanded")
 
@@ -676,7 +676,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,''),(2,'a')) t(id, grp) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 2 PER grp MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 2 PER grp MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto", scope="expanded")
 
@@ -699,7 +699,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a'),(2,'b')) t(id, grp) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 99 WHEN grp='a' MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 99 WHEN grp='a' MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -720,7 +720,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -743,7 +743,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT x >= 1 AND SUM(x) <= 2 MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x >= 1 AND SUM(x) <= 2 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -765,7 +765,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) "
-            "DECIDE x IS BOOLEAN, y IS INTEGER SUCH THAT x <= 0 AND y <= 1 "
+            "DECIDE x(BOOL), y(INT) SUCH THAT x <= 0 AND y <= 1 "
             "AND SUM(y) >= 5 AND SUM(x) + SUM(y) >= 9 MAXIMIZE SUM(y)"
         )
         result = _diagnose(cli, sql, mode="auto")
@@ -788,7 +788,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT x = 1 AND SUM(x) <= 2 MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x = 1 AND SUM(x) <= 2 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -806,7 +806,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT x <= 1 AND x >= 0 AND SUM(x) >= 3 "
+            "DECIDE x(BOOL) SUCH THAT x <= 1 AND x >= 0 AND SUM(x) >= 3 "
             "MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
@@ -826,7 +826,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) "
-            "DECIDE x IS BOOLEAN SUCH THAT x >= hi MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x >= hi MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -850,7 +850,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,5),(2,7)) t(id, hi) "
-            "DECIDE x IS BOOLEAN SUCH THAT x >= hi MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x >= hi MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto", scope="expanded")
 
@@ -875,7 +875,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,12)) t(id, lo) "
-            "DECIDE x IS REAL SUCH THAT x <= 5 AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= 5 AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -894,7 +894,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,1)) t(id, demand) "
-            "DECIDE x IS REAL SUCH THAT 10000*x <= 0 AND x >= demand MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT 10000*x <= 0 AND x >= demand MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -919,7 +919,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
-            "DECIDE x IS REAL SUCH THAT x <= 2 + 3 AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= 2 + 3 AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -941,7 +941,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
-            "DECIDE x IS REAL SUCH THAT x <= (SELECT 5) AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= (SELECT 5) AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -963,7 +963,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,5),(2,8)) t(id, hi) "
-            "DECIDE x IS REAL SUCH THAT x <= (SELECT hi) AND x >= 100 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= (SELECT hi) AND x >= 100 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -991,7 +991,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x <= 4 AND 2 * x >= 30 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= 4 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1011,7 +1011,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,10),(2,10),(3,10)) t(id, lo) "
-            "DECIDE x IS REAL SUCH THAT AVG(x) <= 5 AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT AVG(x) <= 5 AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1034,7 +1034,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, w, x FROM (VALUES (1,10),(2,20),(3,30)) t(id, w) "
-            "DECIDE x IS BOOLEAN SUCH THAT AVG(x * w) >= 100 MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT AVG(x * w) >= 100 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1057,7 +1057,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,15)) t(id, lo) "
-            "DECIDE x IS INTEGER SUCH THAT SUM(x) < 10 AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(INT) SUCH THAT SUM(x) < 10 AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1075,7 +1075,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,3)) t(id, hi) "
-            "DECIDE x IS INTEGER SUCH THAT SUM(x) > 10 AND x <= hi MAXIMIZE SUM(x)"
+            "DECIDE x(INT) SUCH THAT SUM(x) > 10 AND x <= hi MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1093,7 +1093,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
-            "DECIDE x IS REAL SUCH THAT POWER(x,2) <= 4 AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT POWER(x,2) <= 4 AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1116,7 +1116,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,4)) t(id, lo) "
-            "DECIDE x IS INTEGER SUCH THAT POWER(x,2) < 10 AND x >= lo MAXIMIZE SUM(x)"
+            "DECIDE x(INT) SUCH THAT POWER(x,2) < 10 AND x >= lo MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1136,7 +1136,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS INTEGER SUCH THAT x <> 5 AND x >= 5 AND x <= 5 MAXIMIZE SUM(x)"
+            "DECIDE x(INT) SUCH THAT x <> 5 AND x >= 5 AND x <= 5 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1157,7 +1157,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,5)) t(id, lo) "
-            "DECIDE x IS INTEGER SUCH THAT x <> 5 AND x >= lo "
+            "DECIDE x(INT) SUCH THAT x <> 5 AND x >= lo "
             "AND 10000000*x <= 50000000 MINIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
@@ -1187,7 +1187,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            f"DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 {objective}"
+            f"DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 {objective}"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1218,7 +1218,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            f"DECIDE x IS BOOLEAN SUCH THAT SUM(x) <> 0 AND SUM(x) <> 1 {objective}"
+            f"DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 AND SUM(x) <> 1 {objective}"
         )
         result = _diagnose(cli, sql, mode="auto")
 
@@ -1255,7 +1255,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x, y FROM (VALUES (1)) t(id) "
-            "DECIDE x IS BOOLEAN, y IS INTEGER SUCH THAT x <> 0 AND x <> 1 AND y <= 5 "
+            "DECIDE x(BOOL), y(INT) SUCH THAT x <> 0 AND x <> 1 AND y <= 5 "
             "MAXIMIZE SUM(y)"
         )
         result = _diagnose(cli, sql, mode="auto")
@@ -1288,7 +1288,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x, y FROM (VALUES (1)) t(id) "
-            "DECIDE x IS BOOLEAN, y IS BOOLEAN SUCH THAT "
+            "DECIDE x(BOOL), y(BOOL) SUCH THAT "
             f"x <> 0 AND x <> 1 AND y <> 0 AND y <> 1 {objective}"
         )
         result = _diagnose(cli, sql, mode="auto")
@@ -1314,7 +1314,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
         )
         # A positive override still produces exactly one drop.
         override = cli.execute_script(
@@ -1358,7 +1358,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x, y FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL, y IS REAL SUCH THAT x * y <= 1 AND x >= 5 AND y >= 5 "
+            "DECIDE x(REAL), y(REAL) SUCH THAT x * y <= 1 AND x >= 5 AND y >= 5 "
             "MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="auto")
@@ -1378,7 +1378,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, mode="off")
         assert "select * from decide_diagnostics()" not in result.stderr.lower()
@@ -1398,7 +1398,7 @@ class TestInfeasibleHeadlineAndRendering:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
-            "DECIDE x IS INTEGER SUCH THAT x >= 10 AND x <= 5 MAXIMIZE SUM(x)"
+            "DECIDE x(INT) SUCH THAT x >= 10 AND x <= 5 MAXIMIZE SUM(x)"
         )
         err = _diagnose(cli, sql).stderr.lower()
         assert "diagnosis points to clause `x <= 5`" in err
@@ -1411,7 +1411,7 @@ class TestInfeasibleHeadlineAndRendering:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 999999 MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 999999 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -1433,7 +1433,7 @@ class TestInfeasibleHeadlineAndRendering:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, w, x FROM (VALUES (1,5),(2,5),(3,5)) t(id,w) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 1 AND SUM(x * w) <= -1 MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 1 AND SUM(x * w) <= -1 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -1455,7 +1455,7 @@ class TestInfeasibleHeadlineAndRendering:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, p, x FROM (VALUES (1,10),(2,20),(3,30)) t(id,p) "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 3 AND SUM(x * p) <= 5 MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 3 AND SUM(x * p) <= 5 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -1474,7 +1474,7 @@ class TestInfeasibleHeadlineAndRendering:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -1492,7 +1492,7 @@ class TestInfeasibleHeadlineAndRendering:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id,x,y,z FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL,y IS REAL,z IS REAL "
+            "DECIDE x(REAL),y(REAL),z(REAL) "
             "SUCH THAT x<=1 AND x>=5 AND y<=1 AND y>=5 AND z<=1 AND z>=5 MAXIMIZE SUM(x+y+z)"
         )
         result = _diagnose(cli, sql)
@@ -1512,7 +1512,7 @@ class TestInfeasibleHeadlineAndRendering:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id,x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x <= 1 AND x >= 1234567890 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= 1 AND x >= 1234567890 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -1530,7 +1530,7 @@ class TestInfeasibleHeadlineAndRendering:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1),(2),(3)) t(id) "
-            "DECIDE x IS INTEGER SUCH THAT MAX(x) + SUM(x) <= -1 MAXIMIZE SUM(x)"
+            "DECIDE x(INT) SUCH THAT MAX(x) + SUM(x) <= -1 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -1555,7 +1555,7 @@ class TestEqualityBoundConflict:
     @pytest.mark.parametrize("clause", ["x = 5 AND x = 10", "x = 10 AND x = 5"])
     def test_contradictory_equalities_are_infeasible(self, request, cli_fixture, clause):
         cli = request.getfixturevalue(cli_fixture)
-        sql = f"SELECT id,x FROM (VALUES (1)) t(id) DECIDE x IS REAL SUCH THAT {clause} MAXIMIZE SUM(x)"
+        sql = f"SELECT id,x FROM (VALUES (1)) t(id) DECIDE x(REAL) SUCH THAT {clause} MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
         assert "infeasible" in result.stderr.lower()
         rows = _rows(result)
@@ -1568,7 +1568,7 @@ class TestEqualityBoundConflict:
         """Regression guard: the intersect must not break a consistent (or explicitly
         negative) equality — both still solve to their value, no false infeasible."""
         cli = request.getfixturevalue(cli_fixture)
-        sql = f"SELECT x FROM (VALUES (1)) t(id) DECIDE x IS REAL SUCH THAT {clause} MAXIMIZE SUM(x)"
+        sql = f"SELECT x FROM (VALUES (1)) t(id) DECIDE x(REAL) SUCH THAT {clause} MAXIMIZE SUM(x)"
         out = cli.execute_script(".mode csv\n" + sql + ";\n").stdout
         rows = list(csv.DictReader(io.StringIO(out)))
         assert len(rows) == 1 and float(rows[0]["x"]) == pytest.approx(expected)

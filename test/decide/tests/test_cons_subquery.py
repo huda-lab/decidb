@@ -24,7 +24,7 @@ def test_q04_subquery_rhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT o_orderkey, o_totalprice, x
         FROM orders
         WHERE o_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * o_totalprice) <= (SELECT AVG(c_acctbal) FROM customer WHERE c_nationkey = 10)
         MAXIMIZE SUM(x * o_totalprice)
     """
@@ -93,7 +93,7 @@ def test_per_constraint_with_subquery_rhs(
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_extendedprice) <= (SELECT 30000) PER l_orderkey
         MAXIMIZE SUM(x)
     """

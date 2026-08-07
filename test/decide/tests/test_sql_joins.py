@@ -26,7 +26,7 @@ def test_q05_join_decide(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         WHERE o.o_custkey = c.c_custkey
           AND c.c_mktsegment = 'BUILDING'
           AND o.o_orderkey < 1000
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * o.o_totalprice) <= 100000
         MAXIMIZE SUM(x * o.o_totalprice)
     """
@@ -92,7 +92,7 @@ def test_three_way_join(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
           AND o.o_custkey = c.c_custkey
           AND c.c_mktsegment = 'BUILDING'
           AND l.l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l.l_extendedprice) <= 50000
         MAXIMIZE SUM(x * l.l_extendedprice)
     """

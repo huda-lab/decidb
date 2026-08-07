@@ -147,7 +147,7 @@ WITH weighted AS (
 )
 SELECT *
 FROM weighted
-DECIDE new_hours IS INTEGER
+DECIDE new_hours(INT)
 SUCH THAT ...
 MINIMIZE SUM(penalty_weight * abs(new_hours - hours))
 ```
@@ -166,7 +166,7 @@ WITH effective AS (
 )
 SELECT *
 FROM effective
-DECIDE new_hours IS INTEGER
+DECIDE new_hours(INT)
 SUCH THAT
   SUM(new_hours * effectiveness) >= 60 PER projectID
 ```
@@ -187,7 +187,7 @@ WITH toleranced AS (
 )
 SELECT *
 FROM toleranced
-DECIDE syn_rent IS INTEGER
+DECIDE syn_rent(INT)
 SUCH THAT
   abs(syn_rent - rent) <= tolerance
 ```

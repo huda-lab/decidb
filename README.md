@@ -16,7 +16,7 @@ Select optimal subsets of data with constraints and objectives — no external t
 ```sql
 SELECT item, value, weight, x AS selected
 FROM Items
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);
@@ -43,7 +43,7 @@ SUCH THAT constraint [AND constraint ...]
 
 | Feature                  | Details                                                                          |
 | ------------------------ | -------------------------------------------------------------------------------- |
-| **Variable types**       | `IS BOOLEAN` (0/1), `IS INTEGER` (non-negative, default), `IS REAL` (continuous) |
+| **Variable types**       | `BOOL` (0/1), `INT` (non-negative), `REAL` (continuous) |
 | **Constraint operators** | `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, `IN`                                 |
 | **Aggregates**           | `SUM()`, `COUNT()`, `AVG()`, `MIN()`, `MAX()`                                    |
 | **Conditional**          | `expression WHEN condition` (postfix)                                            |

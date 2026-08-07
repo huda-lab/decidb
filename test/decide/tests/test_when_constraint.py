@@ -30,7 +30,7 @@ def test_when_aggregate_string_equality(decidb_cli, duckdb_conn, oracle_solver, 
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -92,7 +92,7 @@ def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_t
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
             AND SUM(x * l_quantity) <= 80 WHEN l_returnflag = 'A'
         MAXIMIZE SUM(x * l_extendedprice)
@@ -158,7 +158,7 @@ def test_when_aggregate_numeric_comparison(decidb_cli, duckdb_conn, oracle_solve
                l_discount, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_extendedprice) <= 5000 WHEN l_discount >= 0.06
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -218,7 +218,7 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_quantity > 0
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -279,7 +279,7 @@ def test_when_no_rows_match(decidb_cli):
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'Z'
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -299,7 +299,7 @@ def test_when_mixed_conditional_and_unconditional(decidb_cli, duckdb_conn, oracl
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
@@ -365,7 +365,7 @@ def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, p
         SELECT c_custkey, c_acctbal, c_mktsegment, x
         FROM customer
         WHERE c_nationkey = 1
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * 10) <= 200 WHEN c_mktsegment = 'AUTOMOBILE'
         MAXIMIZE SUM(x * c_acctbal)
     """
@@ -424,7 +424,7 @@ def test_when_not_equal(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 80 WHEN l_returnflag <> 'N'
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -490,7 +490,7 @@ def test_when_constraint_ordering_invariance(decidb_cli):
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 20
             AND SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
@@ -501,7 +501,7 @@ def test_when_constraint_ordering_invariance(decidb_cli):
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
@@ -549,7 +549,7 @@ def test_when_null_condition_column(decidb_cli, duckdb_conn, oracle_solver, perf
         )
         SELECT id, val, flag, x
         FROM data
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) <= 20 WHEN flag = 'R'
         MAXIMIZE SUM(x * val)
     """
@@ -596,7 +596,7 @@ def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
             VALUES (1, 10.0, 'a'), (2, 5.0, NULL),
                    (3, 8.0, 'c'), (4, 15.0, NULL)
         ) t(id, val, note)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) <= 15 WHEN (note IS NOT NULL)
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * val)

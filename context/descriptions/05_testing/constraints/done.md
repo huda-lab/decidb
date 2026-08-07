@@ -18,7 +18,7 @@ oracle-verified (`test_cons_comparison.py` and others).
 
 - **`<>` (NE Big-M)** (`test_cons_comparison.py`, plus `test_aggregate_local_when.py` for the aggregate-local variant): expression-level and aggregate-local WHEN composition, with/without WHEN binding, and mixed-sign coefficient column (both-sided disjunction). `<>` on REAL LHS is rejected.
 - **Strict `<` / `>` rejection coverage** (`test_cons_comparison.py`): rejected on REAL LHS (per-row and aggregate), non-integer coefficient, mixed BOOL + REAL LHS, quadratic path (`SUM(POWER(real, 2))`), and bilinear Bool × Real path.
-- **Strict `<` / `>` accepted shapes** (oracle-verified): pure INTEGER SUM (per-row and aggregate), BOOLEAN × INTEGER bilinear LHS, INTEGER × INTEGER bilinear LHS (Gurobi), `SUM(ABS(integer_expr))`.
+- **Strict `<` / `>` accepted shapes** (oracle-verified): pure INT SUM (per-row and aggregate), BOOL × INT bilinear LHS, INT × INT bilinear LHS (Gurobi), `SUM(ABS(integer_expr))`.
 - Regression: `<=` / `>=` on REAL LHS still work.
 
 ### BETWEEN
@@ -29,7 +29,7 @@ oracle-verified (`test_cons_comparison.py` and others).
 
 ### IN
 
-- **Oracle-verified** (`test_cons_in.py`): `x IN (values)` on decision variable, non-integer values on REAL var, `x IN (0, 1)` on BOOLEAN (no-op optimization), single-value IN rewritten to `x = v`, IN + WHEN composition.
+- **Oracle-verified** (`test_cons_in.py`): `x IN (values)` on decision variable, non-integer values on REAL var, `x IN (0, 1)` on BOOL (no-op optimization), single-value IN rewritten to `x = v`, IN + WHEN composition.
 - Error tests (`test_error_binder.py`): `SUM(x) IN (...)` rejected, DECIDE var in IN RHS rejected.
 
 ### Structural forms
@@ -60,7 +60,7 @@ signed column and negative constant literal multiplier
 | BETWEEN | aggregate-local WHEN | ✓ |
 | BETWEEN | PER + REAL var (fractional bounds) | ✓ (`test_per_clause.py::test_real_between_per_oracle`) |
 | IN | WHEN | ✓ |
-| IN | BOOLEAN domain restriction | ✓ |
+| IN | BOOL domain restriction | ✓ |
 | Negative coefficients | objective | ✓ |
 | Negative coefficients | aggregate constraint (signed column) | ✓ |
 | Negative coefficients | aggregate constraint (constant literal) | ✓ |

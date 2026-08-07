@@ -73,7 +73,7 @@ def _knapsack_sql():
     ccols = ", ".join(f"((id*{7 + 2 * k})%97)+1 AS c{k}" for k in range(M))
     inner = f"SELECT id, {ccols}, ((id*13)%89)+1 AS p FROM range(1,{N + 1}) t(id)"
     cons = " AND ".join(f"SUM(c{k}*x) <= {caps[k]}" for k in range(M))
-    return f"SELECT id, x FROM ({inner}) DECIDE x IS BOOLEAN SUCH THAT {cons} MAXIMIZE SUM(p*x)"
+    return f"SELECT id, x FROM ({inner}) DECIDE x(BOOL) SUCH THAT {cons} MAXIMIZE SUM(p*x)"
 
 
 def _market_split_sql():
@@ -93,7 +93,7 @@ def _market_split_sql():
     cols = "id," + ",".join(f"c{k}" for k in range(M))
     inner = f"SELECT * FROM (VALUES {rows}) t({cols})"
     cons = " AND ".join(f"SUM(c{k}*x) = {rhs[k]}" for k in range(M))
-    return f"SELECT id, x FROM ({inner}) DECIDE x IS BOOLEAN SUCH THAT {cons}"
+    return f"SELECT id, x FROM ({inner}) DECIDE x(BOOL) SUCH THAT {cons}"
 
 
 _KNAPSACK_SQL = _knapsack_sql()
@@ -213,7 +213,7 @@ def _large_lp_sql():
     1e+100 ObjBound sentinel is finite; HiGHS's mip_dual_bound holds a 0 default)."""
     inner = "SELECT id, ((id%97)+1) AS w FROM range(1,200001) t(id)"
     return (
-        f"SELECT id, x FROM ({inner}) DECIDE x IS REAL "
+        f"SELECT id, x FROM ({inner}) DECIDE x(REAL) "
         "SUCH THAT x >= 0 AND x <= 1000 AND SUM(w*x) <= 100000000 MAXIMIZE SUM(x)"
     )
 
@@ -223,7 +223,7 @@ def _large_qp_sql():
     timeout path must be as bound-honest as the LP one."""
     inner = "SELECT id, ((id%97)+1) AS w FROM range(1,200001) t(id)"
     return (
-        f"SELECT id, x FROM ({inner}) DECIDE x IS REAL "
+        f"SELECT id, x FROM ({inner}) DECIDE x(REAL) "
         "SUCH THAT x >= 0 AND x <= 1000 AND SUM(w*x) >= 10000000 "
         "MINIMIZE SUM(POWER(x - w, 2))"
     )

@@ -21,7 +21,7 @@ feasibility problem (no objective), all-zero objective coefficients
 Error tests (not oracle-verified):
 - NULL coefficients (with COALESCE hint) — `test_edge_cases.py::test_null_coefficients`
 - Aggregate LHS vs aggregate RHS (`SUM(x*v) <= SUM(y*v)`) rejected — `test_error_binder.py::test_aggregate_vs_aggregate_constraint_rejected`
-- Unconstrained INTEGER var in objective (mixed w/ bounded BOOLEAN) — `test_error_infeasible.py::TestUnboundedModels::test_mixed_unbounded_integer_var`
+- Unconstrained INT var in objective (mixed w/ bounded BOOL) — `test_error_infeasible.py::TestUnboundedModels::test_mixed_unbounded_integer_var`
 
 ## Data shapes
 

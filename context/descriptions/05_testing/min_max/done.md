@@ -14,9 +14,9 @@ classifies each occurrence as **easy** (naturally per-row, no Big-M) or
 
 All oracle-verified unless noted.
 
-- **Easy cases** (`test_min_max.py`, plus entity-scoped variants in `test_entity_scope.py` and `test_aggregate_local_when.py`): `MAX(expr) <= K` / `MIN(expr) >= K` stripped to per-row, with column coefficients (`MAX(x * expr) <= K`), on INTEGER vars, with WHEN, with PER (stripped as redundant), WHEN + PER composition, entity-scoped MAX/MIN, aggregate-local WHEN on easy MAX.
+- **Easy cases** (`test_min_max.py`, plus entity-scoped variants in `test_entity_scope.py` and `test_aggregate_local_when.py`): `MAX(expr) <= K` / `MIN(expr) >= K` stripped to per-row, with column coefficients (`MAX(x * expr) <= K`), on INT vars, with WHEN, with PER (stripped as redundant), WHEN + PER composition, entity-scoped MAX/MIN, aggregate-local WHEN on easy MAX.
 - **Hard cases (Big-M indicators)** (`test_min_max.py`, `test_per_interactions.py`, `test_entity_scope.py`, `test_aggregate_local_when.py`): `MAX(expr) >= K`, `MIN(expr) <= K`, equality for both; multiple MIN/MAX constraints in one query; MIN/MAX in both constraint and objective; entity-scoped hard MAX; PER variants with Big-M per group (`MAX >= K PER`, `MIN <= K PER`, `MAX = K PER` combining easy + hard per group); hard MAX + aggregate-local WHEN.
-- **Objectives** (`test_min_max.py`): easy `MINIMIZE MAX(expr)` / `MAXIMIZE MIN(expr)` (plain, on INTEGER, and with aggregate-local WHEN); hard `MAXIMIZE MAX(expr)` / `MINIMIZE MIN(expr)`.
+- **Objectives** (`test_min_max.py`): easy `MINIMIZE MAX(expr)` / `MAXIMIZE MIN(expr)` (plain, on INT, and with aggregate-local WHEN); hard `MAXIMIZE MAX(expr)` / `MINIMIZE MIN(expr)`.
 
 ### Nested aggregate + PER objectives
 
@@ -67,7 +67,7 @@ SUM / AVG empty WHEN, and PER with one empty group (skip preserved,
 | MIN/MAX (nested) | PER (objective) | ✓ |
 | MIN/MAX (easy) | entity-scoped | ✓ |
 | MIN/MAX (hard) | entity-scoped | ✓ |
-| MIN/MAX | INTEGER variables | ✓ |
+| MIN/MAX | INT variables | ✓ |
 | MIN/MAX (hard) | PER (per-group Big-M) | ✓ |
 | MIN/MAX | multiple constraints in same query | ✓ |
 | MIN/MAX | constraint + objective in same query | ✓ |

@@ -116,7 +116,7 @@ INSERT INTO assignments VALUES
       <div class="code-block">
         <pre class="language-sql"><code>SELECT nurse_name, shift_name, assigned
 FROM assignments
-DECIDE assigned IS BOOLEAN
+DECIDE assigned(BOOL)
 SUCH THAT
     SUM(assigned) >= 1 PER shift_id AND
     SUM(assigned) <= 1 PER nurse_id;</code></pre>
@@ -129,7 +129,7 @@ SUCH THAT
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE assigned IS BOOLEAN</code> &mdash; One binary variable per row. Each row represents one nurse&ndash;shift pair; assigned=1 means "this nurse works this shift".</div>
+          <div><code>DECIDE assigned(BOOL)</code> &mdash; One binary variable per row. Each row represents one nurse&ndash;shift pair; assigned=1 means "this nurse works this shift".</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>

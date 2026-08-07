@@ -109,7 +109,7 @@ INSERT INTO Items VALUES
         <pre class="language-sql"><code>SELECT id, name, value, weight, x as selected
 FROM Items
 WHERE category = 'electronics'
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);</code></pre>
@@ -122,7 +122,7 @@ MAXIMIZE SUM(x * value);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE x IS BOOLEAN</code> — Creates a binary decision variable x for each row. x=1 means "select this item", x=0 means "skip it".</div>
+          <div><code>DECIDE x(BOOL)</code> — Creates a binary decision variable x for each row. x=1 means "select this item", x=0 means "skip it".</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>

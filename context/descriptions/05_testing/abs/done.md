@@ -16,7 +16,7 @@ Path-A / Path-B classification.
 
 ## Scenarios covered
 
-- **Sound directions** (oracle-verified in `test_abs_linearization.py`): ABS in objective (basic, with WHEN, with PER on a separate SUM); per-row `ABS(expr) <= K`; aggregate `SUM(ABS(expr)) <= K` (plain and WHEN-masked aux sum); multiple ABS terms in one expression; mixed BOOLEAN + REAL variables (`test_abs_mixed_vars`); ABS with no DECIDE variable (passthrough, no oracle needed).
+- **Sound directions** (oracle-verified in `test_abs_linearization.py`): ABS in objective (basic, with WHEN, with PER on a separate SUM); per-row `ABS(expr) <= K`; aggregate `SUM(ABS(expr)) <= K` (plain and WHEN-masked aux sum); multiple ABS terms in one expression; mixed BOOL + REAL variables (`test_abs_mixed_vars`); ABS with no DECIDE variable (passthrough, no oracle needed).
 - **PER interaction**: ABS in aggregate constraint with PER (per-group aux) — `test_per_interactions.py::test_per_abs_aggregate`, oracle-verified.
 - **Hard directions (Big-M)** — smoke only via `stress_queries/01_constraints.sql` C33–C37; oracle test gap, see todo:
   - C33 per-row `ABS(expr) >= K`, C34 `ABS(expr) = K`
@@ -28,8 +28,8 @@ Path-A / Path-B classification.
 
 | Feature A | Feature B | Tested |
 |-----------|-----------|--------|
-| ABS | BOOLEAN | ✓ |
-| ABS | INTEGER | ✓ |
+| ABS | BOOL | ✓ |
+| ABS | INT | ✓ |
 | ABS | REAL | ✓ |
 | ABS | Multiple variable types | ✓ |
 | ABS (objective) | WHEN | ✓ |

@@ -7,7 +7,7 @@ Tests live in `test/decide/tests/test_avg.py` (11 tests) plus interactions in
 
 All oracle-verified unless noted:
 
-- **Core** (`test_avg.py`): `AVG(x) op K` constraints, flat AVG objective (= SUM argmax), AVG + WHEN, AVG + PER (per-group average), AVG + WHEN + PER, BOOLEAN and INTEGER variables, AVG in bilinear constraint, `AVG(x) <> K` (Big-M + RHS scaling, plain and with WHEN), AVG with no DECIDE variable (passthrough, no oracle needed).
+- **Core** (`test_avg.py`): `AVG(x) op K` constraints, flat AVG objective (= SUM argmax), AVG + WHEN, AVG + PER (per-group average), AVG + WHEN + PER, BOOL and INT variables, AVG in bilinear constraint, `AVG(x) <> K` (Big-M + RHS scaling, plain and with WHEN), AVG with no DECIDE variable (passthrough, no oracle needed).
 - **Aggregate-local WHEN** (`test_aggregate_local_when.py`): local WHEN on AVG, and local WHEN + AVG + PER.
 - **Nested PER objectives** (`test_per_objective.py`): `SUM(AVG(x * cost)) PER col` with unequal groups, including extreme 1:5 group-size asymmetry; `MAX(AVG(...)) PER col` (easy MAX) and `MIN(AVG(...)) PER col` (easy MIN).
 
@@ -15,8 +15,8 @@ All oracle-verified unless noted:
 
 | Feature A | Feature B | Tested |
 |-----------|-----------|--------|
-| AVG | BOOLEAN | ✓ |
-| AVG | INTEGER | ✓ |
+| AVG | BOOL | ✓ |
+| AVG | INT | ✓ |
 | AVG | WHEN (expression-level) | ✓ |
 | AVG | WHEN (aggregate-local) | ✓ |
 | AVG | PER | ✓ |

@@ -51,7 +51,7 @@ def test_qualified_column_distinguishes_self_join_sides(
         SELECT n1.n_nationkey, x
         FROM nation n1 JOIN nation n2 ON n1.n_regionkey = n2.n_regionkey
         WHERE n2.n_nationkey = 1
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * n2.n_nationkey) <= 3
         MAXIMIZE SUM(x * n1.n_nationkey)
     """
@@ -108,7 +108,7 @@ def test_qualified_column_in_objective_only(decidb_cli, duckdb_conn):
         SELECT n1.n_nationkey, x
         FROM nation n1 JOIN nation n2 ON n1.n_regionkey = n2.n_regionkey
         WHERE n2.n_nationkey = 1
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE SUM(x * n1.n_nationkey)
     """
@@ -139,7 +139,7 @@ def test_qualified_decide_variable_with_qualified_column(decidb_cli, duckdb_conn
         SELECT n1.n_nationkey, keep
         FROM nation n1 JOIN nation n2 ON n1.n_regionkey = n2.n_regionkey
         WHERE n2.n_nationkey = 1
-        DECIDE n1.keep IS BOOLEAN
+        DECIDE n1.keep(BOOL)
         SUCH THAT SUM(n1.keep * n2.n_nationkey) <= 2
         MAXIMIZE SUM(keep * n1.n_nationkey)
     """

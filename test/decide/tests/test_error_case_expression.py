@@ -31,7 +31,7 @@ class TestCaseExpressionRejection:
         """Searched CASE inside a SUCH THAT constraint."""
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END) >= 1
             MAXIMIZE SUM(x * s_acctbal)
         """
@@ -48,7 +48,7 @@ class TestCaseExpressionRejection:
         """Searched CASE inside a MAXIMIZE objective."""
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) <= 3
             MAXIMIZE SUM(x * CASE WHEN s_nationkey = 1 THEN 100 ELSE 1 END)
         """
@@ -58,7 +58,7 @@ class TestCaseExpressionRejection:
         """Searched CASE inside a MINIMIZE objective."""
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) >= 3
             MINIMIZE SUM(x * CASE WHEN s_nationkey = 1 THEN 100 ELSE 1 END)
         """
@@ -73,7 +73,7 @@ class TestCaseExpressionRejection:
         """
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x * CASE s_nationkey WHEN 1 THEN 1 ELSE 0 END) >= 1
             MAXIMIZE SUM(x * s_acctbal)
         """
@@ -83,7 +83,7 @@ class TestCaseExpressionRejection:
         """CASE directly inside SUM (no outer multiplication)."""
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(CASE WHEN s_nationkey = 1 THEN x ELSE 0 END) >= 1
             MAXIMIZE SUM(x * s_acctbal)
         """
@@ -100,7 +100,7 @@ class TestCaseExpressionRejection:
         """
         sql = f"""
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) <= 3
             MAXIMIZE {agg}(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END)
         """
@@ -116,7 +116,7 @@ class TestCaseExpressionRejection:
         """
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END) >= 1
             MAXIMIZE SUM(x * s_acctbal)
         """
@@ -145,7 +145,7 @@ class TestCaseExpressionRejection:
         """
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END) <= 1
                      PER s_nationkey
             MAXIMIZE SUM(x * s_acctbal)

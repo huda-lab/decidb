@@ -9,7 +9,7 @@
 now decided in the draft even though nothing is implemented. See "Syntax proposed by the
 paper" below; the older option list is kept as the alternatives that were considered.**
 
-A table-scoped variable (`DECIDE Sensors.keepS IS BOOLEAN`) yields one solver
+A table-scoped variable (`DECIDE Sensors.keepS(BOOL)`) yields one solver
 variable per entity, but every aggregate over it still runs over **join-result
 rows**: an entity appearing in 5 rows contributes 5 times. That is deliberate
 SQL semantics (`done.md` → "Aggregate semantics with table scope";
@@ -105,7 +105,7 @@ WITH J AS (SELECT A.sensorID, A.alertType FROM Alerts A JOIN ... ),
      pw AS (SELECT alertType, 1.0/COUNT(*) AS wp FROM J GROUP BY alertType)
 SELECT ... FROM Alerts A JOIN Policy P ON ... JOIN Sensors S ON ...
      JOIN sw ON sw.sensorID = S.sensorID JOIN pw ON pw.alertType = P.alertType
-DECIDE S.keepS IS BOOLEAN, P.keepP IS BOOLEAN
+DECIDE S.keepS(BOOL), P.keepP(BOOL)
 SUCH THAT SUM(A.falseAlarm * keepP * keepS) = 0
 MAXIMIZE SUM(keepS * sw.ws) + SUM(keepP * pw.wp);
 ```
@@ -142,136 +142,6 @@ replace — both semantics will coexist), plus
 
 *Discovered 2026-07-26, reviewing Example 2.1 of the CIDR'27 paper draft.*
 
----
-
-## Signed decision variables — finite negative bounds: DONE; free (-∞) domain: deferred
-
-
-**Deferred — fully-free ($-\infty \ldots +\infty$) domain.** Out of scope by
-design: a signed variable always has a finite lower bound. A truly
-unbounded-below variable (e.g. `x <= 10` meaning `(-inf, 10]`) is the case most
-likely to make objectives unbounded, so it is not expressible without a future
-opt-in (`FREE`/`IS REAL UNBOUNDED` keyword). Two known smaller gaps left for
-later: (1) **column-valued** `IN` domains with negative data values are not
-auto-widened (only constant literals are); (2) a signed variable in a bilinear
-product needs an *explicit* upper bound (implied-bound propagation skips signed
-variables).
-
-**Diagnostics interaction.** The unbounded diagnosis reports an escape
-`direction` (`+∞` / `-∞`). Because signed variables still have a finite lower
-bound, no variable is unbounded *below*, so downward escape remains unreachable
-and `direction` is still always `+∞`. The `-∞` branch only becomes testable if
-the deferred free-domain work lands. See
-`08_query_diagnostics/unbounded/todo.md` (direction / downward escape).
-
----
-
-## Clause order: `DECIDE` before `FROM`, `SUCH THAT` / `MINIMIZE` after the joins
-
-**Priority: High — paper-facing. Figure 1 and every §3 example use this order; code follows
-the paper. Stage-1 grammar batch (with "Declaration surface syntax", "Query-wide `scalar`",
-and `../such_that/todo.md` → "`IS BETWEEN`") — one `make grammar-build` cycle.**
-
-The draft splits the decision clauses around the `FROM` list: the declaration sits between
-`SELECT` and `FROM`, and the constraints and objective come after the joins.
-
-```sql
-select routeID, depotID, regionID, open, ship
-decide D.open(BOOL), T.ship(INT)
-from Depots D
-join Routes T using (depotID)
-join Regions R using (regionID)
-such that ...
-minimize ...
-```
-
-Today the three parts are one non-terminal, `decide_clause`, placed after `from_clause
-where_clause` (`third_party/libpg_query/grammar/statements/select.y:275-307`, used at
-`:358`, `:375`, `:393`, `:412`). The only accepted order is `SELECT … FROM … WHERE … DECIDE
-… SUCH THAT … MAXIMIZE …`, and the parts cannot be separated. The paper's query fails at
-`from`.
-
-**Decision settled (2026-08-07, by the user): accept BOTH orders.** The paper's split order
-and today's single-block order both parse. Nothing migrates — the 712 `SUCH THAT`
-occurrences across 57 test files, the 12 benchmark queries and the 28 doc files stay valid.
-The syntax reference documents both, neither is deprecated.
-
-**Work.** Split `decide_clause` into two optional slots and thread both through all four
-`simple_select` alternatives:
-- a *declaration* slot (`DECIDE typed_decide_variable_list`) between the target list and
-  `from_clause`;
-- a *body* slot (`SUCH THAT decide_constraint_list [MAXIMIZE|MINIMIZE …]`) after
-  `where_clause`.
-
-Today's order is then the case where the declaration slot is empty and the body slot
-carries the whole `DECIDE … SUCH THAT …` block, so the existing `decide_clause` rule stays
-as a third alternative in the body slot. Reject at parse time: a declaration in both slots,
-a body with no declaration in either slot, and a declaration slot with no body.
-
-**Hazard — the `in_decide_clause` lexer flag.** This is the part that will bite. The lexer
-arms `in_decide_clause` when it sees the `DECIDE` token
-(`third_party/libpg_query/src_backend_parser_parser.cpp:212`) and, while armed, emits the
-clause's `WHEN` as the distinct `WHEN_DECIDE` token; the `decide_clause` grammar action
-clears it (`select.y:279`, `:289`, `:299`). The flag exists because a bare `WHEN` after a
-function call collided with `WITHIN GROUP` and corrupted ordinary function-call parsing.
-
-With the split order the flag would be armed at `DECIDE` and stay armed across `FROM`,
-every `JOIN … ON`, and `WHERE` — so any `CASE WHEN` in a join condition or a filter would
-lex as `WHEN_DECIDE` and break ordinary SQL. The declaration slot must therefore **clear**
-the flag at the end of the variable list, and the body slot must **re-arm** it. Re-arming
-needs a second lexer trigger, since the switch keys on `cur_token == DECIDE` only —
-`SUCH` is the natural one. The `decide_case_depth` counter that keeps `CASE…END` WHENs
-ordinary has to be reset alongside it.
-
-**Grammar risk**: four `simple_select` alternatives × two new optional slots. Check the
-bison conflict report, not just that it builds — an optional slot before `from_clause` is
-the kind of change that turns a clean grammar into one with shift/reduce conflicts
-resolved by luck. Requires `make grammar-build` (bison 2.3).
-
-**Test**: `test/decide/tests/test_when_grammar.py` and `test_error_parser.py` — parametrize
-a representative query over both clause orders and assert identical plans/results; add a
-query with `CASE WHEN` in a `JOIN … ON` and in `WHERE` under the split order (the lexer-flag
-regression), and assert the three rejected combinations above raise parser errors.
-
-**Docs on completion**: `../../00_project_overview/syntax_reference.md` §1 (document both
-orders, paper order first), `done.md`, and the query skeleton at the bottom of
-`../README.md`.
-
-**Raised**: 2026-08-07, sweeping the submitted CIDR'27 paper against the codebase
-(`../../todo.md` → A1).
-
----
-
-## Declaration surface syntax: parenthesized type form and short type names
-
-**Priority: High — the paper's running examples already use this form; code follows the paper.
-Stage-1 grammar batch — lands with "Clause order" above in one `make grammar-build` cycle.**
-
-The CIDR'27 draft (Figure 1, §2.1, §3.2) declares decisions as
-`decide D.open(BOOL), T.ship(INT)`. The grammar accepts neither the
-parenthesized type nor the abbreviations. `typed_decide_variable`
-(`third_party/libpg_query/grammar/statements/select.y:186-220`) has exactly four
-forms — `T.x IS type`, `T.x`, `x IS type`, `x` — and `variable_type`
-(`select.y:170-177`) admits only `INTEGER | REAL | BOOLEAN`. `INT` lexes to
-`INT_P`, a distinct token the rule does not accept, and `BOOL` is not a keyword
-at all.
-
-**Work**: add the `ColId '(' variable_type ')'` and `ColId '.' ColId '(' variable_type ')'`
-productions, and add `INT_P` / a `BOOL` alias to `variable_type`. Keep the `IS`
-forms working — existing tests and every doc example use them.
-
-**Test**: `test/decide/tests/` — parametrize an existing declaration test over both
-surfaces so they stay equivalent.
-
-**Docs on completion**: `../../00_project_overview/syntax_reference.md` §1 (declaration
-grammar), `done.md` (variable declaration).
-
-**Raised**: 2026-07-30, writing paper §3.2 (parser subsection). Re-verified against
-`build/release/decidb` 2026-08-07: the paper's Figure 1 query still fails at
-`decide D.open(BOOL)` with `syntax error at or near "("`.
-
----
-
 ## Query-wide `scalar` decision scope
 
 **Priority: High — the paper's Example 1 depends on it; code follows the paper.**
@@ -284,7 +154,7 @@ table-scoped (one per entity). There is no `SCALAR` token in `select.y`,
 `syntax_reference.md:7` documents only `DECIDE [Table.]variable_name [IS type]`,
 and `done.md` describes only the two scopes.
 
-Unlike the surface-syntax item above, this is a semantic addition, not a spelling:
+This is a semantic addition, not a spelling:
 a third scope needs a variable-indexing case (`VarIndexer`,
 `src/decidb/utility/ilp_model_builder.cpp:19-51`, which currently branches on
 row-scoped vs. entity-scoped), an output-column rule (the value repeats across
@@ -298,8 +168,8 @@ inferring query-wide scope from an unqualified declaration with no row dependenc
 ruled out: it would silently reclassify existing row-scoped declarations whose constraints
 happen not to reference row data.
 
-**Depends on** the parenthesized type form above (the draft's spelling is
-`scalar name(TYPE)`), so it lands in the same grammar cycle. The semantics — a third
+**Unblocked**: the parenthesized type form has shipped, so the draft's spelling
+`scalar name(TYPE)` is already expressible. The semantics — a third
 `VarIndexer` case, the output-column repeat rule, and "must not multiply by row count"
 inside a reducer — are the work, and are independent of the two orders in "Clause order".
 
@@ -310,4 +180,4 @@ one; assert one solver column for the former regardless of input cardinality.
 `done.md` (variable scope).
 
 **Raised**: 2026-07-30, writing paper §3.2 (parser subsection). Re-verified 2026-08-07:
-`decide T.ship IS INTEGER, scalar mx IS INTEGER` → `syntax error at or near "mx"`.
+`decide T.ship(INT), scalar mx(INT)` → `syntax error at or near "mx"`.

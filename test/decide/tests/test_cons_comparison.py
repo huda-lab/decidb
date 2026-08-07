@@ -48,7 +48,7 @@ def test_sum_equality_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) = 10
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -105,7 +105,7 @@ def test_sum_strict_less_than(decidb_cli, duckdb_conn, oracle_solver, perf_track
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) < 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -163,7 +163,7 @@ def test_sum_strict_greater_than(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) > 5
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
@@ -236,7 +236,7 @@ def test_sum_negative_constant_multiplier(
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 20
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * (-10.0)) <= -50
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -309,7 +309,7 @@ def test_sum_negative_coeffs_aggregate(
     )
     decide_sql = f"""
         SELECT id, cost, val, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * cost) >= 0
         MAXIMIZE SUM(x * val)
     """
@@ -364,7 +364,7 @@ def test_sum_not_equal(decidb_cli):
     result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 5
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
@@ -382,7 +382,7 @@ def test_perrow_not_equal(decidb_cli):
     result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x
+        DECIDE x(INT)
         SUCH THAT x <> 3
             AND x <= 5
             AND SUM(x * l_quantity) <= 500
@@ -403,7 +403,7 @@ def test_sum_not_equal_zero(decidb_cli):
     result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 0
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * l_extendedprice)
@@ -424,7 +424,7 @@ def test_sum_not_equal_with_when(decidb_cli):
     result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 5 WHEN l_quantity > 20
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
@@ -451,7 +451,7 @@ def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
                    ('c', 8, false),
                    ('d', 3, true)
         ) t(name, value, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 2 WHEN active
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * value)
@@ -498,7 +498,7 @@ def test_sum_not_equal_no_when_binding(decidb_cli, oracle_solver):
                    ('c', 8),
                    ('d', 3)
         ) t(name, value)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 2
             AND SUM(x) <= 3
             AND SUM(x * value) <= 21
@@ -545,11 +545,11 @@ def test_sum_not_equal_no_when_binding(decidb_cli, oracle_solver):
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
 def test_real_sum_strict_lt_rejected(decidb_cli):
-    """SUM(x) < K with IS REAL — integer-step rewrite is unsafe, must reject."""
+    """SUM(x) < K with(REAL) — integer-step rewrite is unsafe, must reject."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey < 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x) < 5
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -564,11 +564,11 @@ def test_real_sum_strict_lt_rejected(decidb_cli):
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
 def test_real_sum_strict_gt_rejected(decidb_cli):
-    """SUM(x) > K with IS REAL — integer-step rewrite is unsafe, must reject."""
+    """SUM(x) > K with(REAL) — integer-step rewrite is unsafe, must reject."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x) > 1
             AND SUM(x * l_extendedprice) <= 50000
         MAXIMIZE SUM(x * l_extendedprice)
@@ -583,11 +583,11 @@ def test_real_sum_strict_gt_rejected(decidb_cli):
 @pytest.mark.cons_comparison
 @pytest.mark.var_real
 def test_real_perrow_strict_rejected(decidb_cli):
-    """Per-row x < K with IS REAL — same integer-step rewrite applies; must reject."""
+    """Per-row x < K with(REAL) — same integer-step rewrite applies; must reject."""
     sql = """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x < 5
         MAXIMIZE SUM(x)
     """
@@ -606,7 +606,7 @@ def test_integer_fractional_coeff_strict_rejected(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 10
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 4
             AND SUM(0.5 * x) < 5
         MAXIMIZE SUM(x)
@@ -626,7 +626,7 @@ def test_mixed_bool_real_strict_rejected(decidb_cli):
     """Mixed BOOLEAN + REAL in the LHS of SUM(...) < K — reject due to REAL term."""
     sql = """
         SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE x IS BOOLEAN, y IS REAL
+        DECIDE x(BOOL), y(REAL)
         SUCH THAT y <= 10
             AND SUM(x + y) < 20
         MAXIMIZE SUM(x + y)
@@ -654,7 +654,7 @@ def test_bilinear_bool_int_strict_oracle(decidb_cli, oracle_solver):
     """
     sql = """
         SELECT id, b, n FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE b IS BOOLEAN, n IS INTEGER
+        DECIDE b(BOOL), n(INT)
         SUCH THAT n <= 4
             AND SUM(b * n) < 5
         MAXIMIZE SUM(b * n)
@@ -713,7 +713,7 @@ def test_bilinear_int_int_strict_oracle(decidb_cli, oracle_solver):
     """
     sql = """
         SELECT id, x, y FROM (VALUES (1), (2)) t(id)
-        DECIDE x IS INTEGER, y IS INTEGER
+        DECIDE x(INT), y(INT)
         SUCH THAT x <= 4 AND y <= 4
             AND SUM(x * y) < 10
         MAXIMIZE SUM(x * y)
@@ -764,7 +764,7 @@ def test_bilinear_int_int_strict_oracle(decidb_cli, oracle_solver):
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_integer_sum_strict_lt_oracle(decidb_cli, duckdb_conn, oracle_solver):
-    """SUM(x) < K on pure IS INTEGER vars — the canonical integer-step rewrite case.
+    """SUM(x) < K on pure(INT) vars — the canonical integer-step rewrite case.
 
     Confirms that the `< K → <= K-1` rewrite still fires after the fix for
     LHS with no boolean factor and no bilinear term. Oracle encodes `<= K-1`.
@@ -772,7 +772,7 @@ def test_integer_sum_strict_lt_oracle(decidb_cli, duckdb_conn, oracle_solver):
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 20
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 3
             AND SUM(x) < 10
         MAXIMIZE SUM(x * l_extendedprice)
@@ -823,7 +823,7 @@ def test_abs_integer_strict_oracle(decidb_cli, oracle_solver):
     """
     sql = """
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 5
             AND SUM(ABS(x - 2)) < 4
         MAXIMIZE SUM(x)
@@ -865,11 +865,11 @@ def test_abs_integer_strict_oracle(decidb_cli, oracle_solver):
 @pytest.mark.var_integer
 @pytest.mark.correctness
 def test_integer_perrow_strict_oracle(decidb_cli, duckdb_conn, oracle_solver):
-    """Per-row `x < K` on IS INTEGER — confirms per-row rewrite path works end-to-end."""
+    """Per-row `x < K` on(INT) — confirms per-row rewrite path works end-to-end."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 20
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x < 4
             AND SUM(x * l_extendedprice) <= 50000
         MAXIMIZE SUM(x * l_extendedprice)
@@ -925,7 +925,7 @@ def test_real_sum_le_still_works(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -975,7 +975,7 @@ def test_real_sum_le_still_works(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
 def test_real_sum_not_equal_rejected(decidb_cli):
-    """SUM(x) <> K with IS REAL — integer-step (±1) rewrite is unsafe, must reject.
+    """SUM(x) <> K with(REAL) — integer-step (±1) rewrite is unsafe, must reject.
 
     The NE Big-M rewrite expands `SUM(x) <> K` into `SUM(x) <= K-1 OR SUM(x) >= K+1`,
     which wrongly excludes feasible continuous points in the band (K-1, K+1) when
@@ -984,7 +984,7 @@ def test_real_sum_not_equal_rejected(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 3.33 AND SUM(x) <> 10
         MAXIMIZE SUM(x)
     """
@@ -1009,14 +1009,14 @@ def test_real_sum_not_equal_rejected(decidb_cli):
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
 def test_strict_lt_rejection_quadratic_real(decidb_cli):
-    """SUM(POWER(x, 2)) < K with IS REAL — rejected by the quadratic-path guard.
+    """SUM(POWER(x, 2)) < K with(REAL) — rejected by the quadratic-path guard.
 
     Routes through `BuildQuadraticConstraint`; LHS contains a REAL variable so
     `lhs_is_integer=false` and the guard fires with the shared message.
     """
     sql = """
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 10
             AND SUM(POWER(x, 2)) < 5
         MAXIMIZE SUM(x)
@@ -1041,7 +1041,7 @@ def test_strict_lt_rejection_bilinear_bool_real(decidb_cli):
     """
     sql = """
         SELECT id, b, y FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE b IS BOOLEAN, y IS REAL
+        DECIDE b(BOOL), y(REAL)
         SUCH THAT y <= 10
             AND SUM(b * y) < 5
         MAXIMIZE SUM(b * y)
@@ -1074,7 +1074,7 @@ def test_sum_not_equal_mixed_sign_coeffs(decidb_cli, oracle_solver):
                    (3, -2, 5),
                    (4, 2, 5)
         ) t(id, cost, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * cost) <> 0
         MAXIMIZE SUM(x * val)
     """)

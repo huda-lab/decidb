@@ -76,7 +76,7 @@ def test_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     sql_per = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 3
         MINIMIZE SUM(x * s_acctbal) PER s_nationkey
     """
@@ -123,7 +123,7 @@ def test_sum_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 3
         MAXIMIZE SUM(SUM(x * s_acctbal)) PER s_nationkey
     """
@@ -198,7 +198,7 @@ def test_minimize_sum_max_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER l_returnflag
         MINIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
     """
@@ -264,7 +264,7 @@ def test_maximize_sum_min_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER l_returnflag
         MAXIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
     """
@@ -328,7 +328,7 @@ def test_maximize_sum_max_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER l_returnflag
             AND SUM(x) <= 3 PER l_returnflag
         MAXIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
@@ -396,7 +396,7 @@ def test_minimize_sum_min_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER l_returnflag
             AND SUM(x) <= 3 PER l_returnflag
         MINIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
@@ -468,7 +468,7 @@ def test_minimize_max_sum_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2 PER l_returnflag
         MINIMIZE MAX(SUM(x * l_quantity)) PER l_returnflag
     """
@@ -530,7 +530,7 @@ def test_maximize_min_sum_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2 PER l_returnflag
         MAXIMIZE MIN(SUM(x * l_quantity)) PER l_returnflag
     """
@@ -595,7 +595,7 @@ def test_sum_max_when_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER l_returnflag
         MINIMIZE SUM(MAX(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
     """
@@ -668,7 +668,7 @@ def test_single_group(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey = 1
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
         MINIMIZE SUM(MAX(x * l_quantity)) PER l_orderkey
     """
@@ -729,7 +729,7 @@ def test_sum_avg_per_unequal_groups(
     sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER s_nationkey
         MINIMIZE SUM(AVG(x * s_acctbal)) PER s_nationkey
     """
@@ -796,7 +796,7 @@ def test_avg_sum_per_noop(
     sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 3
         MINIMIZE AVG(SUM(x * s_acctbal)) PER s_nationkey
     """
@@ -858,7 +858,7 @@ def test_minimize_max_avg_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2 PER l_returnflag
         MINIMIZE MAX(AVG(x * l_quantity)) PER l_returnflag
     """
@@ -922,7 +922,7 @@ def test_maximize_min_avg_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2 PER l_returnflag
         MAXIMIZE MIN(AVG(x * l_quantity)) PER l_returnflag
     """
@@ -986,7 +986,7 @@ def test_sum_avg_when_per(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER l_returnflag
         MINIMIZE SUM(AVG(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
     """
@@ -1071,7 +1071,7 @@ def test_sum_avg_per_extreme_unequal_groups(
     )
     sql = f"""
         SELECT id, grp, cost, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER grp
         MINIMIZE SUM(AVG(x * cost)) PER grp
     """
@@ -1188,7 +1188,7 @@ def test_maximize_sum_max_power_per(
     sql = f"""
         WITH data AS ({_POWER_DATA_SQL})
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 10 AND SUM(x) <= 20
         MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp
     """
@@ -1274,7 +1274,7 @@ def test_minimize_sum_min_power_per(
     sql = f"""
         WITH data AS ({data_sql})
         SELECT id, grp, target, x FROM data
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 10
         MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp
     """
@@ -1341,7 +1341,7 @@ def test_flat_max_per_error(decidb_cli):
         decidb_cli.execute("""
             SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
             WHERE s_nationkey < 5
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) >= 1
             MINIMIZE MAX(x * s_acctbal) PER s_nationkey
         """)
@@ -1355,7 +1355,7 @@ def test_flat_min_per_error(decidb_cli):
         decidb_cli.execute("""
             SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
             WHERE s_nationkey < 5
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) >= 1
             MAXIMIZE MIN(x * s_acctbal) PER s_nationkey
         """)

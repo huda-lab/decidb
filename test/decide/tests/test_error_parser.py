@@ -13,11 +13,11 @@ class TestParserErrors:
     """DECIDE parser should reject malformed syntax."""
 
     def test_missing_such_that(self, decidb_cli):
-        """DECIDE x MAXIMIZE ... without SUCH THAT."""
+        """DECIDE x(INT) MAXIMIZE ... without SUCH THAT."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"syntax error.*MAXIMIZE")
+                DECIDE x(INT) MAXIMIZE SUM(x*l_quantity) LIMIT 1
+            """, match=r"DECIDE requires a SUCH THAT clause")
 
     def test_missing_decide_variable(self, decidb_cli):
         """DECIDE without a variable name."""
@@ -31,15 +31,15 @@ class TestParserErrors:
         """MAXIMIZE with no expression before LIMIT."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x SUCH THAT x IS BINARY
+                DECIDE x(INT) SUCH THAT x IS BINARY
                 MAXIMIZE LIMIT 1
             """, match=r"syntax error")
 
     def test_unknown_variable_type(self, decidb_cli):
-        """IS CONTINUOUS is not a recognized variable type."""
+        """CONTINUOUS is not a recognized variable type (REAL is the spelling)."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x SUCH THAT x IS CONTINUOUS
+                DECIDE x(CONTINUOUS) SUCH THAT x <= 1
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
             """, match=r"syntax error.*CONTINUOUS")
 
@@ -47,7 +47,7 @@ class TestParserErrors:
         """Top-level SUCH THAT constraints must be separated with AND."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
-                DECIDE x IS BOOLEAN
+                DECIDE x(BOOL)
                 SUCH THAT x <= 1, SUM(x) <= 10
                 MAXIMIZE SUM(x) LIMIT 1
             """, match=r"(?i)comma-separated SUCH THAT constraints are not supported")

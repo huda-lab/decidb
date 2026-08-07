@@ -53,7 +53,7 @@ def test_explain_basic_knapsack(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -71,7 +71,7 @@ def test_explain_minimize(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_extendedprice) >= 5000
         MINIMIZE SUM(x * l_quantity)
     """
@@ -85,7 +85,7 @@ def test_explain_integer_variable(decidb_cli):
     sql = """
         SELECT ps_partkey, ps_availqty, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 50
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 10 AND SUM(x * ps_supplycost) <= 5000
         MAXIMIZE SUM(x * ps_availqty)
     """
@@ -100,7 +100,7 @@ def test_explain_multi_variable(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x, y
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN, y IS INTEGER
+        DECIDE x(BOOL), y(INT)
         SUCH THAT SUM(x * l_quantity) <= 50
             AND y <= 3
             AND SUM(y) <= 10
@@ -124,7 +124,7 @@ def test_explain_when_string_filter(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -140,7 +140,7 @@ def test_explain_when_numeric_comparison(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_discount, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_extendedprice) <= 5000 WHEN l_discount >= 0.06
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -156,7 +156,7 @@ def test_explain_when_mixed_constraints(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
@@ -176,7 +176,7 @@ def test_explain_per_basic(decidb_cli):
     """EXPLAIN shows PER suffix for group-partitioned constraints."""
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -191,7 +191,7 @@ def test_explain_per_integer(decidb_cli):
     sql = """
         SELECT ps_partkey, ps_availqty, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 50
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT SUM(x * ps_supplycost) <= 1000 PER ps_partkey
         MAXIMIZE SUM(x * ps_availqty)
     """
@@ -206,7 +206,7 @@ def test_explain_multi_column_per_parenthesized(decidb_cli):
     sql = """
         SELECT l_orderkey, l_returnflag, l_linestatus, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
         MAXIMIZE SUM(x)
     """
@@ -227,7 +227,7 @@ def test_explain_when_and_per(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 PER l_returnflag
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
@@ -258,7 +258,7 @@ def test_explain_objective_when_postfix(decidb_cli):
     sql = """
         SELECT l_orderkey, l_extendedprice, l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
@@ -280,7 +280,7 @@ def test_explain_json_structure(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -299,7 +299,7 @@ def test_explain_json_when(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -313,7 +313,7 @@ def test_explain_json_per(decidb_cli):
     """JSON EXPLAIN includes PER information in constraint display."""
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -326,7 +326,7 @@ def test_explain_json_logical_plan(decidb_cli):
     """JSON EXPLAIN of logical plan contains DECIDE node."""
     sql = """
         SELECT l_orderkey, x FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -344,7 +344,7 @@ def test_explain_analyze_basic(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -360,7 +360,7 @@ def test_explain_analyze_when(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -374,7 +374,7 @@ def test_explain_analyze_per(decidb_cli):
     """EXPLAIN ANALYZE works with PER clause queries."""
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -389,7 +389,7 @@ def test_explain_analyze_multiple_constraints(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
@@ -409,7 +409,7 @@ def test_explain_logical_plan(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -429,7 +429,7 @@ def test_explain_logical_when(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -444,7 +444,7 @@ def test_explain_logical_per(decidb_cli):
     decidb_cli.execute_raw("pragma explain_output='optimized_only'")
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """

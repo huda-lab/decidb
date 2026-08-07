@@ -99,7 +99,7 @@ def test_when_paren_not_constraint(
                    (2,  5.0, false),
                    (3,  7.0, false)
         ) t(id, val, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN (NOT w) <= 8
         MAXIMIZE SUM(x * val)
     """
@@ -155,7 +155,7 @@ def test_when_paren_eq_constraint(
                    (2,  5.0, 'low'),
                    (3,  7.0, 'high')
         ) t(id, val, tier)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN (tier = 'high') <= 8
         MAXIMIZE SUM(x * val)
     """
@@ -211,7 +211,7 @@ def test_when_paren_arith_constraint(
                    (2,  5.0, 1, 1),
                    (3,  7.0, 3, 3)
         ) t(id, val, a, b)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN (a + b > 5) <= 8
         MAXIMIZE SUM(x * val)
     """
@@ -272,7 +272,7 @@ def test_when_paren_not_objective(
                    (2,  5.0, false),
                    (3,  7.0, false)
         ) t(id, val, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
         MAXIMIZE SUM(x * val) WHEN (NOT w)
     """
@@ -333,7 +333,7 @@ def test_when_paren_eq_objective(
                    (2,  5.0, 'low'),
                    (3,  7.0, 'high')
         ) t(id, val, tier)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
         MAXIMIZE SUM(x * val) WHEN (tier = 'high')
     """
@@ -388,7 +388,7 @@ def test_when_paren_arith_objective(
                    (2,  5.0, 1, 1),
                    (3,  7.0, 3, 3)
         ) t(id, val, a, b)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
         MAXIMIZE SUM(x * val) WHEN (a + b > 5)
     """
@@ -443,7 +443,7 @@ def test_when_unparen_not_constraint_rejects(decidb_cli):
             VALUES (1, 10.0, true),
                    (2,  5.0, false)
         ) t(id, val, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN NOT w <= 8
         MAXIMIZE SUM(x * val)
         """,
@@ -466,7 +466,7 @@ def test_when_unparen_eq_constraint_rejects(decidb_cli):
             VALUES (1, 10.0, 'high'),
                    (2,  5.0, 'low')
         ) t(id, val, tier)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN tier = 'high' <= 8
         MAXIMIZE SUM(x * val)
         """,
@@ -486,7 +486,7 @@ def test_when_unparen_arith_constraint_rejects(decidb_cli):
             VALUES (1, 10.0, 2, 4),
                    (2,  5.0, 1, 1)
         ) t(id, val, a, b)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN a + b > 5 <= 8
         MAXIMIZE SUM(x * val)
         """,
@@ -511,7 +511,7 @@ def test_when_unparen_not_objective_rejects(decidb_cli):
             VALUES (1, 10.0, true),
                    (2,  5.0, false)
         ) t(id, val, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
         MAXIMIZE SUM(x * val) WHEN NOT w
         """,
@@ -540,7 +540,7 @@ def test_when_unparen_arith_objective_rejects(decidb_cli):
             VALUES (1, 10.0, 2, 4),
                    (2,  5.0, 1, 1)
         ) t(id, val, a, b)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
         MAXIMIZE SUM(x * val) WHEN a + b > 5
         """,
@@ -577,7 +577,7 @@ def test_constraint_unparen_eq_message_sentinel(decidb_cli):
             VALUES (1, 10.0, 'high'),
                    (2,  5.0, 'low')
         ) t(id, val, tier)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN tier = 'high' <= 10
         MAXIMIZE SUM(x * val)
         """,
@@ -602,7 +602,7 @@ def test_when_unparen_error_carries_paren_hint(decidb_cli):
             VALUES (1, 10.0, true),
                    (2,  5.0, false)
         ) t(id, val, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN NOT w <= 8
         MAXIMIZE SUM(x * val)
         """,

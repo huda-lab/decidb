@@ -114,7 +114,7 @@ def test_aggregate_quadratic_constraint_data_only_offset(decidb_cli):
         FROM (
             VALUES (1, 1.0, 1.0), (2, 2.0, 2.0)
         ) t(id, target, cost)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 10
             AND SUM(POWER(x - target, 2) + cost) <= 3
         MAXIMIZE SUM(x)
@@ -148,7 +148,7 @@ class TestQuadraticConstraintCorrectness:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND POWER(x - target, 2) <= 0
             MAXIMIZE SUM(x)
@@ -204,7 +204,7 @@ class TestQuadraticConstraintCorrectness:
         base_sql = f"""
             WITH data AS ({data_sql})
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= {{budget}}
             MAXIMIZE SUM(x)
@@ -257,7 +257,7 @@ class TestQuadraticConstraintCorrectness:
             WITH data AS (SELECT 1 AS id, 5.0 AS c)
             SELECT id, ROUND(x, 4) AS x, ROUND(y, 4) AS y
             FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 10
                 AND y >= 0 AND y <= 10
                 AND POWER(2*x + y - c, 2) <= 0
@@ -304,7 +304,7 @@ class TestQuadraticConstraintCorrectness:
         base_sql = f"""
             WITH data AS ({data_sql})
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= {{budget}}
             MAXIMIZE SUM(x)
@@ -360,7 +360,7 @@ class TestQuadraticConstraintCorrectness:
                 SELECT 3, 30.0
             )
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(-POWER(x - target, 2)) >= -50
             MAXIMIZE SUM(x)
@@ -409,7 +409,7 @@ class TestQuadraticConstraintCorrectness:
                 SELECT 3, 30.0
             )
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(2 * POWER(x - target, 2)) <= 100
             MAXIMIZE SUM(x)
@@ -461,7 +461,7 @@ class TestQuadraticConstraintCorrectness:
                 SELECT 3, 3.0, 15.0
             )
             SELECT id, ROUND(x, 4) AS x, weight, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(weight * x - target, 2)) <= 0
             MAXIMIZE SUM(x)
@@ -528,7 +528,7 @@ def _run_syntax_variant(
     sql = f"""
         WITH data AS ({_SYNTAX_DATA_SQL})
         SELECT id, ROUND(x, 4) AS x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
             AND SUM({constraint_expr}) <= 50
         MAXIMIZE SUM(x)
@@ -603,7 +603,7 @@ class TestQuadraticConstraintSyntax:
                 SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
             )
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(x * x) <= 75
             MAXIMIZE SUM(x)
@@ -645,7 +645,7 @@ class TestQuadraticConstraintSyntax:
         sql = """
             WITH data AS (SELECT 1 AS id)
             SELECT id, ROUND(x, 4) AS x, ROUND(y, 4) AS y FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 10
                 AND y >= 0 AND y <= 10
                 AND SUM(x * x + x * y + y * y) <= 12
@@ -687,7 +687,7 @@ class TestQuadraticConstraintSyntax:
                 SELECT 1 AS id UNION ALL SELECT 2
             )
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(3 * POWER(x, 2)) <= 75
             MAXIMIZE SUM(x)
@@ -744,7 +744,7 @@ class TestQuadraticConstraintInteractions:
                 SELECT 3, 30.0, 0
             )
             SELECT id, ROUND(x, 4) AS x, target, active FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 2 WHEN active = 1
             MAXIMIZE SUM(x)
@@ -810,7 +810,7 @@ class TestQuadraticConstraintInteractions:
                 SELECT 4, 'B', 35.0
             )
             SELECT id, grp, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 10 PER grp
             MAXIMIZE SUM(x)
@@ -884,7 +884,7 @@ class TestQuadraticConstraintInteractions:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, grp, active, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 5 WHEN active = 1 PER grp
             MAXIMIZE SUM(x)
@@ -956,7 +956,7 @@ class TestQuadraticConstraintInteractions:
                 SELECT 3, 30.0, 35.0
             )
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - t1, 2)) <= 50
                 AND SUM(POWER(x - t2, 2)) <= 50
@@ -1012,7 +1012,7 @@ class TestQuadraticConstraintInteractions:
                 SELECT 3, 30.0, 25.0
             )
             SELECT id, ROUND(x, 4) AS x, preferred, required FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - required, 2)) <= 50
             MINIMIZE SUM(POWER(x - preferred, 2))
@@ -1074,7 +1074,7 @@ class TestQuadraticConstraintInteractions:
                 SELECT 3, 20.0
             )
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(x) >= 50
                 AND SUM(POWER(x - target, 2)) <= 25
@@ -1139,7 +1139,7 @@ class TestQuadraticConstraintVarTypes:
                 SELECT 2, 20.0
             )
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 10
             MAXIMIZE SUM(x)
@@ -1187,7 +1187,7 @@ class TestQuadraticConstraintVarTypes:
                 SELECT 3, 30
             )
             SELECT id, x, target FROM data
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 6
             MAXIMIZE SUM(x)
@@ -1241,7 +1241,7 @@ class TestQuadraticConstraintVarTypes:
                 SELECT 'B', 22.0
             )
             SELECT item, ROUND(x, 4) AS x, target FROM items
-            DECIDE items.x IS REAL
+            DECIDE items.x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 20
             MAXIMIZE SUM(x)
@@ -1313,7 +1313,7 @@ class TestQuadraticConstraintEdgeCases:
         sql = """
             WITH data AS (SELECT 1 AS id)
             SELECT id, x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 10
                 AND POWER(x, 2) <= -1
             MAXIMIZE SUM(x)
@@ -1337,7 +1337,7 @@ class TestQuadraticConstraintEdgeCases:
         sql = """
             WITH data AS (SELECT 1 AS id, 5.0 AS target)
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND POWER(x - target, 2) <= 4
             MAXIMIZE SUM(x)
@@ -1376,7 +1376,7 @@ class TestQuadraticConstraintEdgeCases:
                 SELECT 3, 30.0
             )
             SELECT id, ROUND(x, 4) AS x, target FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND POWER(x - target, 2) <= 9
             MAXIMIZE SUM(x)
@@ -1427,7 +1427,7 @@ class TestQuadraticConstraintErrors:
         sql = """
             WITH data AS (SELECT 1 AS id, 10.0 AS target)
             SELECT id, x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 10
                 AND SUM(POWER(x - target, 2)) <= 5
             MAXIMIZE SUM(x)
@@ -1446,7 +1446,7 @@ class TestQuadraticConstraintErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 3
                 AND SUM(POWER(x, 2) * POWER(x, 2)) <= 16
             MINIMIZE SUM(-x)
@@ -1457,7 +1457,7 @@ class TestQuadraticConstraintErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, x, y FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 5 AND y >= 0 AND y <= 5
                 AND SUM(POWER(x, 2) * POWER(y, 2)) <= 10
             MAXIMIZE SUM(x + y)
@@ -1468,7 +1468,7 @@ class TestQuadraticConstraintErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, a, x FROM data
-            DECIDE a IS REAL, x IS REAL
+            DECIDE a(REAL), x(REAL)
             SUCH THAT a >= 0 AND a <= 5 AND x >= 0 AND x <= 5
                 AND SUM(a * POWER(x, 2)) <= 20
             MAXIMIZE SUM(a + x)

@@ -10,7 +10,7 @@ We use a standard "Knapsack" problem: Select items to maximize value while keepi
 SELECT id, value, weight
 FROM Items
 WHERE category = 'electronics'
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);
@@ -40,7 +40,7 @@ MAXIMIZE SUM(x * value);
 **Input**: Parsed Statement.
 **Action**: Validates types and names.
 
-1.  `DECIDE x IS BOOLEAN`: The binder extracts the type from the DECIDE clause and records that variable `x` has specialized domain $[0, 1]$. It automatically adds implicit constraints `x >= 0 AND x <= 1`.
+1.  `DECIDE x(BOOL)`: The binder extracts the type from the DECIDE clause and records that variable `x` has specialized domain $[0, 1]$. It automatically adds implicit constraints `x >= 0 AND x <= 1`.
 2.  **Filter**: `WHERE category='electronics'` is bound to a standard Table Scan + Filter.
 3.  **Linearity Check**: `x * weight` is valid because `weight` comes from the table (constant coefficient).
 

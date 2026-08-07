@@ -101,7 +101,7 @@ class TestSolidBranches:
         )
         sql = (
             "SELECT l_orderkey, l_linenumber, buy FROM lineitem WHERE l_orderkey <= 300 "
-            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN l_shipmode <> 'AIR' "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN l_shipmode <> 'AIR' "
             "MAXIMIZE SUM(buy * l_extendedprice)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -119,7 +119,7 @@ class TestSolidBranches:
         n = _scalar(cli, "SELECT count(*) FROM lineitem WHERE l_orderkey <= 1000")
         sql = (
             "SELECT l_orderkey, l_linenumber, buy FROM lineitem WHERE l_orderkey <= 1000 "
-            "DECIDE buy IS REAL SUCH THAT buy >= 0 MAXIMIZE SUM(buy * l_extendedprice)"
+            "DECIDE buy(REAL) SUCH THAT buy >= 0 MAXIMIZE SUM(buy * l_extendedprice)"
         )
         rows = _rows(_diagnose(cli, sql))
         assert _attr(rows, "variable", "affected_rows") == f"all {n} rows"
@@ -144,7 +144,7 @@ class TestSolidBranches:
 
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 40 "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
         )
 
         # --- query mode: one folded clause edit, amount = worst shortfall ---
@@ -189,7 +189,7 @@ class TestSolidBranches:
 
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 20 "
-            "DECIDE x IS BOOLEAN SUCH THAT x >= l_quantity MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x >= l_quantity MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -211,7 +211,7 @@ class TestSolidBranches:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 20 "
-            "DECIDE x IS BOOLEAN SUCH THAT x >= l_quantity MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x >= l_quantity MAXIMIZE SUM(x)"
         )
         result = _diagnose(
             cli, sql,
@@ -234,7 +234,7 @@ class TestSolidBranches:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 400 "
-            "DECIDE x IS BOOLEAN SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
         )
         headline = _headline(_diagnose(
             cli, sql,
@@ -250,7 +250,7 @@ class TestSolidBranches:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey = 1 "
-            "DECIDE x IS BOOLEAN SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
         )
         rows = _rows(_diagnose(cli, sql))
         drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
@@ -264,7 +264,7 @@ class TestSolidBranches:
         sql = (
             "SELECT s.s_suppkey, keep FROM supplier s "
             "JOIN nation n ON s.s_nationkey = n.n_nationkey "
-            "DECIDE s.keep IS REAL SUCH THAT keep <= 50 WHEN n.n_name <> 'GERMANY' "
+            "DECIDE s.keep(REAL) SUCH THAT keep <= 50 WHEN n.n_name <> 'GERMANY' "
             "MAXIMIZE SUM(keep)"
         )
         rows = _rows(
@@ -285,7 +285,7 @@ class TestSolidBranches:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT l_orderkey, buy FROM lineitem WHERE l_orderkey <= 100 "
-            "DECIDE buy IS BOOLEAN "
+            "DECIDE buy(BOOL) "
             "SUCH THAT SUM(buy) >= 30 AND SUM(buy * l_extendedprice) <= 100 "
             "MAXIMIZE SUM(buy)"
         )

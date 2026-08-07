@@ -48,7 +48,7 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x * l_quantity) >= 30 PER l_returnflag
         MINIMIZE SUM(x * l_extendedprice)
     """
@@ -151,7 +151,7 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x >= 1 AND x <= 5
             AND MIN(x * l_quantity) <= 20 PER l_returnflag
         MAXIMIZE SUM(x * l_extendedprice)
@@ -261,7 +261,7 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 100
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 5
             AND MAX(x * l_quantity) = 30 PER l_returnflag
         MAXIMIZE SUM(x * l_extendedprice)
@@ -376,7 +376,7 @@ def test_per_abs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         )
         SELECT id, grp, target, x
         FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 50
             AND SUM(ABS(x - target)) <= 5 PER grp
         MAXIMIZE SUM(x)
@@ -484,7 +484,7 @@ def test_per_multi_variable(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         )
         SELECT id, grp, w, x, y
         FROM data
-        DECIDE x IS BOOLEAN, y IS INTEGER
+        DECIDE x(BOOL), y(INT)
         SUCH THAT SUM(x * w) <= 12 PER grp
             AND y <= 3
             AND SUM(y) <= 8
@@ -601,7 +601,7 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
             SELECT 4, 'B', true,  7, 2
         )
         SELECT id, grp, w, v, x, y FROM data
-        DECIDE x IS BOOLEAN, y IS INTEGER
+        DECIDE x(BOOL), y(INT)
         SUCH THAT y <= 5 AND SUM(x * w + y * v) <= 18 WHEN active PER grp
         MAXIMIZE SUM(x * w + y * v)
     """
@@ -711,7 +711,7 @@ def test_qp_objective_per_constraint(
         )
         SELECT id, grp, target, ROUND(x::DOUBLE, 6) AS x
         FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100 AND SUM(x) >= 5 PER grp
         MINIMIZE SUM(POWER(x - target, 2))
     """
@@ -801,7 +801,7 @@ def test_per_single_row_groups(decidb_cli, oracle_solver, perf_tracker):
         SELECT id, grp, val, x FROM (
             VALUES (1, 'A', 100.0), (2, 'B', 50.0), (3, 'C', 75.0)
         ) t(id, grp, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) <= 60 PER grp
         MAXIMIZE SUM(x * val)
     """
@@ -868,7 +868,7 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
             VALUES (1, 'A', 0.0), (2, 'A', 0.0),
                    (3, 'B', 5.0), (4, 'B', 20.0)
         ) t(id, grp, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) <= 8 PER grp
         MAXIMIZE SUM(x)
     """
@@ -943,7 +943,7 @@ def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
                    (4, 'A', 3.0, true),
                    (5, NULL, 12.0, false)
         ) t(id, grp, val, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) <= 10 WHEN active PER grp
         MAXIMIZE SUM(x * val)
     """

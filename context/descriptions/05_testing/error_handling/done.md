@@ -40,7 +40,7 @@ rows zero).
 ## Unboundedness detection
 
 `test_error_infeasible.py::TestUnboundedModels`: unbounded MAXIMIZE with
-`IS INTEGER` and with `IS REAL` (only lower bound).
+`INT` and with `REAL` (only lower bound).
 
 Error messages are matched exactly (`(?i)unbounded` here, `(?i)infeasible`
 for the infeasible class). Gurobi's ambiguous `INF_OR_UNBD` status is

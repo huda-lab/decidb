@@ -83,7 +83,7 @@ def test_aggregate_local_when_constraint_independent_masks(
                    ('b', 4, false, true),
                    ('c', 10, false, false)
         ) t(name, value, w1, w2)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN w1 + SUM(x * value) WHEN w2 <= 6
         MAXIMIZE SUM(x * value)
     """
@@ -132,7 +132,7 @@ def test_aggregate_local_when_constraint_parenthesized_condition(
         SELECT name, value, tier, x FROM (
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'none')
         ) t(name, value, tier)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN (tier = 'high') + SUM(x * value) WHEN (tier = 'low') <= 7
         MAXIMIZE SUM(x * value)
     """
@@ -184,7 +184,7 @@ def test_aggregate_local_when_objective_independent_masks(
                    ('b', 0, 9, false, true),
                    ('c', 8, 8, false, false)
         ) t(name, value, bonus, w1, w2)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE SUM(x * value) WHEN w1 + SUM(x * bonus) WHEN w2
     """
@@ -235,7 +235,7 @@ def test_expression_level_when_still_works(
         SELECT name, value, w1, x FROM (
             VALUES ('a', 6, true), ('b', 4, true), ('c', 10, false)
         ) t(name, value, w1)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) <= 6 WHEN w1
         MAXIMIZE SUM(x * value)
     """
@@ -274,7 +274,7 @@ def test_expression_level_when_cannot_mix_with_aggregate_local_when(decidb_cli):
         SELECT name, value, w1, w2, x FROM (
             VALUES ('a', 6, true, false), ('b', 4, false, true)
         ) t(name, value, w1, w2)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT (SUM(x * value) WHEN w1 + SUM(x * value) WHEN w2 <= 6) WHEN w1
         MAXIMIZE SUM(x * value)
     """, match=r"Cannot combine")
@@ -301,7 +301,7 @@ def test_aggregate_local_when_with_avg_constraint(
         SELECT name, value, active, x FROM (
             VALUES ('a', 12, true), ('b', 4, true), ('c', 8, false), ('d', 6, true)
         ) t(name, value, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * value) WHEN active <= 5
         MAXIMIZE SUM(x * value)
     """
@@ -355,7 +355,7 @@ def test_aggregate_local_when_with_per_constraint(
                    ('c', 8, 'Y', true), ('d', 3, 'Y', false),
                    ('e', 7, 'X', true), ('f', 6, 'Y', true)
         ) t(name, value, grp, priority)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN priority <= 12 PER grp
         MAXIMIZE SUM(x * value)
     """
@@ -411,7 +411,7 @@ def test_aggregate_local_when_with_avg_and_per(
                    ('c', 3, 'G1', false), ('d', 10, 'G2', true),
                    ('e', 6, 'G2', true), ('f', 2, 'G2', false)
         ) t(name, value, grp, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * value) WHEN active <= 6 PER grp
         MAXIMIZE SUM(x * value)
     """
@@ -463,7 +463,7 @@ def test_aggregate_local_when_with_max(
         SELECT name, value, eligible, x FROM (
             VALUES ('a', 10, true), ('b', 5, true), ('c', 20, false), ('d', 3, true)
         ) t(name, value, eligible)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x * value) WHEN eligible <= 7
         MAXIMIZE SUM(x * value)
     """
@@ -522,7 +522,7 @@ def test_aggregate_local_when_with_hard_max(
         SELECT name, value, active, x FROM (
             VALUES ('a', 10, true), ('b', 5, true), ('c', 20, false), ('d', 3, true)
         ) t(name, value, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x * value) WHEN active >= 6
             AND SUM(x) <= 2
         MAXIMIZE SUM(x * value)
@@ -588,7 +588,7 @@ def test_aggregate_local_when_mixed_filtered_unfiltered_constraint(
         SELECT name, value, premium, x FROM (
             VALUES ('a', 8, true), ('b', 5, false), ('c', 10, true), ('d', 3, false)
         ) t(name, value, premium)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN premium + SUM(x) <= 12
         MAXIMIZE SUM(x * value)
     """
@@ -639,7 +639,7 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
             VALUES ('a', 10, 2, true), ('b', 3, 8, false),
                    ('c', 7, 5, true), ('d', 1, 1, false)
         ) t(name, value, bonus, vip)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE SUM(x * value) WHEN vip + SUM(x * bonus)
     """
@@ -692,7 +692,7 @@ def test_aggregate_local_when_all_filtered_out(decidb_cli):
         SELECT name, value, flag, x FROM (
             VALUES ('a', 10, false), ('b', 5, false), ('c', 8, false)
         ) t(name, value, flag)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN flag + SUM(x * value) <= 23
         MAXIMIZE SUM(x * value)
     """
@@ -718,7 +718,7 @@ def test_aggregate_local_when_overlapping_filters(
             VALUES ('a', 10, true, true), ('b', 5, true, false),
                    ('c', 8, false, true), ('d', 3, false, false)
         ) t(name, value, cat_a, cat_b)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN cat_a + SUM(x * value) WHEN cat_b <= 20
         MAXIMIZE SUM(x * value)
     """
@@ -767,7 +767,7 @@ def test_aggregate_local_when_single_aggregate(
         SELECT name, value, active, x FROM (
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false)
         ) t(name, value, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN active <= 10
         MAXIMIZE SUM(x * value)
     """
@@ -814,7 +814,7 @@ def test_aggregate_local_when_three_terms(
             VALUES ('a', 10, 'X'), ('b', 5, 'Y'), ('c', 8, 'Z'),
                    ('d', 3, 'X'), ('e', 7, 'Y')
         ) t(name, value, cat)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN (cat = 'X') + SUM(x * value) WHEN (cat = 'Y') + SUM(x * value) WHEN (cat = 'Z') <= 20
         MAXIMIZE SUM(x * value)
     """
@@ -863,7 +863,7 @@ def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
         SELECT name, value, x FROM (
             VALUES ('a', 10), ('b', 5)
         ) t(name, value)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN x <= 10
         MAXIMIZE SUM(x * value)
     """, match=r"(?i)DECIDE variables")
@@ -878,7 +878,7 @@ def test_aggregate_local_when_mixed_expression_objective_error(decidb_cli):
         SELECT name, value, w1, w2, x FROM (
             VALUES ('a', 10, true, false), ('b', 5, false, true)
         ) t(name, value, w1, w2)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE (SUM(x * value) WHEN w1 + SUM(x * value) WHEN w2) WHEN w1
     """, match=r"Cannot combine")
@@ -893,7 +893,7 @@ def test_aggregate_local_when_decide_var_in_objective_condition_error(decidb_cli
         SELECT name, value, x FROM (
             VALUES ('a', 10), ('b', 5)
         ) t(name, value)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE SUM(x * value) WHEN x
     """, match=r"(?i)DECIDE variables")
@@ -919,7 +919,7 @@ def test_expression_level_when_objective_still_works(
         SELECT name, value, vip, x FROM (
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false)
         ) t(name, value, vip)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE SUM(x * value) WHEN vip
     """
@@ -970,7 +970,7 @@ def test_expression_level_when_per_still_works(
             VALUES ('a', 10, 'A', true), ('b', 5, 'A', false),
                    ('c', 8, 'B', true), ('d', 3, 'B', false)
         ) t(name, value, grp, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) <= 10 WHEN active PER grp
         MAXIMIZE SUM(x * value)
     """
@@ -1026,7 +1026,7 @@ def test_bilinear_aggregate_local_when_constraint(
         SELECT id, value, active, b, x FROM (
             VALUES (1, 10, true), (2, 5, true), (3, 8, false), (4, 3, true)
         ) t(id, value, active)
-        DECIDE b IS BOOLEAN, x IS BOOLEAN
+        DECIDE b(BOOL), x(BOOL)
         SUCH THAT SUM(b * x) WHEN active <= 1
         MAXIMIZE SUM(b * value + x * value)
     """
@@ -1089,7 +1089,7 @@ def test_bilinear_aggregate_local_when_objective(
         SELECT id, value, premium, b, x FROM (
             VALUES (1, 10, true), (2, 5, false), (3, 8, true)
         ) t(id, value, premium)
-        DECIDE b IS BOOLEAN, x IS BOOLEAN
+        DECIDE b(BOOL), x(BOOL)
         SUCH THAT SUM(b) <= 3 AND SUM(x) <= 3
         MAXIMIZE SUM(b * x * value) WHEN premium
     """
@@ -1154,7 +1154,7 @@ def test_ne_aggregate_local_when_constraint(
         SELECT name, value, active, x FROM (
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
         ) t(name, value, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) WHEN active <> 2
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * value)
@@ -1208,7 +1208,7 @@ def test_ne_with_per_constraint(
             VALUES ('a', 10, 'eng'), ('b', 5, 'eng'), ('c', 8, 'sales'),
                    ('d', 3, 'sales'), ('e', 7, 'eng')
         ) t(name, value, dept)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 2 PER dept
             AND SUM(x) <= 4
         MAXIMIZE SUM(x * value)
@@ -1260,7 +1260,7 @@ def test_between_aggregate_local_when_constraint(
         SELECT name, value, active, x FROM (
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
         ) t(name, value, active)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN active BETWEEN 5 AND 13
         MAXIMIZE SUM(x * value)
     """
@@ -1302,7 +1302,7 @@ def test_entity_scoped_aggregate_local_when(
         SELECT c.c_custkey, n.n_nationkey, n.n_name, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN IS BOOLEAN
+        DECIDE n.keepN(BOOL)
         SUCH THAT SUM(keepN * c.c_acctbal) WHEN (c.c_acctbal > 5000) <= 50000
         MAXIMIZE SUM(keepN)
     """
@@ -1369,7 +1369,7 @@ def test_aggregate_local_when_unparenthesized_comparison_error(decidb_cli):
         SELECT name, value, tier, x FROM (
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'none')
         ) t(name, value, tier)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN tier = 'high' <= 7
         MAXIMIZE SUM(x * value)
     """)
@@ -1392,7 +1392,7 @@ def test_aggregate_local_when_objective_reassociation(
         SELECT name, value, tier, x FROM (
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'high')
         ) t(name, value, tier)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE SUM(x * value) WHEN tier = 'high'
     """
@@ -1459,7 +1459,7 @@ def test_when_with_constant_offset_paren_condition(
         SELECT id, w, x FROM (
             VALUES (1, 2.0), (2, 0.5), (3, 3.0)
         ) t(id, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x) WHEN (w > 1) + 3 <= 10
             AND x <= 10
         MAXIMIZE SUM(x)
@@ -1509,7 +1509,7 @@ def test_when_with_scalar_multiplier(
         SELECT id, w, x FROM (
             VALUES (1, true), (2, false), (3, true)
         ) t(id, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT 2 * (SUM(x) WHEN w) <= 10
             AND x <= 10
         MAXIMIZE SUM(x)
@@ -1559,7 +1559,7 @@ def test_when_with_parallel_sum_and_offset(
         SELECT id, w, x, y FROM (
             VALUES (1, true), (2, false), (3, true)
         ) t(id, w)
-        DECIDE x IS REAL, y IS REAL
+        DECIDE x(REAL), y(REAL)
         SUCH THAT (SUM(x) WHEN w) + (SUM(y) + 3) <= 10
             AND x <= 10 AND y <= 10
         MAXIMIZE SUM(x) + SUM(y)
@@ -1607,7 +1607,7 @@ def test_when_unparenthesized_condition_misparses(decidb_cli):
     is the exercised positive path above."""
     decidb_cli.assert_error("""
         SELECT id, x FROM (VALUES (1, 2.0), (2, 0.5), (3, 3.0)) t(id, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT (SUM(x) WHEN w > 1) + 3 <= 10
             AND x <= 10
         MAXIMIZE SUM(x)
@@ -1634,7 +1634,7 @@ def test_when_objective_with_constant_offset(
         SELECT id, w, x FROM (
             VALUES (1, 2.0), (2, 0.5), (3, 3.0)
         ) t(id, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 10
         MAXIMIZE (SUM(x) WHEN w > 1) + 3
     """
@@ -1687,7 +1687,7 @@ def test_outer_when_with_arithmetic_offset_works(
         SELECT id, value, w, x FROM (
             VALUES (1, 6.0, true), (2, 4.0, true), (3, 10.0, false)
         ) t(id, value, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * value) + 3 <= 10 WHEN w
         MAXIMIZE SUM(x * value)
     """
@@ -1747,7 +1747,7 @@ def test_when_with_data_column_scalar_left(
         SELECT id, col, w, x FROM (
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
         ) t(id, col, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT col * (SUM(x) WHEN w) <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
@@ -1797,7 +1797,7 @@ def test_when_with_data_column_scalar_right(
         SELECT id, col, w, x FROM (
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
         ) t(id, col, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT (SUM(x) WHEN w) * col <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
@@ -1846,7 +1846,7 @@ def test_when_divided_by_data_column(
         SELECT id, col, w, x FROM (
             VALUES (1, 2.0, true), (2, 4.0, false), (3, 1.0, true), (4, 0.5, true)
         ) t(id, col, w)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT (SUM(x) WHEN w) / col <= 5
             AND x <= 10
         MAXIMIZE SUM(x)

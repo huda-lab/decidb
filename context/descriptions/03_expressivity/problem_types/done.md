@@ -8,7 +8,7 @@ DeciDB can express several classes of mathematical optimization problems. The pr
 
 ### LP (Linear Programming)
 
-All variables declared `IS REAL`, with a linear objective and linear constraints.
+All variables declared `REAL`, with a linear objective and linear constraints.
 
 Model form: minimize c^T x, subject to Ax <= b and l <= x <= u. DeciDB
 defaults l to 0, but an explicit finite negative lower bound makes a variable
@@ -16,7 +16,7 @@ signed.
 
 ```sql
 SELECT id, ROUND(x, 2) FROM data
-DECIDE x IS REAL
+DECIDE x(REAL)
 SUCH THAT x <= 100 AND SUM(x) >= 500
 MINIMIZE SUM(x * cost)
 ```
@@ -25,15 +25,15 @@ Supported by both Gurobi and HiGHS.
 
 ### ILP (Integer Linear Programming)
 
-All variables declared `IS INTEGER` and/or `IS BOOLEAN`, with a linear objective and linear constraints. This is the **default** problem class — `DECIDE x` without a type annotation defaults to `IS INTEGER`.
+All variables declared `INT` and/or `BOOL`, with a linear objective and linear constraints. This is the **default** problem class.
 
 Model form: minimize c^T x, subject to Ax <= b, x in Z^n, and l <= x <= u.
-INTEGER variables default l to 0, but support explicit finite negative lower
-bounds; BOOLEAN variables remain in [0, 1].
+INT variables default l to 0, but support explicit finite negative lower
+bounds; BOOL variables remain in [0, 1].
 
 ```sql
 SELECT * FROM items
-DECIDE keep IS BOOLEAN
+DECIDE keep(BOOL)
 SUCH THAT SUM(keep * weight) <= 50
 MAXIMIZE SUM(keep * value)
 ```
@@ -42,11 +42,11 @@ Supported by both Gurobi and HiGHS.
 
 ### MILP (Mixed-Integer Linear Programming)
 
-Mix of `IS REAL` + `IS INTEGER`/`IS BOOLEAN` variables, with a linear objective and linear constraints. Arises when a query needs both selection (BOOLEAN) and value-assignment (REAL).
+Mix of `REAL` + `INT`/`BOOL` variables, with a linear objective and linear constraints. Arises when a query needs both selection (BOOL) and value-assignment (REAL).
 
 ```sql
 SELECT * FROM employees
-DECIDE selected IS BOOLEAN, new_salary IS REAL
+DECIDE selected(BOOL), new_salary(REAL)
 SUCH THAT selected <= 1 AND new_salary <= max_salary AND SUM(new_salary) <= budget
 MAXIMIZE SUM(selected * performance)
 ```
@@ -55,7 +55,7 @@ Supported by both Gurobi and HiGHS.
 
 ### QP (Quadratic Programming)
 
-All variables declared `IS REAL` (continuous), with a quadratic objective and linear constraints.
+All variables declared `REAL` (continuous), with a quadratic objective and linear constraints.
 
 Model form: minimize (1/2) x^T Q x + c^T x, subject to Ax <= b and
 l <= x <= u. DeciDB defaults l to 0, but supports explicit finite negative
@@ -66,13 +66,13 @@ lower bounds.
 ```sql
 -- MINIMIZE convex: Q is PSD (standard)
 SELECT id, ROUND(x, 2) FROM data
-DECIDE x IS REAL
+DECIDE x(REAL)
 SUCH THAT x >= 0 AND x <= 100
 MINIMIZE SUM(POWER(x - target, 2))
 
 -- MAXIMIZE concave (negated quadratic): Q is NSD, both solvers handle natively
 SELECT id, ROUND(x, 2) FROM data
-DECIDE x IS REAL
+DECIDE x(REAL)
 SUCH THAT x >= 0 AND x <= 100
 MAXIMIZE SUM(-POWER(x - target, 2))
 ```
@@ -82,20 +82,20 @@ MAXIMIZE SUM(-POWER(x - target, 2))
 ```sql
 -- MAXIMIZE convex: push x to boundary (maximum squared deviation)
 SELECT id, ROUND(x, 2) FROM data
-DECIDE x IS REAL
+DECIDE x(REAL)
 SUCH THAT x >= 0 AND x <= 10
 MAXIMIZE SUM(POWER(x - 5, 2))
 ```
 
 ### MIQP (Mixed-Integer Quadratic Programming)
 
-Mix of `IS REAL` + `IS INTEGER`/`IS BOOLEAN` variables, with a quadratic objective and linear constraints. Arises when combining selection (BOOLEAN) with least-squares fitting (REAL).
+Mix of `REAL` + `INT`/`BOOL` variables, with a quadratic objective and linear constraints. Arises when combining selection (BOOL) with least-squares fitting (REAL).
 
-**Gurobi only** — HiGHS rejects MIQP with an error directing the user to either install Gurobi or use `IS REAL` variables.
+**Gurobi only** — HiGHS rejects MIQP with an error directing the user to either install Gurobi or use `REAL` variables.
 
 ```sql
 SELECT * FROM measurements
-DECIDE keep IS BOOLEAN, repaired IS REAL
+DECIDE keep(BOOL), repaired(REAL)
 SUCH THAT repaired >= 0 AND repaired <= 100 AND SUM(keep) >= 10
 MINIMIZE SUM(POWER(repaired - measured, 2))
 ```
@@ -107,7 +107,7 @@ Linear terms may appear alongside a `POWER(...)` term in the same objective, eit
 ```sql
 -- Linear regularisation on top of least-squares
 SELECT * FROM data
-DECIDE x IS REAL
+DECIDE x(REAL)
 SUCH THAT x >= 0 AND x <= 100
 MINIMIZE SUM(POWER(x - target, 2) + penalty * x)
 
@@ -121,20 +121,20 @@ Optimum of `SUM(POWER(x - t, 2) + c * x)` with no other binding constraints is `
 
 ### Bilinear Programming (Boolean × Anything — McCormick Linearization)
 
-When one factor in a product of two different DECIDE variables is declared `IS BOOLEAN`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
+When one factor in a product of two different DECIDE variables is declared `BOOL`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
 
 **Requires**: A finite upper bound on the non-Boolean variable — explicit (`x <= K`) or inferred via implied-bound propagation from a non-negative constraint like `SUM(x) <= K` (see `../../04_optimizer/matrix_efficiency/done.md`). Bool×Bool uses simpler AND-linearization (no Big-M needed).
 
 ```sql
 -- Boolean x Real objective (both solvers)
 SELECT * FROM items
-DECIDE b IS BOOLEAN, x IS REAL
+DECIDE b(BOOL), x(REAL)
 SUCH THAT x <= 100 AND SUM(b) <= 5
 MAXIMIZE SUM(b * x)
 
 -- Boolean x Boolean objective (both solvers)
 SELECT * FROM tasks
-DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN
+DECIDE b1(BOOL), b2(BOOL)
 SUCH THAT SUM(b1) <= 3 AND SUM(b2) <= 3
 MAXIMIZE SUM(b1 * b2)
 
@@ -152,7 +152,7 @@ When neither factor is Boolean (`Real×Real`, `Int×Int`, `Int×Real`), the prod
 ```sql
 -- Real x Real objective (Gurobi only)
 SELECT * FROM data
-DECIDE x IS REAL, y IS REAL
+DECIDE x(REAL), y(REAL)
 SUCH THAT x <= 10 AND y <= 10
 MINIMIZE SUM(x * y)
 
@@ -166,7 +166,7 @@ Any combination of variable types, with constraints but **no** `MAXIMIZE`/`MINIM
 
 ```sql
 SELECT * FROM shifts
-DECIDE assigned IS BOOLEAN
+DECIDE assigned(BOOL)
 SUCH THAT SUM(assigned) >= 3 PER day AND SUM(assigned) <= 5 PER employee
 ```
 
@@ -181,7 +181,7 @@ Quadratic terms (`POWER(linear_expr, 2)`) are supported in `SUCH THAT` constrain
 ```sql
 -- Aggregate quadratic constraint: total squared deviation budget
 SELECT id, ROUND(x, 2) FROM data
-DECIDE x IS REAL
+DECIDE x(REAL)
 SUCH THAT x >= 0 AND x <= 100
     AND SUM(POWER(x - target, 2)) <= 1000
 MAXIMIZE SUM(x)
@@ -206,14 +206,14 @@ The user does not declare a problem class. DeciDB infers it from the variable ty
 
 | Variable Types | Objective | Problem Class |
 |---|---|---|
-| All BOOLEAN/INTEGER | Linear or none | ILP |
+| All BOOL/INT | Linear or none | ILP |
 | All REAL | Linear or none | LP |
-| Mix of REAL + INTEGER/BOOLEAN | Linear or none | MILP |
+| Mix of REAL + INT/BOOL | Linear or none | MILP |
 | All REAL | Convex quadratic | QP |
 | All REAL | Non-convex quadratic (`MAXIMIZE SUM(POWER)`) | Non-convex QP (Gurobi only) |
-| Mix of REAL + INTEGER/BOOLEAN | Quadratic | MIQP (Gurobi only) |
-| Any (one factor BOOLEAN) | Bilinear (`b * x`) | MILP (McCormick, both solvers) |
-| Any (no BOOLEAN factor) | Bilinear (`x * y`) | Non-convex QP (Gurobi only) |
+| Mix of REAL + INT/BOOL | Quadratic | MIQP (Gurobi only) |
+| Any (one factor BOOL) | Bilinear (`b * x`) | MILP (McCormick, both solvers) |
+| Any (no BOOL factor) | Bilinear (`x * y`) | Non-convex QP (Gurobi only) |
 | Any | Linear/quadratic, with `POWER(expr,2)` constraints | QCQP (Gurobi only) |
 | Any | None (feasibility) | Feasibility |
 
@@ -300,11 +300,11 @@ MAXIMIZE SUM(-1 * POWER(x - target, 2))    -- explicit -1 multiplication
 
 Variable types have these default bounds:
 
-- BOOLEAN: [0, 1]
-- INTEGER: [0, 1e30]
+- BOOL: [0, 1]
+- INT: [0, 1e30]
 - REAL: [0, 1e30]
 
-For INTEGER and REAL, 0 is a default rather than an intrinsic floor. An
+For INT and REAL, 0 is a default rather than an intrinsic floor. An
 explicit finite negative lower bound such as `x >= -10`, `x BETWEEN -10 AND
 10`, or a negative literal in an `IN` domain makes the variable signed. Bound
 absorption stores the resulting domain directly as solver column bounds.

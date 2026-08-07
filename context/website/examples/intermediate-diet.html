@@ -107,7 +107,7 @@ INSERT INTO Meals VALUES
       <div class="code-block">
         <pre class="language-sql"><code>SELECT id, name, protein, carbs, fat, calories, cost, x as selected
 FROM Meals
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * protein) >= 50 AND
     SUM(x * carbs) >= 100 AND
@@ -122,7 +122,7 @@ MINIMIZE SUM(x * cost);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE x IS BOOLEAN</code> — For each meal: include (x=1) or skip (x=0).</div>
+          <div><code>DECIDE x(BOOL)</code> — For each meal: include (x=1) or skip (x=0).</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>

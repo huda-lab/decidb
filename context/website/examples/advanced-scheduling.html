@@ -116,7 +116,7 @@ FROM Resources r
 JOIN Slots s ON r.available_day = s.day
 WHERE s.start_time BETWEEN '09:00' AND '17:00'
   AND r.skill_level >= s.required_level
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x) <= 3 PER resource_id AND
     SUM(x) = 1 PER slot_id

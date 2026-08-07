@@ -94,7 +94,7 @@ class TestQuadraticBasic:
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x
             FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 2))
         """
@@ -136,7 +136,7 @@ class TestQuadraticBasic:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM((x - target) ** 2)
         """
@@ -178,7 +178,7 @@ class TestQuadraticBasic:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM((x - target) * (x - target))
         """
@@ -218,7 +218,7 @@ class TestQuadraticBasic:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 10 AND x <= 40
             MINIMIZE SUM(POWER(x - target, 2))
         """
@@ -262,7 +262,7 @@ class TestQuadraticBasic:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100 AND SUM(x) = 60
             MINIMIZE SUM(POWER(x - target, 2))
         """
@@ -306,7 +306,7 @@ class TestQuadraticBasic:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x, 2))
         """
@@ -350,7 +350,7 @@ class TestQuadraticBasic:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, grp, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 2)) WHEN grp = 'A'
         """
@@ -401,7 +401,7 @@ class TestQuadraticBasic:
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x, ROUND(y, 4) AS y
             FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND y >= 0 AND y <= cap
             MINIMIZE SUM(POWER(x - target, 2))
@@ -446,7 +446,7 @@ class TestQuadraticBasic:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 10
             MINIMIZE SUM(POWER(x/2 - 1, 2))
         """
@@ -499,7 +499,7 @@ class TestQuadraticBasic:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, w, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 10
             MINIMIZE SUM(POWER(x/w - 1, 2))
         """
@@ -576,7 +576,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
@@ -609,7 +609,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 10 AND x <= 40
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
@@ -642,7 +642,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM(-((x - target) ** 2))
         """
@@ -676,7 +676,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(POWER(x, 2))
         """
@@ -718,7 +718,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, x FROM data
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(POWER(x - 5, 2))
         """
@@ -773,7 +773,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM((-2) * POWER(x - target, 2))
         """
@@ -811,7 +811,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100 AND SUM(x) = 90
             MAXIMIZE SUM((-0.5) * POWER(x - target, 2))
         """
@@ -852,7 +852,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM(POWER(x - target, 2) * (-1))
         """
@@ -886,7 +886,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MAXIMIZE SUM(-((x - target) * (x - target)))
         """
@@ -924,7 +924,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, x FROM data
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT x >= 0 AND x <= 20
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
@@ -972,7 +972,7 @@ class TestQuadraticMaximize:
         sql = f"""
             WITH data AS ({data_sql})
             SELECT id, target, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100 AND SUM(x) = 60
             MAXIMIZE SUM(-POWER(x - target, 2))
         """
@@ -1016,7 +1016,7 @@ class TestQuadraticErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id, 10.0 AS target)
             SELECT id, x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 3))
         """, match=r"Only POWER\(expr, 2\) is supported|Higher powers are not allowed")
@@ -1028,7 +1028,7 @@ class TestQuadraticErrors:
         sql = """
             WITH data AS (SELECT 1 AS id, 10.0 AS val)
             SELECT id, ROUND(x, 2) AS x, ROUND(y, 2) AS y FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 10 AND y >= 0 AND y <= 10
             MINIMIZE SUM(x * y)
         """
@@ -1071,7 +1071,7 @@ class TestQuadraticErrors:
                 SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
             )
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 10
             MINIMIZE SUM(-POWER(x, 2))
         """
@@ -1110,7 +1110,7 @@ class TestQuadraticErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id, 10.0 AS target, 2 AS exp)
             SELECT id, x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, exp))
         """, match=r"POWER exponent.*must be a constant integer")
@@ -1123,7 +1123,7 @@ class TestQuadraticErrors:
             )
             SELECT id, ROUND(x, 4) AS x, ROUND(y, 4) AS y
             FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
             MINIMIZE SUM(POWER(x - a, 2)) + SUM(POWER(y - b, 2))
         """, match=r"multiple quadratic")
@@ -1134,7 +1134,7 @@ class TestQuadraticErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, ROUND(x, 4) AS x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 3
             MINIMIZE SUM(POWER(x - 1, 2) * POWER(x - 1, 2)) + SUM(-2 * x)
         """, match=r"self-product .* non-linear|degree > 2")
@@ -1146,7 +1146,7 @@ class TestQuadraticErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, x, y FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 100 AND y >= 0 AND y <= 100
             MINIMIZE SUM(POWER(x, 2) * POWER(y, 2))
         """, match=r"degree > 2")
@@ -1157,7 +1157,7 @@ class TestQuadraticErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, a, x FROM data
-            DECIDE a IS REAL, x IS REAL
+            DECIDE a(REAL), x(REAL)
             SUCH THAT a >= 0 AND a <= 5 AND x >= 0 AND x <= 5
             MAXIMIZE SUM(a * POWER(x, 2))
         """, match=r"degree > 2")
@@ -1178,7 +1178,7 @@ def test_qp_minimize_squared_deviation_tpch(
         SELECT ps_partkey, ps_suppkey, ps_supplycost, ROUND(x, 4) AS x
         FROM partsupp
         WHERE ps_partkey <= 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 1000
         MINIMIZE SUM(POWER(x - ps_supplycost, 2))
     """
@@ -1235,7 +1235,7 @@ def test_qp_with_sum_constraint_tpch(
         SELECT ps_partkey, ps_suppkey, ps_supplycost, ROUND(x, 4) AS x
         FROM partsupp
         WHERE ps_partkey <= 10
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 10000 AND SUM(x) >= {inflated}
         MINIMIZE SUM(POWER(x - ps_supplycost, 2))
     """
@@ -1301,7 +1301,7 @@ def test_qp_mixed_linear_quadratic(
         )
         SELECT id, target, penalty, ROUND(x, 6) AS x
         FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
         MINIMIZE SUM(POWER(x - target, 2) + penalty * x)
     """
@@ -1359,7 +1359,7 @@ def test_qp_mixed_separate_sums(
         )
         SELECT id, target, penalty, ROUND(x, 6) AS x
         FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
         MINIMIZE SUM(POWER(x - target, 2)) + SUM(penalty * x)
     """
@@ -1417,7 +1417,7 @@ def test_qp_mixed_negated_quadratic(
         )
         SELECT id, target, penalty, ROUND(x, 6) AS x
         FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
         MAXIMIZE SUM(-POWER(x - target, 2) + penalty * x)
     """
@@ -1502,7 +1502,7 @@ def test_qp_nested_sum_sum_per_binding(
     sql = f"""
         WITH data AS ({data_sql})
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
             AND SUM(x) <= 10 WHEN grp = 'A'
             AND SUM(x) <= 40 WHEN grp = 'B'
@@ -1565,7 +1565,7 @@ def test_qp_nested_sum_sum_per_unconstrained(
     sql = f"""
         WITH data AS ({data_sql})
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
         MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
     """
@@ -1623,7 +1623,7 @@ def test_qp_nested_sum_avg_per_binding(
     sql = f"""
         WITH data AS ({data_sql})
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
             AND SUM(x) <= 20 WHEN grp = 'A'
             AND SUM(x) <= 60 WHEN grp = 'B'
@@ -1704,7 +1704,7 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
     sql = f"""
         WITH data AS ({data_sql})
         SELECT id, grp, ROUND(x, 4) AS x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
             AND SUM(x) >= 4 WHEN grp = 'A'
             AND SUM(x) >= 6 WHEN grp = 'B'
@@ -1778,7 +1778,7 @@ def test_qp_entity_scoped_objective(
     sql = f"""
         WITH items AS ({data_sql})
         SELECT item, target, ROUND(x, 4) AS x FROM items
-        DECIDE items.x IS REAL
+        DECIDE items.x(REAL)
         SUCH THAT x >= 0 AND x <= 100
             AND SUM(x) <= 50
         MINIMIZE SUM(POWER(x - target, 2))
@@ -1863,25 +1863,25 @@ class TestHighsRejection:
     """
 
     def test_highs_nonconvex_qp_rejected(self, decidb_cli_highs):
-        """MAXIMIZE SUM(POWER(x, 2)) with x IS REAL is non-convex and HiGHS-rejected."""
+        """MAXIMIZE SUM(POWER(x, 2)) with x(REAL) is non-convex and HiGHS-rejected."""
         sql = """
             WITH data AS (SELECT 1 AS id UNION ALL SELECT 2)
             SELECT id, x FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(POWER(x, 2))
         """
         decidb_cli_highs.assert_error(sql, match=r"[Nn]on-convex.*Gurobi")
 
     def test_highs_miqp_rejected(self, decidb_cli_highs):
-        """MINIMIZE SUM(POWER(x, 2)) with x IS INTEGER triggers MIQP, HiGHS-rejected."""
+        """MINIMIZE SUM(POWER(x, 2)) with x(INT) triggers MIQP, HiGHS-rejected."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 3.0 AS target UNION ALL
                 SELECT 2, 7.0
             )
             SELECT id, x FROM data
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT x <= 10
             MINIMIZE SUM(POWER(x - target, 2))
         """

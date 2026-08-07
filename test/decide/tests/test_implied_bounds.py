@@ -18,7 +18,7 @@ def test_propagation_multivar_knapsack(decidb_cli):
     sql = """
         WITH data AS (SELECT 1 AS id)
         SELECT id, x, y FROM data
-        DECIDE x IS INTEGER, y IS INTEGER
+        DECIDE x(INT), y(INT)
         SUCH THAT 2 * x + 3 * y <= 12 AND x <> 0 AND y <> 0
         MAXIMIZE SUM(x + 2 * y)
     """
@@ -37,7 +37,7 @@ def test_propagation_skips_zero_coefficient_row(decidb_cli):
     sql = """
         WITH data AS (SELECT 1 AS id, 2.0 AS w UNION ALL SELECT 2 AS id, 0.0 AS w)
         SELECT id, w, x FROM data
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 100 AND x * w <= 10
         MAXIMIZE SUM(x)
     """
@@ -56,7 +56,7 @@ def test_propagation_enables_mccormick_bilinear(decidb_cli):
     sql = """
         WITH data AS (SELECT 1 AS id UNION ALL SELECT 2 AS id)
         SELECT id, b, x FROM data
-        DECIDE b IS BOOLEAN, x IS INTEGER
+        DECIDE b(BOOL), x(INT)
         SUCH THAT SUM(x) <= 10
         MAXIMIZE SUM(b * x)
     """
@@ -77,7 +77,7 @@ def test_propagation_skips_negative_coefficient(decidb_cli):
     sql = """
         WITH data AS (SELECT 1 AS id)
         SELECT id, x, y FROM data
-        DECIDE x IS INTEGER, y IS INTEGER
+        DECIDE x(INT), y(INT)
         SUCH THAT 2 * x - y <= 4 AND y <= 10 AND x <= 100
         MAXIMIZE SUM(x)
     """
@@ -98,7 +98,7 @@ def test_propagation_skips_when_excluded_constraint(decidb_cli):
     sql = """
         WITH data AS (SELECT 'A' AS g UNION ALL SELECT 'B' AS g)
         SELECT g, x FROM data
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 100 AND SUM(x) <= 5 WHEN g = 'A'
         MAXIMIZE SUM(x)
     """

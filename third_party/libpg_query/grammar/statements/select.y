@@ -168,56 +168,70 @@ opt_select:
 	;
 
 variable_type:
-			INTEGER
+			INT_P
 				{ $$ = makeTypeName("integer_variable"); $$->location = @1; }
 			| REAL
 				{ $$ = makeTypeName("real_variable"); $$->location = @1; }
-			| BOOLEAN_P
+			| BOOL_P
 				{ $$ = makeTypeName("bool_variable"); $$->location = @1; }
 		;
 
-/* A single typed variable declaration:
- *   "x IS INTEGER"            -- row-scoped (one per result row)
- *   "x"                       -- row-scoped, defaults to INTEGER
- *   "T.x IS BOOLEAN"          -- table-scoped (one per entity in table T)
- *   "T.x"                     -- table-scoped, defaults to INTEGER
+/* A single typed variable declaration. The type is mandatory:
+ *   "x(INT)"                  -- row-scoped (one per result row)
+ *   "T.x(BOOL)"               -- table-scoped (one per entity in table T)
  */
 typed_decide_variable:
-			ColId '.' ColId IS variable_type
+			ColId '(' variable_type ')'
 				{
-					/* Table-scoped variable: T.x IS TYPE */
-					PGColumnRef *col = makeNode(PGColumnRef);
-					col->fields = list_make2(makeString($1), makeString($3));
-					col->location = @1;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$5, @2);
-				}
-			| ColId '.' ColId
-				{
-					/* Table-scoped variable: T.x (defaults to INTEGER) */
-					PGColumnRef *col = makeNode(PGColumnRef);
-					col->fields = list_make2(makeString($1), makeString($3));
-					col->location = @1;
-					PGTypeName *deftype = makeTypeName("integer_variable");
-					deftype->location = @1;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)deftype, @1);
-				}
-			| ColId IS variable_type
-				{
-					/* Row-scoped variable: x IS TYPE */
+					/* Row-scoped variable: x(TYPE) */
 					PGColumnRef *col = makeNode(PGColumnRef);
 					col->fields = list_make1(makeString($1));
 					col->location = @1;
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$3, @2);
 				}
+			| ColId '.' ColId '(' variable_type ')'
+				{
+					/* Table-scoped variable: T.x(TYPE) */
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make2(makeString($1), makeString($3));
+					col->location = @1;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$5, @2);
+				}
+				/* Removed spellings, kept only to give an actionable message: a
+			 * declaration with no type, and the old "x IS INTEGER" form.
+			 */
 			| ColId
 				{
-					/* Row-scoped variable: x (defaults to INTEGER) */
-					PGColumnRef *col = makeNode(PGColumnRef);
-					col->fields = list_make1(makeString($1));
-					col->location = @1;
-					PGTypeName *deftype = makeTypeName("integer_variable");
-					deftype->location = @1;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)deftype, @1);
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("DECIDE variable \"%s\" needs a type; write %s(INT), %s(BOOL) or %s(REAL)", $1, $1, $1, $1),
+							 parser_errposition(@1)));
+					$$ = NULL;
+				}
+			| ColId '.' ColId
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("DECIDE variable \"%s.%s\" needs a type; write %s.%s(INT), %s.%s(BOOL) or %s.%s(REAL)",
+									$1, $3, $1, $3, $1, $3, $1, $3),
+							 parser_errposition(@1)));
+					$$ = NULL;
+				}
+			| ColId IS ColId
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("write the DECIDE type in parentheses, e.g. %s(INT); the IS form is no longer accepted", $1),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+			| ColId '.' ColId IS ColId
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("write the DECIDE type in parentheses, e.g. %s.%s(INT); the IS form is no longer accepted", $1, $3),
+							 parser_errposition(@4)));
+					$$ = NULL;
 				}
 		;
 
@@ -272,37 +286,91 @@ decide_objective_item:
 				{ $$ = $1; }
 		;
 
-decide_clause:
-			DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list MAXIMIZE decide_objective_item
+/* DecidB: the constraints and optional objective. Shared by both clause
+ * orders -- the single-block order reaches it through decide_clause, the
+ * paper's split order uses it directly as the body slot. Leaves variables
+ * NULL; whoever has the declaration attaches it.
+ */
+decide_tail:
+			SUCH THAT decide_constraint_list MAXIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     pg_yyget_extra(yyscanner)->in_decide_clause = false;
-                    n->variables = $2;
-                    n->constraints = $5;
+                    n->variables = NULL;
+                    n->constraints = $3;
                     n->sense = PG_OBJ_MAXIMIZE;
-                    n->objective = $7;
+                    n->objective = $5;
                     $$ = (PGNode *)n;
                 }
-			| DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list MINIMIZE decide_objective_item
+			| SUCH THAT decide_constraint_list MINIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     pg_yyget_extra(yyscanner)->in_decide_clause = false;
-                    n->variables = $2;
-                    n->constraints = $5;
+                    n->variables = NULL;
+                    n->constraints = $3;
                     n->sense = PG_OBJ_MINIMIZE;
-                    n->objective = $7;
+                    n->objective = $5;
                     $$ = (PGNode *)n;
                 }
-			| DECIDE typed_decide_variable_list SUCH THAT decide_constraint_list
+			| SUCH THAT decide_constraint_list
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     pg_yyget_extra(yyscanner)->in_decide_clause = false;
-                    n->variables = $2;
-                    n->constraints = $5;
+                    n->variables = NULL;
+                    n->constraints = $3;
                     n->sense = PG_OBJ_FEASIBILITY;
                     n->objective = NULL;
                     $$ = (PGNode *)n;
                 }
+		;
+
+/* SUCH is not in this rule's follow set, so the empty alternative adds no
+ * shift/reduce conflict; decide_clause turns the NULL into a real error.
+ */
+opt_decide_tail:
+			decide_tail								{ $$ = $1; }
+			| /*EMPTY*/								{ $$ = NULL; }
+		;
+
+/* DecidB: the single-block order, DECIDE ... SUCH THAT ... after where_clause. */
+decide_clause:
+			DECIDE typed_decide_variable_list opt_decide_tail
+                {
+                    PGDecideClause *n;
+                    if ($3 == NULL)
+                        ereport(ERROR,
+                                (errcode(PG_ERRCODE_SYNTAX_ERROR),
+                                 errmsg("DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint"),
+                                 parser_errposition(@1)));
+                    n = (PGDecideClause *) $3;
+                    n->variables = $2;
+                    $$ = (PGNode *)n;
+                }
+		;
+
+/* DecidB: declaration slot. Sits between the target list and FROM, giving the
+ * paper's clause order (SELECT ... DECIDE ... FROM ... SUCH THAT ...). The
+ * action clears in_decide_clause so FROM / JOIN ... ON / WHERE lex as ordinary
+ * SQL -- otherwise a CASE WHEN in a join condition would lex as WHEN_DECIDE.
+ * The body slot re-arms the flag on its SUCH token.
+ */
+decide_declaration:
+			DECIDE typed_decide_variable_list
+				{
+					pg_yyget_extra(yyscanner)->in_decide_clause = false;
+					pg_yyget_extra(yyscanner)->decide_case_depth = 0;
+					$$ = $2;
+				}
+			| /*EMPTY*/								{ $$ = NULL; }
+		;
+
+/* DecidB: body slot, after where_clause. Carries either the whole single-block
+ * DECIDE ... SUCH THAT ... clause (declaration slot empty), or just the
+ * constraints and objective (declaration slot supplies the variables).
+ */
+decide_body:
+			decide_clause							{ $$ = $1; }
+			| decide_tail							{ $$ = $1; }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
@@ -355,61 +423,61 @@ decide_constraint_item:
 
 simple_select:
             SELECT opt_all_clause opt_target_list_opt_comma
-			into_clause from_clause where_clause decide_clause
+			into_clause decide_declaration from_clause where_clause decide_body
 			group_clause having_clause window_clause qualify_clause sample_clause
 				{
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->targetList = $3;
 					n->intoClause = $4;
-					n->fromClause = $5;
-					n->whereClause = $6;
-                    n->decideClause = $7;
-					n->groupClause = $8;
-					n->havingClause = $9;
-					n->windowClause = $10;
-					n->qualifyClause = $11;
-					n->sampleOptions = $12;
+					n->fromClause = $6;
+					n->whereClause = $7;
+                    n->decideClause = makeDecideClause($5, $8, @5, @8, yyscanner);
+					n->groupClause = $9;
+					n->havingClause = $10;
+					n->windowClause = $11;
+					n->qualifyClause = $12;
+					n->sampleOptions = $13;
 					$$ = (PGNode *)n;
 				}
 			| SELECT distinct_clause target_list_opt_comma
-			into_clause from_clause where_clause decide_clause
+			into_clause decide_declaration from_clause where_clause decide_body
 			group_clause having_clause window_clause qualify_clause sample_clause
 				{
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->distinctClause = $2;
 					n->targetList = $3;
 					n->intoClause = $4;
-					n->fromClause = $5;
-					n->whereClause = $6;
-                    n->decideClause = $7;
-					n->groupClause = $8;
-					n->havingClause = $9;
-					n->windowClause = $10;
-					n->qualifyClause = $11;
-					n->sampleOptions = $12;
+					n->fromClause = $6;
+					n->whereClause = $7;
+                    n->decideClause = makeDecideClause($5, $8, @5, @8, yyscanner);
+					n->groupClause = $9;
+					n->havingClause = $10;
+					n->windowClause = $11;
+					n->qualifyClause = $12;
+					n->sampleOptions = $13;
 					$$ = (PGNode *)n;
 				}
 			|  FROM from_list opt_select
-			into_clause where_clause decide_clause
+			into_clause decide_declaration where_clause decide_body
 			group_clause having_clause window_clause qualify_clause sample_clause
 				{
 					PGSelectStmt *n = makeNode(PGSelectStmt);
 					n->targetList = $3;
 					n->fromClause = $2;
 					n->intoClause = $4;
-					n->whereClause = $5;
-                    n->decideClause = $6;
-					n->groupClause = $7;
-					n->havingClause = $8;
-					n->windowClause = $9;
-					n->qualifyClause = $10;
-					n->sampleOptions = $11;
+					n->whereClause = $6;
+                    n->decideClause = makeDecideClause($5, $7, @5, @7, yyscanner);
+					n->groupClause = $8;
+					n->havingClause = $9;
+					n->windowClause = $10;
+					n->qualifyClause = $11;
+					n->sampleOptions = $12;
 					n->from_first = true;
 					$$ = (PGNode *)n;
 				}
 			|
 			FROM from_list SELECT distinct_clause target_list_opt_comma
-			into_clause where_clause decide_clause
+			into_clause decide_declaration where_clause decide_body
 			group_clause having_clause window_clause qualify_clause sample_clause
 				{
 					PGSelectStmt *n = makeNode(PGSelectStmt);
@@ -417,13 +485,13 @@ simple_select:
 					n->distinctClause = $4;
 					n->fromClause = $2;
 					n->intoClause = $6;
-					n->whereClause = $7;
-                    n->decideClause = $8;
-					n->groupClause = $9;
-					n->havingClause = $10;
-					n->windowClause = $11;
-					n->qualifyClause = $12;
-					n->sampleOptions = $13;
+					n->whereClause = $8;
+                    n->decideClause = makeDecideClause($7, $9, @7, @9, yyscanner);
+					n->groupClause = $10;
+					n->havingClause = $11;
+					n->windowClause = $12;
+					n->qualifyClause = $13;
+					n->sampleOptions = $14;
 					n->from_first = true;
 					$$ = (PGNode *)n;
 				}

@@ -23,7 +23,7 @@ def test_q08_marketing_campaign(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT c_custkey, c_acctbal, x
         FROM customer
         WHERE c_nationkey = 1
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * 10) <= 500
         MAXIMIZE SUM(x * c_acctbal)
     """
@@ -80,7 +80,7 @@ def test_order_selection(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT x, o_orderkey, o_totalprice
         FROM orders
         WHERE o_orderdate >= '1995-01-01' AND o_orderdate < '1995-02-01'
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 300
         MAXIMIZE SUM(x * o_totalprice)
     """
@@ -137,7 +137,7 @@ def test_sum_gte_with_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 10
             AND SUM(x * l_quantity) <= 500
         MAXIMIZE SUM(x * l_extendedprice)
@@ -209,7 +209,7 @@ def test_aggregate_lhs_with_constant_offset(
     sql = """
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT SUM(x) + 3 <= 10
             AND x <= 5
         MAXIMIZE SUM(x * ps_availqty)
@@ -278,7 +278,7 @@ def test_sum_body_data_only_offset_plain(decidb_cli):
         FROM (
             VALUES (1, 4.0, 10.0), (2, 5.0, 20.0), (3, 2.0, 15.0)
         ) t(id, cost, value)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x + cost) <= 12
         MAXIMIZE SUM(x * value)
     """)
@@ -296,7 +296,7 @@ def test_sum_body_data_only_offset_weighted_repro_shape(decidb_cli):
         FROM (
             VALUES (1, 1.0, 5.0), (2, 2.0, 3.0), (3, 3.0, 1.0)
         ) t(id, q, price)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(q * (price + x)) <= 18
         MAXIMIZE SUM(x * q)
     """)
@@ -315,7 +315,7 @@ def test_sum_body_data_only_offset_bilinear_constraint(decidb_cli):
         FROM (
             VALUES (1, 2.0, 10.0), (2, 3.0, 20.0), (3, 1.0, 15.0)
         ) t(id, cost, value)
-        DECIDE x IS BOOLEAN, y IS BOOLEAN
+        DECIDE x(BOOL), y(BOOL)
         SUCH THAT SUM(x * y + cost) <= 8
         MAXIMIZE SUM(x * y * value)
     """)
@@ -336,7 +336,7 @@ def test_sum_body_data_only_offset_outer_when(decidb_cli):
                    (2, 4.0, true, 20.0),
                    (3, 100.0, false, 30.0)
         ) t(id, cost, w, value)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x + cost) <= 9 WHEN w
         MAXIMIZE SUM(x * value)
     """)
@@ -358,7 +358,7 @@ def test_sum_body_data_only_offset_per_group(decidb_cli):
                    (3, 'B', 1.0, 5.0),
                    (4, 'B', 1.0, 6.0)
         ) t(id, grp, cost, value)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x + cost) <= 6 PER grp
         MAXIMIZE SUM(x * value)
     """)
@@ -376,7 +376,7 @@ def test_avg_body_data_only_offset(decidb_cli):
         FROM (
             VALUES (1, 2.0, 10.0), (2, 4.0, 20.0)
         ) t(id, cost, value)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x + cost) <= 3.5
         MAXIMIZE SUM(x * value)
     """)
@@ -402,7 +402,7 @@ def test_aggregate_sum_divided_by_constant(
     sql = """
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT SUM(x / 2) <= 5
             AND x <= 5
         MAXIMIZE SUM(x * ps_availqty)
@@ -460,7 +460,7 @@ def test_aggregate_sum_divided_by_data_column(
             SELECT 3, 0.5
         )
         SELECT id, w, ROUND(x, 4) AS x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x / w) <= 10
             AND x <= 10
         MAXIMIZE SUM(x)

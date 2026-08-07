@@ -17,6 +17,7 @@ Build output: `build/release/decidb` (CLI), `build/release/src/libduckdb.dylib` 
 make decide-test                       # Run DECIDE differential tests
 make decide-setup                      # Setup test environment only
 ```
+
 Tests are in `test/decide/`.
 
 ## Benchmark
@@ -49,14 +50,14 @@ Selective: `python3 benchmark/decide/run_benchmarks.py --sizes medium --queries 
 Full syntax specification (clause shapes, variable types, constraints, WHEN/PER, MIN/MAX linearization, QP, bilinear): `context/descriptions/00_project_overview/syntax_reference.md`
 Keyword-by-keyword feature status: `context/descriptions/03_expressivity/` (each keyword has `done.md`/`todo.md`)
 
-**Read the syntax reference before working on DECIDE semantics, formulations, or tests** — do not rely on recalled syntax.
+**Read the syntax reference before working on DECIDE semantics, formulations, or tests**
 
 ## Core Principles
 
 - **Follow DuckDB patterns first**: When adding a feature, find how DuckDB handles the analogous SQL case and mirror that approach. Don't invent new patterns when DuckDB already has one.
 - **Solver-agnostic**: Features must work with both Gurobi and HiGHS. Don't rely on solver-specific capabilities without a fallback path.
 - **Minimal DuckDB core modifications**: DeciDB extends DuckDB; prefer adding new code over modifying core DuckDB files. The less we touch upstream, the easier version upgrades are.
-- **User-facing output is for SQL users, not solver experts**: Every string a user reads — error messages, diagnostics, hints — must be concise and *actionable*. Name the offending object by its SQL identifier (variable / column / clause), state the smallest concrete edit that fixes it, and stop. No solver or LP/math jargon (ray, recession, instance, escape, dual, Big-M, "guilty clause"), no internal mechanics, no meta-commentary on how the diagnosis was derived. **Tell the user the fix, not the math.** Push deeper detail into a relation they can opt into (e.g. `decide_diagnostics()`) instead of inlining it into the error. This applies everywhere output reaches a user, diagnostics most of all.
+- **User-facing output is for SQL users, not solver experts**: Every string a user reads — error messages, diagnostics, hints — must be concise and *actionable*. Name the offending object by its SQL identifier (variable / column / clause), state the smallest concrete edit that fixes it, and stop. No solver or LP/math jargon (ray, recession, instance, escape, dual, Big-M, "guilty clause"), no internal mechanics, no meta-commentary on how the diagnosis was derived. **Tell the user the fix, not the math.** 
 
 ## Demand Elegance (Balanced)
 
@@ -90,10 +91,12 @@ While working on any task, if you spot a potential bug or code-quality issue alo
 ## Grammar Changes
 
 Editing `third_party/libpg_query/grammar/` `.y`/`.yh` files requires regeneration before building:
+
 ```bash
 make grammar-build                     # regenerate grammar + rebuild (one step)
 make grammar                           # regenerate grammar only (requires bison 2.3)
 ```
+
 The `.y` files are templates; the actual compiled parser is `third_party/libpg_query/src_backend_parser_gram.cpp` (generated).
 
 ## Lessons
@@ -102,13 +105,18 @@ See `.claude/lessons.md` for corrections and gotchas discovered during developme
 
 ## Development Priorities
 
-**Current focus: writing the DeciDB paper (CIDR'27 submission).** The draft lives at `context/DeciDB_Paper.pdf`. The user owns **§3 Architecture** and **§4 Diagnostics** and is actively revising them; other authors (Anh, Filip) own the rest. Treat this as writing support, not a coding task: check claims against the implementation and docs under `context/descriptions/`, match terminology/examples used elsewhere in the paper, match academic register, don't invent results or numbers, and don't silently resolve open reviewer comments embedded in the PDF (inline "Anh:"/"Hatim:"/"Filip:" notes) — surface them instead.
+**Current focus: bringing the code up to the submitted paper.** The CIDR'27 submission (`context/DeciDB_Paper.pdf`) is now **the spec**, and `src/` is behind it in roughly 18 places — grammar, constraint semantics, architecture, diagnostics.
 
-**The paper may lead the code.** Some constructs the paper describes are intended design that is not implemented yet — the code will be changed to match after the paper settles. A mismatch between the draft and `src/` is therefore not automatically an error in the draft, and syntax appearing in the paper is not "wrong" merely because the grammar rejects it today. Keep checking against the code, since knowing what still has to be built is the point; but when you find a divergence, state once which side is which (what the code does today vs. what the draft assumes), treat it as a code-side task rather than a drafting mistake, and do not rewrite the draft to match the code or block on the gap. Log intended-but-unimplemented constructs under `context/descriptions/03_expressivity/` (the relevant keyword's `todo.md`) so the follow-up code work isn't lost, then keep going.
+**`context/descriptions/todo.md` is the guide for this work.** It holds a full paper-vs-code sweep, grouped A–E, with each entry giving what the paper says (with §), what the code does today, how that was verified, and where the work is filed. **Read it before starting any paper-alignment task**, and follow the staged order in its triage table rather than picking entries ad hoc — the batching notes there exist because several entries share one `make grammar-build` cycle or one binder check.
 
-Ongoing (secondary, feeds the paper but is not gated on it):
-- **Query Diagnostics & Solver Behavior**: turn failed/useless DECIDE solves (infeasible/unbounded/slow) into actionable, least-change diagnoses, and empirically characterize Gurobi/HiGHS behavior on these cases. `context/descriptions/08_query_diagnostics/` — start with its `README.md`. Architecture is **substrate → spine → terminals**: `foundations/`, `router/`, `unbounded/` · `infeasible/` (flagship elastic) · `slow/`. Principles: diagnosis on by default (`PRAGMA diagnose_decide=auto`), solver-agnostic (own elastic model builder; Gurobi-only APIs like `feasRelax` are accelerators, never dependencies). Solver-behavior unknowns marked 🔬 in the todos should be probed empirically before implementing.
-- **Optimizer**: matrix efficiency, algebraic rewrites (Big-M reformulation, push-down/pull-out). `context/descriptions/04_optimizer/` (each strategy area has `done.md`/`todo.md`; start with its `README.md`).
+How that file relates to the per-area docs:
+
+- `context/descriptions/todo.md` is the **map** — one entry per divergence, triage status, batching. Implementation detail does not live here.
+- The per-area `todo.md` files are the **live tasks**. When the user dispatches a group, its entries are written into the relevant per-area `todo.md`, and from then on that file is authoritative; the map keeps only a pointer and the decisions that were settled.
+
+**The paper leads the code.** It is submitted, so it is frozen and authoritative: a mismatch between it and `src/` is a code-side task, never a drafting mistake, and syntax in the paper is not "wrong" because the grammar rejects it today. Do not rewrite the draft to match the code, and do not block on a gap. When you hit one, state once which side is which (what the code does today vs. what the paper specifies) and keep going.
+
+**Finding a divergence not already in the sweep.** Assume the sweep is incomplete. Add the new gap to the right group in `context/descriptions/todo.md` in the same shape as its neighbours (paper § + current behavior + how verified), and surface it to the user — do not file it straight into a per-area `todo.md`, and do not silently change either the code or the draft to close it. Dispatching is the user's call.
 
 ## Documentation
 
@@ -118,10 +126,10 @@ Key areas: `00_project_overview/` (syntax spec), `01_pipeline/` (architecture), 
 **`todo.md` and `done.md` are disjoint.** `todo.md` contains only pending work; `done.md` is the present-tense description of how a feature currently works. When a task ships, remove it from `todo.md` and merge its substance into `done.md` — do not leave completed items in `todo.md` or treat `done.md` as a completed-checklist archive.
 
 **MANDATORY: Keep docs in sync with code changes.** Whenever a code change affects the behavior, semantics, or implementation of a feature documented in `context/descriptions/`, you MUST update the relevant `done.md` (and `todo.md` if applicable) or `{description}.md` file in the same work session. This includes:
+
 - Semantic changes (how a feature works)
 - Implementation changes (data structures, code paths, function signatures)
 - Code Pointers sections (line numbers, file references, tag constants)
 - New feature interactions (e.g., WHEN+PER composition)
-- **Performance commits**: a perf-log entry in `context/descriptions/06_performance/` is added as a follow-up commit once the user has run the benchmark and shared numbers — see the dedicated section above. Do not block the code commit on writing the log.
 
 If unsure which doc to update, check `context/descriptions/README.md` for the directory layout. Ask the user for confirmation if which doc to update is not clear or if a new doc may be needed.

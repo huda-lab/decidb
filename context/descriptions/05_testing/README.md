@@ -17,7 +17,7 @@ Each subdirectory corresponds to a feature area and contains:
 
 | Directory | Feature | Key test files |
 |-----------|---------|----------------|
-| `variables/` | IS BOOLEAN / IS INTEGER / IS REAL, multi-variable | `test_var_*.py` |
+| `variables/` | BOOL / INT / REAL, multi-variable | `test_var_*.py` |
 | `entity_scope/` | Table-scoped decision variables (`DECIDE Table.var`) | `test_entity_scope.py` |
 | `constraints/` | Comparison operators (`=`, `<`, `<=`, `>`, `>=`, `<>`, BETWEEN, IN), per-row vs aggregate | `test_cons_*.py` |
 | `when/` | WHEN clause (expression-level and aggregate-local) | `test_when_*.py`, `test_aggregate_local_when.py` |

@@ -1,9 +1,9 @@
 # Variable Type Test Coverage — Done
 
-Covers `IS BOOLEAN`, `IS INTEGER`, `IS REAL`, and multi-variable queries. Tests live in:
-- `test/decide/tests/test_var_boolean.py` — IS BOOLEAN
-- `test/decide/tests/test_var_integer.py` — default/IS INTEGER
-- `test/decide/tests/test_var_real.py` — IS REAL
+Covers `BOOL`, `INT`, `REAL`, and multi-variable queries. Tests live in:
+- `test/decide/tests/test_var_boolean.py` — BOOL
+- `test/decide/tests/test_var_integer.py` — omitted-type rejection (the type is mandatory)
+- `test/decide/tests/test_var_real.py` — REAL
 - `test/decide/tests/test_var_multi.py` — multiple variables
 
 Note: table-scoped variables (`DECIDE Table.var`) have their own folder at
@@ -13,10 +13,10 @@ Note: table-scoped variables (`DECIDE Table.var`) have their own folder at
 
 All oracle-verified:
 
-- **IS BOOLEAN** (`test_var_boolean.py`, plus many files): classic 0/1 knapsack and a weight-limit variant; broad coverage across all constraint types and MAXIMIZE/MINIMIZE objectives via the rest of the suite.
-- **IS INTEGER** (`test_var_integer.py`, `test_cons_perrow.py`, `test_cons_mixed.py`, `test_cons_between.py`): default type (no annotation) and explicit `IS INTEGER`, per-row upper bound + aggregate, column-derived upper bound (`x <= ps_availqty`), BETWEEN with INTEGER.
-- **IS REAL** (`test_var_real.py`): basic LP (continuous MAXIMIZE), upper bound on REAL, mixed BOOLEAN + REAL, WHEN and PER on aggregate constraints, MINIMIZE (coefficient-sign path), forced non-integer optimum (readback sanity).
-- **Multiple variables** (`test_var_multi.py`, plus interactions elsewhere): two variables with separate constraints (BOOL + INTEGER), two boolean variables (cross-constraint), paired INTEGER + REAL (no BOOLEAN), three variables (BOOL + INTEGER + REAL), mixed BOOLEAN + REAL in the same SUM term and in the same query; mixed BOOLEAN + REAL with ABS (`test_abs_linearization.py`); BOOLEAN + INTEGER under PER grouping (`test_per_interactions.py`).
+- **BOOL** (`test_var_boolean.py`, plus many files): classic 0/1 knapsack and a weight-limit variant; broad coverage across all constraint types and MAXIMIZE/MINIMIZE objectives via the rest of the suite.
+- **INT** (`test_cons_perrow.py`, `test_cons_mixed.py`, `test_cons_between.py`): explicit `x(INT)`, per-row upper bound + aggregate, column-derived upper bound (`x <= ps_availqty`), BETWEEN with INT. `test_var_integer.py` covers the omitted-type parser error rather than a positive case.
+- **REAL** (`test_var_real.py`): basic LP (continuous MAXIMIZE), upper bound on REAL, mixed BOOL + REAL, WHEN and PER on aggregate constraints, MINIMIZE (coefficient-sign path), forced non-integer optimum (readback sanity).
+- **Multiple variables** (`test_var_multi.py`, plus interactions elsewhere): two variables with separate constraints (BOOL + INT), two boolean variables (cross-constraint), paired INT + REAL (no BOOL), three variables (BOOL + INT + REAL), mixed BOOL + REAL in the same SUM term and in the same query; mixed BOOL + REAL with ABS (`test_abs_linearization.py`); BOOL + INT under PER grouping (`test_per_interactions.py`).
 
 ### Error cases
 
@@ -28,15 +28,15 @@ parser-level (`test_error_parser.py`).
 
 | Feature A | Feature B | Tested |
 |-----------|-----------|--------|
-| BOOLEAN | all features (broadly) | ✓ |
-| INTEGER | all features (broadly) | ✓ |
+| BOOL | all features (broadly) | ✓ |
+| INT | all features (broadly) | ✓ |
 | REAL | MAXIMIZE objective | ✓ |
 | REAL | MINIMIZE objective | ✓ |
 | REAL | PER constraint | ✓ |
 | REAL | WHEN constraint (aggregate) | ✓ |
-| BOOLEAN + INTEGER | same query | ✓ |
-| BOOLEAN + INTEGER | PER grouping | ✓ |
-| BOOLEAN + REAL | same query | ✓ |
-| BOOLEAN + REAL | ABS linearization | ✓ |
-| BOOLEAN + REAL | bilinear (McCormick) | ✓ |
-| INTEGER + REAL | QP constraint | ✓ |
+| BOOL + INT | same query | ✓ |
+| BOOL + INT | PER grouping | ✓ |
+| BOOL + REAL | same query | ✓ |
+| BOOL + REAL | ABS linearization | ✓ |
+| BOOL + REAL | bilinear (McCormick) | ✓ |
+| INT + REAL | QP constraint | ✓ |

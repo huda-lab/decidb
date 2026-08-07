@@ -8,7 +8,7 @@ Products of two different DECIDE variables are supported in both objectives and 
 
 ### 1. Boolean x Anything (McCormick Linearization)
 
-When one factor is declared `IS BOOLEAN`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
+When one factor is declared `BOOL`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
 
 **Requires**: A finite upper bound on the non-Boolean variable. This may be given
 explicitly (`x <= K`) **or inferred** by implied-bound propagation from a
@@ -104,7 +104,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 3. **Optimizer** (`decide_optimizer.cpp`): `RewriteBilinear()` pass runs after `RewriteAbs`, before `RewriteMinMax`. Walks both objective and constraint expressions:
    - Detects `*` nodes where both children reference different decide variables
    - Skips identical expressions (existing QP path)
-   - For Bool x Bool: AND-linearization with 3 structural constraints, BOOLEAN auxiliary
+   - For Bool x Bool: AND-linearization with 3 structural constraints, BOOL auxiliary
    - For Bool x Non-Bool: records a `BilinearLink` only; all McCormick corners (including the upper corner that for `L>=0` is the plain `w <= x`) are emitted at execution time once `L`/`U` are resolved
    - For Non-Boolean x Non-Boolean: left in place for Q matrix path
    - Uses `is_boolean_var` vector (not `return_type`) to detect boolean status

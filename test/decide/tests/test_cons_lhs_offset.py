@@ -17,7 +17,7 @@ def _xy_sums(rows, cols):
 _Q = """
     SELECT l_orderkey, l_linenumber, x, y
     FROM lineitem WHERE l_orderkey <= 2
-    DECIDE x IS REAL, y IS REAL
+    DECIDE x(REAL), y(REAL)
     SUCH THAT {cons}
     MINIMIZE SUM(x + y)
 """
@@ -44,7 +44,7 @@ def test_data_column_led_lhs_with_rhs_var_enforced(decidb_cli):
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x, y
         FROM lineitem WHERE l_orderkey <= 2
-        DECIDE x IS REAL, y IS REAL
+        DECIDE x(REAL), y(REAL)
         SUCH THAT (l_quantity - x) <= y
         MINIMIZE SUM(x + y)
     """

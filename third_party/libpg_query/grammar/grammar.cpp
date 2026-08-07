@@ -507,6 +507,49 @@ doNegateFloat(PGValue *v)
 		v->val.str = psprintf("-%s", oldval);
 }
 
+/*
+ * DecidB: combine the two DECIDE slots into the single PGDecideClause the rest
+ * of the system consumes. The declaration may sit before FROM (the paper's
+ * order) or inline in the body block (the original order), but not both, and
+ * neither half stands alone.
+ */
+static PGNode *
+makeDecideClause(PGList *decl, PGNode *body, int decl_location,
+				 int body_location, core_yyscan_t yyscanner)
+{
+	PGDecideClause *clause;
+
+	if (decl == NULL && body == NULL)
+		return NULL;
+
+	if (body == NULL)
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint"),
+				 parser_errposition(decl_location)));
+
+	clause = (PGDecideClause *) body;
+
+	if (decl == NULL)
+	{
+		if (clause->variables == NULL)
+			ereport(ERROR,
+					(errcode(PG_ERRCODE_SYNTAX_ERROR),
+					 errmsg("SUCH THAT requires a DECIDE clause; declare the decision variables with DECIDE"),
+					 parser_errposition(body_location)));
+		return body;
+	}
+
+	if (clause->variables != NULL)
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("DECIDE appears twice; declare the variables either before FROM or with SUCH THAT, not both"),
+				 parser_errposition(decl_location)));
+
+	clause->variables = decl;
+	return body;
+}
+
 static PGNode *
 makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location)
 {

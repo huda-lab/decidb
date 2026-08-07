@@ -103,7 +103,7 @@ INSERT INTO Products VALUES
       <div class="code-block">
         <pre class="language-sql"><code>SELECT product_id, name, cost_per_unit, min_quantity, max_capacity, x as quantity_to_produce
 FROM Products
-DECIDE x IS INTEGER
+DECIDE x(INT)
 SUCH THAT
     x >= min_quantity AND
     x <= max_capacity AND
@@ -117,7 +117,7 @@ MINIMIZE SUM(x * cost_per_unit);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE x IS INTEGER</code> — x is a non-negative integer for each row, representing how many units to produce.</div>
+          <div><code>DECIDE x(INT)</code> — x is a non-negative integer for each row, representing how many units to produce.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>

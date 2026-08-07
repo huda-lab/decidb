@@ -18,7 +18,7 @@ _OPTIMAL_SQL = """
         SELECT 3, 30.0
     )
     SELECT id, val, x FROM data
-    DECIDE x IS BOOLEAN
+    DECIDE x(BOOL)
     SUCH THAT SUM(x) = 1
     MAXIMIZE SUM(x * val)
 """
@@ -26,7 +26,7 @@ _OPTIMAL_SQL = """
 
 _INFEASIBLE_SQL = """
     SELECT id, x FROM (VALUES (1), (2)) t(id)
-    DECIDE x IS BOOLEAN
+    DECIDE x(BOOL)
     SUCH THAT SUM(x) >= 3
     MAXIMIZE SUM(x)
 """
@@ -34,7 +34,7 @@ _INFEASIBLE_SQL = """
 
 _UNBOUNDED_LP_SQL = """
     SELECT id, x FROM (VALUES (1), (2)) t(id)
-    DECIDE x IS REAL
+    DECIDE x(REAL)
     SUCH THAT x >= 0
     MAXIMIZE SUM(x)
 """
@@ -42,7 +42,7 @@ _UNBOUNDED_LP_SQL = """
 
 _UNBOUNDED_MILP_SQL = """
     SELECT id, x FROM (VALUES (1), (2)) t(id)
-    DECIDE x IS INTEGER
+    DECIDE x(INT)
     SUCH THAT x >= 1
     MAXIMIZE SUM(x)
 """
@@ -54,7 +54,7 @@ _UNBOUNDED_MILP_SQL = """
 # "unbounded" error, not depend on the MAXIMIZE sense.
 _UNBOUNDED_MILP_MIN_SQL = """
     SELECT id, x FROM (VALUES (1), (2)) t(id)
-    DECIDE x IS INTEGER
+    DECIDE x(INT)
     SUCH THAT x >= 1
     MINIMIZE SUM(x * -1)
 """

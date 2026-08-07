@@ -12,7 +12,7 @@ Push constraint evaluation closer to the data access layer to eliminate rows tha
 
 **Approach**: Analyze constraint bounds to derive row-level implications. If a row's data makes it impossible for that row's decision variable to contribute to any feasible solution, prune it before building the ILP matrix.
 
-**Example**: If `x IS BOOLEAN` and the only constraint involving x is `SUM(x * weight) <= 40`, then any row where `weight > 40` can never have `x = 1` in a feasible solution (a single such row would violate the constraint). These rows can be pruned.
+**Example**: If `x(BOOL)` and the only constraint involving x is `SUM(x * weight) <= 40`, then any row where `weight > 40` can never have `x = 1` in a feasible solution (a single such row would violate the constraint). These rows can be pruned.
 
 **Requirements**:
 - Bound analysis over constraint coefficients

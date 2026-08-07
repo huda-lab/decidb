@@ -54,7 +54,7 @@ Aggregate-local WHEN is not represented as a standalone `row_group_ids` wrapper.
 -- Per-employee workload repair with role-specific cap
 SELECT *
 FROM Employees E JOIN WeeklyPlan P ON E.empID = P.empID
-DECIDE new_hours IS INTEGER
+DECIDE new_hours(INT)
 SUCH THAT
     SUM(new_hours) <= 40 PER P.empID AND
     SUM(new_hours) <= 30 WHEN E.title = 'Director' PER P.empID

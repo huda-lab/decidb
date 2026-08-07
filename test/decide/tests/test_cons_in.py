@@ -54,7 +54,7 @@ def test_in_domain_restriction(
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x
+        DECIDE x(INT)
         SUCH THAT x IN (0, 1, 3)
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
@@ -102,11 +102,11 @@ def test_in_domain_restriction(
 def test_in_binary_domain(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """x IN (0, 1) on an implicitly typed variable — equivalent to IS BOOLEAN."""
+    """x IN (0, 1) on an implicitly typed variable — equivalent to(BOOL)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x
+        DECIDE x(INT)
         SUCH THAT x IN (0, 1)
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
@@ -158,7 +158,7 @@ def test_in_single_value(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x
+        DECIDE x(INT)
         SUCH THAT x IN (3)
         MINIMIZE SUM(x * l_quantity)
     """
@@ -205,7 +205,7 @@ def test_in_minimize_picks_smallest(
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x
+        DECIDE x(INT)
         SUCH THAT x IN (3, 5, 7)
         MINIMIZE SUM(x * l_quantity)
     """
@@ -253,7 +253,7 @@ def test_in_maximize_picks_largest(
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x
+        DECIDE x(INT)
         SUCH THAT x IN (2, 5)
             AND SUM(x * l_quantity) <= 99999
         MAXIMIZE SUM(x * l_extendedprice)
@@ -306,7 +306,7 @@ def test_in_with_when(
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x
+        DECIDE x(INT)
         SUCH THAT x IN (0, 2, 4) WHEN l_quantity > 20
             AND SUM(x * l_quantity) <= 500
         MAXIMIZE SUM(x * l_extendedprice)
@@ -359,11 +359,11 @@ def test_in_with_when(
 def test_in_boolean_explicit(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """x IS BOOLEAN with x IN (0, 1) — trivially satisfied, no auxiliary vars needed."""
+    """x(BOOL) with x IN (0, 1) — trivially satisfied, no auxiliary vars needed."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x IN (0, 1)
             AND SUM(x) <= 10
         MAXIMIZE SUM(x * l_extendedprice)
@@ -419,7 +419,7 @@ def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 15
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x IN (0.5, 1.5, 2.75)
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)

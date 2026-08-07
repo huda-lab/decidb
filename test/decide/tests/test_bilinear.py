@@ -50,7 +50,7 @@ class TestBilinearBooleanObjectives:
             )
             SELECT id, b1, b2
             FROM data
-            DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN
+            DECIDE b1(BOOL), b2(BOOL)
             SUCH THAT SUM(b1) <= 3 AND SUM(b2) <= 3
             MAXIMIZE SUM(b1 * b2)
         """
@@ -98,7 +98,7 @@ class TestBilinearBooleanObjectives:
             )
             SELECT id, b1, b2
             FROM data
-            DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN
+            DECIDE b1(BOOL), b2(BOOL)
             SUCH THAT SUM(b1) <= 2 AND SUM(b2) <= 3
             MAXIMIZE SUM(b1 * b2)
         """
@@ -148,7 +148,7 @@ class TestBilinearBooleanObjectives:
             )
             SELECT id, b, ROUND(x, 2) AS x
             FROM data
-            DECIDE b IS BOOLEAN, x IS REAL
+            DECIDE b(BOOL), x(REAL)
             SUCH THAT x >= 0 AND x <= 100 AND SUM(b) <= 2
             MAXIMIZE SUM(b * x)
         """
@@ -193,14 +193,14 @@ class TestBilinearBooleanObjectives:
     def test_bool_times_integer_objective(
         self, decidb_cli, oracle_solver, perf_tracker,
     ):
-        """MAXIMIZE SUM(b * n) where b IS BOOLEAN, n IS INTEGER ∈ [0,5]."""
+        """MAXIMIZE SUM(b * n) where b(BOOL), n(INT) ∈ [0,5]."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
             )
             SELECT id, b, n
             FROM data
-            DECIDE b IS BOOLEAN, n IS INTEGER
+            DECIDE b(BOOL), n(INT)
             SUCH THAT n >= 0 AND n <= 5 AND SUM(b) <= 2
             MAXIMIZE SUM(b * n)
         """
@@ -255,7 +255,7 @@ class TestBilinearBooleanObjectives:
             )
             SELECT id, b, ROUND(x, 2) AS x
             FROM data
-            DECIDE b IS BOOLEAN, x IS REAL
+            DECIDE b(BOOL), x(REAL)
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(profit * b * x)
         """
@@ -325,7 +325,7 @@ class TestBilinearNonConvexObjectives:
             WITH data AS (SELECT 1 AS id)
             SELECT id, ROUND(x, 2) AS x, ROUND(y, 2) AS y
             FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 10 AND y >= 0 AND y <= 10
             MAXIMIZE SUM(x * y)
         """
@@ -368,7 +368,7 @@ class TestBilinearNonConvexObjectives:
             WITH data AS (SELECT 1 AS id)
             SELECT id, x, y
             FROM data
-            DECIDE x IS INTEGER, y IS INTEGER
+            DECIDE x(INT), y(INT)
             SUCH THAT x >= 0 AND x <= 5 AND y >= 0 AND y <= 5
             MAXIMIZE SUM(x * y)
         """
@@ -411,7 +411,7 @@ class TestBilinearNonConvexObjectives:
             WITH data AS (SELECT 1 AS id)
             SELECT id, n, ROUND(x, 2) AS x
             FROM data
-            DECIDE n IS INTEGER, x IS REAL
+            DECIDE n(INT), x(REAL)
             SUCH THAT n >= 0 AND n <= 5 AND x >= 0 AND x <= 10
             MAXIMIZE SUM(n * x)
         """
@@ -470,7 +470,7 @@ class TestBilinearMixedObjectives:
             )
             SELECT id, b, ROUND(x, 2) AS x
             FROM data
-            DECIDE b IS BOOLEAN, x IS REAL
+            DECIDE b(BOOL), x(REAL)
             SUCH THAT x >= 0 AND x <= 20
             MAXIMIZE SUM(cost + b * x)
         """
@@ -536,7 +536,7 @@ class TestBilinearFeatureInteractions:
             )
             SELECT id, category, b, ROUND(x, 2) AS x
             FROM data
-            DECIDE b IS BOOLEAN, x IS REAL
+            DECIDE b(BOOL), x(REAL)
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(b * x) WHEN category = 'A'
         """
@@ -608,7 +608,7 @@ class TestBilinearConstraints:
             WITH data AS ({data_sql})
             SELECT {select_cols}, x, y
             FROM data
-            DECIDE x IS INTEGER, y IS INTEGER
+            DECIDE x(INT), y(INT)
             SUCH THAT x <= 1 AND y <= 1 AND {constraint_expr}
         """
         return decidb_cli_gurobi.execute(sql)
@@ -681,7 +681,7 @@ class TestBilinearConstraints:
             WITH data AS (SELECT 1 AS id, 2 AS a, 5 AS b)
             SELECT id, a, b, x, y
             FROM data
-            DECIDE x IS INTEGER, y IS INTEGER
+            DECIDE x(INT), y(INT)
             SUCH THAT x >= 0 AND x <= 1
                   AND y >= 0 AND y <= 1
                   AND {constraint_expr}
@@ -722,7 +722,7 @@ class TestBilinearConstraints:
             )
             SELECT id, b1, b2
             FROM data
-            DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN
+            DECIDE b1(BOOL), b2(BOOL)
             SUCH THAT SUM(b1 * b2) <= 1
             MAXIMIZE SUM(b1 + b2)
         """
@@ -782,7 +782,7 @@ class TestBilinearErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, a, b, c FROM data
-            DECIDE a IS BOOLEAN, b IS BOOLEAN, c IS BOOLEAN
+            DECIDE a(BOOL), b(BOOL), c(BOOL)
             SUCH THAT a >= 0 AND b >= 0 AND c >= 0
             MAXIMIZE SUM(a * b * c)
         """, match=r"Triple|higher-order")
@@ -797,7 +797,7 @@ class TestBilinearErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, b1, b2, x, y FROM data
-            DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN, x IS REAL, y IS REAL
+            DECIDE b1(BOOL), b2(BOOL), x(REAL), y(REAL)
             SUCH THAT x <= 10 AND y <= 10
             MAXIMIZE SUM((b1 * x) * (b2 * y))
         """, match=r"Triple|higher-order")
@@ -807,7 +807,7 @@ class TestBilinearErrors:
         decidb_cli.assert_error("""
             WITH data AS (SELECT 1 AS id)
             SELECT id, b, x FROM data
-            DECIDE b IS BOOLEAN, x IS REAL
+            DECIDE b(BOOL), x(REAL)
             SUCH THAT b >= 0
             MAXIMIZE SUM(b * x)
         """, match=r"finite upper bound|upper bound")
@@ -818,7 +818,7 @@ class TestBilinearErrors:
             WITH data AS (SELECT 1 AS id)
             SELECT id, ROUND(x, 2) AS x, ROUND(y, 2) AS y
             FROM data
-            DECIDE x IS REAL, y IS REAL
+            DECIDE x(REAL), y(REAL)
             SUCH THAT x >= 0 AND x <= 10 AND y >= 0 AND y <= 10
             MAXIMIZE SUM(x * y)
         """
@@ -855,7 +855,7 @@ class TestBilinearBackwardCompat:
             )
             SELECT id, ROUND(x, 4) AS x
             FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM(POWER(x - target, 2))
         """
@@ -907,7 +907,7 @@ class TestBilinearBackwardCompat:
             )
             SELECT id, profit, x
             FROM data
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) <= 2
             MAXIMIZE SUM(profit * x)
         """
@@ -959,7 +959,7 @@ class TestBilinearBackwardCompat:
             )
             SELECT id, ROUND(x, 4) AS x
             FROM data
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
             MINIMIZE SUM((x - target) * (x - target))
         """
@@ -1033,7 +1033,7 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_returnflag,
                b, ROUND(x, 4) AS x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE b IS BOOLEAN, x IS REAL
+        DECIDE b(BOOL), x(REAL)
         SUCH THAT x <= 50 AND SUM(b * x) <= 100 PER l_returnflag
         MAXIMIZE SUM(l_extendedprice * b * x)
     """
@@ -1119,7 +1119,7 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_returnflag,
                l_shipmode, b, ROUND(x, 4) AS x
         FROM lineitem WHERE l_orderkey <= 10
-        DECIDE b IS BOOLEAN, x IS REAL
+        DECIDE b(BOOL), x(REAL)
         SUCH THAT x <= 50
             AND SUM(b * x) <= 80 WHEN (l_shipmode = 'AIR' OR l_shipmode = 'RAIL') PER l_returnflag
         MAXIMIZE SUM(l_extendedprice * b * x) WHEN (l_shipmode = 'AIR' OR l_shipmode = 'RAIL')
@@ -1212,7 +1212,7 @@ def test_bilinear_entity_scoped(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN, ROUND(x, 4) AS x
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
-        DECIDE n.keepN IS BOOLEAN, x IS REAL
+        DECIDE n.keepN(BOOL), x(REAL)
         SUCH THAT x <= 100 AND SUM(keepN * x) <= 1000
         MAXIMIZE SUM(keepN * x * c_acctbal)
     """
@@ -1307,7 +1307,7 @@ def test_bilinear_minimize_objective(decidb_cli, duckdb_conn, oracle_solver, per
         )
         SELECT id, cost, b, ROUND(x, 4) AS x
         FROM data
-        DECIDE b IS BOOLEAN, x IS REAL
+        DECIDE b(BOOL), x(REAL)
         SUCH THAT x >= 2 AND x <= 10 AND SUM(b) >= 2
         MINIMIZE SUM(cost * b * x)
     """
@@ -1373,7 +1373,7 @@ def _run_split_coefficient_bilinear_query(decidb_cli, objective_expr):
         )
         SELECT id, a, b, x, y
         FROM t
-        DECIDE x IS INTEGER, y IS INTEGER
+        DECIDE x(INT), y(INT)
         SUCH THAT x >= 0 AND x <= 1 AND y >= 0 AND y <= 1
               AND SUM(x) = 1 AND SUM(y) = 1
         MAXIMIZE SUM({objective_expr})
@@ -1500,7 +1500,7 @@ def _run_single_row_bilinear_objective(decidb_cli, objective_expr):
         WITH data AS (SELECT 1 AS id)
         SELECT id, x, y, z
         FROM data
-        DECIDE x IS INTEGER, y IS INTEGER, z IS INTEGER
+        DECIDE x(INT), y(INT), z(INT)
         SUCH THAT x >= 0 AND x <= 1
               AND y >= 0 AND y <= 1
               AND z >= 0 AND z <= 1
@@ -1580,7 +1580,7 @@ def test_bilinear_bool_bool_coeff_minimize(decidb_cli, oracle_solver):
         )
         SELECT id, cost, b1, b2
         FROM data
-        DECIDE b1 IS BOOLEAN, b2 IS BOOLEAN
+        DECIDE b1(BOOL), b2(BOOL)
         SUCH THAT SUM(b1) = 4 AND SUM(b2) = 2
         MINIMIZE SUM(cost * b1 * b2)
     """
@@ -1639,7 +1639,7 @@ def test_bilinear_bool_real_constraint(decidb_cli, duckdb_conn, oracle_solver, p
         )
         SELECT id, b, ROUND(x, 4) AS x
         FROM data
-        DECIDE b IS BOOLEAN, x IS REAL
+        DECIDE b(BOOL), x(REAL)
         SUCH THAT x <= 10 AND SUM(b * x) <= 15
         MAXIMIZE SUM(x)
     """

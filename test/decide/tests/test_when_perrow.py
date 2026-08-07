@@ -31,7 +31,7 @@ def test_when_perrow_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tra
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x <= 0 WHEN l_returnflag = 'N'
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
@@ -98,7 +98,7 @@ def test_when_perrow_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_t
                l_discount, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x = 1 WHEN l_discount >= 0.09
             AND SUM(x * l_quantity) <= 5000
         MAXIMIZE SUM(x * l_extendedprice)
@@ -163,7 +163,7 @@ def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, p
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x <= 0 WHEN l_quantity > 40
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
@@ -227,7 +227,7 @@ def test_when_perrow_no_matches(decidb_cli, duckdb_conn, oracle_solver, perf_tra
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x <= 0 WHEN l_returnflag = 'Z'
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
@@ -289,7 +289,7 @@ def test_when_perrow_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp
         WHERE ps_partkey < 20
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 3 WHEN ps_availqty > 0
             AND SUM(x) <= 50
         MAXIMIZE SUM(x * ps_availqty)
@@ -346,7 +346,7 @@ def test_when_perrow_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_perrow_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Per-row WHEN bound with IS REAL — continuous skip-constraint path.
+    """Per-row WHEN bound with(REAL) — continuous skip-constraint path.
 
     All existing per-row WHEN tests use BOOLEAN or INTEGER variables, both
     of which have implicit or defaulted upper bounds. REAL variables have
@@ -366,7 +366,7 @@ def test_when_perrow_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
                ROUND(x, 6) AS x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 10 WHEN l_returnflag = 'N'
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice)

@@ -296,8 +296,8 @@ an in-process binding.
 
 | Marker | Description |
 |--------|-------------|
-| `var_boolean` | IS BOOLEAN decision variables |
-| `var_integer` | IS INTEGER / default type |
+| `var_boolean` | BOOL decision variables |
+| `var_integer` | omitted-type rejection |
 | `cons_aggregate` | SUM-based aggregate constraints |
 | `cons_perrow` | Per-row bounds (`x <= 5`, `x <= col`) |
 | `cons_mixed` | Aggregate + per-row combined |
@@ -366,7 +366,7 @@ def test_my_new_query(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     sql = """
         SELECT col1, col2, x
         FROM my_table WHERE some_filter
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * col1) <= 100
         MAXIMIZE SUM(x * col2)
     """

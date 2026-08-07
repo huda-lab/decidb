@@ -560,7 +560,7 @@ INSERT INTO Items VALUES
                   <pre class="language-sql"><code id="code-query">SELECT id, value, weight, x
 FROM Items
 WHERE category = 'electronics'
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * weight) <= 50
 MAXIMIZE SUM(x * value);</code></pre>
@@ -581,7 +581,7 @@ MAXIMIZE SUM(x * value);</code></pre>
                   <li class="flex gap-4">
                     <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">2</span>
                     <div>
-                      <code class="text-fg">DECIDE x IS BOOLEAN</code>
+                      <code class="text-fg">DECIDE x(BOOL)</code>
                       <span class="text-fg-muted"> &mdash; Creates a binary (0/1) variable <code>x</code> for each remaining row.</span>
                     </div>
                   </li>

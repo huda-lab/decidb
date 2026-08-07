@@ -76,7 +76,7 @@ _ROW_PARTIAL = (
     "SELECT id, buy FROM ("
     "SELECT i AS id, CASE WHEN i % 5 = 0 THEN 'export' ELSE 'domestic' END AS channel, "
     "i * 1.0 AS margin FROM range(1, 101) t(i)) "
-    "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN channel = 'domestic' "
+    "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN channel = 'domestic' "
     "MAXIMIZE SUM(buy * margin)"
 )
 
@@ -97,7 +97,7 @@ class TestEscapingInstances:
         sql = (
             "SELECT id, buy FROM ("
             "SELECT i AS id, i * 1.0 AS margin FROM range(1, 101) t(i)) "
-            "DECIDE buy IS REAL SUCH THAT buy >= 0 MAXIMIZE SUM(buy * margin)"
+            "DECIDE buy(REAL) SUCH THAT buy >= 0 MAXIMIZE SUM(buy * margin)"
         )
         rows = _rows(_diagnose(cli, sql))
         assert _attr(rows, "buy", "affected_rows") == "all 100 rows"
@@ -111,7 +111,7 @@ class TestEscapingInstances:
         sql = (
             "SELECT id, buy FROM ("
             "SELECT i AS id, (i % 2) AS parity, i * 1.0 AS w FROM range(1, 101) t(i)) "
-            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN id <= 50 MAXIMIZE SUM(buy * w)"
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id <= 50 MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
         assert _attr(rows, "buy", "affected_rows") == "50 of 100 rows"
@@ -128,7 +128,7 @@ class TestEscapingInstances:
             "SELECT e.eid, hire FROM ("
             "SELECT i AS eid, CASE WHEN i <= 10 THEN 'A' ELSE 'B' END AS dept "
             "FROM range(1, 31) t(i)) e "
-            "DECIDE e.hire IS REAL SUCH THAT hire <= 50 WHEN dept = 'B' "
+            "DECIDE e.hire(REAL) SUCH THAT hire <= 50 WHEN dept = 'B' "
             "MAXIMIZE SUM(hire * eid)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -144,7 +144,7 @@ class TestEscapingInstances:
             "SELECT i AS eid, CASE WHEN i <= 10 THEN 1 ELSE 2 END AS rid "
             "FROM range(1, 31) t(i)) e "
             "JOIN (VALUES (1, 'A'), (2, 'B')) d(rid, region) ON e.rid = d.rid "
-            "DECIDE e.hire IS REAL SUCH THAT hire <= 50 WHEN region = 'B' "
+            "DECIDE e.hire(REAL) SUCH THAT hire <= 50 WHEN region = 'B' "
             "MAXIMIZE SUM(hire)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -169,7 +169,7 @@ class TestEscapingInstances:
             "SELECT id, zone, buy FROM ("
             "SELECT i AS id, CASE WHEN i <= 25 THEN 'A' ELSE 'B' END AS zone, "
             "i * 1.0 AS w FROM range(1, 101) t(i)) "
-            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN id > 25 "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id > 25 "
             "MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -196,7 +196,7 @@ class TestEscapingInstances:
             "SELECT * FROM ("
             "SELECT i AS id, CASE WHEN i <= 25 THEN 'A' ELSE 'B' END, "
             "i * 1.0 AS w FROM range(1, 101) t(i)) "
-            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN id > 25 "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id > 25 "
             "MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -215,7 +215,7 @@ class TestEscapingInstances:
             "SELECT id, buy FROM ("
             "SELECT i AS id, CASE WHEN i <= 150 THEN 'P' ELSE 'Q' END AS category, "
             "i * 1.0 AS w FROM range(1, 301) t(i)) "
-            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN (category = 'Q' OR id <= 60) "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN (category = 'Q' OR id <= 60) "
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
@@ -238,7 +238,7 @@ class TestEscapingInstances:
             "CASE WHEN i <= 4 THEN 'target' "
             "ELSE 'B' || CAST(((i - 5) % 24) AS VARCHAR) END AS bucket, "
             "i * 1.0 AS w FROM range(1, 101) t(i)) "
-            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN (id > 4 OR bucket = 'never') "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN (id > 4 OR bucket = 'never') "
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
@@ -267,7 +267,7 @@ class TestEscapingInstances:
             "CASE WHEN i <= 8 THEN 'target' "
             "ELSE 'S' || CAST(((i - 9) % 14) AS VARCHAR) END AS segment, "
             "i * 1.0 AS w FROM range(1, 121) t(i)) "
-            "DECIDE buy IS REAL SUCH THAT buy <= 100 WHEN (id > 8 OR segment = 'never') "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN (id > 8 OR segment = 'never') "
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))

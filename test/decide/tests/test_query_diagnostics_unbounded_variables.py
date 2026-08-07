@@ -58,7 +58,7 @@ class TestUnboundedVariableDiagnostics:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
 
@@ -83,7 +83,7 @@ class TestUnboundedVariableDiagnostics:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, n FROM (VALUES (1), (2)) t(id) "
-            "DECIDE n IS INTEGER SUCH THAT n >= 0 MAXIMIZE SUM(n)"
+            "DECIDE n(INT) SUCH THAT n >= 0 MAXIMIZE SUM(n)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -96,7 +96,7 @@ class TestUnboundedVariableDiagnostics:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x, y FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS REAL, y IS REAL SUCH THAT x >= 0 AND y >= 0 "
+            "DECIDE x(REAL), y(REAL) SUCH THAT x >= 0 AND y >= 0 "
             "MAXIMIZE SUM(x + y)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -119,7 +119,7 @@ class TestUnboundedVariableDiagnostics:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x >= 0 MINIMIZE SUM(x * -1)"
+            "DECIDE x(REAL) SUCH THAT x >= 0 MINIMIZE SUM(x * -1)"
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
@@ -132,7 +132,7 @@ class TestUnboundedVariableDiagnostics:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
         rows = _rows(_diagnose(cli, sql, mode="auto"))
         assert _attrs(rows, "x")["grows_toward"] == "+inf"
@@ -143,7 +143,7 @@ class TestUnboundedVariableDiagnostics:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x >= 0 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(x)"
         )
         script = (
             ".mode csv\n"

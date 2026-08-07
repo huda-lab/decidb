@@ -10,7 +10,7 @@ Tests live in:
 All oracle-verified:
 
 - **Uncorrelated** (`test_cons_subquery.py`): scalar subquery as constraint RHS, aggregate subquery (AVG, SUM, etc.), scalar subquery as PER constraint RHS (shared across all groups).
-- **Correlated** (`test_cons_correlated_subquery.py`): per-row bound, AVG subquery as per-row bound on IS REAL, boolean gate, objective coefficients, WHEN composition, NULL-producing correlated with COALESCE.
+- **Correlated** (`test_cons_correlated_subquery.py`): per-row bound, AVG subquery as per-row bound on REAL, boolean gate, objective coefficients, WHEN composition, NULL-producing correlated with COALESCE.
 
 ### Error cases
 
@@ -28,8 +28,8 @@ subquery returning multiple rows.
 | Correlated subquery | aggregate constraint | ✓ |
 | Correlated subquery | objective | ✓ |
 | Correlated subquery | WHEN | ✓ |
-| Correlated subquery | BOOLEAN | ✓ |
-| Correlated subquery | INTEGER | ✓ |
+| Correlated subquery | BOOL | ✓ |
+| Correlated subquery | INT | ✓ |
 | Correlated subquery | REAL | ✓ |
 | Subquery | DECIDE variable (rejected) | ✓ (error test) |
 

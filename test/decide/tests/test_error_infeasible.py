@@ -23,7 +23,7 @@ class TestInfeasibleModels:
         """Per-row bounds ``x >= 10 AND x <= 5`` contradict each other."""
         decidb_cli.assert_error("""
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey < 10
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT x >= 10 AND x <= 5
             MAXIMIZE SUM(x * l_quantity)
         """, match=r"(?i)infeasible")
@@ -47,7 +47,7 @@ class TestInfeasibleModels:
         """``SUM(x) >= 999999`` with BOOLEAN x caps at ``N <= 999999`` rows."""
         decidb_cli.assert_error("""
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey = 1
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) >= 999999
             MAXIMIZE SUM(x * l_quantity)
         """, match=r"(?i)infeasible")
@@ -74,7 +74,7 @@ class TestInfeasibleModels:
         """Non-negative ``x`` cannot have a negative weighted SUM."""
         decidb_cli.assert_error("""
             SELECT l_quantity, x FROM lineitem WHERE l_orderkey < 5
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT SUM(x) >= 1 AND SUM(x * l_quantity) <= -1
             MAXIMIZE SUM(x)
         """, match=r"(?i)infeasible")
@@ -105,7 +105,7 @@ class TestInfeasibleModels:
         decidb_cli.assert_error("""
             SELECT l_orderkey, l_quantity, l_returnflag, x
             FROM lineitem WHERE l_orderkey < 10
-            DECIDE x IS BOOLEAN
+            DECIDE x(BOOL)
             SUCH THAT x <= 0 WHEN l_quantity > 0
                 AND SUM(x) >= 1
             MAXIMIZE SUM(x * l_quantity)
@@ -141,7 +141,7 @@ class TestInfeasibleModels:
         domain, BEFORE the elastic engine, rather than reaching diagnosis."""
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x <= -1 MAXIMIZE SUM(x)",
+            "DECIDE x(REAL) SUCH THAT x <= -1 MAXIMIZE SUM(x)",
             match=r"(?i)x <= -1 cannot hold.*non-negative",
         )
         oracle_solver.create_model("infeas_real_upper_below_zero")
@@ -157,7 +157,7 @@ class TestInfeasibleModels:
         domain. The 0/1 box is intrinsic and never loosened."""
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS BOOLEAN SUCH THAT x >= 2 MAXIMIZE SUM(x)",
+            "DECIDE x(BOOL) SUCH THAT x >= 2 MAXIMIZE SUM(x)",
             match=r"(?i)x >= 2 cannot hold.*BOOLEAN",
         )
         oracle_solver.create_model("infeas_boolean_lower_above_one")
@@ -172,7 +172,7 @@ class TestInfeasibleModels:
         the maximum is -1."""
         rows, _ = decidb_cli.execute(
             "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x IS REAL SUCH THAT x <= -1 AND x >= -5 MAXIMIZE SUM(x)"
+            "DECIDE x(REAL) SUCH THAT x <= -1 AND x >= -5 MAXIMIZE SUM(x)"
         )
         assert rows and rows[0][0] == pytest.approx(-1.0)
 
@@ -191,7 +191,7 @@ class TestUnboundedModels:
         """Integer x >= 1 with no upper bound — unbounded when maximising SUM(x)."""
         decidb_cli.assert_error("""
             SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT x >= 1
             MAXIMIZE SUM(x)
         """, match=r"(?i)unbounded")
@@ -214,7 +214,7 @@ class TestUnboundedModels:
         """REAL x >= 0 with no upper bound — unbounded when maximising SUM(x)."""
         decidb_cli.assert_error("""
             SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
-            DECIDE x IS REAL
+            DECIDE x(REAL)
             SUCH THAT x >= 0
             MAXIMIZE SUM(x)
         """, match=r"(?i)unbounded")
@@ -246,7 +246,7 @@ class TestUnboundedModels:
             SELECT id, val, x, y FROM (
                 VALUES (1, 10.0), (2, 20.0), (3, 30.0)
             ) t(id, val)
-            DECIDE x IS BOOLEAN, y IS INTEGER
+            DECIDE x(BOOL), y(INT)
             SUCH THAT SUM(x) <= 5
             MAXIMIZE SUM(x * val + y)
         """, match=r"(?i)unbounded")
@@ -276,7 +276,7 @@ class TestUnboundedModels:
         """
         decidb_cli_highs.assert_error("""
             SELECT l_orderkey, l_linenumber, x FROM lineitem WHERE l_orderkey <= 5
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT x >= 1
             MAXIMIZE SUM(x)
         """, match=r"(?i)unbounded")

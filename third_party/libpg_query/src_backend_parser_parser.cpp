@@ -209,7 +209,15 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 	 * corrupted ordinary function-call parsing). The flag is cleared by the
 	 * decide_clause grammar action. No lookahead is needed for this decision.
 	 */
-	if (cur_token == DECIDE) {
+	if (cur_token == DECIDE || cur_token == SUCH) {
+		/*
+		 * SUCH re-arms the flag for the split clause order
+		 * (SELECT ... DECIDE ... FROM ... SUCH THAT ...), where the
+		 * declaration slot cleared it so that FROM / JOIN ... ON / WHERE lex
+		 * as ordinary SQL. In the single-block order the flag is already set
+		 * and this is a no-op. SUCH is a reserved keyword, so it cannot reach
+		 * here as an identifier.
+		 */
 		yyextra->in_decide_clause = true;
 		yyextra->decide_case_depth = 0;
 	} else if (yyextra->in_decide_clause) {

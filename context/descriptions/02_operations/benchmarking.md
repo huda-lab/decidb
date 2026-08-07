@@ -118,7 +118,7 @@ A full run (3 iterations × 2 sizes) takes roughly 17 minutes at these settings.
 | Query | File | Features Exercised |
 |-------|------|--------------------|
 | Q1 | `q1_ilp_selection.sql` | Boolean ILP selection; MAXIMIZE SUM + WHEN-on-objective; AVG constraint; WHEN + aggregate-local WHEN; multi-column PER |
-| Q2 | `q2_integer_domains.sql` | INTEGER + default-type vars; BETWEEN, IN(var), `<>` per-row + aggregate, division, unary-minus, strict `>`; uncorrelated + correlated subqueries; data-only aggregate RHS; `%` fold |
+| Q2 | `q2_integer_domains.sql` | `INT` vars; BETWEEN, IN(var), `<>` per-row + aggregate, division, unary-minus, strict `>`; uncorrelated + correlated subqueries; data-only aggregate RHS; `%` fold |
 | Q3 | `q3_abs_norms.sql` | REAL signed domain; MINIMIZE; ABS lower-envelope; norm L1 / L∞ / L0 (row-limited — L0 is one binary per row) |
 | Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) + nested-PER objective; composed MIN/MAX-in-LHS; easy MAX constraint (full scale) |
 | Q5 | `q5_qp_qcqp.sql` | Convex QP + QCQP; quadratic + mixed linear/quadratic objective; norm L2; aggregate quadratic constraint (row-limited, Gurobi) |
@@ -170,10 +170,9 @@ Cells mark which query exercises each feature. Queries pack multiple features, s
 
 | Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
-| IS BOOLEAN | x | | | x | | x | x | x | x | | |
-| IS INTEGER (explicit) | | x | | | | | | | | | |
-| IS REAL | | | x | | x | x | x | | | x | x |
-| Default type (bare `DECIDE x`) | | x | | | | | | | | | |
+| BOOL | x | | | x | | x | x | x | x | | |
+| INT (explicit) | | x | | | | | | | | | |
+| REAL | | | x | | x | x | x | | | x | x |
 | Multiple variables | | x | | | | x | x | | | | |
 | Entity/table-scoped | | | | | | | | x | | | |
 | Signed / negative domain | | | x | | | | | | | | |
@@ -271,7 +270,7 @@ After each run, `view_results.py` displays colored stage-proportion bars:
 Q1: ilp_selection
   SELECT l_orderkey, l_linenumber, ..., keep
   FROM lineitem
-  DECIDE keep IS BOOLEAN
+  DECIDE keep(BOOL)
   SUCH THAT SUM(keep * l_quantity) <= 3829286 ...
   MAXIMIZE SUM(keep * l_extendedprice) WHEN l_linestatus = 'F';
 

@@ -136,7 +136,7 @@ Solution is extracted from `highs.getSolution().col_value`, validated for comple
 
 If `model.has_quadratic_obj` is true, the Q matrix is passed via `highs.passHessian()`. HiGHS expects CSC (Compressed Sparse Column) format for the lower triangle.
 
-**MIQP Limitation**: HiGHS does not support mixed-integer quadratic programs. If any variable is integer/boolean and the objective is quadratic, an `InvalidInputException` is thrown directing the user to install Gurobi or use `IS REAL` variables.
+**MIQP Limitation**: HiGHS does not support mixed-integer quadratic programs. If any variable is integer/boolean and the objective is quadratic, an `InvalidInputException` is thrown directing the user to install Gurobi or use `REAL` variables.
 
 The COO→CSC conversion:
 1. Count entries per column
@@ -148,7 +148,7 @@ The COO→CSC conversion:
 Both backends produce identical user-facing error messages for each failure mode, ensuring a consistent experience regardless of which solver is active. Messages include:
 
 - **Infeasible**: Lists common causes (contradictory bounds, impossible SUM constraints, overly restrictive variable types) and suggests relaxing constraints.
-- **Unbounded**: Explains the objective can grow infinitely and suggests adding upper bounds, budget limits, or using BOOLEAN.
+- **Unbounded**: Explains the objective can grow infinitely and suggests adding upper bounds, budget limits, or using BOOL.
 - **Time/Iteration Limit**: Suggests simplifying constraints or reducing data size.
 
 ## Adding a New Solver Backend

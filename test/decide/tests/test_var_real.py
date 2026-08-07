@@ -1,7 +1,7 @@
-"""Tests for IS REAL (continuous) decision variables.
+"""Tests for(REAL) (continuous) decision variables.
 
 Covers:
-  - test_real_basic: simple LP with DECIDE x IS REAL
+  - test_real_basic: simple LP with DECIDE x(REAL)
   - test_real_with_bounds: REAL variable with explicit upper bound
   - test_real_mixed: mixed BOOLEAN + REAL variables
   - test_real_with_when: REAL variable + WHEN conditional
@@ -27,7 +27,7 @@ def test_real_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x * l_quantity) <= 500
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -84,7 +84,7 @@ def test_real_with_bounds(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 5
             AND SUM(x * l_extendedprice) <= 50000
         MAXIMIZE SUM(x * l_extendedprice)
@@ -142,7 +142,7 @@ def test_real_mixed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, s, w
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE s IS BOOLEAN, w IS REAL
+        DECIDE s(BOOL), w(REAL)
         SUCH THAT SUM(s * l_quantity) <= 50
             AND w <= 10
         MAXIMIZE SUM(s * l_extendedprice + w * l_quantity)
@@ -207,7 +207,7 @@ def test_real_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, l_returnflag, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
             AND x <= 10
         MAXIMIZE SUM(x * l_extendedprice)
@@ -270,7 +270,7 @@ def test_real_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, ROUND(x, 4) AS x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 100 AND SUM(x) >= 10
         MINIMIZE SUM(x * l_extendedprice)
     """
@@ -338,7 +338,7 @@ def test_real_fractional_readback(
             SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
         )
         SELECT id, ROUND(x, 6) AS x FROM data
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 5 AND SUM(x) = 10.5
         MAXIMIZE SUM(x)
     """
@@ -398,7 +398,7 @@ def test_real_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x * l_quantity) <= 50 PER l_orderkey
         MAXIMIZE SUM(x * l_extendedprice)
     """

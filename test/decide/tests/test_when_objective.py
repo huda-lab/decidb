@@ -30,7 +30,7 @@ def test_when_objective_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
@@ -96,7 +96,7 @@ def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 50
         MINIMIZE SUM(x * l_quantity) WHEN l_returnflag = 'A'
     """
@@ -162,7 +162,7 @@ def test_when_objective_no_match(decidb_cli):
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 10
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'Z'
     """
@@ -180,7 +180,7 @@ def test_when_objective_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_t
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_quantity > 0
     """
@@ -243,7 +243,7 @@ def test_when_constraint_and_objective_same_condition(
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
@@ -311,7 +311,7 @@ def test_when_constraint_and_objective_different_conditions(
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'A'
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
     """
@@ -380,7 +380,7 @@ def test_when_objective_with_unconditional_constraint(
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
             AND x <= 1
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'

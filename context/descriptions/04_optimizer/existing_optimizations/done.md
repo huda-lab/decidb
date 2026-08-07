@@ -8,7 +8,7 @@ Everything currently implemented that reduces ILP size, improves solve time, or 
 
 Standard DuckDB predicate pushdown. Rows eliminated by WHERE never enter the constraint/objective matrix. This is not a COP-specific optimization — it is inherited from DuckDB's query pipeline — but it is the single most impactful optimization for most queries, since each surviving row becomes a decision variable.
 
-**Example**: `SELECT ... FROM items WHERE price < 100 DECIDE x IS BOOLEAN ...` — only rows with `price < 100` become decision variables.
+**Example**: `SELECT ... FROM items WHERE price < 100 DECIDE x(BOOL) ...` — only rows with `price < 100` become decision variables.
 
 **Code**: No DECIDE-specific code; DuckDB's standard filter pushdown handles this before rows reach `PhysicalDecide`.
 

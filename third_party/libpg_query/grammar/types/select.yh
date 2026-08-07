@@ -1,4 +1,8 @@
 %type <node> decide_clause
+%type <node> decide_tail
+%type <node> opt_decide_tail
+%type <list> decide_declaration
+%type <node> decide_body
 %type <node> typed_decide_variable
 %type <list> typed_decide_variable_list
 %type <node> decide_constraint_list

@@ -25,7 +25,7 @@ def test_per_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """PER keyword should partition constraints by group."""
     sql = """
         SELECT s_suppkey, s_acctbal, s_nationkey, x FROM supplier
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -78,7 +78,7 @@ def test_per_with_integer_variable(
     sql = """
         SELECT ps_partkey, ps_suppkey, ps_availqty, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 50
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT SUM(x * ps_supplycost) <= 1000 PER ps_partkey
         MAXIMIZE SUM(x * ps_availqty)
     """
@@ -134,7 +134,7 @@ def test_per_combined_with_when(
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 PER l_returnflag
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
@@ -204,7 +204,7 @@ def test_per_not_equal(
     sql = """
         SELECT l_orderkey, l_linenumber, l_returnflag, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 3 PER l_returnflag
             AND SUM(x) <= 15
         MAXIMIZE SUM(x * l_extendedprice)
@@ -273,7 +273,7 @@ def test_per_null_group_key(
         WITH data AS ({data_sql})
         SELECT id, grp, val, x
         FROM data
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1 PER grp
         MAXIMIZE SUM(x * val)
     """
@@ -324,7 +324,7 @@ def test_per_different_grouping_columns(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5 PER l_returnflag
             AND SUM(x) <= 8 PER l_linestatus
         MAXIMIZE SUM(x * l_extendedprice)
@@ -396,7 +396,7 @@ def test_real_between_per_oracle(
     sql = """
         SELECT l_orderkey, l_linestatus, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 25
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x BETWEEN 0.1 AND 2.9
             AND SUM(x) <= 10 PER l_linestatus
         MAXIMIZE SUM(x * l_extendedprice)

@@ -84,7 +84,7 @@
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        A hospital is restructuring its nursing staff and needs to decide which nurses to retain. Each nurse is scheduled for multiple shifts, and joining <code>nurses</code> with <code>shifts</code> produces one result row per nurse&ndash;shift combination. The decision, however, is per nurse &mdash; you either keep a nurse for all their shifts or release them entirely. Without table-scoped variables, DeciDB would create one independent binary variable per result row, allowing inconsistent decisions like "retain Alice for Monday but not Tuesday." The <code>n.</code> prefix in <code>DECIDE n.keepN IS BOOLEAN</code> tells DeciDB to create exactly one variable per unique nurse, shared across all rows that originate from that nurse.
+        A hospital is restructuring its nursing staff and needs to decide which nurses to retain. Each nurse is scheduled for multiple shifts, and joining <code>nurses</code> with <code>shifts</code> produces one result row per nurse&ndash;shift combination. The decision, however, is per nurse &mdash; you either keep a nurse for all their shifts or release them entirely. Without table-scoped variables, DeciDB would create one independent binary variable per result row, allowing inconsistent decisions like "retain Alice for Monday but not Tuesday." The <code>n.</code> prefix in <code>DECIDE n.keepN(BOOL)</code> tells DeciDB to create exactly one variable per unique nurse, shared across all rows that originate from that nurse.
       </p>
     </section>
 
@@ -125,7 +125,7 @@ INSERT INTO shifts VALUES
         <pre class="language-sql"><code>SELECT n.name, s.shift_date, s.hours, keepN AS retained
 FROM nurses n
 JOIN shifts s ON n.id = s.nurse_id
-DECIDE n.keepN IS BOOLEAN
+DECIDE n.keepN(BOOL)
 SUCH THAT
     SUM(keepN * s.hours * n.hourly_rate) <= 1200
 MAXIMIZE SUM(keepN * s.hours);</code></pre>
@@ -138,7 +138,7 @@ MAXIMIZE SUM(keepN * s.hours);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE n.keepN IS BOOLEAN</code> &mdash; The <code>n.</code> prefix makes this a <em>table-scoped</em> variable. DeciDB creates one binary variable per unique nurse in the <code>nurses</code> table (4 variables total), not one per result row (8 rows). All join rows originating from the same nurse share the same <code>keepN</code> value.</div>
+          <div><code>DECIDE n.keepN(BOOL)</code> &mdash; The <code>n.</code> prefix makes this a <em>table-scoped</em> variable. DeciDB creates one binary variable per unique nurse in the <code>nurses</code> table (4 variables total), not one per result row (8 rows). All join rows originating from the same nurse share the same <code>keepN</code> value.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>

@@ -114,7 +114,7 @@ INSERT INTO employees VALUES
       <div class="code-block">
         <pre class="language-sql"><code>SELECT name, department, performance_score, promoted
 FROM employees
-DECIDE promoted IS BOOLEAN
+DECIDE promoted(BOOL)
 SUCH THAT
     SUM(promoted) <= 2 PER department AND
     SUM(promoted) <= 4
@@ -128,7 +128,7 @@ MAXIMIZE SUM(promoted * performance_score);</code></pre>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>DECIDE promoted IS BOOLEAN</code> &mdash; One binary variable per employee. promoted=1 means selected for promotion.</div>
+          <div><code>DECIDE promoted(BOOL)</code> &mdash; One binary variable per employee. promoted=1 means selected for promotion.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>

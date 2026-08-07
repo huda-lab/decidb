@@ -1,7 +1,7 @@
 """Tests for ABS() linearization over decision variables.
 
 Covers:
-  - test_abs_objective_basic: MINIMIZE SUM(ABS(x - col)) with IS REAL
+  - test_abs_objective_basic: MINIMIZE SUM(ABS(x - col)) with(REAL)
   - test_abs_objective_with_when: ABS in objective with WHEN condition
   - test_abs_objective_with_per: ABS in objective with PER grouping
   - test_abs_constraint_per_row: ABS(x - col) <= tolerance (per-row)
@@ -41,7 +41,7 @@ def test_abs_objective_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE new_qty IS REAL
+        DECIDE new_qty(REAL)
         SUCH THAT SUM(new_qty) = 100
         MINIMIZE SUM(ABS(new_qty - l_quantity))
     """
@@ -109,7 +109,7 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, new_qty
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE new_qty IS REAL
+        DECIDE new_qty(REAL)
         SUCH THAT SUM(new_qty) = 100
         MINIMIZE SUM(ABS(new_qty - l_quantity)) WHEN l_returnflag = 'R'
     """
@@ -185,7 +185,7 @@ def test_abs_objective_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE new_qty IS REAL
+        DECIDE new_qty(REAL)
         SUCH THAT SUM(new_qty) = 20 PER l_orderkey
         MINIMIZE SUM(ABS(new_qty - l_quantity))
     """
@@ -259,7 +259,7 @@ def test_abs_constraint_per_row(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, new_qty
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE new_qty IS REAL
+        DECIDE new_qty(REAL)
         SUCH THAT ABS(new_qty - l_quantity) <= 5
         MAXIMIZE SUM(new_qty * l_extendedprice)
     """
@@ -338,7 +338,7 @@ def test_abs_constraint_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_t
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, new_qty
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE new_qty IS REAL
+        DECIDE new_qty(REAL)
         SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
         MAXIMIZE SUM(new_qty * l_extendedprice)
     """
@@ -427,7 +427,7 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
                ROUND(new_qty, 4) AS new_qty
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE new_qty IS REAL
+        DECIDE new_qty(REAL)
         SUCH THAT new_qty <= 60
             AND SUM(ABS(new_qty - l_quantity)) <= 30 WHEN l_returnflag = 'R'
         MAXIMIZE SUM(new_qty * l_extendedprice)
@@ -515,7 +515,7 @@ def test_abs_multiple_terms(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, x, y
         FROM lineitem
         WHERE l_orderkey <= 3
-        DECIDE x IS REAL, y IS REAL
+        DECIDE x(REAL), y(REAL)
         SUCH THAT SUM(x) = 50
             AND SUM(y) = 10000
         MINIMIZE SUM(ABS(x - l_quantity) + ABS(y - l_extendedprice))
@@ -632,7 +632,7 @@ def test_abs_mixed_vars(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, s, w
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE s IS BOOLEAN, w IS REAL
+        DECIDE s(BOOL), w(REAL)
         SUCH THAT SUM(s) >= 5
             AND SUM(w) = 100
         MINIMIZE SUM(ABS(w - l_quantity))
@@ -710,7 +710,7 @@ def test_abs_mixed_vars(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 def test_real_abs_fractional_target_oracle(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """``SUM(ABS(x - 2.5)) <= K`` with IS REAL and a non-integer target constant.
+    """``SUM(ABS(x - 2.5)) <= K`` with(REAL) and a non-integer target constant.
 
     Regression test for the integer-step rewrite sweep. ABS linearization uses
     bounded-auxiliary constraints (``d >= x - 2.5`` and ``d >= -(x - 2.5)``) —
@@ -722,7 +722,7 @@ def test_real_abs_fractional_target_oracle(
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 20
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 5.0
             AND SUM(ABS(x - 2.5)) <= 10
         MAXIMIZE SUM(x * l_extendedprice)
@@ -800,7 +800,7 @@ def test_abs_maximize_objective_basic(decidb_cli, duckdb_conn, oracle_solver, pe
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 3
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x) = 100 AND x <= 50
         MAXIMIZE SUM(ABS(x - l_quantity))
     """
@@ -897,7 +897,7 @@ def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn):
         SELECT l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 3
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT SUM(x) = 100
         MAXIMIZE SUM(ABS(x - l_quantity))
     """
@@ -942,7 +942,7 @@ def test_abs_constraint_per_row_hard_ge(decidb_cli, duckdb_conn):
     sql = f"""
         SELECT l_quantity, x
         FROM lineitem WHERE l_orderkey <= 3
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= {ub} AND ABS(x - l_quantity) >= {k}
         MINIMIZE SUM(x)
     """
@@ -981,7 +981,7 @@ def test_abs_constraint_per_row_hard_eq(decidb_cli, duckdb_conn):
     sql = f"""
         SELECT l_quantity, x
         FROM lineitem WHERE l_orderkey <= 3
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= {ub} AND ABS(x - l_quantity) = {k}
         MINIMIZE SUM(x)
     """
@@ -1024,7 +1024,7 @@ def test_abs_constraint_aggregate_hard_ge(decidb_cli, duckdb_conn, oracle_solver
     sql = f"""
         SELECT l_quantity, x
         FROM lineitem WHERE l_orderkey <= 3
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= {ub} AND SUM(ABS(x - l_quantity)) >= {k}
         MINIMIZE SUM(x)
     """
@@ -1108,7 +1108,7 @@ def test_abs_min_geq_per_row_hard(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, x FROM (VALUES (1),(2),(3)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 4 AND x <= 20 AND MIN(ABS(x - 5)) >= 3
         MINIMIZE SUM(x)
     """)
@@ -1135,7 +1135,7 @@ def test_abs_max_geq_aggregate_hard(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, x FROM (VALUES (1),(2),(3)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= 4 AND x <= 20 AND MAX(ABS(x - 5)) >= 3
         MINIMIZE SUM(x)
     """)
@@ -1161,7 +1161,7 @@ def test_abs_between_both_bounds(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, x FROM (VALUES (1),(2)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 20 AND ABS(x - 5) BETWEEN 2 AND 8
         MAXIMIZE SUM(x)
     """)
@@ -1187,7 +1187,7 @@ def test_abs_on_both_sides(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, x FROM (VALUES (1),(2)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 20 AND ABS(x - 3) <= ABS(x - 9)
         MAXIMIZE SUM(x)
     """)

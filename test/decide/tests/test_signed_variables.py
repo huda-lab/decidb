@@ -42,7 +42,7 @@ def test_signed_linear(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 50
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x BETWEEN -3 AND 3
               AND SUM(x * l_quantity) >= 0
         MINIMIZE SUM(x * l_extendedprice)
@@ -102,7 +102,7 @@ def test_signed_mccormick(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, b, x
         FROM lineitem
         WHERE l_orderkey < 40
-        DECIDE b IS BOOLEAN, x IS REAL
+        DECIDE b(BOOL), x(REAL)
         SUCH THAT x BETWEEN -8 AND 8
               AND SUM(b) <= 3
         MINIMIZE SUM(l_extendedprice * b * x)
@@ -167,7 +167,7 @@ def test_signed_in_domain(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey < 40
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x IN (-5, 0, 5)
         MINIMIZE SUM(x * l_extendedprice)
     """
@@ -221,7 +221,7 @@ def test_signed_lower_bound_only(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey < 50
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x >= -4
               AND SUM(x) >= 10
         MINIMIZE SUM(x * l_extendedprice)
@@ -272,7 +272,7 @@ def test_signed_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, d
         FROM lineitem
         WHERE l_orderkey < 50
-        DECIDE d IS INTEGER
+        DECIDE d(INT)
         SUCH THAT d >= -5
               AND SUM(d) >= 3
         MINIMIZE SUM(d * l_extendedprice)
@@ -326,7 +326,7 @@ def test_signed_default_preserved(decidb_cli, duckdb_conn, oracle_solver, perf_t
         SELECT l_orderkey, l_linenumber, l_extendedprice, x, y
         FROM lineitem
         WHERE l_orderkey < 40
-        DECIDE x IS REAL, y IS REAL
+        DECIDE x(REAL), y(REAL)
         SUCH THAT x >= -5
               AND SUM(x + y) >= 0
         MINIMIZE SUM((x + y) * l_extendedprice)
@@ -392,7 +392,7 @@ def test_signed_mccormick_asymmetric(decidb_cli, duckdb_conn, oracle_solver, per
         SELECT l_orderkey, l_linenumber, l_extendedprice, b, x
         FROM lineitem
         WHERE l_orderkey < 40
-        DECIDE b IS BOOLEAN, x IS REAL
+        DECIDE b(BOOL), x(REAL)
         SUCH THAT x BETWEEN -100 AND 5
               AND SUM(b) <= 3
         MINIMIZE SUM(l_extendedprice * b * x)
@@ -450,7 +450,7 @@ def test_signed_abs_objective(decidb_cli, duckdb_conn, oracle_solver, perf_track
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem
         WHERE l_orderkey < 20
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x BETWEEN -5 AND 5
               AND SUM(x) = -3
         MINIMIZE SUM(ABS(x))
@@ -504,7 +504,7 @@ def test_signed_strict_integer(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         SELECT l_orderkey, l_linenumber, l_extendedprice, d
         FROM lineitem
         WHERE l_orderkey < 40
-        DECIDE d IS INTEGER
+        DECIDE d(INT)
         SUCH THAT d BETWEEN -10 AND 0
               AND SUM(d) > -8
         MINIMIZE SUM(d * l_extendedprice)
@@ -555,7 +555,7 @@ def test_signed_norm_l1_parity(decidb_cli):
     base = """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 20
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x BETWEEN -5 AND 5 AND SUM(x) = -3
         MINIMIZE {obj}
     """

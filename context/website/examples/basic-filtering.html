@@ -108,7 +108,7 @@ INSERT INTO Items VALUES
 FROM Items
 WHERE category IN ('A', 'B', 'C')
   AND priority BETWEEN 1 AND 5
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * weight) <= 100
 MAXIMIZE SUM(x * priority);</code></pre>
@@ -128,7 +128,7 @@ MAXIMIZE SUM(x * priority);</code></pre>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>DECIDE x IS BOOLEAN</code> — Binary decision: include (x=1) or exclude (x=0) each candidate item.</div>
+          <div><code>DECIDE x(BOOL)</code> — Binary decision: include (x=1) or exclude (x=0) each candidate item.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>

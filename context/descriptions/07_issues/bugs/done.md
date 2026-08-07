@@ -194,7 +194,7 @@ Pointers: `grammar/grammar.y`, `grammar/statements/select.y`, `include/parser/gr
 
 ## Table-scoped `Table.var` didn't bind in SELECT list / per-row constraints
 
-**Broke**: `SELECT supplier.pick … DECIDE supplier.pick IS BOOLEAN` failed with "Table has no column named pick". The DECIDE-internal binders consult `decide_variable_names` (which registers qualified + unqualified forms), but the SELECT list and the per-row constraint fall-through use the *regular* DuckDB binder, which only sees the unqualified generic binding — qualified refs routed to the real table binding. The aggregate path only worked because SymEngine *accidentally* strips qualifiers.
+**Broke**: `SELECT supplier.pick … DECIDE supplier.pick(BOOL)` failed with "Table has no column named pick". The DECIDE-internal binders consult `decide_variable_names` (which registers qualified + unqualified forms), but the SELECT list and the per-row constraint fall-through use the *regular* DuckDB binder, which only sees the unqualified generic binding — qualified refs routed to the real table binding. The aggregate path only worked because SymEngine *accidentally* strips qualifiers.
 
 **Fix/lesson**: A parsed-AST pre-pass (`RewriteScopedVarRefs` in `bind_select_node.cpp`) rewrites qualified refs to scoped DECIDE vars into bare refs before any binding. **Watch for**: DECIDE name resolution is split across two binder worlds (DECIDE binders vs. regular DuckDB binder); any new place an expression escapes to the regular binder needs scoped-var refs normalized first. Don't rely on SymEngine's qualifier-stripping side effect.
 

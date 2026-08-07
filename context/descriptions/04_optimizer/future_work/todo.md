@@ -125,7 +125,7 @@ remaining work below generalizes it.
 
 Derive tighter variable bounds from constraint interactions. If constraints collectively force a variable into a narrower range than its declared type allows, pass the tighter bounds to the solver.
 
-**Example**: If `x IS INTEGER` (default bounds [0, +inf)) but constraints imply `x <= 5`, set the upper bound to 5. Tighter bounds improve solver performance and Big-M quality.
+**Example**: If `x(INT)` (default bounds [0, +inf)) but constraints imply `x <= 5`, set the upper bound to 5. Tighter bounds improve solver performance and Big-M quality.
 
 **Remaining**: handle negative coefficients / general sign patterns (the current pass requires all-non-negative terms), iterate to a fixpoint (chained implications), and migrate the analysis into the optimizer (binder-to-optimizer migration) so it composes with other rewrites.
 

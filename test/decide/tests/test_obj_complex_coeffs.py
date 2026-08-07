@@ -23,7 +23,7 @@ def test_q03_complex_coeffs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT l_orderkey, l_extendedprice, l_discount, l_tax, x
         FROM lineitem
         WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * (l_extendedprice * (1 - l_discount) * (1 + l_tax))) <= 50000
         MAXIMIZE SUM(x)
     """
@@ -98,7 +98,7 @@ def test_objective_with_constant_offset(
     sql = """
         SELECT c_custkey, c_acctbal, x FROM customer
         WHERE c_nationkey = 1
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(x * c_acctbal) + 100
     """
@@ -149,7 +149,7 @@ def test_objective_with_scalar_multiplier(
     sql = """
         SELECT c_custkey, c_acctbal, x FROM customer
         WHERE c_nationkey = 1
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5
         MAXIMIZE 2 * SUM(x * c_acctbal)
     """

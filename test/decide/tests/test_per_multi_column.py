@@ -32,7 +32,7 @@ def test_multi_column_per_basic(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -83,13 +83,13 @@ def test_multi_column_per_single_column_in_parens(
     """PER (col) with parens should be equivalent to PER col at the objective level."""
     sql_parens = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5 PER (s_nationkey)
         MAXIMIZE SUM(x * s_acctbal)
     """
     sql_no_parens = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5 PER s_nationkey
         MAXIMIZE SUM(x * s_acctbal)
     """
@@ -151,7 +151,7 @@ def test_multi_column_per_with_when_on_different_column(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, l_quantity, l_discount, x
         FROM lineitem WHERE l_orderkey < 200
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 20 WHEN l_discount > 0.05 PER (l_returnflag, l_linestatus)
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice)
@@ -214,7 +214,7 @@ def test_multi_column_per_when_overlaps_per_column(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 200
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2 WHEN l_returnflag = 'R' PER (l_returnflag, l_linestatus)
             AND SUM(x) <= 50
         MAXIMIZE SUM(x * l_extendedprice)
@@ -276,7 +276,7 @@ def test_multi_column_per_when_eliminates_all_in_group(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2 WHEN l_quantity > 40 PER (l_returnflag, l_linestatus)
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
@@ -337,7 +337,7 @@ def test_multi_column_per_more_groups(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3 PER l_returnflag
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -345,7 +345,7 @@ def test_multi_column_per_more_groups(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -406,7 +406,7 @@ def test_multi_column_per_three_columns(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus, l_shipmode,
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 200
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2 PER (l_returnflag, l_linestatus, l_shipmode)
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -460,7 +460,7 @@ def test_multi_column_per_with_integer_variable(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_linestatus,
                l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 100
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT SUM(x * l_quantity) <= 100 PER (l_returnflag, l_linestatus)
             AND x <= 3
         MAXIMIZE SUM(x * l_extendedprice)
@@ -512,7 +512,7 @@ def test_unparenthesized_multi_column_per_rejected_with_hint(decidb_cli):
     at the parenthesized `PER (col1, col2)` form."""
     sql = """
         SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER region, yr
         MAXIMIZE SUM(x)
     """
@@ -529,7 +529,7 @@ def test_parenthesized_multi_column_per_is_the_supported_form(decidb_cli):
     supported counterpart to the rejected bare form above."""
     sql = """
         SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER (region, yr)
         MAXIMIZE SUM(x)
     """

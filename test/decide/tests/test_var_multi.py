@@ -21,11 +21,11 @@ from comparison.compare import compare_solutions
 def test_two_variables_separate_constraints(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """DECIDE x IS BOOLEAN, y IS INTEGER with independent constraints."""
+    """DECIDE x(BOOL), y(INT) with independent constraints."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x, y
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN, y IS INTEGER
+        DECIDE x(BOOL), y(INT)
         SUCH THAT SUM(x * l_quantity) <= 100
             AND y <= 5
             AND SUM(y) <= 20
@@ -94,7 +94,7 @@ def test_two_boolean_variables(
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x, y
         FROM lineitem WHERE l_orderkey < 50
-        DECIDE x IS BOOLEAN, y IS BOOLEAN
+        DECIDE x(BOOL), y(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
             AND SUM(y * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice + y * l_quantity)
@@ -160,7 +160,7 @@ def test_two_boolean_variables(
 def test_integer_real_paired(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """DECIDE x IS INTEGER, y IS REAL without a BOOLEAN in the mix.
+    """DECIDE x(INT), y(REAL) without a BOOLEAN in the mix.
 
     Guards the variable-type flag loop: with no boolean the solver must still
     set ``is_integer`` only on ``x`` (leaving ``y`` continuous). A regression
@@ -174,7 +174,7 @@ def test_integer_real_paired(
     )
     sql = f"""
         SELECT id, val_a, val_b, x, ROUND(y, 4) AS y FROM ({data_sql})
-        DECIDE x IS INTEGER, y IS REAL
+        DECIDE x(INT), y(REAL)
         SUCH THAT x <= 5 AND y <= 10 AND SUM(x + y) <= 20
         MAXIMIZE SUM(x * val_a + y * val_b)
     """
@@ -252,7 +252,7 @@ def test_three_decide_variables(
     sql = f"""
         SELECT id, a, b, c, val_a, val_b, val_c, x, y, ROUND(z, 4) AS z
         FROM ({data_sql})
-        DECIDE x IS BOOLEAN, y IS INTEGER, z IS REAL
+        DECIDE x(BOOL), y(INT), z(REAL)
         SUCH THAT SUM(x) <= 3
             AND y <= 5
             AND z <= 10.0
@@ -342,7 +342,7 @@ def test_mixed_types_same_aggregate_term(
     sql = f"""
         SELECT id, col_a, col_b, val_x, val_y, x, ROUND(y, 4) AS y
         FROM ({data_sql})
-        DECIDE x IS BOOLEAN, y IS REAL
+        DECIDE x(BOOL), y(REAL)
         SUCH THAT y <= 10
             AND SUM(x * col_a + y * col_b) <= 50
         MAXIMIZE SUM(x * val_x + y * val_y)

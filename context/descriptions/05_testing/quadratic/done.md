@@ -25,7 +25,7 @@ All oracle-verified; gurobi-gated cases noted:
 All oracle-verified, in `test_quadratic_constraints.py`:
 
 - **Core shapes**: per-row `POWER(expr, 2) <= K` (gurobi-gated), aggregate `SUM(POWER(expr, 2)) <= K`, zero budget (exact match), binding vs non-binding constraints, multi-variable inner expression, negated `-POWER(expr, 2)`, scaled `K * POWER(expr, 2)`, data-dependent coefficients.
-- **Composition**: quadratic constraint + WHEN, + PER groups, + WHEN + PER (mask before group); multiple quadratic constraints per query; QCQP (quadratic objective + quadratic constraint); mixed linear + quadratic constraints; table-scoped (entity) + QP; REAL and INTEGER variables; bilinear + self-product mixed.
+- **Composition**: quadratic constraint + WHEN, + PER groups, + WHEN + PER (mask before group); multiple quadratic constraints per query; QCQP (quadratic objective + quadratic constraint); mixed linear + quadratic constraints; table-scoped (entity) + QP; REAL and INT variables; bilinear + self-product mixed.
 - Infeasible quadratic constraint (negative budget) — error test, not oracle-verified.
 
 ## Error cases
@@ -46,8 +46,8 @@ All oracle-verified, in `test_quadratic_constraints.py`:
 | QP constraint | WHEN + PER | ✓ |
 | QP objective | multiple variables | ✓ |
 | QP constraint | multiple variables | ✓ |
-| QP | BOOLEAN (MIQP) | ✓ (gurobi-gated) |
-| QP | INTEGER (MIQP) | ✓ (gurobi-gated) |
+| QP | BOOL (MIQP) | ✓ (gurobi-gated) |
+| QP | INT (MIQP) | ✓ (gurobi-gated) |
 | QP | REAL | ✓ |
 | QP | entity-scoped | ✓ |
 | QP constraint | bilinear (mixed) | ✓ |

@@ -25,7 +25,7 @@ def test_q06_multi_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_track
         FROM lineitem l, part p
         WHERE l.l_partkey = p.p_partkey
           AND l.l_orderkey < 50
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 500
           AND SUM(x * p.p_size) <= 1000
         MAXIMIZE SUM(x)

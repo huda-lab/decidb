@@ -110,7 +110,7 @@ INSERT INTO Assets VALUES
       <div class="code-block">
         <pre class="language-sql"><code>SELECT ticker, name, sector, expected_return, risk_score, min_investment, x as selected
 FROM Assets
-DECIDE x IS BOOLEAN
+DECIDE x(BOOL)
 SUCH THAT
     SUM(x * min_investment) <= (SELECT value FROM Config WHERE name = 'budget') AND
     SUM(x * risk_score) <= 300 AND

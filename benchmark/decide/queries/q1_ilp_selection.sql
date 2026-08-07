@@ -3,7 +3,7 @@
 --       func=SUM,AVG; when=WHEN-constraint,aggregate-local-WHEN; per=PER-multi-column
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_returnflag, l_linestatus, keep
 FROM lineitem
-DECIDE keep IS BOOLEAN
+DECIDE keep(BOOL)
 SUCH THAT SUM(keep * l_quantity) <= ${Q1_QTY_CAP}
     AND AVG(keep * l_discount) <= 0.06
     AND SUM(keep * l_quantity) <= ${Q1_R_QTY_CAP} WHEN l_returnflag = 'R'

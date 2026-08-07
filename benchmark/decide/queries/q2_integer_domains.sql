@@ -4,7 +4,7 @@
 --            strict->,uncorrelated-subquery,correlated-subquery,data-only-aggregate-RHS,data-only-op-fold(%)
 SELECT o_orderkey, o_custkey, o_totalprice, o_orderpriority, n, units
 FROM orders
-DECIDE n IS INTEGER, units
+DECIDE n(INT), units(INT)
 SUCH THAT n BETWEEN 0 AND 3
     AND n IN (0, 1, 3)
     AND n <> 2

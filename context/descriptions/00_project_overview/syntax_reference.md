@@ -2,24 +2,52 @@
 
 ## 1. The DECIDE Clause usage
 
+Two clause orders are accepted; they parse to the same plan and neither is
+preferred by the engine.
+
+**Split order** (the paper's, Figure 1) — the declaration sits between `SELECT`
+and `FROM`, the constraints and objective come after the joins:
+
 ```sql
 SELECT ...
-DECIDE [Table.]variable_name [IS type] [, [Table.]variable_name2 [IS type2] ...]
+DECIDE [Table.]variable_name(type) [, [Table.]variable_name2(type2) ...]
+FROM ...
+[JOIN ...]
+[WHERE ...]
 SUCH THAT
     constraint_expression
     [AND constraint_expression2 ...]
 [MAXIMIZE | MINIMIZE] objective_expression
 ```
 
+**Single-block order** — the whole clause sits after `WHERE`:
+
+```sql
+SELECT ...
+FROM ...
+[WHERE ...]
+DECIDE [Table.]variable_name(type) [, [Table.]variable_name2(type2) ...]
+SUCH THAT
+    constraint_expression
+    [AND constraint_expression2 ...]
+[MAXIMIZE | MINIMIZE] objective_expression
+```
+
+The declaration may appear in one position or the other, never both. A
+declaration with no `SUCH THAT`, or a `SUCH THAT` with no declaration, is a
+parser error.
+
 ## 2. Decision Variables
 
-- Must be declared in `DECIDE` list with optional type annotation.
+- Must be declared in the `DECIDE` list, and the type is **mandatory**: it is
+  written in parentheses after the name, `x(INT)`. There are exactly three type
+  names — `INT`, `BOOL`, `REAL`.
 - Scope: Available in `SUCH THAT`, `MAXIMIZE/MINIMIZE`, and the `SELECT` list.
 - **Type Declarations** (in DECIDE clause):
-  - `x IS INTEGER`: Default if no type specified. $x \in \{0, 1, 2, ...\}$ by default
-  - `x IS BOOLEAN`: $x \in \{0, 1\}$ (automatically adds bounds constraints)
-  - `x IS REAL`: $x \in [0, \infty)$ by default (continuous)
-- **Default lower bound is 0** for `IS INTEGER` and `IS REAL`. This is a
+  - `x(INT)`: $x \in \{0, 1, 2, ...\}$ by default
+  - `x(BOOL)`: $x \in \{0, 1\}$ (automatically adds bounds constraints)
+  - `x(REAL)`: $x \in [0, \infty)$ by default (continuous)
+- **Default lower bound is 0** for `INT` and `REAL`. This is a
   *default*, not a floor: a variable becomes **signed** (may take negative
   values) when the query gives it an explicit negative lower bound —
   `x >= -K`, `x BETWEEN -K AND K`, or a negative literal in an `IN` domain
@@ -30,22 +58,21 @@ SUCH THAT
 **Examples:**
 
 ```sql
-DECIDE x IS BOOLEAN           -- x is binary (0 or 1)
-DECIDE x IS INTEGER           -- x is integer, default domain {0, 1, 2, ...}
-DECIDE x                      -- same as x IS INTEGER (default)
-DECIDE x IS REAL              -- x is continuous, default domain [0, +inf)
-DECIDE x IS BOOLEAN, y IS INTEGER, z IS REAL  -- multiple typed variables
+DECIDE x(BOOL)           -- x is binary (0 or 1)
+DECIDE x(INT)           -- x is integer, default domain {0, 1, 2, ...}
+DECIDE x(REAL)              -- x is continuous, default domain [0, +inf)
+DECIDE x(BOOL), y(INT), z(REAL)  -- multiple typed variables
 
 -- Signed (negative-domain) variables: opt in with an explicit negative bound
-DECIDE adj IS REAL            -- ... SUCH THAT adj BETWEEN -10 AND 10  → adj in [-10, 10]
-DECIDE d IS INTEGER           -- ... SUCH THAT d >= -5                  → d in [-5, +inf)
+DECIDE adj(REAL)            -- ... SUCH THAT adj BETWEEN -10 AND 10  → adj in [-10, 10]
+DECIDE d(INT)           -- ... SUCH THAT d >= -5                  → d in [-5, +inf)
 ```
 
 ### 2.1 Table-Scoped Variables
 
 By default, decision variables are **row-scoped**: the solver creates one variable per row in the input relation. When a query joins multiple tables, the input relation is the join result, and each result row gets its own independent variable.
 
-**Table-scoped** variables are declared with a table qualifier: `DECIDE Table.var IS TYPE`. A table-scoped variable has ONE value per unique entity in the named source table. All result rows originating from the same entity share the same variable value (entity consistency).
+**Table-scoped** variables are declared with a table qualifier: `DECIDE Table.var(TYPE)`. A table-scoped variable has ONE value per unique entity in the named source table. All result rows originating from the same entity share the same variable value (entity consistency).
 
 - The table qualifier must match a table alias or table name in the `FROM` clause.
 - Entity identification uses all columns from the source table as a composite key.
@@ -62,7 +89,7 @@ By default, decision variables are **row-scoped**: the solver creates one variab
 SELECT n.name, s.shift_date, keepN
 FROM nurses n
 JOIN shifts s ON n.id = s.nurse_id
-DECIDE n.keepN IS BOOLEAN
+DECIDE n.keepN(BOOL)
 SUCH THAT
     SUM(keepN * s.hours) <= 100
 MAXIMIZE SUM(keepN * n.skill_score)
@@ -80,7 +107,7 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 
 - **Supported Operators**: `=`, `<`, `<=`, `>`, `>=`, `<>`.
   - `<>` (not-equal): Supported on both per-row and aggregate constraints via Big-M disjunction (1 auxiliary binary variable + 2 constraints per `<>`). Rewritten to `LHS <= K-1 OR LHS >= K+1`, which (like strict `<` / `>`) is only valid when the LHS is integer-valued. REAL variables or non-integer coefficients are rejected with `InvalidInputException`. For `AVG(x) <> K` the denominator is hoisted to the RHS (emitted as `SUM(x) <> K*n`, per-group size for PER), keeping the LHS integer-valued.
-  - `<` / `>` (strict): Rewritten internally to the integer-step form (`LHS < K` $\rightarrow$ `LHS <= ceil(K) - 1`), which is only valid when the LHS is provably integer-valued (every DECIDE variable is `IS INTEGER`/`IS BOOLEAN` and every coefficient is integral; bilinear products of integer-typed factors also count). If any term involves a `IS REAL` variable or a non-integer coefficient, DeciDB rejects the constraint with `InvalidInputException`; use `<=` / `>=` instead.
+  - `<` / `>` (strict): Rewritten internally to the integer-step form (`LHS < K` $\rightarrow$ `LHS <= ceil(K) - 1`), which is only valid when the LHS is provably integer-valued (every DECIDE variable is `INT`/`BOOL` and every coefficient is integral; bilinear products of integer-typed factors also count). If any term involves a `REAL` variable or a non-integer coefficient, DeciDB rejects the constraint with `InvalidInputException`; use `<=` / `>=` instead.
 - **Between**: `expr BETWEEN a AND b` $\rightarrow$ `expr >= a AND expr <= b`.
 - **In**: `x IN (v1, ..., vK)` — works on both table columns and decision variables. On decision variables, rewritten to K binary indicator variables with cardinality + linking constraints. `IN` on aggregates (e.g., `SUM(x) IN (...)`) is not supported.
 - **Linearity**: Most sub-expressions involving a decision variable must be linear.
@@ -127,7 +154,7 @@ SUCH THAT (x - t) * (x - t) <= K
   - `MAXIMIZE SUM(POWER(expr, 2))` is non-convex (Gurobi only, via NonConvex=2).
   - Gurobi supports both continuous QP and mixed-integer QP (MIQP). HiGHS supports continuous QP only — integer/boolean variables with quadratic objectives require Gurobi.
 - **Bilinear objectives and constraints (`x * y`)**: Products of two different DECIDE variables are supported in both objectives and constraints. Two categories:
-  - **Boolean x anything** (McCormick linearization): When one factor is `IS BOOLEAN`, the product is exactly linearized. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable — given explicitly (`x <= K`) or inferred by implied-bound propagation from a non-negative constraint like `SUM(x) <= K`. Bool x Bool uses simpler AND-linearization (no Big-M).
+  - **Boolean x anything** (McCormick linearization): When one factor is `BOOL`, the product is exactly linearized. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable — given explicitly (`x <= K`) or inferred by implied-bound propagation from a non-negative constraint like `SUM(x) <= K`. Bool x Bool uses simpler AND-linearization (no Big-M).
   - **General non-convex** (`Real*Real`, `Int*Int`, `Int*Real`): Produces indefinite Q matrix. Objectives: Gurobi only (NonConvex=2). Constraints: Gurobi only (via quadratic constraints). HiGHS rejects with clear errors.
   - Data coefficients are supported: `SUM(profit * b * x)`.
   - Composes with WHEN: `SUM(b * x) WHEN condition`.

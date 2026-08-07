@@ -38,7 +38,7 @@ def test_avg_objective(
     """MAXIMIZE AVG(x * col) should give the same argmax as MAXIMIZE SUM(x * col)."""
     base = """
         SELECT name, value, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         {objective}
     """
@@ -95,7 +95,7 @@ def test_avg_constraint(
     """AVG(x*value) <= 5 with N=4 rows ⇒ SUM(x*value) <= 20."""
     sql = f"""
         SELECT name, value, x FROM ({_DATA_SQL_4})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * value) <= 5
         MAXIMIZE SUM(x * value)
     """
@@ -146,7 +146,7 @@ def test_avg_with_when(
     data_sql = f"SELECT * FROM ({values}) t(name, value, tier)"
     sql = f"""
         SELECT name, value, tier, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * value) <= 6 WHEN tier = 'high'
         MAXIMIZE SUM(x * value)
     """
@@ -198,7 +198,7 @@ def test_avg_with_per(
     data_sql = f"SELECT * FROM ({values}) t(name, value, grp)"
     sql = f"""
         SELECT name, value, grp, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * value) <= 4 PER grp
         MAXIMIZE SUM(x * value)
     """
@@ -252,7 +252,7 @@ def test_avg_with_when_per(
     data_sql = f"SELECT * FROM ({values}) t(name, value, grp, tier)"
     sql = f"""
         SELECT name, value, grp, tier, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * value) <= 5 WHEN tier = 'high' PER grp
         MAXIMIZE SUM(x * value)
     """
@@ -304,7 +304,7 @@ def test_avg_boolean(
     """AVG(x) <= 0.5 with 4 BOOLEAN rows ⇒ SUM(x) <= 2."""
     sql = f"""
         SELECT name, value, x FROM ({_DATA_SQL_4})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x) <= 0.5
         MAXIMIZE SUM(x * value)
     """
@@ -352,7 +352,7 @@ def test_avg_integer(
     data_sql = f"SELECT * FROM ({values}) t(name, value)"
     sql = f"""
         SELECT name, value, x FROM ({data_sql})
-        DECIDE x
+        DECIDE x(INT)
         SUCH THAT x <= 5 AND AVG(x) <= 3
         MAXIMIZE SUM(x * value)
     """
@@ -399,7 +399,7 @@ def test_avg_bilinear_constraint(
     data_sql = "SELECT * FROM (VALUES (1), (2), (3)) t(value)"
     sql = f"""
         SELECT value, x, y FROM ({data_sql})
-        DECIDE x IS BOOLEAN, y IS BOOLEAN
+        DECIDE x(BOOL), y(BOOL)
         SUCH THAT AVG(x * y) <= 0.5
         MAXIMIZE SUM(x + y)
     """
@@ -459,7 +459,7 @@ def test_avg_not_equal_boolean(
     data_sql = f"SELECT * FROM ({values}) t(name, profit, weight)"
     sql = f"""
         SELECT name, profit, weight, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * weight) <= 16
               AND AVG(x) <> 0.5
         MAXIMIZE SUM(x * profit)
@@ -526,7 +526,7 @@ def test_avg_not_equal_with_when(
     data_sql = f"SELECT * FROM ({values}) t(name, profit, weight, tier)"
     sql = f"""
         SELECT name, profit, weight, tier, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * weight) <= 20
               AND AVG(x) <> 0.5 WHEN tier = 'high'
         MAXIMIZE SUM(x * profit)

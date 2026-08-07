@@ -29,7 +29,7 @@ def test_single_row(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey = 1 AND l_linenumber = 1
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -88,7 +88,7 @@ def test_trivial_all_selected(decidb_cli, duckdb_conn, oracle_solver, perf_track
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 20
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 999999
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -147,7 +147,7 @@ def test_rhs_zero_forces_all_zero(decidb_cli, duckdb_conn, oracle_solver, perf_t
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey < 20
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 0
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -206,7 +206,7 @@ def test_negative_objective_coefficients(decidb_cli, duckdb_conn, oracle_solver,
         SELECT c_custkey, c_acctbal, x
         FROM customer
         WHERE c_nationkey <= 3
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 5
         MINIMIZE SUM(x * c_acctbal)
     """
@@ -258,7 +258,7 @@ def test_zero_rows_empty_input(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem
         WHERE l_orderkey < 0
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -283,7 +283,7 @@ def test_avg_constraint_when_filters_all_rows(decidb_cli):
                    (3, 5.0, 'B'),
                    (4, 12.0, 'B')
         ) t(id, val, flag)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * val) WHEN (flag = 'Z') <= 1
         MAXIMIZE SUM(x * val)
     """
@@ -319,7 +319,7 @@ def test_maximize_sum_max_per_with_empty_when_group(
                    (4, 'B', 12.0, false),
                    (5, 'B', 6.0, false)
         ) t(id, grp, val, flag)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1 PER grp
         MAXIMIZE SUM(MAX(x * val)) WHEN flag PER grp
     """
@@ -429,7 +429,7 @@ def test_min_geq_constraint_when_empty(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MIN(x * val) >= 5 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
@@ -446,7 +446,7 @@ def test_min_leq_constraint_when_empty(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MIN(x * val) <= 3 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
@@ -463,7 +463,7 @@ def test_max_leq_constraint_when_empty(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x * val) <= 2 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
@@ -480,7 +480,7 @@ def test_max_geq_constraint_when_empty(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x * val) >= 999 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
@@ -507,7 +507,7 @@ def test_avg_per_constraint_with_empty_group(decidb_cli, duckdb_conn, oracle_sol
                    (4, 'B', 50.0, false),
                    (5, 'B', 100.0, false)
         ) t(id, grp, val, flag)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * val) WHEN flag <= 8 PER grp
         MAXIMIZE SUM(x * val)
     """
@@ -548,7 +548,7 @@ def test_maximize_min_objective_when_empty(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
         MAXIMIZE MIN(x * val) WHEN val > 100
     """
@@ -569,7 +569,7 @@ def test_minimize_max_objective_when_empty(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
         MINIMIZE MAX(x * val) WHEN val > 100
     """
@@ -592,7 +592,7 @@ def test_maximize_max_objective_when_empty(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
         MAXIMIZE MAX(x * val) WHEN val > 100
     """
@@ -619,7 +619,7 @@ def test_mixed_empty_and_populated_when_terms_constraint(decidb_cli):
                    (2, 5.0, true),
                    (3, 7.0, false)
         ) t(id, val, w2)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN (val > 1000)
                 + SUM(x * val) WHEN w2 <= 8
         MAXIMIZE SUM(x * val)
@@ -638,7 +638,7 @@ def test_mixed_empty_and_populated_when_terms_objective(decidb_cli):
                    (2, 1.0, 100.0, true),
                    (3, 3.0, 5.0, false)
         ) t(id, val, bonus, w2)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
         MAXIMIZE SUM(x * val) WHEN (val > 1000)
                + SUM(x * bonus) WHEN w2
@@ -662,7 +662,7 @@ def test_minimize_min_objective_when_empty(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
         MINIMIZE MIN(x * val) WHEN val > 100
     """
@@ -693,7 +693,7 @@ def test_max_when_empty_constraint_hard(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT (MAX(x * val) WHEN (val > 100)) >= 5
         MAXIMIZE SUM(x * val)
     """
@@ -714,7 +714,7 @@ def test_min_when_empty_constraint_hard(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT (MIN(x * val) WHEN (val > 100)) <= 5
         MAXIMIZE SUM(x * val)
     """
@@ -738,7 +738,7 @@ def test_sum_plus_max_when_empty_silently_vacates_constraint(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) + (MAX(x * val) WHEN (val > 100)) <= 5
         MAXIMIZE SUM(x * val)
     """
@@ -757,7 +757,7 @@ def test_sum_when_empty_rejected(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) <= 5 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
@@ -776,7 +776,7 @@ def test_avg_when_empty_rejected(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT AVG(x * val) <= 5 WHEN val > 100
         MAXIMIZE SUM(x * val)
     """
@@ -798,7 +798,7 @@ def test_composed_easy_min_when_empty_rejected(decidb_cli):
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * val) + (MIN(x * val) WHEN (val > 100)) >= 100
         MAXIMIZE SUM(x * val)
     """
@@ -818,7 +818,7 @@ def test_feasibility_no_objective(decidb_cli, duckdb_conn, oracle_solver, perf_t
         )
         SELECT id, val, x
         FROM data
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) = 2 AND SUM(x * val) <= 50
     """
     result, cols = decidb_cli.execute(sql)
@@ -870,7 +870,7 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         WITH data AS ({data_sql})
         SELECT id, grp, val, x
         FROM data
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) = 1 PER grp
             AND SUM(x * val) <= 35
     """
@@ -949,7 +949,7 @@ def test_null_coefficients(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         )
         SELECT id, weight, value, x
         FROM data
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * weight) <= 15
         MAXIMIZE SUM(x * value)
     """, match=r"NULL")
@@ -971,7 +971,7 @@ def test_all_zero_objective(decidb_cli, oracle_solver, perf_tracker):
     """
     sql = """
         SELECT id, val, x FROM (VALUES (1, 0.0), (2, 0.0), (3, 0.0)) t(id, val)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
         MAXIMIZE SUM(x * val)
     """
@@ -1051,7 +1051,7 @@ def test_many_terms_objective(
     )
     sql = f"""
         SELECT id, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * (c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10)) <= 40
         MAXIMIZE SUM(x * (c1 + 2*c2 + c3 + 2*c4 + c5 + 2*c6 + c7 + 2*c8 + c9 + 2*c10))
     """
@@ -1142,7 +1142,7 @@ def test_five_plus_heterogeneous_constraints(
     )
     sql = f"""
         SELECT id, qty, price, flag, category, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x <= 1
             AND SUM(x * qty) <= 12
             AND SUM(x) >= 2 WHEN flag = 'R'
@@ -1235,7 +1235,7 @@ def test_large_coefficient_numeric_stability(
     )
     sql = f"""
         SELECT id, val, x FROM ({data_sql})
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <> 1
             AND SUM(x * val) <= 2000000000
         MAXIMIZE SUM(x * val)
@@ -1304,7 +1304,7 @@ def test_gurobi_highs_agree_on_objective(decidb_cli_highs, decidb_cli_gurobi):
             SELECT 3, 3.0
         )
         SELECT id, cost, b FROM data
-        DECIDE b IS BOOLEAN
+        DECIDE b(BOOL)
         SUCH THAT SUM(b) >= 2
         MINIMIZE SUM(cost * b)
     """

@@ -7,7 +7,7 @@
 --       obj=MAXIMIZE-POWER(nonconvex); cons=per-row-quadratic-constraint,nonconvex-bilinear-constraint
 SELECT o_orderkey, o_totalprice, pick, x, y
 FROM (SELECT o_orderkey, o_totalprice FROM orders ORDER BY o_orderkey LIMIT ${Q7_ROW_LIMIT}) orders
-DECIDE pick IS BOOLEAN, x IS REAL, y IS REAL
+DECIDE pick(BOOL), x(REAL), y(REAL)
 SUCH THAT x <= 10
     AND y <= 10
     AND POWER(x - 5, 2) <= 16

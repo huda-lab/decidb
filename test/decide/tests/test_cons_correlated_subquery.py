@@ -34,7 +34,7 @@ def test_correlated_subquery_perrow_bound(decidb_cli, duckdb_conn, oracle_solver
         SELECT ps_partkey, ps_suppkey, ps_supplycost, x
         FROM partsupp
         WHERE ps_partkey < 20
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= (SELECT CAST(p_size AS INTEGER) FROM part WHERE p_partkey = ps_partkey)
           AND SUM(x * ps_supplycost) <= 5000
         MAXIMIZE SUM(x)
@@ -99,7 +99,7 @@ def test_correlated_subquery_boolean_filter(decidb_cli, duckdb_conn, oracle_solv
         SELECT ps_partkey, ps_suppkey, ps_supplycost, x
         FROM partsupp
         WHERE ps_partkey < 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x <= COALESCE((SELECT 1 FROM supplier WHERE s_suppkey = ps_suppkey AND s_acctbal > 0), 0)
           AND SUM(x * ps_supplycost) <= 2000
         MAXIMIZE SUM(x)
@@ -167,7 +167,7 @@ def test_correlated_subquery_objective(decidb_cli, duckdb_conn, oracle_solver, p
                x
         FROM partsupp
         WHERE ps_partkey < 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * ps_supplycost) <= 3000
         MAXIMIZE SUM(x * (SELECT CAST(p_retailprice AS DOUBLE) FROM part
                           WHERE p_partkey = ps_partkey))
@@ -235,7 +235,7 @@ def test_correlated_subquery_when_composition(decidb_cli, duckdb_conn, oracle_so
         SELECT ps_partkey, ps_suppkey, ps_supplycost, x
         FROM partsupp
         WHERE ps_partkey < 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x <= COALESCE(
                     (SELECT 1 FROM supplier
                      WHERE s_suppkey = ps_suppkey AND s_acctbal > 0), 0)
@@ -310,7 +310,7 @@ def test_correlated_subquery_null_coalesce(decidb_cli, duckdb_conn, oracle_solve
         SELECT ps_partkey, ps_suppkey, ps_supplycost, x
         FROM partsupp
         WHERE ps_partkey < 20
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= COALESCE(
                     (SELECT CAST(p_size AS INTEGER) FROM part
                      WHERE p_partkey = ps_partkey AND p_size > 30), 0)
@@ -371,7 +371,7 @@ def test_correlated_subquery_null_coalesce(decidb_cli, duckdb_conn, oracle_solve
 def test_correlated_subquery_is_real(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Correlated subquery providing a fractional per-row upper bound on IS REAL.
+    """Correlated subquery providing a fractional per-row upper bound on(REAL).
 
     Decorrelation emits per-row RHS values; with `AVG(...)` on a continuous
     (non-integer) LHS those bounds are fractional in general. This exercises
@@ -385,7 +385,7 @@ def test_correlated_subquery_is_real(
         SELECT l.l_orderkey, l.l_linenumber, l.l_extendedprice, l.l_quantity, x
         FROM lineitem l
         WHERE l.l_orderkey < 30
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= (SELECT CAST(AVG(l2.l_quantity) AS DOUBLE)
                         FROM lineitem l2
                         WHERE l2.l_orderkey = l.l_orderkey)

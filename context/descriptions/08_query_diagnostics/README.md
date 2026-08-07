@@ -282,7 +282,7 @@ default but costs nothing here — it only runs when a solve fails — and
 SELECT p_partkey, p_retailprice, buy
 FROM part
 WHERE p_partkey <= 8
-DECIDE buy IS BOOLEAN
+DECIDE buy(BOOL)
 SUCH THAT SUM(buy * p_retailprice) <= 3000
 MAXIMIZE SUM(buy * p_retailprice);
 ```
@@ -319,7 +319,7 @@ Nothing stops `buy` from growing, so revenue grows with it.
 SELECT p_partkey, buy
 FROM part
 WHERE p_partkey <= 8
-DECIDE buy IS REAL
+DECIDE buy(REAL)
 SUCH THAT buy >= 0
 MAXIMIZE SUM(buy * p_retailprice);
 ```
@@ -351,7 +351,7 @@ slice escapes. The relation pinpoints it, turning "something is unbounded" into
 SELECT p_partkey, p_mfgr, buy
 FROM part
 WHERE p_size <= 5
-DECIDE buy IS REAL
+DECIDE buy(REAL)
 SUCH THAT buy >= 0
      AND SUM(buy * p_retailprice) <= 100000 WHEN p_mfgr <> 'Manufacturer#1'
 MAXIMIZE SUM(buy * p_retailprice * 0.10);
@@ -382,7 +382,7 @@ FROM partsupp ps
 JOIN supplier s ON ps.ps_suppkey = s.s_suppkey
 JOIN nation n ON s.s_nationkey = n.n_nationkey
 JOIN region r ON n.n_regionkey = r.r_regionkey
-DECIDE s.capacity IS REAL
+DECIDE s.capacity(REAL)
 SUCH THAT capacity <= 1000 WHEN r_name <> 'EUROPE'
 MAXIMIZE SUM(capacity * ps_supplycost);
 ```
@@ -411,7 +411,7 @@ relation is stashed.
 SELECT p_partkey, buy
 FROM part
 WHERE p_partkey <= 8
-DECIDE buy IS REAL
+DECIDE buy(REAL)
 SUCH THAT buy >= 0
 MAXIMIZE SUM(buy * p_retailprice) + SUM(POWER(buy, 2));
 ```
@@ -439,7 +439,7 @@ exact loosening.
 SELECT p_partkey, make
 FROM part
 WHERE p_partkey <= 8
-DECIDE make IS INTEGER
+DECIDE make(INT)
 SUCH THAT make >= 10 AND make <= 5
 MAXIMIZE SUM(make);
 ```
@@ -471,7 +471,7 @@ of reach. The suggestion is quoted as an `AVG` bound, in the same units you wrot
 SELECT p_partkey, buy
 FROM part
 WHERE p_partkey <= 8
-DECIDE buy IS BOOLEAN
+DECIDE buy(BOOL)
 SUCH THAT AVG(buy * p_retailprice) >= 5000
 MAXIMIZE SUM(buy);
 ```
@@ -503,7 +503,7 @@ Neither edit alone restores a solution, so the diagnosis proposes a balanced pai
 SELECT p_partkey, buy
 FROM part
 WHERE p_partkey <= 8
-DECIDE buy IS BOOLEAN
+DECIDE buy(BOOL)
 SUCH THAT SUM(buy) >= 20 AND SUM(buy * p_retailprice) <= 900
 MAXIMIZE SUM(buy);
 ```
@@ -538,7 +538,7 @@ loosening fixes that; the diagnosis says which clause to drop (`edit_kind = drop
 
 ```sql
 SELECT promo FROM part WHERE p_partkey = 1
-DECIDE promo IS BOOLEAN
+DECIDE promo(BOOL)
 SUCH THAT promo <> 0 AND promo <> 1
 MINIMIZE SUM(promo);
 ```
@@ -569,7 +569,7 @@ SELECT l_orderkey, l_linenumber, ship
 FROM lineitem
 JOIN partsupp ON l_partkey = ps_partkey AND l_suppkey = ps_suppkey
 WHERE l_orderkey IN (33, 295)
-DECIDE ship IS INTEGER
+DECIDE ship(INT)
 SUCH THAT ship >= l_quantity AND ship <= ps_availqty
 MAXIMIZE SUM(ship);
 ```
@@ -629,7 +629,7 @@ Details: SELECT * FROM decide_diagnostics();
 SELECT p_partkey, p_mfgr, buy
 FROM part
 WHERE p_partkey <= 12
-DECIDE buy IS BOOLEAN
+DECIDE buy(BOOL)
 SUCH THAT SUM(buy) >= 3 PER p_mfgr
 MAXIMIZE SUM(buy);
 ```
@@ -724,7 +724,7 @@ FROM (
          ((p_partkey*15)%97)+1 AS w4, ((p_partkey*17)%97)+1 AS w5
   FROM part WHERE p_partkey <= 400
 )
-DECIDE buy IS BOOLEAN
+DECIDE buy(BOOL)
 SUCH THAT SUM(w0*buy) <= 9785 AND SUM(w1*buy) <= 9766
       AND SUM(w2*buy) <= 9747 AND SUM(w3*buy) <= 9776
       AND SUM(w4*buy) <= 9806 AND SUM(w5*buy) <= 9787
@@ -772,7 +772,7 @@ FROM (
          hash(p_partkey*6+4)%100 AS c4, hash(p_partkey*6+5)%100 AS c5
   FROM part WHERE p_partkey <= 60
 )
-DECIDE pick IS BOOLEAN
+DECIDE pick(BOOL)
 SUCH THAT SUM(c0*pick) = 1509 AND SUM(c1*pick) = 1554
       AND SUM(c2*pick) = 1495 AND SUM(c3*pick) = 1535
       AND SUM(c4*pick) = 1473 AND SUM(c5*pick) = 1650;
@@ -873,7 +873,7 @@ PRAGMA diagnose_decide='off';
 SELECT p_partkey, buy
 FROM part
 WHERE p_partkey <= 8
-DECIDE buy IS REAL
+DECIDE buy(REAL)
 SUCH THAT buy >= 0
 MAXIMIZE SUM(buy * p_retailprice);
 ```

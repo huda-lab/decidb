@@ -11,9 +11,9 @@ are constraint-only (verify feasibility but not optimality) — a legacy tier pe
 
 Oracle-verified groups in `test_entity_scope.py`:
 
-- **Core**: basic BOOLEAN selection, tight-SUM entity consistency under pressure, IS INTEGER (per-row + aggregate bounds), IS REAL (single-table, DOUBLE readback), mixed entity- + row-scoped variables (VarIndexer three-block layout), two entity-scoped vars from different tables.
+- **Core**: basic BOOL selection, tight-SUM entity consistency under pressure, INT (per-row + aggregate bounds), REAL (single-table, DOUBLE readback), mixed entity- + row-scoped variables (VarIndexer three-block layout), two entity-scoped vars from different tables.
 - **WHEN / PER composition**: WHEN on constraint and on objective, single- and multi-column PER, WHEN + PER triple, WHEN filtering all rows for some entities.
-- **Aggregate interactions**: MAX/MIN easy and hard (Big-M) cases, hard MIN on entity-scoped INTEGER, entity + WHEN + hard MAX triple, ABS linearization (per-row aux → entity), AVG → SUM scaling (standalone and + PER), NE (`<>`) Big-M with objective verification, NE + PER (oracle via `add_ne_indicator` per region).
+- **Aggregate interactions**: MAX/MIN easy and hard (Big-M) cases, hard MIN on entity-scoped INT, entity + WHEN + hard MAX triple, ABS linearization (per-row aux → entity), AVG → SUM scaling (standalone and + PER), NE (`<>`) Big-M with objective verification, NE + PER (oracle via `add_ne_indicator` per region).
 - **Source shapes / NULL semantics**: scalar uncorrelated subquery RHS + PER + entity-scoped (three-way), three-table fan-out JOIN with entity variable on the inner table and PER on an outer-table column, NULL entity-key column grouping into a single shared entity, side-by-side entity-scope vs PER NULL-key divergence (entity-scope collapses NULL keys into one shared entity; PER excludes NULL-keyed rows from groups — rows float free of the cap), and a row-scoped baseline contrast on a 1-to-many orders×lineitem JOIN.
 
 Rows with unique caveats:
@@ -27,8 +27,8 @@ Rows with unique caveats:
 
 | Feature A | Feature B | Tested |
 |-----------|-----------|--------|
-| entity_scope | BOOLEAN | ✓ |
-| entity_scope | INTEGER | ✓ |
+| entity_scope | BOOL | ✓ |
+| entity_scope | INT | ✓ |
 | entity_scope | REAL | ✓ |
 | entity_scope | row-scoped (mixed) | ✓ |
 | entity_scope | WHEN (constraint) | ✓ |

@@ -12,7 +12,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
 | [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, SOCP |
-| [decide/](decide/) | IS BOOLEAN, IS INTEGER, IS REAL, multiple vars, row-scoped/table-scoped, linearity | Clause order (`DECIDE` before `FROM`), `(BOOL)`/`(INT)` type form, query-wide `scalar`, relation-qualified reducer `SUM(D: expr)` — all paper §3 |
+| [decide/](decide/) | BOOL, INT, REAL (type mandatory), multiple vars, row-scoped/table-scoped, both clause orders, linearity | Query-wide `scalar`, relation-qualified reducer `SUM(D: expr)` — paper §3 |
 | [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`) | `IS BETWEEN` spelling (paper §3) |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
 | [when/](when/) | Full implementation (constraints + objectives + PER composition + aggregate-local filters) | *(no planned features)* |
@@ -27,12 +27,11 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 
 | Keyword / Feature | Implemented | Todo File |
 |---|---|---|
-| `DECIDE x IS BOOLEAN` | Yes | — |
-| `DECIDE x IS INTEGER` | Yes | — |
-| `DECIDE x IS REAL` | Yes | — |
-| `DECIDE x` (default INTEGER) | Yes | — |
-| Multiple variables: `DECIDE x, y` | Yes | — |
-| `DECIDE Table.var` (table-scoped) | Yes (entity-keyed, mixed with row-scoped) | — |
+| `DECIDE x(BOOL)` | Yes | — |
+| `DECIDE x(INT)` | Yes | — |
+| `DECIDE x(REAL)` | Yes | — |
+| Multiple variables: `DECIDE x(INT), y(BOOL)` | Yes | — |
+| `DECIDE Table.var(TYPE)` (table-scoped) | Yes (entity-keyed, mixed with row-scoped) | — |
 | `SUCH THAT` with `=`, `<`, `<=`, `>`, `>=` | Yes | — |
 | `<>` (not-equal) | Yes (Big-M disjunction) | — |
 | `AND` constraint separator | Yes | — |
@@ -60,7 +59,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `DIAGNOSE <query>` prefix | No (paper §5; `PRAGMA diagnose_decide='auto'` today) | [diagnose/todo.md](diagnose/todo.md) |
 | Relation-qualified reducer `SUM(D: expr)` | No (paper §3.2; aggregates run over join-result rows today) | [decide/todo.md](decide/todo.md) |
 | `DECIDE` before `FROM` (paper clause order) | No (paper Figure 1; `SELECT…FROM…DECIDE` only today — both orders will be accepted) | [decide/todo.md](decide/todo.md) |
-| `DECIDE x(BOOL)` / `x(INT)` type form | No (paper §3.1; `IS BOOLEAN` / `IS INTEGER` only today — both forms will be accepted) | [decide/todo.md](decide/todo.md) |
+| `DECIDE x(BOOL)` / `x(INT)` type form | No (paper §3.1; `BOOL` / `INT` only today — both forms will be accepted) | [decide/todo.md](decide/todo.md) |
 | `DECIDE scalar x(INT)` (query-wide) | No (paper §3.1; row-scoped and table-scoped only today) | [decide/todo.md](decide/todo.md) |
 | `IS BETWEEN a AND b` | No (paper Figure 1; bare `BETWEEN` only today — both spellings will be accepted) | [such_that/todo.md](such_that/todo.md) |
 
@@ -96,12 +95,16 @@ DECIQL extends SQL with constrained optimization. The key structure:
 
 ```sql
 SELECT select_list
+DECIDE [Table.]variable_name(type) [, ...]
 FROM table_expression
 [WHERE ...]
-DECIDE [Table.]variable_name [IS type] [, ...]
 SUCH THAT
     constraint [AND constraint ...]
 [MAXIMIZE | MINIMIZE] objective_expression
 ```
+
+The declaration may equally sit after `WHERE`, immediately before `SUCH THAT`
+(`... FROM t WHERE ... DECIDE x(INT) SUCH THAT ...`). Both orders are accepted
+and produce the same plan.
 
 See `context/descriptions/00_project_overview/syntax_reference.md` for the full implemented syntax reference.

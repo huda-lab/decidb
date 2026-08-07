@@ -7,7 +7,7 @@
 --       combined, so the ABS Path-B constraint lives in Q10 instead. Keep L0 alone here.
 SELECT l_orderkey, l_linenumber, l_quantity, adj
 FROM (SELECT l_orderkey, l_linenumber, l_quantity FROM lineitem ORDER BY l_orderkey, l_linenumber LIMIT ${Q3_ROW_LIMIT}) lineitem
-DECIDE adj IS REAL
+DECIDE adj(REAL)
 SUCH THAT adj BETWEEN -20 AND 20
     AND SUM(ABS(adj)) <= ${Q3_ABS_CAP}
     AND norm(adj, 'inf') <= 15

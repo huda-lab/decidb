@@ -33,7 +33,7 @@ def test_modulo_data_coefficient_matches_oracle(decidb_cli, duckdb_conn, oracle_
     cardinality cap must match an oracle fed the same per-row coefficients."""
     sql = """
         SELECT id, x FROM range(1, 5) t(id)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE SUM(((id * 7) % 97) * x)
     """
@@ -84,7 +84,7 @@ def test_modulo_data_coefficient_in_constraint_runs(decidb_cli):
     forces all rows off — a valid, checkable feasibility outcome."""
     rows, cols = decidb_cli.execute("""
         SELECT id, x FROM range(1, 5) t(id)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(((id * 7) % 97) * x) <= 3
         MAXIMIZE SUM(x)
     """)
@@ -108,7 +108,7 @@ def test_mod_function_data_coefficient_matches_oracle(decidb_cli, duckdb_conn, o
     `ToSymbolicRecursive` raised INTERNAL on named data-only functions."""
     sql = """
         SELECT id, x FROM range(1, 6) t(id)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE SUM(mod(id, 5) * x)
     """
@@ -155,7 +155,7 @@ def test_floor_function_data_coefficient_in_constraint(decidb_cli):
     cleanly and the returned assignment satisfies the stated bound."""
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x FROM (VALUES (1, 10.7), (2, 20.3), (3, 5.9)) t(id, v)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(floor(v) * x) <= 16
         MAXIMIZE SUM(x)
     """)
@@ -174,7 +174,7 @@ class TestUnsupportedOperatorOverVariableRejection:
         """`x % 97` genuinely applies `%` to a decision variable → not foldable."""
         decidb_cli.assert_error("""
             SELECT id, x FROM range(1, 5) t(id)
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT SUM((x % 97)) <= 3
             MAXIMIZE SUM(x)
         """, match=r"(?i)'%'")
@@ -185,7 +185,7 @@ class TestUnsupportedOperatorOverVariableRejection:
         fold must NOT swallow variable-bearing functions)."""
         decidb_cli.assert_error("""
             SELECT id, x FROM range(1, 5) t(id)
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT SUM(mod(x, 5)) <= 3
             MAXIMIZE SUM(x)
         """, match=r"(?i)'mod'.*DECIDE variable")
@@ -195,7 +195,7 @@ class TestUnsupportedOperatorOverVariableRejection:
         never a C++ trace / INTERNAL Error."""
         sql = """
             SELECT id, x FROM range(1, 5) t(id)
-            DECIDE x IS INTEGER
+            DECIDE x(INT)
             SUCH THAT SUM(((id * 7) % x)) <= 3
             MAXIMIZE SUM(x)
         """

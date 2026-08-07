@@ -78,7 +78,7 @@ class TestNoGlobalGrammarPollution:
         try:
             decidb_cli.execute(
                 "SELECT l_orderkey FROM lineitem "
-                "DECIDE x IS BOOLEAN SUCH THAT SUM(x) <= 1 "
+                "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 "
                 "GROUP BY l_orderkey "
                 "HAVING max(l_quantity) > CASE WHEN l_orderkey > 0 THEN 0 ELSE 1 END"
             )

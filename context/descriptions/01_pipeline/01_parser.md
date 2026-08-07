@@ -137,9 +137,9 @@ The symbolic layer normalizes the constraint child while passing through the PER
 Table-scoped (entity-scoped) decision variables use a qualified `table.variable` syntax, parsed via a dedicated grammar rule in `select.y`:
 
 ```yacc
-ColId '.' ColId IS variable_type
+ColId '.' ColId '(' variable_type ')'
 ```
 
-When the parser encounters a dotted name in the `DECIDE` clause (e.g., `DECIDE drivers.assigned IS BOOLEAN`), it produces a qualified `PGColumnRef` with a two-part name list — the first part is the table alias, the second is the variable name. This is the same `PGColumnRef` structure DuckDB uses for qualified column references (e.g., `t.col`), so no new AST node types are required.
+When the parser encounters a dotted name in the `DECIDE` clause (e.g., `DECIDE drivers.assigned(BOOL)`), it produces a qualified `PGColumnRef` with a two-part name list — the first part is the table alias, the second is the variable name. This is the same `PGColumnRef` structure DuckDB uses for qualified column references (e.g., `t.col`), so no new AST node types are required.
 
 During normalization the symbolic layer canonicalizes a decision variable to its **unqualified** name, so `S.keepS` and `keepS` are the same symbol (§2). The table prefix is therefore not carried through algebraic simplification, and does not need to be: `bind_select_node.cpp` registers the unqualified name for every variable and rejects two variables that share one (`Duplicate DECIDE variable name`), so the unqualified form always resolves to the right variable. This is the opposite of the rule for *data* columns, which are keyed by full path precisely because two tables may expose the same column name. The binder (not the parser) is responsible for resolving the table alias and validating that the referenced table exists in the query's bind context.

@@ -30,7 +30,7 @@ def test_when_compound_and_aggregate(decidb_cli, duckdb_conn, oracle_solver, per
                l_returnflag, l_linestatus, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 50 WHEN (l_returnflag = 'R' AND l_linestatus = 'F')
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -95,7 +95,7 @@ def test_when_compound_or_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100 WHEN (l_returnflag = 'R' OR l_returnflag = 'A')
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -160,7 +160,7 @@ def test_when_compound_and_perrow(decidb_cli, duckdb_conn, oracle_solver, perf_t
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x <= 0 WHEN (l_returnflag = 'N' AND l_quantity > 30)
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
@@ -225,7 +225,7 @@ def test_when_compound_and_objective(decidb_cli, duckdb_conn, oracle_solver, per
                l_returnflag, l_discount, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice) WHEN (l_returnflag = 'R' AND l_discount >= 0.06)
     """
@@ -297,7 +297,7 @@ def test_when_compound_mixed_types(decidb_cli, duckdb_conn, oracle_solver, perf_
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 80 WHEN (l_returnflag = 'A' AND l_quantity <= 25)
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -362,7 +362,7 @@ def test_when_compound_or_perrow(decidb_cli, duckdb_conn, oracle_solver, perf_tr
                l_discount, x
         FROM lineitem
         WHERE l_orderkey < 100
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT x = 1 WHEN (l_discount >= 0.09 OR l_quantity < 3)
             AND SUM(x * l_quantity) <= 5000
         MAXIMIZE SUM(x * l_extendedprice)

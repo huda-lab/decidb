@@ -18,7 +18,7 @@ Unlike a standard `GROUP BY` or `SELECT` clause, the `DECIDE` clause introduces 
 
 ### 2.1 Table-Scoped (Entity-Scoped) Variables
 
-When a variable declaration uses the qualified `table.variable` syntax (e.g., `DECIDE drivers.assigned IS BOOLEAN`), the binder performs additional resolution:
+When a variable declaration uses the qualified `table.variable` syntax (e.g., `DECIDE drivers.assigned(BOOL)`), the binder performs additional resolution:
 
 1. **Table alias resolution**: The binder looks up the table alias (e.g., `drivers`) in the current bind context to verify that the referenced table exists in the FROM clause.
 2. **Entity key identification**: The binder identifies the entity key columns for the referenced table. These are the columns that define unique entities (typically a primary key or the columns used to distinguish rows belonging to the same entity).
@@ -66,16 +66,15 @@ DeciDB supports both **uncorrelated and correlated scalar subqueries** in constr
 
 ## 4. Type Inference & Syntactic Sugar
 
-Type declarations are specified in the `DECIDE` clause itself (e.g., `DECIDE x IS BOOLEAN`). The binder translates these into the appropriate internal representation and adds implicit constraints.
+Type declarations are specified in the `DECIDE` clause itself (e.g., `DECIDE x(BOOL)`). The binder translates these into the appropriate internal representation and adds implicit constraints.
 
 | DECIDE Syntax         | Internal Representation | Added Constraints     |
 | :-------------------- | :---------------------- | :-------------------- |
-| `DECIDE x IS INTEGER` | `x` (Type: Integer)     | `x >= 0`              |
-| `DECIDE x IS BOOLEAN` | `x` (Type: Integer)     | `x >= 0` AND `x <= 1` |
-| `DECIDE x`            | `x` (Type: Integer)     | `x >= 0` (default)    |
-| `DECIDE x IS REAL`    | `x` (Type: Double)      | `x >= 0`              |
+| `DECIDE x(INT)` | `x` (Type: Integer)     | `x >= 0`              |
+| `DECIDE x(BOOL)` | `x` (Type: Integer)     | `x >= 0` AND `x <= 1` |
+| `DECIDE x(REAL)`    | `x` (Type: Double)      | `x >= 0`              |
 
-Note: DuckDB's internal `LogicalType::INTEGER` is used for INTEGER and BOOLEAN decision variables. `IS BOOLEAN` is strictly a domain constraint, not a storage type. `IS REAL` variables use `LogicalType::DOUBLE` internally and generate continuous (non-integer) solver variables.
+Note: DuckDB's internal `LogicalType::INTEGER` is used for INT and BOOL decision variables. `BOOL` is strictly a domain constraint, not a storage type. `REAL` variables use `LogicalType::DOUBLE` internally and generate continuous (non-integer) solver variables.
 
 ## 5. `WHEN` Condition Validation
 

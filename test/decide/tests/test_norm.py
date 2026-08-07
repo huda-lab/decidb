@@ -19,7 +19,7 @@ from decidb_cli import DecidBCliError
 _BASE = """
     SELECT l_orderkey, l_linenumber, l_quantity, new_qty
     FROM lineitem WHERE l_orderkey <= 3
-    DECIDE new_qty IS REAL
+    DECIDE new_qty(REAL)
     SUCH THAT SUM(new_qty) = 100
     MINIMIZE {obj}
 """
@@ -65,7 +65,7 @@ def test_norm_l0_matches_handrolled(decidb_cli):
     hand = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem WHERE l_orderkey <= 3
-        DECIDE new_qty IS REAL, z IS BOOLEAN
+        DECIDE new_qty(REAL), z(BOOL)
         SUCH THAT SUM(new_qty) = 100 AND ABS(new_qty - l_quantity) <= 100 * z
         MINIMIZE SUM(z)
     """
@@ -86,7 +86,7 @@ def test_norm_l0_count_constraint(decidb_cli):
     sql = f"""
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem WHERE l_orderkey <= 3
-        DECIDE new_qty IS REAL
+        DECIDE new_qty(REAL)
         SUCH THAT SUM(new_qty) = {target} AND norm(new_qty - l_quantity, 0, 1000) <= 2
         MINIMIZE SUM(ABS(new_qty - l_quantity))
     """
@@ -138,7 +138,7 @@ def test_norm_with_per_constraint(decidb_cli):
     norm_sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem WHERE l_orderkey <= 3
-        DECIDE new_qty IS REAL
+        DECIDE new_qty(REAL)
         SUCH THAT new_qty >= 1 AND norm(new_qty - l_quantity, 1) <= 5 PER l_orderkey
         MINIMIZE SUM(new_qty)
     """
@@ -189,7 +189,7 @@ def test_norm_l0_lower_bound_infeasible_explicit_m(decidb_cli):
     # one-way link let phantom z=1 inflate the count and return a (wrong) solution.
     decidb_cli.assert_error("""
         SELECT id, x FROM (VALUES (1), (2)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0, 100) >= 2
         MINIMIZE SUM(x)
     """, match=r"(?i)infeasible")
@@ -201,7 +201,7 @@ def test_norm_l0_lower_bound_infeasible_auto_m(decidb_cli):
     # Same, via the auto-M path (placeholder M refilled at execution).
     decidb_cli.assert_error("""
         SELECT id, x FROM (VALUES (1), (2)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0) >= 2
         MINIMIZE SUM(x)
     """, match=r"(?i)infeasible")
@@ -212,7 +212,7 @@ def test_norm_l0_lower_bound_infeasible_auto_m(decidb_cli):
 def test_norm_l0_equality_infeasible(decidb_cli):
     decidb_cli.assert_error("""
         SELECT id, x FROM (VALUES (1), (2)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0, 100) = 2
         MINIMIZE SUM(x)
     """, match=r"(?i)infeasible")
@@ -224,7 +224,7 @@ def test_norm_l0_lower_bound_infeasible_highs(decidb_cli_highs):
     # Solver-agnostic: the reverse link is in our model builder, so HiGHS enforces it too.
     decidb_cli_highs.assert_error("""
         SELECT id, x FROM (VALUES (1), (2)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0, 100) >= 2
         MINIMIZE SUM(x)
     """, match=r"(?i)infeasible")
@@ -236,7 +236,7 @@ def test_norm_l0_maximize_not_inflated(decidb_cli):
     # objective must not be inflated. The solve succeeds with x all 0 ...
     rows, cols = decidb_cli.execute("""
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x = 0
         MAXIMIZE norm(x, 0, 100)
     """)
@@ -245,7 +245,7 @@ def test_norm_l0_maximize_not_inflated(decidb_cli):
     # ... and demanding even one nonzero is then infeasible (count cannot exceed 0).
     decidb_cli.assert_error("""
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x = 0 AND norm(x, 0, 100) >= 1
         MAXIMIZE norm(x, 0, 100)
     """, match=r"(?i)infeasible")
@@ -257,7 +257,7 @@ def test_norm_l0_lower_bound_feasible_is_honest(decidb_cli):
     # actually-nonzero rows (the constraint is met by real nonzeros, not phantom z).
     rows, cols = decidb_cli.execute("""
         SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x <= 10 AND norm(x, 0, 100) >= 2 AND SUM(x) >= 4
         MINIMIZE SUM(x)
     """)
@@ -273,7 +273,7 @@ def test_norm_l0_tolerance_pragma(decidb_cli):
     # x=1 count as zero, so the same `>= 1` becomes infeasible.
     sql = """
         SELECT id, x FROM (VALUES (1)) t(id)
-        DECIDE x IS REAL
+        DECIDE x(REAL)
         SUCH THAT x = 1 AND norm(x, 0, 100) >= 1
         MINIMIZE SUM(x)
     """

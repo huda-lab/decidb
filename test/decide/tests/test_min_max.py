@@ -62,7 +62,7 @@ def test_max_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) <= 0
         MAXIMIZE SUM(x)
     """
@@ -84,7 +84,7 @@ def test_min_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MIN(x) >= 1
         MAXIMIZE SUM(x)
     """
@@ -107,7 +107,7 @@ def test_max_leq_with_expr(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x * l_quantity) <= {threshold}
         MAXIMIZE SUM(x)
     """
@@ -172,7 +172,7 @@ def test_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) >= 1
         MINIMIZE SUM(x)
     """
@@ -197,7 +197,7 @@ def test_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MIN(x) <= 0
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -221,7 +221,7 @@ def test_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) = 1
         MINIMIZE SUM(x)
     """
@@ -245,7 +245,7 @@ def test_min_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MIN(x) = 0
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -270,7 +270,7 @@ def test_minimize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
         MINIMIZE MAX(x * l_quantity)
     """
@@ -338,7 +338,7 @@ def test_maximize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
         MAXIMIZE MIN(x * l_quantity)
     """
@@ -407,7 +407,7 @@ def test_maximize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 3
         MAXIMIZE MAX(x * l_extendedprice)
     """
@@ -487,7 +487,7 @@ def test_max_constraint_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_t
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) <= 0 WHEN l_quantity > 30
         MAXIMIZE SUM(x)
     """
@@ -524,7 +524,7 @@ def test_maximize_max_mixed_sign_coefficient(decidb_cli):
         )
         SELECT id, c, x
         FROM data
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 10 AND x >= 10 WHEN c < 0
         MAXIMIZE MAX(c * x)
     """
@@ -552,7 +552,7 @@ def test_maximize_max_max_per_mixed_sign(decidb_cli):
         )
         SELECT g, c, x
         FROM data
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x <= 10 AND x >= 10 WHEN c < 0
         MAXIMIZE MAX(MAX(c * x)) PER g
     """
@@ -580,7 +580,7 @@ def test_min_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
         MAXIMIZE MIN(x * l_quantity) WHEN l_quantity <= 30
     """
@@ -666,7 +666,7 @@ def test_max_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
         MINIMIZE MAX(x * l_quantity) WHEN l_quantity <= 30
     """
@@ -744,7 +744,7 @@ def test_minimize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem
         WHERE l_orderkey <= 3
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT x >= 1 AND
               x <= 5 AND
               SUM(x) >= 10
@@ -821,7 +821,7 @@ def test_max_constraint_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) <= 0 PER l_orderkey
         MAXIMIZE SUM(x)
     """
@@ -848,7 +848,7 @@ def test_min_max_when_per_composition(decidb_cli, duckdb_conn, oracle_solver, pe
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 10
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) <= 0 WHEN l_quantity > 40 PER l_orderkey
         MAXIMIZE SUM(x)
     """
@@ -876,7 +876,7 @@ def test_max_leq_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem
         WHERE l_orderkey <= 3
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT MAX(x) <= 3
         MAXIMIZE SUM(x)
     """
@@ -900,7 +900,7 @@ def test_minimize_max_integer(decidb_cli, duckdb_conn, oracle_solver, perf_track
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 3
-        DECIDE x IS INTEGER
+        DECIDE x(INT)
         SUCH THAT SUM(x) >= 10 AND
               x <= 5
         MINIMIZE MAX(x)
@@ -966,7 +966,7 @@ def test_multiple_minmax_constraints(decidb_cli, duckdb_conn, oracle_solver, per
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) <= 0 WHEN l_quantity > 40 AND
               MIN(x) >= 1 WHEN l_quantity < 5
         MAXIMIZE SUM(x)
@@ -994,7 +994,7 @@ def test_minmax_constraint_and_objective(decidb_cli, duckdb_conn, oracle_solver,
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem
         WHERE l_orderkey <= 5
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) >= 1
         MINIMIZE MAX(x * l_extendedprice)
     """
@@ -1027,7 +1027,7 @@ def test_max_notequal_error(decidb_cli):
     """MAX(x) <> K should produce a binder error."""
     decidb_cli.assert_error("""
         SELECT l_quantity FROM lineitem
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x) <> 0
         MAXIMIZE SUM(x) LIMIT 1
     """, match=r"does not support <> comparison with MIN/MAX")
@@ -1056,7 +1056,7 @@ def test_sum_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
                    (2, 5.0, true),
                    (3, 7.0, false)
         ) t(id, v, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= 12
         MAXIMIZE SUM(x * v)
     """
@@ -1111,7 +1111,7 @@ def test_max_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
                    (2, 5.0, false, true),
                    (3, 7.0, false, false)
         ) t(id, v, w1, w2)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x * v) WHEN w1 + MAX(x * v) WHEN w2 <= 12
         MAXIMIZE SUM(x * v)
     """
@@ -1170,7 +1170,7 @@ def test_min_plus_min_geq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
                    (2, 8.0, false, true),
                    (3, 7.0, false, false)
         ) t(id, v, w1, w2)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MIN(x * v) WHEN w1 + MIN(x * v) WHEN w2 >= 15
         MINIMIZE SUM(x * v)
     """
@@ -1224,7 +1224,7 @@ def test_composed_minmax_hard_max_constraint(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x FROM (VALUES (1,10.0),(2,20.0),(3,30.0)) t(id,v)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(x * v) >= 40
         MINIMIZE SUM(x)
     """)
@@ -1240,7 +1240,7 @@ def test_composed_minmax_subtraction_rejected(decidb_cli):
     """Subtraction in a composed MIN/MAX LHS is rejected in v1."""
     decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT MAX(x * v) WHEN w - MIN(x * v) WHEN w <= 3
         MAXIMIZE SUM(x * v)
     """, match=r"does not support subtraction")
@@ -1266,7 +1266,7 @@ def test_composed_minmax_scalar_mult_hard_min(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x FROM (VALUES (1,10.0,true),(2,5.0,true)) t(id,v,w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT (2 * MIN(x * v) WHEN w) + SUM(x * v) <= 20
         MAXIMIZE SUM(x * v)
     """)
@@ -1289,7 +1289,7 @@ def test_composed_minmax_scalar_mult_hard_max(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x FROM (VALUES (1,10.0),(2,5.0)) t(id,v)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(2 * x * v) >= 25
         MINIMIZE SUM(x)
     """)
@@ -1307,7 +1307,7 @@ def test_composed_minmax_per_wrapper_rejected(decidb_cli):
     """PER on a composed MIN/MAX constraint is rejected in v1."""
     decidb_cli.assert_error("""
         SELECT id, v, g FROM (VALUES (1, 10.0, true, 'A'), (2, 5.0, true, 'B')) t(id, v, w, g)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= 12 PER g
         MAXIMIZE SUM(x * v)
     """, match=r"does not support outer WHEN/PER")
@@ -1324,7 +1324,7 @@ def test_composed_minmax_nonconst_rhs_subquery_rejected(decidb_cli):
     """
     decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= (SELECT 12)
         MAXIMIZE SUM(x * v)
     """, match=r"Composed MIN/MAX in DECIDE v1 requires a constant RHS")
@@ -1342,7 +1342,7 @@ def test_composed_minmax_nonconst_rhs_column_rejected(decidb_cli):
     """
     decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true, 12), (2, 5.0, true, 12)) t(id, v, w, cap)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= cap
         MAXIMIZE SUM(x * v)
     """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate")
@@ -1363,7 +1363,7 @@ def test_composed_minmax_outer_when_rejected(decidb_cli):
         SELECT id, v, tier FROM (
             VALUES (1, 10.0, true, 'high'), (2, 5.0, true, 'low')
         ) t(id, v, w, tier)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT (SUM(x * v) + MAX(x * v) WHEN w) <= 12 WHEN (tier = 'high')
         MAXIMIZE SUM(x * v)
     """, match=r"Cannot combine expression-level WHEN with aggregate-local WHEN")
@@ -1386,7 +1386,7 @@ def test_minimize_sum_plus_max_composed_objective(
                    (2, 5.0, false),
                    (3, 7.0, false)
         ) t(id, v, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
         MINIMIZE SUM(x * v) + MAX(x * v) WHEN w
     """
@@ -1449,7 +1449,7 @@ def test_maximize_min_plus_sum_composed_objective(
                    (2, 5.0, true),
                    (3, 7.0, false)
         ) t(id, v, w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
         MAXIMIZE MIN(x * v) WHEN w + SUM(x * v)
     """
@@ -1512,7 +1512,7 @@ def test_composed_minmax_objective_hard_max(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x FROM (VALUES (1,10.0,true),(2,5.0,true)) t(id,v,w)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
         MAXIMIZE MAX(x * v) WHEN w + SUM(x * v)
     """)
@@ -1536,7 +1536,7 @@ def test_composed_minmax_objective_hard_min(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x FROM (VALUES (1,10.0),(2,5.0),(3,3.0)) t(id,v)
-        DECIDE x IS BOOLEAN
+        DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
         MINIMIZE SUM(x * v) + MIN(x * v)
     """)

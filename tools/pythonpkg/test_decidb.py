@@ -18,10 +18,9 @@ try:
     result = con.execute("""
         SELECT name, weight, value, x
         FROM items
-        DECIDE x
+        DECIDE x(BOOL)
         SUCH THAT
             SUM(x * weight) <= 5
-            AND x IS BINARY
         MAXIMIZE SUM(x * value)
     """).fetchall()
     print("DECIDE query result:")
