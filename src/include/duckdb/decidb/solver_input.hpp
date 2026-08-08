@@ -383,9 +383,9 @@ struct SolverInput {
     //! Entity mappings: one per EntityScopeInfo (source table with scoped vars)
     vector<EntityMapping> entity_mappings;
 
-    //! Per-variable scope: INVALID_INDEX = row-scoped (default),
-    //! otherwise index into entity_mappings
-    vector<idx_t> variable_entity_scope;
+    //! Per-variable scope (row / entity / query-wide scalar).
+    //! For entity-scoped variables, entity_scope_idx indexes entity_mappings.
+    vector<DecideVarScopeInfo> variable_scopes;
 
     //! When set (infeasible diagnosis armed), SolverModel::Build does NOT throw on an
     //! inverted column box (col_lower > col_upper). The model is built and retained so the

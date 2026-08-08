@@ -201,9 +201,9 @@ public:
     //! Entity scope info for each source table with table-scoped variables
     vector<EntityScopeInfo> entity_scopes;
 
-    //! Per-variable scope assignment: INVALID_INDEX = row-scoped,
-    //! otherwise index into entity_scopes
-    vector<idx_t> variable_entity_scope;
+    //! Per-variable scope assignment (row / entity / query-wide scalar);
+    //! entity_scope_idx indexes entity_scopes
+    vector<DecideVarScopeInfo> variable_scopes;
 
     //! Source column name per physical child-output column (positionally aligned
     //! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Used by

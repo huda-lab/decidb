@@ -96,7 +96,7 @@ TEST_CASE("DeciDB F6 variable provenance", "[decidb][query_diagnostics][provenan
 		mapping.num_entities = 2;
 		mapping.row_to_entity = {0, 0, 1, 1};
 		input.entity_mappings.push_back(mapping);
-		input.variable_entity_scope = {DConstants::INVALID_INDEX, 0};
+		input.variable_scopes = {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Entity(0)};
 
 		VarIndexer indexer = VarIndexer::BuildRef(input);
 		duckdb::vector<string> labels = {"x", "cap"};

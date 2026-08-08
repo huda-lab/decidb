@@ -18,8 +18,9 @@
 
 namespace duckdb {
 
-DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables)
-    : DecideBinder(binder, context, variables) {
+DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+                                                 const case_insensitive_set_t &scalar_variables)
+    : DecideBinder(binder, context, variables, scalar_variables) {
 }
 
 static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
@@ -509,6 +510,14 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
 		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
+            auto scalar_name = FindScalarDecideVariable(*func.children.front());
+            if (!scalar_name.empty()) {
+                error_msg = StringUtil::Format(
+                    "'%s' is a query-wide decision, so %s(%s) has nothing to aggregate over; "
+                    "use %s on its own",
+                    scalar_name, StringUtil::Upper(fname), scalar_name, scalar_name);
+                return DecideExpression::INVALID;
+            }
             if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true, /*allow_bilinear=*/true)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;

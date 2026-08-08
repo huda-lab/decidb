@@ -8,8 +8,9 @@
 
 namespace duckdb {
 
-DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables)
-    : DecideBinder(binder, context, variables){
+DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+                                             const case_insensitive_set_t &scalar_variables)
+    : DecideBinder(binder, context, variables, scalar_variables) {
 }
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
@@ -25,7 +26,9 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF:
     case ExpressionClass::CONSTANT: {
-        if (!is_top_expression) {
+        // A bare query-wide decision is a complete objective on its own: it has a
+        // single solver column, so there is nothing for a reducer to collapse.
+        if (!is_top_expression || IsScalarDecideVariable(expr)) {
 	        return ExpressionBinder::BindExpression(expr_ptr, depth);
 	    }
 	    break;
@@ -161,6 +164,14 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
 		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
+            auto scalar_name = FindScalarDecideVariable(*func.children.front());
+            if (!scalar_name.empty()) {
+                error_msg = StringUtil::Format(
+                    "'%s' is a query-wide decision, so %s(%s) has nothing to aggregate over; "
+                    "use %s on its own",
+                    scalar_name, StringUtil::Upper(fname), scalar_name, scalar_name);
+                return DecideExpression::INVALID;
+            }
             if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true)) {
                 error_msg += ", found '" + expr.ToString() + "'";
                 return DecideExpression::INVALID;
@@ -194,6 +205,15 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
             error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }
+    }
+    case ExpressionClass::COLUMN_REF: {
+        // A query-wide decision is a single solver column, so it is already a
+        // scalar objective — it needs no reducer to collapse it.
+        if (IsScalarDecideVariable(expr)) {
+            return DecideExpression::VARIABLE;
+        }
+        error_msg = StringUtil::Format("The objective of the [MAXIMIZE|MINIMIZE] clause must be a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());
+        return DecideExpression::INVALID;
     }
     default: {
         error_msg = StringUtil::Format("The objective of the [MAXIMIZE|MINIMIZE] clause must be a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());

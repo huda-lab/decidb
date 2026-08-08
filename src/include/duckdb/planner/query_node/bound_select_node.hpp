@@ -70,7 +70,7 @@ public:
     vector<bool> is_boolean_var;
     //! Table-scoped variable metadata (populated during binding, transferred to LogicalDecide)
     vector<EntityScopeInfo> entity_scopes;
-    vector<idx_t> variable_entity_scope;
+    vector<DecideVarScopeInfo> variable_scopes;
     //! BoundColumnRefExpressions for entity_key columns (one per key per scope, flattened in scope order).
     //! Transferred to LogicalDecide; see logical_decide.hpp for details on why these exist.
     vector<unique_ptr<Expression>> entity_key_expressions;

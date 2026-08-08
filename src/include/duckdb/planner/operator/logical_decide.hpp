@@ -154,9 +154,9 @@ public:
     //! Empty if all variables are row-scoped (default behavior).
     vector<EntityScopeInfo> entity_scopes;
 
-    //! Per-variable scope assignment: INVALID_INDEX = row-scoped (default),
-    //! otherwise index into entity_scopes.
-    vector<idx_t> variable_entity_scope;
+    //! Per-variable scope assignment (row / entity / query-wide scalar).
+    //! Defaults to row-scoped; entity_scope_idx indexes entity_scopes.
+    vector<DecideVarScopeInfo> variable_scopes;
 
     //! BoundColumnRefExpressions for every entity-key column (flattened in scope order).
     //! These live here so that DuckDB's binder initial column_id selection AND the

@@ -615,8 +615,33 @@ bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<id
 	return true;
 }
 
-DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables) : ExpressionBinder(binder, context), variables(variables) {
-    is_top_expression = true;        
+DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+                           const case_insensitive_set_t &scalar_variables)
+    : ExpressionBinder(binder, context), variables(variables), scalar_variables(scalar_variables) {
+    is_top_expression = true;
+}
+
+bool DecideBinder::IsScalarDecideVariable(const ParsedExpression &expr) const {
+	if (expr.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+		return false;
+	}
+	const auto &colref = expr.Cast<const ColumnRefExpression>();
+	// A scalar is never table-qualified (the grammar rejects that spelling), so
+	// only the bare name can name one.
+	return !colref.IsQualified() && scalar_variables.count(colref.GetColumnName()) > 0;
+}
+
+string DecideBinder::FindScalarDecideVariable(const ParsedExpression &expr) const {
+	if (IsScalarDecideVariable(expr)) {
+		return expr.Cast<const ColumnRefExpression>().GetColumnName();
+	}
+	string found;
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		if (found.empty()) {
+			found = FindScalarDecideVariable(child);
+		}
+	});
+	return found;
 }
 
 BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) {

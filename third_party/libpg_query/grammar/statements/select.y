@@ -176,9 +176,23 @@ variable_type:
 				{ $$ = makeTypeName("bool_variable"); $$->location = @1; }
 		;
 
+/* Same three types, marked query-wide. The scope rides on the type marker
+ * because the marker namespace ("integer_variable", ...) is already private to
+ * DeciDB; the binder strips the "scalar_" prefix and reads it as the scope.
+ */
+scalar_variable_type:
+			INT_P
+				{ $$ = makeTypeName("scalar_integer_variable"); $$->location = @1; }
+			| REAL
+				{ $$ = makeTypeName("scalar_real_variable"); $$->location = @1; }
+			| BOOL_P
+				{ $$ = makeTypeName("scalar_bool_variable"); $$->location = @1; }
+		;
+
 /* A single typed variable declaration. The type is mandatory:
  *   "x(INT)"                  -- row-scoped (one per result row)
  *   "T.x(BOOL)"               -- table-scoped (one per entity in table T)
+ *   "scalar x(INT)"           -- query-wide (one for the whole query)
  */
 typed_decide_variable:
 			ColId '(' variable_type ')'
@@ -197,9 +211,35 @@ typed_decide_variable:
 					col->location = @1;
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$5, @2);
 				}
+			| SCALAR ColId '(' scalar_variable_type ')'
+				{
+					/* Query-wide variable: scalar x(TYPE) */
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make1(makeString($2));
+					col->location = @2;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$4, @3);
+				}
 				/* Removed spellings, kept only to give an actionable message: a
-			 * declaration with no type, and the old "x IS INTEGER" form.
+			 * declaration with no type, the old "x IS INTEGER" form, and a
+			 * table-qualified scalar (a contradiction in terms).
 			 */
+			| SCALAR ColId '.' ColId '(' variable_type ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("scalar DECIDE variable \"%s\" cannot name a table; write scalar %s(INT), or drop scalar for one decision per %s row",
+									$4, $4, $2),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+			| SCALAR ColId
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("DECIDE variable \"%s\" needs a type; write scalar %s(INT), scalar %s(BOOL) or scalar %s(REAL)", $2, $2, $2, $2),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
 			| ColId
 				{
 					ereport(ERROR,

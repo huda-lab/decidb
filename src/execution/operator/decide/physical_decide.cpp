@@ -1958,6 +1958,15 @@ public:
         }
     }
 
+    //! True when the decision referenced by `expr` is query-wide (`scalar`).
+    //! Such a term is a complete objective contribution on its own: it maps to a
+    //! single solver column, so there is no reducer to collapse it.
+    bool IsScalarDecideTerm(const Expression &expr) const {
+        idx_t var_idx = op.FindDecideVariable(expr);
+        return var_idx != DConstants::INVALID_INDEX && var_idx < op.variable_scopes.size() &&
+               op.variable_scopes[var_idx].IsScalar();
+    }
+
     void ExtractAggregateObjectiveTerms(const Expression &expr, Objective &obj, int sign) {
         if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
             auto &cast = expr.Cast<BoundCastExpression>();
@@ -1981,6 +1990,11 @@ public:
                 ExtractAggregateObjectiveTerms(*func.children[0], obj, -sign);
                 return;
             }
+        }
+        // A query-wide decision contributes without a reducer.
+        if (IsScalarDecideTerm(expr)) {
+            ExtractLinearAndBilinearTerms(expr, obj, sign, nullptr);
+            return;
         }
         if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
             throw InvalidInputException(
@@ -2077,7 +2091,9 @@ public:
 
             objective->when_condition = std::move(when_cond);
             objective->per_columns = std::move(per_cols);
-        } else if (BoundExpressionContainsAggregate(*expr)) {
+        } else if (BoundExpressionContainsAggregate(*expr) || IsScalarDecideTerm(*expr)) {
+            // The second arm covers an objective made only of query-wide decisions
+            // (e.g. `minimize max_shortfall`), which carries no aggregate at all.
             objective = make_uniq<Objective>();
             ExtractAggregateObjectiveTerms(*expr, *objective, 1);
             objective->when_condition = std::move(when_cond);
@@ -2742,9 +2758,15 @@ struct UnboundedCandidateProvider {
 
 	vector<ColumnGrouping> operator()(idx_t decide_var_idx, idx_t total_instances) {
 		(void)total_instances;
-		bool entity_scoped = decide_var_idx < var_indexer.is_entity_scoped.size() &&
-		                     var_indexer.is_entity_scoped[decide_var_idx];
-		if (!entity_scoped) {
+		auto scope = decide_var_idx < var_indexer.var_scope.size()
+		                 ? var_indexer.var_scope[decide_var_idx]
+		                 : DecideVarScope::ROW;
+		if (scope == DecideVarScope::SCALAR) {
+			// One column for the whole query: there is no subset of rows or
+			// entities to characterize, so offer no grouping candidates.
+			return {};
+		}
+		if (scope == DecideVarScope::ROW) {
 			return GetRowCandidates();
 		}
 		idx_t scope_idx = decide_var_idx < var_indexer.var_entity_mapping_idx.size()
@@ -3970,7 +3992,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     solver_input.num_rows = num_rows;
     solver_input.num_decide_vars = num_decide_vars;
     solver_input.entity_mappings = std::move(entity_mappings);
-    solver_input.variable_entity_scope = variable_entity_scope;
+    solver_input.variable_scopes = variable_scopes;
     
     // Variable types and bounds
     solver_input.variable_types.resize(num_decide_vars);

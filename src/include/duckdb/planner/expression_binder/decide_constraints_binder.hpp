@@ -17,7 +17,8 @@ namespace duckdb {
 //! The DecideConstraints binder is responsible for binding an expression within the SUCH THAT clause of a SQL statement
 class DecideConstraintsBinder : public DecideBinder {
 public:
-    DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
+    DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+                            const case_insensitive_set_t &scalar_variables = case_insensitive_set_t());
     bool binding_when_condition = false;
 
 protected:

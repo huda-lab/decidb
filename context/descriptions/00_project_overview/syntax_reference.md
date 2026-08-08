@@ -43,6 +43,14 @@ parser error.
   written in parentheses after the name, `x(INT)`. There are exactly three type
   names — `INT`, `BOOL`, `REAL`.
 - Scope: Available in `SUCH THAT`, `MAXIMIZE/MINIMIZE`, and the `SELECT` list.
+- There are three **variable scopes**, which decide how many solver columns one
+  declaration yields:
+
+  | Spelling | Scope | Columns |
+  |---|---|---|
+  | `x(INT)` | row-scoped (default) | one per result row |
+  | `T.x(INT)` | table-scoped | one per distinct entity of `T` (§2.1) |
+  | `scalar x(INT)` | query-wide | exactly one, for the whole query (§2.2) |
 - **Type Declarations** (in DECIDE clause):
   - `x(INT)`: $x \in \{0, 1, 2, ...\}$ by default
   - `x(BOOL)`: $x \in \{0, 1\}$ (automatically adds bounds constraints)
@@ -78,6 +86,41 @@ By default, decision variables are **row-scoped**: the solver creates one variab
 - Entity identification uses all columns from the source table as a composite key.
 - Mixed queries can declare both row-scoped and table-scoped variables.
 - Reduces solver variable count from `num_rows` (join result size) to `num_entities` (distinct entities in the source table).
+
+### 2.2 Query-Wide (`scalar`) Variables
+
+Some decisions are not attached to a tuple. `DECIDE scalar name(TYPE)` declares
+**one** decision shared by the whole query, regardless of input cardinality.
+
+```sql
+SELECT r.regionID, ship, max_shortfall
+FROM routes r
+DECIDE ship(INT), scalar max_shortfall(INT)
+SUCH THAT ship <= max_shortfall
+MINIMIZE max_shortfall - SUM(ship)
+```
+
+- **Spelling.** The `scalar` keyword precedes the name; the type is still
+  mandatory. `scalar` is an unreserved keyword, so it remains usable as an
+  ordinary column, alias, or table name.
+- **Never table-qualified.** `scalar T.x(INT)` is a contradiction and is
+  rejected at parse time — a query-wide decision has no entity to attach to.
+- **Output.** The assigned value is repeated on every output row, the same way a
+  table-scoped assignment repeats on every row carrying that entity.
+- **In constraints.** A query-wide decision may be compared against row-varying
+  data (`ship <= max_shortfall`); the constraint is generated per row, and every
+  generated row references the same solver column. That is what makes the
+  decision shared rather than per-row.
+- **Not aggregable.** A reducer around a query-wide decision — `SUM(cap)`,
+  `AVG(cap)`, or `SUM(x + cap)` — is **rejected**. There is one column, so there
+  is nothing to reduce over, and either plausible reading (coefficient `1` or
+  coefficient `n`) is a different optimization problem. Use the bare name.
+- **In objectives.** Because reducers are rejected, a query-wide decision appears
+  in `MAXIMIZE`/`MINIMIZE` bare, either alone (`MINIMIZE max_shortfall`) or as an
+  additive term beside reducers (`MINIMIZE max_shortfall - SUM(ship)`). Its
+  objective coefficient is applied **once**, not once per row.
+
+Tests: `test/decide/tests/test_scalar_scope.py`.
 
 **SUM/AVG semantics**: Aggregates follow SQL semantics and sum over result rows, not entities. If an entity appears in 3 result rows (because it joined with 3 rows from another table), its variable contributes 3 times to a SUM. This matches what a user would expect from the join result.
 

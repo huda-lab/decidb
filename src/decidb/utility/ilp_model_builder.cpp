@@ -16,19 +16,21 @@ static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
     idx.num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
 
-    idx.is_entity_scoped.resize(num_decide_vars, false);
+    idx.var_scope.resize(num_decide_vars, DecideVarScope::ROW);
     idx.row_var_offset.resize(num_decide_vars, DConstants::INVALID_INDEX);
     idx.entity_var_base.resize(num_decide_vars, DConstants::INVALID_INDEX);
     idx.var_entity_mapping_idx.resize(num_decide_vars, DConstants::INVALID_INDEX);
+    idx.scalar_var_index.resize(num_decide_vars, DConstants::INVALID_INDEX);
 
-    // Classify variables and compute offsets
+    // Classify variables and compute row-block offsets
     idx_t row_var_count = 0;
     for (idx_t v = 0; v < num_decide_vars; v++) {
-        bool scoped = !input.variable_entity_scope.empty() &&
-                      v < input.variable_entity_scope.size() &&
-                      input.variable_entity_scope[v] != DConstants::INVALID_INDEX;
-        idx.is_entity_scoped[v] = scoped;
-        if (!scoped) {
+        // A variable with no recorded scope (synthesized auxiliaries appended after
+        // the declaration list) is row-scoped, matching the previous default.
+        auto scope = v < input.variable_scopes.size() ? input.variable_scopes[v].scope
+                                                     : DecideVarScope::ROW;
+        idx.var_scope[v] = scope;
+        if (scope == DecideVarScope::ROW) {
             idx.row_var_offset[v] = row_var_count;
             row_var_count++;
         }
@@ -41,17 +43,28 @@ static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
     // Entity block: assign base offsets per entity-scoped variable
     idx_t entity_offset = 0;
     for (idx_t v = 0; v < num_decide_vars; v++) {
-        if (!idx.is_entity_scoped[v]) {
+        if (idx.var_scope[v] != DecideVarScope::ENTITY) {
             continue;
         }
-        idx_t scope_idx = input.variable_entity_scope[v];
+        idx_t scope_idx = input.variable_scopes[v].entity_scope_idx;
         D_ASSERT(scope_idx < entity_mappings.size());
         idx.var_entity_mapping_idx[v] = scope_idx;
         idx.entity_var_base[v] = idx.entity_block_start + entity_offset;
         entity_offset += entity_mappings[scope_idx].num_entities;
     }
 
-    idx.global_block_start = idx.entity_block_start + entity_offset;
+    // Scalar block: exactly one column per query-wide variable, independent of num_rows
+    idx.scalar_block_start = idx.entity_block_start + entity_offset;
+    idx_t scalar_count = 0;
+    for (idx_t v = 0; v < num_decide_vars; v++) {
+        if (idx.var_scope[v] != DecideVarScope::SCALAR) {
+            continue;
+        }
+        idx.scalar_var_index[v] = idx.scalar_block_start + scalar_count;
+        scalar_count++;
+    }
+
+    idx.global_block_start = idx.scalar_block_start + scalar_count;
     idx.total_vars = idx.global_block_start + input.num_global_vars;
 }
 
@@ -168,12 +181,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     for (idx_t var = 0; var < num_decide_vars; var++) {
         idx_t num_instances = indexer.NumInstances(var);
         for (idx_t inst = 0; inst < num_instances; inst++) {
-            idx_t var_idx;
-            if (!indexer.is_entity_scoped[var]) {
-                var_idx = inst * indexer.num_row_vars + indexer.row_var_offset[var];
-            } else {
-                var_idx = indexer.entity_var_base[var] + inst;
-            }
+            idx_t var_idx = indexer.InstanceColumn(var, inst);
             model.col_lower[var_idx] = per_var_lower[var];
             model.col_upper[var_idx] = per_var_upper[var];
             model.is_integer[var_idx] = !(input.variable_types[var] == LogicalType::DOUBLE ||
@@ -222,6 +230,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 continue;
             }
             auto &col = input.objective_coefficients[term_idx];
+            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR) {
+                // A query-wide decision has one column and does not vary by row, so
+                // its term contributes once rather than once per row — otherwise the
+                // coefficient would be silently multiplied by the input cardinality.
+                model.obj_coeffs[indexer.Get(decide_var_idx, 0)] += col.Size() > 0 ? col.Get(0) : 1.0;
+                continue;
+            }
             for (idx_t row = 0; row < num_rows; row++) {
                 if (row >= col.Size()) break;
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
@@ -494,7 +509,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
                 idx_t v = ec.variable_indices[term_idx];
                 if (v == DConstants::INVALID_INDEX) continue;
-                if (indexer.is_entity_scoped[v]) return false;
+                // Entity- and scalar-scoped variables both collapse many rows onto
+                // one column, so the per-row fan-out below would double-write them.
+                if (indexer.var_scope[v] != DecideVarScope::ROW) return false;
                 if (!seen_vars.insert(v).second) return false;
             }
             return true;
@@ -1182,10 +1199,18 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
             slot.label = var_labels[var];
             slot.decide_var_idx = var;
             // For entity-scoped vars, the instance is the entity id (col - base);
-            // for row-scoped vars it is the row. Both recover from the column.
-            slot.instance = indexer.is_entity_scoped[var]
-                                ? col - indexer.entity_var_base[var]
-                                : row;
+            // for row-scoped vars it is the row; a scalar has exactly one instance.
+            switch (indexer.var_scope[var]) {
+            case DecideVarScope::ENTITY:
+                slot.instance = col - indexer.entity_var_base[var];
+                break;
+            case DecideVarScope::SCALAR:
+                slot.instance = 0;
+                break;
+            default:
+                slot.instance = row;
+                break;
+            }
         }
     }
     // Name any labeled global-block columns (today: aggregate `<>` indicators).

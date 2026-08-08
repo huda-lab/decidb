@@ -99,7 +99,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         }
     }
     decide_op->entity_scopes = std::move(op.entity_scopes);
-    decide_op->variable_entity_scope = std::move(op.variable_entity_scope);
+    decide_op->variable_scopes = std::move(op.variable_scopes);
 
     // Resolve source column names for the surviving (post-pruning) child columns,
     // positionally aligned with the materialized data chunk. Used by the unbounded

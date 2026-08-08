@@ -121,8 +121,8 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 			decide.ne_indicator_indices.push_back(ind_idx);
 			decide.num_auxiliary_vars++;
 			decide.is_boolean_var.push_back(true);
-			if (!decide.variable_entity_scope.empty()) {
-				decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+			if (!decide.variable_scopes.empty()) {
+				decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
 			}
 			// F6: record the user's original <> comparison for diagnosis naming
 			decide.aux_var_expressions.emplace_back(
@@ -793,8 +793,8 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxIndicator(LogicalDecide &d
 	decide.decide_variables.push_back(std::move(ind_var));
 	decide.num_auxiliary_vars++;
 	decide.is_boolean_var.push_back(true);
-	if (!decide.variable_entity_scope.empty()) {
-		decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+	if (!decide.variable_scopes.empty()) {
+		decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
 	}
 	decide.minmax_indicator_links.emplace_back(agg_name, ind_idx);
 	// F6: record the user's original MIN/MAX(inner) for diagnosis naming
@@ -1013,8 +1013,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			decide.decide_variables.push_back(std::move(y_var));
 			decide.num_auxiliary_vars++;
 			decide.is_boolean_var.push_back(true);
-			if (!decide.variable_entity_scope.empty()) {
-				decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+			if (!decide.variable_scopes.empty()) {
+				decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
 			}
 
 			// Tag C1 and C2 so physical_decide.cpp can find them by y_idx at finalization.
@@ -1062,8 +1062,8 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				decide.decide_variables.push_back(std::move(aux_var));
 				decide.num_auxiliary_vars++;
 				decide.is_boolean_var.push_back(false);
-				if (!decide.variable_entity_scope.empty()) {
-					decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX);
+				if (!decide.variable_scopes.empty()) {
+					decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
 				}
 				// F6: record the user's original ABS(inner) for diagnosis naming
 				decide.aux_var_expressions.emplace_back(
@@ -1299,8 +1299,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				decide.decide_variables.push_back(std::move(aux_var));
 				decide.num_auxiliary_vars++;
 				decide.is_boolean_var.push_back(both_bool);
-				if (!decide.variable_entity_scope.empty()) {
-					decide.variable_entity_scope.push_back(DConstants::INVALID_INDEX); // row-scoped
+				if (!decide.variable_scopes.empty()) {
+					decide.variable_scopes.push_back(DecideVarScopeInfo::Row()); // row-scoped
 				}
 				// F6: record the user's original product (b * x) for diagnosis naming
 				decide.aux_var_expressions.emplace_back(

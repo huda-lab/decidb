@@ -24,6 +24,51 @@ enum class DecideExpression : uint8_t {
     SUM
 };
 
+//! How one DECIDE declaration maps onto solver columns.
+//!   ROW    — `x(INT)`        one column per result row
+//!   ENTITY — `T.x(INT)`      one column per distinct entity of table T
+//!   SCALAR — `scalar x(INT)` one column for the whole query
+enum class DecideVarScope : uint8_t {
+    ROW = 0,
+    ENTITY = 1,
+    SCALAR = 2
+};
+
+//! Per-variable scope assignment. Kept as one struct rather than parallel
+//! arrays so the optimizer's auxiliary-variable appends cannot desync the
+//! scope from its entity index.
+struct DecideVarScopeInfo {
+    DecideVarScope scope = DecideVarScope::ROW;
+    //! Index into entity_scopes / entity_mappings. Meaningful only when
+    //! scope == ENTITY; INVALID_INDEX otherwise.
+    idx_t entity_scope_idx = DConstants::INVALID_INDEX;
+
+    DecideVarScopeInfo() = default;
+    DecideVarScopeInfo(DecideVarScope scope_p, idx_t entity_scope_idx_p)
+        : scope(scope_p), entity_scope_idx(entity_scope_idx_p) {
+    }
+
+    static DecideVarScopeInfo Row() {
+        return DecideVarScopeInfo();
+    }
+    static DecideVarScopeInfo Entity(idx_t entity_scope_idx_p) {
+        return DecideVarScopeInfo(DecideVarScope::ENTITY, entity_scope_idx_p);
+    }
+    static DecideVarScopeInfo Scalar() {
+        return DecideVarScopeInfo(DecideVarScope::SCALAR, DConstants::INVALID_INDEX);
+    }
+
+    bool IsRow() const {
+        return scope == DecideVarScope::ROW;
+    }
+    bool IsEntity() const {
+        return scope == DecideVarScope::ENTITY;
+    }
+    bool IsScalar() const {
+        return scope == DecideVarScope::SCALAR;
+    }
+};
+
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
     NONE = 0,   //! No MIN/MAX objective (pure SUM or no objective)

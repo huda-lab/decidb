@@ -1078,7 +1078,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 
         // Table-scoped variable tracking
         vector<EntityScopeInfo> entity_scopes;
-        vector<idx_t> variable_entity_scope;  // per variable: INVALID_INDEX or index into entity_scopes
+        vector<DecideVarScopeInfo> variable_scopes;  // per variable: row / entity / query-wide scalar
         // Map table alias → entity_scopes index (to share scope info for multiple vars on same table)
         case_insensitive_map_t<idx_t> table_scope_map;
 
@@ -1117,6 +1117,15 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 }
             } else {
                 throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration.");
+            }
+
+            // The grammar flags a query-wide declaration by prefixing the type
+            // marker (see scalar_variable_type in select.y). Strip it so the type
+            // comparisons below stay scope-agnostic.
+            const string scalar_prefix = "scalar_";
+            bool is_scalar = StringUtil::StartsWith(type_marker, scalar_prefix);
+            if (is_scalar) {
+                type_marker = type_marker.substr(scalar_prefix.size());
             }
 
             if (bind_context.GetMatchingBinding(name)) {
@@ -1185,7 +1194,15 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 }
             }
 
-            variable_entity_scope.push_back(scope_idx);
+            // A scalar is query-wide, so it never carries an entity scope; the
+            // grammar already rejects the table-qualified spelling.
+            if (is_scalar) {
+                variable_scopes.push_back(DecideVarScopeInfo::Scalar());
+            } else if (scope_idx != DConstants::INVALID_INDEX) {
+                variable_scopes.push_back(DecideVarScopeInfo::Entity(scope_idx));
+            } else {
+                variable_scopes.push_back(DecideVarScopeInfo::Row());
+            }
             var_names.push_back(name);
             var_types.push_back(type_marker == "real_variable" ? LogicalType::DOUBLE : LogicalType::INTEGER);
             is_boolean_var.push_back(type_marker == "bool_variable");
@@ -1329,15 +1346,23 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         }
 
         bind_context.AddGenericBinding(result->decide_index, "decide_variables", var_names, var_types);
+        // Names declared with `scalar`, so the constraint and objective binders can
+        // tell a query-wide decision from a row-scoped one.
+        case_insensitive_set_t scalar_variable_names;
+        for (idx_t v = 0; v < variable_scopes.size() && v < var_names.size(); v++) {
+            if (variable_scopes[v].IsScalar()) {
+                scalar_variable_names.insert(var_names[v]);
+            }
+        }
         // Isolate with brackets to avoid multiple active binders.
         {
-            DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names);
+            DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names, scalar_variable_names);
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
             // Types are now determined from the DECIDE clause, not from constraint binding
         }
         if (statement.decide_objective) {
-            DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names);
+            DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names, scalar_variable_names);
             decide_objective_binder.decide_sense = statement.decide_sense;
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
             result->decide_objective = decide_objective_binder.Bind(objective);
@@ -1423,7 +1448,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 
         // Store table-scoped variable metadata
         result->entity_scopes = std::move(entity_scopes);
-        result->variable_entity_scope = variable_entity_scope;
+        result->variable_scopes = variable_scopes;
 
         // ne_indicator_indices is now populated by DecideOptimizer (post-binding)
         // minmax_indicator_links, flat_objective_agg/is_easy, per_inner/outer_agg/is_easy

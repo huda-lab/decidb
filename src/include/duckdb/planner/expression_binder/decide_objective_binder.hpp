@@ -17,7 +17,8 @@ namespace duckdb {
 //! The DecideObjective binder is responsible for binding an expression within the [MAXIMIZE|MINIMIZE] clause of a SQL statement
 class DecideObjectiveBinder : public DecideBinder {
 public:
-    DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
+    DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+                          const case_insensitive_set_t &scalar_variables = case_insensitive_set_t());
     DecideSense decide_sense = DecideSense::MINIMIZE;
 
 protected:

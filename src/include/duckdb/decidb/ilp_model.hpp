@@ -17,19 +17,24 @@
 namespace duckdb {
 
 //! Maps (decide_var_idx, row) pairs to flat solver variable indices.
-//! Supports mixed row-scoped and entity-scoped variables with a three-block layout:
+//! Supports row-scoped, entity-scoped and query-wide variables with a four-block layout:
 //!   Block 1: row-scoped vars  (num_rows * num_row_vars entries)
 //!   Block 2: entity-scoped vars (sum of num_entities per scope)
-//!   Block 3: global auxiliary vars
+//!   Block 3: scalar (query-wide) vars, one column each
+//!   Block 4: global auxiliary vars
+//! Scalars sit *below* global_block_start so the "user decide-variable columns
+//! occupy [0, global_block_start)" invariant relied on by the model builder and
+//! the column labeller keeps holding.
 struct VarIndexer {
     idx_t num_rows = 0;
     idx_t num_row_vars = 0;          //!< Count of row-scoped decide variables
     idx_t entity_block_start = 0;    //!< First index of entity block
-    idx_t global_block_start = 0;    //!< First index of global block
+    idx_t scalar_block_start = 0;    //!< First index of scalar block
+    idx_t global_block_start = 0;    //!< First index of global (auxiliary) block
     idx_t total_vars = 0;
 
-    //! Per decide-variable: true if entity-scoped
-    vector<bool> is_entity_scoped;
+    //! Per decide-variable scope
+    vector<DecideVarScope> var_scope;
 
     //! For row-scoped vars: offset within the row block (var_idx → position in row)
     vector<idx_t> row_var_offset;
@@ -40,29 +45,58 @@ struct VarIndexer {
     //! For entity-scoped vars: index into entity_mappings source
     vector<idx_t> var_entity_mapping_idx;
 
+    //! For scalar vars: the single flat column index in the scalar block
+    vector<idx_t> scalar_var_index;
+
     //! Pointer to entity mappings (not owned — caller ensures lifetime)
     const vector<EntityMapping> *entity_mappings_ref = nullptr;
     //! Owned copy of entity mappings (used when VarIndexer must outlive its source)
     vector<EntityMapping> entity_mappings_owned;
 
-    //! Get the flat solver variable index for a given decide variable at a given row
+    //! Get the flat solver variable index for a given decide variable at a given row.
+    //! A scalar variable ignores `row` — every row resolves to the same column.
     inline idx_t Get(idx_t var_idx, idx_t row) const {
-        if (!is_entity_scoped[var_idx]) {
+        switch (var_scope[var_idx]) {
+        case DecideVarScope::ROW:
             return row * num_row_vars + row_var_offset[var_idx];
+        case DecideVarScope::SCALAR:
+            return scalar_var_index[var_idx];
+        default: {
+            auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
+            auto &mapping = mappings[var_entity_mapping_idx[var_idx]];
+            idx_t entity_id = mapping.row_to_entity[row];
+            return entity_var_base[var_idx] + entity_id;
         }
-        auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
-        auto &mapping = mappings[var_entity_mapping_idx[var_idx]];
-        idx_t entity_id = mapping.row_to_entity[row];
-        return entity_var_base[var_idx] + entity_id;
+        }
+    }
+
+    //! Flat column for the inst-th instance of a variable, where
+    //! inst < NumInstances(var_idx). Unlike Get(), which resolves through a result
+    //! row, this walks a variable's own instances — rows for row-scoped variables,
+    //! entity ids for entity-scoped ones, and the single column for a scalar.
+    inline idx_t InstanceColumn(idx_t var_idx, idx_t inst) const {
+        switch (var_scope[var_idx]) {
+        case DecideVarScope::ROW:
+            return inst * num_row_vars + row_var_offset[var_idx];
+        case DecideVarScope::SCALAR:
+            return scalar_var_index[var_idx];
+        default:
+            return entity_var_base[var_idx] + inst;
+        }
     }
 
     //! Get the number of instances (copies) for a given decide variable
     inline idx_t NumInstances(idx_t var_idx) const {
-        if (!is_entity_scoped[var_idx]) {
+        switch (var_scope[var_idx]) {
+        case DecideVarScope::ROW:
             return num_rows;
+        case DecideVarScope::SCALAR:
+            return 1;
+        default: {
+            auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
+            return mappings[var_entity_mapping_idx[var_idx]].num_entities;
         }
-        auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
-        return mappings[var_entity_mapping_idx[var_idx]].num_entities;
+        }
     }
 
     //! Build a VarIndexer that OWNS a copy of entity_mappings.

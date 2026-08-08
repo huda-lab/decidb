@@ -52,9 +52,18 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 //! The DecideBinder is a base class for binders in DECIDE statements
 class DecideBinder : public ExpressionBinder {
 public:
-    DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables);
+    DecideBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
+                 const case_insensitive_set_t &scalar_variables = case_insensitive_set_t());
 
 protected:
+    //! True when `expr` is a bare reference to a query-wide (`scalar`) decision.
+    //! A scalar has one solver column, so it needs no reducer to collapse it —
+    //! and conversely may not appear inside one.
+    bool IsScalarDecideVariable(const ParsedExpression &expr) const;
+    //! Name of the query-wide decision referenced anywhere inside `expr`, or ""
+    //! if there is none. Used to reject scalars inside reducers.
+    string FindScalarDecideVariable(const ParsedExpression &expr) const;
+
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
     BindResult BindLocalWhenAggregate(FunctionExpression &when_expr, idx_t depth);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
@@ -65,6 +74,8 @@ protected:
 
     bool is_top_expression;
     case_insensitive_map_t<idx_t> variables;
+    //! Subset of `variables` declared with the `scalar` keyword.
+    case_insensitive_set_t scalar_variables;
 };
 
 } // namespace duckdb

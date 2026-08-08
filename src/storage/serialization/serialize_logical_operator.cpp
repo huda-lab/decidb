@@ -407,8 +407,17 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(213, "per_inner_is_easy", per_inner_is_easy);
 	serializer.WritePropertyWithDefault<bool>(214, "per_outer_is_easy", per_outer_is_easy);
 	serializer.WritePropertyWithDefault<bool>(215, "per_inner_was_avg", per_inner_was_avg);
-	// Table-scoped variable metadata
-	serializer.WritePropertyWithDefault<vector<idx_t>>(216, "variable_entity_scope", variable_entity_scope);
+	// Table-scoped / query-wide variable metadata. Flattened into parallel
+	// vectors: 216 keeps its original meaning (entity index, INVALID for
+	// non-entity vars) and 233 adds the scope kind.
+	vector<idx_t> var_scope_entity_indices;
+	vector<uint8_t> var_scope_kinds;
+	for (auto &vs : variable_scopes) {
+		var_scope_entity_indices.push_back(vs.entity_scope_idx);
+		var_scope_kinds.push_back(static_cast<uint8_t>(vs.scope));
+	}
+	serializer.WritePropertyWithDefault<vector<idx_t>>(216, "variable_entity_scope", var_scope_entity_indices);
+	serializer.WritePropertyWithDefault<vector<uint8_t>>(233, "variable_scope_kinds", var_scope_kinds);
 	// Flatten entity_scopes into parallel vectors for serialization
 	idx_t num_scopes = entity_scopes.size();
 	serializer.WritePropertyWithDefault<idx_t>(217, "num_entity_scopes", num_scopes);
@@ -491,8 +500,22 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<bool>(213, "per_inner_is_easy", result->per_inner_is_easy);
 	deserializer.ReadPropertyWithDefault<bool>(214, "per_outer_is_easy", result->per_outer_is_easy);
 	deserializer.ReadPropertyWithDefault<bool>(215, "per_inner_was_avg", result->per_inner_was_avg);
-	// Table-scoped variable metadata
-	deserializer.ReadPropertyWithDefault<vector<idx_t>>(216, "variable_entity_scope", result->variable_entity_scope);
+	// Table-scoped / query-wide variable metadata (see Serialize for the layout).
+	vector<idx_t> var_scope_entity_indices;
+	vector<uint8_t> var_scope_kinds;
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(216, "variable_entity_scope", var_scope_entity_indices);
+	deserializer.ReadPropertyWithDefault<vector<uint8_t>>(233, "variable_scope_kinds", var_scope_kinds);
+	result->variable_scopes.resize(var_scope_entity_indices.size());
+	for (idx_t i = 0; i < var_scope_entity_indices.size(); i++) {
+		auto &vs = result->variable_scopes[i];
+		vs.entity_scope_idx = var_scope_entity_indices[i];
+		// Plans written before 233 existed carry only the entity index, where
+		// INVALID meant row-scoped and anything else meant entity-scoped.
+		vs.scope = i < var_scope_kinds.size()
+		               ? static_cast<DecideVarScope>(var_scope_kinds[i])
+		               : (vs.entity_scope_idx == DConstants::INVALID_INDEX ? DecideVarScope::ROW
+		                                                                  : DecideVarScope::ENTITY);
+	}
 	idx_t num_scopes = 0;
 	deserializer.ReadPropertyWithDefault<idx_t>(217, "num_entity_scopes", num_scopes);
 	if (num_scopes > 0) {
