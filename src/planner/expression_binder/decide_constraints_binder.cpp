@@ -19,8 +19,9 @@
 namespace duckdb {
 
 DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
-                                                 const case_insensitive_set_t &scalar_variables)
-    : DecideBinder(binder, context, variables, scalar_variables) {
+                                                 const case_insensitive_set_t &scalar_variables,
+                                                 optional_ptr<DecideQualifierContext> qualifier_context)
+    : DecideBinder(binder, context, variables, scalar_variables, qualifier_context) {
 }
 
 static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
@@ -497,7 +498,10 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT clause does not support '%s'(ExpressionClass::%s)", expr.ToString(), EnumUtil::ToString(expr.GetExpressionClass()))));
 }
 
-DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &expr, string& error_msg){
+DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
+    // A relation qualifier changes which tuples a reducer sums over, not what shape it
+    // is, so classification looks straight through it.
+    auto &expr = const_cast<ParsedExpression &>(UnwrapQualifiedReducer(expr_ptr));
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF: {
         if (!IsVariableExpression(expr, variables)) {

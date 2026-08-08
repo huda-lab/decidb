@@ -2,142 +2,132 @@
 
 ---
 
-## Entity-level aggregation over table-scoped variables
+## Multi-relation qualifiers — `sum(D,T: expr)`
 
-**Priority: High — paper-facing. The CIDR'27 draft proposes syntax for this (§3.2,
-"relation-qualified reducer") and §4.5 describes its execution, so the language surface is
-now decided in the draft even though nothing is implemented. See "Syntax proposed by the
-paper" below; the older option list is kept as the alternatives that were considered.**
+**Deferred by the user on 2026-08-08 when the single-relation qualifier shipped.** Rejected
+today with a message naming the supported form:
 
-A table-scoped variable (`DECIDE Sensors.keepS(BOOL)`) yields one solver
-variable per entity, but every aggregate over it still runs over **join-result
-rows**: an entity appearing in 5 rows contributes 5 times. That is deliberate
-SQL semantics (`done.md` → "Aggregate semantics with table scope";
-`../../00_project_overview/syntax_reference.md` §2.1; asserted by
-`test/decide/tests/test_entity_scope.py:79`). The gap is that there is **no way
-to aggregate once per entity** — no `COUNT(DISTINCT keepS)`, no entity-scoped
-`SUM`. Any query whose objective is "how many *tuples* did I touch" is therefore
-inexpressible, and the natural-looking phrasing is silently wrong rather than
-rejected.
-
-**Motivating case** (paper §2.1, Example 2.1 — counterfactual explanation of
-false alerts). The prose asks for the *minimum number of tuples* to delete from
-`Sensors` or `Policy`; the query is
-
-```sql
-from Alerts A join Policy P on ... join Sensors S on ...
-such that sum(falseAlarm * keepP * keepS) = 0
-maximize sum(keepS) + sum(keepP)
+```
+Parser Error: a reducer can be qualified by one relation only; write sum(D: ...) and join
+the other relation's terms in a separate reducer
 ```
 
-which actually maximizes $\sum_s \deg(s)\cdot keepS_s + \sum_p \deg(p)\cdot keepP_p$,
-where $\deg$ is the number of alerts the entity joins with — an alert-weighted
-repair cost, not a tuple count. The two objectives disagree: if sensor 23 raises
-three false alarms across two alert types, deleting that one sensor row costs 3
-while deleting the two matching `Policy` rows costs 2, so the query returns a
-2-tuple explanation when a 1-tuple one exists. The `SUCH THAT` constraint is
-immune (a sum of non-negative terms equal to zero is multiplicity-invariant);
-only objectives and non-zero-RHS aggregates are affected.
+Paper §3.2.2 allows a qualifier naming an intermediate join — `sum(D,T: …)`, "which maps to
+`Depots join Routes`". The reduction key is then the composite tuple identity of that join,
+and the well-formedness rule widens to "any attribute must come from one of the named
+relations".
 
-**Syntax proposed by the paper (§3.2).** A **relation-qualified reducer**: the aggregate
-carries a bound relation name or alias, and reduces over that relation's tuple identities
-instead of over join-result rows.
+**What is already in place.** The grammar parses the qualifier as a `func_arg_list`, so
+`D,T` already reaches the action as a two-element list — the rejection is a length check,
+not a parser limitation. `EntityScopeInfo` holds a *vector* of key bindings, so a composite
+key is concatenation of the two relations' bindings rather than a new structure. Both were
+built this way deliberately so the multi-relation case is an extension, not a rewrite.
 
-```sql
-MAXIMIZE SUM(D: opening_cost * open) - SUM(unit_cost * ship)
+**What is missing.**
+1. Drop the length check in the grammar action (`select.y`, the `func_name '(' func_arg_list
+   ':' func_arg_list ')'` alternative) and carry the whole list through
+   `PG_AEXPR_QUALIFIED_REDUCER` — the transform currently takes `root.rexpr` as one node and
+   would take a `PGList`, mirroring how `PER_CONSTRAINT_TAG` already handles multi-column
+   `PER`.
+2. Generalize `FindOrCreateEntityScope` to key on a *list* of relation names and build a
+   concatenated `entity_key_bindings` / `entity_key_column_types`. The `table_scope_map` key
+   becomes the joined name list.
+3. Widen `CheckQualifiedReducerBody` to accept a column or entity-scoped decision from any
+   of the named relations.
+4. Nothing changes in execution: the mask machinery keys on the resulting `EntityMapping`
+   and does not care how many relations produced the key.
+
+**Decision needed first.** Whether `sum(D,T: ...)` must name relations that are actually
+joined to each other in the query, or whether any set of bound relations is allowed (a
+cross product would then define the identity). The paper's example is a join.
+
+**Test**: extend `test/decide/tests/test_qualified_reducer.py` with an oracle case over a
+two-relation key whose composite degree differs from either relation's own degree.
+
+**Done file**: `done.md` → "Relation-qualified reducers", plus
+`../../00_project_overview/syntax_reference.md` §5.1.
+
+---
+
+## Row-scoped decisions inside a relation-qualified reducer
+
+**Deferred by the user on 2026-08-08 when the single-relation qualifier shipped.** Rejected
+today:
+
+```
+Binder Error: 'y' is not a decision of D, so SUM(D: ...) cannot use it; declare it as
+D.y(...) or move that term into its own reducer
 ```
 
-`SUM(D: expr)` projects the currently surviving rows onto the tuple identities of `D`,
-drops the repetitions the join introduced, and contributes one term per remaining `D`
-tuple. Unqualified reducers keep today's semantics (one term per join-result row), so this
-is opt-in and nothing existing changes meaning. If the query does not alias the relation,
-the qualifier is the table name (`Depots:`).
+The rejection is currently the *only* sound answer available: a row-scoped decision has one
+variable per join-result row, so de-duplicating rows by `D`'s tuple identity would silently
+pick one row's variable and drop the others' — an arbitrary choice, which is exactly what
+§3.2.2's well-formedness rule exists to prevent.
 
-Semantics points the draft settles, worth preserving when this is built:
-- **Not `SUM(DISTINCT expr)`.** Identity is the tuple, not the value: two different depots
-  with equal `opening_cost` are two terms, not one.
-- **Scope is the surviving rows, not the base table.** The join and `WHERE` decide which
-  `D` tuples contribute. A depot the join or a filter removed has no decision variable at
-  all, so a base-table scan would emit terms for variables that do not exist and would
-  silently undo the query's filters.
-- **Well-formedness: everything inside the reducer comes from the qualified relation.**
-  §3.2.2: "any attribute or decision column used must come from the qualified relation.
-  Constants and query-wide decisions are also allowed." The draft's own counter-example is
-  `sum(D: opening_cost + unit_cost * ship)`, rejected because `unit_cost` and `ship` are
-  `T`'s — "DeciDB rejects this expression rather than choosing an arbitrary route for each
-  depot". This **settles what was logged here as an open edge case**: the answer is reject
-  at bind time, never pick a row of the group. Note the explicit carve-out for query-wide
-  (`scalar`) decisions, which ties this to the `scalar` entry above.
-- **Qualifiers may name an intermediate join, not just a base relation.** §3.2.2 allows
-  `sum(D,T: …)`, "which maps to `Depots join Routes`", alongside the single-relation
-  `D:` / `Depots:` forms. The reduction key is then the composite tuple identity of that
-  join, and the well-formedness rule widens to "any attribute must come from one of the
-  named relations". Grammar-wise this makes the qualifier a *list* of `ColId`, so design it
-  as a list from the start rather than retrofitting one.
-- **Construction order is fixed.** §3.2.2 pins it: `when` selection → `per` partitioning →
-  qualifier-key grouping and de-duplication → aggregation. "First, `when` selects the
-  relevant rows. Next, `per` divides them into the groups for which separate expressions
-  are generated. A qualifier such as `D:` then specifies the tuple-identity key by which the
-  reducer's input is grouped and de-duplicated. Finally, the reducer aggregates one
-  contribution from each tuple identity." The de-duplication stage is new — there is
-  nothing in the current pipeline to extend, so this is where the stage gets inserted, and
-  it must sit *inside* the PER partition (de-duplicate within a group, not across the
-  query).
+**The open question is what it should mean instead**, if anything. Three readings, none
+obviously right:
 
-**Earlier options considered** (superseded by the paper's syntax above, kept for rationale):
-1. `COUNT(DISTINCT keepS)` / `SUM(DISTINCT ...)` — familiar SQL surface, but
-   `DISTINCT` on a decision variable means "distinct *entity*", not "distinct
-   *value*", which reads wrong.
-2. An explicit entity qualifier on the aggregate, e.g. `SUM(keepS) PER ENTITY`
-   or `SUM(S.keepS)` where the table prefix at *use* site selects entity
-   scope — states the binding rather than implying it.
-3. No new syntax: document the multiplicity trap and the reciprocal-weight
-   workaround below. Zero implementation cost.
+1. **Reject permanently** — the current behavior, and consistent with the rule as written.
+   The workaround (declare the decision on the qualified relation) is a one-word edit and is
+   what the error suggests.
+2. **Sum the group's row-scoped variables before de-duplicating** — `SUM(D: c * y)` becomes
+   one term per depot whose coefficient multiplies the *sum* of that depot's `y` variables.
+   Well-defined, but it makes the qualifier mean two different things depending on the
+   operand's scope, and nothing in the paper suggests it.
+3. **Treat it as an error only when the reducer would actually be ambiguous** — allow it when
+   the qualifier's key happens to determine the row (a 1:1 join). Rejected as an idea for
+   `PER` already, since feasibility would then depend on data rather than on the query.
 
-**Reciprocal-weight workaround (verified working).** Entity-level counting *is*
-expressible today without new syntax: precompute each entity's join-result
-degree in a CTE and weight its variable by `1/degree`, so the `n` copies of a
-shared variable sum back to exactly 1.
+Same question applies to a query-wide (`scalar`) decision inside a qualified reducer, which
+is also rejected today. Note this **diverges from the paper**: §3.2.2 explicitly carves out
+query-wide decisions as always allowed inside a qualified reducer "because they do not vary
+across rows". The user chose rejection on 2026-08-08 so that `scalar` behaves the same way
+inside a qualified reducer as it does inside an unqualified one (see `done.md` → "Reducers
+are rejected"), rather than being allowed in one and refused in the other. If the carve-out
+is restored later, the natural reading is coefficient = number of distinct tuple identities,
+which the qualifier makes unambiguous in a way bare `SUM(cap)` is not.
 
-```sql
-WITH J AS (SELECT A.sensorID, A.alertType FROM Alerts A JOIN ... ),
-     sw AS (SELECT sensorID,  1.0/COUNT(*) AS ws FROM J GROUP BY sensorID),
-     pw AS (SELECT alertType, 1.0/COUNT(*) AS wp FROM J GROUP BY alertType)
-SELECT ... FROM Alerts A JOIN Policy P ON ... JOIN Sensors S ON ...
-     JOIN sw ON sw.sensorID = S.sensorID JOIN pw ON pw.alertType = P.alertType
-DECIDE S.keepS(BOOL), P.keepP(BOOL)
-SUCH THAT SUM(A.falseAlarm * keepP * keepS) = 0
-MAXIMIZE SUM(keepS * sw.ws) + SUM(keepP * pw.wp);
-```
+**Test**: `test_qualified_reducer.py::test_row_scoped_decision_inside_qualified_reducer_rejected`
+and `::test_query_wide_decision_inside_qualified_reducer_rejected` pin the current rejections.
 
-Three caveats keep this a workaround rather than a fix: the degree CTE must
-replicate the DECIDE block's joins *and* filters exactly or the weights silently
-desynchronize; `1.0/3` summed three times gives `1.9999999999999998`, harmless
-against integer-1 differences but real; and the whole construction needs a
-paragraph of explanation at every use site.
+**Done file**: `done.md` → "Relation-qualified reducers".
 
-**Implementation sketch.** The qualifier is new surface syntax, so this now starts at the
-grammar: `SUM(D: expr)` — and `SUM(D,T: expr)` — inside an aggregate argument
-(`third_party/libpg_query/grammar/statements/select.y`, `make grammar-build`), then the
-binder resolves each name in the qualifier list against the query's bound relations,
-rejects an unknown or unbound alias, and enforces the well-formedness rule above.
-Downstream, the entity→variable-index map already exists — `VarIndexer`
-(`src/include/duckdb/decidb/ilp_model.hpp`) and the Phase 1.5 entity mapping in
-`src/execution/operator/decide/physical_decide.cpp`. Entity-level aggregation is
-coefficient accumulation that visits each entity key once instead of once per
-row, so it is a coefficient-building change, not a new solver construct.
+---
 
-**Sequencing**: larger than the rest of the stage-1 grammar batch and not a prerequisite
-for any of it. The grammar edit is small; the de-duplication stage and the multi-relation
-key are the work. Land it after the clause-order / declaration-form / `scalar` batch.
+## EXPLAIN renders a qualified reducer identically to an unqualified one
 
-**Test**: extend `test/decide/tests/test_entity_scope.py` with an oracle case
-where entity degrees differ, so the row-weighted and entity-weighted optima
-diverge (the assertion at line 79 pins the current row-weighted behavior and
-must keep passing for the non-entity form).
+`EXPLAIN` prints `sum((opening_cost * open))` for both `SUM(D: opening_cost * open)` and
+`SUM(opening_cost * open)`, so the plan gives no way to tell two queries with different
+optima apart. The tag itself does not leak into the output (it lives on the aggregate's
+`alias`, which `ToString()` does not print) — the qualifier is simply not rendered.
 
-**Done file**: `done.md` → "Aggregate semantics with table scope" (extend, don't
-replace — both semantics will coexist), plus
-`../../00_project_overview/syntax_reference.md` §2.1.
+Unlike `WHEN` and `PER`, which `CollectTaggedExpressionStrings`
+(`src/planner/operator/logical_decide.cpp`) unwraps into postfix suffixes, the qualifier
+sits *on* the aggregate node rather than above it, so surfacing it means intercepting the
+aggregate's own rendering rather than appending a suffix. Cosmetic, but it costs a reader
+the one detail that distinguishes the two plans.
 
-*Discovered 2026-07-26, reviewing Example 2.1 of the CIDR'27 paper draft.*
+*Discovered 2026-08-08 while shipping the single-relation qualifier.*
+
+---
+
+## Qualified reducer composed with MIN/MAX in the same clause
+
+`SUM(D: a * x) + MAX(b * y) <= K` (and the objective equivalent) routes through the composed
+MIN/MAX path, whose `ComposedMinMaxTerm` (`logical_decide.hpp`) carries no
+`qualifier_scope_idx` — so the qualifier would be **silently dropped** and the reducer would
+fall back to row semantics.
+
+No wrong answer is reachable today, but only by accident: that shape already dies with
+`INTERNAL Error: Vector::Reference used on vector of different type` whenever the variable
+is entity-scoped, which every qualified reducer's operand must be. The unqualified form
+fails identically, so the crash is pre-existing — logged in
+`../../07_issues/bugs/todo.md` → "Composed MIN/MAX with an entity-scoped variable crashes".
+**Fixing that bug removes the thing currently standing between this gap and a silently
+wrong answer, so the two must be resolved together.**
+
+Two options: thread `qualifier_scope_idx` through `ComposedMinMaxTerm` and AND the mask into
+that path's `filter_mask` (it treats masks as row exclusion, which is the right shape), or
+reject the combination explicitly at bind time.
+
+*Discovered 2026-08-08 while shipping the single-relation qualifier.*

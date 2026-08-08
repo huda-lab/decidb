@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/to_string.hpp"
 
 namespace duckdb {
 
@@ -100,6 +101,39 @@ inline bool IsRelaxableForElastic(ConstraintKind kind) {
 //!                    the reported edit is the max overshoot, not the sum.
 enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_LITERAL };
 
+//! DECIDE encodes pipeline metadata in the `alias` of bound expressions. More than one
+//! tag can apply to the same node — a relation-qualified AVG is tagged by the binder
+//! (which relation it reduces over) and again by the AVG->SUM rewrite (that its
+//! coefficients need the 1/N denominator) — so tags are **concatenated** and matched by
+//! search, never by equality. Every tag opens and closes with `__`, which is what makes
+//! concatenation unambiguous and lets a prefix tag's payload be read back below.
+inline void AddDecideTag(string &alias, const string &tag) {
+	alias += tag;
+}
+
+//! True when `alias` carries `tag`, whatever else it also carries.
+inline bool HasDecideTag(const string &alias, const string &tag) {
+	return alias.find(tag) != string::npos;
+}
+
+//! Reads the payload of a prefix-shaped tag out of a possibly multi-tag alias:
+//! ("__qualified_by_2____avg_rewrite__", "__qualified_by_") yields "2". The payload runs
+//! from the end of the prefix to the tag's closing `__`, so payloads may contain single
+//! underscores ("0_min"). Returns false when the tag is absent or has an empty payload.
+inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, string &payload) {
+	auto start = alias.find(prefix);
+	if (start == string::npos) {
+		return false;
+	}
+	start += prefix.size();
+	auto end = alias.find("__", start);
+	if (end == string::npos) {
+		return false;
+	}
+	payload = alias.substr(start, end - start);
+	return !payload.empty();
+}
+
 //! Tag used to identify WHEN-conditional constraints throughout the pipeline
 static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
 
@@ -109,6 +143,38 @@ static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
 //! Returns true if the alias is PER_CONSTRAINT_TAG
 inline bool IsPerConstraintTag(const string &alias) {
 	return alias == PER_CONSTRAINT_TAG;
+}
+
+//! Tag used by the parser to mark a relation-qualified reducer, `sum(D: expr)`.
+//! Shape mirrors the aggregate-local WHEN tag: children[0] is the aggregate,
+//! children[1] is the qualifier's relation name. The binder consumes and
+//! discards it, folding the resolved relation into the tag below.
+static constexpr const char *QUALIFIED_REDUCER_TAG = "__qualified_reducer__";
+
+//! Tag prefix recording a bound qualified reducer (on BoundAggregateExpression.alias).
+//! Format: "__qualified_by_<entity_scope_idx>__" — the index is into
+//! LogicalDecide::entity_scopes, whose entry supplies the tuple-identity key the
+//! reducer de-duplicates by. A qualifier is an entity scope that may have no
+//! variable declared on it, so the two share one table of keys and one mapping.
+static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_by_";
+
+//! Builds the alias tag naming the entity scope a reducer is qualified by.
+inline string MakeQualifiedReducerTag(idx_t entity_scope_idx) {
+	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(entity_scope_idx) + "__";
+}
+
+//! Reads back the entity scope index from an alias written by MakeQualifiedReducerTag.
+//! Returns false (leaving `scope_idx` untouched) when the alias carries no such tag.
+inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
+	string digits;
+	if (!ExtractDecideTagPayload(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, digits)) {
+		return false;
+	}
+	if (digits.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	scope_idx = static_cast<idx_t>(std::stoull(digits));
+	return true;
 }
 
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)

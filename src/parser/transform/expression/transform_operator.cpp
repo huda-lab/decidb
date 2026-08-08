@@ -238,6 +238,16 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		result->is_operator = true;
 		return std::move(result);
 	}
+	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER: {
+		// DecidB: relation-qualified reducer, sum(D: expr).
+		// children[0] = the aggregate, children[1] = the qualifier's relation name.
+		vector<unique_ptr<ParsedExpression>> children;
+		children.push_back(TransformExpression(root.lexpr));
+		children.push_back(TransformExpression(root.rexpr));
+		auto result = make_uniq<FunctionExpression>(QUALIFIED_REDUCER_TAG, std::move(children));
+		result->is_operator = true;
+		return std::move(result);
+	}
 
 	default:
 		break;

@@ -1424,13 +1424,23 @@ public:
         // Minimal: keep constructor lean; detailed solver output comes from HiGHS
     }
 
+    //! Entity scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
+    //! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
+    static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
+        idx_t scope_idx = DConstants::INVALID_INDEX;
+        TryParseQualifiedReducerTag(agg.alias, scope_idx);
+        return scope_idx;
+    }
+
     static void ApplyAggregateMetadata(vector<Term> &terms, idx_t begin, const BoundAggregateExpression &agg) {
-        bool is_avg = (agg.alias == AVG_REWRITE_TAG);
+        bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
+        idx_t qualifier_scope = QualifierScopeOf(agg);
         for (idx_t i = begin; i < terms.size(); i++) {
             if (agg.filter) {
                 terms[i].filter = agg.filter->Copy();
             }
             terms[i].avg_scale = is_avg;
+            terms[i].qualifier_scope_idx = qualifier_scope;
         }
     }
 
@@ -1470,7 +1480,8 @@ public:
             throw InvalidInputException("DECIDE optimizer should rewrite aggregate '%s' to SUM before execution",
                                         agg.function.name);
         }
-        bool is_avg = (agg.alias == AVG_REWRITE_TAG);
+        bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
+        idx_t qualifier_scope = QualifierScopeOf(agg);
 
         idx_t linear_before = constraint.lhs_terms.size();
         idx_t bilinear_before = constraint.bilinear_terms.size();
@@ -1482,21 +1493,21 @@ public:
                 constraint.bilinear_terms[i].filter = agg.filter->Copy();
             }
             constraint.bilinear_terms[i].avg_scale = is_avg;
+            constraint.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
         }
         for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
             if (agg.filter) {
                 constraint.quadratic_groups[i].filter = agg.filter->Copy();
             }
             constraint.quadratic_groups[i].avg_scale = is_avg;
+            constraint.quadratic_groups[i].qualifier_scope_idx = qualifier_scope;
         }
 
-        if (agg.alias.size() > strlen(MINMAX_INDICATOR_TAG_PREFIX) + 2 &&
-            agg.alias.substr(0, strlen(MINMAX_INDICATOR_TAG_PREFIX)) == MINMAX_INDICATOR_TAG_PREFIX) {
-            auto payload = agg.alias.substr(strlen(MINMAX_INDICATOR_TAG_PREFIX));
-            payload = payload.substr(0, payload.size() - 2);
-            auto sep = payload.find('_');
-            constraint.minmax_indicator_idx = std::stoull(payload.substr(0, sep));
-            constraint.minmax_agg_type = payload.substr(sep + 1);
+        string minmax_payload;
+        if (ExtractDecideTagPayload(agg.alias, MINMAX_INDICATOR_TAG_PREFIX, minmax_payload)) {
+            auto sep = minmax_payload.find('_');
+            constraint.minmax_indicator_idx = std::stoull(minmax_payload.substr(0, sep));
+            constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
             constraint.kind = ConstraintKind::USER_MECHANISM;
         }
     }
@@ -2011,7 +2022,8 @@ public:
             throw InvalidInputException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
                                         agg.function.name);
         }
-        bool is_avg = (agg.alias == AVG_REWRITE_TAG);
+        bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
+        idx_t qualifier_scope = QualifierScopeOf(agg);
 
         idx_t before = obj.terms.size();
         idx_t bilinear_before = obj.bilinear_terms.size();
@@ -2019,12 +2031,15 @@ public:
         ExtractLinearAndBilinearTerms(*agg.children[0], obj, sign, agg.filter.get());
         for (idx_t i = before; i < obj.terms.size(); i++) {
             obj.terms[i].avg_scale = is_avg;
+            obj.terms[i].qualifier_scope_idx = qualifier_scope;
         }
         for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
             obj.bilinear_terms[i].avg_scale = is_avg;
+            obj.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
         }
         for (idx_t i = squared_before; i < obj.squared_terms.size(); i++) {
             obj.squared_terms[i].avg_scale = is_avg;
+            obj.squared_terms[i].qualifier_scope_idx = qualifier_scope;
         }
     }
 
@@ -2077,16 +2092,19 @@ public:
             idx_t bilinear_before = objective->bilinear_terms.size();
             idx_t squared_before = objective->squared_terms.size();
             ExtractLinearAndBilinearTerms(*agg.children[0], *objective, 1, agg.filter.get());
-            if (agg.alias == AVG_REWRITE_TAG) {
-                for (idx_t i = before; i < objective->terms.size(); i++) {
-                    objective->terms[i].avg_scale = true;
-                }
-                for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
-                    objective->bilinear_terms[i].avg_scale = true;
-                }
-                for (idx_t i = squared_before; i < objective->squared_terms.size(); i++) {
-                    objective->squared_terms[i].avg_scale = true;
-                }
+            bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
+            idx_t qualifier_scope = QualifierScopeOf(agg);
+            for (idx_t i = before; i < objective->terms.size(); i++) {
+                objective->terms[i].avg_scale = is_avg;
+                objective->terms[i].qualifier_scope_idx = qualifier_scope;
+            }
+            for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
+                objective->bilinear_terms[i].avg_scale = is_avg;
+                objective->bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
+            }
+            for (idx_t i = squared_before; i < objective->squared_terms.size(); i++) {
+                objective->squared_terms[i].avg_scale = is_avg;
+                objective->squared_terms[i].qualifier_scope_idx = qualifier_scope;
             }
 
             objective->when_condition = std::move(when_cond);
@@ -3017,6 +3035,73 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         bool avg_scale = false;
     };
 
+    // Which rows a relation-qualified reducer (`sum(D: ...)`) actually contributes.
+    // The join repeats each D tuple once per matching row; §3.2.2 asks for one term per
+    // tuple identity, and the binder has already guaranteed that every row sharing an
+    // identity carries the same value — so keeping the first row of each identity and
+    // dropping the rest yields exactly one contribution per identity, whichever row is
+    // kept. De-duplication runs inside the PER partition, after `when` selection and
+    // `per` partitioning, which is the construction order the paper pins.
+    // `mappings` is passed rather than captured: the local entity_mappings is moved onto
+    // solver_input partway down Finalize, so the constraint side reads the local and the
+    // objective side reads solver_input's copy.
+    auto BuildQualifierKeepMask = [&](const vector<EntityMapping> &mappings, idx_t scope_idx,
+                                      const vector<idx_t> &row_group_ids) {
+        auto &mapping = mappings[scope_idx];
+        vector<bool> keep(num_rows, false);
+        // Group ids are dense in [0, num_groups) and entity ids in [0, num_entities),
+        // so (group, entity) flattens into one dense index with no hashing.
+        idx_t num_groups = 1;
+        if (!row_group_ids.empty()) {
+            for (idx_t gid : row_group_ids) {
+                if (gid != DConstants::INVALID_INDEX && gid + 1 > num_groups) {
+                    num_groups = gid + 1;
+                }
+            }
+        }
+        vector<bool> seen(num_groups * mapping.num_entities, false);
+        for (idx_t row = 0; row < num_rows; row++) {
+            idx_t group = row_group_ids.empty() ? 0 : row_group_ids[row];
+            if (group == DConstants::INVALID_INDEX) {
+                continue; // excluded by WHEN or a NULL PER key — never a surviving identity
+            }
+            idx_t slot = group * mapping.num_entities + mapping.row_to_entity[row];
+            if (!seen[slot]) {
+                seen[slot] = true;
+                keep[row] = true;
+            }
+        }
+        return keep;
+    };
+
+    // Fold that mask into a term's filter state, so everything downstream — coefficient
+    // zeroing, AVG's denominator (which counts surviving rows and therefore becomes the
+    // distinct-identity count), the empty-aggregate guard — treats a duplicate row
+    // exactly as it treats a WHEN-excluded one.
+    auto ApplyQualifierToFilter = [&](const vector<EntityMapping> &mappings, idx_t scope_idx,
+                                      const vector<idx_t> &row_group_ids, TermFilterState &state) {
+        auto keep = BuildQualifierKeepMask(mappings, scope_idx, row_group_ids);
+        if (!state.has_filter) {
+            state.mask = std::move(keep);
+            state.has_filter = true;
+            return;
+        }
+        for (idx_t row = 0; row < num_rows; row++) {
+            state.mask[row] = state.mask[row] && keep[row];
+        }
+    };
+
+    // Zero every row the (now possibly de-duplicated) mask drops. The WHEN pass already
+    // did this for its own mask; re-applying the combined mask is idempotent.
+    auto MaskCoefficientColumn = [&](CoefficientColumn &column, const vector<bool> &mask) {
+        auto &values = column.MutableDense();
+        for (idx_t row = 0; row < values.size(); row++) {
+            if (!mask[row]) {
+                values[row] = 0.0;
+            }
+        }
+    };
+
     // Evaluate N boolean filter expressions in a single scan over gstate.data.
     auto EvaluateBooleanMasks = [&](const vector<const Expression*> &conditions) -> vector<vector<bool>> {
         if (conditions.empty()) return {};
@@ -3401,6 +3486,26 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     RejectEmptyAggregate(included_rows, "aggregate", "constraint");
                 }
             }
+        }
+
+        // Relation-qualified reducers: drop the duplicate rows the join introduced, now
+        // that WHEN selection and PER partitioning have fixed the groups to de-duplicate
+        // within. Folding this into the term filter keeps AVG's denominator honest.
+        for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+            idx_t scope_idx = constraint->lhs_terms[term_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, term_filters[term_idx]);
+            MaskCoefficientColumn(eval_const.row_coefficients[term_idx], term_filters[term_idx].mask);
+        }
+        for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
+            idx_t scope_idx = constraint->bilinear_terms[term_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, bilinear_filters[term_idx]);
+        }
+        for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
+            idx_t scope_idx = constraint->quadratic_groups[group_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, quadratic_filters[group_idx]);
         }
 
         // Per-term aggregate-local WHEN: reject any term whose own filter mask
@@ -4691,6 +4796,45 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             coefficients[row] *= scale;
         }
     };
+
+    // Relation-qualified reducers in the objective: same de-duplication as on the
+    // constraint side, applied once the objective's PER groups are settled and before
+    // AVG scaling reads the surviving-row counts.
+    if (gstate.objective) {
+        for (idx_t term_idx = 0; term_idx < gstate.objective->terms.size() &&
+                                 term_idx < obj_linear_term_filters.size();
+             term_idx++) {
+            idx_t scope_idx = gstate.objective->terms[term_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+                                   solver_input.objective_row_group_ids,
+                                   obj_linear_term_filters[term_idx]);
+            MaskCoefficientColumn(solver_input.objective_coefficients[term_idx],
+                                  obj_linear_term_filters[term_idx].mask);
+        }
+        for (idx_t term_idx = 0; term_idx < gstate.objective->squared_terms.size() &&
+                                 term_idx < obj_quadratic_term_filters.size();
+             term_idx++) {
+            idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+                                   solver_input.objective_row_group_ids,
+                                   obj_quadratic_term_filters[term_idx]);
+            MaskCoefficientColumn(solver_input.quadratic_inner_coefficients[term_idx],
+                                  obj_quadratic_term_filters[term_idx].mask);
+        }
+        for (idx_t term_idx = 0; term_idx < gstate.objective->bilinear_terms.size() &&
+                                 term_idx < obj_bilinear_filters.size();
+             term_idx++) {
+            idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+                                   solver_input.objective_row_group_ids,
+                                   obj_bilinear_filters[term_idx]);
+            MaskCoefficientColumn(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
+                                  obj_bilinear_filters[term_idx].mask);
+        }
+    }
 
     for (idx_t term_idx = 0; term_idx < obj_linear_term_filters.size(); term_idx++) {
         if (!obj_linear_term_filters[term_idx].avg_scale) {

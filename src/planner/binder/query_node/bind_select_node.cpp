@@ -1156,42 +1156,10 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 string qualified_name = table_name + "." + name;
                 decide_variable_names.emplace(qualified_name, var_idx);
 
-                // Reuse existing entity scope if another variable already scoped to this table
-                auto scope_it = table_scope_map.find(table_name);
-                if (scope_it != table_scope_map.end()) {
-                    scope_idx = scope_it->second;
-                    entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
-                } else {
-                    // Create new EntityScopeInfo for this table.
-                    // Register every source-table column in the TableBinding's
-                    // bound_column_ids via GetColumnBinding. This forces the
-                    // columns into the scan's column_ids and returns the correct
-                    // ColumnBinding (table_index, position-in-col_ids). Refinement
-                    // below may drop some; whatever survives gets its columns
-                    // kept in the scan via entity_key_expressions.
-                    EntityScopeInfo scope_info;
-                    scope_info.table_alias = table_name;
-                    scope_info.source_table_index = binding->index;
-                    if (binding->binding_type == BindingType::TABLE) {
-                        auto &tbl_binding = binding->Cast<TableBinding>();
-                        for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-                            scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-                            scope_info.entity_key_bindings.push_back(
-                                tbl_binding.GetColumnBinding(col_idx));
-                        }
-                    } else {
-                        // Non-base table (e.g., subquery): fall back to raw bindings.
-                        for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-                            scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-                            scope_info.entity_key_bindings.push_back(
-                                ColumnBinding(binding->index, col_idx));
-                        }
-                    }
-                    scope_info.scoped_variable_indices.push_back(var_idx);
-                    scope_idx = entity_scopes.size();
-                    table_scope_map.emplace(table_name, scope_idx);
-                    entity_scopes.push_back(std::move(scope_info));
-                }
+                // Reuse the scope if another variable — or a qualified reducer — already
+                // keyed on this table; the tuple-identity key is the same either way.
+                scope_idx = FindOrCreateEntityScope(bind_context, table_name, entity_scopes, table_scope_map);
+                entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
             }
 
             // A scalar is query-wide, so it never carries an entity scope; the
@@ -1354,15 +1322,23 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 scalar_variable_names.insert(var_names[v]);
             }
         }
+        // What a relation-qualified reducer needs to resolve `sum(D: ...)`. The binders
+        // may append a key-only entity scope to `entity_scopes`, which is why this runs
+        // before the vector is moved onto the operator below.
+        DecideQualifierContext qualifier_context;
+        qualifier_context.decide_index = result->decide_index;
+        qualifier_context.entity_scopes = &entity_scopes;
+        qualifier_context.table_scope_map = &table_scope_map;
+        qualifier_context.variable_scopes = &variable_scopes;
         // Isolate with brackets to avoid multiple active binders.
         {
-            DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names, scalar_variable_names);
+            DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names, scalar_variable_names, &qualifier_context);
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
             // Types are now determined from the DECIDE clause, not from constraint binding
         }
         if (statement.decide_objective) {
-            DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names, scalar_variable_names);
+            DecideObjectiveBinder decide_objective_binder (*this, context, decide_variable_names, scalar_variable_names, &qualifier_context);
             decide_objective_binder.decide_sense = statement.decide_sense;
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
             result->decide_objective = decide_objective_binder.Bind(objective);

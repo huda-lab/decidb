@@ -9,8 +9,9 @@
 namespace duckdb {
 
 DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
-                                             const case_insensitive_set_t &scalar_variables)
-    : DecideBinder(binder, context, variables, scalar_variables) {
+                                             const case_insensitive_set_t &scalar_variables,
+                                             optional_ptr<DecideQualifierContext> qualifier_context)
+    : DecideBinder(binder, context, variables, scalar_variables, qualifier_context) {
 }
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
@@ -158,7 +159,10 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support '%s'(ExpressionClass::%s)", expr.ToString(), EnumUtil::ToString(expr.GetExpressionClass()))));
 }
 
-DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr, string& error_msg){
+DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
+    // A relation qualifier changes which tuples a reducer sums over, not what shape it
+    // is, so classification looks straight through it.
+    auto &expr = const_cast<ParsedExpression &>(UnwrapQualifiedReducer(expr_ptr));
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();

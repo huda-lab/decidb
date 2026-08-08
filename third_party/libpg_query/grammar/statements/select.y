@@ -3027,6 +3027,35 @@ c_expr:		d_expr
 					/* DecidB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
+			| func_name '(' func_arg_list ':' func_arg_list ')'
+				{
+					/* DecidB: relation-qualified reducer, sum(D: expr).
+					 *
+					 * The qualifier is parsed as a func_arg_list rather than as a
+					 * dedicated name list on purpose. `sum(D, T: e)` and `sum(a, b)`
+					 * share a prefix that LALR(1) cannot tell apart at the comma, so
+					 * both sides are read as argument lists and the qualifier's shape
+					 * is checked here instead of in the grammar. The decision point
+					 * moves to ':' vs ')' after a completed func_arg_list, which is
+					 * conflict-free.
+					 */
+					if ($3->length != 1)
+					{
+						ereport(ERROR, (errcode(PG_ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("a reducer can be qualified by one relation only; write sum(D: ...) and join the other relation's terms in a separate reducer"),
+							parser_errposition(@3)));
+					}
+					PGNode *qualifier = (PGNode *) $3->head->data.ptr_value;
+					if (!IsA(qualifier, PGColumnRef))
+					{
+						ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
+							errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
+							parser_errposition(@3)));
+					}
+					PGFuncCall *n = makeFuncCall($1, $5, @1);
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, qualifier, @4);
+				}
 			| indirection_expr_or_a_expr opt_extended_indirection
 				{
 					if ($2)

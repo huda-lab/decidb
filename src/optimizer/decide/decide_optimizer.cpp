@@ -174,7 +174,10 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr) {
 			// For a single objective AVG this is optimization-equivalent to SUM,
 			// but additive objective expressions can mix AVG with SUM or filtered
 			// aggregates, so preserving the scale is required for correct semantics.
-			new_sum->alias = AVG_REWRITE_TAG;
+			// Carry the AVG's own tags across — a relation qualifier was stamped by
+			// the binder and still names the relation the SUM de-duplicates by.
+			new_sum->alias = agg.alias;
+			AddDecideTag(new_sum->alias, AVG_REWRITE_TAG);
 
 			if (has_cast) {
 				// Preserve the cast wrapper — update its child

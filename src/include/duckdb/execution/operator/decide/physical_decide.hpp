@@ -21,6 +21,11 @@ struct Term {
     int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
     unique_ptr<Expression> filter;       // Optional aggregate-local WHEN filter
     bool avg_scale = false;              // True when this term came from AVG and needs 1/N scaling
+    //! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
+    //! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
+    //! entity_mappings; coefficient evaluation keeps one row per tuple identity
+    //! of that relation and zeroes the duplicates the join introduced.
+    idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 
     Term(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
         : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {}
@@ -34,6 +39,11 @@ struct BilinearConstraintTerm {
     int sign = 1;
     unique_ptr<Expression> filter;        // Optional aggregate-local WHEN filter
     bool avg_scale = false;               // True when this term came from AVG and needs 1/N scaling
+    //! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
+    //! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
+    //! entity_mappings; coefficient evaluation keeps one row per tuple identity
+    //! of that relation and zeroes the duplicates the join introduced.
+    idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 };
 
 //! Represents a complete constraint after term extraction
@@ -70,6 +80,11 @@ struct DecideConstraint {
         double sign = 1.0;         // +1, -1, or scalar (from negation/scaling)
         unique_ptr<Expression> filter; // Optional aggregate-local WHEN filter
         bool avg_scale = false;    // True when this group came from AVG and needs 1/N scaling
+        //! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
+        //! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
+        //! entity_mappings; coefficient evaluation keeps one row per tuple identity
+        //! of that relation and zeroes the duplicates the join introduced.
+        idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 
         QuadraticGroup() = default;
     };
@@ -104,6 +119,11 @@ struct Objective {
         int sign = 1;                       // +1 or -1
         unique_ptr<Expression> filter;       // Optional aggregate-local WHEN filter
         bool avg_scale = false;              // True when this term came from AVG and needs 1/N scaling
+        //! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
+        //! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
+        //! entity_mappings; coefficient evaluation keeps one row per tuple identity
+        //! of that relation and zeroes the duplicates the join introduced.
+        idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
     };
     vector<BilinearTerm> bilinear_terms;
     bool has_bilinear = false;

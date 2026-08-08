@@ -216,6 +216,46 @@ SUCH THAT (x - t) * (x - t) <= K
   - `norm(e, 'inf')` → `MAX(ABS(e))` — L-infinity (max linearization).
   - `norm(e, 0[, M])` → **L0 / count of nonzeros**. Adds one 0/1 indicator `z` per row, linked so `z = 1` **iff** `|e| >= tolerance` (a forward Big-M link forces `z=1` when `e != 0`, a reverse link `ABS(e) >= tol*z` forces `z=0` when `e` is within tolerance); the term becomes `SUM(z)`, the **exact** count. Upgrades the model to a MILP. Because the count is exact it is sound in **every** context — `MINIMIZE`/penalty and `<= K` cap, **and** `>= K`, `= K`, `MAXIMIZE`. The Big-M bound is **inferred from the data** when omitted — `norm(e, 0)` derives a tight per-problem `M` at execution from variable bounds (implied-bound propagation) + data; pass `norm(e, 0, M)` to supply it explicitly. The reverse link reuses ABS linearization, so `e` must have finite bounds. The nonzero tolerance (default `1e-4`, must exceed the solver feasibility tolerance) is configurable via `SET decide_l0_tolerance = …`; a value forced into `(0, tolerance)` is reported infeasible (tolerance-ambiguous).
 
+### 5.1 Relation-Qualified Reducers — `SUM(D: expr)`
+
+By default a reducer combines one term per **join-result row**. A join repeats a table's
+tuples once per match, so an unqualified reducer over a table-scoped decision weights that
+decision by how many rows its entity joined with. A **relation-qualified reducer** reduces
+over the qualified relation's tuple identities instead, contributing one term per tuple.
+
+**Syntax**: `agg(Rel: expr)`, where `agg` is `SUM`, `AVG`, `MIN` or `MAX`, and `Rel` is a
+table alias or table name bound in the `FROM` clause.
+
+```sql
+SELECT routeID, depotID, open, ship
+DECIDE D.open(BOOL), T.ship(INT)
+FROM Depots D JOIN Routes T USING (depotID)
+SUCH THAT ship <= capacity * open AND SUM(ship) >= 300
+MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open);
+```
+
+A depot serving three routes appears in three result rows. `SUM(D: opening_cost * open)`
+charges its opening cost **once**; the unqualified `SUM(opening_cost * open)` would charge
+it three times. Both forms remain available and the unqualified one is unchanged.
+
+- **Identity is the tuple, not the value.** Two depots with equal `opening_cost` are two
+  terms. This is not `SUM(DISTINCT expr)`.
+- **Scope is the surviving rows, not the base table.** The join and `WHERE` decide which
+  tuples contribute; a depot filtered out has no term and no decision variable.
+- **Everything inside must come from the qualified relation.** A column or decision from
+  another relation is rejected at bind time — `SUM(D: opening_cost + unit_cost * ship)`
+  names `T`'s columns and is refused rather than picking an arbitrary route per depot.
+  Row-scoped and query-wide (`scalar`) decisions are refused for the same reason: they are
+  not determined by the qualifier's key. Constants are fine.
+- **Construction order** is `WHEN` selection → `PER` partitioning → qualifier grouping and
+  de-duplication → aggregation. De-duplication happens **inside** each `PER` group.
+- **`AVG(D: expr)` divides by the number of distinct tuples**, not the number of rows.
+- **`MIN`/`MAX` are unaffected by de-duplication** — every row of a tuple identity carries
+  the same value, so dropping repeats cannot move an extremum. The qualifier is accepted
+  and is a no-op for them.
+- **One relation per qualifier.** `SUM(D,T: ...)` is rejected with a message naming the
+  single-relation form.
+
 ## 6. Conditional Expressions — `WHEN`
 
 The `WHEN` keyword enables conditional constraints and conditional objectives. A `WHEN` clause causes the expression to apply only to rows where the condition evaluates to true. Rows where the condition is false or NULL are excluded.

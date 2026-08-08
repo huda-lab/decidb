@@ -34,7 +34,68 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
   - **Diagnostics**: a scalar has a single instance, so `FormatEscapingInstances` already suppresses the `affected_rows`/`affected_entities` cell and the unbounded report carries only `grows_toward`. The candidate provider returns no grouping candidates for a scalar — there is no subset of rows to characterize.
   - Tests: `test/decide/tests/test_scalar_scope.py`.
 - **Table-scoped entity identification**: all columns from the source table form a composite key. During physical execution (Phase 1.5), the executor scans result rows, extracts the source-table columns for each scoped variable, and maps each distinct entity key to a single solver variable index — the **entity consistency guarantee**. There is no syntax for a custom key subset.
-- **Aggregate semantics with table scope**: SUM/AVG aggregate over result rows, not entities — if an entity appears in 5 join-result rows, its shared variable contributes 5 times (standard SQL aggregation over the join result).
+- **Aggregate semantics with table scope**: SUM/AVG aggregate over result rows, not entities — if an entity appears in 5 join-result rows, its shared variable contributes 5 times (standard SQL aggregation over the join result). A **relation-qualified reducer** opts out of that per reducer; see below.
+
+## Relation-qualified reducers — `agg(D: expr)`
+
+`SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result rows,
+contributing one term per surviving `D` tuple (paper §3.2.2). Syntax and semantics:
+`../../00_project_overview/syntax_reference.md` §5.1. Unqualified reducers are unchanged,
+so this is opt-in and nothing existing changes meaning.
+
+- **A qualifier is an entity scope with no variable.** The tuple-identity key a qualifier
+  needs is exactly the key a `T.x(TYPE)` declaration needs, so both go through
+  `FindOrCreateEntityScope` (`decide_binder.cpp`) and share one `entity_scopes` entry, one
+  set of pinned key columns, and one `EntityMapping`. Qualifying by a relation that already
+  has an entity-scoped declaration reuses its scope; qualifying by one that does not
+  appends a key-only scope whose `scoped_variable_indices` is empty.
+- **De-duplication is a row mask, not a new pipeline stage.** `BuildQualifierKeepMask`
+  (`physical_decide.cpp`, Phase 2) keeps the first row of each `(PER group, entity id)` pair
+  and drops the rest; `ApplyQualifierToFilter` ANDs that into the term's existing
+  `TermFilterState`, the same slot aggregate-local `WHEN` uses. Consequences that fall out
+  rather than being coded: `AVG`'s denominator counts surviving rows and so becomes the
+  distinct-identity count; the empty-aggregate guard and coefficient zeroing already
+  respect the mask; the paper's construction order (`when` → `per` → qualifier grouping →
+  aggregation) is just where the mask is applied — after `row_group_ids` is settled.
+  Soundness rests on the well-formedness rule: every row of an identity carries the same
+  value, so *which* row survives cannot matter.
+- **The mask is per term, not per clause**, so `SUM(D: a * open) + SUM(b * ship)` in one
+  objective de-duplicates only the first term.
+- **`MIN`/`MAX` need no de-duplication.** Dropping repeats of a value already present
+  cannot move an extremum. The qualifier is accepted, carried, and has no effect for them.
+- **Rejections** (all at bind time, in `BindQualifiedReducer` /
+  `CheckQualifiedReducerBody`): a column or entity-scoped decision from another relation, a
+  row-scoped decision, a query-wide (`scalar`) decision, an unknown relation name, a
+  qualifier on a non-`SUM`/`AVG`/`MIN`/`MAX` function. Multi-relation qualifiers
+  (`SUM(D,T: ...)`) are rejected in the grammar action.
+- Tests: `test/decide/tests/test_qualified_reducer.py`.
+
+### Code Pointers — qualified reducers
+
+- **Grammar**: `third_party/libpg_query/grammar/statements/select.y`, `c_expr` alternative
+  `func_name '(' func_arg_list ':' func_arg_list ')'`. The qualifier is parsed as an
+  argument list, not a dedicated name list: `sum(D, T: e)` and `sum(a, b)` share a prefix
+  that LALR(1) cannot separate at the comma, so both sides are read as argument lists and
+  the qualifier's shape is checked in the C action. The decision point becomes `:` vs `)`
+  after a completed `func_arg_list`, which is conflict-free — `%expect` stayed at 8.
+- **Parse node**: `PG_AEXPR_QUALIFIED_REDUCER` (`parsenodes.hpp`) →
+  `QUALIFIED_REDUCER_TAG` FunctionExpression (`transform_operator.cpp`), shaped
+  `tag(aggregate, relation_name)` exactly like the aggregate-local WHEN tag.
+- **Symbolic normalization**: `decide_symbolic.cpp` path 3 was generalized from
+  "aggregate-local WHEN" to **tagged aggregate** (`ContainsTaggedAggregate`,
+  `AsFoldableAggregate`), so a qualified reducer takes the same parsed-level route and
+  SymEngine never flattens the tag. No fifth normalizer path was added.
+- **Binder**: `DecideBinder::BindQualifiedReducer` resolves the relation, enforces
+  well-formedness, and stamps `MakeQualifiedReducerTag(scope_idx)` on the bound aggregate's
+  `alias`. `DecideQualifierContext` (`decide_binder.hpp`) carries what it needs from
+  `bind_select_node.cpp`, which is still filling `entity_scopes` at that point.
+- **Alias tags are now composable** (`common/enums/decide.hpp`): `AddDecideTag`,
+  `HasDecideTag`, `ExtractDecideTagPayload`. A qualified `AVG` is tagged twice — once by
+  the binder, once by the AVG→SUM rewrite — so tags concatenate and are matched by search
+  rather than equality. The AVG and MIN/MAX indicator readers were converted accordingly.
+- **Term plumbing**: `qualifier_scope_idx` on `Term`, `BilinearConstraintTerm`,
+  `QuadraticGroup` and `Objective::BilinearTerm` (`physical_decide.hpp`), stamped by
+  `ApplyAggregateMetadata` / `QualifierScopeOf`.
 
 ## Linearity / Non-Linearity
 

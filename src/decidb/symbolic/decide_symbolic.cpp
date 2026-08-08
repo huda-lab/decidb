@@ -44,18 +44,18 @@
 //      Detector: `ContainsTopLevelMinOrMax`.
 //      Downstream: `RewriteComposedMinMaxInConstraint` in the optimizer.
 //
-//   3. Aggregate-local WHEN LHS path (`SUM(x) WHEN c`)
+//   3. Tagged-aggregate LHS path (`SUM(x) WHEN c`, `sum(D: x)`)
 //      NOT a true bypass — does its own parsed-level rewrite.
-//      Why: SymEngine doesn't know WHEN semantics and would absorb the
-//      WHEN tag as opaque, then expand around it, scrambling which terms
-//      the per-aggregate filter applies to.
+//      Why: SymEngine knows neither WHEN nor qualifier semantics and would
+//      absorb the tag as opaque, then expand around it, scrambling which
+//      terms the per-aggregate filter or the qualifier applies to.
 //      What it does: (a) folds `K * (SUM(x) WHEN c)` and
 //      `(SUM(x) WHEN c) / K` into `WHEN(SUM(K*x), c)` so the extractor
-//      sees a bare WHEN-tagged aggregate; (b) decomposes the LHS
+//      sees a bare tagged aggregate; (b) decomposes the LHS
 //      additively (recursing through `+`, binary `-`, unary `-`, CAST),
 //      peels pure-numeric leaves into a single offset; (c) rebuilds the
 //      LHS from the structural terms; (d) returns `LHS_struct OP (RHS - offset)`.
-//      Helpers: `CopyAndFoldConstantsIntoWhenAggregates`,
+//      Helpers: `CopyAndFoldConstantsIntoAggregates`, `AsFoldableAggregate`,
 //      `DecomposeAdditiveAtParsed`, `BuildAdditiveExpressionFromTerms`.
 //
 //   4. Default path: SymEngine `expand().simplify()` + term collection +
@@ -945,32 +945,37 @@ static bool ContainsSumFunction(const ParsedExpression &expr) {
     }
 }
 
-static bool ContainsAggregateLocalWhen(const ParsedExpression &expr) {
+// True when the tree carries a structural tag sitting directly above an aggregate:
+// an aggregate-local WHEN (`SUM(x) WHEN c`) or a relation qualifier (`sum(D: x)`).
+// Both are opaque to SymEngine, which would flatten around them and scramble which
+// terms the tag applies to, so both route to the parsed-level path below.
+static bool ContainsTaggedAggregate(const ParsedExpression &expr) {
     if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
         auto &func = expr.Cast<const FunctionExpression>();
-        if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
+        if (func.is_operator && (func.function_name == WHEN_CONSTRAINT_TAG ||
+                                 func.function_name == QUALIFIED_REDUCER_TAG)) {
             return true;
         }
         for (auto &child : func.children) {
-            if (ContainsAggregateLocalWhen(*child)) return true;
+            if (ContainsTaggedAggregate(*child)) return true;
         }
-        if (func.filter && ContainsAggregateLocalWhen(*func.filter)) return true;
+        if (func.filter && ContainsTaggedAggregate(*func.filter)) return true;
         return false;
     }
     if (expr.GetExpressionClass() == ExpressionClass::OPERATOR) {
         auto &op = expr.Cast<const OperatorExpression>();
         for (auto &child : op.children) {
-            if (ContainsAggregateLocalWhen(*child)) return true;
+            if (ContainsTaggedAggregate(*child)) return true;
         }
         return false;
     }
     if (expr.GetExpressionClass() == ExpressionClass::CAST) {
         auto &cast = expr.Cast<const CastExpression>();
-        return ContainsAggregateLocalWhen(*cast.child);
+        return ContainsTaggedAggregate(*cast.child);
     }
     if (expr.GetExpressionClass() == ExpressionClass::COMPARISON) {
         auto &cmp = expr.Cast<const ComparisonExpression>();
-        return ContainsAggregateLocalWhen(*cmp.left) || ContainsAggregateLocalWhen(*cmp.right);
+        return ContainsTaggedAggregate(*cmp.left) || ContainsTaggedAggregate(*cmp.right);
     }
     return false;
 }
@@ -986,6 +991,11 @@ static bool ContainsTopLevelMinOrMax(const ParsedExpression &expr) {
         if (!func.is_operator) {
             auto fname = StringUtil::Lower(func.function_name);
             return fname == "min" || fname == "max";
+        }
+        // A relation qualifier wraps the aggregate without changing whether it is a
+        // composed sibling, so look straight through it.
+        if (func.function_name == QUALIFIED_REDUCER_TAG && !func.children.empty()) {
+            return ContainsTopLevelMinOrMax(*func.children[0]);
         }
         if (func.function_name == "+" || func.function_name == "-") {
             for (auto &child : func.children) {
@@ -1112,20 +1122,21 @@ static unique_ptr<ParsedExpression> CopyAndFoldConstantsIntoAggregates(
     const ParsedExpression &expr,
     const case_insensitive_map_t<idx_t> &decide_variables);
 
-// Return the inner aggregate FunctionExpression if `expr` is either a
-// direct aggregate call (SUM/AVG/MIN/MAX) or a WHEN-tagged aggregate, and
-// set `out_when` to the WHEN tag node if present (else nullptr). Unwraps
-// CASTs.
+// Return the inner aggregate FunctionExpression if `expr` is either a direct
+// aggregate call (SUM/AVG/MIN/MAX) or a tagged one — `SUM(x) WHEN c`, `sum(D: x)` —
+// and set `out_tag` to the tag node if present (else nullptr). Both tags have the
+// same shape, `tag(aggregate, payload)`, so one path handles them. Unwraps CASTs.
 static const FunctionExpression *AsFoldableAggregate(
-    const ParsedExpression &expr, const FunctionExpression *&out_when) {
-    out_when = nullptr;
+    const ParsedExpression &expr, const FunctionExpression *&out_tag) {
+    out_tag = nullptr;
     const ParsedExpression *cur = &expr;
     while (cur->GetExpressionClass() == ExpressionClass::CAST) {
         cur = cur->Cast<const CastExpression>().child.get();
     }
     if (cur->GetExpressionClass() != ExpressionClass::FUNCTION) return nullptr;
     auto &f = cur->Cast<const FunctionExpression>();
-    if (f.is_operator && f.function_name == WHEN_CONSTRAINT_TAG) {
+    if (f.is_operator &&
+        (f.function_name == WHEN_CONSTRAINT_TAG || f.function_name == QUALIFIED_REDUCER_TAG)) {
         if (f.children.size() != 2) return nullptr;
         const ParsedExpression *child = f.children[0].get();
         while (child->GetExpressionClass() == ExpressionClass::CAST) {
@@ -1136,7 +1147,7 @@ static const FunctionExpression *AsFoldableAggregate(
         if (cf.is_operator) return nullptr;
         auto name = StringUtil::Lower(cf.function_name);
         if (name != "sum" && name != "avg" && name != "min" && name != "max") return nullptr;
-        out_when = &f;
+        out_tag = &f;
         return &cf;
     }
     if (!f.is_operator) {
@@ -1148,16 +1159,16 @@ static const FunctionExpression *AsFoldableAggregate(
     return nullptr;
 }
 
-// Build a new aggregate (and optional WHEN wrapper) whose inner body is
+// Build a new aggregate (re-wrapped in its tag, if it had one) whose inner body is
 // `K * inner` or `inner / K`. `factor` is moved into the new body.
 static unique_ptr<ParsedExpression> MakeAggregateWithScaledInner(
     const FunctionExpression &agg,
-    const FunctionExpression *when_tag,
+    const FunctionExpression *tag,
     unique_ptr<ParsedExpression> factor,
     bool is_division,
     const case_insensitive_map_t<idx_t> &decide_variables) {
     if (agg.children.size() != 1) {
-        return when_tag ? when_tag->Copy() : agg.Copy();
+        return tag ? tag->Copy() : agg.Copy();
     }
     auto inner_copy = CopyAndFoldConstantsIntoAggregates(*agg.children[0], decide_variables);
     unique_ptr<ParsedExpression> new_inner;
@@ -1169,13 +1180,13 @@ static unique_ptr<ParsedExpression> MakeAggregateWithScaledInner(
     vector<unique_ptr<ParsedExpression>> agg_args;
     agg_args.push_back(std::move(new_inner));
     auto new_agg = make_uniq<FunctionExpression>(agg.function_name, std::move(agg_args));
-    if (!when_tag) {
+    if (!tag) {
         return std::move(new_agg);
     }
-    vector<unique_ptr<ParsedExpression>> when_args;
-    when_args.push_back(std::move(new_agg));
-    when_args.push_back(when_tag->children[1]->Copy());
-    auto result = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(when_args));
+    vector<unique_ptr<ParsedExpression>> tag_args;
+    tag_args.push_back(std::move(new_agg));
+    tag_args.push_back(tag->children[1]->Copy());
+    auto result = make_uniq<FunctionExpression>(tag->function_name, std::move(tag_args));
     result->is_operator = true;
     return std::move(result);
 }
@@ -1187,10 +1198,10 @@ static unique_ptr<ParsedExpression> CopyAndFoldConstantsIntoAggregates(
         auto &func = expr.Cast<const FunctionExpression>();
         if (func.is_operator && (func.function_name == "*" || func.function_name == "/") &&
             func.children.size() == 2) {
-            const FunctionExpression *when_left = nullptr;
-            const FunctionExpression *when_right = nullptr;
-            const FunctionExpression *agg_left = AsFoldableAggregate(*func.children[0], when_left);
-            const FunctionExpression *agg_right = AsFoldableAggregate(*func.children[1], when_right);
+            const FunctionExpression *tag_left = nullptr;
+            const FunctionExpression *tag_right = nullptr;
+            const FunctionExpression *agg_left = AsFoldableAggregate(*func.children[0], tag_left);
+            const FunctionExpression *agg_right = AsFoldableAggregate(*func.children[1], tag_right);
             if (func.function_name == "*") {
                 // Either side may be the aggregate; the other side is the
                 // scale factor. Reject only if both sides are aggregates
@@ -1199,13 +1210,13 @@ static unique_ptr<ParsedExpression> CopyAndFoldConstantsIntoAggregates(
                 if (agg_left && !agg_right &&
                     !ExpressionContainsDecideVariable(*func.children[1], decide_variables)) {
                     auto factor = CopyAndFoldConstantsIntoAggregates(*func.children[1], decide_variables);
-                    return MakeAggregateWithScaledInner(*agg_left, when_left, std::move(factor),
+                    return MakeAggregateWithScaledInner(*agg_left, tag_left, std::move(factor),
                                                        /*is_division=*/false, decide_variables);
                 }
                 if (agg_right && !agg_left &&
                     !ExpressionContainsDecideVariable(*func.children[0], decide_variables)) {
                     auto factor = CopyAndFoldConstantsIntoAggregates(*func.children[0], decide_variables);
-                    return MakeAggregateWithScaledInner(*agg_right, when_right, std::move(factor),
+                    return MakeAggregateWithScaledInner(*agg_right, tag_right, std::move(factor),
                                                        /*is_division=*/false, decide_variables);
                 }
             } else { // "/"
@@ -1215,7 +1226,7 @@ static unique_ptr<ParsedExpression> CopyAndFoldConstantsIntoAggregates(
                 if (agg_left &&
                     !ExpressionContainsDecideVariable(*func.children[1], decide_variables)) {
                     auto divisor = CopyAndFoldConstantsIntoAggregates(*func.children[1], decide_variables);
-                    return MakeAggregateWithScaledInner(*agg_left, when_left, std::move(divisor),
+                    return MakeAggregateWithScaledInner(*agg_left, tag_left, std::move(divisor),
                                                        /*is_division=*/true, decide_variables);
                 }
             }
@@ -1287,20 +1298,23 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
         return cmp.Copy();
     }
 
-    // Aggregate-local WHEN needs to survive into binding/execution as a
-    // per-aggregate filter. The full SymEngine-style normalization below
-    // would flatten the aggregate tree and lose the filter boundary, so we
-    // can't use it. Instead we do a smaller parsed-level rewrite that does
-    // exactly what the user expects without touching the WHEN tag:
-    //   1. Fold constant scalars into the WHEN-tagged aggregates' bodies
+    // A tag sitting directly above an aggregate — an aggregate-local WHEN
+    // (`SUM(x) WHEN c`) or a relation qualifier (`sum(D: x)`) — has to survive
+    // into binding and execution: one becomes a per-aggregate filter, the other
+    // names the relation the reducer de-duplicates by. The full SymEngine-style
+    // normalization below would flatten the aggregate tree and lose the tag
+    // boundary, so we can't use it. Instead we do a smaller parsed-level rewrite
+    // that does exactly what the user expects without touching the tag:
+    //   1. Fold constant scalars into the tagged aggregates' bodies
     //      (`K * (SUM(x) WHEN c)` → `WHEN(SUM(K*x), c)`,
-    //      `(SUM(x) WHEN c) / K` → `WHEN(SUM(x/K), c)`). This makes the
-    //      downstream extractor see a bare WHEN-tagged aggregate it can walk.
+    //      `(SUM(x) WHEN c) / K` → `WHEN(SUM(x/K), c)`, and likewise for a
+    //      qualifier). This makes the downstream extractor see a bare tagged
+    //      aggregate it can walk.
     //   2. Decompose the LHS additively, peel pure-numeric terms into a
     //      single offset, and rebuild the LHS from the structural terms.
     //   3. Move the offset to the RHS as `RHS - offset`, exactly mirroring
-    //      what the symbolic library would do for the non-WHEN case.
-    if (ContainsAggregateLocalWhen(*cmp.left)) {
+    //      what the symbolic library would do for the untagged case.
+    if (ContainsTaggedAggregate(*cmp.left)) {
         auto folded_lhs = CopyAndFoldConstantsIntoAggregates(*cmp.left, decide_variables);
         vector<std::pair<int, const ParsedExpression *>> structural;
         double lhs_offset = 0.0;
