@@ -61,23 +61,16 @@ Option 1 is preferred: canonical form is a property of the query, not of one exe
 
 ---
 
-## Aggregate-local WHEN on a qualified reducer: rejected in constraints, works in objectives, and the message leaks an internal tag
+## Aggregate-local WHEN on a qualified reducer: rejected in constraints, works in objectives
 
-**Location**: the `SUCH THAT` binder path (`src/planner/expression_binder/decide_constraints_binder.cpp`) versus `decide_objective_binder.cpp`; tag constants in `src/include/duckdb/common/enums/decide.hpp`.
+**Location**: the `SUCH THAT` binder path (`src/planner/expression_binder/decide_constraints_binder.cpp`) versus `decide_objective_binder.cpp`.
 
-`SUM(D: expr) WHEN (cond)` binds in an **objective** and behaves correctly — both masks apply, and the qualifier survives (pinned by `test_qualified_reducer.py::test_qualified_reducer_with_aggregate_local_when_in_objective`). The same expression in a **constraint** is rejected:
+`SUM(D: expr) WHEN (cond)` binds in an **objective** and behaves correctly — both masks apply, and the qualifier survives (pinned by `test_qualified_reducer.py::test_qualified_reducer_with_aggregate_local_when_in_objective`). The same expression in a **constraint** is rejected (pinned by `test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected`).
 
-```
-Binder Error: SUCH THAT clause does not support '(sum(keep) __qualified_reducer__ n)'(ExpressionClass::FUNCTION)
-```
+**The asymmetry is undocumented and probably unintended.** `done.md` describes the qualifier mask as ANDed into the same `TermFilterState` slot aggregate-local `WHEN` already uses, which is a description of a composition that works. It works on one side only. Root cause: a relation-qualified reducer is not a `func_application`, so the grammar's tight aggregate-local-WHEN production (`func_application WHEN_DECIDE decide_when_condition`, `third_party/libpg_query/grammar/statements/select.y:3040`) never matches it. `SUM(D: expr) WHEN cond <= bound` in a constraint therefore falls to the loose, whole-constraint WHEN production instead, which swallows the trailing comparison into the WHEN condition — the objective binder has no trailing comparison to swallow, which is why only the constraint side is affected. `SUM(D: expr) <= bound WHEN cond` (comparison before WHEN) already binds and executes correctly today, so the constraint-side gap is specifically that the tight aggregate-local production needs a qualified-reducer alternative, not that the composition is unsupported outright.
 
-Two problems in one.
+**Why it matters**: the asymmetry means the same expression is legal in one clause and not the other depending on WHEN/comparison order, which is the kind of rule users cannot infer, and the constraint-side rejection currently surfaces as a generic "the WHEN must follow the comparison" binder error rather than a real fix.
 
-1. **The asymmetry is undocumented and probably unintended.** `done.md` describes the qualifier mask as ANDed into the same `TermFilterState` slot aggregate-local `WHEN` already uses, which is a description of a composition that works. It works on one side only.
-2. **The message leaks `__qualified_reducer__`**, an internal alias tag, plus a C++ enumerator name (`ExpressionClass::FUNCTION`). Per the project's user-facing output principle this should name the SQL construct and the smallest edit — something like "a relation-qualified reducer cannot carry a WHEN filter in SUCH THAT; move the condition into the WHERE clause". The tag is an implementation detail of how the binder marks the aggregate; it has no meaning to a SQL user.
-
-**Why it matters**: the leak is the more visible of the two — any user who writes this shape sees an internal identifier. The asymmetry means the same expression is legal in one clause and not the other, which is the kind of rule users cannot infer.
-
-**Test**: `test/decide/tests/test_qualified_reducer.py::test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected` pins the current rejection and matches only on `SUCH THAT clause does not support`, so tightening the message will not break it. Widen the assertion when the message is fixed; delete the test and add a positive one if the composition is made to work.
+**Test**: `test/decide/tests/test_qualified_reducer.py::test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected` pins the current rejection with a message-shape check; delete it and add a positive one if the composition is made to work.
 
 **Discovered**: 2026-08-08, writing the deferred test coverage for group A.

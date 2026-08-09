@@ -297,6 +297,29 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
             "Move the shared condition into each aggregate-local WHEN, or keep a single expression-level WHEN."));
     }
 
+    // A relation-qualified reducer (`sum(D: ...)`) is not a `func_application`, so WHEN
+    // written right after it always parses as this (whole-constraint) form rather than
+    // aggregate-local WHEN, taking everything after it — including a trailing comparison
+    // like `<= bound` — as the condition. What is left in child[0] is then the bare
+    // reducer, which can never be a constraint on its own. Catch that shape here with a
+    // message that names the fix, instead of falling through to the generic dispatch
+    // below, which would report the reducer's internal tag.
+    if (func.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
+        auto &candidate = func.children[0]->Cast<FunctionExpression>();
+        if (candidate.is_operator && candidate.function_name == QUALIFIED_REDUCER_TAG &&
+            candidate.children.size() == 2 &&
+            candidate.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION &&
+            candidate.children[1]->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+            auto agg_name = candidate.children[0]->Cast<FunctionExpression>().function_name;
+            auto relation = candidate.children[1]->Cast<ColumnRefExpression>().GetColumnName();
+            return BindResult(BinderException::Unsupported(*expr_ptr,
+                StringUtil::Format(
+                    "A relation-qualified reducer's WHEN must follow the comparison, not precede it. "
+                    "Write %s(%s: ...) <= bound WHEN cond.",
+                    StringUtil::Upper(agg_name), relation)));
+        }
+    }
+
     // Bind the constraint (child[0]) through normal DECIDE constraint dispatch
     is_top_expression = true;
     ErrorData constraint_error;
