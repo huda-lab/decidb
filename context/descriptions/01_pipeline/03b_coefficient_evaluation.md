@@ -21,6 +21,14 @@ The `TransformExpression` lambda performs this recursively:
 
 This lambda is defined multiple times (for LHS coefficients, RHS expressions, WHEN conditions, PER columns, and objective terms) with slight variations in which expression types are handled.
 
+### Precondition: every evaluated expression must already be resolved
+
+The `BoundColumnRefExpression` branch reads `colref.binding.column_index` and uses it **as a position in the materialized chunk**. Those two indexings only agree because `ColumnBindingResolver` has already rewritten the DECIDE clause's column references to `BoundReferenceExpression`s carrying chunk positions — the leftover `BoundColumnRef` case is a fallback, not the normal path.
+
+That makes resolution a hard precondition of this phase, and it is enforced by hand: the resolver's `LOGICAL_DECIDE` case (`src/execution/column_binding_resolver.cpp`) enumerates DECIDE's expression-holding fields explicitly rather than using `VisitOperatorExpressions`, because DECIDE variables must be shielded from resolution through `ignored_bindings`. **Any new field on `LogicalDecide` that holds expressions this phase will evaluate must be added to that enumeration.** An optimizer rewrite that *moves* sub-expressions out of `decide_objective` / `decide_constraints` into a side vector — as the composed MIN/MAX rewrite does — silently opts them out otherwise, and the operator then evaluates a logical index as a chunk position. A single-table source hides the mistake completely, because the two indexings coincide there; it surfaces only once a join reorders the columns. Currently enumerated: `decide_variables`, `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`, `composed_minmax_constraints`.
+
+`entity_key_expressions` is deliberately **not** resolved: `plan_decide.cpp` matches those against the child's `GetColumnBindings()` by `(table_index, column_index)` to compute `entity_key_physical_indices`, which needs the logical binding intact.
+
 ## Per-Term Coefficient Evaluation
 
 For each constraint, each term's coefficient expression is evaluated against the materialized data:

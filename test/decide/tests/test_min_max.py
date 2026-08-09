@@ -1543,3 +1543,67 @@ def test_composed_minmax_objective_hard_min(decidb_cli):
     ci = {c: i for i, c in enumerate(cols)}
     chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
     assert set(chosen) == {5.0, 3.0}, f"expected the two smallest, got {chosen}"
+
+
+# ============================================================================
+# Composed MIN/MAX with an entity-scoped variable — KNOWN DEFECT
+# ============================================================================
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+def test_composed_minmax_entity_scoped_multi_row(decidb_cli, perf_tracker):
+    """`MINIMIZE SUM(c*open) + MAX(c*open)` over a table-scoped decision on a join.
+
+    Three depots, costs 50/40/30; depot 1 joins two routes, the others one each.
+    Charging every row, the objective is
+    ``100*o1 + 40*o2 + 30*o3 + max(50*o1, 50*o1, 40*o2, 30*o3)``, minimised at
+    ``o3 = 1`` for 60.
+
+    Regression for the composed-term binding bug: the composed MIN/MAX rewrite
+    lifts sub-expressions out of the objective into their own vector, and the
+    column-binding resolver used to skip that vector — so the operator read each
+    coefficient reference's *logical* column index as a position in the
+    materialized chunk. Here that made ``D.c`` resolve to ``R.rid``, and the
+    query answered depot 2 (objective 80). A single-table source hides it because
+    the two indexings coincide, which is why every pre-existing composed test
+    passed.
+
+    The oracle is enumeration over the eight assignments rather than a solver
+    call, because the instance is small enough to be exhaustive and the point is
+    the objective *value*, not an alternate optimum.
+    """
+    setup = """
+        WITH D(did, c) AS (VALUES (1, 50), (2, 40), (3, 30)),
+             R(rid, did) AS (VALUES (10, 1), (11, 1), (12, 2), (13, 3))
+    """
+    rows, cols = decidb_cli.execute(setup + """
+        SELECT R.rid, D.did, open
+        FROM D JOIN R ON D.did = R.did
+        DECIDE D.open(BOOL)
+        SUCH THAT SUM(open) >= 1
+        MINIMIZE SUM(D.c * open) + MAX(D.c * open)
+    """)
+    assert len(rows) == 4
+
+    ci = {c: i for i, c in enumerate(cols)}
+    cost = {1: 50, 2: 40, 3: 30}
+    chosen = {int(r[ci["did"]]): int(r[ci["open"]]) for r in rows}
+
+    row_values = [cost[int(r[ci["did"]])] * int(r[ci["open"]]) for r in rows]
+    decidb_obj = sum(row_values) + max(row_values)
+
+    # Exhaustive oracle over the three entity decisions.
+    best = None
+    for o1 in (0, 1):
+        for o2 in (0, 1):
+            for o3 in (0, 1):
+                if 2 * o1 + o2 + o3 < 1:
+                    continue
+                vals = [50 * o1, 50 * o1, 40 * o2, 30 * o3]
+                total = sum(vals) + max(vals)
+                if best is None or total < best:
+                    best = total
+
+    assert decidb_obj == best, (
+        f"composed MIN/MAX is suboptimal: DeciDB={decidb_obj} (chose {chosen}), "
+        f"optimal={best}")

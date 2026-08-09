@@ -108,26 +108,3 @@ aggregate's own rendering rather than appending a suffix. Cosmetic, but it costs
 the one detail that distinguishes the two plans.
 
 *Discovered 2026-08-08 while shipping the single-relation qualifier.*
-
----
-
-## Qualified reducer composed with MIN/MAX in the same clause
-
-`SUM(D: a * x) + MAX(b * y) <= K` (and the objective equivalent) routes through the composed
-MIN/MAX path, whose `ComposedMinMaxTerm` (`logical_decide.hpp`) carries no
-`qualifier_scope_idx` — so the qualifier would be **silently dropped** and the reducer would
-fall back to row semantics.
-
-No wrong answer is reachable today, but only by accident: that shape already dies with
-`INTERNAL Error: Vector::Reference used on vector of different type` whenever the variable
-is entity-scoped, which every qualified reducer's operand must be. The unqualified form
-fails identically, so the crash is pre-existing — logged in
-`../../07_issues/bugs/todo.md` → "Composed MIN/MAX with an entity-scoped variable crashes".
-**Fixing that bug removes the thing currently standing between this gap and a silently
-wrong answer, so the two must be resolved together.**
-
-Two options: thread `qualifier_scope_idx` through `ComposedMinMaxTerm` and AND the mask into
-that path's `filter_mask` (it treats masks as row exclusion, which is the right shape), or
-reject the combination explicitly at bind time.
-
-*Discovered 2026-08-08 while shipping the single-relation qualifier.*

@@ -471,6 +471,10 @@ static void WalkComposedLhs(const Expression &e, int sign, idx_t decide_index, b
 	if (agg.filter) {
 		term.filter = agg.filter->Copy();
 	}
+	// Carry the relation qualifier (`SUM(D: ...)`) off the tag the binder stamped on the
+	// aggregate. Without this the composed path reduces over join-result rows and a
+	// qualified reducer silently reverts to row semantics.
+	TryParseQualifiedReducerTag(agg.alias, term.qualifier_scope_idx);
 	if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
 		bool is_max = (name == "max");
 		// z_k pushed down if the outer wants LHS small and this term's sign is +,

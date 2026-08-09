@@ -88,3 +88,49 @@ Those hand-written fields include loops and comments no generator would emit —
 **Test**: a plan round-trip assertion for a DECIDE query with a table-scoped and a query-wide variable, asserting `entity_scopes` and `variable_scopes` survive serialize→deserialize. There is no such test today, which is why the drift went unnoticed.
 
 **Discovered**: 2026-08-08, implementing A3 (`scalar` query-wide decisions). Adding a scope field meant editing this file, and the JSON turned out not to mention the field being edited. Not triggered by that work — the new field 233 was added in the same hand-written style as its neighbours — but the next regeneration would take the whole DECIDE block with it.
+
+---
+
+## Declaring DECIDE in both clause slots reports the wrong fix
+
+**Location**: `third_party/libpg_query/grammar/statements/select.y` (the `decide_declaration` / `decide_body` slots and `makeDecideClause()` in `grammar/grammar.cpp`).
+
+A query that declares in both slots —
+
+```sql
+SELECT c_custkey, x DECIDE x(BOOL) FROM customer DECIDE x(BOOL)
+SUCH THAT SUM(x) <= 3 MAXIMIZE SUM(x * c_acctbal)
+```
+
+— is correctly rejected, but the message is `DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint`, pointing at the first `DECIDE`. The declaration slot closes when the second `DECIDE` appears where `SUCH THAT` was expected, so the missing-`SUCH THAT` production fires.
+
+**Why it matters**: the message names a fix the user already applied — the query *does* have a `SUCH THAT`. Per the project's user-facing output principle, the message should name the offending object (the duplicate declaration) and the smallest edit (drop one of the two `DECIDE` lists). As written it sends the reader looking for a clause that is already there.
+
+**Fix direction**: detect the two-slot case where it is actually knowable — either a grammar production that accepts a `DECIDE` token in the body position purely to raise a dedicated message, or a check in `makeDecideClause()` if both slots can reach it. The four existing reject-only productions for the removed declaration spellings are the pattern to follow.
+
+**Test**: `test/decide/tests/test_clause_order.py::TestClauseOrderErrors::test_declaration_in_both_slots_rejected` pins the rejection today but deliberately asserts only `parser error`, not the wording. Tighten that regex when the message is fixed.
+
+**Discovered**: 2026-08-08, writing the clause-order regression tests while confirming group A of `context/descriptions/todo.md` was complete.
+
+---
+
+## Aggregate-local WHEN on a qualified reducer: rejected in constraints, works in objectives, and the message leaks an internal tag
+
+**Location**: the `SUCH THAT` binder path (`src/planner/expression_binder/decide_constraints_binder.cpp`) versus `decide_objective_binder.cpp`; tag constants in `src/include/duckdb/common/enums/decide.hpp`.
+
+`SUM(D: expr) WHEN (cond)` binds in an **objective** and behaves correctly — both masks apply, and the qualifier survives (pinned by `test_qualified_reducer.py::test_qualified_reducer_with_aggregate_local_when_in_objective`). The same expression in a **constraint** is rejected:
+
+```
+Binder Error: SUCH THAT clause does not support '(sum(keep) __qualified_reducer__ n)'(ExpressionClass::FUNCTION)
+```
+
+Two problems in one.
+
+1. **The asymmetry is undocumented and probably unintended.** `done.md` describes the qualifier mask as ANDed into the same `TermFilterState` slot aggregate-local `WHEN` already uses, which is a description of a composition that works. It works on one side only.
+2. **The message leaks `__qualified_reducer__`**, an internal alias tag, plus a C++ enumerator name (`ExpressionClass::FUNCTION`). Per the project's user-facing output principle this should name the SQL construct and the smallest edit — something like "a relation-qualified reducer cannot carry a WHEN filter in SUCH THAT; move the condition into the WHERE clause". The tag is an implementation detail of how the binder marks the aggregate; it has no meaning to a SQL user.
+
+**Why it matters**: the leak is the more visible of the two — any user who writes this shape sees an internal identifier. The asymmetry means the same expression is legal in one clause and not the other, which is the kind of rule users cannot infer.
+
+**Test**: `test/decide/tests/test_qualified_reducer.py::test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected` pins the current rejection and matches only on `SUCH THAT clause does not support`, so tightening the message will not break it. Widen the assertion when the message is fixed; delete the test and add a positive one if the composition is made to work.
+
+**Discovered**: 2026-08-08, writing the deferred test coverage for group A.

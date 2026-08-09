@@ -5795,6 +5795,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 } else {
                     ta.filter_mask.assign(num_rows, true);
                 }
+                // Fold in the relation qualifier's de-duplication mask, exactly as the
+                // non-composed reducer paths do. Composed v1 has no outer PER, so every
+                // row is in one group and `row_group_ids` is empty. Applied uniformly:
+                // for MIN/MAX it is provably a no-op (every row of an identity carries the
+                // same value, so dropping repeats cannot move an extremum), which keeps
+                // one code path instead of a special case that has to stay in sync.
+                if (term.qualifier_scope_idx != DConstants::INVALID_INDEX) {
+                    auto keep = BuildQualifierKeepMask(solver_input.entity_mappings,
+                                                       term.qualifier_scope_idx, {});
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        ta.filter_mask[row] = ta.filter_mask[row] && keep[row];
+                    }
+                }
                 analyses.push_back(std::move(ta));
             }
 
@@ -6019,6 +6032,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ta.filter_mask = std::move(obj_comp_masks[mask_slot++]);
                 } else {
                     ta.filter_mask.assign(num_rows, true);
+                }
+                // Same qualifier de-duplication as the composed constraint path above.
+                if (term.qualifier_scope_idx != DConstants::INVALID_INDEX) {
+                    auto keep = BuildQualifierKeepMask(solver_input.entity_mappings,
+                                                       term.qualifier_scope_idx, {});
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        ta.filter_mask[row] = ta.filter_mask[row] && keep[row];
+                    }
                 }
                 obj_analyses.push_back(std::move(ta));
             }

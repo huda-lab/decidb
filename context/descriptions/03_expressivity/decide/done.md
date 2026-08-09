@@ -61,6 +61,12 @@ so this is opt-in and nothing existing changes meaning.
   value, so *which* row survives cannot matter.
 - **The mask is per term, not per clause**, so `SUM(D: a * open) + SUM(b * ship)` in one
   objective de-duplicates only the first term.
+- **Composed MIN/MAX carries the qualifier too.** `SUM(D: a * open) + MAX(b * ship)` routes
+  through the composed path, which keeps its own term struct
+  (`ComposedMinMaxTerm::qualifier_scope_idx`, stamped by the optimizer from the same tag)
+  and ANDs the same mask into that term's filter mask. Objective and constraint are separate
+  code paths and both do it. Applied uniformly to every term kind rather than skipped for
+  `MIN`/`MAX`: it is provably a no-op there, so one code path beats a special case.
 - **`MIN`/`MAX` need no de-duplication.** Dropping repeats of a value already present
   cannot move an extremum. The qualifier is accepted, carried, and has no effect for them.
 - **Rejections** (all at bind time, in `BindQualifiedReducer` /

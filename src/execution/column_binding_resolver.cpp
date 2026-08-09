@@ -153,7 +153,38 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 		if (decide_op.decide_objective) {
 			VisitExpression(&decide_op.decide_objective);
 		}
-		
+
+		// The composed MIN/MAX rewrite (DecideOptimizer) lifts sub-expressions out of the
+		// objective and constraint trees into their own vectors and leaves a placeholder
+		// behind, so visiting `decide_objective` / `decide_constraints` no longer reaches
+		// them. They must be resolved here for the same reason everything else is: the
+		// physical operator evaluates them against the materialized child chunk, reading
+		// each reference's index as a *position in that chunk*. An unresolved
+		// BoundColumnRef still carries a logical (table_index, column_index), so the
+		// operator silently reads whichever column now sits at that position — the right
+		// answer only when the two coincide, as they do for a single-table source.
+		for (auto &term : decide_op.composed_minmax_objective_terms) {
+			if (term.inner_expr) {
+				VisitExpression(&term.inner_expr);
+			}
+			if (term.filter) {
+				VisitExpression(&term.filter);
+			}
+		}
+		for (auto &spec : decide_op.composed_minmax_constraints) {
+			for (auto &term : spec.terms) {
+				if (term.inner_expr) {
+					VisitExpression(&term.inner_expr);
+				}
+				if (term.filter) {
+					VisitExpression(&term.filter);
+				}
+			}
+			if (spec.rhs_expr) {
+				VisitExpression(&spec.rhs_expr);
+			}
+		}
+
 		// Clear ignored bindings after visiting expressions
 		ignored_bindings.clear();
 		

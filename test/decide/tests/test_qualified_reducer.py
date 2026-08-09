@@ -426,3 +426,249 @@ def test_unknown_relation_qualifier_rejected(decidb_cli):
             extra_decls="",
             constraint="SUM(keepN) <= 5",
             objective="SUM(supplier: n.n_nationkey * keepN)"))
+
+
+# ---------------------------------------------------------------------------
+# Test 9: Hard-direction MIN / MAX with a qualifier
+#
+# Test 4 covers the easy directions, which become per-row constraints with no
+# auxiliaries. The hard directions add a global auxiliary plus one Big-M
+# indicator per active row, so the de-duplication mask and the indicator rows
+# meet for the first time here.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+def test_qualified_hard_max_objective(decidb_cli, duckdb_conn, perf_tracker):
+    """`MAXIMIZE MAX(n: ...)` — the Big-M direction.
+
+    `done.md` claims MIN/MAX are unaffected by de-duplication because every row
+    of an identity carries the same value. That reasoning should survive the
+    Big-M encoding too, which is what this checks: the qualified and unqualified
+    forms must reach the same extremum.
+    """
+    template = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0 AND n.n_nationkey > 0
+        DECIDE n.keepN(BOOL)
+        SUCH THAT SUM(n: keepN) <= 2
+        MAXIMIZE MAX({reducer})
+    """
+    qualified, _ = decidb_cli.execute(
+        template.format(reducer="n: n.n_nationkey * keepN"))
+    unqualified, _ = decidb_cli.execute(
+        template.format(reducer="n.n_nationkey * keepN"))
+
+    nation_ids = [int(r[0]) for r in duckdb_conn.execute("""
+        SELECT DISTINCT CAST(n.n_nationkey AS BIGINT)
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0 AND n.n_nationkey > 0
+        ORDER BY 1
+    """).fetchall()]
+
+    q_keep = _keep_by_nation(qualified, 1, 2)
+    u_keep = _keep_by_nation(unqualified, 1, 2)
+    q_max = max(n * q_keep.get(n, 0) for n in nation_ids)
+    u_max = max(n * u_keep.get(n, 0) for n in nation_ids)
+
+    assert q_max == u_max, \
+        f"qualifier changed the extremum: qualified={q_max}, unqualified={u_max}"
+    assert q_max == max(nation_ids), \
+        "the objective should reach the largest available nationkey"
+    assert sum(q_keep.values()) <= 2, "qualified budget violated"
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+def test_qualified_hard_min_constraint(decidb_cli, duckdb_conn, perf_tracker):
+    """`MIN(n: ...) <= K` — the hard direction on the constraint side."""
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0 AND n.n_nationkey > 0
+        DECIDE n.keepN(BOOL)
+        SUCH THAT MIN(n: n.n_nationkey * keepN) <= 1 AND SUM(n: keepN) >= 2
+        MAXIMIZE SUM(n: keepN)
+    """
+    result, _ = decidb_cli.execute(sql)
+    keep = _keep_by_nation(result, 1, 2)
+
+    nation_ids = [int(r[0]) for r in duckdb_conn.execute("""
+        SELECT DISTINCT CAST(n.n_nationkey AS BIGINT)
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0 AND n.n_nationkey > 0
+        ORDER BY 1
+    """).fetchall()]
+
+    values = [n * keep.get(n, 0) for n in nation_ids]
+    assert min(values) <= 1, f"MIN constraint violated: min={min(values)}"
+    assert sum(keep.values()) >= 2, "SUM constraint violated"
+
+
+# ---------------------------------------------------------------------------
+# Test 10: Qualifier composed with an aggregate-local WHEN
+#
+# The qualifier mask is ANDed into the same `TermFilterState` slot that
+# aggregate-local WHEN uses, so these two are the only masks that share a slot.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+def test_qualified_reducer_with_aggregate_local_when_in_objective(
+        decidb_cli, duckdb_conn, perf_tracker):
+    """Both masks apply, and the qualifier survives the composition.
+
+    Nations 5 (9 rows) and 14 (2 rows) are chosen so row-weighting inverts the
+    ranking: identity weights are 5 and 14, row weights 45 and 28. With a budget
+    of one nation, the qualified form must pick 14 and the unqualified 5 — so a
+    dropped qualifier is visible in the answer, not just the objective.
+    """
+    template = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
+        DECIDE n.keepN(BOOL)
+        SUCH THAT SUM(n: keepN) <= 1
+        MAXIMIZE SUM({reducer}) WHEN (n.n_nationkey > 1)
+    """
+    counts = {
+        int(r[0]): int(r[1]) for r in duckdb_conn.execute("""
+            SELECT CAST(n.n_nationkey AS BIGINT), COUNT(*)
+            FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+            WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
+            GROUP BY 1
+        """).fetchall()
+    }
+    assert 5 * counts[5] > 14 * counts[14], \
+        "fixture no longer inverts the ranking; pick different nations"
+
+    qualified, _ = decidb_cli.execute(
+        template.format(reducer="n: n.n_nationkey * keepN"))
+    unqualified, _ = decidb_cli.execute(
+        template.format(reducer="n.n_nationkey * keepN"))
+
+    q_keep = _keep_by_nation(qualified, 1, 2)
+    u_keep = _keep_by_nation(unqualified, 1, 2)
+
+    assert q_keep.get(14) == 1 and q_keep.get(5) == 0, \
+        f"qualified form should charge each nation once and pick 14, got {q_keep}"
+    assert u_keep.get(5) == 1 and u_keep.get(14) == 0, \
+        f"unqualified form should be row-weighted and pick 5, got {u_keep}"
+
+
+@pytest.mark.correctness
+def test_aggregate_local_when_filters_inside_a_qualified_reducer(
+        decidb_cli, perf_tracker):
+    """The WHEN mask still excludes rows once the qualifier is in play.
+
+    `n_nationkey < 10` drops nation 14 from the term entirely, so the only
+    profitable choice left is nation 5 — the opposite of the previous test's
+    answer, driven purely by the local filter.
+    """
+    result, _ = decidb_cli.execute("""
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
+        DECIDE n.keepN(BOOL)
+        SUCH THAT SUM(n: keepN) <= 1
+        MAXIMIZE SUM(n: n.n_nationkey * keepN) WHEN (n.n_nationkey < 10)
+    """)
+    keep = _keep_by_nation(result, 1, 2)
+    assert keep.get(5) == 1, \
+        f"nation 14 is filtered out of the objective, so 5 is the only gain: {keep}"
+
+
+@pytest.mark.error_binder
+@pytest.mark.error
+def test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected(
+        decidb_cli):
+    """The same composition is rejected on the *constraint* side.
+
+    Asymmetric with the objective case above, which works — and the message
+    leaks the internal `__qualified_reducer__` tag instead of naming the
+    unsupported combination. Both are logged in
+    ``07_issues/code_quality/todo.md``; this test pins the current rejection so
+    the fix is visible when it lands.
+    """
+    decidb_cli.assert_error("""
+            SELECT c.c_custkey, n.n_nationkey, keepN
+            FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+            WHERE n.n_regionkey = 0
+            DECIDE n.keepN(BOOL)
+            SUCH THAT SUM(n: keepN) WHEN (n.n_nationkey > 1) <= 2
+            MAXIMIZE SUM(n: n.n_nationkey * keepN)
+        """, match=r"SUCH THAT clause does not support")
+
+
+# ---------------------------------------------------------------------------
+# Test 11: Composed MIN/MAX silently drops the qualifier — KNOWN DEFECT
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+def test_composed_minmax_preserves_the_qualifier(decidb_cli, duckdb_conn,
+                                                 perf_tracker):
+    """Adding `+ MAX(keepN)` to a qualified reducer must not change what the
+    qualifier means.
+
+    Same inverting fixture as the WHEN test: with a one-nation budget the
+    qualified form picks 14 (identity weights 5 vs 14) and the unqualified form
+    would pick 5 (row weights 45 vs 28).
+
+    Regression for the dropped-qualifier bug: `ComposedMinMaxTerm` carried no
+    `qualifier_scope_idx`, so the de-duplication mask never reached the composed
+    path and the reducer silently reverted to row semantics — answering 5. The
+    control is the same query without the composed term, which is what makes a
+    failure here a dropped qualifier rather than a different problem.
+    """
+    template = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
+        DECIDE n.keepN(BOOL)
+        SUCH THAT SUM(n: keepN) <= 1
+        MAXIMIZE SUM(n: n.n_nationkey * keepN){extra}
+    """
+    control, _ = decidb_cli.execute(template.format(extra=""))
+    composed, _ = decidb_cli.execute(template.format(extra=" + MAX(keepN)"))
+
+    control_keep = _keep_by_nation(control, 1, 2)
+    composed_keep = _keep_by_nation(composed, 1, 2)
+
+    assert control_keep.get(14) == 1, \
+        f"control lost its qualifier too — this test no longer isolates the defect: {control_keep}"
+    assert composed_keep.get(14) == 1, (
+        f"composed MIN/MAX dropped the qualifier: picked {composed_keep}, "
+        f"control picked {control_keep}")
+
+
+@pytest.mark.correctness
+def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli,
+                                                                 perf_tracker):
+    """The composed *constraint* path is separate code from the objective path,
+    so it needs its own pin.
+
+    Budget 20 against `SUM(n: nationkey * keepN) + MAX(keepN)`. Under identity
+    semantics both nations fit: 5 + 14 + 1 = 20. Under row semantics neither
+    does on its own (45 + 1 and 28 + 1 both exceed 20), so a dropped qualifier
+    collapses the answer to the empty selection.
+    """
+    template = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
+        DECIDE n.keepN(BOOL)
+        SUCH THAT SUM({reducer}) + MAX(keepN) <= 20
+        MAXIMIZE SUM(n: keepN)
+    """
+    qualified, _ = decidb_cli.execute(
+        template.format(reducer="n: n.n_nationkey * keepN"))
+    unqualified, _ = decidb_cli.execute(
+        template.format(reducer="n.n_nationkey * keepN"))
+
+    q_keep = _keep_by_nation(qualified, 1, 2)
+    u_keep = _keep_by_nation(unqualified, 1, 2)
+
+    assert q_keep.get(5) == 1 and q_keep.get(14) == 1, \
+        f"identity semantics fit both nations under the budget, got {q_keep}"
+    assert sum(u_keep.values()) == 0, \
+        f"row semantics fit neither nation under the budget, got {u_keep}"

@@ -119,6 +119,11 @@ public:
         unique_ptr<Expression> inner_expr;    // The expression inside the aggregate
         unique_ptr<Expression> filter;        // Aggregate-local WHEN filter (optional)
         bool is_easy = true;                  // For MIN/MAX: easy (no Big-M) or hard (indicator).
+        //! Entity scope this term's reducer is qualified by (`SUM(D: ...)`), or
+        //! INVALID_INDEX when unqualified. Mirrors `Term::qualifier_scope_idx`; the
+        //! physical layer folds the matching de-duplication mask into `filter`'s mask so a
+        //! qualified reducer keeps its identity semantics inside a composed clause.
+        idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
     };
     struct ComposedMinMaxConstraint {
         vector<ComposedMinMaxTerm> terms;

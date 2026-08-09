@@ -1,5 +1,11 @@
 # MIN/MAX Aggregate Test Coverage — Done
 
+> **Composed MIN/MAX coverage must use a multi-table join.** Every composed test predating
+> 2026-08-08 used a single-table `VALUES` source, where a logical column index and a chunk
+> position coincide — so the suite passed while the composed path read the wrong data column
+> over any join. `test_composed_minmax_entity_scoped_multi_row` is the join-based regression;
+> keep new composed tests on a join for the same reason.
+
 Tests live in:
 - `test/decide/tests/test_min_max.py` — primary MIN/MAX test file (36 tests)
 - `test/decide/tests/test_per_objective.py` — nested aggregate PER objectives
