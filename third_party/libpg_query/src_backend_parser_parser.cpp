@@ -54,6 +54,7 @@ PGList *raw_parser(const char *str) {
 	yyextra.have_lookahead = false;
 	yyextra.in_decide_clause = false;
 	yyextra.decide_case_depth = 0;
+	yyextra.decide_declared_before_from = false;
 
 	/* initialize the bison parser */
 	parser_init(&yyextra);
@@ -111,6 +112,7 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
 	yyextra.have_lookahead = false;
 	yyextra.in_decide_clause = false;
 	yyextra.decide_case_depth = 0;
+	yyextra.decide_declared_before_from = false;
 
 	while(true) {
 		YYSTYPE type;

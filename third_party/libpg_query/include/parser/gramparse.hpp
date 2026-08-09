@@ -62,6 +62,15 @@ typedef struct base_yy_extra_type {
 	int decide_case_depth;
 
 	/*
+	 * DecidB: true once a pre-FROM DECIDE declaration (decide_declaration)
+	 * has been consumed. Lets decide_clause's action recognize a second
+	 * DECIDE reached through decide_body and report "DECIDE appears twice"
+	 * directly, instead of whatever error its own opt_decide_tail
+	 * production would otherwise raise.
+	 */
+	bool decide_declared_before_from;
+
+	/*
 	 * State variables that belong to the grammar.
 	 */
 	PGList *parsetree; /* final parse result is delivered here */

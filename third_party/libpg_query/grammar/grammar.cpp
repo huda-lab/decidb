@@ -511,7 +511,10 @@ doNegateFloat(PGValue *v)
  * DecidB: combine the two DECIDE slots into the single PGDecideClause the rest
  * of the system consumes. The declaration may sit before FROM (the paper's
  * order) or inline in the body block (the original order), but not both, and
- * neither half stands alone.
+ * neither half stands alone. The both-slots case is caught earlier, in
+ * decide_clause's own action (select.y), while decl and the body's own
+ * variables are both still in scope to name as the duplicate; by the time
+ * decl reaches here, body->variables != NULL is therefore never true.
  */
 static PGNode *
 makeDecideClause(PGList *decl, PGNode *body, int decl_location,
@@ -539,12 +542,6 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 					 parser_errposition(body_location)));
 		return body;
 	}
-
-	if (clause->variables != NULL)
-		ereport(ERROR,
-				(errcode(PG_ERRCODE_SYNTAX_ERROR),
-				 errmsg("DECIDE appears twice; declare the variables either before FROM or with SUCH THAT, not both"),
-				 parser_errposition(decl_location)));
 
 	clause->variables = decl;
 	return body;
