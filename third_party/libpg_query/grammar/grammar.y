@@ -3,7 +3,7 @@
 %}
 #line 5 "third_party/libpg_query/grammar/grammar.y"
 %pure-parser
-/* %expect 8:
+/* %expect 9:
  * 2 inherited shift/reduce conflicts from DuckDB's PostgreSQL-derived grammar
  *   (postfix-operator states a_expr/b_expr qual_Op).
  * 1 from the DECIDE constraint/objective WHEN_DECIDE (decide_constraint_item:
@@ -12,6 +12,11 @@
  *   WHEN_DECIDE ...). Both DECIDE conflicts are keyed on WHEN_DECIDE, a token
  *   base_yylex() only emits inside a DECIDE clause, so they cannot fire for
  *   ordinary SQL — see src_backend_parser_parser.cpp.
+ * 1 from the same aggregate-local WHEN_DECIDE atom, but for the relation-
+ *   qualified reducer form (c_expr: func_name '(' func_arg_list ':'
+ *   func_arg_list ')' . WHEN_DECIDE ...) — a qualified reducer is not a
+ *   func_application, so it needs its own shift/reduce pair alongside the one
+ *   above. Same resolution, same WHEN_DECIDE-only token gating.
  * 4 from the optional DECIDE declaration slot, one per simple_select
  *   alternative (simple_select: ... into_clause . decide_declaration ...). On
  *   lookahead DECIDE the parser can shift into the declaration slot or reduce
@@ -21,7 +26,7 @@
  *   the identical PGDecideClause via makeDecideClause(), so bison's default
  *   shift is correct and the resolution is not load-bearing.
  */
-%expect 8
+%expect 9
 %name-prefix="base_yy"
 %locations
 

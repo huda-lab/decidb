@@ -61,6 +61,19 @@ so this is opt-in and nothing existing changes meaning.
   value, so *which* row survives cannot matter.
 - **The mask is per term, not per clause**, so `SUM(D: a * open) + SUM(b * ship)` in one
   objective de-duplicates only the first term.
+- **Aggregate-local WHEN on a qualified reducer works on both sides, regardless of
+  WHEN/comparison order**: `SUM(D: expr) WHEN cond <= bound` and
+  `SUM(D: expr) <= bound WHEN cond` both bind and execute in constraints, matching the
+  objective side. This needed a grammar production, not a binder change — the binder's
+  `ContainsDecideAggregate`/`GetExpressionType` already unwrap `WHEN_CONSTRAINT` around a
+  qualified reducer correctly (proven by the objective side, which never had a trailing
+  comparison to lose). The grammar had no route to *produce* that shape for the
+  WHEN-before-comparison order: a qualified reducer is not a `func_application`, so it
+  couldn't take the `func_application WHEN_DECIDE decide_when_condition` production
+  aggregate-local WHEN already used, and fell instead to the loose, whole-constraint
+  `a_expr WHEN_DECIDE b_expr` production, which swallowed a trailing `<= bound` into the
+  WHEN condition. Fixed by adding a qualified-reducer-specific mirror of that production
+  (see Code Pointers below).
 - **Composed MIN/MAX carries the qualifier too.** `SUM(D: a * open) + MAX(b * ship)` routes
   through the composed path, which keeps its own term struct
   (`ComposedMinMaxTerm::qualifier_scope_idx`, stamped by the optimizer from the same tag)
@@ -84,6 +97,14 @@ so this is opt-in and nothing existing changes meaning.
   that LALR(1) cannot separate at the comma, so both sides are read as argument lists and
   the qualifier's shape is checked in the C action. The decision point becomes `:` vs `)`
   after a completed `func_arg_list`, which is conflict-free — `%expect` stayed at 8.
+  A second alternative, `func_name '(' func_arg_list ':' func_arg_list ')' WHEN_DECIDE
+  decide_when_condition`, mirrors `func_application WHEN_DECIDE decide_when_condition` so
+  a qualified reducer followed directly by `WHEN` also takes the tight aggregate-local-WHEN
+  route instead of the loose whole-constraint one; the qualifier validation is duplicated
+  inline rather than factored into a shared helper (bison actions can't call each other and
+  this file has no C prologue to hang one on — the file already accepts this style of
+  duplication elsewhere). This added one more shift/reduce conflict of the same shape as
+  the existing `func_application`/`WHEN_DECIDE` one, so `%expect` moved to 9.
 - **Parse node**: `PG_AEXPR_QUALIFIED_REDUCER` (`parsenodes.hpp`) →
   `QUALIFIED_REDUCER_TAG` FunctionExpression (`transform_operator.cpp`), shaped
   `tag(aggregate, relation_name)` exactly like the aggregate-local WHEN tag.
