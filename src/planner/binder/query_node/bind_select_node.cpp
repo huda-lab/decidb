@@ -446,7 +446,7 @@ static bool ReferencesDecideVariable(ParsedExpression &expr,
 // of DecideConstraintsBinder both resolve it through the generic
 // `decide_variables` binding instead of routing `Table` to the real table
 // binding (which has no such column). The aggregate-SUM path already strips
-// qualifiers via SymEngine round-trip in NormalizeDecideConstraints; this
+// qualifiers via SymbolicC++ round-trip in NormalizeDecideConstraints; this
 // pre-pass extends that behavior uniformly to per-row constraints, the
 // SELECT list, and the objective.
 static void RewriteScopedVarRefs(unique_ptr<ParsedExpression> &expr,

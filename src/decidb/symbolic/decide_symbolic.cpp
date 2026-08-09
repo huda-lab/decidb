@@ -17,10 +17,10 @@
 // constants moved to the RHS, like-terms combined, and pure-data scalars
 // hoisted out of SUM bodies as their own additive terms.
 //
-// The default normalizer uses SymEngine (`expand().simplify()`) for the
+// The default normalizer uses SymbolicC++ (`expand().simplify()`) for the
 // arithmetic, which is correct for plain linear LHSes but DESTRUCTIVE for
-// any expression carrying DECIDE-specific structural tags that SymEngine
-// doesn't understand. SymEngine treats unknown nodes as opaque and freely
+// any expression carrying DECIDE-specific structural tags that SymbolicC++
+// doesn't understand. SymbolicC++ treats unknown nodes as opaque and freely
 // reorders / flattens around them, scrambling structure the downstream
 // pipeline needs.
 //
@@ -29,14 +29,14 @@
 // `NormalizeComparisonExpr`. They run in this order — first match wins:
 //
 //   1. Quadratic LHS bypass (`POWER(linear, 2)`, `(expr)*(expr)`)
-//      Why: SymEngine `.expand()` would distribute the square and lose
+//      Why: SymbolicC++ `.expand()` would distribute the square and lose
 //      the recognizable `POWER(linear, 2)` pattern that the QP extractor
 //      pattern-matches on to populate the Q matrix.
 //      Detector: `ComparisonLhsHasQuadratic`.
 //      Downstream: QP path in `physical_decide.cpp::DetectQuadraticPattern`.
 //
 //   2. Composed MIN/MAX LHS bypass (`SUM(...) + MIN(...)` etc.)
-//      Why: SymEngine doesn't know MIN/MAX semantics and would treat
+//      Why: SymbolicC++ doesn't know MIN/MAX semantics and would treat
 //      MAX(x*v) as just another opaque function symbol, combining it
 //      incorrectly with surrounding additive terms. The composed walker
 //      needs the additive structure intact to emit per-aggregate
@@ -46,7 +46,7 @@
 //
 //   3. Tagged-aggregate LHS path (`SUM(x) WHEN c`, `sum(D: x)`)
 //      NOT a true bypass — does its own parsed-level rewrite.
-//      Why: SymEngine knows neither WHEN nor qualifier semantics and would
+//      Why: SymbolicC++ knows neither WHEN nor qualifier semantics and would
 //      absorb the tag as opaque, then expand around it, scrambling which
 //      terms the per-aggregate filter or the qualifier applies to.
 //      What it does: (a) folds `K * (SUM(x) WHEN c)` and
@@ -58,7 +58,7 @@
 //      Helpers: `CopyAndFoldConstantsIntoAggregates`, `AsFoldableAggregate`,
 //      `DecomposeAdditiveAtParsed`, `BuildAdditiveExpressionFromTerms`.
 //
-//   4. Default path: SymEngine `expand().simplify()` + term collection +
+//   4. Default path: SymbolicC++ `expand().simplify()` + term collection +
 //      LHS/RHS partition by decide-var presence + rebuild.
 //
 // SAFETY INVARIANT (informal): each bypass is conservative — it preserves
@@ -947,7 +947,7 @@ static bool ContainsSumFunction(const ParsedExpression &expr) {
 
 // True when the tree carries a structural tag sitting directly above an aggregate:
 // an aggregate-local WHEN (`SUM(x) WHEN c`) or a relation qualifier (`sum(D: x)`).
-// Both are opaque to SymEngine, which would flatten around them and scramble which
+// Both are opaque to SymbolicC++, which would flatten around them and scramble which
 // terms the tag applies to, so both route to the parsed-level path below.
 static bool ContainsTaggedAggregate(const ParsedExpression &expr) {
     if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
@@ -1071,7 +1071,7 @@ static bool ComparisonLhsHasQuadratic(const ParsedExpression &lhs,
 //     (sign, leaf*) for the caller to reconstruct.
 //
 // Used to peel constant offsets from a constraint LHS or objective body
-// without flattening WHEN-tagged aggregates (which the SymEngine-style
+// without flattening WHEN-tagged aggregates (which the SymbolicC++-style
 // symbolic library would do, losing the per-aggregate filter boundary).
 static void DecomposeAdditiveAtParsed(
     const ParsedExpression &expr, int sign,
@@ -1301,7 +1301,7 @@ static unique_ptr<ParsedExpression> NormalizeComparisonExpr(const ComparisonExpr
     // A tag sitting directly above an aggregate — an aggregate-local WHEN
     // (`SUM(x) WHEN c`) or a relation qualifier (`sum(D: x)`) — has to survive
     // into binding and execution: one becomes a per-aggregate filter, the other
-    // names the relation the reducer de-duplicates by. The full SymEngine-style
+    // names the relation the reducer de-duplicates by. The full SymbolicC++-style
     // normalization below would flatten the aggregate tree and lose the tag
     // boundary, so we can't use it. Instead we do a smaller parsed-level rewrite
     // that does exactly what the user expects without touching the tag:
