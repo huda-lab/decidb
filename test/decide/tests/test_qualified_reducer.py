@@ -17,6 +17,8 @@ Covers:
     decision inside the reducer, unknown relation
 """
 
+import re
+
 import pytest
 from decidb_cli import DecidBCliError
 from solver.types import VarType, ObjSense
@@ -584,20 +586,26 @@ def test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected(
         decidb_cli):
     """The same composition is rejected on the *constraint* side.
 
-    Asymmetric with the objective case above, which works — and the message
-    leaks the internal `__qualified_reducer__` tag instead of naming the
-    unsupported combination. Both are logged in
-    ``07_issues/code_quality/todo.md``; this test pins the current rejection so
-    the fix is visible when it lands.
+    Asymmetric with the objective case above, which works. That asymmetry is
+    logged in ``07_issues/code_quality/todo.md`` and is not fixed here; this
+    test only pins that the rejection still fires and that the message is
+    SQL-facing (no leaked internal tag or C++ enum name).
     """
-    decidb_cli.assert_error("""
+    result = decidb_cli.execute_raw("""
             SELECT c.c_custkey, n.n_nationkey, keepN
             FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
             WHERE n.n_regionkey = 0
             DECIDE n.keepN(BOOL)
             SUCH THAT SUM(n: keepN) WHEN (n.n_nationkey > 1) <= 2
             MAXIMIZE SUM(n: n.n_nationkey * keepN)
-        """, match=r"SUCH THAT clause does not support")
+        """)
+    combined = result.stdout + result.stderr
+    assert re.search(r"WHEN must follow the comparison", combined), \
+        f"rejection message missing or reworded: {combined[:500]}"
+    assert "__qualified_reducer__" not in combined, \
+        f"internal reducer tag leaked into the error message: {combined[:500]}"
+    assert "ExpressionClass::" not in combined, \
+        f"internal C++ enum name leaked into the error message: {combined[:500]}"
 
 
 # ---------------------------------------------------------------------------
