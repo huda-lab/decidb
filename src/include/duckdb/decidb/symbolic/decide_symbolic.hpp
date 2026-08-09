@@ -62,6 +62,17 @@ struct SymbolicTranslationContext {
     //! `S.keepS` stay one symbol and `decide_variables.count(name)` keeps working.
     unordered_map<string, unique_ptr<ParsedExpression>> column_map;
 
+    //! Map of placeholder names to original MIN(...)/MAX(...) aggregate calls
+    //! (opaque through normalization, like abs_map). MIN/MAX used to be
+    //! represented as `__MIN__ * inner` / `__MAX__ * inner` so the symbol
+    //! algebra could see (and reassemble) the inner expression, but a
+    //! multi-term inner (`MIN((qty+1)*x)`) gets auto-distributed by
+    //! `.expand()` before the marker can be reassociated with the whole
+    //! product, scrambling the aggregate. Keeping the whole MIN/MAX node
+    //! opaque — same idiom as abs_map/subquery_map — sidesteps that: the CAS
+    //! never sees inside it, so there is nothing for it to distribute.
+    unordered_map<string, unique_ptr<ParsedExpression>> min_max_map;
+
     //! Constructor
     explicit SymbolicTranslationContext(const case_insensitive_map_t<idx_t> &vars)
         : decide_variables(vars) {}

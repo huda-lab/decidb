@@ -24,6 +24,9 @@ Covers:
   - test_flat_min_additive_coefficient_hard: MINIMIZE MIN((qty+1)*x), hard
   - test_composed_min_max_additive_coefficient: MAX((qty+1)*x) + SUM(x)
   - test_per_outer_min_entity_scoped: MIN(SUM(keepN*acctbal)) PER segment
+  - test_per_sum_outer_min_inner_additive_coefficient: SUM(MIN((qty+1)*x)) PER flag
+  - test_per_sum_outer_min_inner_repeated_variable: SUM(MIN(qty*x + x)) PER flag
+  - test_per_sum_outer_max_inner_additive_coefficient: SUM(MAX((qty+1)*x)) PER flag
 """
 
 import time
@@ -32,7 +35,13 @@ import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
-from ._oracle_helpers import emit_hard_inner_max, emit_hard_inner_min
+from ._oracle_helpers import (
+    emit_hard_inner_max,
+    emit_hard_inner_min,
+    emit_inner_max,
+    emit_inner_min,
+    group_indices,
+)
 
 
 LINEITEM_FILTER = "l_orderkey <= 10"
@@ -55,6 +64,30 @@ def _row_max(rows, cols, value_fn):
 
 def _row_min(rows, cols, value_fn):
     return min(value_fn(row, cols) for row in rows)
+
+
+def _fetch_lineitem_with_flag(conn):
+    """Rows of (orderkey, linenumber, quantity, returnflag) in query order."""
+    return conn.execute(f"""
+        SELECT CAST(l_orderkey AS BIGINT),
+               CAST(l_linenumber AS BIGINT),
+               CAST(l_quantity AS DOUBLE),
+               l_returnflag
+        FROM lineitem WHERE {LINEITEM_FILTER}
+    """).fetchall()
+
+
+def _per_group_extreme(rows, cols, pick):
+    """`pick` (min/max) applied within each l_returnflag group of DecidB's output."""
+    flag_i = cols.index("l_returnflag")
+    qty_i = cols.index("l_quantity")
+    x_i = cols.index("x")
+    per_group = {}
+    for row in rows:
+        per_group.setdefault(row[flag_i], []).append(
+            (float(row[qty_i]) + 1.0) * int(row[x_i])
+        )
+    return sum(pick(vals) for vals in per_group.values())
 
 
 # ===========================================================================
@@ -535,3 +568,185 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
         f"Objective mismatch: DecidB={decidb_obj:.4f}, "
         f"Oracle={result.objective_value:.4f}"
     )
+
+
+# ===========================================================================
+# PER objective, SUM outer, MIN/MAX inner, multi-term row expression
+#
+# Regression coverage for the `SUM(MIN(expr)) PER col` bind-time bug: the
+# outer-SUM nested form used to reject a multi-term inner MIN/MAX argument
+# (`MIN((qty+1)*x)`, `MIN(qty*x + x)`) with a binder error naming syntax the
+# user never wrote (`sum((x * (min(l.qty) + __MIN__)))`) — the CAS
+# distributed the `__MIN__`/`__MAX__` marker across the inner sum before it
+# could be reassembled into a whole aggregate. The single-term inner
+# (`MIN(qty*x)`, already covered above) and the outer-MIN/MAX-instead-of-SUM
+# forms were unaffected; only outer SUM + multi-term inner MIN/MAX hit it.
+# See done.md → "SUM(MIN(expr)) PER col rejected a multi-term inner
+# MIN/MAX argument at bind time".
+# ===========================================================================
+
+@pytest.mark.min_max
+@pytest.mark.per_clause
+@pytest.mark.var_boolean
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_per_sum_outer_min_inner_additive_coefficient(
+    decidb_cli, duckdb_conn, oracle_solver
+):
+    """MAXIMIZE SUM(MIN((l_quantity + 1) * x)) PER l_returnflag.
+
+    Outer SUM over groups, inner MIN over a two-term row expression — the
+    exact shape that used to fail at bind time. Requiring at least one active
+    row per group keeps every group's MIN strictly positive, so a scrambled
+    linearization (which would silently zero out or misattribute a group's
+    contribution) shows up in the objective value, not just in whether the
+    query binds at all.
+    """
+    data = _fetch_lineitem_with_flag(duckdb_conn)
+    n = len(data)
+    groups = group_indices(data, lambda r: r[3])
+
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
+        FROM lineitem WHERE l_orderkey <= 10
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
+              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
+              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
+        MAXIMIZE SUM(MIN((l_quantity + 1) * x)) PER l_returnflag
+    """
+    rows, cols = decidb_cli.execute(sql)
+
+    ub = max(r[2] for r in data) + 1.0
+    oracle_solver.create_model("per_sum_outer_min_inner_additive_coeff")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_1_{flag}",
+        )
+    z_names = []
+    for flag, idxs in groups.items():
+        row_coeffs = [{vnames[i]: data[i][2] + 1.0} for i in idxs]
+        z_names.append(emit_inner_min(oracle_solver, f"grp_{flag}", row_coeffs, ub))
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+
+    def decidb_obj(rs, cs):
+        return _per_group_extreme(rs, cs, min)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+    )
+    assert cmp.status in ("identical", "optimal")
+
+
+@pytest.mark.min_max
+@pytest.mark.per_clause
+@pytest.mark.var_boolean
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_per_sum_outer_min_inner_repeated_variable(
+    decidb_cli, duckdb_conn, oracle_solver
+):
+    """MAXIMIZE SUM(MIN(l_quantity * x + x)) PER l_returnflag.
+
+    Algebraically identical to `SUM(MIN((l_quantity + 1) * x)) PER
+    l_returnflag` above; written out as two separate terms sharing the same
+    variable, since that's the second shape the bug report called out
+    (`MIN(l.qty * x + x)`), distinct from the coefficient-distribution shape.
+    """
+    data = _fetch_lineitem_with_flag(duckdb_conn)
+    n = len(data)
+    groups = group_indices(data, lambda r: r[3])
+
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
+        FROM lineitem WHERE l_orderkey <= 10
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
+              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
+              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
+        MAXIMIZE SUM(MIN(l_quantity * x + x)) PER l_returnflag
+    """
+    rows, cols = decidb_cli.execute(sql)
+
+    ub = max(r[2] for r in data) + 1.0
+    oracle_solver.create_model("per_sum_outer_min_inner_repeated_var")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_1_{flag}",
+        )
+    z_names = []
+    for flag, idxs in groups.items():
+        row_coeffs = [{vnames[i]: data[i][2] + 1.0} for i in idxs]
+        z_names.append(emit_inner_min(oracle_solver, f"grp_{flag}", row_coeffs, ub))
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+
+    def decidb_obj(rs, cs):
+        return _per_group_extreme(rs, cs, min)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+    )
+    assert cmp.status in ("identical", "optimal")
+
+
+@pytest.mark.min_max
+@pytest.mark.per_clause
+@pytest.mark.var_boolean
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_per_sum_outer_max_inner_additive_coefficient(
+    decidb_cli, duckdb_conn, oracle_solver
+):
+    """MINIMIZE SUM(MAX((l_quantity + 1) * x)) PER l_returnflag.
+
+    The other direction named in the bug report: outer SUM, inner MAX, sense
+    MINIMIZE. Requiring at least one active row per group keeps the optimal
+    strategy non-trivial (pick the single lowest-quantity row per group
+    rather than collapsing everything to zero).
+    """
+    data = _fetch_lineitem_with_flag(duckdb_conn)
+    n = len(data)
+    groups = group_indices(data, lambda r: r[3])
+
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
+        FROM lineitem WHERE l_orderkey <= 10
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
+              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
+              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
+        MINIMIZE SUM(MAX((l_quantity + 1) * x)) PER l_returnflag
+    """
+    rows, cols = decidb_cli.execute(sql)
+
+    ub = max(r[2] for r in data) + 1.0
+    oracle_solver.create_model("per_sum_outer_max_inner_additive_coeff")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    for flag, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs}, ">=", 1.0, name=f"sum_ge_1_{flag}",
+        )
+    z_names = []
+    for flag, idxs in groups.items():
+        row_coeffs = [{vnames[i]: data[i][2] + 1.0} for i in idxs]
+        z_names.append(emit_inner_max(oracle_solver, f"grp_{flag}", row_coeffs, ub))
+    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MINIMIZE)
+    result = oracle_solver.solve()
+
+    def decidb_obj(rs, cs):
+        return _per_group_extreme(rs, cs, max)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+    )
+    assert cmp.status in ("identical", "optimal")

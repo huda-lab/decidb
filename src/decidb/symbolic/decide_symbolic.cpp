@@ -141,6 +141,17 @@ static bool SymbolicContainsDecideVariable(const Symbolic &s, const case_insensi
         if (name.rfind("__ABS_", 0) == 0) {
             return true;
         }
+        // MIN/MAX placeholders are opaque (see min_max_map): whether they
+        // "contain" a decide variable can't be answered by inspecting the
+        // symbol name alone, so conservatively treat every MIN/MAX node as
+        // decide-var-bearing. A data-only MIN/MAX (no decide variable inside)
+        // is invalid DECIDE syntax anyway and gets rejected downstream by
+        // the nested-aggregate check in decide_binder.cpp; treating it as
+        // "contains a decide variable" here just lets that rejection happen
+        // with its real error instead of the term silently vanishing.
+        if (name.rfind("__MINMAX_", 0) == 0) {
+            return true;
+        }
         return false;
     }
     if (s.type() == typeid(Numeric)) {
@@ -426,18 +437,21 @@ Symbolic ToSymbolicRecursive(const ParsedExpression &expr, SymbolicTranslationCo
                 }
                 auto inner_symbolic = ToSymbolicRecursive(*func_expr.children[0], ctx);
                 return Symbolic("__SUM__") * inner_symbolic;
-            } else if (func_name_lower == "min") {
+            } else if (func_name_lower == "min" || func_name_lower == "max") {
                 if (func_expr.children.empty()) {
-                    throw InternalException("ToSymbolic: MIN function with no arguments");
+                    throw InternalException("ToSymbolic: %s function with no arguments",
+                        StringUtil::Upper(func_name_lower));
                 }
-                auto inner_symbolic = ToSymbolicRecursive(*func_expr.children[0], ctx);
-                return Symbolic("__MIN__") * inner_symbolic;
-            } else if (func_name_lower == "max") {
-                if (func_expr.children.empty()) {
-                    throw InternalException("ToSymbolic: MAX function with no arguments");
-                }
-                auto inner_symbolic = ToSymbolicRecursive(*func_expr.children[0], ctx);
-                return Symbolic("__MAX__") * inner_symbolic;
+                // MIN/MAX is non-distributive: a marker-product representation
+                // (`__MIN__ * inner`) leaves `inner` visible to the CAS, so
+                // `.expand()` distributes the marker across a multi-term inner
+                // sum before the aggregate can be reassembled — e.g.
+                // MIN((qty+1)*x) becomes min(qty)+__MIN__*x garbage. Keep the
+                // whole node opaque instead (same idiom as ABS/subqueries) so
+                // the CAS never sees inside it.
+                string placeholder = "__MINMAX_" + to_string(ctx.min_max_map.size()) + "__";
+                ctx.min_max_map[placeholder] = expr.Copy();
+                return Symbolic(placeholder);
             } else if (func_name_lower == "avg") {
                 if (func_expr.children.empty()) {
                     throw InternalException("ToSymbolic: AVG function with no arguments");
@@ -587,7 +601,8 @@ static void CollectDecideFactors(const Symbolic &node, vector<Symbolic> &decide_
     }
     if (node.type() == typeid(Symbol)) {
         auto name = CastPtr<const Symbol>(node)->name;
-        if (decide_variables.count(name) > 0 || name.rfind("__ABS_", 0) == 0) {
+        if (decide_variables.count(name) > 0 || name.rfind("__ABS_", 0) == 0 ||
+            name.rfind("__MINMAX_", 0) == 0) {
             decide_factors.push_back(node);
         } else {
             other_factors.push_back(node);
@@ -767,37 +782,31 @@ static bool IsSumMarker(const Symbolic &s) {
     return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__SUM__";
 }
 
-static bool IsMinMarker(const Symbolic &s) {
-    return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__MIN__";
-}
-
-static bool IsMaxMarker(const Symbolic &s) {
-    return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__MAX__";
-}
-
 static bool IsAvgMarker(const Symbolic &s) {
     return s.type() == typeid(Symbol) && CastPtr<const Symbol>(s)->name == "__AVG__";
 }
 
 static bool IsAggregateMarker(const Symbolic &s) {
-    return IsSumMarker(s) || IsMinMarker(s) || IsMaxMarker(s) || IsAvgMarker(s);
+    return IsSumMarker(s) || IsAvgMarker(s);
 }
 
+// MIN/MAX don't reach here as markers — they round-trip through min_max_map
+// as opaque symbols (see ToSymbolicRecursive), never as `__MIN__ * inner` /
+// `__MAX__ * inner` products. Only SUM/AVG still use the marker-product
+// shape, since both distribute over addition (SUM(a+b) = SUM(a)+SUM(b),
+// AVG likewise) so the CAS auto-expanding a marker product is harmless —
+// unlike MIN/MAX, which don't distribute.
 static unique_ptr<ParsedExpression> FromSymbolicAggregateProduct(const Product &prod, SymbolicTranslationContext &ctx) {
-    // Expect one aggregate marker (__SUM__, __MIN__, __MAX__, __AVG__) and remaining factors as inner expression
+    // Expect one aggregate marker (__SUM__, __AVG__) and remaining factors as inner expression
     list<Symbolic> non_markers;
     bool has_sum_marker = false;
-    bool has_min_marker = false;
-    bool has_max_marker = false;
     bool has_avg_marker = false;
     for (auto &f : prod.factors) {
         if (IsSumMarker(f)) has_sum_marker = true;
-        else if (IsMinMarker(f)) has_min_marker = true;
-        else if (IsMaxMarker(f)) has_max_marker = true;
         else if (IsAvgMarker(f)) has_avg_marker = true;
         else non_markers.push_back(f);
     }
-    if (!(has_sum_marker || has_min_marker || has_max_marker || has_avg_marker) || non_markers.empty()) {
+    if (!(has_sum_marker || has_avg_marker) || non_markers.empty()) {
         // Fallback to regular product
         return FromSymbolicProduct(prod, ctx);
     }
@@ -807,7 +816,7 @@ static unique_ptr<ParsedExpression> FromSymbolicAggregateProduct(const Product &
     for (; it != non_markers.end(); ++it) inner = inner * (*it);
     vector<unique_ptr<ParsedExpression>> args;
     args.push_back(FromSymbolic(inner, ctx));
-    string func_name = has_sum_marker ? "sum" : (has_min_marker ? "min" : (has_max_marker ? "max" : "avg"));
+    string func_name = has_sum_marker ? "sum" : "avg";
     return make_uniq_base<ParsedExpression, FunctionExpression>(func_name, std::move(args));
 }
 
@@ -824,6 +833,11 @@ unique_ptr<ParsedExpression> FromSymbolic(const Symbolic &s, SymbolicTranslation
         // Check if it's an ABS placeholder
         if (ctx.abs_map.count(name)) {
             return ctx.abs_map[name]->Copy();
+        }
+        // Check if it's a MIN()/MAX() placeholder — restore the original
+        // aggregate node verbatim (see min_max_map)
+        if (ctx.min_max_map.count(name)) {
+            return ctx.min_max_map[name]->Copy();
         }
         // Check if it's a folded data-only subexpression (e.g. `(id * 7) % 97`)
         if (ctx.data_map.count(name)) {
