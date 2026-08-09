@@ -149,7 +149,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 - **Model builder**: `src/decidb/utility/ilp_model_builder.cpp` — Q matrix off-diagonal entries, `QuadraticConstraint` building
 - **Gurobi quadratic constraints**: `src/decidb/gurobi/gurobi_solver.cpp` — `GRBaddqconstr` loop
 - **HiGHS rejection**: `src/decidb/naive/deterministic_naive.cpp` — quadratic constraint check
-- **Serialization**: `src/storage/serialization/serialize_logical_operator.cpp` — properties 225-228
+- **Serialization**: `src/planner/operator/logical_decide.cpp` (`LogicalDecide::Serialize`/`Deserialize`, hand-maintained — see `logical_operator.json`'s `"custom_implementation": true`) — properties 225-228
 
 ### McCormick auxiliary type preserves integer-valuedness
 

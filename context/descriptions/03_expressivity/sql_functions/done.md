@@ -234,7 +234,7 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 - Tag constants: `ABS_UB_POS_TAG_PREFIX`, `ABS_UB_NEG_TAG_PREFIX`, `ABS_NEEDS_BIGM_TAG` in `decide.hpp`.
 - Execution: `physical_decide.cpp` — tag parsing in `AnalyzeConstraint` sets `DecideConstraint::abs_y_idx`/`abs_is_pos_bound`; these are copied to `EvaluatedConstraint`; the Big-M finalization block (after the bilinear block) iterates `abs_maximize_links`, computes M from variable bounds, and emits two derived `EvaluatedConstraint`s (C_ub1 and C_ub2) per ABS term. The error message at finite-bound check is generic (covers both objective-MAXIMIZE and constraint hard-direction triggers).
 - Transfer: `plan_decide.cpp` moves `abs_maximize_links` from logical to physical operator.
-- Serialization: `serialize_logical_operator.cpp` fields 230/231 (`abs_maximize_link_aux`, `abs_maximize_link_y`).
+- Serialization: `logical_decide.cpp` (`LogicalDecide::Serialize`/`Deserialize`, hand-maintained) fields 230/231 (`abs_maximize_link_aux`, `abs_maximize_link_y`).
 
 **Tests**: `test/decide/tests/test_abs_linearization.py` — 10 test cases covering MINIMIZE objectives, MAXIMIZE objectives (basic + missing-bound error), constraints, WHEN, PER, multiple ABS terms, no-decide-var, and mixed variable types.
 

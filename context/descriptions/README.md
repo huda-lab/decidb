@@ -59,7 +59,7 @@ source code and need to know where things live on disk.
 | — Model Building       | Transforms `SolverInput` → `SolverModel`                                    | `01_pipeline/03c_model_building.md` | `src/decidb/utility/ilp_model_builder.cpp`                                   |
 | — Solver Backends      | Gurobi (preferred) / HiGHS (fallback) dispatch                           | `01_pipeline/03d_solver_backends.md` | `ilp_solver.cpp`, `gurobi_solver.cpp`, `deterministic_naive.cpp`            |
 | — Result Projection    | Projects solution values onto rows with type-specific casting             | `01_pipeline/03e_result_projection.md` | `physical_decide.cpp` (GetData)                                           |
-| EXPLAIN                | EXPLAIN / EXPLAIN ANALYZE / FORMAT JSON output for DECIDE operator        | `01_pipeline/04_explain.md`            | `logical_decide.cpp`, `physical_decide.cpp`, `serialize_logical_operator.cpp` |
+| EXPLAIN                | EXPLAIN / EXPLAIN ANALYZE / FORMAT JSON output for DECIDE operator        | `01_pipeline/04_explain.md`            | `logical_decide.cpp` (also carries `LogicalDecide::Serialize`/`Deserialize`, hand-maintained per `"custom_implementation": true`), `physical_decide.cpp` |
 | Code Structure         | File organization, class hierarchy, key methods map                       | `01_pipeline/code_structure.md`        | All DeciDB source files                                                            |
 
 > **Note**: Algebraic rewrites (AVG→SUM, ABS linearization, MIN/MAX classification, `<>` indicators) are performed by `DecideOptimizer` — see `04_optimizer/rewrite_passes/done.md`. The binder validates and binds expressions; the optimizer transforms them.
