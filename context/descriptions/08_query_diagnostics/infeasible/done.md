@@ -90,10 +90,13 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to R ≤ R*, D ≤ D*
   `clause_id`, shape `SHARED_LITERAL`, so the engine collapses them to one shared slack (the
   knob is one literal `K` → report the max overshoot — **I2.a**). Single-instance is the N=1
   case. Default non-negativity (`lower = 0`) and the BOOLEAN `0/1` box stay rigid: a BOOLEAN
-  variable is lowered to an INTEGER with synthesized `x >= 0` / `x <= 1` domain constraints
-  (so its runtime type is INTEGER — indistinguishable by type from a genuine integer bound),
-  so `TraverseBoundsConstraints` consults `op.is_boolean_var` (threaded from `LogicalDecide`)
-  and skips recording a BOOLEAN bound **only when it merely restates the domain** (an upper
+  variable's domain is applied directly to the solver column by `PhysicalDecide::Finalize`
+  (never synthesized as `x >= 0` / `x <= 1` constraints — its runtime DuckDB type is still
+  INTEGER, so it participates in arithmetic, but its *solver-facing* type is reported as
+  BOOLEAN from `op.is_boolean_var` alone). Since the domain is never a constraint node,
+  `TraverseBoundsConstraints` only ever sees one here if the user wrote it themselves; it
+  consults `op.is_boolean_var` (threaded from `LogicalDecide`) and skips recording a BOOLEAN
+  bound **only when it merely restates the domain** (an upper
   `>= 1` or a lower `<= 0` after integer-strict normalization). A genuine BOOLEAN **pin**
   (`x <= 0`, `x >= 1`, `x = 1`) IS recorded and re-emitted like any other user bound — its
   column is opened only back to the intrinsic `[0,1]` (never to ±1e30), so the pin becomes
@@ -667,11 +670,16 @@ domain rigid:
   propagation only ever tightens (raises lower / lowers upper), and every implied tightening has
   a backing row (`USER_PARAMETER` slackable, or `STRUCTURAL` still-rigid) that keeps enforcing it.
   This is what lets `x <= 2+3` (a foldable cap copied into `col_upper`) be loosened by its row
-  instead of pinned by the box. **BOOLEAN columns are detected via `is_boolean_var[var]`, not
-  `is_binary[col]`** — a BOOLEAN is lowered to an INTEGER carrying a `[0,1]` box, so `is_binary`
-  is `false` for it; gating on `is_binary` would reset its upper to `+∞` and silently make it
-  unbounded. The decision-1a re-emission loop uses the same signal: an absorbed BOOLEAN pin's
-  column opens only to `[0,1]` for the pinned direction (a non-BOOLEAN opens to ±1e30).
+  instead of pinned by the box. **BOOLEAN columns are detected via `is_boolean_var[var]`, checked
+  before the generic `is_binary[col]` branch** — `is_binary` is also `true` for a BOOLEAN-domain
+  variable (its domain is reported straight to the model builder as `LogicalType::BOOLEAN`, see
+  `../../03_expressivity/decide/done.md`), but the generic `is_binary` branch only *skips* reset,
+  which is correct for an optimizer-created BOOLEAN indicator (never touched by
+  `DecidePropagateImpliedBounds`) and wrong for a BOOLEAN-domain variable, which can be
+  implied-tightened below 1 (the budget example) and needs the active `[0,1]` reset. Checking
+  `is_boolean_var` first preserves that. The decision-1a re-emission loop uses the same signal: an
+  absorbed BOOLEAN pin's column opens only to `[0,1]` for the pinned direction (a non-BOOLEAN opens
+  to ±1e30).
 - **Inverted-box survival (`SolverInput::tolerate_infeasible_bounds`).** Two opposite absorbed
   bounds (`x <= 4 AND x >= 10`) invert the box (`col_lower > col_upper`). Without help,
   `SolverModel::Build` throws before `retained_model` is populated, so the engine never sees the

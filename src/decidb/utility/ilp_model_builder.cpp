@@ -172,6 +172,19 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
+    // A BOOLEAN-domain variable's bounds are normally exactly [0,1] (the merge above
+    // is a no-op for it — its lower default is already the resolved-absorbed 0, and
+    // its upper is capped by the type default). But an explicit, unusual user pin that
+    // widens past the domain (e.g. `x >= -1` on a declared BOOL) would leave `binary`
+    // paired with an out-of-[0,1] bound, which solver backends don't accept. Downgrade
+    // to a plain bounded integer in that case rather than sending a contradictory
+    // (binary, out-of-range) column — same solve result, just not flagged binary.
+    for (idx_t var = 0; var < num_decide_vars; var++) {
+        if (per_var_binary[var] && (per_var_lower[var] < 0.0 || per_var_upper[var] > 1.0)) {
+            per_var_binary[var] = false;
+        }
+    }
+
     // Expand per-variable config to all solver variables
     model.col_lower.resize(total_vars);
     model.col_upper.resize(total_vars);

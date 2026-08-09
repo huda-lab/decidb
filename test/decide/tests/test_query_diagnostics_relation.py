@@ -818,6 +818,61 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_boolean_data_conflict_gets_real_diagnosis(self, request, cli_fixture):
+        """DomainSpec regression guard (07_issues/code_quality: "BOOL domains round-trip
+        through the constraint tree instead of being variable bounds" — fixed by applying
+        a BOOLEAN's `[0,1]` domain directly to the solver column instead of synthesizing
+        `x >= 0 AND x <= 1` rows). Two BOOLEAN variables, no bound anywhere near the 0/1
+        domain: `SUM(x) >= 2` needs 2 of 3 rows' x=1, `SUM(x) + SUM(y) <= 1` caps their
+        combined total at 1 — a genuine aggregate-vs-aggregate conflict. With the domain no
+        longer represented as constraint rows, the elastic engine must still see and
+        diagnose this real conflict (it must not lose coverage just because the synthetic
+        bound rows are gone), and the reported edit must target one of the two written
+        clauses."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) "
+            "DECIDE x(BOOL), y(BOOL) SUCH THAT SUM(x) >= 2 "
+            "AND SUM(x) + SUM(y) <= 1 MAXIMIZE SUM(x) + SUM(y)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        edits = _clause_edits(rows)
+        subjects = {e["subject"] for e in edits}
+        assert subjects, "expected at least one clause edit"
+        assert subjects <= {"SUM(x) >= 2", "SUM(x) + SUM(y) <= 1"}, subjects
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_boolean_domain_never_offered_even_as_last_resort(self, request, cli_fixture):
+        """DomainSpec regression guard, companion to the data-conflict test above and to
+        `test_infeasible_boolean_loosens_constraint_not_domain`: construct the case so
+        widening the 0/1 box is the ONLY numeric change that would make `SUM(x) >= 5` over
+        3 BOOLEAN rows satisfiable in isolation (max achievable is 3) — checking that even
+        under that pressure, no reported edit ever names a bare variable subject (`x`) or a
+        suggested_change that widens past 1, since the domain was never emitted as a
+        slackable row to begin with. The only honest edit loosens the SUM floor itself."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        edits = _clause_edits(rows)
+        assert edits, "expected at least one clause edit"
+        assert all(e["subject"] != "x" for e in edits), edits
+        assert all(
+            "suggested_change" not in e or ("<= 1" not in e["suggested_change"] and "<= 2" not in e["suggested_change"])
+            for e in edits
+        ), edits
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_data_rhs_query_mode_virtual_offset(self, request, cli_fixture):
         """T3 query mode (default): a per-row data RHS (`x >= hi`) has no literal to loosen,
         so the clause reports ONE virtual query offset `x >= hi - delta` (delta = max
