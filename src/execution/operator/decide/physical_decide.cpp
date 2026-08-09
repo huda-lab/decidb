@@ -5128,6 +5128,93 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         return M;
     };
 
+    // Accumulator for a MIN/MAX linking row (`z - expr op bound`).
+    //
+    // Term arrays are indexed by term, not by variable, so the same solver column
+    // reaches one row more than once in two situations: `(c + 1) * x` distributes
+    // into `c*x + 1*x`, and an entity-scoped or scalar variable resolves to a
+    // single column across every row it spans. A repeated column index is rejected
+    // outright by both Gurobi and HiGHS, so coefficients are summed per column here
+    // rather than pushed per term. Constant terms carry no column at all
+    // (`variable_index == INVALID_INDEX`) and collect into `constant`, which the
+    // caller folds into the bound: `z <= expr + k` is `z - expr <= k`.
+    //
+    // Columns keep first-appearance order — emitting straight from the hash map
+    // would hand the solver a different matrix ordering run to run.
+    struct MinMaxLinkRow {
+        vector<int> indices;
+        vector<double> coefficients;
+        double constant = 0.0;
+        std::unordered_map<int, idx_t> column_slot;
+
+        void AddColumn(int column, double coefficient) {
+            auto entry = column_slot.find(column);
+            if (entry == column_slot.end()) {
+                column_slot.emplace(column, indices.size());
+                indices.push_back(column);
+                coefficients.push_back(coefficient);
+            } else {
+                coefficients[entry->second] += coefficient;
+            }
+        }
+
+        //! True when no column survives accumulation — either nothing was added, or
+        //! every column's terms cancelled (`c*x - c*x`). Such a row constrains the
+        //! auxiliary against `constant` alone.
+        bool HasNoColumns() const {
+            for (auto coefficient : coefficients) {
+                if (std::abs(coefficient) >= 1e-15) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        void AppendTo(SolverInput::RawConstraint &rc) const {
+            for (idx_t i = 0; i < indices.size(); i++) {
+                if (std::abs(coefficients[i]) < 1e-15) {
+                    continue;
+                }
+                rc.indices.push_back(indices[i]);
+                rc.coefficients.push_back(coefficients[i]);
+            }
+        }
+    };
+
+    // Accumulate one row of the saved objective expression into `link`, negated:
+    // the linking row is `z - expr op bound`, so the expression's coefficients
+    // enter with the opposite sign and its constant part lands on the bound.
+    // `scale` carries the inner-AVG 1/n_g factor at the PER sites; 1.0 elsewhere.
+    auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row, double scale) {
+        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+            double coeff = saved_obj_coefficients[t].Get(row) * scale;
+            if (std::abs(coeff) < 1e-15) {
+                continue;
+            }
+            idx_t v = saved_obj_var_indices[t];
+            if (v == DConstants::INVALID_INDEX) {
+                link.constant += coeff;
+            } else {
+                link.AddColumn((int)var_indexer.Get(v, row), -coeff);
+            }
+        }
+    };
+
+    // Same accumulation for the composed paths, whose terms arrive as a
+    // `Term` list plus per-term evaluated coefficient columns.
+    auto AddComposedRowTerms = [&](MinMaxLinkRow &link, const vector<Term> &inner_terms,
+                                   const vector<vector<double>> &per_term_coefs, idx_t row) {
+        for (idx_t it = 0; it < inner_terms.size(); it++) {
+            double coeff = per_term_coefs[it][row];
+            idx_t v = inner_terms[it].variable_index;
+            if (v == DConstants::INVALID_INDEX) {
+                link.constant += coeff;
+            } else {
+                link.AddColumn((int)var_indexer.Get(v, row), -coeff);
+            }
+        }
+    };
+
     if (per_inner_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty() &&
         solver_input.objective_num_groups > 0) {
         // ================================================================
@@ -5220,18 +5307,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                     for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
                         idx_t row = active_flat_rows[k];
+                        MinMaxLinkRow link;
+                        AddObjectiveRowTerms(link, row, 1.0);
                         SolverInput::RawConstraint rc;
                         rc.sense = sense_char;
-                        rc.rhs = 0.0;
+                        rc.rhs = link.constant;
                         rc.indices.push_back((int)group_value_indices[g]);
                         rc.coefficients.push_back(1.0);
-                        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                            double coeff = saved_obj_coefficients[t][row];
-                            if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
-                            rc.indices.push_back((int)var_idx);
-                            rc.coefficients.push_back(-coeff);
-                        }
+                        link.AppendTo(rc);
                         solver_input.global_constraints.push_back(std::move(rc));
                     }
                 }
@@ -5255,29 +5338,25 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
                         idx_t row = active_flat_rows[k];
                         idx_t active_idx = k; // position in active_flat_rows
+                        MinMaxLinkRow link;
+                        AddObjectiveRowTerms(link, row, 1.0);
                         SolverInput::RawConstraint rc;
                         rc.indices.push_back((int)group_value_indices[g]);
                         rc.coefficients.push_back(1.0);
-                        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                            double coeff = saved_obj_coefficients[t][row];
-                            if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
-                            rc.indices.push_back((int)var_idx);
-                            rc.coefficients.push_back(-coeff);
-                        }
+                        link.AppendTo(rc);
                         idx_t y_idx = first_y + active_idx;
                         if (inner_is_min) {
                             // MINIMIZE MIN inner: z_g - expr_r - M*y_r >= -M
                             rc.indices.push_back((int)y_idx);
                             rc.coefficients.push_back(-M);
                             rc.sense = '>';
-                            rc.rhs = -M;
+                            rc.rhs = -M + link.constant;
                         } else {
                             // MAXIMIZE MAX inner: z_g - expr_r + M*y_r <= M
                             rc.indices.push_back((int)y_idx);
                             rc.coefficients.push_back(M);
                             rc.sense = '<';
-                            rc.rhs = M;
+                            rc.rhs = M + link.constant;
                         }
                         solver_input.global_constraints.push_back(std::move(rc));
                     }
@@ -5408,26 +5487,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 char sense_char = outer_is_min ? '<' : '>';
                 bool any_group_emitted = false;
                 for (idx_t g = 0; g < K; g++) {
-                    SolverInput::RawConstraint rc;
-                    rc.sense = sense_char;
-                    rc.rhs = 0.0;
-                    rc.indices.push_back((int)w_idx);
-                    rc.coefficients.push_back(1.0);
-                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) { idx_t row = obj_flat_rows[k];
-                        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                            double coeff = saved_obj_coefficients[t][row];
-                            if (per_inner_was_avg) {
-                                coeff /= static_cast<double>(group_size(g));
-                            }
-                            if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
-                            rc.indices.push_back((int)var_idx);
-                            rc.coefficients.push_back(-coeff);
-                        }
+                    double scale = per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
+                    MinMaxLinkRow link;
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                        AddObjectiveRowTerms(link, obj_flat_rows[k], scale);
                     }
                     // Skip vacuous w op 0 rows: outer MIN/MAX of group sums settles
                     // dominated zero-sum groups via the optimization direction itself.
-                    if (rc.indices.size() == 1) continue;
+                    // A group left holding only a constant still bounds w, so it stays.
+                    if (link.HasNoColumns() && std::abs(link.constant) < 1e-15) continue;
+                    SolverInput::RawConstraint rc;
+                    rc.sense = sense_char;
+                    rc.rhs = link.constant;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    link.AppendTo(rc);
                     solver_input.global_constraints.push_back(std::move(rc));
                     any_group_emitted = true;
                 }
@@ -5453,32 +5527,26 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     solver_input.global_obj_coeffs.push_back(0.0);
                 }
                 for (idx_t g = 0; g < K; g++) {
+                    double scale = per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
+                    MinMaxLinkRow link;
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                        AddObjectiveRowTerms(link, obj_flat_rows[k], scale);
+                    }
                     SolverInput::RawConstraint rc;
                     rc.indices.push_back((int)w_idx);
                     rc.coefficients.push_back(1.0);
-                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) { idx_t row = obj_flat_rows[k];
-                        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                            double coeff = saved_obj_coefficients[t][row];
-                            if (per_inner_was_avg) {
-                                coeff /= static_cast<double>(group_size(g));
-                            }
-                            if (std::abs(coeff) < 1e-15) continue;
-                            idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
-                            rc.indices.push_back((int)var_idx);
-                            rc.coefficients.push_back(-coeff);
-                        }
-                    }
+                    link.AppendTo(rc);
                     idx_t u_idx = first_u + g;
                     if (outer_is_min) {
                         rc.indices.push_back((int)u_idx);
                         rc.coefficients.push_back(-M_outer);
                         rc.sense = '>';
-                        rc.rhs = -M_outer;
+                        rc.rhs = -M_outer + link.constant;
                     } else {
                         rc.indices.push_back((int)u_idx);
                         rc.coefficients.push_back(M_outer);
                         rc.sense = '<';
-                        rc.rhs = M_outer;
+                        rc.rhs = M_outer + link.constant;
                     }
                     solver_input.global_constraints.push_back(std::move(rc));
                 }
@@ -5543,18 +5611,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         if (is_easy) {
             char sense_char = is_min_agg ? '<' : '>';
             for (idx_t row : active_rows) {
+                MinMaxLinkRow link;
+                AddObjectiveRowTerms(link, row, 1.0);
                 SolverInput::RawConstraint rc;
                 rc.sense = sense_char;
-                rc.rhs = 0.0;
+                rc.rhs = link.constant;
                 rc.indices.push_back((int)z_idx);
                 rc.coefficients.push_back(1.0);
-                for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                    double coeff = saved_obj_coefficients[t].Get(row);
-                    if (std::abs(coeff) < 1e-15) continue;
-                    idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
-                    rc.indices.push_back((int)var_idx);
-                    rc.coefficients.push_back(-coeff);
-                }
+                link.AppendTo(rc);
                 solver_input.global_constraints.push_back(std::move(rc));
             }
         } else {
@@ -5573,27 +5637,23 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
             for (idx_t a = 0; a < active_rows.size(); a++) {
                 idx_t row = active_rows[a];
+                MinMaxLinkRow link;
+                AddObjectiveRowTerms(link, row, 1.0);
                 SolverInput::RawConstraint rc;
                 rc.indices.push_back((int)z_idx);
                 rc.coefficients.push_back(1.0);
-                for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                    double coeff = saved_obj_coefficients[t].Get(row);
-                    if (std::abs(coeff) < 1e-15) continue;
-                    idx_t var_idx = var_indexer.Get(saved_obj_var_indices[t], row);
-                    rc.indices.push_back((int)var_idx);
-                    rc.coefficients.push_back(-coeff);
-                }
+                link.AppendTo(rc);
                 idx_t y_idx = first_y_idx + a;
                 if (is_min_agg) {
                     rc.indices.push_back((int)y_idx);
                     rc.coefficients.push_back(-M);
                     rc.sense = '>';
-                    rc.rhs = -M;
+                    rc.rhs = -M + link.constant;
                 } else {
                     rc.indices.push_back((int)y_idx);
                     rc.coefficients.push_back(M);
                     rc.sense = '<';
-                    rc.rhs = M;
+                    rc.rhs = M + link.constant;
                 }
                 solver_input.global_constraints.push_back(std::move(rc));
             }
@@ -5663,30 +5723,22 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             sum_y.indices.push_back((int)y_idx);
             sum_y.coefficients.push_back(1.0);
 
+            MinMaxLinkRow row_terms;
+            AddComposedRowTerms(row_terms, inner_terms, per_term_coefs, row);
             SolverInput::RawConstraint link;
             link.indices.push_back((int)z_idx);
             link.coefficients.push_back(1.0);
-            double row_const = 0.0;
-            for (idx_t it = 0; it < inner_terms.size(); it++) {
-                idx_t v = inner_terms[it].variable_index;
-                double c = per_term_coefs[it][row];
-                if (v == DConstants::INVALID_INDEX) {
-                    row_const += c;
-                } else {
-                    link.indices.push_back((int)var_indexer.Get(v, row));
-                    link.coefficients.push_back(-c);
-                }
-            }
+            row_terms.AppendTo(link);
             if (is_max) {
                 link.indices.push_back((int)y_idx);
                 link.coefficients.push_back(M);
                 link.sense = '<';
-                link.rhs = M + row_const;
+                link.rhs = M + row_terms.constant;
             } else {
                 link.indices.push_back((int)y_idx);
                 link.coefficients.push_back(-M);
                 link.sense = '>';
-                link.rhs = -M + row_const;
+                link.rhs = -M + row_terms.constant;
             }
             link.kind = ConstraintKind::USER_PARAMETER;
             solver_input.global_constraints.push_back(std::move(link));
@@ -5855,23 +5907,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 char sense = is_max ? '>' : '<';
                 for (idx_t row = 0; row < num_rows; row++) {
                     if (!ta.filter_mask[row]) continue;
+                    MinMaxLinkRow link;
+                    AddComposedRowTerms(link, ta.inner_terms, ta.per_term_coefs, row);
                     SolverInput::RawConstraint rc;
                     rc.indices.push_back((int)ta.z_idx);
                     rc.coefficients.push_back(1.0);
-                    double row_rhs = 0.0;
-                    for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
-                        auto &inner_t = ta.inner_terms[it];
-                        double coef = ta.per_term_coefs[it][row];
-                        if (inner_t.variable_index == DConstants::INVALID_INDEX) {
-                            row_rhs += coef;
-                        } else {
-                            idx_t abs_idx = var_indexer.Get(inner_t.variable_index, row);
-                            rc.indices.push_back((int)abs_idx);
-                            rc.coefficients.push_back(-coef);
-                        }
-                    }
+                    link.AppendTo(rc);
                     rc.sense = sense;
-                    rc.rhs = row_rhs;
+                    rc.rhs = link.constant;
                     solver_input.global_constraints.push_back(std::move(rc));
                 }
             }
@@ -6083,23 +6126,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             char sense = is_max ? '>' : '<';
             for (idx_t row = 0; row < num_rows; row++) {
                 if (!ta.filter_mask[row]) continue;
+                MinMaxLinkRow link;
+                AddComposedRowTerms(link, ta.inner_terms, ta.per_term_coefs, row);
                 SolverInput::RawConstraint rc;
                 rc.indices.push_back((int)ta.z_idx);
                 rc.coefficients.push_back(1.0);
-                double row_rhs = 0.0;
-                for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
-                    auto &inner_t = ta.inner_terms[it];
-                    double coef = ta.per_term_coefs[it][row];
-                    if (inner_t.variable_index == DConstants::INVALID_INDEX) {
-                        row_rhs += coef;
-                    } else {
-                        idx_t abs_idx = var_indexer.Get(inner_t.variable_index, row);
-                        rc.indices.push_back((int)abs_idx);
-                        rc.coefficients.push_back(-coef);
-                    }
-                }
+                link.AppendTo(rc);
                 rc.sense = sense;
-                rc.rhs = row_rhs;
+                rc.rhs = link.constant;
                 solver_input.global_constraints.push_back(std::move(rc));
             }
         }

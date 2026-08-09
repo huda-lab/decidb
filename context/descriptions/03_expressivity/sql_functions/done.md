@@ -105,6 +105,12 @@ When the aggregate must be tight (equality or the "wrong" direction), a global a
 - **Easy objectives**: `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` — a single global auxiliary variable `z` with per-row linking constraints (`z >= expr_i` for MAX, `z <= expr_i` for MIN). The objective optimizes `z` directly.
 - **Hard objectives**: `MAXIMIZE MAX(expr)` and `MINIMIZE MIN(expr)` — requires `z` plus per-row binary indicator variables to ensure `z` equals some row's actual value (Big-M formulation).
 
+#### Row Expression Shape
+
+The inner expression is any linear combination of decision variables plus a constant — it is not restricted to a single product term. `MIN((cost + 1) * x)`, `MIN(cost * x + x)`, and `MIN(cost * x + 5)` are all accepted, in constraints and objectives, flat / PER / composed alike.
+
+Each linking row is accumulated **per solver column** before emission (`MinMaxLinkRow` in `physical_decide.cpp`). This matters because the term arrays are indexed by term, not by variable, so one column can reach a row more than once: `(cost + 1) * x` distributes into `cost*x + 1*x`, and an entity-scoped or `SCALAR` variable resolves to a single column across every row of a PER group. A repeated column index is rejected outright by both Gurobi and HiGHS, so coefficients are summed and columns whose terms cancel are dropped. Constant terms carry no column and fold into the row's bound: `z <= expr + k` is emitted as `z - expr <= k`.
+
 #### Composition
 
 - **WHEN**: Composes naturally. WHEN masks filter which rows participate in the MIN/MAX aggregate, and constraint/indicator generation skips non-matching rows.
@@ -124,6 +130,11 @@ MINIMIZE MAX(x * cost)                 -- easy: global z, minimize
 MAXIMIZE MIN(x * profit)               -- easy: global z, maximize
 MAXIMIZE MAX(x * profit)               -- hard: z + binary indicators
 MINIMIZE MIN(x * cost)                 -- hard: z + binary indicators
+
+-- Multi-term and constant row expressions
+MINIMIZE MAX((cost + 1) * x)           -- distributes to cost*x + 1*x, one column
+MINIMIZE MAX(cost * x + x)             -- same shape written out
+MINIMIZE MAX(cost * x + 5)             -- constant folds into the row's bound
 
 -- With WHEN
 SUCH THAT MAX(x * cost) <= 50 WHEN category = 'electronics'

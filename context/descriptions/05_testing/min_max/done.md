@@ -8,6 +8,7 @@
 
 Tests live in:
 - `test/decide/tests/test_min_max.py` — primary MIN/MAX test file (36 tests)
+- `test/decide/tests/test_min_max_multiterm.py` — row expressions that are not a single product term (7 tests)
 - `test/decide/tests/test_per_objective.py` — nested aggregate PER objectives
 - `test/decide/tests/test_aggregate_local_when.py` — aggregate-local WHEN with MAX
 - `test/decide/tests/test_per_interactions.py` — hard MIN/MAX constraints with PER (per-group Big-M)
@@ -23,6 +24,7 @@ All oracle-verified unless noted.
 - **Easy cases** (`test_min_max.py`, plus entity-scoped variants in `test_entity_scope.py` and `test_aggregate_local_when.py`): `MAX(expr) <= K` / `MIN(expr) >= K` stripped to per-row, with column coefficients (`MAX(x * expr) <= K`), on INT vars, with WHEN, with PER (stripped as redundant), WHEN + PER composition, entity-scoped MAX/MIN, aggregate-local WHEN on easy MAX.
 - **Hard cases (Big-M indicators)** (`test_min_max.py`, `test_per_interactions.py`, `test_entity_scope.py`, `test_aggregate_local_when.py`): `MAX(expr) >= K`, `MIN(expr) <= K`, equality for both; multiple MIN/MAX constraints in one query; MIN/MAX in both constraint and objective; entity-scoped hard MAX; PER variants with Big-M per group (`MAX >= K PER`, `MIN <= K PER`, `MAX = K PER` combining easy + hard per group); hard MAX + aggregate-local WHEN.
 - **Objectives** (`test_min_max.py`): easy `MINIMIZE MAX(expr)` / `MAXIMIZE MIN(expr)` (plain, on INT, and with aggregate-local WHEN); hard `MAXIMIZE MAX(expr)` / `MINIMIZE MIN(expr)`.
+- **Multi-term and constant row expressions** (`test_min_max_multiterm.py`): the inner expression is a linear combination, not a single product — `MAX((qty + 1) * x)` (distributes into two terms on one column), `MAX(qty * x + x)` (the same shape written out), `MAX(qty * x + 5)` (constant folds into the bound). Covered on the flat path (both directions), the composed path, and the PER outer-MIN path with an **entity-scoped** variable, where one column spans every row of a group so a single term is enough to repeat it. Each test pins the objective value against the oracle, so a linking row that is accepted but mis-linearized still fails.
 
 ### Nested aggregate + PER objectives
 

@@ -6,43 +6,51 @@ Resolved bugs are moved to `done.md`.
 
 ---
 
-## An additive coefficient inside a MIN/MAX objective fails to load into Gurobi
+## `SUM(MIN(expr)) PER col` is rejected at bind time when the inner expression has more than one term
 
-**Symptom.** `Invalid Input Error: Failed to add constraint to Gurobi: Problem adding
-constraints`. The query never reaches the solver.
+**Symptom.** A nested PER objective whose *outer* aggregate is `SUM` and whose inner
+`MIN`/`MAX` argument is not a single product term fails in the binder, before any model
+is built:
 
-**Reproduction** (TPC-H `nation`, 25 rows, no join, `build/release/decidb`):
+```
+Binder Error: Nested MIN() inside DECIDE expression must reference a DECIDE variable,
+found 'sum((x * (min(l.qty) + __MIN__)))'
+```
+
+**Reproduction** (`orders o JOIN lineitem l`, entity-scoped `o.x`, `build/release/decidb`):
 
 ```sql
 -- fails
-SELECT keepN FROM nation n DECIDE n.keepN(BOOL)
-SUCH THAT SUM(keepN) >= 1 MAXIMIZE MIN((n.n_nationkey + 1) * keepN);
+MAXIMIZE SUM(MIN((l.qty + 1) * x)) PER o.grp;
+MAXIMIZE SUM(MIN(l.qty * x + x)) PER o.grp;
+MINIMIZE SUM(MAX((l.qty + 1) * x)) PER o.grp;
 
--- succeeds — same query, coefficient has no additive part
-SELECT keepN FROM nation n DECIDE n.keepN(BOOL)
-SUCH THAT SUM(keepN) >= 1 MAXIMIZE MIN(n.n_nationkey * keepN);
+-- succeeds — same shape, single-term inner
+MAXIMIZE SUM(MIN(l.qty * x)) PER o.grp;
+
+-- succeeds — same multi-term inner under a MIN/MAX outer aggregate
+MAXIMIZE MAX(MIN((l.qty + 1) * x)) PER o.grp;
+MAXIMIZE MIN(SUM((l.qty + 1) * x)) PER o.grp;
 ```
 
-**Scope.** The trigger is an **additive** coefficient (`col + 1`) inside a MIN or MAX
-objective. Narrowed by bisection:
+**Scope.** Only the outer-`SUM` nested form is affected; outer `MIN`/`MAX` accept the same
+inner expression. Both inner aggregates (`MIN` and `MAX`) fail identically.
 
-- fails: `MIN((col + 1) * x)`, `MAX((col + 1) * x)` — both senses, both aggregates
-- fails for row-scoped (`x(BOOL)`) and entity-scoped (`n.x(BOOL)`) variables alike
-- fails with no join present, so it is not a join/multiplicity effect
-- succeeds: `MIN(col * x)`, `MIN(2 * col * x)` — multiplicative scaling is fine
-- succeeds: `SUM((col + 1) * x)` — only MIN/MAX is affected
+**Where to look.** The quoted expression is the tell: `sum((x * (min(l.qty) + __MIN__)))`.
+The `__MIN__` marker tag has been placed *inside* the coefficient rather than wrapping the
+inner aggregate, and the data column has been re-aggregated as a plain SQL `min(l.qty)`.
+So the inner argument is being restructured during marker insertion / symbolic round trip
+when it carries more than one additive term — the single-term case leaves nothing to
+reassociate, which is why it survives. Start at `RewriteMinMaxObjective` in
+`src/optimizer/decide/decide_optimizer.cpp` and the `__MIN__`/`__MAX__` marker handling in
+`src/decidb/symbolic/decide_symbolic.cpp`; the validation that raises is the
+nested-aggregate check in `decide_objective_binder.cpp`.
 
-**Where to look.** `(col + 1) * x` distributes into two additive terms (`col*x + 1*x`).
-SUM absorbs both into one row; the MIN/MAX objective path builds a `z` auxiliary plus
-per-row linking constraints (`RewriteMinMaxObjective` in
-`src/optimizer/decide/decide_optimizer.cpp`, the flat/composed MIN/MAX blocks in
-`src/execution/operator/decide/physical_decide.cpp`), and one of the emitted rows is
-malformed — most likely duplicate column indices or a mismatched
-indices/coefficients length reaching `GurobiSession::Load`
-(`src/decidb/gurobi/gurobi_solver.cpp:168`), which is what `addconstr` rejects. The
-Gurobi error code is swallowed; surfacing it would localize this quickly.
+**Ruled out.** Not a model-build issue — the failure is a `Binder Error`, raised well
+before `physical_decide.cpp` runs. Not related to entity scoping: the same rejection
+occurs for row-scoped variables.
 
-_Discovered 2026-08-08, while writing MIN/MAX coverage for relation-qualified reducers
-(A5). Not caused by that work — both the qualified and unqualified forms fail
-identically. `test_qualified_reducer.py::test_qualified_minmax` sidesteps it by using a
-bare-column coefficient._
+_Discovered 2026-08-09, while writing regression coverage for the MIN/MAX linking-row fix
+(see `done.md` → "MIN/MAX linking rows named the same solver column twice"). Independent
+of that fix — it reproduces identically before and after, and on both solver backends,
+since it never reaches a solver._
