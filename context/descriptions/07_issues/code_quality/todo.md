@@ -46,19 +46,3 @@ Option 1 is preferred: canonical form is a property of the query, not of one exe
 **Test**: a parity suite over constraint shapes — equality, decision-on-RHS, per-row, quadratic, composed `MIN`/`MAX`, aggregate-local `WHEN` — asserting the same solver rows regardless of which stage does the partition. This must exist before either migration starts; the current split has no test that pins the two paths to the same result.
 
 **Discovered**: 2026-07-30, writing paper §3.2. The binder subsection needed a canonicalization example, and the paper's running example (`demand - sum(ship) <= max_shortfall`, Example 1 line 11) turned out to be one the binder's normalizer refuses — its RHS is a decision variable, so the rewrite happens in the physical operator instead.
-
----
-
-## Aggregate-local WHEN on a qualified reducer: rejected in constraints, works in objectives
-
-**Location**: the `SUCH THAT` binder path (`src/planner/expression_binder/decide_constraints_binder.cpp`) versus `decide_objective_binder.cpp`.
-
-`SUM(D: expr) WHEN (cond)` binds in an **objective** and behaves correctly — both masks apply, and the qualifier survives (pinned by `test_qualified_reducer.py::test_qualified_reducer_with_aggregate_local_when_in_objective`). The same expression in a **constraint** is rejected (pinned by `test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected`).
-
-**The asymmetry is undocumented and probably unintended.** `done.md` describes the qualifier mask as ANDed into the same `TermFilterState` slot aggregate-local `WHEN` already uses, which is a description of a composition that works. It works on one side only. Root cause: a relation-qualified reducer is not a `func_application`, so the grammar's tight aggregate-local-WHEN production (`func_application WHEN_DECIDE decide_when_condition`, `third_party/libpg_query/grammar/statements/select.y:3040`) never matches it. `SUM(D: expr) WHEN cond <= bound` in a constraint therefore falls to the loose, whole-constraint WHEN production instead, which swallows the trailing comparison into the WHEN condition — the objective binder has no trailing comparison to swallow, which is why only the constraint side is affected. `SUM(D: expr) <= bound WHEN cond` (comparison before WHEN) already binds and executes correctly today, so the constraint-side gap is specifically that the tight aggregate-local production needs a qualified-reducer alternative, not that the composition is unsupported outright.
-
-**Why it matters**: the asymmetry means the same expression is legal in one clause and not the other depending on WHEN/comparison order, which is the kind of rule users cannot infer, and the constraint-side rejection currently surfaces as a generic "the WHEN must follow the comparison" binder error rather than a real fix.
-
-**Test**: `test/decide/tests/test_qualified_reducer.py::test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected` pins the current rejection with a message-shape check; delete it and add a positive one if the composition is made to work.
-
-**Discovered**: 2026-08-08, writing the deferred test coverage for group A.

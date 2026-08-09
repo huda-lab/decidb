@@ -48,6 +48,14 @@ makes the row-weighted and identity-weighted optima diverge.
   `test_aggregate_local_when_filters_inside_a_qualified_reducer` then flips the
   answer using the filter alone. Together they pin that both masks apply — the
   only place two independent masks share one `TermFilterState` slot.
+- **Aggregate-local `WHEN` composed with the qualifier, in a constraint, WHEN
+  before the comparison**: `test_qualified_reducer_with_aggregate_local_when_in_constraint`
+  (`SUM(D: expr) WHEN cond <= bound`) — the shape that used to be rejected (grammar
+  fix, `03_expressivity/decide/done.md` → "Relation-qualified reducers"). Nation 5
+  sits outside the filter so it never counts against the cap and is always kept;
+  nations 14/15/16 do count and only the value-maximizing one (16) fits, so nation
+  5's keep value is what distinguishes a correctly scoped WHEN from one silently
+  dropped back to the old bug.
 - **Composed MIN/MAX keeps the qualifier**
   (`test_composed_minmax_preserves_the_qualifier`,
   `test_composed_minmax_preserves_the_qualifier_in_a_constraint`): adding
@@ -69,10 +77,6 @@ makes the row-weighted and identity-weighted optima diverge.
   §3.2.2, which carves out query-wide decisions as always allowed.
 - `test_multi_relation_qualifier_rejected` pins a deferral, not a limitation of
   the design — `03_expressivity/decide/todo.md` → "Multi-relation qualifiers".
-- `test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected` pins
-  an **inconsistency**, not intended semantics: the same expression binds in an
-  objective. The message also leaks the internal `__qualified_reducer__` tag.
-  Logged in `07_issues/code_quality/todo.md`.
 - `test_composed_minmax_preserves_the_qualifier` and
   `…_in_a_constraint` are **regressions for a fixed wrong answer**, not aspirational
   pins: `SUM(D: ...) + MAX(...)` used to revert to row semantics because
@@ -97,7 +101,7 @@ makes the row-weighted and identity-weighted optima diverge.
 | qualified reducer | hard-direction MAX objective | ✓ |
 | qualified reducer | hard-direction MIN constraint | ✓ |
 | qualified reducer | aggregate-local `WHEN` (objective) | ✓ |
-| qualified reducer | aggregate-local `WHEN` (constraint) | rejected — see `todo.md` |
+| qualified reducer | aggregate-local `WHEN` (constraint) | ✓ |
 | qualified reducer | composed MIN/MAX (objective) | ✓ |
 | qualified reducer | composed MIN/MAX (constraint) | ✓ |
 | qualified reducer | multi-relation qualifier | rejected (deferred) |

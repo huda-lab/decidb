@@ -17,8 +17,6 @@ Covers:
     decision inside the reducer, unknown relation
 """
 
-import re
-
 import pytest
 from decidb_cli import DecidBCliError
 from solver.types import VarType, ObjSense
@@ -580,32 +578,32 @@ def test_aggregate_local_when_filters_inside_a_qualified_reducer(
         f"nation 14 is filtered out of the objective, so 5 is the only gain: {keep}"
 
 
-@pytest.mark.error_binder
-@pytest.mark.error
-def test_qualified_reducer_with_aggregate_local_when_in_constraint_rejected(
+@pytest.mark.correctness
+def test_qualified_reducer_with_aggregate_local_when_in_constraint(
         decidb_cli):
-    """The same composition is rejected on the *constraint* side.
+    """The same composition (WHEN before the comparison) now works on the
+    *constraint* side too, matching the objective case above.
 
-    Asymmetric with the objective case above, which works. That asymmetry is
-    logged in ``07_issues/code_quality/todo.md`` and is not fixed here; this
-    test only pins that the rejection still fires and that the message is
-    SQL-facing (no leaked internal tag or C++ enum name).
+    Nation 5 sits outside the WHEN filter (`n_nationkey > 5`), so it never
+    counts against the `<= 1` cap and is free to keep; nations 14/15/16 do
+    count, and only one of them fits under the cap, so the value-maximizing
+    choice (16) is the unique optimum. If the WHEN filter were silently
+    dropped (folding back to the old bug, which swallowed it into a whole-
+    constraint condition applied to nothing), nation 5 would compete for the
+    same budget and get dropped in favor of 16 alone — so nation 5's keep
+    value is what distinguishes a correctly scoped WHEN from a broken one.
     """
-    result = decidb_cli.execute_raw("""
-            SELECT c.c_custkey, n.n_nationkey, keepN
-            FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-            WHERE n.n_regionkey = 0
-            DECIDE n.keepN(BOOL)
-            SUCH THAT SUM(n: keepN) WHEN (n.n_nationkey > 1) <= 2
-            MAXIMIZE SUM(n: n.n_nationkey * keepN)
-        """)
-    combined = result.stdout + result.stderr
-    assert re.search(r"WHEN must follow the comparison", combined), \
-        f"rejection message missing or reworded: {combined[:500]}"
-    assert "__qualified_reducer__" not in combined, \
-        f"internal reducer tag leaked into the error message: {combined[:500]}"
-    assert "ExpressionClass::" not in combined, \
-        f"internal C++ enum name leaked into the error message: {combined[:500]}"
+    result, _ = decidb_cli.execute("""
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_nationkey IN (5, 14, 15, 16)
+        DECIDE n.keepN(BOOL)
+        SUCH THAT SUM(n: keepN) WHEN (n.n_nationkey > 5) <= 1
+        MAXIMIZE SUM(n: n.n_nationkey * keepN)
+    """)
+    keep = _keep_by_nation(result, 1, 2)
+    assert keep == {5: 1, 14: 0, 15: 0, 16: 1}, \
+        f"nation 5 should be free (kept) and 16 should win the capped budget, got {keep}"
 
 
 # ---------------------------------------------------------------------------

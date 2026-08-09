@@ -3071,6 +3071,41 @@ c_expr:		d_expr
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, qualifier, @4);
 				}
+			| func_name '(' func_arg_list ':' func_arg_list ')' WHEN_DECIDE decide_when_condition	%prec POSTFIXOP
+				{
+					/* DecidB: aggregate-local WHEN on a relation-qualified reducer,
+					 * sum(D: expr) WHEN cond. Mirrors the two productions above: the
+					 * qualifier validation is duplicated (not factored into a shared
+					 * helper) rather than reusing the plain-qualified-reducer action,
+					 * because bison actions can't call each other directly and this
+					 * file has no C prologue of its own to hang a helper on.
+					 *
+					 * Without this production, `sum(D: expr) WHEN cond` never matches
+					 * here (a qualified reducer is not a func_application, so the
+					 * WHEN_DECIDE clause right after `func_application` above cannot
+					 * fire), so the token stream falls to the loose, whole-constraint
+					 * `a_expr WHEN_DECIDE b_expr` production instead, which swallows
+					 * a trailing comparison like `<= bound` into the WHEN condition.
+					 */
+					if ($3->length != 1)
+					{
+						ereport(ERROR, (errcode(PG_ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("a reducer can be qualified by one relation only; write sum(D: ...) and join the other relation's terms in a separate reducer"),
+							parser_errposition(@3)));
+					}
+					PGNode *qualifier = (PGNode *) $3->head->data.ptr_value;
+					if (!IsA(qualifier, PGColumnRef))
+					{
+						ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
+							errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
+							parser_errposition(@3)));
+					}
+					PGFuncCall *n = makeFuncCall($1, $5, @1);
+					PGNode *qualified_reducer = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, qualifier, @4);
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", qualified_reducer, $8, @7);
+				}
 			| indirection_expr_or_a_expr opt_extended_indirection
 				{
 					if ($2)
