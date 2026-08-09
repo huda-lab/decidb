@@ -24,18 +24,6 @@ The Big-M constant is not the weakness — `compute_big_m()` (line 4925) returns
 
 ---
 
-## BOOL domains round-trip through the constraint tree instead of being variable bounds
-
-**Location**: `src/planner/binder/query_node/bind_select_node.cpp:1196-1220` (injection); `src/execution/operator/decide/physical_decide.cpp:2092-2110` (`ExtractVariableBounds` / `TraverseBoundsConstraints`, recovery).
-
-A `BOOL` declaration does not set a variable's bounds. The binder synthesizes `x >= 0 AND x <= 1` as ordinary `ComparisonExpression`s and prepends them to the `SUCH THAT` tree, so the `0/1` box travels through every downstream stage as constraints. At model build, `TraverseBoundsConstraints` walks the tree to recognize those same comparisons and fold them back into `col_lower`/`col_upper`. The domain therefore makes a round trip: declaration to constraint rows to bounds.
-
-**Why it matters**: bounds and constraints are different things to a solver, and conflating them costs on three fronts. The rewrite passes carry constraint nodes that carry no information beyond the declared type. The recovery is pattern-matching on expression shape, so any rewrite that reassociates or wraps those comparisons silently drops the variable back to its default box. And the diagnostics engines treat constraint rows as loosenable, so a synthetic `x <= 1` is structurally indistinguishable from a limit the user wrote — the elastic program should never offer to loosen a variable's declared type. A `DomainSpec` carried on the variable and applied directly to `col_lower`/`col_upper` would remove all three.
-
-**Discovered**: 2026-07-28, while tracing the binder to answer reviewer questions on the paper's architecture section (what the binder resolves versus where variable domains are actually fixed). The paper claim "the binder turns type declarations into variable domains" is not accurate against this code path, which is what surfaced it.
-
----
-
 ## Canonicalization is split across two stages, in two representations
 
 **Location**: `src/decidb/symbolic/decide_symbolic.cpp:1272-1400` (`NormalizeComparisonExpr`, binder-time, over `ParsedExpression`); `src/execution/operator/decide/physical_decide.cpp:1610-1642` (per-row constraint extraction, model-build time, over bound `Expression`).

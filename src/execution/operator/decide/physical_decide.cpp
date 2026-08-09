@@ -2123,11 +2123,11 @@ public:
     // Variable Bounds Extraction (Part 3)
     //===--------------------------------------------------------------------===//
 
-    void ExtractVariableBounds(vector<double> &lower_bounds, vector<double> &upper_bounds) {
-        // Traverse decide_constraints to find variable-level bounds
-        TraverseBoundsConstraints(*op.decide_constraints, lower_bounds, upper_bounds);
-    }
-
+    // Absorbs literal `x OP const` / BETWEEN constraints the query actually wrote
+    // into the column-bound arrays. A variable's intrinsic domain (BOOLEAN 0/1,
+    // default non-negativity) is never represented here — it comes from
+    // `is_boolean_var` directly (see PhysicalDecide::Finalize) — so this only ever
+    // sees genuine user constraints.
     void TraverseBoundsConstraints(const Expression &expr,
                                    vector<double> &lower_bounds,
                                    vector<double> &upper_bounds) {
@@ -2202,16 +2202,18 @@ public:
                             bool is_integer_var =
                                 (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
                                  op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
-                            // A BOOLEAN variable's 0/1 box arrives here as `x >= 0` /
-                            // `x <= 1` comparisons. BOOLEAN is lowered to an INTEGER with
-                            // that domain, so the runtime type is INTEGER — the only
-                            // surviving signal is op.is_boolean_var. The 0/1 box is the
-                            // variable's intrinsic domain, never a loosenable parameter:
-                            // apply it to the column bounds but do NOT record it for
-                            // elastic re-emission. A genuine user PIN on a BOOLEAN
-                            // (`x <= 0`, `x >= 1`, `x = 1`) tightens the box and IS
-                            // recorded — erasing it made the elastic model diverge from
-                            // the user's query (wrong or missing infeasible diagnoses).
+                            // The intrinsic `[0,1]` domain of a BOOLEAN-domain variable
+                            // (`op.is_boolean_var`) is applied directly to the solver
+                            // column in PhysicalDecide::Finalize, never synthesized as a
+                            // constraint — so a bare `x >= 0` / `x <= 1` only reaches here
+                            // if the user wrote it themselves, redundantly restating the
+                            // domain. That restatement is never a loosenable parameter:
+                            // apply it to the column bounds (a no-op, since the intrinsic
+                            // domain already enforces it) but do NOT record it for elastic
+                            // re-emission. A genuine user PIN on a BOOLEAN (`x <= 0`,
+                            // `x >= 1`, `x = 1`) tightens the box below/above the domain
+                            // and IS recorded — erasing it made the elastic model diverge
+                            // from the user's query (wrong or missing infeasible diagnoses).
                             bool is_bool_var =
                                 var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx];
                             auto RecordBound = [&](char sense, double k) {
@@ -4103,7 +4105,17 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     solver_input.variable_types.resize(num_decide_vars);
     for (idx_t var = 0; var < num_decide_vars; var++) {
         auto &decide_var = decide_variables[var]->Cast<BoundColumnRefExpression>();
-        solver_input.variable_types[var] = decide_var.return_type;
+        // A BOOLEAN-domain variable (declared `x(BOOL)`, or a boolean-valued
+        // auxiliary such as an IN-domain/L0 indicator) is bound with an INTEGER
+        // DuckDB type so it can appear in arithmetic (`M * z`, `x - v1*z1 - ...`),
+        // but its solver-facing domain is BOOLEAN: `is_boolean_var` is the
+        // authoritative signal, not `return_type`. Reporting it as BOOLEAN here
+        // makes SolverModel::Build (ilp_model_builder.cpp) apply the `[0,1]` box
+        // and mark the column binary directly from the type — the same path
+        // optimizer-created BOOLEAN auxiliaries (MIN/MAX, NE indicators) already
+        // use — with no constraint-tree representation of the domain at all.
+        bool bool_domain = var < is_boolean_var.size() && is_boolean_var[var];
+        solver_input.variable_types[var] = bool_domain ? LogicalType::BOOLEAN : decide_var.return_type;
     }
 
     // Bounds were absorbed in the gstate constructor from simple
@@ -6439,11 +6451,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         //   - the intrinsic default (lower 0 / upper +inf) is unchanged;
         //   - an implied tightening (lower>0 / upper<+inf) is reverted — its backing row
         //     (USER_PARAMETER slackable, or STRUCTURAL still-rigid) continues to enforce it.
-        // BOOLEAN columns reset only within [0,1] so the intrinsic box stays rigid. NOTE: a
-        // BOOLEAN is lowered to an INTEGER carrying a [0,1] box, so `is_binary[col]` is
-        // FALSE for it — `is_boolean_var[var]` is the only reliable signal (see the
-        // comment in TraverseBoundsConstraints). Using is_binary here would reset the 0/1
-        // upper to +inf and silently turn the variable unbounded.
+        // BOOLEAN columns reset only within [0,1] so the intrinsic box stays rigid. NOTE:
+        // `is_binary[col]` is also true here (the DomainSpec fix reports BOOLEAN-domain
+        // variables as `LogicalType::BOOLEAN` to the model builder, same as `is_boolean_var`),
+        // but this checks `is_boolean_var[var]` explicitly and FIRST, ahead of the generic
+        // `is_binary` branch below. The generic branch only *skips* — correct for an
+        // optimizer-created BOOLEAN indicator (MIN/MAX z, NE), which DecidePropagateImpliedBounds
+        // never tightens — but a domain-BOOL variable (declared `x(BOOL)`, or an IN/L0
+        // indicator) CAN be tightened by it (the budget example below), and skipping would
+        // leave that stale sub-1 pin in place. Using the generic is_binary skip here for
+        // BOOLEAN-domain variables would silently reintroduce that bug.
         for (idx_t var = 0; var < decide_variables.size(); var++) {
             bool is_bool = var < is_boolean_var.size() && is_boolean_var[var];
             idx_t num_instances = var_indexer.NumInstances(var);

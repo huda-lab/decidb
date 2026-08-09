@@ -618,9 +618,10 @@ static void RewriteNormL0(unique_ptr<ParsedExpression> &expr,
 	auto inner = std::move(func.children[0]);
 
 	// One 0/1 indicator per row. INTEGER (not BOOLEAN) so it participates in the
-	// arithmetic `M * z` below — same convention as the IN-domain indicators; the
-	// explicit 0 <= z <= 1 bounds are added by the indicator-bounds loop later. The
-	// `__l0auto_ind_` prefix marks auto-M links for the physical operator to refill.
+	// arithmetic `M * z` below — same convention as the IN-domain indicators.
+	// `is_boolean_var` marks its domain; PhysicalDecide::Finalize applies `[0,1]`
+	// directly to the solver column. The `__l0auto_ind_` prefix marks auto-M links
+	// for the physical operator to refill.
 	string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
 	idx_t z_idx = var_names.size();
 	var_names.push_back(z_name);
@@ -754,7 +755,8 @@ static void RewriteInDomain(unique_ptr<ParsedExpression> &expr,
 					// General case: create K auxiliary indicator variables
 					// Note: these use INTEGER (not BOOLEAN) because the binder generates
 					// arithmetic expressions (z_1 + z_2 + ... = 1) that require integer arithmetic.
-					// Bounds (0 <= z <= 1) are generated explicitly below.
+					// `is_boolean_var` marks the domain; PhysicalDecide::Finalize applies
+					// `[0,1]` directly to the solver column.
 					vector<string> ind_names;
 					for (idx_t i = 0; i < K; i++) {
 						string ind_name = "__in_ind_" + var_name + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
@@ -1176,32 +1178,17 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             is_boolean_var.push_back(type_marker == "bool_variable");
         }
         
-        // Generate implicit bounds constraints for BOOLEAN variables: 0 <= x <= 1
-        // Prepend these to the existing constraints
-        for (idx_t i = 0; i < var_names.size(); i++) {
-            if (is_boolean_var[i]) {
-                auto x_ref = make_uniq<ColumnRefExpression>(var_names[i]);
-                auto zero = make_uniq<ConstantExpression>(Value::INTEGER(0));
-                auto one = make_uniq<ConstantExpression>(Value::INTEGER(1));
-                
-                auto lower_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, x_ref->Copy(), std::move(zero));
-                auto upper_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(x_ref), std::move(one));
-                
-                auto bounds = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_bound), std::move(upper_bound));
-                
-                // Prepend to constraints
-                if (statement.decide_constraints) {
-                    statement.decide_constraints = make_uniq<ConjunctionExpression>(
-                        ExpressionType::CONJUNCTION_AND, 
-                        std::move(bounds), 
-                        std::move(statement.decide_constraints)
-                    );
-                } else {
-                    statement.decide_constraints = std::move(bounds);
-                }
-            }
-        }
-
+        // A variable's `0/1` domain (declared BOOL, or a boolean-valued auxiliary
+        // like an IN-domain/L0 indicator that must stay INTEGER-typed to
+        // participate in arithmetic — see is_boolean_var's uses below) is never
+        // synthesized as a SUCH THAT constraint. `is_boolean_var` alone carries the
+        // domain from here through LogicalDecide to PhysicalDecide, which applies it
+        // directly to the solver column's bounds (PhysicalDecide::Finalize) — the
+        // same mechanism already used for optimizer-created BOOLEAN-typed
+        // auxiliaries (MIN/MAX indicators, NE indicators). This avoids the round
+        // trip through the constraint tree: no redundant rows for downstream
+        // rewrites to carry or accidentally reshape, and no expression-shape
+        // pattern-matching needed to recover the domain at model-build time.
 
         // Capture user var count BEFORE any rewrites that add auxiliary variables
         idx_t num_user_vars = var_names.size();
@@ -1259,26 +1246,12 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         // NOT-EQUAL (<>) indicator variables are now created by DecideOptimizer
         // (runs after binding, creates BOOLEAN indicators directly on LogicalDecide)
 
-        // MIN/MAX indicator bounds are handled automatically by BOOLEAN type
-        // in physical_decide.cpp. NE indicator bounds are handled by DecideOptimizer.
-        // IN indicators use INTEGER (needed for arithmetic in parsed constraints),
-        // so they need explicit bounds (0 <= z <= 1).
-        for (idx_t i = num_user_vars; i < var_names.size(); i++) {
-            if (!is_boolean_var[i]) continue;
-            if (var_types[i] == LogicalType::BOOLEAN) continue; // auto-bounds via physical_decide
-            auto z_ref = make_uniq<ColumnRefExpression>(var_names[i]);
-            auto zero = make_uniq<ConstantExpression>(Value::INTEGER(0));
-            auto one = make_uniq<ConstantExpression>(Value::INTEGER(1));
-            auto lower = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, z_ref->Copy(), std::move(zero));
-            auto upper = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(z_ref), std::move(one));
-            auto bounds = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower), std::move(upper));
-            if (statement.decide_constraints) {
-                statement.decide_constraints = make_uniq<ConjunctionExpression>(
-                    ExpressionType::CONJUNCTION_AND, std::move(bounds), std::move(statement.decide_constraints));
-            } else {
-                statement.decide_constraints = std::move(bounds);
-            }
-        }
+        // MIN/MAX, NE, and IN/L0 indicator bounds are all handled the same way now:
+        // `is_boolean_var[i]` marks the domain and PhysicalDecide::Finalize applies
+        // `[0,1]` directly to the solver column, regardless of whether the indicator's
+        // DuckDB-facing type is BOOLEAN (MIN/MAX, NE) or INTEGER (IN/L0, which need
+        // INTEGER to participate in the parsed arithmetic that links them). No
+        // constraint-tree bounds to generate here.
 
         // MIN/MAX objective rewrite is handled by DecideOptimizer::RewriteMinMaxObjective (post-binding).
         // MIN/MAX aggregates pass through normalization and binding as normal functions.

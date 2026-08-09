@@ -142,8 +142,8 @@ This mapping is stored on the `SolverInput` and used by the model builder to det
 The evaluated data is packaged into a `SolverInput` struct:
 
 - `num_rows`, `num_decide_vars`: Dimensions
-- `variable_types[var]`: Logical type of each DECIDE variable
-- `lower_bounds[var]`, `upper_bounds[var]`: Bounds from `ExtractVariableBounds()` (intersected with type defaults)
+- `variable_types[var]`: Logical type of each DECIDE variable — reported as `LogicalType::BOOLEAN` whenever `is_boolean_var[var]` is true, even if the variable's DuckDB-facing type is INTEGER (user-declared `BOOL`, IN-domain/L0 auxiliaries), so the model builder applies the `[0,1]` box and `is_binary` from the type alone
+- `lower_bounds[var]`, `upper_bounds[var]`: Bounds from `TraverseBoundsConstraints()` (genuine user-written constraints only; intersected with type defaults, including the BOOLEAN `[0,1]` default above)
 - `constraints`: Vector of `EvaluatedConstraint`, each containing:
   - `variable_indices[term_idx]`: Which variable each term references
   - `row_coefficients[term_idx][row_idx]`: Numeric coefficient values

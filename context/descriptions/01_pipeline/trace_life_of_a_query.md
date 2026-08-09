@@ -40,7 +40,7 @@ MAXIMIZE SUM(x * value);
 **Input**: Parsed Statement.
 **Action**: Validates types and names.
 
-1.  `DECIDE x(BOOL)`: The binder extracts the type from the DECIDE clause and records that variable `x` has specialized domain $[0, 1]$. It automatically adds implicit constraints `x >= 0 AND x <= 1`.
+1.  `DECIDE x(BOOL)`: The binder extracts the type from the DECIDE clause and records that variable `x` has specialized domain $[0, 1]$ via `is_boolean_var`. This domain is applied directly to the solver column's bounds at model-build time (`PhysicalDecide::Finalize`) — no `x >= 0 AND x <= 1` constraints are added to the query.
 2.  **Filter**: `WHERE category='electronics'` is bound to a standard Table Scan + Filter.
 3.  **Linearity Check**: `x * weight` is valid because `weight` comes from the table (constant coefficient).
 

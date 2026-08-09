@@ -126,14 +126,16 @@ Linear expressions are always supported; bilinear (`x * y`) and quadratic (`POWE
     `x`, and `x(INT)`) with a message naming the fix
   - `typed_decide_variable_list: typed_decide_variable | list ',' typed_decide_variable` (includes table-qualified syntax)
 - **Binder** (variable processing loop, type mapping): `src/planner/binder/query_node/bind_select_node.cpp`
-  - REAL → `LogicalType::DOUBLE`, BOOL/INT → `LogicalType::INTEGER`
-  - Boolean type detected via `type_marker == "bool_variable"`
+  - REAL → `LogicalType::DOUBLE`, BOOL/INT → `LogicalType::INTEGER` (the DuckDB-facing type — kept INTEGER even for `BOOL` so the variable can appear in arithmetic like `x * weight`, which BOOLEAN cannot implicitly cast into)
+  - Boolean type detected via `type_marker == "bool_variable"` and recorded in `is_boolean_var[i]` — the domain signal, independent of the DuckDB type above
+  - `is_boolean_var` carries the `[0,1]` domain from here through `LogicalDecide` to `PhysicalDecide`; nothing is synthesized into the `SUCH THAT` tree for it (see below)
 - **ILP model builder** (variable type handling): `src/decidb/utility/ilp_model_builder.cpp`
   - DOUBLE/FLOAT → `is_integer = false`, type-default bounds `[0, 1e30]`
-  - `LogicalType::BOOLEAN` → `is_binary = true`, bounds `[0, 1]` (only used by optimizer-created auxiliary variables: NE / IN indicators)
+  - `LogicalType::BOOLEAN` → `is_binary = true`, bounds `[0, 1]`
   - INT → `is_integer = true`, type-default bounds `[0, 1e30]`
   - Lower bound: the input's resolved lower bound (from `physical_decide.cpp`) is taken **directly**, not `std::max`-ed with the type default — otherwise an explicit negative bound would be clamped back to 0. Upper bound is still intersected (`std::min`) with the type default. See "Signed variables" above.
-  - Note: user-declared `BOOL` variables are mapped to `LogicalType::INTEGER` by the binder (not `LogicalType::BOOLEAN`), with explicit `[0,1]` bounds constraints generated in `bind_select_node.cpp`. The solver result is equivalent, but the mechanism differs from optimizer-created binary auxiliaries.
+  - A safety-net downgrade runs after the bound merge: if a variable would be `is_binary` but its merged bounds fall outside `[0,1]` (an unusual explicit user pin, e.g. `x >= -1` on a declared BOOL), it is reported as a plain bounded integer instead of a contradictory (binary, out-of-range) column.
+- **Every BOOLEAN-domain variable's `[0,1]` box is applied directly to the solver column, never synthesized as a constraint.** This covers user-declared `x(BOOL)` (DuckDB type INTEGER) exactly like it covers optimizer-created auxiliaries with a real `LogicalType::BOOLEAN` type (MIN/MAX indicators, NE indicators) and INTEGER-typed auxiliaries that need to participate in arithmetic (IN-domain, L0 indicators): `PhysicalDecide::Finalize` (`physical_decide.cpp`) reports `LogicalType::BOOLEAN` to `SolverInput::variable_types` for any variable where `is_boolean_var[var]` is true, regardless of its DuckDB-facing type, and the ILP model builder's type-driven bounds above take it from there. `is_boolean_var` is the single authoritative domain signal end to end; `TraverseBoundsConstraints` in `physical_decide.cpp` only ever absorbs genuine user-written bound constraints (`x <= 10`, `BETWEEN`, an explicit BOOLEAN pin like `x = 1`), never the domain itself.
 - **Solver backends**: HiGHS `!is_integer → kContinuous` (`deterministic_naive.cpp`); Gurobi `!is_integer && !is_binary → GRB_CONTINUOUS` (`gurobi_solver.cpp`)
 - **Physical execution** (DOUBLE output path): `physical_decide.cpp` — returns raw `double` solution values for REAL vars
 - **Table-scoped variables**:
