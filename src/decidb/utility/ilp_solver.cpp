@@ -8,7 +8,9 @@
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
 #include "duckdb/common/exception.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <utility>
@@ -67,6 +69,136 @@ void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backe
 	if (std::isfinite(improvement) && improvement > DIAGNOSTIC_RAY_EPSILON) {
 		result.ray = std::move(ray_result.solution);
 	}
+}
+
+//===--------------------------------------------------------------------===//
+// Model dump (DECIDB_DUMP_MODEL)
+//===--------------------------------------------------------------------===//
+// Deterministic textual rendering of a built SolverModel, used as a
+// characterization oracle. A change that claims not to alter the model is
+// checked by diffing dumps rather than by comparing optimal values — two
+// genuinely different models routinely share an optimum, so equal results are
+// not evidence of an equal model.
+//
+//   DECIDB_DUMP_MODEL=1        → stderr
+//   DECIDB_DUMP_MODEL=<path>   → appended to <path>
+//
+// Coefficients are sorted by column index within each row: term order inside a
+// row carries no meaning to the solver, and canonicalization legitimately
+// changes it (migrated terms are appended). Row order is left alone so that a
+// genuine reordering stays visible in the diff.
+
+void AppendDouble(std::string &out, double v) {
+	if (std::isinf(v)) {
+		out += v > 0 ? "inf" : "-inf";
+		return;
+	}
+	if (std::isnan(v)) {
+		out += "nan";
+		return;
+	}
+	if (v == 0.0) {
+		v = 0.0; // normalize -0.0 so it never diffs against 0.0
+	}
+	char buf[32];
+	snprintf(buf, sizeof(buf), "%.10g", v);
+	out += buf;
+}
+
+void AppendSparseRow(std::string &out, const vector<int> &indices, const vector<double> &coefficients) {
+	vector<std::pair<int, double>> terms;
+	terms.reserve(indices.size());
+	for (idx_t i = 0; i < indices.size() && i < coefficients.size(); i++) {
+		terms.emplace_back(indices[i], coefficients[i]);
+	}
+	std::sort(terms.begin(), terms.end());
+	for (auto &term : terms) {
+		out += " " + std::to_string(term.first) + ":";
+		AppendDouble(out, term.second);
+	}
+}
+
+void DumpSolverModel(const SolverModel &model) {
+	const char *dest = std::getenv("DECIDB_DUMP_MODEL");
+	if (!dest || !*dest) {
+		return;
+	}
+
+	std::string out = "=== DECIDB MODEL DUMP ===\n";
+	out += "sense: " + std::string(model.maximize ? "maximize" : "minimize") + "\n";
+	out += "num_vars: " + std::to_string(model.num_vars) + "\n";
+	out += "num_rows: " + std::to_string(model.constraints.size()) + "\n";
+	out += "num_qrows: " + std::to_string(model.quadratic_constraints.size()) + "\n";
+
+	for (idx_t col = 0; col < model.num_vars; col++) {
+		out += "col " + std::to_string(col) + ": lb=";
+		AppendDouble(out, col < model.col_lower.size() ? model.col_lower[col] : 0.0);
+		out += " ub=";
+		AppendDouble(out, col < model.col_upper.size() ? model.col_upper[col] : 0.0);
+		out += " int=" + std::string(col < model.is_integer.size() && model.is_integer[col] ? "1" : "0");
+		out += " bin=" + std::string(col < model.is_binary.size() && model.is_binary[col] ? "1" : "0");
+		out += " obj=";
+		AppendDouble(out, col < model.obj_coeffs.size() ? model.obj_coeffs[col] : 0.0);
+		out += "\n";
+	}
+
+	if (model.has_quadratic_obj) {
+		out += "qobj: nonconvex=" + std::string(model.nonconvex_quadratic ? "1" : "0") + "\n";
+		vector<std::pair<std::pair<int, int>, double>> q_terms;
+		q_terms.reserve(model.q_vals.size());
+		for (idx_t i = 0; i < model.q_vals.size() && i < model.q_rows.size() && i < model.q_cols.size(); i++) {
+			q_terms.push_back({{model.q_rows[i], model.q_cols[i]}, model.q_vals[i]});
+		}
+		std::sort(q_terms.begin(), q_terms.end());
+		for (auto &term : q_terms) {
+			out += "  q " + std::to_string(term.first.first) + "," + std::to_string(term.first.second) + ":";
+			AppendDouble(out, term.second);
+			out += "\n";
+		}
+	}
+
+	for (idx_t r = 0; r < model.constraints.size(); r++) {
+		auto &constr = model.constraints[r];
+		out += "row " + std::to_string(r) + ": sense=" + std::string(1, constr.sense) + " rhs=";
+		AppendDouble(out, constr.rhs);
+		out += " nnz=" + std::to_string(constr.indices.size()) + " |";
+		AppendSparseRow(out, constr.indices, constr.coefficients);
+		out += "\n";
+	}
+
+	for (idx_t r = 0; r < model.quadratic_constraints.size(); r++) {
+		auto &qc = model.quadratic_constraints[r];
+		out += "qrow " + std::to_string(r) + ": sense=" + std::string(1, qc.sense) + " rhs=";
+		AppendDouble(out, qc.rhs);
+		out += " |";
+		AppendSparseRow(out, qc.linear_indices, qc.linear_coefficients);
+		out += " |";
+		vector<std::pair<std::pair<int, int>, double>> q_terms;
+		q_terms.reserve(qc.q_coefficients.size());
+		for (idx_t i = 0; i < qc.q_coefficients.size() && i < qc.q_rows.size() && i < qc.q_cols.size(); i++) {
+			q_terms.push_back({{qc.q_rows[i], qc.q_cols[i]}, qc.q_coefficients[i]});
+		}
+		std::sort(q_terms.begin(), q_terms.end());
+		for (auto &term : q_terms) {
+			out += " " + std::to_string(term.first.first) + "," + std::to_string(term.first.second) + ":";
+			AppendDouble(out, term.second);
+		}
+		out += "\n";
+	}
+
+	out += "=== END MODEL DUMP ===\n";
+
+	if (std::string(dest) == "1") {
+		fputs(out.c_str(), stderr);
+		return;
+	}
+	FILE *f = fopen(dest, "a");
+	if (!f) {
+		fputs(out.c_str(), stderr);
+		return;
+	}
+	fputs(out.c_str(), f);
+	fclose(f);
 }
 
 } // namespace
@@ -159,6 +291,10 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
 	}
+	// Characterization oracle (no-op unless DECIDB_DUMP_MODEL is set). Emitted here,
+	// on the freshly built model, so diagnostic re-solves (probe / ray / elastic
+	// models built later) never pollute the dump.
+	DumpSolverModel(model);
 	// Rows as actually handed to the backend, for the benchmark's model-size metric. Read
 	// off the built model because the pre-expansion inputs are not a row count at all: one
 	// per-row spec becomes a row per data row, one PER spec a row per group. Captured here,

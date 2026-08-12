@@ -375,7 +375,8 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 - **Feasibility support**: Grammar rule in `third_party/libpg_query/grammar/statements/select.y` accepts `DECIDE ... SUCH THAT ...` without objective. `DecideSense::FEASIBILITY` flows through parser → binder → physical → model builder. Model builder sets all objective coefficients to zero.
 
 - **Symbolic normalization skip**: `src/decidb/symbolic/decide_symbolic.cpp`
-  - `ComparisonLhsHasQuadraticOrBilinear` prevents symbolic expansion of POWER/bilinear structure
+  - Objectives only. `SumInnerIsQuadratic` prevents symbolic expansion from destroying the `POWER(linear, 2)` pattern the QP extractor matches on.
+  - Constraints need no skip: nothing expands them before binding since `canonicalize.md` C.4 deleted that layer, and `DecideCanonicalizer` never opens a term.
 
 - **Bilinear implementation**: See [bilinear/done.md](../bilinear/done.md) for full implementation details including:
   - McCormick rewrite pass in optimizer (`RewriteBilinear`)

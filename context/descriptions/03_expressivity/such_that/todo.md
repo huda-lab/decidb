@@ -16,12 +16,14 @@ dropped a nested scalar factor like the `2` in `(2*x)*v` (which reaches the
 composed path un-normalized), silently wrong for both easy and hard composed
 scalar terms — was fixed as part of it.
 
-Still deferred (separate v2 shapes, still bind-time rejected): subtraction in the
-composed LHS (`MAX - MIN`), outer `WHEN`/`PER` wrappers on the composed
-constraint/objective, non-constant RHS, and equality (`=`) outer comparison. Pins
-for these remain `assert_error` in `test_min_max.py`; the hard-direction pins
-flipped to oracle-verified positives (`test_composed_minmax_hard_max_constraint`,
-`_scalar_mult_hard_min`, `_objective_hard_max`, `_objective_hard_min`).
+Still deferred (separate v2 shapes, still bind-time rejected): outer `WHEN`/`PER`
+wrappers on the composed constraint/objective, non-constant RHS, and equality
+(`=`) outer comparison. Pins for these remain `assert_error` in
+`test_min_max.py`; the hard-direction pins flipped to oracle-verified positives
+(`test_composed_minmax_hard_max_constraint`, `_scalar_mult_hard_min`,
+`_objective_hard_max`, `_objective_hard_min`). Subtraction in the composed LHS
+(`MAX - MIN`) shipped with the canonicalization sign-awareness work — see
+`done.md` and `test_canonicalize_sign.py`.
 
 ### Related orthogonal limitation: empty-WHEN on hard-direction MIN/MAX — resolved
 

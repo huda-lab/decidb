@@ -8,6 +8,7 @@
 #include "duckdb/planner/operator/logical_dummy_scan.hpp"
 #include "duckdb/planner/operator/logical_limit.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/common/enums/decide.hpp"
@@ -65,14 +66,85 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             collect_shared_subquery_rhs(*statement.decide_constraints);
         }
 
+        // Which column refs will be ONE value for the whole query once flattening is
+        // done. Canonicalization needs this to tell a legal factor on a reducer
+        // (`(SELECT k FROM p) * SUM(x)`) from an illegal one (`weight * SUM(x)`, which
+        // has no answer to "which row's weight?"). After PlanSubqueries all three of
+        // `weight`, an uncorrelated subquery and a CORRELATED subquery are plain column
+        // refs — the flattened subquery is even named "SUBQUERY" — so only correlation
+        // information captured HERE separates them, and it exists only before
+        // flattening. Hold the owning slots: PlanSubqueries replaces the node in place,
+        // so the slot is what survives to be read afterward.
+        vector<unique_ptr<Expression> *> uncorrelated_subquery_slots;
+        vector<unique_ptr<Expression> *> correlated_subquery_slots;
+        {
+            std::function<void(unique_ptr<Expression> &)> collect_subqueries =
+                [&](unique_ptr<Expression> &slot) {
+                    if (slot->GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
+                        auto &subq = slot->Cast<BoundSubqueryExpression>();
+                        if (subq.subquery_type == SubqueryType::SCALAR) {
+                            // Correlated ones are recorded only so a rejection can call
+                            // them a subquery; they stay out of the query-wide set and
+                            // are refused by the fail-safe default either way.
+                            (subq.IsCorrelated() ? correlated_subquery_slots
+                                                 : uncorrelated_subquery_slots)
+                                .push_back(&slot);
+                        }
+                        return;
+                    }
+                    ExpressionIterator::EnumerateChildren(*slot, collect_subqueries);
+                };
+            if (statement.decide_constraints) {
+                collect_subqueries(statement.decide_constraints);
+            }
+        }
+
         PlanSubqueries(statement.decide_constraints, root);
         PlanSubqueries(statement.decide_objective, root);
+
+        // Read back what each uncorrelated subquery became. Recording the table index
+        // rather than tagging the node keeps this out of the alias channel, which is
+        // already carrying SHARED_SCALAR_SUBQUERY_TAG and a user-visible "SUBQUERY"
+        // name on exactly these nodes.
+        auto collect_flattened_indexes = [](const vector<unique_ptr<Expression> *> &slots,
+                                            unordered_set<idx_t> &out) {
+            for (auto *slot : slots) {
+                if (!*slot) {
+                    continue;
+                }
+                Expression *flat = slot->get();
+                while (flat->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                    flat = flat->Cast<BoundCastExpression>().child.get();
+                }
+                if (flat->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    out.insert(flat->Cast<BoundColumnRefExpression>().binding.table_index);
+                }
+            }
+        };
+        unordered_set<idx_t> query_wide_table_indexes;
+        unordered_set<idx_t> correlated_subquery_table_indexes;
+        collect_flattened_indexes(uncorrelated_subquery_slots, query_wide_table_indexes);
+        collect_flattened_indexes(correlated_subquery_slots, correlated_subquery_table_indexes);
 
         // Subquery RHS is now a flattened column ref (PlanSubqueries rewrote it in place,
         // leaving the comparison node — and our pointers to it — valid). Tag it shared.
         for (auto *comp : shared_subquery_comps) {
             comp->right->SetAlias(SHARED_SCALAR_SUBQUERY_TAG);
         }
+        // Canonicalization: the single point at which the shape of a user-written
+        // constraint is decided (decision terms left, data right). Runs here rather
+        // than during binding because it needs bound expressions -- a decision
+        // variable is exactly a BoundColumnRefExpression on decide_index -- and
+        // because it must see the flattened form PlanSubqueries just produced.
+        // Everything the optimizer emits later is canonicalized by
+        // LogicalDecide::AddConstraint. Those two are the only call sites.
+        if (statement.decide_constraints) {
+            DecideCanonicalizer canonicalizer(context, statement.decide_index,
+                                              std::move(query_wide_table_indexes),
+                                              std::move(correlated_subquery_table_indexes));
+            statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+        }
+
         auto decide_op = make_uniq<LogicalDecide>(
             statement.decide_index,
             std::move(statement.decide_variables),

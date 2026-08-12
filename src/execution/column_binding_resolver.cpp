@@ -170,6 +170,9 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 			if (term.filter) {
 				VisitExpression(&term.filter);
 			}
+			if (term.scale) {
+				VisitExpression(&term.scale);
+			}
 		}
 		for (auto &spec : decide_op.composed_minmax_constraints) {
 			for (auto &term : spec.terms) {
@@ -178,6 +181,9 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 				}
 				if (term.filter) {
 					VisitExpression(&term.filter);
+				}
+				if (term.scale) {
+					VisitExpression(&term.scale);
 				}
 			}
 			if (spec.rhs_expr) {

@@ -31,7 +31,9 @@ Each `MIN`/`MAX` term becomes a continuous auxiliary `z_k` pinned per-row to the
 
 **Relation qualifiers are carried.** A composed term may be a qualified reducer — `MINIMIZE SUM(D: opening_cost * open) + MAX(unit_cost * ship)` — and the qualifier keeps its identity semantics inside the composed clause. `ComposedMinMaxTerm::qualifier_scope_idx` is stamped by the optimizer from the binder's tag, and the physical layer ANDs the matching de-duplication mask into the term's filter mask, exactly as the non-composed reducer paths do. Applied uniformly to every term kind: for `MIN`/`MAX` it is provably a no-op (every row of an identity carries the same value, so dropping repeats cannot move an extremum), which keeps one code path rather than a special case.
 
-**Still rejected at bind time** (v2): subtraction in the additive sum (`MAX - MIN`), outer `PER`/`WHEN` wrapper on the composed objective.
+**Subtraction is supported.** `MAXIMIZE MAX(x*v) - MIN(x*v)` (the spread of the selected values) works: the subtracted term carries sign `-1`, so under `MAXIMIZE` the `MIN` is pushed *down* rather than up and gets the indicator layer. The walker is shared with composed constraints, so the rule is identical — see `../such_that/done.md`.
+
+**Still rejected at bind time** (v2): outer `PER`/`WHEN` wrapper on the composed objective.
 
 ## Quadratic Inner Expressions Under Nested PER
 

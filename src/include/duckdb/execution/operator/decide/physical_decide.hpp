@@ -50,11 +50,6 @@ struct BilinearConstraintTerm {
 struct DecideConstraint {
     vector<Term> lhs_terms;              // All additive terms from LHS
     unique_ptr<Expression> rhs_expr;     // RHS expression (may contain aggregates)
-    // Data/constant part of the LHS (decide vars stripped) in the multi-variable
-    // per-row path, to be SUBTRACTED from the bound at evaluation: moving decide
-    // vars to lhs_terms leaves the LHS data (e.g. the `10` in `10 - x <= y`) which
-    // must move to the RHS negated. nullptr = none. Folds to 0 for bare-var LHS.
-    unique_ptr<Expression> lhs_offset_expr;
     ExpressionType comparison_type;      // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
     bool lhs_is_aggregate = false;       // True if original LHS was an aggregate (e.g., SUM(...))
     bool was_minmax_easy = false;        // True if optimizer stripped an easy-direction MIN/MAX (MINMAX_EASY_REWRITE_TAG). Lets Site 1 enforce empty-WHEN rejection on user-written MIN/MAX even though the LHS is now per-row.
@@ -280,11 +275,15 @@ public:
 
     //! Extract coefficient expression, removing the specified variable
     //! For example: from "x * 5 * l_tax", removes x and returns "5 * l_tax"
-    unique_ptr<Expression> ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const;
+    //! `context` is needed to re-bind a rebuilt product: stripping the variable
+    //! also strips the casts above it, so the surviving children no longer match
+    //! the original `*`'s signature.
+    unique_ptr<Expression> ExtractCoefficientWithoutVariable(ClientContext &context, const Expression &expr,
+                                                             idx_t var_idx) const;
 
     //! Main visitor: extract all terms from a SUM argument
     //! Handles + operators (recursively), * operators (extract var and coef), constants
-    void ExtractTerms(const Expression &expr, vector<Term> &out_terms) const;
+    void ExtractTerms(ClientContext &context, const Expression &expr, vector<Term> &out_terms) const;
 
     //! Forward declaration — see physical_decide.cpp for the full definition.
     //! The struct holds a non-owning `const Expression *` into the caller's

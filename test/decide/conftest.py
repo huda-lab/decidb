@@ -29,7 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from decidb_cli import DecidBCli
 from solver.factory import get_solver
 from oracle_cache import OracleCache, CachedOracleSolver
+from oracle_cache import merge_worker_reports as merge_oracle_reports
 from performance.tracker import PerfTracker
+from performance.tracker import merge_worker_reports as merge_perf_reports
 from performance.reporter import print_perf_table
 
 _TPCH_SF = 0.01
@@ -174,14 +176,15 @@ def _raw_oracle_solver():
 
 @pytest.fixture(scope="session")
 def _oracle_cache(decidb_db_path, request):
-    """Session-wide oracle result cache.  GC runs only on full (unfiltered) runs."""
+    """Session-wide oracle result cache.
+
+    Persisting is deferred to ``pytest_sessionfinish``: only there is the exit
+    status known (a failed run must not GC) and only there can the controller
+    see every xdist worker's slice.
+    """
     cache = OracleCache(decidb_db_path)
+    request.config._decidb_oracle_cache = cache
     yield cache
-    is_full_run = (
-        not getattr(request.config.option, "markexpr", "")
-        and not getattr(request.config.option, "keyword", "")
-    )
-    cache.save(gc=is_full_run)
 
 
 @pytest.fixture(scope="function")
@@ -203,11 +206,93 @@ def oracle_solver(request, _raw_oracle_solver, _oracle_cache):
 
 
 @pytest.fixture(scope="session")
-def perf_tracker():
-    """Session-wide performance tracker.  Saves JSON + prints table on teardown."""
+def perf_tracker(request):
+    """Session-wide performance tracker.
+
+    Saving and printing happen in ``pytest_sessionfinish`` so that one run
+    yields one JSON file and one table, however many xdist workers produced it.
+    """
     tracker = PerfTracker()
+    request.config._decidb_perf_tracker = tracker
     yield tracker
-    path = tracker.save_json()
-    print_perf_table(tracker)
-    if path:
-        print(f"  Performance data saved to: {path}\n")
+
+
+# ---------------------------------------------------------------------------
+# Session teardown: persist the oracle cache and the performance run
+# ---------------------------------------------------------------------------
+
+
+def _worker_id(config) -> str | None:
+    """This process's xdist worker id, or None when it is the controller.
+
+    xdist injects ``workerinput`` into worker processes only, which is the
+    documented way to tell the two apart.
+    """
+    workerinput = getattr(config, "workerinput", None)
+    return workerinput["workerid"] if workerinput else None
+
+
+def pytest_testnodedown(node, error):
+    """Collect an xdist worker's report as it shuts down (controller-side).
+
+    ``workeroutput`` rides the worker's shutdown event, so unlike a file the
+    worker drops on its way out it cannot race the controller's teardown.  A
+    worker that crashed and was replaced delivers no payload; that gap is
+    recorded so the GC can be skipped rather than pruning the entries only that
+    worker had visited.
+    """
+    config = node.config
+    reports = config.__dict__.setdefault("_decidb_worker_reports", [])
+    payload = getattr(node, "workeroutput", {}).get("decidb")
+    if error is not None or payload is None:
+        config.__dict__["_decidb_workers_incomplete"] = True
+        return
+    reports.append(payload)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    config = session.config
+    cache = getattr(config, "_decidb_oracle_cache", None)
+    tracker = getattr(config, "_decidb_perf_tracker", None)
+
+    if _worker_id(config) is not None:
+        # Worker: hand everything back, write nothing shared.
+        config.workeroutput["decidb"] = {
+            "oracle": cache.worker_report() if cache is not None else None,
+            "perf": tracker.worker_report() if tracker is not None else [],
+        }
+        return
+
+    # Controller — or a serial run, which is its own controller.
+    #
+    # GC only on a full, green, complete run.  A filtered run never visited the
+    # entries it would prune; a failed or worker-short run may be missing an
+    # accessed set entirely.  Pruning against an incomplete picture deletes live
+    # entries that then cost a real solve to rebuild.
+    is_full_run = (
+        not getattr(config.option, "markexpr", "")
+        and not getattr(config.option, "keyword", "")
+    )
+    complete = not getattr(config, "_decidb_workers_incomplete", False)
+    gc = is_full_run and exitstatus == 0 and complete
+
+    reports = getattr(config, "_decidb_worker_reports", None)
+    if reports is None:
+        # Serial run: the one cache in this process is the whole picture.
+        if cache is not None:
+            cache.save(gc=gc)
+    else:
+        # Under xdist the controller runs no tests, so the fixture never fired
+        # here and the db path has to be resolved as the fixture would.
+        found = _find_decidb_db()
+        db_path = str(found) if found else None
+        oracle_reports = [r["oracle"] for r in reports if r.get("oracle")]
+        if db_path is not None and oracle_reports:
+            merge_oracle_reports(db_path, oracle_reports, gc=gc)
+        tracker = merge_perf_reports([r.get("perf") or [] for r in reports])
+
+    if tracker is not None and tracker.records:
+        path = tracker.save_json()
+        print_perf_table(tracker)
+        if path:
+            print(f"  Performance data saved to: {path}\n")

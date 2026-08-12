@@ -1,26 +1,33 @@
 # Query-Wide (`scalar`) Scope Test Coverage — Todo
 
-## Scalar with `PER` — blocked on group B, not merely untested
+## Scalar with `PER` — shipped at canonicalize.md C.2 (2026-08-12)
 
 This area's first draft listed "scalar with PER" as an untested but well-defined
-shape. That was wrong, and the correction is worth keeping: the shape **does not
-bind**.
+shape; a later correction said it did not bind at all. Both are now history.
 
 ```
 SUCH THAT SUM(x) <= cap PER c_nationkey
-→ Binder Error: SUM cannot be compared to an expression that is not a scalar or
-  aggregate without DECIDE variables
 ```
 
-The rejection has nothing to do with `PER` — `SUM(x) <= cap` fails the same way
-without it. It is the general "non-reduced RHS on a reduced constraint" check,
-filed as **B1 / B2 / B4** in `context/descriptions/todo.md`. This matters more
-than an ordinary gap because it is the shape the **paper writes with `scalar`**:
-§3.1's `demand - sum(ship) <= max_shortfall per regionID`.
+used to fail the general "non-reduced RHS on a reduced constraint" check, which
+had nothing to do with `PER` — `SUM(x) <= cap` failed the same way without it.
+canonicalize.md **C.2** made the binder's constraint gate side-agnostic, so a
+decision may be the bound; canonicalization moves `cap` to the model side and the
+shape reaching the physical layer is the `SUM(x) - cap <= 0` that B.3 already
+handled. The paper's §3.1 constraint
+(`demand - sum(ship) <= max_shortfall per regionID`) binds and solves in full,
+including the row-varying `demand` that canonicalization sends to the bound side
+for B.5's runtime reduction.
 
-Both rejections are pinned by `test_scalar_as_aggregate_rhs_rejected` and
-`test_scalar_as_aggregate_rhs_with_per_rejected`, so these tests flip when group
-B lands and are the natural place to add the positive coverage then.
+Coverage: `test_scalar_scope.py::test_scalar_as_aggregate_rhs` and
+`::test_scalar_as_aggregate_rhs_with_per` (the two rejection pins, converted to
+oracle-verified positives priced so the optimum is interior rather than all-zero),
+`test_canonicalize_side_agnostic.py::test_data_term_left_of_reducer`, and golden
+corpus 75/76/77.
+
+What is *not* opened: a bare row-varying **data** column as the bound
+(`SUM(x) <= price`). That is still group B of the paper sweep and needs per-tuple
+fan-out at the binder; it is now refused identically on either side.
 
 ## Scalar composed with the remaining rewrites
 

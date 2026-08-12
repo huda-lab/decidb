@@ -67,6 +67,112 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// A factor sitting on a reducer
+// ---------------------------------------------------------------------------
+//
+// The canonicalizer peels a factor OUTWARD off a reducer (`2 * SUM(x*p)`) and
+// converges every spelling onto one. It stays outside from there: nothing pushes
+// it back into the reducer's body.
+//
+// WHY IT STAYS OUTSIDE. `MIN`/`MAX` are order statistics, not linear functionals.
+// They commute with a POSITIVE factor only -- `MAX(-2x)` is `-2*MIN(x)`, not
+// `-2*MAX(x)` -- so pushing a factor in requires knowing its sign, and a scalar
+// subquery's sign is not known until the query runs. Leaving the factor outside
+// makes the sign irrelevant to CORRECTNESS: it only selects which linearization is
+// cheaper. An unknown sign then costs performance instead of failing.
+//
+// (A previous version of this pass did fold, swapping MIN/MAX for a negative
+// factor. It was exact, but it made the sign load-bearing for correctness and so
+// had nothing to fall back on when the sign was unknown.)
+//
+// Where the factor is finally applied depends on the term:
+//   SUM/AVG   -- multiplied into the per-row coefficients
+//               (`PhysicalDecide::ApplyScaleToExtracted`)
+//   MIN/MAX   -- multiplied into the auxiliary's contribution
+//               (`ComposedMinMaxTerm::scale`), or distributed over the per-row
+//               form when the constraint linearizes the easy way.
+static bool BoundExprReferencesDecideVar(const Expression &expr, idx_t decide_index);
+
+//! Unwrap casts.
+static Expression &UnwrapCasts(Expression &e) {
+	Expression *cur = &e;
+	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		cur = cur->Cast<BoundCastExpression>().child.get();
+	}
+	return *cur;
+}
+
+//! If `e` is a reducer with a factor on it, return the bare aggregate and report the
+//! factor; otherwise return nullptr and leave `e` to be treated as itself.
+//!
+//! Both orders are matched for `*`. Canonicalization puts the factor on the left, but
+//! it only runs on CONSTRAINTS -- an objective arrives spelled however the user wrote
+//! it. `/` is not commutative: only `AGG / K` is a scaled reducer.
+static BoundAggregateExpression *AsScaledAggregate(Expression &e, Expression *&out_scale,
+                                                   bool &out_divides) {
+	out_scale = nullptr;
+	out_divides = false;
+	auto &u = UnwrapCasts(e);
+	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return nullptr;
+	}
+	auto &func = u.Cast<BoundFunctionExpression>();
+	bool is_mult = func.function.name == "*";
+	bool is_div = func.function.name == "/";
+	if ((!is_mult && !is_div) || func.children.size() != 2) {
+		return nullptr;
+	}
+	idx_t agg_child;
+	if (UnwrapCasts(*func.children[0]).GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		agg_child = 0;
+	} else if (is_mult && UnwrapCasts(*func.children[1]).GetExpressionClass() ==
+	                          ExpressionClass::BOUND_AGGREGATE) {
+		agg_child = 1;
+	} else {
+		return nullptr;
+	}
+	// Two reducers multiplied is a product of aggregates, not a scaled one.
+	if (UnwrapCasts(*func.children[1 - agg_child]).GetExpressionClass() ==
+	    ExpressionClass::BOUND_AGGREGATE) {
+		return nullptr;
+	}
+	out_scale = func.children[1 - agg_child].get();
+	out_divides = is_div;
+	return &UnwrapCasts(*func.children[agg_child]).Cast<BoundAggregateExpression>();
+}
+
+//! The sign a factor contributes: +1, -1, or 0 when it is not known until the query
+//! runs. Only a plain literal is decidable here; a scalar subquery is not.
+//!
+//! Nothing depends on this for correctness -- it selects between an exact cheap
+//! linearization and an exact expensive one. 0 must therefore be treated as "assume
+//! the expensive one", never as an error.
+static int ScaleSignAtPlanTime(const Expression *scale, bool divides) {
+	if (!scale) {
+		return 1;
+	}
+	const Expression *cur = scale;
+	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		cur = cur->Cast<BoundCastExpression>().child.get();
+	}
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+		return 0;
+	}
+	auto &value = cur->Cast<BoundConstantExpression>().value;
+	if (value.IsNull() || !value.type().IsNumeric()) {
+		return 0;
+	}
+	double d = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	if (d == 0.0) {
+		// A zero factor annihilates the term. Dividing by it is an error the
+		// evaluator will raise; multiplying by it makes the sign irrelevant, and
+		// "positive" keeps the cheap path (every coefficient is zero either way).
+		return divides ? 0 : 1;
+	}
+	return d < 0.0 ? -1 : 1;
+}
+
 void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 	if (!decide.decide_constraints) {
 		return;
@@ -139,14 +245,14 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 
 void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 	if (decide.decide_constraints) {
-		RewriteAvgInExpression(decide.decide_constraints);
+		RewriteAvgInExpression(decide.decide_constraints, decide.decide_index);
 	}
 	if (decide.decide_objective) {
-		RewriteAvgInExpression(decide.decide_objective);
+		RewriteAvgInExpression(decide.decide_objective, decide.decide_index);
 	}
 }
 
-void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr) {
+void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t decide_index) {
 	if (!expr) {
 		return;
 	}
@@ -161,7 +267,16 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr) {
 
 	if (inner->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = inner->Cast<BoundAggregateExpression>();
-		if (StringUtil::CIEquals(agg.function.name, "avg") && agg.children.size() == 1) {
+		// A decision-free AVG is left alone. The rewrite exists only to linearize a
+		// decision-bearing AVG into `1/N * x_i` coefficients; a data-only AVG has
+		// nothing to linearize, it is just a number the right-hand side evaluates.
+		// Rewriting it is actively harmful there: BindAggregateFunction("sum", ...)
+		// redeclares the node with SUM's type (HUGEINT where AVG is DOUBLE), and the
+		// right-hand side must hand its value back to the surrounding expression,
+		// which was bound against that declared type -- so the fractional part is
+		// cast away. Leaving it as a real AVG keeps the round trip DOUBLE->DOUBLE.
+		if (StringUtil::CIEquals(agg.function.name, "avg") && agg.children.size() == 1 &&
+		    BoundExprReferencesDecideVar(*inner, decide_index)) {
 			// Replace AVG(expr) with SUM(expr)
 			vector<unique_ptr<Expression>> sum_children;
 			sum_children.push_back(agg.children[0]->Copy());
@@ -192,7 +307,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr) {
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		RewriteAvgInExpression(child);
+		RewriteAvgInExpression(child, decide_index);
 	});
 }
 
@@ -286,6 +401,105 @@ static void TagAbsForBigM(Expression &expr, idx_t decide_index) {
 	});
 }
 
+// Sign of a numeric constant leaf, unwrapping casts. Returns false when the
+// expression is not a statically-known number.
+static bool TryGetConstantSign(const Expression &expr, int &out_sign) {
+	auto *cur = &expr;
+	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		cur = cur->Cast<BoundCastExpression>().child.get();
+	}
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+		return false;
+	}
+	auto &val = cur->Cast<BoundConstantExpression>().value;
+	if (val.IsNull() || !val.type().IsNumeric()) {
+		return false;
+	}
+	out_sign = val.GetValue<double>() < 0 ? -1 : 1;
+	return true;
+}
+
+// Collect every ABS-over-decide-var node together with the sign it carries once
+// the constraint is expanded additively. `sign` is the sign of the path taken to
+// reach the current node.
+//
+// Only structure whose sign is known at plan time is traversed with a flip: `+`,
+// binary and unary `-`, casts, aggregate bodies, and numeric literal factors. A
+// factor whose sign is not known until execution -- a data column, as in
+// `SUM(w * ABS(x - t))` -- is traversed optimistically as positive. That is a
+// real (pre-existing, data-dependent) unsoundness, filed in
+// 07_issues/bugs/todo.md; closing it means deciding per row at execution time,
+// not tightening this walk.
+static void CollectAbsWithSign(Expression &expr, int sign, idx_t decide_index,
+                               vector<std::pair<Expression *, int>> &out) {
+	if (!ContainsAbsOverDecideVar(expr, decide_index)) {
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		CollectAbsWithSign(*expr.Cast<BoundCastExpression>().child, sign, decide_index, out);
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		auto name = StringUtil::Lower(func.function.name);
+		if (StringUtil::CIEquals(name, "abs") && func.children.size() == 1 &&
+		    BoundExprReferencesDecideVar(*func.children[0], decide_index)) {
+			// The ABS node itself is the unit that gets tagged; a nested ABS inside
+			// it is subsumed, exactly as TagAbsForBigM stops here.
+			out.emplace_back(&expr, sign);
+			return;
+		}
+		if (name == "+") {
+			for (auto &child : func.children) {
+				CollectAbsWithSign(*child, sign, decide_index, out);
+			}
+			return;
+		}
+		if (name == "-" && func.children.size() == 2) {
+			CollectAbsWithSign(*func.children[0], sign, decide_index, out);
+			CollectAbsWithSign(*func.children[1], -sign, decide_index, out);
+			return;
+		}
+		if (name == "-" && func.children.size() == 1) {
+			CollectAbsWithSign(*func.children[0], -sign, decide_index, out);
+			return;
+		}
+		if (name == "*" || name == "/") {
+			// Fold the sign of every constant factor; a non-constant factor keeps
+			// the sign as-is (optimistic, see the note above). For division only the
+			// numerator can carry an ABS, but the divisor's sign still applies.
+			int factor_sign = 1;
+			for (auto &child : func.children) {
+				int child_sign;
+				if (TryGetConstantSign(*child, child_sign)) {
+					factor_sign *= child_sign;
+				}
+			}
+			for (auto &child : func.children) {
+				int ignored;
+				if (!TryGetConstantSign(*child, ignored)) {
+					CollectAbsWithSign(*child, sign * factor_sign, decide_index, out);
+				}
+			}
+			return;
+		}
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		// Aggregates compose: when the constraint bounds the aggregate's value in
+		// the pinning direction, the auxes underneath are pinned transitively.
+		for (auto &child : expr.Cast<BoundAggregateExpression>().children) {
+			CollectAbsWithSign(*child, sign, decide_index, out);
+		}
+		return;
+	}
+	// Anything else (subqueries, CASE, operators with no sign discipline): the
+	// sign of the path is unknown, so the safe answer is "not pinned". Hand the
+	// contained ABS nodes back with sign 0, which never classifies as pinned.
+	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
+		CollectAbsWithSign(child, 0, decide_index, out);
+	});
+}
+
 static void ClassifyAbsConstraints(Expression &expr, idx_t decide_index) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
@@ -312,25 +526,29 @@ static void ClassifyAbsConstraints(Expression &expr, idx_t decide_index) {
 			return;
 		}
 		auto t = comp.type;
-		bool lhs_upper_bounded = (t == ExpressionType::COMPARE_LESSTHAN ||
-		                          t == ExpressionType::COMPARE_LESSTHANOREQUALTO);
-		bool rhs_upper_bounded = (t == ExpressionType::COMPARE_GREATERTHAN ||
-		                          t == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
-		// Sound (no Big-M needed): exactly one side has ABS and the comparison
-		// upper-bounds that side. ABS on both sides falls through to Big-M
-		// because we'd have to upper-bound both auxes anyway.
-		bool sound = (lhs_has_abs && lhs_upper_bounded && !rhs_has_abs) ||
-		             (rhs_has_abs && rhs_upper_bounded && !lhs_has_abs);
-		if (sound) {
-			return;
+		// Read the constraint as `E <op> 0` with `E = LHS - RHS`: every ABS is then
+		// a single signed term of one expression, and "does this comparison push the
+		// aux down?" is a question about that term's sign rather than about which
+		// side of the relation it happens to be written on. That distinction is
+		// invisible before canonicalization -- which never moved a term across the
+		// relation until it ran ahead of this pass -- and load-bearing after it.
+		int pinning_sign;
+		if (t == ExpressionType::COMPARE_LESSTHAN || t == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+			pinning_sign = 1; // E bounded above: a positive term is pushed down
+		} else if (t == ExpressionType::COMPARE_GREATERTHAN ||
+		           t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+			pinning_sign = -1; // E bounded below: a negative term is pushed down
+		} else {
+			pinning_sign = 0; // equality, <>: pin nothing, exactly as before
 		}
-		// Hard-direction or symmetric: tag every ABS in both sides for Big-M.
-		// Tagging both sides covers the "ABS on both sides" case correctly.
-		if (lhs_has_abs) {
-			TagAbsForBigM(*comp.left, decide_index);
-		}
-		if (rhs_has_abs) {
-			TagAbsForBigM(*comp.right, decide_index);
+
+		vector<std::pair<Expression *, int>> signed_abs;
+		CollectAbsWithSign(*comp.left, 1, decide_index, signed_abs);
+		CollectAbsWithSign(*comp.right, -1, decide_index, signed_abs);
+		for (auto &entry : signed_abs) {
+			if (pinning_sign == 0 || entry.second != pinning_sign) {
+				TagAbsForBigM(*entry.first, decide_index);
+			}
 		}
 		return;
 	}
@@ -428,30 +646,44 @@ static void WalkComposedLhs(const Expression &e, int sign, idx_t decide_index, b
 		return;
 	}
 	if (IsSubNode(u)) {
-		// v1 rejects subtraction in composed MIN/MAX LHS — it flips the direction
-		// of each term, doubling the easy/hard classification surface.
-		throw BinderException(
-		    "Composed MIN/MAX in DECIDE v1 does not support subtraction in the LHS. "
-		    "Rewrite the constraint as an additive sum (e.g., move terms to the RHS).");
-	}
-	// Scalar * aggregate (e.g. `2 * MIN(...)`) is not supported in v1.
-	if (u.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		// Subtraction flips the direction each term is pushed. `sign` already
+		// carries that through to the easy/hard classification below, and the
+		// physical layer is sign-generic, so descending is all that is required.
+		// This has to work: canonicalization moves decision terms onto the LHS,
+		// and a term that crosses the relation arrives negated.
 		auto &fn = u.Cast<BoundFunctionExpression>();
-		auto fname = StringUtil::Lower(fn.function.name);
-		if (fname == "*" || fname == "/") {
-			throw BinderException(
-			    "Composed MIN/MAX in DECIDE v1 does not support scalar multiplication "
-			    "or division of aggregate terms (e.g. `2 * MIN(...)`). Each term must "
-			    "be a bare SUM/AVG/MIN/MAX aggregate.");
+		if (fn.children.size() == 2) {
+			WalkComposedLhs(*fn.children[0], sign, decide_index, outer_push_down, out_terms);
+			WalkComposedLhs(*fn.children[1], -sign, decide_index, outer_push_down, out_terms);
+			return;
+		}
+		if (fn.children.size() == 1) {
+			WalkComposedLhs(*fn.children[0], -sign, decide_index, outer_push_down, out_terms);
+			return;
 		}
 	}
-	if (u.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	// A zero constant contributes nothing. It reaches here as the head of the
+	// canonicalizer's `0 - term` idiom for a leading negative term, so rejecting
+	// it would reject shapes purely on how the negation was spelled.
+	if (u.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		auto &val = u.Cast<BoundConstantExpression>().value;
+		if (!val.IsNull() && val.type().IsNumeric() && val.GetValue<double>() == 0.0) {
+			return;
+		}
+	}
+	// A factor on this term (`2 * MIN(...)`) rides alongside it rather than being
+	// pushed into the aggregate. Its sign joins the easy/hard classification below.
+	Expression *scale = nullptr;
+	bool scale_divides = false;
+	BoundAggregateExpression *scaled_agg = AsScaledAggregate(const_cast<Expression &>(u), scale, scale_divides);
+
+	if (!scaled_agg && u.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		throw BinderException(
 		    "Composed MIN/MAX in DECIDE v1 supports only additive sums of SUM/AVG/MIN/MAX aggregates. "
 		    "Got non-aggregate term: %s",
 		    e.ToString());
 	}
-	auto &agg = u.Cast<BoundAggregateExpression>();
+	auto &agg = scaled_agg ? *scaled_agg : u.Cast<BoundAggregateExpression>();
 	auto name = StringUtil::Lower(agg.function.name);
 	if (name != "sum" && name != "avg" && name != "min" && name != "max") {
 		throw BinderException("Composed MIN/MAX in DECIDE v1 does not support aggregate '%s'; "
@@ -471,17 +703,34 @@ static void WalkComposedLhs(const Expression &e, int sign, idx_t decide_index, b
 	if (agg.filter) {
 		term.filter = agg.filter->Copy();
 	}
+	if (scale) {
+		term.scale = scale->Copy();
+		term.scale_divides = scale_divides;
+	}
 	// Carry the relation qualifier (`SUM(D: ...)`) off the tag the binder stamped on the
 	// aggregate. Without this the composed path reduces over join-result rows and a
 	// qualified reducer silently reverts to row semantics.
 	TryParseQualifiedReducerTag(agg.alias, term.qualifier_scope_idx);
 	if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
 		bool is_max = (name == "max");
-		// z_k pushed down if the outer wants LHS small and this term's sign is +,
-		// or outer wants LHS large and this term's sign is -.
-		bool z_pushed_down = (sign > 0) ? outer_push_down : !outer_push_down;
-		// Easy: MAX pushed down, or MIN pushed up.
-		term.is_easy = (is_max && z_pushed_down) || (!is_max && !z_pushed_down);
+		// A negative FACTOR flips which way z is pushed exactly as a subtraction does,
+		// so the two combine into one effective sign. `-2 * MAX(e)` under `<=` pushes
+		// MAX up, the hard direction, just as `- MAX(e)` would.
+		int scale_sign = ScaleSignAtPlanTime(scale, scale_divides);
+		if (scale_sign == 0) {
+			// The factor's sign is not known until the query runs, so neither is the
+			// cheap direction. The indicator layer pins z to the true MIN/MAX in BOTH
+			// directions, which is correct for either sign -- pay for it rather than
+			// guess. This is the case that used to be rejected outright.
+			term.is_easy = false;
+		} else {
+			int effective_sign = sign * scale_sign;
+			// z_k pushed down if the outer wants LHS small and this term's effective
+			// sign is +, or outer wants LHS large and it is -.
+			bool z_pushed_down = (effective_sign > 0) ? outer_push_down : !outer_push_down;
+			// Easy: MAX pushed down, or MIN pushed up.
+			term.is_easy = (is_max && z_pushed_down) || (!is_max && !z_pushed_down);
+		}
 	}
 	out_terms.push_back(std::move(term));
 }
@@ -526,13 +775,34 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 		return;
 	}
 
-	// Must be additive (+/-) AND contain a MIN/MAX leaf; otherwise leave to the
-	// single-term rewrite. The walker rejects subtraction with a clear binder error.
-	if (!IsAddNode(*comp.left) && !IsSubNode(*comp.left)) {
-		return;
-	}
-	if (!AdditiveContainsMinMax(*comp.left, decide.decide_index)) {
-		return;
+	// Additive (+/-) with a MIN/MAX leaf, OR a lone MIN/MAX whose factor has a sign
+	// this stage cannot know.
+	//
+	// The second case matters because the single-term rewrite has only two shapes: an
+	// "easy" per-row fan-out (`∀i e_i <= K`) and a "hard" indicator form (`∃i e_i >=
+	// K`). Those encode OPPOSITE quantifiers, so choosing between them requires the
+	// factor's sign — with the sign unknown there is no safe default, and guessing
+	// "hard" silently drops the ∀ half. The composed path emits the envelope pin AND
+	// the indicator layer, which together pin the auxiliary to the true MIN/MAX in both
+	// directions, so multiplying it by a factor of either sign stays exact.
+	Expression *lone_scale = nullptr;
+	bool lone_divides = false;
+	BoundAggregateExpression *lone_scaled = AsScaledAggregate(*comp.left, lone_scale, lone_divides);
+	bool unknown_sign_lone_minmax =
+	    lone_scaled && lone_scale && ScaleSignAtPlanTime(lone_scale, lone_divides) == 0 &&
+	    (StringUtil::Lower(lone_scaled->function.name) == "min" ||
+	     StringUtil::Lower(lone_scaled->function.name) == "max") &&
+	    lone_scaled->children.size() == 1 &&
+	    BoundExprReferencesDecideVar(*lone_scaled->children[0], decide.decide_index) &&
+	    !BoundExprReferencesDecideVar(*lone_scale, decide.decide_index);
+
+	if (!unknown_sign_lone_minmax) {
+		if (!IsAddNode(*comp.left) && !IsSubNode(*comp.left)) {
+			return;
+		}
+		if (!AdditiveContainsMinMax(*comp.left, decide.decide_index)) {
+			return;
+		}
 	}
 
 	auto cmp_type = comp.type;
@@ -584,13 +854,31 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 		}
 	}
 
-	// LHS must be additive (+/-) AND contain a MIN/MAX leaf; otherwise leave to
-	// the flat-single-aggregate rewrite.
-	if (!IsAddNode(obj) && !IsSubNode(obj)) {
-		return;
-	}
-	if (!AdditiveContainsMinMax(obj, decide.decide_index)) {
-		return;
+	// Additive (+/-) with a MIN/MAX leaf, OR a lone MIN/MAX carrying a factor.
+	//
+	// The second case is here rather than on the flat path because the flat path
+	// replaces the whole objective with its auxiliary at coefficient 1.0 -- it has
+	// nowhere to put a factor. The composed path already carries one per term, and a
+	// one-term composition is a perfectly good degenerate case. An UNSCALED lone
+	// MIN/MAX still goes to the flat path, which keeps its cheaper encoding.
+	Expression *lone_scale = nullptr;
+	bool lone_divides = false;
+	BoundAggregateExpression *lone_scaled = AsScaledAggregate(obj, lone_scale, lone_divides);
+	bool is_scaled_lone_minmax =
+	    lone_scaled && lone_scale &&
+	    (StringUtil::Lower(lone_scaled->function.name) == "min" ||
+	     StringUtil::Lower(lone_scaled->function.name) == "max") &&
+	    lone_scaled->children.size() == 1 &&
+	    BoundExprReferencesDecideVar(*lone_scaled->children[0], decide.decide_index) &&
+	    !BoundExprReferencesDecideVar(*lone_scale, decide.decide_index);
+
+	if (!is_scaled_lone_minmax) {
+		if (!IsAddNode(obj) && !IsSubNode(obj)) {
+			return;
+		}
+		if (!AdditiveContainsMinMax(obj, decide.decide_index)) {
+			return;
+		}
 	}
 
 	// Direction: MAXIMIZE pushes each term UP; MINIMIZE pushes each term DOWN.
@@ -672,16 +960,21 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	}
 	auto &comp = expr->Cast<BoundComparisonExpression>();
 
-	// Unwrap any BoundCastExpression on the LHS
+	// Unwrap any BoundCastExpression on the LHS, and any factor peeled onto it. The
+	// factor STAYS OUTSIDE the aggregate; all it does here is contribute its sign to
+	// the easy/hard classification, and ride along on whichever form is emitted.
 	Expression *lhs = comp.left.get();
 	while (lhs->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		lhs = lhs->Cast<BoundCastExpression>().child.get();
 	}
+	Expression *scale = nullptr;
+	bool scale_divides = false;
+	BoundAggregateExpression *scaled_agg = AsScaledAggregate(*lhs, scale, scale_divides);
 
-	if (lhs->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	if (!scaled_agg && lhs->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return;
 	}
-	auto &agg = lhs->Cast<BoundAggregateExpression>();
+	auto &agg = scaled_agg ? *scaled_agg : lhs->Cast<BoundAggregateExpression>();
 	auto fname = StringUtil::Lower(agg.function.name);
 	if (fname != "min" && fname != "max") {
 		return;
@@ -693,28 +986,54 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	if (!BoundExprReferencesDecideVar(*agg.children[0], decide.decide_index)) {
 		return;
 	}
+	// A factor that is itself decision-bearing is bilinear, not a scale; the
+	// canonicalizer rejects those, so reaching one here would be a bug rather than a
+	// user error. Leave the shape alone rather than mis-linearize it.
+	if (scale && BoundExprReferencesDecideVar(*scale, decide.decide_index)) {
+		return;
+	}
 
 	bool is_max = (fname == "max");
 	auto cmp_type = comp.type;
 
+	// A negative factor reverses the relation the aggregate faces: `-2 * MAX(e) >= -8`
+	// is `MAX(e) <= 4`, the cheap direction, not the expensive one. Classify against
+	// the flipped relation rather than the written one.
+	//
+	// An unknown sign (a scalar subquery factor) makes the cheap direction
+	// undecidable, so take the expensive one -- it pins the auxiliary to the true
+	// MIN/MAX in both directions and is therefore right for either sign.
+	int scale_sign = ScaleSignAtPlanTime(scale, scale_divides);
+
+	// Neither of this path's two encodings is safe without the sign. "Easy" fans the
+	// bound out over EVERY row; "hard" asserts SOME row attains it. Those are opposite
+	// quantifiers, and a negative factor swaps which one the constraint means, so a
+	// factor whose value is not known until the query runs cannot pick between them.
+	// RewriteComposedMinMax claims that shape first (it runs earlier and emits both
+	// halves); reaching here means it declined, so decline too rather than guess.
+	if (scale_sign == 0) {
+		return;
+	}
+	auto effective_cmp = (scale_sign < 0) ? FlipComparisonExpression(cmp_type) : cmp_type;
+
 	// Classify: easy vs hard
 	bool is_easy = false;
-	if (is_max && (cmp_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
-	               cmp_type == ExpressionType::COMPARE_LESSTHAN)) {
+	if (is_max && (effective_cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+	               effective_cmp == ExpressionType::COMPARE_LESSTHAN)) {
 		is_easy = true; // MAX(expr) <= K → every row: expr <= K
 	}
-	if (!is_max && (cmp_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
-	                cmp_type == ExpressionType::COMPARE_GREATERTHAN)) {
+	if (!is_max && (effective_cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
+	                effective_cmp == ExpressionType::COMPARE_GREATERTHAN)) {
 		is_easy = true; // MIN(expr) >= K → every row: expr >= K
 	}
 
 	bool is_hard = false;
-	if (is_max && (cmp_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
-	               cmp_type == ExpressionType::COMPARE_GREATERTHAN)) {
+	if (is_max && (effective_cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
+	               effective_cmp == ExpressionType::COMPARE_GREATERTHAN)) {
 		is_hard = true; // MAX(expr) >= K → need indicator
 	}
-	if (!is_max && (cmp_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
-	                cmp_type == ExpressionType::COMPARE_LESSTHAN)) {
+	if (!is_max && (effective_cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+	                effective_cmp == ExpressionType::COMPARE_LESSTHAN)) {
 		is_hard = true; // MIN(expr) <= K → need indicator
 	}
 
@@ -722,17 +1041,31 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		throw BinderException("DECIDE does not support <> comparison with MIN/MAX aggregates.");
 	}
 
+	// Re-attach the peeled factor to whatever form is emitted below. `scale * e` keeps
+	// the factor on the left, matching the one spelling canonicalization produces.
+	auto apply_scale = [&](unique_ptr<Expression> inner) -> unique_ptr<Expression> {
+		if (!scale) {
+			return inner;
+		}
+		return scale_divides ? optimizer.BindScalarFunction("/", std::move(inner), scale->Copy())
+		                     : optimizer.BindScalarFunction("*", scale->Copy(), std::move(inner));
+	};
+
 	if (cmp_type == ExpressionType::COMPARE_EQUAL) {
 		// Equality: split into easy + hard parts
 		// MAX(expr) = K → (expr <= K) AND (MAX(expr) >= K)
 		// MIN(expr) = K → (expr >= K) AND (MIN(expr) <= K)
 
-		// Easy part: per-row bound
+		// Easy part: per-row bound. A negative factor reverses it, for the same reason
+		// it reverses the classification above.
 		auto easy_cmp_type = is_max ? ExpressionType::COMPARE_LESSTHANOREQUALTO
 		                            : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+		if (scale_sign < 0) {
+			easy_cmp_type = FlipComparisonExpression(easy_cmp_type);
+		}
 		unique_ptr<Expression> easy = make_uniq<BoundComparisonExpression>(
 		    easy_cmp_type,
-		    agg.children[0]->Copy(), comp.right->Copy());
+		    apply_scale(agg.children[0]->Copy()), comp.right->Copy());
 		easy->alias = MINMAX_EASY_REWRITE_TAG;
 		// Preserve aggregate-local WHEN filter as a per-row WHEN wrapper
 		if (agg.filter) {
@@ -747,8 +1080,12 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// Hard part: allocate indicator + tagged SUM
 		auto hard_cmp_type = is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
 		                            : ExpressionType::COMPARE_LESSTHANOREQUALTO;
+		if (scale_sign < 0) {
+			hard_cmp_type = FlipComparisonExpression(hard_cmp_type);
+		}
 		idx_t ind_idx;
-		comp.left = EmitHardMinMaxIndicator(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
+		auto hard_lhs = EmitHardMinMaxIndicator(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
+		comp.left = apply_scale(std::move(hard_lhs));
 		comp.type = hard_cmp_type;
 		return;
 	}
@@ -762,7 +1099,12 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		if (agg.filter) {
 			saved_filter = agg.filter->Copy();
 		}
-		comp.left = agg.children[0]->Copy();
+		// The factor distributes over the per-row form and the relation keeps the
+		// direction the user wrote: `s * MAX(e) <op> K` is `s*e_i <op> K` for every
+		// row, for EITHER sign of s. (A negative s flips the relation twice -- once
+		// getting from the aggregate to `MAX(e) <op'> K/s`, once dividing by s -- so
+		// the two cancel. The classification above is what consumed the sign.)
+		comp.left = apply_scale(agg.children[0]->Copy());
 		// Tag the comparison so physical_decide.cpp can enforce empty-WHEN
 		// rejection on constraints the user wrote as MIN/MAX, even after the
 		// optimizer strips the aggregate.
@@ -780,9 +1122,13 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	}
 
 	if (is_hard) {
-		// Hard case: allocate indicator + tagged SUM via shared helper
+		// Hard case: allocate indicator + tagged SUM via shared helper. The factor
+		// rides on the outside; the physical extractor multiplies it into the row's
+		// coefficients, which is exact whatever its sign because the indicator layer
+		// has already pinned the auxiliary to the true MIN/MAX.
 		idx_t ind_idx;
-		comp.left = EmitHardMinMaxIndicator(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
+		auto hard_lhs = EmitHardMinMaxIndicator(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
+		comp.left = apply_scale(std::move(hard_lhs));
 		return;
 	}
 }
@@ -856,12 +1202,23 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 		obj_expr = cast.child.get();
 	}
 
+	// A factor peeled onto the objective's reducer (`2 * MAX(x*v)`, `MAX(x*v) * 2`).
+	// Objectives are not canonicalized, so both spellings arrive as written.
+	Expression *obj_scale = nullptr;
+	bool obj_scale_divides = false;
+	BoundAggregateExpression *scaled_obj_agg = AsScaledAggregate(*obj_expr, obj_scale, obj_scale_divides);
+
 	// Now inspect the actual aggregate
-	if (obj_expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	if (!scaled_obj_agg && obj_expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return;
 	}
-	auto &outer_agg = obj_expr->Cast<BoundAggregateExpression>();
+	auto &outer_agg = scaled_obj_agg ? *scaled_obj_agg : obj_expr->Cast<BoundAggregateExpression>();
 	auto outer_name = StringUtil::Lower(outer_agg.function.name);
+	// A decision-bearing factor is bilinear, not a scale; the canonicalizer rejects
+	// those, so leave the shape alone rather than mis-linearize it.
+	if (obj_scale && BoundExprReferencesDecideVar(*obj_scale, decide.decide_index)) {
+		return;
+	}
 
 	// Check for nested aggregate: OUTER(INNER(expr)) where INNER is also SUM/MIN/MAX/AVG
 	if (has_per && (outer_name == "sum" || outer_name == "min" || outer_name == "max" || outer_name == "avg") &&
@@ -932,7 +1289,16 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 		    StringUtil::Upper(outer_name));
 	}
 
-	// Flat non-PER MIN/MAX objective
+	// Flat non-PER MIN/MAX objective.
+	//
+	// A FACTOR on it never reaches here: this path replaces the whole objective with
+	// its auxiliary at coefficient 1.0, so there is nowhere to put one.
+	// RewriteComposedMinMaxObjectiveTop claims the scaled case first (it runs earlier
+	// and carries a per-term scale), leaving this path the unscaled shape it was
+	// written for and its cheaper encoding.
+	if (obj_scale) {
+		return;
+	}
 	if (!has_per && (outer_name == "min" || outer_name == "max") &&
 	    outer_agg.children.size() == 1 &&
 	    BoundExprReferencesDecideVar(*outer_agg.children[0], decide.decide_index)) {
@@ -1419,14 +1785,11 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 }
 
 void DecideOptimizer::AppendConstraint(LogicalDecide &decide, unique_ptr<Expression> constraint) {
-	if (decide.decide_constraints) {
-		auto conj = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		conj->children.push_back(std::move(decide.decide_constraints));
-		conj->children.push_back(std::move(constraint));
-		decide.decide_constraints = std::move(conj);
-	} else {
-		decide.decide_constraints = std::move(constraint);
-	}
+	// The constraint pool belongs to the operator, and so does the invariant that
+	// everything in it is canonical. Rewrites keep emitting whatever shape is
+	// natural for them (`aux >= inner`, `aux >= 0 - inner`, ...); LogicalDecide
+	// puts it into canonical form on the way in.
+	decide.AddConstraint(optimizer.context, std::move(constraint));
 }
 
 } // namespace duckdb

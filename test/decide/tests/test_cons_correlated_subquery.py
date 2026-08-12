@@ -14,6 +14,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense
+from ._oracle_helpers import group_indices
 from comparison.compare import compare_solutions
 
 
@@ -436,6 +437,218 @@ def test_correlated_subquery_is_real(
     perf_tracker.record(
         "correlated_subquery_is_real", decidb_time, build_time,
         result.solve_time_seconds, n, n, 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+# --- Row-varying RHS on a reduced constraint (B.5 / D3) ---
+#
+# A correlated subquery decorrelates into a per-row column. On a reduced constraint
+# that is one bound per tuple, all sharing the same reducer, so the conjunction
+# collapses to the tightest single bound: MIN for `<=`, MAX for `>=` (paper §3.2.1,
+# "Without per"). These two used to be rejection tests in test_error_binder.py.
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.cons_subquery
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_correlated_subquery_aggregate_rhs_tightest_bound(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """`SUM(x * cost) <= (correlated subquery)` binds against the MIN of the column.
+
+    The subquery yields one p_size per row. Every tuple imposes
+    `SUM(x * cost) <= p_size_i`, so the binding one is the smallest.
+    """
+    sql = """
+        SELECT ps_partkey, ps_suppkey, x
+        FROM partsupp
+        WHERE ps_partkey < 10
+        DECIDE x(INT)
+        SUCH THAT SUM(x * ps_supplycost)
+                  <= (SELECT CAST(p_size AS INTEGER) FROM part
+                      WHERE p_partkey = ps_partkey)
+        MAXIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT),
+               CAST(ps_suppkey AS BIGINT),
+               CAST(ps_supplycost AS DOUBLE),
+               CAST(p_size AS DOUBLE)
+        FROM partsupp
+        JOIN part ON p_partkey = ps_partkey
+        WHERE ps_partkey < 10
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("correlated_subquery_agg_rhs_min")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0)
+    oracle_solver.add_constraint(
+        {vnames[i]: data[i][2] for i in range(len(data))},
+        "<=", min(row[3] for row in data), name="budget",
+    )
+    oracle_solver.set_objective(
+        {vn: 1.0 for vn in vnames}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 1.0},
+    )
+    perf_tracker.record(
+        "correlated_subquery_agg_rhs_min", decidb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 1,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.cons_subquery
+@pytest.mark.per_clause
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_correlated_subquery_aggregate_per_rhs_tightest_per_group(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """Under PER, the tightest bound is taken within each partition, not globally.
+
+    This is what discriminates group-aware reduction from a single global MIN: each
+    supplier's cap is the smallest p_size among that supplier's own rows.
+    """
+    sql = """
+        SELECT ps_partkey, ps_suppkey, x
+        FROM partsupp
+        WHERE ps_partkey < 20
+        DECIDE x(INT)
+        SUCH THAT SUM(x) <= (SELECT CAST(p_size AS INTEGER) FROM part
+                             WHERE p_partkey = ps_partkey)
+                  PER ps_suppkey
+        MAXIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT),
+               CAST(ps_suppkey AS BIGINT),
+               CAST(p_size AS DOUBLE)
+        FROM partsupp
+        JOIN part ON p_partkey = ps_partkey
+        WHERE ps_partkey < 20
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("correlated_subquery_agg_per_rhs_min")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0)
+    groups = group_indices(data, lambda r: r[1])
+    for grp, idxs in groups.items():
+        oracle_solver.add_constraint(
+            {vnames[i]: 1.0 for i in idxs},
+            "<=", min(data[i][2] for i in idxs), name=f"cap_{grp}",
+        )
+    oracle_solver.set_objective(
+        {vn: 1.0 for vn in vnames}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 1.0},
+    )
+    perf_tracker.record(
+        "correlated_subquery_agg_per_rhs_min", decidb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), len(groups),
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.cons_subquery
+@pytest.mark.when_constraint
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_correlated_subquery_rhs_ignores_aggregate_local_when(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """An aggregate-local WHEN scopes its own reducer, never the bound's row set.
+
+    ``(SUM(x) WHEN (ps_partkey <> 2)) <= (correlated p_size)`` sums only the
+    non-partkey-2 rows on the left, but paper §3.2.1 fans the clause out over every
+    *selected* tuple, so the binding bound is ``min(p_size)`` over all 36 rows, not
+    over the 32 the local WHEN keeps.
+
+    The split discriminates: ``p_size = 1`` occurs only on ``ps_partkey = 2``, which
+    the local WHEN excludes. Reducing over the left side's rows would read the bound
+    as 4 and return 24; the correct bound is 1, giving 21. The reducer form of the
+    same shape (``<= MIN(col)``) already took the wider row set, so this pins the two
+    halves of the RHS to one answer.
+    """
+    sql = """
+        SELECT ps_partkey, ps_suppkey, x
+        FROM partsupp
+        WHERE ps_partkey < 10
+        DECIDE x(INT)
+        SUCH THAT x <= 5
+          AND (SUM(x) WHEN (ps_partkey <> 2))
+              <= (SELECT CAST(p_size AS INTEGER) FROM part
+                  WHERE p_partkey = ps_partkey)
+        MAXIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    decidb_result, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = duckdb_conn.execute("""
+        SELECT CAST(ps_partkey AS BIGINT),
+               CAST(ps_suppkey AS BIGINT),
+               CAST(p_size AS DOUBLE)
+        FROM partsupp
+        JOIN part ON p_partkey = ps_partkey
+        WHERE ps_partkey < 10
+    """).fetchall()
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("correlated_subquery_rhs_ignores_local_when")
+    vnames = [f"x_{i}" for i in range(len(data))]
+    for vn in vnames:
+        oracle_solver.add_variable(vn, VarType.INTEGER, lb=0.0, ub=5.0)
+    # Bound: MIN over EVERY row. Left side: only the rows the local WHEN keeps.
+    oracle_solver.add_constraint(
+        {vnames[i]: 1.0 for i in range(len(data)) if data[i][0] != 2},
+        "<=", min(row[2] for row in data), name="local_when_sum",
+    )
+    oracle_solver.set_objective(
+        {vn: 1.0 for vn in vnames}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        decidb_result, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": 1.0},
+    )
+    perf_tracker.record(
+        "correlated_subquery_rhs_ignores_local_when", decidb_time, build_time,
+        result.solve_time_seconds, len(data), len(vnames), 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )

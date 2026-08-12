@@ -33,18 +33,40 @@ SUCH THAT SUM(x * weight) <= SUM(b) + 10    -- aggregate plus a scalar offset
 SUCH THAT SUM(x * weight) <= SUM(b) WHEN w  -- RHS aggregate-local WHEN: bound over w-rows
 ```
 
-These are handled by a pre-binding rewrite that **hoists each data-only RHS aggregate into the LHS**, negated, leaving only the scalar remainder on the RHS. `SUM(x*val) <= SUM(val)` becomes `SUM(x*val) - SUM(val) <= 0`; `AVG(x+cost) <= AVG(cost) + 1` becomes `AVG(x+cost) - AVG(cost) <= 1`. The moved aggregate is then an ordinary additive **data-only term inside the LHS aggregate** (the same class as `SUM(x + cost)`), so the existing execution path sums it over the constraint's active row set and subtracts it from the bound — inheriting `WHEN`, `PER`, aggregate-local `WHEN`, and `AVG` 1/N scaling with **no execution-layer changes**. Because the RHS aggregate is summed per active group, `PER` constraints naturally carry a **per-group RHS** (each group's `SUM(val)` is its own bound), not one uniform scalar.
+These are evaluated **in place, on the right**, by the RHS reducer evaluator described under "Reducers as a Bound" below: each data-only reducer collapses to one value per group, honouring the constraint's `WHEN`/`PER`, the reducer's own `WHEN`, and relation-qualifier de-duplication. `PER` constraints therefore carry a **per-group RHS** (each group's `SUM(val)` is its own bound), not one uniform scalar.
 
-A trailing `WHEN` on a bare RHS aggregate (`... <= SUM(b) WHEN w`) is parsed as **aggregate-local** — it scopes only that aggregate — so it is moved wholesale (filter included), correctly producing `SUM(x*weight) <= (SUM(b) WHEN w)`.
+A trailing `WHEN` on a bare RHS aggregate (`... <= SUM(b) WHEN w`) is **aggregate-local**: it scopes only that aggregate, so the bound is `SUM(b)` over the w-rows while the left side still sums every row.
 
-**Scope / rejections.** Only data-only `SUM`/`AVG` aggregates are hoisted. Left untouched (so prior behavior is preserved):
-- `MIN`/`MAX` RHS aggregates → still the clean `RHS contains unsupported aggregate 'min'` error (no linear hoist exists).
+**Superseded implementation.** Until 2026-08-10 these shapes were instead handled by a *pre-binding hoist* that moved each data-only RHS aggregate into the LHS, negated (`SUM(x*val) <= SUM(val)` → `SUM(x*val) - SUM(val) <= 0`), where the execution path summed it over the active row set. That covered only `SUM`/`AVG`, because the left side reduces by **summing a column** — SUM by luck, and unable to express MIN. `HoistAggregateComparisonRHS` and its helpers are deleted; see `../../canonicalize.md` §6 B.4 and §7 C.1.
+
+**Scope / rejections.**
 - An RHS aggregate referencing a DECIDE variable (`SUM(x) <= SUM(x*val)`) → still the existing "variables on both sides" binder rejection.
-- The internal `count_star()` RHS special case in `TransformToChunkExpression` is unaffected.
+- The `count_star()` RHS special case in `TransformToChunkExpression` is **deleted** — it folded to the operator's total input cardinality, which was a wrong answer under `WHEN`/`PER`. `COUNT(*)` now counts the constraint's own rows.
 
-**Code**: `RewriteAggregateConstraintRHS` in `src/planner/binder/query_node/bind_select_node.cpp` — walks the SUCH THAT tree (conjunctions + WHEN/PER wrappers, never their conditions/columns); `HoistAggregateComparisonRHS` splits the RHS additive tree (`RhsIsHoistable` / `SplitRhsAdditive`) into aggregate terms (moved to LHS, sign-negated) and scalar terms (kept as the RHS, `0` if none). Runs after the norm/IN rewrites and before `NormalizeDecideConstraints`, so it also covers norm-bounded constraints (`norm(x,1) <= SUM(val)`).
+**Tests**: `test/decide/tests/test_cons_rhs_aggregate.py` — parity with the explicitly-subtracted form and the scalar-bound equivalent, scalar-plus-aggregate RHS, per-group PER bounds, AVG mixed with other terms, aggregate-local WHEN, MIN/MAX bounds, and group-aware `COUNT(*)`.
 
-**Tests**: `test/decide/tests/test_cons_rhs_aggregate.py` — parity with the explicit hoisted form and the scalar-bound equivalent, scalar-plus-aggregate RHS, per-group PER bounds, AVG, aggregate-local WHEN, and MIN/MAX rejection. The still-unsupported MIN/MAX path is pinned in `test_error_binder.py::test_data_only_minmax_rhs_aggregate_errors_without_internal`.
+#### Reducers as a Bound (B.5)
+
+Any reducer may stand on the right of a reduced constraint, evaluated to **one value per group**:
+
+```sql
+SUCH THAT SUM(x * price) <= MIN(price) * 4      -- MIN/MAX, not just SUM/AVG
+SUCH THAT SUM(x) <= COUNT(*) PER grp            -- counts the group's rows
+SUCH THAT SUM(x * price) <= MIN(price) + 90     -- mixed with an ordinary term
+SUCH THAT SUM(x) <= (SELECT b FROM g WHERE ...) -- row-varying: tightest bound
+```
+
+This removes an asymmetry that could not be explained without describing internals: `<= AVG(col)` worked and `<= MIN(col)` did not, because the old hoist moved a data term to the left where it is reduced by **summing a column** — which is SUM by luck, and cannot express MIN.
+
+**Semantics.** The evaluator implements the construction order paper §3.2.2 fixes for every reducer — `when` selection → `per` partitioning → qualifier-key grouping and de-duplication → aggregation. A reducer's own `WHEN` scopes only that reducer, so the right side is *not* narrowed by the left side's aggregate-local `WHEN`: in `(SUM(x) WHEN a) <= MIN(b)`, `MIN(b)` still ranges over every row.
+
+**A row-varying bound** (a data column, a correlated subquery) collapses to the single bound the per-tuple conjunction implies — MIN for `<=`/`<`, MAX for `>=`/`>` — per paper §3.2.1. `=` and `<>` have no such collapse and are refused, but only when the values genuinely differ.
+
+**AVG on the right** keeps its fractional value, including when mixed with other terms (`<= 2 * AVG(col)`). This briefly did not work: the optimizer's AVG→SUM rewrite redeclares the node with SUM's integral type while its value stays fractional, and this is the one place a reducer's value is handed back to a surrounding expression bound against that type, so the fraction was cast away. `RewriteAvgInExpression` now **skips any AVG with no decision variable** — there is nothing to linearize in one, and DuckDB's `AVG` already returns `DOUBLE`.
+
+**Qualified and WHEN-scoped reducers as bounds** (`<= SUM(D: cost)`, `<= SUM(b) WHEN w`) run the same de-duplication and filtering the left side does. These were built with B.5 but unreachable until the binder's RHS validator stopped treating a wrapper's predicate / PER key / relation alias as if it were a value on the bound side.
+
+**Code**: `EvaluateRhsReducerPerGroup` and `ReduceAggregateRhsPerGroup` in `src/execution/operator/decide/physical_decide.cpp`; reducer substitution via `TransformToChunkExpression`'s `agg_substitutions`. Design and the findings behind it: `../../canonicalize.md` §6, B.5.
 
 ### AVG() — Coefficient Scaling at Execution Time
 
@@ -163,13 +185,17 @@ This covers (non-exhaustive) `SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND
 
 **Why this guard exists**: before it, per-row non-linear scalars were silently stripped (`SUCH THAT sqrt(x) <= 2` returned `x = 2` instead of `x = 4`), aggregate non-linear scalars crashed the symbolic layer with `InternalException`, and `ABS(sqrt(x))` FATAL-ed the session at physical execution. The validator catches all three classes at bind time.
 
-**Code**: `ValidateDecideNoNonLinearScalar` in `src/planner/expression_binder/decide_binder.cpp`, called from `src/planner/binder/query_node/bind_select_node.cpp` before `NormalizeDecideConstraints` / `NormalizeDecideObjective` (the pre-pass must run before symbolic normalization because the symbolic layer would otherwise throw on unknown functions).
+**Code**: `ValidateDecideNoNonLinearScalar` in `src/planner/expression_binder/decide_binder.cpp`, called from `src/planner/binder/query_node/bind_select_node.cpp` before `SimplifyDecideConstraints` / `SimplifyDecideObjective` (the pre-pass must run before the symbolic layer, which would otherwise throw on unknown functions in an objective body).
 
 **Tests**: `test/decide/tests/test_error_binder.py` — `test_nonlinear_scalar_per_row_lhs`, `test_nonlinear_scalar_inside_sum`, `test_nonlinear_scalar_inside_abs` (parametrized over SQRT, EXP, LN, LOG, FLOOR, CEIL, ROUND, SIN, COS).
 
 **POWER exponent check**: The same pre-pass rejects `POWER(base, exp)` / `POW(base, exp)` / `base ** exp` when `base` contains a DECIDE variable and `exp` is not a constant numeric equal to `2`. That covers fractional exponents (`POWER(x, 0.5)`), negative exponents (`POWER(x, -1)`), higher-integer exponents (`POWER(x, 3)`), degenerate exponents (`POWER(x, 0)`, `POWER(x, 1)`), and non-constant exponents (`POWER(x, x)`, `POWER(x, col)`). Previously these tripped `InternalException: FromSymbolic: Non-integer exponents are not supported` during symbolic normalization (which happens before binding), exposing a C++ stack trace. The pre-pass now catches all non-2 cases with the same error messages used by the existing `ValidateQuadraticPower` whitelist inside SUM, so error-text tests stay consistent across SUM and non-SUM contexts.
 
 **Data-only named scalar functions now fold too**: `SUM(f(col) * x)` where `f` is an arbitrary named scalar *function* on data columns (`mod()`, `floor()`, …) folds to a per-row coefficient, exactly like data-only operators — see "Data-only operators the algebra doesn't model" under Arithmetic Operators. Only the variable-bearing case (`f(x)`) is rejected. Ordinary arithmetic data-only subterms such as `SUM(x + cost)` and `SUM(q * (price + x))` are supported in aggregate constraints.
+
+**`POWER` over data is one of them, and the exponent is unrestricted there**: `SUM(x * POWER(qty, 2))` is linear in `x` — the base references no decision variable, so the whole call is a per-row coefficient — and `POWER(qty, 3)` is equally fine. The quadratic rules above (`exp == 2`, base must be linear, constraints vs objectives) govern a POWER whose base *is* decision-bearing, and only that.
+
+This was rejected until 2026-08-12, with *"POWER(..., 2) in DECIDE expression must reference at least one DECIDE variable"* — `ValidateQuadraticPower` ran on every POWER node regardless of what it wrapped. The gate had never fired on a real query: the parsed-level symbolic layer lowered `POWER(qty, 2)` to `qty * qty` before binding, so no POWER node survived to be checked. Deleting that layer (`canonicalize.md` C.4) exposed it. Tests: `test/decide/tests/test_power_over_data.py` (oracle-verified, and one case pins that `POWER(x-2, 2)` still takes the quadratic path).
 
 ---
 
@@ -187,16 +213,18 @@ For each `ABS(expr)` that references a DECIDE variable, the system:
 
 The lower-envelope alone forces `d >= |expr|`. To pin `d` to exactly `|expr|`, one of two mechanisms is used per ABS occurrence:
 
-**Path A (lower-envelope only) — when the constraint context upper-bounds `d`.** Triggered for `ABS(...) <= K` / `ABS(...) < K` (LHS) or `K >= ABS(...)` / `K > ABS(...)` (RHS), and the corresponding aggregate forms `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MIN(ABS) <= K`, `AVG(ABS) <= K`. The constraint itself caps `d` from above; the solver picks `d_i = |e_i|` to minimize slack. No extra variables.
+Classification is **per ABS occurrence and by sign**, not by which side of the comparison the ABS was written on. The constraint is read as `E <op> 0` with `E = LHS - RHS`; each ABS then carries an effective sign, and the question "does this comparison push `d` down?" has a single answer per occurrence. Sign is tracked through `+`, binary and unary `-`, casts, aggregate bodies, and numeric literal factors. (A factor whose sign is only known at execution — a data column, as in `SUM(w * ABS(x - t))` — is currently assumed positive; see `../../07_issues/bugs/todo.md`.)
 
-**Path B (Big-M sign-indicator) — for hard-direction shapes.** Triggered for `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, `ABS(...) BETWEEN a AND b`, ABS in equality / not-equal between aggregates, ABS on both sides of a comparison, and the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`, etc.). These shapes do not naturally upper-bound `d`, so a binary sign indicator `y ∈ {0,1}` is allocated per ABS term and two Big-M upper-bound constraints are added (same formulation as the MAXIMIZE-objective path below):
+**Path A (lower-envelope only) — when the constraint pushes `d` down.** The effective sign is positive under `<` / `<=`, or negative under `>` / `>=`. Covers `ABS(...) <= K` (LHS), `K >= ABS(...)` (RHS), the aggregate forms `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MIN(ABS) <= K`, `AVG(ABS) <= K`, and the *positively-signed* ABS of a shape like `ABS(a - k) - ABS(b - k) <= 0`. The constraint itself caps `d` from above; the solver picks `d_i = |e_i|` to minimize slack. No extra variables.
+
+**Path B (Big-M sign-indicator) — for hard-direction shapes.** The effective sign runs against the relation, or the relation pins nothing (`=`, `<>`, BETWEEN, IN). Covers `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, `ABS(...) BETWEEN a AND b`, ABS in equality / not-equal between aggregates, the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`), and any **subtracted** ABS — `ABS(a-k) - ABS(b-k) <= 0` upper-bounds the difference, so the second auxiliary is free to float upward and must be pinned. These shapes do not naturally upper-bound `d`, so a binary sign indicator `y ∈ {0,1}` is allocated per ABS term and two Big-M upper-bound constraints are added (same formulation as the MAXIMIZE-objective path below):
 
 - `d <= expr  + 2M·(1−y)`  (active when `y=1`, selecting the positive branch)
 - `d <= −expr + 2M·y`      (active when `y=0`, selecting the negative branch)
 
 Combined with the lower envelope, these force `d = |expr|` exactly regardless of constraint direction. `M` is computed at execution time from the bounds of variables in `expr` — when Path B is used, **every DECIDE variable referenced inside `ABS(expr)` must have a finite bound, either declared or inferred** by implied-bound propagation (e.g. `SUM(x) = K` implies `x <= K`; see `../../04_optimizer/matrix_efficiency/done.md`). Only when no bound can be derived is the query rejected. (Path A queries don't need bounds because the constraint itself bounds `d`.)
 
-The classifier (`TagAbsConstraintsForBigM` in `decide_optimizer.cpp`) walks the constraint tree once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. WHEN/PER wrappers don't change classification — the per-row Big-M envelope is unconditional, and the WHEN/PER filter only affects which rows participate in the outer aggregate or constraint.
+The classifier (`TagAbsConstraintsForBigM` in `decide_optimizer.cpp`, via `CollectAbsWithSign`) walks the constraint tree once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. WHEN/PER wrappers don't change classification — the per-row Big-M envelope is unconditional, and the WHEN/PER filter only affects which rows participate in the outer aggregate or constraint.
 
 ### ABS in MINIMIZE objectives (lower-envelope)
 
@@ -229,7 +257,7 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 `ABS()` without decision variables (e.g., `ABS(col1 - col2)`) is left as regular SQL — no rewrite occurs.
 
 **Code**:
-- Constraint classifier: `TagAbsConstraintsForBigM` in `decide_optimizer.cpp` runs before `RewriteAbs`. Walks the constraint tree, classifies each comparison's ABS-bearing sides as Path A (sound) or Path B (Big-M needed), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
+- Constraint classifier: `TagAbsConstraintsForBigM` in `decide_optimizer.cpp` runs before `RewriteAbs`. Walks the constraint tree; for each comparison, `CollectAbsWithSign` gathers every ABS occurrence with the sign it carries in `LHS - RHS`, classifies each as Path A (sign pushes `d` down) or Path B (it does not), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
 - Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`. Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to `AbsPairInfo`. Phase 2 emits the lower envelope unconditionally. For each pair where `needs_bigm || (in_objective && MAXIMIZE)`, also allocates the `y` binary, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX`, and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The link vector is named `abs_maximize_links` for historical reasons but covers both Big-M users (objective MAXIMIZE and constraint hard-direction).
 - Tag constants: `ABS_UB_POS_TAG_PREFIX`, `ABS_UB_NEG_TAG_PREFIX`, `ABS_NEEDS_BIGM_TAG` in `decide.hpp`.
 - Execution: `physical_decide.cpp` — tag parsing in `AnalyzeConstraint` sets `DecideConstraint::abs_y_idx`/`abs_is_pos_bound`; these are copied to `EvaluatedConstraint`; the Big-M finalization block (after the bilinear block) iterates `abs_maximize_links`, computes M from variable bounds, and emits two derived `EvaluatedConstraint`s (C_ub1 and C_ub2) per ABS term. The error message at finite-bound check is generic (covers both objective-MAXIMIZE and constraint hard-direction triggers).

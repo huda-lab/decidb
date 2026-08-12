@@ -102,9 +102,11 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to R ≤ R*, D ≤ D*
   column is opened only back to the intrinsic `[0,1]` (never to ±1e30), so the pin becomes
   loosenable while the 0/1 domain itself stays rigid. (Erasing pins wholesale made the
   elastic model diverge from the user's query: silently missing diagnoses, or edits that
-  left the real query infeasible.) Reversed user bounds such as `5 >= x` are flipped by the
-  constraint binder before this pass, so they follow the same absorption and re-emission
-  path as `x <= 5`. `has_unhandled_user_bounds` is now computed for real by the re-emission
+  left the real query infeasible.) Reversed user bounds such as `5 >= x` are flipped by
+  `DecideCanonicalizer` before this pass, so they follow the same absorption and re-emission
+  path as `x <= 5`. (Until canonicalize.md C.2 the constraint binder flipped them first, at
+  the parsed level; that duplicate was deleted and the canonicalizer's own mirror branch is
+  now the only thing that swaps a comparison's sides.) `has_unhandled_user_bounds` is now computed for real by the re-emission
   loop: it turns `true` only if a recorded bound's column is missing from the retained model
   (expected never in practice), keeping the elastic-infeasible verdict honest.
 - **Engine (`decide_diagnostic_engines.cpp`, `DiagnoseInfeasible`).** Pure model math.

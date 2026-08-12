@@ -140,8 +140,8 @@ classDiagram
 
 ### `src/decidb/symbolic/decide_symbolic.cpp`
 -   **`ToSymbolicRecursive(ParsedExpression)`**: Walks a DuckDB AST and converts it to a `Symbolic` object.
--   **`NormalizeDecideConstraints(ParsedExpression)`**: Rearranges terms to isolate decision variables on LHS. Takes and returns a `ParsedExpression` (calls `NormalizeConstraintsRecursive` internally).
--   **`NormalizeDecideObjective(ParsedExpression)`**: Same normalization for the objective expression.
+-   **`SimplifyDecideConstraints(ParsedExpression)`**: Grammar repair only — reassociates the `A AND B WHEN c` precedence mis-parse and recurses through conjunctions and WHEN/PER wrappers. Comparisons are copied through unchanged; term placement is `DecideCanonicalizer`'s job, after binding.
+-   **`SimplifyDecideObjective(ParsedExpression)`**: Expands and simplifies a SUM objective body with SymbolicC++, rebuilds it factored as `coefficient * decide_part`, peels a constant offset, and reassociates the same WHEN mis-parse.
 
 ### `src/planner/expression_binder/decide_binder.cpp`
 -   **`ValidateSumArgument()`** (free function): Recursively checks that an expression is a linear combination of decision variables (or optionally quadratic when `allow_quadratic` is true). Throws "Non-linear term detected" error. Called by both `DecideConstraintsBinder` and `DecideObjectiveBinder`.

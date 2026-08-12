@@ -53,13 +53,15 @@ private:
 	//! Helper: recursively find COMPARE_NOTEQUAL in bound expression tree
 	void FindNotEqualConstraints(Expression &expr, LogicalDecide &decide);
 
-	//! Rewrite AVG(expr) aggregates to SUM(expr) with alias tagging.
+	//! Rewrite decision-bearing AVG(expr) aggregates to SUM(expr) with alias tagging.
 	//! Execution scales extracted AVG terms by the active row count.
 	void RewriteAvgToSum(LogicalDecide &decide);
 
 	//! Helper: recursively walk a bound expression tree, replacing AVG aggregates with SUM.
 	//! The replacement is tagged with AVG_REWRITE_TAG so coefficient evaluation can scale terms.
-	void RewriteAvgInExpression(unique_ptr<Expression> &expr);
+	//! A decision-free AVG is skipped: there is nothing to linearize, and rebinding it as SUM
+	//! would redeclare it with SUM's integral type while its value stays fractional.
+	void RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t decide_index);
 
 	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.
 	//! Extracts each term's metadata into decide.composed_minmax_constraints and replaces
@@ -145,7 +147,9 @@ private:
 	                                               idx_t &out_ind_idx);
 
 	//! Helper: append a constraint to the decide constraint tree via AND conjunction
-	static void AppendConstraint(LogicalDecide &decide, unique_ptr<Expression> constraint);
+	//! Thin forwarder to LogicalDecide::AddConstraint, which canonicalizes on insert.
+	//! Non-static because it needs the optimizer's ClientContext.
+	void AppendConstraint(LogicalDecide &decide, unique_ptr<Expression> constraint);
 
 	Optimizer &optimizer;
 };

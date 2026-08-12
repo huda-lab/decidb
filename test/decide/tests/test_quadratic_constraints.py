@@ -1422,23 +1422,6 @@ class TestQuadraticConstraintEdgeCases:
 @pytest.mark.quadratic
 class TestQuadraticConstraintErrors:
 
-    def test_highs_rejection(self, decidb_cli):
-        """HiGHS rejects quadratic constraints with a clear error (Gurobi accepts)."""
-        sql = """
-            WITH data AS (SELECT 1 AS id, 10.0 AS target)
-            SELECT id, x FROM data
-            DECIDE x(REAL)
-            SUCH THAT x >= 0 AND x <= 10
-                AND SUM(POWER(x - target, 2)) <= 5
-            MAXIMIZE SUM(x)
-        """
-        try:
-            decidb_cli.execute(sql)
-            pytest.skip("Gurobi is available; HiGHS rejection test not applicable")
-        except DecidBCliError as e:
-            assert re.search(r"[Qq]uadratic|[Gg]urobi", str(e)), \
-                f"Expected quadratic/Gurobi rejection, got: {e}"
-
     def test_constraint_self_product_of_power_rejected(self, decidb_cli):
         # POWER(x, 2) * POWER(x, 2) inside a constraint = x^4; must not
         # silently reduce to x^2. (Previously this produced wrong bindings

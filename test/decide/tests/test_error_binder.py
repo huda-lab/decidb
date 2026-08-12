@@ -288,33 +288,26 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x * l_quantity)
             """, match=r"PER can only be applied to aggregate \(SUM\) constraints")
 
-    def test_aggregate_vs_aggregate_constraint_rejected(self, decidb_cli):
-        """Aggregate on both LHS and RHS (`SUM(x*v) <= SUM(y*v)`) must be rejected.
+    # `SUM(x*v) <= SUM(y*v)` used to be rejected here, sharing this file's "not a
+    # scalar or aggregate without DECIDE variables" message because the bound was
+    # itself a reducer over decision variables. canonicalize.md C.2 made the gate
+    # side-agnostic and the shape solves; it is now oracle-verified in
+    # test_canonicalize_side_agnostic.py::test_aggregate_vs_aggregate.
 
-        Per-row `x <= y` is now supported (ABS linearization), but the
-        *aggregate-against-aggregate* shape reuses the "not a scalar or
-        aggregate without DECIDE variables" binder rejection because the RHS
-        is itself an aggregate over DECIDE variables.
-        """
-        decidb_cli.assert_error("""
-                WITH t AS (SELECT 1 AS id, 10 AS val UNION ALL SELECT 2, 20)
-                SELECT id, val, x, y FROM t
-                DECIDE x(INT), y(INT)
-                SUCH THAT SUM(x * val) <= SUM(y * val) AND SUM(y) <= 5
-                MAXIMIZE SUM(x * val)
-            """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
-
-    def test_data_only_minmax_rhs_aggregate_errors_without_internal(self, decidb_cli):
-        """Data-only SUM/AVG RHS aggregates are supported (hoisted to the LHS), but
-        MIN/MAX RHS aggregates remain unsupported — and must surface a clean
-        InvalidInputException, not an InternalException / stack trace."""
-        decidb_cli.assert_error("""
+    def test_data_only_minmax_rhs_aggregate_now_supported(self, decidb_cli):
+        """MIN/MAX on the RHS used to be refused because the left side could only
+        reduce a data term by summing it. The reducer evaluator removes that limit,
+        so this now solves: MIN(val) = 10 caps SUM(x*val), giving x = (1, 0)."""
+        rows, cols = decidb_cli.execute("""
                 WITH t AS (SELECT 1 AS id, 10 AS val UNION ALL SELECT 2, 20)
                 SELECT id, val, x FROM t
                 DECIDE x(INT)
                 SUCH THAT SUM(x * val) <= MIN(val)
                 MAXIMIZE SUM(x * val)
-            """, match=r"can't be reduced to a scalar bound.*MIN/MAX/COUNT")
+            """)
+        xi, vi = cols.index("x"), cols.index("val")
+        total = sum(int(round(float(r[xi]))) * float(r[vi]) for r in rows)
+        assert total == 10.0, rows
 
     # --- Unsupported aggregates rejected at DecideBinder::BindAggregate ---
 
@@ -478,46 +471,30 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
             """, match=r"WHEN conditions cannot reference DECIDE variables")
 
-    # --- Correlated subquery on aggregate RHS error cases ---
+    # --- Correlated subquery on aggregate RHS ---
+    # A row-varying RHS on a reduced constraint used to be refused here. It is now
+    # reduced to the tightest bound the per-tuple conjunction implies (paper §3.2.1),
+    # so the positive cases moved to test_cons_correlated_subquery.py as
+    # oracle-verified tests. Only `=` still has no single bound, and that is a
+    # data-dependent rejection — it fires when the values really do differ.
 
     @pytest.mark.cons_subquery
     @pytest.mark.cons_aggregate
-    def test_correlated_subquery_aggregate_rhs_non_scalar(self, decidb_cli):
-        """Correlated subquery on aggregate constraint RHS produces per-row values — must error.
+    def test_correlated_subquery_aggregate_equality_rhs_rejected(self, decidb_cli):
+        """`SUM(x) = <per-row value>` is N contradictory constraints, not a bound.
 
-        SUM(x * supplycost) <= (SELECT p_size ...) decorrelates into a per-row
-        column, but an aggregate constraint needs a single scalar RHS.
+        `<=`/`>=` collapse to the tightest bound; `=` cannot, so it is refused with
+        the two conflicting values named.
         """
         decidb_cli.assert_error("""
                 SELECT ps_partkey, ps_suppkey, x
                 FROM partsupp
                 WHERE ps_partkey < 10
                 DECIDE x(INT)
-                SUCH THAT SUM(x * ps_supplycost)
-                          <= (SELECT CAST(p_size AS INTEGER) FROM part
-                              WHERE p_partkey = ps_partkey)
+                SUCH THAT SUM(x) = (SELECT CAST(p_size AS INTEGER) FROM part
+                                    WHERE p_partkey = ps_partkey)
                 MAXIMIZE SUM(x)
-            """, match=r"scalar right-hand side")
-
-    @pytest.mark.cons_subquery
-    @pytest.mark.cons_aggregate
-    @pytest.mark.per_clause
-    def test_correlated_subquery_aggregate_per_rhs_non_scalar(self, decidb_cli):
-        """Correlated subquery on aggregate PER constraint RHS — must error.
-
-        Same rejection as the non-PER case, but exercises the PER-path
-        validation in ilp_model_builder.
-        """
-        decidb_cli.assert_error("""
-                SELECT ps_partkey, ps_suppkey, x
-                FROM partsupp
-                WHERE ps_partkey < 20
-                DECIDE x(INT)
-                SUCH THAT SUM(x) <= (SELECT CAST(p_size AS INTEGER) FROM part
-                                     WHERE p_partkey = ps_partkey)
-                          PER ps_suppkey
-                MAXIMIZE SUM(x)
-            """, match=r"scalar right-hand side")
+            """, match=r"takes more than one value here.*has no single bound")
 
     # --- Division with a DECIDE variable in the divisor ---
     # `x / 2` and `x / data_col` are linear (coefficient scaling); `x / y`

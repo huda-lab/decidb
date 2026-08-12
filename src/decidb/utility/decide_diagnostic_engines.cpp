@@ -834,7 +834,11 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA &&
 		                prov.clause_id != DConstants::INVALID_INDEX;
 		if (expanded) {
-			if (data_rhs) {
+			// Only an unreduced per-row constraint expands row by row. A reduced
+			// constraint emits one elastic row per *group*, so a data-derived bound on
+			// one of those is a per-group knob, not a per-row profile entry — routing
+			// it here would relabel every group as a row and drop the group key.
+			if (data_rhs && !prov.is_aggregate) {
 				// The independent per-row slack is that row's exact overshoot, one profile
 				// entry. A debug view, not a directly pasteable edit.
 				ClauseEdit e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
@@ -843,14 +847,23 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 				edits.push_back(std::move(e));
 				continue;
 			}
-			// A literal knob. When PER-grouped this block is one group → break it out with
-			// its group key; otherwise there is nothing per-group to expose.
-			ClauseEdit e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
+			// A knob to report on its own. A user literal re-quotes as a number; a
+			// data-derived bound has no number in the query to edit, so it renders as
+			// a symbolic offset over the column, exactly as query mode does.
+			ClauseEdit e;
+			if (data_rhs) {
+				string rhs_text = prov.rhs_label.empty() ? FormatNum(orig.rhs) : prov.rhs_label;
+				e = MakeVirtualOffsetEdit(prov, FormatLhs(orig, columns), rhs_text, sl.sense, amount);
+			} else {
+				e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
+			}
+			// When PER-grouped this block is one group → break it out with its group
+			// key; otherwise there is nothing per-group to expose.
 			if (!prov.group_label.empty()) {
 				e.edit_source = "expanded_group";
 				e.offset_scope = "group";
 			} else {
-				e.edit_source = "source_literal";
+				e.edit_source = data_rhs ? "virtual_offset" : "source_literal";
 				e.offset_scope = "clause";
 			}
 			edits.push_back(std::move(e));

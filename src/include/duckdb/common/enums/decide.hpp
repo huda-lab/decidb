@@ -215,6 +215,16 @@ inline bool IsSharedScalarSubqueryTag(const string &alias) {
 	return alias == SHARED_SCALAR_SUBQUERY_TAG;
 }
 
+//! True when the alias marks an expression that is one value for the whole query.
+//! Used by the canonicalizer to answer "may this factor scale a reducer?" —
+//! `(SELECT k FROM p) * SUM(x)` may, `weight * SUM(x)` may not. A subquery that
+//! flattening has already turned into a column ref is indistinguishable from row data
+//! by shape, so a tag is the only evidence left; an unflattened one is recognized
+//! directly from its node type and needs no tag.
+inline bool IsQueryWideConstantTag(const string &alias) {
+	return alias == SHARED_SCALAR_SUBQUERY_TAG;
+}
+
 //! Tag prefix for ABS upper-bound constraint linking.
 //! Format: "__abs_ub_pos_<y_idx>__" on C1 (aux >= inner)
 //!         "__abs_ub_neg_<y_idx>__" on C2 (aux >= -inner)

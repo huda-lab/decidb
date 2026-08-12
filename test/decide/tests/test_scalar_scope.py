@@ -482,44 +482,113 @@ def test_scalar_with_not_equal(decidb_cli, perf_tracker):
 
 
 # ---------------------------------------------------------------------------
-# Test 10: A scalar on the RHS of a reduced constraint does not bind yet
+# Test 10: A scalar on the RHS of a reduced constraint (canonicalize.md C.2)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.error_binder
-@pytest.mark.error
-def test_scalar_as_aggregate_rhs_rejected(decidb_cli):
-    """`SUM(x) <= cap` — the paper's §3.1 shape — is rejected today.
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_scalar_as_aggregate_rhs(decidb_cli, oracle_solver):
+    """`SUM(x) <= cap` — the paper's §3.1 shape, with the decision on the *bound*.
 
-    This is not a scalar-scope limitation: the same binder check refuses any
-    non-reduced RHS on a reduced constraint, with or without `PER`, and it is
-    filed as group B of `context/descriptions/todo.md` (B1/B2/B4). It is pinned
-    here because it is the one shape the paper writes with `scalar`
-    (`demand - sum(ship) <= max_shortfall per regionID`), so this test is what
-    will flip when group B lands.
+    Rejected until canonicalize.md C.2, which made the binder's constraint gate
+    side-agnostic: it now accepts a comparison when either side bears a decision
+    and lets `DecideCanonicalizer` move `cap` onto the model side (K1). Nothing
+    new happens downstream — `SUM(x) - cap <= 0` is the shape B.3 already landed,
+    where a query-wide decision is a legal row-invariant term of a reduced
+    constraint.
+
+    The instance is priced so the optimum is interior rather than all-zero: one
+    unit of cap unlocks one unit of SUM(x), worth 3, and costs 2, so cap is pushed
+    to its own ceiling of 12 and SUM(x) follows it. That is what makes the test
+    discriminate — a formulation that charged for `cap` once per row would pay
+    2 * n per unit and collapse the answer to cap = 0.
     """
-    decidb_cli.assert_error("""
+    rows, cols = decidb_cli.execute("""
             SELECT c_custkey, x, cap
             FROM customer WHERE c_custkey <= 20
             DECIDE x(INT), scalar cap(INT)
-            SUCH THAT SUM(x) <= cap AND cap <= 12
-            MAXIMIZE SUM(x) - 20 * cap
-        """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate")
+            SUCH THAT SUM(x) <= cap AND cap <= 12 AND x <= 12
+            MAXIMIZE 3 * SUM(x) - 2 * cap
+        """)
+    n = len(rows)
+    assert n > 1
+
+    oracle_solver.create_model("scalar_as_aggregate_rhs")
+    oracle_solver.add_variable("cap", VarType.INTEGER, lb=0.0, ub=12.0)
+    obj = {"cap": -2.0}
+    reduced = {"cap": -1.0}
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0, ub=12.0)
+        obj[f"x_{i}"] = 3.0
+        reduced[f"x_{i}"] = 1.0
+    oracle_solver.add_constraint(reduced, "<=", 0.0, name="sum_le_cap")
+    oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
+    oracle_obj = oracle_solver.solve().objective_value
+
+    cap_idx, x_idx = cols.index("cap"), cols.index("x")
+    cap_value = int(rows[0][cap_idx])
+    assert all(int(r[cap_idx]) == cap_value for r in rows), "cap is not query-wide"
+    total_x = sum(int(r[x_idx]) for r in rows)
+    assert total_x <= cap_value, f"SUM(x)={total_x} exceeds cap={cap_value}"
+    assert cap_value == 12 and total_x == 12, \
+        f"expected the interior optimum cap=12, SUM(x)=12; got cap={cap_value}, SUM(x)={total_x}"
+    decidb_obj = 3.0 * total_x - 2.0 * cap_value
+    assert abs(decidb_obj - oracle_obj) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
 
 
-@pytest.mark.error_binder
-@pytest.mark.error
-def test_scalar_as_aggregate_rhs_with_per_rejected(decidb_cli):
-    """Same shape with `PER`, which is exactly the paper's §3.1 constraint.
+@pytest.mark.cons_aggregate
+@pytest.mark.per_clause
+@pytest.mark.correctness
+def test_scalar_as_aggregate_rhs_with_per(decidb_cli, duckdb_conn, oracle_solver):
+    """The same shape under `PER`, which is exactly the paper's §3.1 constraint.
 
-    Blocked on the same group-B work; `PER` adds nothing to the rejection.
+    `PER` is what makes the query-wide reading observable: the single `cap` column
+    now appears in *several* rows of the solver matrix, one per nation, so a
+    formulation that duplicated it per partition would let each group spend its own
+    cap and would report a larger objective.
     """
-    decidb_cli.assert_error("""
+    rows, cols = decidb_cli.execute("""
             SELECT c_custkey, c_nationkey, x, cap
             FROM customer WHERE c_custkey <= 40
             DECIDE x(INT), scalar cap(INT)
-            SUCH THAT SUM(x) <= cap PER c_nationkey AND cap <= 12
-            MAXIMIZE SUM(x) - 20 * cap
-        """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate")
+            SUCH THAT SUM(x) <= cap PER c_nationkey AND cap <= 12 AND x <= 12
+            MAXIMIZE 3 * SUM(x) - 2 * cap
+        """)
+    n = len(rows)
+    assert n > 1
+
+    groups = [r[0] for r in duckdb_conn.execute(
+        "SELECT c_nationkey FROM customer WHERE c_custkey <= 40"
+    ).fetchall()]
+    assert len(groups) == n
+    assert len(set(groups)) > 1, "PER needs more than one partition to discriminate"
+
+    oracle_solver.create_model("scalar_as_aggregate_rhs_per")
+    oracle_solver.add_variable("cap", VarType.INTEGER, lb=0.0, ub=12.0)
+    obj = {"cap": -2.0}
+    per_group = {}
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0, ub=12.0)
+        obj[f"x_{i}"] = 3.0
+        per_group.setdefault(groups[i], {"cap": -1.0})[f"x_{i}"] = 1.0
+    for g, row in per_group.items():
+        oracle_solver.add_constraint(row, "<=", 0.0, name=f"sum_le_cap_{g}")
+    oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
+    oracle_obj = oracle_solver.solve().objective_value
+
+    cap_idx, x_idx, nat_idx = cols.index("cap"), cols.index("x"), cols.index("c_nationkey")
+    cap_value = int(rows[0][cap_idx])
+    assert all(int(r[cap_idx]) == cap_value for r in rows), "cap is not query-wide"
+    totals = {}
+    for r in rows:
+        totals[r[nat_idx]] = totals.get(r[nat_idx], 0) + int(r[x_idx])
+    for g, total in totals.items():
+        assert total <= cap_value, f"group {g}: SUM(x)={total} exceeds cap={cap_value}"
+    assert cap_value == 12, f"expected the interior optimum cap=12, got {cap_value}"
+    decidb_obj = 3.0 * sum(int(r[x_idx]) for r in rows) - 2.0 * cap_value
+    assert abs(decidb_obj - oracle_obj) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/decidb/solver_config.hpp"
 #include <sys/resource.h>
@@ -45,11 +46,31 @@ namespace duckdb {
 // BoundReferenceExpression nodes so that DuckDB's ExpressionExecutor can
 // evaluate expressions against data chunks (which use positional indices).
 
+//! Collect every reducer in an expression. Descent stops at a match: a reducer inside a
+//! reducer is not legal SQL, so there is nothing below one to find.
+static void CollectReducers(const Expression &expr, vector<const Expression *> &out) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		out.push_back(&expr);
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		CollectReducers(child, out);
+	});
+}
+
 //! Transform a coefficient/value expression for ExpressionExecutor.
-//! Handles: BOUND_COLUMN_REF, BOUND_FUNCTION, BOUND_CAST, BOUND_AGGREGATE (count_star→constant),
+//! Handles: BOUND_COLUMN_REF, BOUND_FUNCTION, BOUND_CAST, BOUND_AGGREGATE,
 //! BOUND_COMPARISON, BOUND_CONJUNCTION, BOUND_OPERATOR. Falls back to Copy() for others.
-static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context,
-                                                         idx_t num_rows = 0) {
+//!
+//! `agg_substitutions` maps a reducer node to an extra chunk column carrying that
+//! reducer's already-computed value, broadcast over the rows of its group. It is how a
+//! right-hand side like `MIN(cap) + demand * 2` becomes evaluable per row: the reducer
+//! collapses to a column reference and the rest of the tree is untouched. A tree built
+//! this way is only valid against the augmented chunk layout, so it must never be
+//! memoized by CachedTransformToChunkExpression.
+static unique_ptr<Expression> TransformToChunkExpression(
+    const Expression &expr, ClientContext &context,
+    const std::unordered_map<const Expression *, idx_t> *agg_substitutions = nullptr) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
@@ -57,7 +78,7 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		vector<unique_ptr<Expression>> new_children;
 		for (auto &child : func.children) {
-			new_children.push_back(TransformToChunkExpression(*child, context, num_rows));
+			new_children.push_back(TransformToChunkExpression(*child, context, agg_substitutions));
 		}
 		unique_ptr<FunctionData> new_bind_info;
 		if (func.bind_info) {
@@ -67,39 +88,45 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 		                                                           std::move(new_children), std::move(new_bind_info));
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		auto &cast = expr.Cast<BoundCastExpression>();
-		auto transformed_child = TransformToChunkExpression(*cast.child, context, num_rows);
+		auto transformed_child = TransformToChunkExpression(*cast.child, context, agg_substitutions);
 		return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		auto &agg = expr.Cast<BoundAggregateExpression>();
-		if (agg.function.name == "count_star") {
-			return make_uniq_base<Expression, BoundConstantExpression>(Value::BIGINT(num_rows));
+		if (agg_substitutions) {
+			auto it = agg_substitutions->find(&expr);
+			if (it != agg_substitutions->end()) {
+				// The extra column is DOUBLE, but the parent node was bound against this
+				// reducer's own type. Handing it a DOUBLE would not fail — it would
+				// reinterpret the physical representation and compute a wrong value
+				// (a DOUBLE 4.0 read as INTEGER is 0), so cast back explicitly.
+				auto ref = make_uniq<BoundReferenceExpression>(LogicalType::DOUBLE, it->second);
+				return BoundCastExpression::AddCastToType(context, std::move(ref),
+				                                          expr.return_type);
+			}
 		}
-		// Note: don't surface agg.function.name here — an AVG on the RHS is rewritten
-		// to sum/count before this point, so the internal name would misleadingly read
-		// "sum" for a query that wrote AVG. Give concrete, actionable forms instead.
+		// Reached only where no substitution was prepared — an aggregate outside the
+		// right-hand side, e.g. in a WHEN condition or a coefficient, where a reducer has
+		// no meaning.
 		throw InvalidInputException(
-		    "DECIDE constraint right-hand side: this data aggregate can't be reduced to a "
-		    "scalar bound. Additive forms work (`<= AVG(col)`, `<= SUM(col) + 5`); a scalar "
-		    "multiple (`2 * AVG(col)`) or MIN/MAX/COUNT does not. Pre-compute it in a scalar "
-		    "subquery (`<= (SELECT 2 * AVG(col) FROM t)`) or move the aggregate to the "
-		    "left-hand side.");
+		    "DECIDE: an aggregate cannot be used here. Reducers are allowed on either side "
+		    "of a constraint and in the objective, not inside a WHEN condition or a "
+		    "coefficient.");
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		auto &comp = expr.Cast<BoundComparisonExpression>();
-		auto left = TransformToChunkExpression(*comp.left, context, num_rows);
-		auto right = TransformToChunkExpression(*comp.right, context, num_rows);
+		auto left = TransformToChunkExpression(*comp.left, context, agg_substitutions);
+		auto right = TransformToChunkExpression(*comp.right, context, agg_substitutions);
 		return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
 		for (auto &child : conj.children) {
-			result->children.push_back(TransformToChunkExpression(*child, context, num_rows));
+			result->children.push_back(TransformToChunkExpression(*child, context, agg_substitutions));
 		}
 		return std::move(result);
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
 		auto &op_expr = expr.Cast<BoundOperatorExpression>();
 		auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
 		for (auto &child : op_expr.children) {
-			result->children.push_back(TransformToChunkExpression(*child, context, num_rows));
+			result->children.push_back(TransformToChunkExpression(*child, context, agg_substitutions));
 		}
 		return std::move(result);
 	} else {
@@ -108,21 +135,23 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 }
 
 //! Per-Finalize cache for TransformToChunkExpression. Keyed on input Expression
-//! pointer identity — addresses are stable for the duration of one Finalize, and
-//! `num_rows` is constant within Finalize so it's not part of the key. The cache
+//! pointer identity — addresses are stable for the duration of one Finalize. The cache
 //! owns lifetime; callers that pass the returned reference to ExpressionExecutor
 //! must keep the cache alive until the executor is no longer used.
+//!
+//! Only ever holds substitution-free trees. A tree built with `agg_substitutions` is
+//! valid solely against the augmented chunk it was built for, so it is transformed
+//! directly and never cached.
 using ChunkExprCache = std::unordered_map<const Expression*, unique_ptr<Expression>>;
 
 static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
                                                           const Expression &expr,
-                                                          ClientContext &context,
-                                                          idx_t num_rows = 0) {
+                                                          ClientContext &context) {
 	auto it = cache.find(&expr);
 	if (it != cache.end()) {
 		return *it->second;
 	}
-	auto transformed = TransformToChunkExpression(expr, context, num_rows);
+	auto transformed = TransformToChunkExpression(expr, context);
 	auto *raw = transformed.get();
 	cache.emplace(&expr, std::move(transformed));
 	return *raw;
@@ -394,7 +423,14 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
                                      const std::function<bool(idx_t)> &row_filter,
                                      vector<idx_t> &out_row_group_ids,
                                      idx_t &out_num_groups,
-                                     vector<string> &out_group_labels) {
+                                     vector<string> &out_group_labels,
+                                     // Optional second map over the SAME group numbering but a
+                                     // looser row filter. The right-hand side needs this: its
+                                     // reducers must not inherit the LHS's aggregate-local WHEN,
+                                     // which `row_filter` folds in. Groups that no strict row
+                                     // reached emit no constraint, so their rows stay excluded.
+                                     const std::function<bool(idx_t)> *loose_row_filter = nullptr,
+                                     vector<idx_t> *out_loose_row_group_ids = nullptr) {
 	size_t key = HashPerKey(per_columns, null_excludes);
 	auto &bucket = cache[key];
 	PerGroupCacheEntry *entry = nullptr;
@@ -429,6 +465,9 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
 	// in encounter order, matching the legacy BuildGroupIds output exactly.
 	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 	out_group_labels.clear();
+	if (out_loose_row_group_ids) {
+		out_loose_row_group_ids->assign(num_rows, DConstants::INVALID_INDEX);
+	}
 	if (entry->unfiltered_num_groups == 0 || num_rows == 0) {
 		out_num_groups = 0;
 		return;
@@ -450,6 +489,18 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
 		out_row_group_ids[r] = mapped;
 	}
 	out_num_groups = next_remap;
+
+	if (out_loose_row_group_ids) {
+		// Same `remap`, so a row lands in the group the model builder will emit for.
+		for (idx_t r = 0; r < num_rows; r++) {
+			idx_t unf_gid = entry->unfiltered_row_group_ids[r];
+			if (unf_gid == DConstants::INVALID_INDEX) continue;
+			if (loose_row_filter && *loose_row_filter && !(*loose_row_filter)(r)) continue;
+			idx_t mapped = remap[unf_gid];
+			if (mapped == DConstants::INVALID_INDEX) continue; // group emits no constraint
+			(*out_loose_row_group_ids)[r] = mapped;
+		}
+	}
 }
 
 struct NormalizedProductTerm {
@@ -519,8 +570,44 @@ static void CollectMultiplicativeFactors(const Expression &expr, vector<const Ex
 	factors.push_back(cur);
 }
 
-static unique_ptr<Expression> BuildCoefficientFromFactors(const vector<const Expression *> &factors,
-                                                          const BoundFunctionExpression &mul_func) {
+//! Re-resolve a binary operator against the children it is actually being given.
+//!
+//! Rebuilding a `BoundFunctionExpression` by hand — reusing another node's
+//! `function` / `return_type` / `bind_info` over different children — does not
+//! fail when the types disagree. It reinterprets the children's *physical*
+//! representation, which silently yields a wrong number and can read past the
+//! end of a narrower vector. DECIDE has now hit that failure mode three times
+//! (see `07_issues/bugs/done.md`), always where a subtree was rebuilt after
+//! terms were dropped or distributed. Binding through `FunctionBinder` is the
+//! only rebuild that stays correct for arbitrary children: it picks the
+//! implementation for these argument types, computes the matching return type
+//! and bind data, and inserts whatever casts the signature needs.
+static unique_ptr<Expression> RebindOperator(ClientContext &context, const string &name,
+                                             vector<unique_ptr<Expression>> children) {
+	FunctionBinder function_binder(context);
+	ErrorData error;
+	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
+	if (error.HasError()) {
+		throw InternalException("DECIDE failed to rebind '%s' while rebuilding a coefficient: %s", name,
+		                       error.Message());
+	}
+	return result;
+}
+
+static unique_ptr<Expression> RebindMultiply(ClientContext &context, unique_ptr<Expression> lhs,
+                                             unique_ptr<Expression> rhs) {
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(lhs));
+	children.push_back(std::move(rhs));
+	return RebindOperator(context, "*", std::move(children));
+}
+
+//! Fold a flattened factor list back into a product. Each binary node is bound
+//! for its own operands rather than inheriting the original `*`'s signature:
+//! `CollectMultiplicativeFactors` both unwraps casts and (via its callers) drops
+//! factors, so neither the operand types nor the arity survive the round trip.
+static unique_ptr<Expression> BuildCoefficientFromFactors(ClientContext &context,
+                                                          const vector<const Expression *> &factors) {
 	if (factors.empty()) {
 		return nullptr;
 	}
@@ -530,15 +617,7 @@ static unique_ptr<Expression> BuildCoefficientFromFactors(const vector<const Exp
 
 	auto result = factors[0]->Copy();
 	for (idx_t i = 1; i < factors.size(); i++) {
-		vector<unique_ptr<Expression>> mul_children;
-		mul_children.push_back(std::move(result));
-		mul_children.push_back(factors[i]->Copy());
-		unique_ptr<FunctionData> bind_info;
-		if (mul_func.bind_info) {
-			bind_info = mul_func.bind_info->Copy();
-		}
-		result = make_uniq_base<Expression, BoundFunctionExpression>(
-		    mul_func.return_type, mul_func.function, std::move(mul_children), std::move(bind_info));
+		result = RebindMultiply(context, std::move(result), factors[i]->Copy());
 	}
 	return result;
 }
@@ -556,7 +635,7 @@ static unique_ptr<Expression> BuildCoefficientFromFactors(const vector<const Exp
 // Returns empty when no additive factor is present (caller falls through to
 // the existing classification logic).
 static vector<pair<int, unique_ptr<Expression>>>
-TryDistributeMultiplyOverAdd(const BoundFunctionExpression &mul_expr) {
+TryDistributeMultiplyOverAdd(ClientContext &context, const BoundFunctionExpression &mul_expr) {
 	vector<pair<int, unique_ptr<Expression>>> out;
 	vector<const Expression *> factors;
 	CollectMultiplicativeFactors(mul_expr, factors);
@@ -598,7 +677,7 @@ TryDistributeMultiplyOverAdd(const BoundFunctionExpression &mul_expr) {
 			new_factors.push_back(factors[j]);
 		}
 		new_factors.push_back(ad);
-		auto prod = BuildCoefficientFromFactors(new_factors, mul_expr);
+		auto prod = BuildCoefficientFromFactors(context, new_factors);
 		out.push_back({s, std::move(prod)});
 	}
 	return out;
@@ -766,7 +845,8 @@ bool PhysicalDecide::IsLinearInDecideVars(const Expression &expr) const {
     return FindDecideVariable(expr) == DConstants::INVALID_INDEX;
 }
 
-unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const Expression &expr, idx_t var_idx) const {
+unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(ClientContext &context, const Expression &expr,
+                                                                        idx_t var_idx) const {
     // If this IS the variable itself, return constant 1
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
         auto &colref = expr.Cast<BoundColumnRefExpression>();
@@ -792,7 +872,7 @@ unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const E
                 // nested coefficients like the `2` in `(2*x)*v`, which reaches here
                 // un-normalized on the composed MIN/MAX path. The already-normalized
                 // `x*(2*v)` form is unchanged (its variable child is the bare `x`).
-                auto sub = ExtractCoefficientWithoutVariable(*child, var_idx);
+                auto sub = ExtractCoefficientWithoutVariable(context, *child, var_idx);
                 if (sub->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
                     auto &cv = sub->Cast<BoundConstantExpression>().value;
                     if (!cv.IsNull() && cv.type().IsNumeric() &&
@@ -810,17 +890,27 @@ unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(const E
                 return std::move(filtered_children[0]);
             }
 
-            // Rebuild multiplication with remaining children
-            return make_uniq_base<Expression, BoundFunctionExpression>(func.return_type, func.function,
-                                                     std::move(filtered_children),
-                                                     func.bind_info ? func.bind_info->Copy() : nullptr);
+            // Rebuild the multiplication by re-binding it for the children that
+            // actually remain. Dropping the variable also drops the casts above it,
+            // so a child can come back narrower than the original signature expects
+            // (`CAST(x * price AS DECIMAL(38,2))` yields a bare DECIMAL(15,2)
+            // `price`), and dropping a child shifts the rest out of alignment with
+            // `function.arguments`. Reusing the original bound function through
+            // either of those does not fail — it reinterprets the physical
+            // representation and silently computes a wrong coefficient. See
+            // `RebindOperator`.
+            auto result = std::move(filtered_children[0]);
+            for (idx_t i = 1; i < filtered_children.size(); i++) {
+                result = RebindMultiply(context, std::move(result), std::move(filtered_children[i]));
+            }
+            return result;
         }
     }
 
     // If it's a cast, recurse into child
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
         auto &cast = expr.Cast<BoundCastExpression>();
-        return ExtractCoefficientWithoutVariable(*cast.child, var_idx);
+        return ExtractCoefficientWithoutVariable(context, *cast.child, var_idx);
     }
 
     // Otherwise, return a copy of the entire expression (no variable in it)
@@ -943,23 +1033,23 @@ PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(const Ex
     return {};
 }
 
-void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_terms) const {
+void PhysicalDecide::ExtractTerms(ClientContext &context, const Expression &expr, vector<Term> &out_terms) const {
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
         auto &func = expr.Cast<BoundFunctionExpression>();
 
         // Addition: recursively process all children
         if (func.function.name == "+") {
             for (auto &child : func.children) {
-                ExtractTerms(*child, out_terms);
+                ExtractTerms(context, *child, out_terms);
             }
             return;
         }
 
         // Subtraction: first child positive, second child negated
         if (func.function.name == "-" && func.children.size() == 2) {
-            ExtractTerms(*func.children[0], out_terms);
+            ExtractTerms(context, *func.children[0], out_terms);
             idx_t before = out_terms.size();
-            ExtractTerms(*func.children[1], out_terms);
+            ExtractTerms(context, *func.children[1], out_terms);
             for (idx_t i = before; i < out_terms.size(); i++) {
                 out_terms[i].sign *= -1;
             }
@@ -969,7 +1059,7 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
         // Unary minus: recurse and flip sign of every produced term.
         if (func.function.name == "-" && func.children.size() == 1) {
             idx_t before = out_terms.size();
-            ExtractTerms(*func.children[0], out_terms);
+            ExtractTerms(context, *func.children[0], out_terms);
             for (idx_t i = before; i < out_terms.size(); i++) {
                 out_terms[i].sign *= -1;
             }
@@ -982,11 +1072,11 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
             // distribute first so each resulting product is `coef * var`-shaped.
             // Without this, ExtractCoefficientWithoutVariable would silently
             // drop the additive structure and produce a wrong coefficient.
-            auto distributed = TryDistributeMultiplyOverAdd(func);
+            auto distributed = TryDistributeMultiplyOverAdd(context, func);
             if (!distributed.empty()) {
                 for (auto &kv : distributed) {
                     idx_t before = out_terms.size();
-                    ExtractTerms(*kv.second, out_terms);
+                    ExtractTerms(context, *kv.second, out_terms);
                     if (kv.first == -1) {
                         for (idx_t i = before; i < out_terms.size(); i++) {
                             out_terms[i].sign *= -1;
@@ -1003,7 +1093,7 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
                 out_terms.push_back(Term{DConstants::INVALID_INDEX, func.Copy()});
             } else {
                 // Variable found - extract coefficient
-                auto coef = ExtractCoefficientWithoutVariable(func, var_idx);
+                auto coef = ExtractCoefficientWithoutVariable(context, func, var_idx);
                 out_terms.push_back(Term{var_idx, std::move(coef)});
             }
             return;
@@ -1019,7 +1109,7 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
         if (func.function.name == "/" && func.children.size() == 2 &&
             FindDecideVariable(*func.children[1]) == DConstants::INVALID_INDEX) {
             idx_t before = out_terms.size();
-            ExtractTerms(*func.children[0], out_terms);
+            ExtractTerms(context, *func.children[0], out_terms);
             D_ASSERT(func.function.arguments.size() == 2);
             const auto &num_type = func.function.arguments[0];
             const auto &denom_type = func.function.arguments[1];
@@ -1041,7 +1131,7 @@ void PhysicalDecide::ExtractTerms(const Expression &expr, vector<Term> &out_term
     // Handle casts
     if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
         auto &cast = expr.Cast<BoundCastExpression>();
-        ExtractTerms(*cast.child, out_terms);
+        ExtractTerms(context, *cast.child, out_terms);
         return;
     }
 
@@ -1086,6 +1176,106 @@ static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, co
             "An empty aggregate has no well-defined value; check your WHEN clause.",
             what, ctx);
     }
+}
+
+// Reduce an aggregate constraint's right-hand side to one value per group.
+//
+// A reduced constraint emits ONE row per group, but the RHS is still a column, so a
+// bound that varies row to row has to collapse. Paper §3.2.1 fixes the semantics:
+// without PER, the clause generates one instance per tuple, each pairing the reducer
+// (evaluated over the whole selection) with that tuple's non-reduced values. The
+// conjunction `LHS <= r_i` over every row is exactly `LHS <= min r_i`, so MIN for
+// `<=` and MAX for `>=` is a derivation, not a policy choice. With PER we apply the
+// same rule per partition.
+//
+// `=` and `<>` have no such collapse — differing values are contradictory (or
+// unrelated) constraints, not a tighter one — so they are refused. Only when the
+// values genuinely differ, though: that is a fact about the data, and rejecting on
+// the query's shape alone would refuse a bound that happens to be constant.
+//
+// The reduced value is broadcast back over the group's rows, so every reader
+// downstream keeps seeing a plain `rhs_values` column and needs no new field. Rows in
+// no group keep their raw value; each reader either skips them or skips the whole
+// constraint. When nothing varies the column is left untouched, which keeps the
+// uniform-storage fast path (and the built model) exactly as it was.
+//
+// `group_ids` is the RHS's own map — the constraint's WHEN and PER, deliberately
+// without the LHS's aggregate-local filters, the same map the RHS reducers are
+// evaluated over. An aggregate-local WHEN scopes its own reducer, not the per-tuple
+// fan-out, so `SUM(x) WHEN a <= cap` takes the tightest `cap` over every selected row
+// rather than over the a-rows. Reducing over the looser map is safe for the broadcast
+// too: it is a superset of the strict map, so every row a reader reaches is written.
+static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
+                                       const vector<idx_t> &group_ids, idx_t num_rows,
+                                       const string &rhs_text) {
+    if (ec.rhs_values.IsUniform() || ec.rhs_values.Size() == 0) {
+        return; // one value for every row already
+    }
+    const bool has_groups = !group_ids.empty();
+    const idx_t num_groups = has_groups ? ec.num_groups : 1;
+    if (num_groups == 0) {
+        return;
+    }
+    const idx_t rows = MinValue<idx_t>(num_rows, ec.rhs_values.Size());
+
+    const auto cmp = ec.comparison_type;
+    const bool take_min = cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+                          cmp == ExpressionType::COMPARE_LESSTHAN;
+    const bool take_max = cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
+                          cmp == ExpressionType::COMPARE_GREATERTHAN;
+
+    auto group_of = [&](idx_t row) -> idx_t {
+        if (!has_groups) {
+            return 0;
+        }
+        idx_t g = group_ids[row];
+        return g >= num_groups ? DConstants::INVALID_INDEX : g;
+    };
+
+    vector<double> reduced(num_groups, 0.0);
+    vector<bool> seen(num_groups, false);
+    bool varies = false;
+
+    for (idx_t row = 0; row < rows; row++) {
+        idx_t g = group_of(row);
+        if (g == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        double v = ec.rhs_values.Get(row);
+        if (!seen[g]) {
+            reduced[g] = v;
+            seen[g] = true;
+            continue;
+        }
+        if (v == reduced[g]) {
+            continue;
+        }
+        if (!take_min && !take_max) {
+            throw InvalidInputException(
+                "%s takes more than one value here (%g and %g), so `%s` has no single "
+                "bound. Use <= or >=, or compare against one value such as a scalar "
+                "subquery.",
+                rhs_text.c_str(), reduced[g], v,
+                cmp == ExpressionType::COMPARE_EQUAL ? "=" : "<>");
+        }
+        varies = true;
+        if (take_min ? (v < reduced[g]) : (v > reduced[g])) {
+            reduced[g] = v;
+        }
+    }
+
+    if (!varies) {
+        return; // every group already agreed — leave the column alone
+    }
+    auto &col = ec.rhs_values.MutableDense();
+    for (idx_t row = 0; row < rows; row++) {
+        idx_t g = group_of(row);
+        if (g == DConstants::INVALID_INDEX || !seen[g]) {
+            continue;
+        }
+        col[row] = reduced[g];
+    }
+    ec.rhs_values.SyncSize();
 }
 
 //===--------------------------------------------------------------------===//
@@ -1244,7 +1434,7 @@ static void CollectDecideVarRefs(const Expression &expr, int sign,
         if (func.function.name == "*" && func.children.size() == 2) {
             // Multiplication: descend into both children to find decide variables.
             // Sign propagates unchanged — * doesn't flip algebraic sign, it changes
-            // the coefficient magnitude (handled separately by FindVarCoefficient).
+            // the coefficient magnitude, which this walk does not measure.
             CollectDecideVarRefs(*func.children[0], sign, refs, op);
             CollectDecideVarRefs(*func.children[1], sign, refs, op);
             return;
@@ -1256,77 +1446,6 @@ static void CollectDecideVarRefs(const Expression &expr, int sign,
         return;
     }
     // Constants, data columns, etc.: no DECIDE vars
-}
-
-//! Replace all DECIDE variable references in a bound expression with constant 0.
-//! Returns a data-only expression that can be evaluated per-row from the input chunk.
-static unique_ptr<Expression> StripDecideVars(const Expression &expr, const PhysicalDecide &op) {
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-        idx_t var_idx = op.FindDecideVariable(expr);
-        if (var_idx != DConstants::INVALID_INDEX) {
-            return make_uniq_base<Expression, BoundConstantExpression>(Value::DOUBLE(0.0));
-        }
-        return expr.Copy();
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-        auto &func = expr.Cast<BoundFunctionExpression>();
-        vector<unique_ptr<Expression>> new_children;
-        for (auto &child : func.children) {
-            new_children.push_back(StripDecideVars(*child, op));
-        }
-        unique_ptr<FunctionData> new_bind_info;
-        if (func.bind_info) {
-            new_bind_info = func.bind_info->Copy();
-        }
-        return make_uniq_base<Expression, BoundFunctionExpression>(
-            func.return_type, func.function, std::move(new_children), std::move(new_bind_info));
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-        auto &cast = expr.Cast<BoundCastExpression>();
-        auto new_child = StripDecideVars(*cast.child, op);
-        // Recreate the cast
-        return make_uniq_base<Expression, BoundCastExpression>(
-            std::move(new_child), cast.return_type, cast.bound_cast.Copy(), cast.try_cast);
-    }
-    return expr.Copy();
-}
-
-//! Walk through +/- nodes to find the sub-expression containing a specific decide
-//! variable, then extract its coefficient using ExtractCoefficientWithoutVariable.
-//! Returns the unsigned coefficient (sign is tracked separately by CollectDecideVarRefs).
-static unique_ptr<Expression> FindVarCoefficient(
-    const Expression &expr, idx_t var_idx, const PhysicalDecide &op) {
-    if (!op.ContainsVariable(expr, var_idx)) {
-        return nullptr;
-    }
-    // Bare variable reference: coefficient is 1
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-        if (op.FindDecideVariable(expr) == var_idx) {
-            return make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
-        }
-        return nullptr;
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-        auto &func = expr.Cast<BoundFunctionExpression>();
-        // Multiplication: this is the coefficient node — extract the non-variable part
-        if (func.function.name == "*") {
-            return op.ExtractCoefficientWithoutVariable(expr, var_idx);
-        }
-        // Addition/subtraction: recurse into the child that contains the variable
-        if ((func.function.name == "+" || func.function.name == "-") && func.children.size() == 2) {
-            for (auto &child : func.children) {
-                auto result = FindVarCoefficient(*child, var_idx, op);
-                if (result) {
-                    return result;
-                }
-            }
-        }
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-        auto &cast = expr.Cast<BoundCastExpression>();
-        return FindVarCoefficient(*cast.child, var_idx, op);
-    }
-    return nullptr;
 }
 
 //===--------------------------------------------------------------------===//
@@ -1362,7 +1481,7 @@ struct UserBoundSpec {
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
     explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
-        : data(context, op.children[0]->GetTypes()), op(op) {
+        : data(context, op.children[0]->GetTypes()), context(context), op(op) {
         // Pre-absorb simple variable bounds (x OP const / BETWEEN) into column-bound
         // arrays so AnalyzeConstraint can skip emitting one DecideConstraint per row
         // for constraints that are fully captured by column bounds.
@@ -1444,6 +1563,133 @@ public:
         }
     }
 
+    //! Multiply everything the aggregate under a peeled scale just produced by that
+    //! scale. Folding the factor into the reducer's body is what the canonicalizer
+    //! refuses to do, because at the parsed level the aggregate may still be MIN/MAX
+    //! and `MAX(-2x)` is `-2*MIN(x)`, not `-2*MAX(x)`. Here it is safe and exact: the
+    //! optimizer has already rewritten every MIN/MAX to SUM (asserted below), and a
+    //! sum distributes over any factor regardless of sign.
+    //!
+    //! `scale_func` is the bound `*` or `/` node the factor came from; reusing its
+    //! FunctionData is how the coefficient gets rebuilt without a binder here, the
+    //! same way ExtractTerms handles `expr / K`.
+    void ApplyScaleToExtracted(const BoundFunctionExpression &scale_func, const Expression &scale,
+                               bool divides, DecideConstraint &constraint, idx_t linear_before,
+                               idx_t bilinear_before, idx_t quadratic_before) {
+        auto scaled = [&](unique_ptr<Expression> coef) {
+            const auto &lhs_type = scale_func.function.arguments[divides ? 0 : 1];
+            const auto &rhs_type = scale_func.function.arguments[divides ? 1 : 0];
+            vector<unique_ptr<Expression>> children;
+            // `scale * coef` keeps the factor on the left, matching the canonical
+            // spelling; `coef / scale` has to keep the operand order division needs.
+            if (divides) {
+                children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), lhs_type));
+                children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), rhs_type));
+            } else {
+                children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), rhs_type));
+                children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), lhs_type));
+            }
+            return make_uniq_base<Expression, BoundFunctionExpression>(
+                scale_func.return_type, scale_func.function, std::move(children), nullptr);
+        };
+        for (idx_t i = linear_before; i < constraint.lhs_terms.size(); i++) {
+            constraint.lhs_terms[i].coefficient = scaled(std::move(constraint.lhs_terms[i].coefficient));
+        }
+        for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
+            auto &bt = constraint.bilinear_terms[i];
+            // A null coefficient means 1.0; the scale becomes the whole coefficient.
+            bt.coefficient = bt.coefficient
+                                 ? scaled(std::move(bt.coefficient))
+                                 : scaled(make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1)));
+        }
+        if (quadratic_before == constraint.quadratic_groups.size()) {
+            return;
+        }
+        // A quadratic group carries a numeric multiplier rather than an expression, so
+        // scaling one needs the factor's value here. Read it straight off the node, the
+        // way the scaled-quadratic detection below already does -- there is no
+        // ClientContext at analysis time to evaluate anything richer.
+        const Expression *literal = &scale;
+        while (literal->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+            literal = literal->Cast<BoundCastExpression>().child.get();
+        }
+        if (literal->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+            throw InvalidInputException(
+                "DECIDE constraint: a squared term cannot be multiplied by '%s', whose value "
+                "is not known until the query runs. Use a constant factor, or move it inside "
+                "the aggregate as SUM(%s * POWER(...)).",
+                scale.GetName(), scale.GetName());
+        }
+        double factor = literal->Cast<BoundConstantExpression>()
+                            .value.DefaultCastAs(LogicalType::DOUBLE)
+                            .GetValue<double>();
+        if (divides && factor == 0.0) {
+            throw InvalidInputException("DECIDE constraint: division by zero in a squared term.");
+        }
+        for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
+            constraint.quadratic_groups[i].sign *= divides ? 1.0 / factor : factor;
+        }
+    }
+
+    //! If `expr` is a reducer with a factor peeled onto it by the canonicalizer
+    //! (`2 * SUM(x)`, `SUM(x) / 2`), return the bare reducer and report the factor.
+    //! Only ONE spelling has to be recognized here -- factor on the left for `*` --
+    //! because canonicalization converged `SUM(x) * 2` and friends onto it.
+    //! Name an expression the way the user wrote it: strip the casts the binder added.
+    static string ScaleUserName(const Expression &expr) {
+        const Expression *cur = &expr;
+        while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+            cur = cur->Cast<BoundCastExpression>().child.get();
+        }
+        auto name = cur->GetName();
+        return name.empty() ? cur->ToString() : name;
+    }
+
+    static const Expression *AsScaledAggregate(const Expression &expr, const Expression *&out_scale,
+                                               bool &out_divides,
+                                               const BoundFunctionExpression *&out_func) {
+        out_scale = nullptr;
+        out_divides = false;
+        out_func = nullptr;
+        if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+            return nullptr;
+        }
+        auto &func = expr.Cast<BoundFunctionExpression>();
+        bool is_mult = func.function.name == "*";
+        bool is_div = func.function.name == "/";
+        if ((!is_mult && !is_div) || func.children.size() != 2) {
+            return nullptr;
+        }
+        // Both orders are matched for `*`. Canonicalization puts the factor on the
+        // left, but it only runs on CONSTRAINTS -- an objective reaches here spelled
+        // however the user wrote it. `/` is not commutative: only `AGG / K` qualifies.
+        auto unwrap = [](const Expression &e) -> const Expression * {
+            const Expression *cur = &e;
+            while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+                cur = cur->Cast<BoundCastExpression>().child.get();
+            }
+            return cur;
+        };
+        idx_t agg_child;
+        if (unwrap(*func.children[0])->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+            agg_child = 0;
+        } else if (is_mult && unwrap(*func.children[1])->GetExpressionClass() ==
+                                  ExpressionClass::BOUND_AGGREGATE) {
+            agg_child = 1;
+        } else {
+            return nullptr;
+        }
+        // Two reducers multiplied is a product of aggregates, not a scaled one.
+        if (unwrap(*func.children[1 - agg_child])->GetExpressionClass() ==
+            ExpressionClass::BOUND_AGGREGATE) {
+            return nullptr;
+        }
+        out_scale = func.children[1 - agg_child].get();
+        out_divides = is_div;
+        out_func = &func;
+        return unwrap(*func.children[agg_child]);
+    }
+
     void ExtractAggregateConstraintTerms(const Expression &expr, DecideConstraint &constraint, int sign) {
         if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
             auto &cast = expr.Cast<BoundCastExpression>();
@@ -1467,6 +1713,42 @@ public:
                 ExtractAggregateConstraintTerms(*func.children[0], constraint, -sign);
                 return;
             }
+        }
+        // A scaled reducer: unwrap to the reducer, extract it, then apply the factor to
+        // everything that came out.
+        {
+            const Expression *scale = nullptr;
+            bool divides = false;
+            const BoundFunctionExpression *scale_func = nullptr;
+            if (const Expression *agg_expr = AsScaledAggregate(expr, scale, divides, scale_func)) {
+                // Belt and braces: the canonicalizer rejects a decision-bearing factor
+                // before a user-written constraint reaches here, but constraints the
+                // OPTIMIZER emits are canonicalized by the permissive path, which does
+                // not judge factors. Reading a decision column as a coefficient crashes
+                // in evaluation rather than failing cleanly, so check here too.
+                if (op.FindDecideVariable(*scale) != DConstants::INVALID_INDEX) {
+                    throw InvalidInputException(
+                        "DECIDE constraint: '%s' is a decision, so it cannot multiply an "
+                        "aggregate. Only constants and query-wide values can scale "
+                        "SUM/AVG/MIN/MAX.",
+                        ScaleUserName(*scale));
+                }
+                idx_t linear_before = constraint.lhs_terms.size();
+                idx_t bilinear_before = constraint.bilinear_terms.size();
+                idx_t quadratic_before = constraint.quadratic_groups.size();
+                ExtractAggregateConstraintTerms(*agg_expr, constraint, sign);
+                ApplyScaleToExtracted(*scale_func, *scale, divides, constraint, linear_before,
+                                      bilinear_before, quadratic_before);
+                return;
+            }
+        }
+        // A query-wide (`scalar`) decision is row-invariant, so it is a complete term of
+        // an aggregate constraint on its own -- there is nothing for a reducer to collapse.
+        // This is K3's "reducer or row-invariant" rule; the objective path already reads
+        // the same way (see ExtractAggregateObjectiveTerms).
+        if (IsScalarDecideTerm(expr)) {
+            ExtractConstraintTerms(expr, constraint, sign);
+            return;
         }
         if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
             throw InvalidInputException("DECIDE aggregate constraint LHS contains a non-aggregate term: %s.\n"
@@ -1618,40 +1900,26 @@ public:
                     // Per-row constraint (e.g., x <= 5, or multi-variable: d >= x - c)
                     constraint->lhs_is_aggregate = false;
 
-                    // Check if RHS contains DECIDE variables (multi-variable constraint)
+                    // K1 guard. DecideCanonicalizer puts every decision-bearing term on
+                    // the left, so a decision variable reaching the RHS here means the
+                    // invariant was broken upstream -- by a new optimizer rewrite that
+                    // mutates a constraint in place instead of going through
+                    // LogicalDecide::AddConstraint, most likely. This used to be a second
+                    // implementation of the partition (canonicalize.md sites 4/5); it was
+                    // verified unreachable across the golden corpus and the full suite
+                    // before being replaced by the check, so a wrong answer here would
+                    // otherwise be silent.
                     vector<ExprVarRef> rhs_refs;
                     CollectDecideVarRefs(*comp.right, +1, rhs_refs, op);
-
                     if (!rhs_refs.empty()) {
-                        // Multi-variable per-row constraint (e.g., ABS linearization: d >= x - c)
-                        // Collect LHS DECIDE vars
-                        vector<ExprVarRef> lhs_refs;
-                        CollectDecideVarRefs(*lhs, +1, lhs_refs, op);
+                        throw InternalException(
+                            "DECIDE constraint is not canonical: decision variable on the right-hand "
+                            "side of '%s'. Constraints must be canonicalized by DecideCanonicalizer "
+                            "before reaching the physical operator.",
+                            comp.right->ToString());
+                    }
 
-                        // LHS vars: extract row-varying coefficients, keep sign
-                        for (auto &ref : lhs_refs) {
-                            auto coef = FindVarCoefficient(*lhs, ref.var_idx, op);
-                            if (!coef) {
-                                coef = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
-                            }
-                            constraint->lhs_terms.push_back(Term{ref.var_idx, std::move(coef), ref.sign});
-                        }
-                        // RHS vars: extract row-varying coefficients, negate sign (moving to LHS)
-                        for (auto &ref : rhs_refs) {
-                            auto coef = FindVarCoefficient(*comp.right, ref.var_idx, op);
-                            if (!coef) {
-                                coef = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
-                            }
-                            constraint->lhs_terms.push_back(Term{ref.var_idx, std::move(coef), -ref.sign});
-                        }
-
-                        // RHS becomes data-only: DECIDE vars replaced with constant 0
-                        constraint->rhs_expr = StripDecideVars(*comp.right, op);
-                        // The LHS data/constant part (decide vars stripped) must also
-                        // move to the bound, negated — otherwise it is dropped (e.g. the
-                        // `10` in `10 - x <= y`). Subtracted from rhs at evaluation.
-                        constraint->lhs_offset_expr = StripDecideVars(*lhs, op);
-                    } else if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+                    if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                         // Simple single-variable constraint (e.g., x <= 5)
                         idx_t var_idx = op.FindDecideVariable(*lhs);
                         if (var_idx != DConstants::INVALID_INDEX) {
@@ -1705,7 +1973,7 @@ public:
             obj.has_quadratic = true;
             obj.quadratic_sign = effective_sign;
             idx_t before = obj.squared_terms.size();
-            op.ExtractTerms(*quad_pattern.inner_linear_expr, obj.squared_terms);
+            op.ExtractTerms(context, *quad_pattern.inner_linear_expr, obj.squared_terms);
             if (filter) {
                 for (idx_t i = before; i < obj.squared_terms.size(); i++) {
                     obj.squared_terms[i].filter = filter->Copy();
@@ -1746,7 +2014,7 @@ public:
                 // Distribute before ClassifyNormalizedProduct (which throws on
                 // additive factors). See ExtractConstraintTerms for rationale.
                 {
-                    auto distributed = TryDistributeMultiplyOverAdd(func);
+                    auto distributed = TryDistributeMultiplyOverAdd(context, func);
                     if (!distributed.empty()) {
                         for (auto &kv : distributed) {
                             ExtractLinearAndBilinearTerms(*kv.second, obj, sign * kv.first, filter);
@@ -1760,7 +2028,7 @@ public:
                         Objective::BilinearTerm bt;
                         bt.var_a = product.decide_factors[0];
                         bt.var_b = product.decide_factors[1];
-                        bt.coefficient = BuildCoefficientFromFactors(product.coefficient_factors, *product.mul_func);
+                        bt.coefficient = BuildCoefficientFromFactors(context, product.coefficient_factors);
                         bt.sign = sign;
                         if (filter) {
                             bt.filter = filter->Copy();
@@ -1782,7 +2050,7 @@ public:
 
         // Not bilinear — delegate to linear extraction
         idx_t before = obj.terms.size();
-        op.ExtractTerms(expr, obj.terms);
+        op.ExtractTerms(context, expr, obj.terms);
         // Apply sign to newly added terms
         if (sign == -1) {
             for (idx_t i = before; i < obj.terms.size(); i++) {
@@ -1883,7 +2151,7 @@ public:
                     if (filter) {
                         qg.filter = filter->Copy();
                     }
-                    op.ExtractTerms(*inner, qg.inner_terms);
+                    op.ExtractTerms(context, *inner, qg.inner_terms);
                     constr.quadratic_groups.push_back(std::move(qg));
                     constr.has_quadratic = true;
                     return;
@@ -1908,7 +2176,7 @@ public:
                                     if (filter) {
                                         qg.filter = filter->Copy();
                                     }
-                                    op.ExtractTerms(*inner, qg.inner_terms);
+                                    op.ExtractTerms(context, *inner, qg.inner_terms);
                                     constr.quadratic_groups.push_back(std::move(qg));
                                     constr.has_quadratic = true;
                                     return;
@@ -1923,7 +2191,7 @@ public:
                 // hard-direction rewrites and other paths the symbolic normalizer
                 // didn't fully expand.
                 {
-                    auto distributed = TryDistributeMultiplyOverAdd(func);
+                    auto distributed = TryDistributeMultiplyOverAdd(context, func);
                     if (!distributed.empty()) {
                         for (auto &kv : distributed) {
                             ExtractConstraintTerms(*kv.second, constr, sign * kv.first, filter);
@@ -1937,7 +2205,7 @@ public:
                         BilinearConstraintTerm bt;
                         bt.var_a = product.decide_factors[0];
                         bt.var_b = product.decide_factors[1];
-                        bt.coefficient = BuildCoefficientFromFactors(product.coefficient_factors, *product.mul_func);
+                        bt.coefficient = BuildCoefficientFromFactors(context, product.coefficient_factors);
                         bt.sign = sign;
                         if (filter) {
                             bt.filter = filter->Copy();
@@ -1956,7 +2224,7 @@ public:
         }
         // Linear — delegate to ExtractTerms
         idx_t before = constr.lhs_terms.size();
-        op.ExtractTerms(expr, constr.lhs_terms);
+        op.ExtractTerms(context, expr, constr.lhs_terms);
         if (sign == -1) {
             for (idx_t i = before; i < constr.lhs_terms.size(); i++) {
                 constr.lhs_terms[i].sign *= -1;
@@ -1976,6 +2244,58 @@ public:
         idx_t var_idx = op.FindDecideVariable(expr);
         return var_idx != DConstants::INVALID_INDEX && var_idx < op.variable_scopes.size() &&
                op.variable_scopes[var_idx].IsScalar();
+    }
+
+    //! Objective twin of ApplyScaleToExtracted: multiply a factor that stayed outside a
+    //! reducer into everything the reducer produced. `quadratic_sign` is a number
+    //! rather than an expression, so a squared term needs the factor's value here.
+    void ApplyScaleToObjective(const BoundFunctionExpression &scale_func, const Expression &scale,
+                               bool divides, Objective &obj, idx_t linear_before,
+                               idx_t bilinear_before, idx_t squared_before) {
+        auto scaled = [&](unique_ptr<Expression> coef) {
+            const auto &lhs_type = scale_func.function.arguments[divides ? 0 : 1];
+            const auto &rhs_type = scale_func.function.arguments[divides ? 1 : 0];
+            vector<unique_ptr<Expression>> children;
+            if (divides) {
+                children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), lhs_type));
+                children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), rhs_type));
+            } else {
+                children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), rhs_type));
+                children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), lhs_type));
+            }
+            return make_uniq_base<Expression, BoundFunctionExpression>(
+                scale_func.return_type, scale_func.function, std::move(children), nullptr);
+        };
+        for (idx_t i = linear_before; i < obj.terms.size(); i++) {
+            obj.terms[i].coefficient = scaled(std::move(obj.terms[i].coefficient));
+        }
+        for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
+            auto &bt = obj.bilinear_terms[i];
+            bt.coefficient = bt.coefficient
+                                 ? scaled(std::move(bt.coefficient))
+                                 : scaled(make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1)));
+        }
+        if (squared_before == obj.squared_terms.size()) {
+            return;
+        }
+        const Expression *literal = &scale;
+        while (literal->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+            literal = literal->Cast<BoundCastExpression>().child.get();
+        }
+        if (literal->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+            throw InvalidInputException(
+                "DECIDE objective: a squared term cannot be multiplied by '%s', whose value is "
+                "not known until the query runs. Use a constant factor, or move it inside the "
+                "aggregate as SUM(%s * POWER(...)).",
+                scale.GetName(), scale.GetName());
+        }
+        double factor = literal->Cast<BoundConstantExpression>()
+                            .value.DefaultCastAs(LogicalType::DOUBLE)
+                            .GetValue<double>();
+        if (divides && factor == 0.0) {
+            throw InvalidInputException("DECIDE objective: division by zero in a squared term.");
+        }
+        obj.quadratic_sign *= divides ? 1.0 / factor : factor;
     }
 
     void ExtractAggregateObjectiveTerms(const Expression &expr, Objective &obj, int sign) {
@@ -1999,6 +2319,35 @@ public:
             }
             if (func.function.name == "-" && func.children.size() == 1) {
                 ExtractAggregateObjectiveTerms(*func.children[0], obj, -sign);
+                return;
+            }
+        }
+        // A factor left outside a reducer (`2 * SUM(x*p)`): extract the reducer, then
+        // multiply the factor into everything it produced. Mirrors the constraint
+        // side; objectives are not canonicalized, so both spellings arrive as written.
+        {
+            const Expression *obj_scale = nullptr;
+            bool obj_divides = false;
+            const BoundFunctionExpression *obj_scale_func = nullptr;
+            if (const Expression *agg_expr = AsScaledAggregate(expr, obj_scale, obj_divides, obj_scale_func)) {
+                // The canonicalizer vets a factor before it gets here -- but it only runs
+                // on CONSTRAINTS, so an objective arrives unvetted and this is the first
+                // place that can say no. A decision on both sides of the `*` is a product
+                // of two decisions (bilinear), not a scaled reducer; treating it as a
+                // coefficient reads a decision column as data and crashes in evaluation.
+                if (op.FindDecideVariable(*obj_scale) != DConstants::INVALID_INDEX) {
+                    throw InvalidInputException(
+                        "DECIDE objective: '%s' is a decision, so it cannot multiply an "
+                        "aggregate. Only constants and query-wide values can scale "
+                        "SUM/AVG/MIN/MAX.",
+                        ScaleUserName(*obj_scale));
+                }
+                idx_t linear_before = obj.terms.size();
+                idx_t bilinear_before = obj.bilinear_terms.size();
+                idx_t squared_before = obj.squared_terms.size();
+                ExtractAggregateObjectiveTerms(*agg_expr, obj, sign);
+                ApplyScaleToObjective(*obj_scale_func, *obj_scale, obj_divides, obj, linear_before,
+                                      bilinear_before, squared_before);
                 return;
             }
         }
@@ -2360,6 +2709,12 @@ public:
     mutex lock;
     // This collection will hold all the data from the child operator
     ColumnDataCollection data;
+
+    //! Kept so the term extractors can re-bind a rebuilt product through
+    //! `FunctionBinder` instead of reusing another node's signature — see
+    //! `RebindOperator`. Analysis runs entirely inside this state's constructor,
+    //! so the reference stays valid for every use.
+    ClientContext &context;
 
     const PhysicalDecide &op;
 
@@ -3144,6 +3499,127 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         return EvaluateBooleanMasks({&condition})[0];
     };
 
+    // Reduce one data-only reducer on the right-hand side to a value per group.
+    //
+    // Implements the construction order paper §3.2.2 fixes for every reducer:
+    //
+    //     when selection -> per partitioning -> qualifier de-duplication -> aggregation
+    //
+    // The first two arrive as `group_ids` (built from the constraint's WHEN and PER,
+    // deliberately without the LHS's aggregate-local filters). This adds the reducer's
+    // own WHEN, then the relation-qualifier de-duplication, then folds.
+    //
+    // Unlike the left-hand side, nothing here can be expressed as a coefficient: the
+    // LHS reduces by *summing a column*, which is why only SUM and AVG could ever be
+    // moved there and MIN/MAX/COUNT were refused. Folding per kind is what removes
+    // that asymmetry.
+    auto EvaluateRhsReducerPerGroup = [&](const BoundAggregateExpression &agg,
+                                          const vector<idx_t> &group_ids,
+                                          idx_t num_groups) -> vector<double> {
+        const bool has_groups = !group_ids.empty();
+        const idx_t groups = has_groups ? num_groups : 1;
+        auto group_of = [&](idx_t row) -> idx_t {
+            return has_groups ? group_ids[row] : 0;
+        };
+
+        // Stage 1: the reducer's own WHEN (`SUM(b) WHEN w`), which scopes this reducer
+        // and nothing else.
+        vector<bool> keep;
+        if (agg.filter) {
+            keep = EvaluateBooleanMask(*agg.filter);
+        }
+        // Stage 2: relation-qualified reducers (`sum(D: cost)`) contribute once per
+        // distinct entity, not once per joined row.
+        idx_t scope_idx = DecideGlobalSinkState::QualifierScopeOf(agg);
+        if (scope_idx != DConstants::INVALID_INDEX) {
+            auto dedup = BuildQualifierKeepMask(entity_mappings, scope_idx, group_ids);
+            if (keep.empty()) {
+                keep = std::move(dedup);
+            } else {
+                for (idx_t row = 0; row < num_rows && row < keep.size(); row++) {
+                    keep[row] = keep[row] && dedup[row];
+                }
+            }
+        }
+
+        const string name = StringUtil::Lower(agg.function.name);
+        const bool is_count = name == "count" || name == "count_star";
+        const bool is_avg = name == "avg" || HasDecideTag(agg.alias, AVG_REWRITE_TAG);
+        const bool is_min = name == "min";
+        const bool is_max = name == "max";
+        const bool is_sum = name == "sum";
+        if (!is_count && !is_avg && !is_min && !is_max && !is_sum) {
+            throw InvalidInputException(
+                "DECIDE constraint right-hand side: %s is not supported as a bound. "
+                "Use SUM, AVG, MIN, MAX or COUNT, or pre-compute the value in a scalar "
+                "subquery.",
+                agg.function.name);
+        }
+        // A data-only AVG reaches here as a genuine AVG node: DecideOptimizer's
+        // AVG->SUM rewrite deliberately skips decision-free aggregates, because
+        // rebinding one as SUM redeclares it with SUM's integral type while its value
+        // stays fractional — and this is the one place a reducer's value is handed
+        // back to a surrounding expression that was bound against that declared type.
+        // Left as AVG, the round trip is DOUBLE->DOUBLE and the fold below is exact.
+
+        // COUNT(*) has no argument to evaluate; every other kind reduces one column.
+        vector<double> values;
+        if (!agg.children.empty()) {
+            ExpressionExecutor arg_executor(context);
+            const Expression &arg =
+                CachedTransformToChunkExpression(chunk_expr_cache, *agg.children[0], context);
+            arg_executor.AddExpression(arg);
+            values.reserve(num_rows);
+            ColumnDataScanState scan;
+            gstate.data.InitializeScan(scan);
+            DataChunk in_chunk;
+            in_chunk.Initialize(context, gstate.data.Types());
+            DataChunk out_chunk;
+            out_chunk.Initialize(context, vector<LogicalType>{arg.return_type});
+            while (gstate.data.Scan(scan, in_chunk)) {
+                out_chunk.Reset();
+                arg_executor.Execute(in_chunk, out_chunk);
+                ExtractDoubleColumn(out_chunk.data[0], in_chunk.size(), 1.0, values,
+                                    "constraint right-hand side aggregate");
+            }
+        }
+
+        // Stage 3: fold.
+        vector<double> acc(groups, 0.0);
+        vector<idx_t> counts(groups, 0);
+        for (idx_t row = 0; row < num_rows; row++) {
+            idx_t g = group_of(row);
+            if (g == DConstants::INVALID_INDEX || g >= groups) {
+                continue;
+            }
+            if (!keep.empty() && !keep[row]) {
+                continue;
+            }
+            double v = values.empty() ? 0.0 : (row < values.size() ? values[row] : 0.0);
+            if (counts[g] == 0) {
+                acc[g] = is_count ? 1.0 : v;
+            } else if (is_min) {
+                acc[g] = MinValue<double>(acc[g], v);
+            } else if (is_max) {
+                acc[g] = MaxValue<double>(acc[g], v);
+            } else if (is_count) {
+                acc[g] += 1.0;
+            } else {
+                acc[g] += v; // SUM, and AVG's numerator
+            }
+            counts[g]++;
+        }
+        for (idx_t g = 0; g < groups; g++) {
+            // An empty reducer has no value — MIN(∅) and MAX(∅) are not representable
+            // and AVG(∅) is undefined. Same rule the left-hand side already enforces.
+            RejectEmptyAggregate(counts[g], "aggregate", "constraint right-hand side");
+            if (is_avg) {
+                acc[g] /= static_cast<double>(counts[g]);
+            }
+        }
+        return acc;
+    };
+
     // 1. Evaluate constraints
     for (idx_t c = 0; c < gstate.constraints.size(); c++) {
         auto &constraint = gstate.constraints[c];
@@ -3302,107 +3778,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
         }
 
-        // Evaluate RHS
-        // RHS can be a constant, an aggregate (scalar), or a row-varying expression (for row-wise constraints)
-
-        if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-            auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
-            double rhs_constant = const_expr.value.GetValue<double>();
-            eval_const.rhs_values.AssignScalar(num_rows, rhs_constant);
-            // The RHS is one editable literal shared across every row this clause
-            // emits → the elastic engine collapses those rows to one shared slack.
-            eval_const.rhs_is_shared_literal = true;
-        } else {
-            // RHS is a complex expression. It might be row-varying (e.g., column ref) or scalar (aggregate).
-            // We evaluate it against the data chunks.
-            // A *foldable* RHS (e.g. `2 + 3`, `5 * 2`, `ABS(-4)`) is one compile-time
-            // scalar shared by every row this clause emits, exactly like a bare literal
-            // — collapse those rows to one shared slack so the infeasible diagnosis
-            // treats it as a single editable cap, not per-row data. A row-varying RHS
-            // (column ref, correlated subquery) is not foldable and stays PER_ROW_DATA.
-            // An uncorrelated scalar subquery (`x <= (SELECT 5)`) flattens to a column
-            // ref that is not foldable but IS one shared cap; the binder marked it with
-            // SHARED_SCALAR_SUBQUERY_TAG before flattening so we recognize it here.
-            eval_const.rhs_is_shared_literal =
-                constraint->rhs_expr->IsFoldable() ||
-                IsSharedScalarSubqueryTag(constraint->rhs_expr->GetAlias());
-            // Capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
-            // infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
-            // genuine data RHS; a shared-literal RHS reports the numeric knob instead.
-            if (!eval_const.rhs_is_shared_literal) {
-                eval_const.rhs_label = RenderDiagnosticRhsLabel(*constraint->rhs_expr);
-            }
-            eval_const.rhs_values.Reserve(num_rows);
-
-            const Expression &transformed_rhs =
-                CachedTransformToChunkExpression(chunk_expr_cache, *constraint->rhs_expr, context, num_rows);
-
-            // Prepare executor
-            ExpressionExecutor rhs_executor(context);
-            rhs_executor.AddExpression(transformed_rhs);
-
-            // Scan data and evaluate
-            ColumnDataScanState rhs_scan_state;
-            gstate.data.InitializeScan(rhs_scan_state);
-            DataChunk rhs_chunk;
-            rhs_chunk.Initialize(context, gstate.data.Types());
-
-            DataChunk rhs_result;
-            vector<LogicalType> result_types = {transformed_rhs.return_type};
-            rhs_result.Initialize(context, result_types);
-            while (gstate.data.Scan(rhs_scan_state, rhs_chunk)) {
-                rhs_result.Reset();
-                rhs_executor.Execute(rhs_chunk, rhs_result);
-                auto &rhs_col = eval_const.rhs_values.MutableDense();
-                ExtractDoubleColumn(rhs_result.data[0], rhs_chunk.size(), 1.0,
-                                    rhs_col,
-                                    "constraint right-hand side");
-                eval_const.rhs_values.SyncSize();
-            }
-        }
-
-        // Subtract the stripped LHS data part from the bound (multi-variable per-row
-        // path). Foldable (no data column) → one scalar subtract; otherwise evaluate
-        // the per-row data column and subtract. A zero offset (bare-var LHS) is a no-op.
-        if (constraint->lhs_offset_expr) {
-            auto &off_expr = *constraint->lhs_offset_expr;
-            if (off_expr.IsFoldable()) {
-                double off = ExpressionExecutor::EvaluateScalar(context, off_expr)
-                                 .DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                if (off != 0.0) {
-                    auto &col = eval_const.rhs_values.MutableDense();
-                    for (idx_t r = 0; r < num_rows; r++) {
-                        col[r] -= off;
-                    }
-                    eval_const.rhs_values.SyncSize();
-                }
-            } else {
-                const Expression &transformed_off =
-                    CachedTransformToChunkExpression(chunk_expr_cache, off_expr, context, num_rows);
-                ExpressionExecutor off_executor(context);
-                off_executor.AddExpression(transformed_off);
-                ColumnDataScanState off_scan;
-                gstate.data.InitializeScan(off_scan);
-                DataChunk off_chunk;
-                off_chunk.Initialize(context, gstate.data.Types());
-                DataChunk off_result;
-                off_result.Initialize(context, vector<LogicalType>{transformed_off.return_type});
-                vector<double> off_vals;
-                off_vals.reserve(num_rows);
-                while (gstate.data.Scan(off_scan, off_chunk)) {
-                    off_result.Reset();
-                    off_executor.Execute(off_chunk, off_result);
-                    ExtractDoubleColumn(off_result.data[0], off_chunk.size(), 1.0, off_vals,
-                                        "constraint LHS data offset");
-                }
-                auto &col = eval_const.rhs_values.MutableDense();
-                for (idx_t r = 0; r < num_rows && r < off_vals.size(); r++) {
-                    col[r] -= off_vals[r];
-                }
-                eval_const.rhs_values.SyncSize();
-            }
-        }
-
         // DecidB: Unified WHEN+PER row→group assignment
         // Produces row_group_ids and num_groups for the evaluated constraint.
         // - No WHEN, no PER: row_group_ids stays empty, num_groups = 0 (fast path)
@@ -3411,6 +3786,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // - WHEN+PER: WHEN filters first, then PER groups the remaining rows
         bool has_when = (constraint->when_condition != nullptr);
         bool has_per = (!constraint->per_columns.empty());
+
+        // Group map for the right-hand side's own reducers: the constraint's WHEN and
+        // PER, without the LHS's aggregate-local filters. Empty means "every row, one
+        // group", the same convention `row_group_ids` uses.
+        vector<idx_t> rhs_row_group_ids;
 
         // Facet C: render the WHEN/PER qualifier for the clause label, reusing the same
         // expression GetName() the EXPLAIN/ParamsToString path uses. Order mirrors the
@@ -3457,13 +3837,22 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
                 return true;
             };
+            // The RHS's own reducers are scoped by the constraint's WHEN and PER, but
+            // NOT by the LHS's aggregate-local WHENs — those scope their own reducer
+            // only. `SUM(x) WHEN a <= MIN(b)` must take MIN over every row, not the
+            // a-rows. Kept in the same numbering so group g means the same thing on
+            // both sides.
+            std::function<bool(idx_t)> rhs_row_is_included = [&](idx_t row) {
+                return !has_when || when_mask[row];
+            };
 
             if (has_per) {
                 LookupOrBuildPerGroupIds(per_group_cache, constraint->per_columns,
                                          chunk_expr_cache, context, gstate.data, num_rows,
                                          /*null_excludes=*/true, row_is_included,
                                          eval_const.row_group_ids, eval_const.num_groups,
-                                         eval_const.group_labels);
+                                         eval_const.group_labels,
+                                         &rhs_row_is_included, &rhs_row_group_ids);
                 // PER: individual empty groups are skipped silently, but the
                 // aggregate as a whole must see at least one group. Per-row
                 // constraints are exempt — a per-row WHEN matching zero rows is
@@ -3476,12 +3865,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 }
             } else {
                 eval_const.row_group_ids.resize(num_rows);
+                rhs_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
                 // WHEN and/or aggregate-local WHEN (no PER): one group (group 0) for matching rows
                 idx_t included_rows = 0;
                 for (idx_t row = 0; row < num_rows; row++) {
                     bool inc = row_is_included(row);
                     eval_const.row_group_ids[row] = inc ? 0 : DConstants::INVALID_INDEX;
                     if (inc) included_rows++;
+                    if (rhs_row_is_included(row)) {
+                        rhs_row_group_ids[row] = 0;
+                    }
                 }
                 eval_const.num_groups = 1;
                 if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
@@ -3536,6 +3929,145 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             auto &mask = quadratic_filters[group_idx].mask;
             for (bool m : mask) if (m) cnt++;
             RejectEmptyAggregate(cnt, "quadratic aggregate term", "constraint");
+        }
+
+        // Evaluate RHS
+        // RHS can be a constant, an aggregate (scalar), or a row-varying expression (for row-wise constraints)
+
+        if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+            auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
+            double rhs_constant = const_expr.value.GetValue<double>();
+            eval_const.rhs_values.AssignScalar(num_rows, rhs_constant);
+            // The RHS is one editable literal shared across every row this clause
+            // emits → the elastic engine collapses those rows to one shared slack.
+            eval_const.rhs_is_shared_literal = true;
+        } else {
+            // RHS is a complex expression. It might be row-varying (e.g., column ref) or scalar (aggregate).
+            // We evaluate it against the data chunks.
+            // A *foldable* RHS (e.g. `2 + 3`, `5 * 2`, `ABS(-4)`) is one compile-time
+            // scalar shared by every row this clause emits, exactly like a bare literal
+            // — collapse those rows to one shared slack so the infeasible diagnosis
+            // treats it as a single editable cap, not per-row data. A row-varying RHS
+            // (column ref, correlated subquery) is not foldable and stays PER_ROW_DATA.
+            // An uncorrelated scalar subquery (`x <= (SELECT 5)`) flattens to a column
+            // ref that is not foldable but IS one shared cap; the binder marked it with
+            // SHARED_SCALAR_SUBQUERY_TAG before flattening so we recognize it here.
+            eval_const.rhs_is_shared_literal =
+                constraint->rhs_expr->IsFoldable() ||
+                IsSharedScalarSubqueryTag(constraint->rhs_expr->GetAlias());
+            // Capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
+            // infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
+            // genuine data RHS; a shared-literal RHS reports the numeric knob instead.
+            if (!eval_const.rhs_is_shared_literal) {
+                eval_const.rhs_label = RenderDiagnosticRhsLabel(*constraint->rhs_expr);
+            }
+            eval_const.rhs_values.Reserve(num_rows);
+
+            // Reducers on this side are evaluated first, to one value per group, and
+            // replaced by an extra chunk column carrying that value broadcast over the
+            // group's rows. What remains is an ordinary per-row expression, so a mixed
+            // bound like `MIN(cap) + demand * 2` needs no special case: the reducer part
+            // is constant within the group and the rest still varies, which is exactly
+            // what the reduction after this block expects.
+            vector<const Expression *> rhs_reducers;
+            CollectReducers(*constraint->rhs_expr, rhs_reducers);
+
+            std::unordered_map<const Expression *, idx_t> agg_substitutions;
+            vector<vector<double>> reducer_values;
+            const idx_t data_columns = gstate.data.ColumnCount();
+            for (idx_t i = 0; i < rhs_reducers.size(); i++) {
+                auto &agg = rhs_reducers[i]->Cast<BoundAggregateExpression>();
+                reducer_values.push_back(EvaluateRhsReducerPerGroup(
+                    agg, rhs_row_group_ids, eval_const.num_groups));
+                agg_substitutions.emplace(rhs_reducers[i], data_columns + i);
+            }
+
+            // A substituted tree is only valid against the augmented chunk below, so it
+            // is transformed directly rather than through the shared cache.
+            unique_ptr<Expression> owned_rhs;
+            const Expression *transformed_rhs = nullptr;
+            if (agg_substitutions.empty()) {
+                transformed_rhs = &CachedTransformToChunkExpression(
+                    chunk_expr_cache, *constraint->rhs_expr, context);
+            } else {
+                owned_rhs = TransformToChunkExpression(*constraint->rhs_expr, context,
+                                                       &agg_substitutions);
+                transformed_rhs = owned_rhs.get();
+            }
+
+            // Prepare executor
+            ExpressionExecutor rhs_executor(context);
+            rhs_executor.AddExpression(*transformed_rhs);
+
+            // Scan data and evaluate
+            ColumnDataScanState rhs_scan_state;
+            gstate.data.InitializeScan(rhs_scan_state);
+            vector<LogicalType> chunk_types = gstate.data.Types();
+            for (idx_t i = 0; i < rhs_reducers.size(); i++) {
+                chunk_types.push_back(LogicalType::DOUBLE);
+            }
+            DataChunk rhs_chunk;
+            rhs_chunk.Initialize(context, chunk_types);
+            DataChunk scan_chunk;
+            scan_chunk.Initialize(context, gstate.data.Types());
+
+            DataChunk rhs_result;
+            vector<LogicalType> result_types = {transformed_rhs->return_type};
+            rhs_result.Initialize(context, result_types);
+            idx_t scanned = 0;
+            while (gstate.data.Scan(rhs_scan_state, scan_chunk)) {
+                DataChunk *eval_chunk = &scan_chunk;
+                if (!rhs_reducers.empty()) {
+                    rhs_chunk.Reset();
+                    for (idx_t col = 0; col < scan_chunk.ColumnCount(); col++) {
+                        rhs_chunk.data[col].Reference(scan_chunk.data[col]);
+                    }
+                    for (idx_t i = 0; i < rhs_reducers.size(); i++) {
+                        auto &vals = reducer_values[i];
+                        auto out = FlatVector::GetData<double>(rhs_chunk.data[data_columns + i]);
+                        for (idx_t row = 0; row < scan_chunk.size(); row++) {
+                            idx_t abs_row = scanned + row;
+                            idx_t g = rhs_row_group_ids.empty()
+                                          ? 0
+                                          : rhs_row_group_ids[abs_row];
+                            // A row in no group contributes to no constraint; its value
+                            // is never read, so any finite filler will do.
+                            out[row] = (g == DConstants::INVALID_INDEX || g >= vals.size())
+                                           ? (vals.empty() ? 0.0 : vals[0])
+                                           : vals[g];
+                        }
+                    }
+                    rhs_chunk.SetCardinality(scan_chunk.size());
+                    eval_chunk = &rhs_chunk;
+                }
+                rhs_result.Reset();
+                rhs_executor.Execute(*eval_chunk, rhs_result);
+                auto &rhs_col = eval_const.rhs_values.MutableDense();
+                ExtractDoubleColumn(rhs_result.data[0], scan_chunk.size(), 1.0,
+                                    rhs_col,
+                                    "constraint right-hand side");
+                eval_const.rhs_values.SyncSize();
+                scanned += scan_chunk.size();
+            }
+        }
+
+        // A reduced constraint emits one row per group, so its bound must be one value
+        // per group. `was_minmax_easy` is included: the optimizer emitted it per row,
+        // but it is still one reducer compared against every tuple's bound, so the
+        // tightest bound is what pins it.
+        if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
+            string rhs_text = eval_const.rhs_label.empty()
+                                  ? RenderDiagnosticRhsLabel(*constraint->rhs_expr)
+                                  : eval_const.rhs_label;
+            // A decorrelated scalar subquery flattens to a column literally named
+            // SUBQUERY. Quoting that back at the user names nothing they wrote, so
+            // fall back to describing the side instead.
+            if (rhs_text.empty() || StringUtil::CIEquals(rhs_text, "SUBQUERY")) {
+                rhs_text = "The right-hand side";
+            } else {
+                rhs_text = "`" + rhs_text + "`";
+            }
+            ReduceAggregateRhsPerGroup(eval_const, rhs_row_group_ids, num_rows, rhs_text);
         }
 
         auto ScaleAvgRowCoefficients = [&](CoefficientColumn &col, bool has_filter,
@@ -4961,10 +5493,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         const auto &offsets = *offsets_ptr;
         const auto &flat_rows = *flat_ptr;
 
-        // Base (unscaled) RHS. For AVG(x) <> K we store the original K in rhs_values and
-        // multiply by group size per non-empty group below.
-        double base_rhs = ec.rhs_values.Get(0);
-
         for (idx_t g = 0; g < num_groups_to_process; g++) {
             idx_t g_begin = offsets[g];
             idx_t g_end = offsets[g + 1];
@@ -4973,7 +5501,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             }
             idx_t g_size = g_end - g_begin;
 
-            double rhs = base_rhs;
+            // Base (unscaled) RHS, read from a row that actually belongs to this group.
+            // For AVG(x) <> K we store the original K in rhs_values and multiply by the
+            // group size below. Reading row 0 once for every group predates the RHS
+            // carrying a per-group value; it also silently used a WHEN-excluded row.
+            double rhs = ec.rhs_values.Get(flat_rows[g_begin]);
             if (ec.ne_avg_rhs_scale) {
                 rhs *= static_cast<double>(g_size);
             }
@@ -5805,24 +6337,85 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             return coefs;
         };
 
-        for (auto &spec : composed_minmax_constraints) {
-            // RHS must be constant (possibly cast-wrapped) in v1.
-            const Expression *rhs_inner = spec.rhs_expr.get();
-            while (rhs_inner->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                rhs_inner = rhs_inner->Cast<BoundCastExpression>().child.get();
+        //! A factor on a reducer is one value for the whole query by construction (the
+        //! canonicalizer rejects anything row-varying), so evaluate it once and read
+        //! row 0. It goes through the same chunk-expression transform every other
+        //! coefficient does -- a flattened scalar subquery is a column reference, and
+        //! reading it without that transform would index the chunk by a logical column
+        //! index.
+        //!
+        //! `scale` must be the expression OWNED by the term, never a copy:
+        //! CachedTransformToChunkExpression keys its cache on the Expression's address,
+        //! so a temporary would leave a dangling key that a later allocation at the
+        //! same address silently inherits.
+        auto EvaluateQueryWideScale = [&](const Expression &scale, bool divides) -> double {
+            const Expression &transformed =
+                CachedTransformToChunkExpression(chunk_expr_cache, scale, context);
+            ExpressionExecutor exec(context);
+            exec.AddExpression(transformed);
+            ColumnDataScanState scan;
+            gstate.data.InitializeScan(scan);
+            DataChunk chunk;
+            chunk.Initialize(context, gstate.data.Types());
+            double v = 1.0;
+            bool got = false;
+            while (!got && gstate.data.Scan(scan, chunk)) {
+                if (chunk.size() == 0) {
+                    continue;
+                }
+                DataChunk result;
+                result.Initialize(context, {transformed.return_type});
+                exec.Execute(chunk, result);
+                Value val = result.data[0].GetValue(0);
+                if (val.IsNull()) {
+                    throw InvalidInputException(
+                        "DECIDE: the factor on an aggregate evaluated to NULL.");
+                }
+                v = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                if (!std::isfinite(v)) {
+                    throw InvalidInputException(
+                        "DECIDE: the factor on an aggregate is not finite (NaN/Inf).");
+                }
+                got = true;
             }
-            if (rhs_inner->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+            if (!got) {
+                return 1.0;
+            }
+            if (divides) {
+                if (v == 0.0) {
+                    throw InvalidInputException(
+                        "DECIDE constraint: division by zero — the factor on an aggregate "
+                        "evaluated to 0.");
+                }
+                return 1.0 / v;
+            }
+            return v;
+        };
+
+        for (auto &spec : composed_minmax_constraints) {
+            // RHS must be row-invariant in v1. Decide that by foldability rather
+            // than by matching a literal node: canonicalization rebuilds the bound
+            // side as an additive chain, so a constant arrives as `(0 - 3) + 0`
+            // just as legitimately as `-3`. IsFoldable is the same test the
+            // per-row constraint path uses for a shared literal RHS.
+            if (!spec.rhs_expr->IsFoldable()) {
                 throw BinderException(
                     "Composed MIN/MAX in DECIDE v1 requires a constant RHS; got '%s'.",
                     spec.rhs_expr->ToString());
             }
-            double rhs_val = rhs_inner->Cast<BoundConstantExpression>()
-                                 .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+            double rhs_val = ExpressionExecutor::EvaluateScalar(context, *spec.rhs_expr)
+                                 .DefaultCastAs(LogicalType::DOUBLE)
+                                 .GetValue<double>();
 
             struct TermAnalysis {
                 LogicalDecide::ComposedMinMaxTerm::Kind kind;
                 string agg_name;
                 int sign;
+                //! Factor the canonicalizer peeled off this reducer, already evaluated.
+                //! It stays outside the aggregate all the way to here, which is what
+                //! makes its sign irrelevant to correctness -- see
+                //! LogicalDecide::ComposedMinMaxTerm::scale.
+                double scale = 1.0;
                 bool is_easy;
                 vector<bool> filter_mask;
                 vector<Term> inner_terms;
@@ -5846,11 +6439,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ta.agg_name = term.agg_name;
                 ta.sign = term.sign;
                 ta.is_easy = term.is_easy;
+                if (term.scale) {
+                    ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides);
+                }
                 if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
                     ta.label = StringUtil::Upper(term.agg_name) + "(" + term.inner_expr->ToString() + ")";
                 }
 
-                ExtractTerms(*term.inner_expr, ta.inner_terms);
+                ExtractTerms(context, *term.inner_expr, ta.inner_terms);
                 for (auto &inner_t : ta.inner_terms) {
                     ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t));
                 }
@@ -5947,7 +6543,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             double outer_rhs = rhs_val;
             for (auto &ta : analyses) {
                 if (ta.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
-                    outer_accum[(int)ta.z_idx] += (double)ta.sign;
+                    outer_accum[(int)ta.z_idx] += (double)ta.sign * ta.scale;
                 } else {
                     // SUM/AVG term. For AVG, divide by filtered row count.
                     double avg_divisor = 1.0;
@@ -5966,7 +6562,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         auto &inner_t = ta.inner_terms[it];
                         for (idx_t row = 0; row < num_rows; row++) {
                             if (!ta.filter_mask[row]) continue;
-                            double coef = ta.per_term_coefs[it][row] * (double)ta.sign / avg_divisor;
+                            double coef = ta.per_term_coefs[it][row] * (double)ta.sign * ta.scale / avg_divisor;
                             if (inner_t.variable_index == DConstants::INVALID_INDEX) {
                                 outer_rhs -= coef;
                             } else {
@@ -6043,6 +6639,53 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             return coefs;
         };
 
+        //! Objective-side twin of the constraint path's helper. Same rule: `scale` must
+        //! be the term's own expression, not a copy -- the chunk-expression cache is
+        //! keyed by address.
+        auto EvaluateQueryWideScale = [&](const Expression &scale, bool divides) -> double {
+            const Expression &transformed =
+                CachedTransformToChunkExpression(chunk_expr_cache, scale, context);
+            ExpressionExecutor exec(context);
+            exec.AddExpression(transformed);
+            ColumnDataScanState scan;
+            gstate.data.InitializeScan(scan);
+            DataChunk chunk;
+            chunk.Initialize(context, gstate.data.Types());
+            double v = 1.0;
+            bool got = false;
+            while (!got && gstate.data.Scan(scan, chunk)) {
+                if (chunk.size() == 0) {
+                    continue;
+                }
+                DataChunk result;
+                result.Initialize(context, {transformed.return_type});
+                exec.Execute(chunk, result);
+                Value val = result.data[0].GetValue(0);
+                if (val.IsNull()) {
+                    throw InvalidInputException(
+                        "DECIDE: the factor on an aggregate evaluated to NULL.");
+                }
+                v = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                if (!std::isfinite(v)) {
+                    throw InvalidInputException(
+                        "DECIDE: the factor on an aggregate is not finite (NaN/Inf).");
+                }
+                got = true;
+            }
+            if (!got) {
+                return 1.0;
+            }
+            if (divides) {
+                if (v == 0.0) {
+                    throw InvalidInputException(
+                        "DECIDE objective: division by zero — the factor on an aggregate "
+                        "evaluated to 0.");
+                }
+                return 1.0 / v;
+            }
+            return v;
+        };
+
         // Clear any existing objective terms — the placeholder constant produced
         // none, but be defensive in case other paths populated them.
         solver_input.objective_coefficients.clear();
@@ -6052,6 +6695,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             LogicalDecide::ComposedMinMaxTerm::Kind kind;
             string agg_name;
             int sign;
+            //! Factor the canonicalizer peeled off this reducer, already evaluated.
+            //! See LogicalDecide::ComposedMinMaxTerm::scale.
+            double scale = 1.0;
             bool is_easy;
             vector<bool> filter_mask;
             vector<Term> inner_terms;
@@ -6076,10 +6722,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 ta.agg_name = term.agg_name;
                 ta.sign = term.sign;
                 ta.is_easy = term.is_easy;
+                if (term.scale) {
+                    ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides);
+                }
                 if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
                     ta.label = StringUtil::Upper(term.agg_name) + "(" + term.inner_expr->ToString() + ")";
                 }
-                ExtractTerms(*term.inner_expr, ta.inner_terms);
+                ExtractTerms(context, *term.inner_expr, ta.inner_terms);
                 for (auto &inner_t : ta.inner_terms) {
                     ta.per_term_coefs.push_back(EvaluateTermCoefsObj(inner_t));
                 }
@@ -6171,7 +6820,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             if (ta.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
                 // The z_k's obj coef is ta.sign (the MIN/MAX term's sign in the additive sum).
                 idx_t gslot = ta.z_idx - var_indexer.global_block_start;
-                solver_input.global_obj_coeffs[gslot] = (double)ta.sign;
+                solver_input.global_obj_coeffs[gslot] = (double)ta.sign * ta.scale;
             } else {
                 double avg_divisor = 1.0;
                 if (ta.agg_name == "avg") {
@@ -6187,7 +6836,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (dst.empty()) dst.assign(num_rows, 0.0);
                     for (idx_t row = 0; row < num_rows; row++) {
                         if (!ta.filter_mask[row]) continue;
-                        dst[row] += ta.per_term_coefs[it][row] * (double)ta.sign / avg_divisor;
+                        dst[row] += ta.per_term_coefs[it][row] * (double)ta.sign * ta.scale / avg_divisor;
                     }
                 }
             }

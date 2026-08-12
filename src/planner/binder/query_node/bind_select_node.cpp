@@ -446,7 +446,7 @@ static bool ReferencesDecideVariable(ParsedExpression &expr,
 // of DecideConstraintsBinder both resolve it through the generic
 // `decide_variables` binding instead of routing `Table` to the real table
 // binding (which has no such column). The aggregate-SUM path already strips
-// qualifiers via SymbolicC++ round-trip in NormalizeDecideConstraints; this
+// qualifiers via SymbolicC++ round-trip in SimplifyDecideConstraints; this
 // pre-pass extends that behavior uniformly to per-row constraints, the
 // SELECT list, and the objective.
 static void RewriteScopedVarRefs(unique_ptr<ParsedExpression> &expr,
@@ -853,200 +853,6 @@ static void RewriteInDomain(unique_ptr<ParsedExpression> &expr,
 	});
 }
 
-// ---- Data-Only Aggregate RHS hoisting ------------------------------------
-// An aggregate constraint whose RHS carries data-only SUM/AVG aggregates
-// (e.g. SUM(x*val) <= SUM(val), AVG(x+cost) <= AVG(cost) + 1) is rewritten by
-// moving those aggregates to the LHS, negated, leaving only the scalar part on
-// the RHS:  SUM(x*val) - SUM(val) <= 0  /  AVG(x+cost) - AVG(cost) <= 1.
-// The moved aggregate becomes an additive data-only term in the LHS aggregate,
-// which the existing execution path already sums over the constraint's active
-// row set (WHEN / PER / aggregate-local WHEN) and subtracts from the bound —
-// including AVG 1/N scaling — so no execution-layer changes are needed.
-//
-// Only data-only SUM/AVG aggregates are hoisted. MIN/MAX/COUNT aggregates, or
-// aggregates referencing a DECIDE variable, leave the constraint untouched so
-// existing behavior (the count_star() special case, or the rejection of
-// variables-on-both-sides) is preserved.
-static unique_ptr<ParsedExpression> DecideMakeArithOp(const string &op,
-                                                      unique_ptr<ParsedExpression> lhs,
-                                                      unique_ptr<ParsedExpression> rhs) {
-	vector<unique_ptr<ParsedExpression>> args;
-	args.push_back(std::move(lhs));
-	args.push_back(std::move(rhs));
-	return make_uniq<FunctionExpression>(op, std::move(args), nullptr, nullptr, false, true);
-}
-
-// An additive leaf is a movable aggregate if, after stripping CAST and an
-// optional aggregate-local WHEN wrapper, it is a bare data-only SUM/AVG.
-static bool IsMovableAggregateLeaf(const ParsedExpression &expr,
-                                   const case_insensitive_map_t<idx_t> &variables) {
-	const ParsedExpression *e = &expr;
-	while (e->GetExpressionClass() == ExpressionClass::CAST) {
-		e = e->Cast<CastExpression>().child.get();
-	}
-	if (e->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &f = e->Cast<FunctionExpression>();
-		if (f.is_operator && f.function_name == WHEN_CONSTRAINT_TAG && !f.children.empty()) {
-			e = f.children[0].get();
-			while (e->GetExpressionClass() == ExpressionClass::CAST) {
-				e = e->Cast<CastExpression>().child.get();
-			}
-		}
-	}
-	if (e->GetExpressionClass() != ExpressionClass::FUNCTION) {
-		return false;
-	}
-	auto &agg = e->Cast<FunctionExpression>();
-	if (agg.is_operator) {
-		return false;
-	}
-	auto name = StringUtil::Lower(agg.function_name);
-	if (name != "sum" && name != "avg") {
-		return false;
-	}
-	return !ExpressionContainsDecideVariable(*e, variables);
-}
-
-// The RHS is hoistable if it is an additive (+ / - / unary -) tree in which
-// every aggregate-bearing leaf is a movable data-only SUM/AVG. Non-aggregate
-// (scalar) leaves are permitted and stay on the RHS.
-static bool RhsIsHoistable(const ParsedExpression &expr,
-                           const case_insensitive_map_t<idx_t> &variables) {
-	const ParsedExpression *e = &expr;
-	while (e->GetExpressionClass() == ExpressionClass::CAST) {
-		e = e->Cast<CastExpression>().child.get();
-	}
-	if (e->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &f = e->Cast<FunctionExpression>();
-		if (f.is_operator && (f.function_name == "+" || f.function_name == "-")) {
-			for (auto &child : f.children) {
-				if (!RhsIsHoistable(*child, variables)) {
-					return false;
-				}
-			}
-			return true;
-		}
-	}
-	if (!ContainsDecideAggregate(*e)) {
-		return true; // scalar term, keep on RHS
-	}
-	return IsMovableAggregateLeaf(*e, variables);
-}
-
-// Split an additive RHS into aggregate terms (to move to the LHS) and scalar
-// terms (to keep on the RHS), each tagged with its accumulated +/- sign.
-static void SplitRhsAdditive(unique_ptr<ParsedExpression> node, int sign,
-                             vector<std::pair<int, unique_ptr<ParsedExpression>>> &moved,
-                             vector<std::pair<int, unique_ptr<ParsedExpression>>> &kept) {
-	if (node->GetExpressionClass() == ExpressionClass::CAST) {
-		SplitRhsAdditive(std::move(node->Cast<CastExpression>().child), sign, moved, kept);
-		return;
-	}
-	if (node->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &f = node->Cast<FunctionExpression>();
-		if (f.is_operator && f.function_name == "+") {
-			for (auto &child : f.children) {
-				SplitRhsAdditive(std::move(child), sign, moved, kept);
-			}
-			return;
-		}
-		if (f.is_operator && f.function_name == "-" && f.children.size() == 2) {
-			SplitRhsAdditive(std::move(f.children[0]), sign, moved, kept);
-			SplitRhsAdditive(std::move(f.children[1]), -sign, moved, kept);
-			return;
-		}
-		if (f.is_operator && f.function_name == "-" && f.children.size() == 1) {
-			SplitRhsAdditive(std::move(f.children[0]), -sign, moved, kept);
-			return;
-		}
-	}
-	if (ContainsDecideAggregate(*node)) {
-		moved.emplace_back(sign, std::move(node));
-	} else {
-		kept.emplace_back(sign, std::move(node));
-	}
-}
-
-static void HoistAggregateComparisonRHS(ComparisonExpression &comp,
-                                        const case_insensitive_map_t<idx_t> &variables) {
-	// Only aggregate constraints, with the DECIDE aggregate on the LHS.
-	if (!ContainsDecideAggregate(*comp.left) ||
-	    !ExpressionContainsDecideVariable(*comp.left, variables)) {
-		return;
-	}
-	// RHS must carry a data-only aggregate and be cleanly hoistable. Aggregates
-	// touching a DECIDE variable (variables on both sides) are left for the
-	// existing rejecting path.
-	if (!ContainsDecideAggregate(*comp.right) ||
-	    ExpressionContainsDecideVariable(*comp.right, variables) ||
-	    !RhsIsHoistable(*comp.right, variables)) {
-		return;
-	}
-
-	vector<std::pair<int, unique_ptr<ParsedExpression>>> moved, kept;
-	SplitRhsAdditive(std::move(comp.right), +1, moved, kept);
-
-	// Move aggregate terms to the LHS with negated sign.
-	unique_ptr<ParsedExpression> new_left = std::move(comp.left);
-	for (auto &m : moved) {
-		new_left = DecideMakeArithOp(m.first > 0 ? "-" : "+", std::move(new_left), std::move(m.second));
-	}
-	comp.left = std::move(new_left);
-
-	// Rebuild the scalar RHS from the kept terms (0 if none remain).
-	unique_ptr<ParsedExpression> new_right;
-	for (auto &k : kept) {
-		if (!new_right) {
-			if (k.first < 0) {
-				vector<unique_ptr<ParsedExpression>> a;
-				a.push_back(std::move(k.second));
-				new_right = make_uniq<FunctionExpression>("-", std::move(a), nullptr, nullptr, false, true);
-			} else {
-				new_right = std::move(k.second);
-			}
-		} else {
-			new_right = DecideMakeArithOp(k.first > 0 ? "+" : "-", std::move(new_right), std::move(k.second));
-		}
-	}
-	if (!new_right) {
-		new_right = make_uniq<ConstantExpression>(Value::DOUBLE(0));
-	}
-	comp.right = std::move(new_right);
-}
-
-// Walk the SUCH THAT tree (conjunctions + WHEN/PER wrappers) and hoist data-only
-// aggregate RHS on each aggregate comparison. Descends only into the constraint
-// child of WHEN/PER wrappers, never their conditions or PER columns.
-static void RewriteAggregateConstraintRHS(unique_ptr<ParsedExpression> &expr,
-                                          const case_insensitive_map_t<idx_t> &variables) {
-	if (!expr) {
-		return;
-	}
-	switch (expr->GetExpressionClass()) {
-	case ExpressionClass::CONJUNCTION: {
-		auto &conj = expr->Cast<ConjunctionExpression>();
-		for (auto &child : conj.children) {
-			RewriteAggregateConstraintRHS(child, variables);
-		}
-		return;
-	}
-	case ExpressionClass::FUNCTION: {
-		auto &f = expr->Cast<FunctionExpression>();
-		if (f.is_operator &&
-		    (f.function_name == WHEN_CONSTRAINT_TAG || IsPerConstraintTag(f.function_name)) &&
-		    !f.children.empty()) {
-			RewriteAggregateConstraintRHS(f.children[0], variables);
-		}
-		return;
-	}
-	case ExpressionClass::COMPARISON:
-		HoistAggregateComparisonRHS(expr->Cast<ComparisonExpression>(), variables);
-		return;
-	default:
-		return;
-	}
-}
-
 // NOTE: RewriteNotEqual has been moved to DecideOptimizer (src/optimizer/decide/decide_optimizer.cpp).
 // It now operates on BoundExpressions post-binding instead of ParsedExpressions pre-binding.
 
@@ -1261,25 +1067,27 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
 
         if (statement.decide_constraints) {
-            // Hoist data-only aggregate RHS (SUM(x*val) <= SUM(val)) into the LHS
-            // as additive data-only terms before normalization, so the existing
-            // aggregate-body / WHEN / PER / AVG machinery handles them. Runs after
-            // the norm/IN rewrites so it also covers norm-bounded constraints.
-            RewriteAggregateConstraintRHS(statement.decide_constraints, decide_variable_names);
+            // A data-only reducer on the right used to be hoisted left here
+            // (`SUM(x*val) <= SUM(val)` -> `SUM(x*val) - SUM(val) <= 0`), because the
+            // right side could not reduce one. It can now (B.5's
+            // EvaluateRhsReducerPerGroup), and the canonicalizer classifies every
+            // decision-free term RIGHT (B.4), so the hoist would only build a tree
+            // that gets undone one stage later. Deleted 2026-08-10; see
+            // context/descriptions/canonicalize.md C.1.
             // deb("-- Parsed SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
             // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
-            // DECIDE variable. Must run before NormalizeDecideConstraints — the
+            // DECIDE variable. Must run before SimplifyDecideConstraints — the
             // symbolic layer throws InternalException on unknown functions, and
             // the per-row path would silently strip them.
             ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
-            statement.decide_constraints = NormalizeDecideConstraints(*statement.decide_constraints, decide_variable_names);
+            statement.decide_constraints = SimplifyDecideConstraints(*statement.decide_constraints, decide_variable_names);
             // deb("-- Normalized SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
         }
         if (statement.decide_objective) {
             // deb("-- Parsed OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
             ValidateDecideNoNonLinearScalar(context, *statement.decide_objective, decide_variable_names);
             double peeled_offset = 0.0;
-            statement.decide_objective = NormalizeDecideObjective(*statement.decide_objective,
+            statement.decide_objective = SimplifyDecideObjective(*statement.decide_objective,
                                                                    decide_variable_names,
                                                                    peeled_offset);
             result->objective_constant_offset = peeled_offset;

@@ -30,9 +30,11 @@ When a `BoundComparisonExpression` is reached (the actual constraint):
 - The comparison type (`<=`, `>=`, `=`, etc.) and RHS expression are recorded directly.
 - The LHS is unwrapped through any `BoundCastExpression` layers.
 - **Aggregate LHS** (e.g., `SUM(x * cost)` or `SUM(x * cost) WHEN a + SUM(x * hours) WHEN b`): `ExtractAggregateConstraintTerms()` walks additive aggregate expressions, calls `ExtractConstraintTerms()` on each aggregate's child, and copies aggregate metadata onto the extracted terms. The `lhs_is_aggregate` flag is set. Aggregate-local `WHEN` filters are stored on `Term::filter`, bilinear term filters, or quadratic group filters. If the aggregate has alias `AVG_REWRITE_TAG`, the extracted terms are marked for AVG scaling.
-- **Per-row LHS**: Two sub-paths:
-  - **Multi-variable** (RHS also contains DECIDE variables, e.g., `d >= x - c` from ABS linearization): `CollectDecideVarRefs()` finds all DECIDE variables on both sides with their signs. LHS variables keep their sign; RHS variables are moved to LHS with negated sign. `StripDecideVars()` replaces DECIDE variable references in the RHS with constant 0, producing a data-only expression.
+- **Per-row LHS**: first the **K1 guard** — `CollectDecideVarRefs()` on the RHS must find nothing. `DecideCanonicalizer` has already moved every decision-bearing term to the left, so a hit here means a rewrite broke canonical form upstream and the constraint is rejected with an internal error rather than mis-solved. Then two sub-paths:
   - **Single-variable** (simple bound like `x <= 5`): `FindDecideVariable()` identifies the variable; coefficient is implicitly 1.
+  - **Complex LHS** (e.g. `z_0 + z_1 = 1`, `d - x >= -c` from ABS linearization, or a quadratic `POWER(x - t, 2) <= K`): `ExtractConstraintTerms()` walks the additive spine.
+
+  There used to be a third sub-path that re-partitioned a decision-bearing RHS here, carrying the LHS's data part on `lhs_offset_expr`. It was a second implementation of the canonicalizer's job and was deleted at `canonicalize.md` C.3 after being verified unreachable; the guard above is what replaced it.
 
 ## `AnalyzeObjective()`
 
@@ -118,9 +120,9 @@ All methods on `PhysicalDecide`:
 
 - **`ContainsVariable(expr, var_idx)`**: Checks whether the expression tree contains a reference to a specific DECIDE variable. Used by `ExtractCoefficientWithoutVariable`.
 
-- **`ExtractCoefficientWithoutVariable(expr, var_idx)`**: Given a multiplication expression containing a DECIDE variable, returns a copy with the variable factor removed. For example, from `x * 5 * l_tax`, removes `x` and returns `5 * l_tax`. If the expression *is* the variable itself, returns constant 1.
+- **`ExtractCoefficientWithoutVariable(context, expr, var_idx)`**: Given a multiplication expression containing a DECIDE variable, returns a copy with the variable factor removed. For example, from `x * 5 * l_tax`, removes `x` and returns `5 * l_tax`. If the expression *is* the variable itself, returns constant 1. The surviving factors are re-multiplied through `RebindOperator` — see the note below on why the `ClientContext` is required.
 
-- **`ExtractTerms(expr, out_terms)`**: Main visitor for decomposing SUM arguments into terms. Handles:
+- **`ExtractTerms(context, expr, out_terms)`**: Main visitor for decomposing SUM arguments into terms. Handles:
   - `+` operators: recursively processes all children
   - `-` operators (binary): processes first child, then second child with sign flipped
   - `*` operators: finds the DECIDE variable (if any) and extracts the coefficient
@@ -131,8 +133,10 @@ All methods on `PhysicalDecide`:
 
 Static helper functions (not on `PhysicalDecide`):
 
+- **`RebindOperator(context, name, children)`** and its wrapper **`RebindMultiply`**: re-resolve an operator against the children it is actually being given, via `FunctionBinder::BindScalarFunction`. **Every rebuild of a reshaped subtree must go through this.** Hand-assembling a `BoundFunctionExpression` from another node's `function` / `return_type` / `bind_info` does not fail when the children's types disagree — it reinterprets their *physical* representation, returning a plausible wrong number and potentially reading past the end of a narrower vector. DECIDE has hit that failure mode three times; see `07_issues/bugs/done.md` ("A rebuilt product inherited a signature it no longer matched"). Two things guarantee a mismatch after a rewrite: distribution replaces a factor with one of its addends (narrower than the sum it came from), and dropping a factor shifts the survivors out of alignment with `function.arguments`. This is why `ExtractTerms` and `ExtractCoefficientWithoutVariable` take a `ClientContext`; `DecideGlobalSinkState` holds one for the analysis phase, and `Finalize` has its own.
+
+- **`BuildCoefficientFromFactors(context, factors)`**: folds a flattened factor list back into a product, binding each binary node for its own operands. Used by `TryDistributeMultiplyOverAdd` and by bilinear term extraction.
+
 - **`CombineBilinearCoefficients(coef_a, coef_b, mul_func)`**: Combines coefficient expressions extracted from both sides of a bilinear product. Returns no coefficient for `1 * 1`, returns the non-`1` side for one-sided coefficients, and creates a `BoundFunctionExpression("*", ...)` for two non-`1` coefficients. This keeps objective and constraint bilinear extraction consistent for shapes like `(coef_a * x) * (coef_b * y)`.
 
-- **`CollectDecideVarRefs(expr, sign, refs, op)`**: Walks the expression tree tracking sign through `+` and `-` operators, collecting all DECIDE variable references with their accumulated sign (+1 or -1).
-
-- **`StripDecideVars(expr, op)`**: Returns a copy of the expression with all DECIDE variable references replaced by constant `0.0`. Produces a data-only expression suitable for evaluation via `ExpressionExecutor`.
+- **`CollectDecideVarRefs(expr, sign, refs, op)`**: Walks the expression tree tracking sign through `+` and `-` operators, collecting all DECIDE variable references with their accumulated sign (+1 or -1). Its only remaining caller is the K1 guard on the per-row path, which needs the emptiness of the result rather than the signs.

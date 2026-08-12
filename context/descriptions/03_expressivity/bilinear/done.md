@@ -113,7 +113,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
    - `ExtractLinearAndBilinearTerms()`: separates linear and bilinear terms in objectives
    - `ExtractConstraintTerms()`: same for constraints
    - `ClassifyNormalizedProduct()`: flattens any nested `*` tree into leaf factors, partitions them into decide-variable indices (`decide_factors`) and data expressions (`coefficient_factors`). Handles arbitrary groupings like `(a*b)*(x*y)` and `a*b*x*y` identically.
-   - `BuildCoefficientFromFactors()`: rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms.
+   - `BuildCoefficientFromFactors()`: rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms. Each binary `*` is re-bound through `RebindOperator` for the operands actually present — reusing the original multiply's signature over a reshaped factor list silently reinterprets the operands' physical representation (see `01_pipeline/03a_expression_analysis.md` and `07_issues/bugs/done.md`).
    - Linear terms (`decide_factors.size() == 1`) fall through to `ExtractTerms` (uses `ExtractCoefficientWithoutVariable` on the original tree for type-safe coefficient extraction).
    - McCormick generation: uses `BilinearLink` metadata + resolved bounds to emit the envelope corners `w <= U*b`, `w >= x - U*(1-b)`, `w <= x - L*(1-b)`, and (only when `L < 0`) `w >= L*b`; widens the aux's lower bound to `L` for signed `x`
    - Evaluates bilinear coefficients per-row, applies WHEN mask
@@ -141,7 +141,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 
 - **Binder validation**: `src/planner/expression_binder/decide_binder.cpp` — `ValidateSumArgumentInternal()`, `allow_bilinear` parameter
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp` — passes `allow_bilinear=true`
-- **Symbolic normalization (bilinear)**: `src/decidb/symbolic/decide_symbolic.cpp` — bilinear expressions now use the default SymEngine expansion path; `ComparisonLhsHasQuadratic` bypasses SymEngine only for quadratic (POWER) shapes
+- **Symbolic normalization (bilinear)**: no longer applies to constraints. The parsed-level constraint simplifier was deleted at `canonicalize.md` C.4, so a bilinear constraint reaches the binder as written and `DecideCanonicalizer` decides its shape without opening the product. In a bilinear *objective*, `SimplifyDecideObjective` still expands with SymbolicC++, and its one bypass (`SumInnerIsQuadratic`) fires on POWER shapes only — bare `SUM(x*y)` takes the default path
 - **Optimizer rewrite**: `src/optimizer/decide/decide_optimizer.cpp` — `RewriteBilinear()`, `FindAndReplaceBilinear()`
 - **Boolean type tracking**: `src/include/duckdb/planner/operator/logical_decide.hpp` — `is_boolean_var`
 - **Bilinear link struct**: `src/include/duckdb/planner/operator/logical_decide.hpp` — `BilinearLink`

@@ -22,6 +22,22 @@ The `run_tests.sh` script automatically creates a virtualenv at
 `test/decide/.venv/` on first run, installs all dependencies, and then
 invokes pytest.
 
+### Parallelism
+
+Tests run across **8 xdist workers by default** (~25s, vs ~130s serially). The
+suite parallelizes well because its cost is dominated by tests that sit on a
+wall-clock solver time limit rather than by CPU work — `test_query_diagnostics_slow.py`
+alone is ~46% of a serial run.
+
+```bash
+DECIDE_TEST_JOBS=4 ./test/decide/run_tests.sh   # 4 workers
+DECIDE_TEST_JOBS=0 ./test/decide/run_tests.sh   # serial, for readable output
+./test/decide/run_tests.sh -n 2                 # explicit -n always wins
+```
+
+Run serially when you need a single test's stdout/stderr uninterleaved, or when
+bisecting an order-dependent failure.
+
 ## Setup (Manual)
 
 ```bash
@@ -216,7 +232,21 @@ Invalidation:
 - **Global**: the database file's size and modification time. Rebuilding
   `decidb.db` invalidates the entire cache.
 - **GC**: stale entries (deleted/renamed tests) are pruned automatically on
-  full (unfiltered) test runs.
+  full (unfiltered) test runs that pass. A filtered run never visits the entries
+  it would prune, and a failed run may be missing a worker's report, so neither
+  prunes. A test that skips is not "accessed" either, so its entry is pruned and
+  re-solved on the next run — cheap, and it keeps the cache honest.
+
+Under xdist each worker builds its own `OracleCache` over the slice of tests it
+was handed, so **no worker writes the shared file**: its GC would prune every
+entry the other workers owned, and the last writer would win. Workers hand back
+a `worker_report()` (entries solved this session + the set of test IDs they
+visited) over xdist's `workeroutput` channel; the controller merges them in
+`pytest_sessionfinish` and GCs against the union. The report rides the worker's
+shutdown event rather than a file the worker drops on its way out, which is what
+makes the GC safe: a worker that crashes and gets replaced delivers no report,
+the controller notices the gap and skips pruning. A missing *file* would have
+been indistinguishable from a worker that legitimately touched nothing.
 
 To force a full re-solve, delete the cache file:
 
@@ -266,6 +296,12 @@ still fine — that is a coarse topic check, not a dependency on exact wording.
 After each run, a summary table is printed and a JSON file is saved to
 `results/perf_YYYYMMDD_HHMMSS.json`. Each record includes timing data,
 the comparison status (`identical`/`optimal`), and the full decide vector.
+
+One run produces exactly one file regardless of worker count: under xdist each
+worker returns its records over `workeroutput` and the controller writes the
+merged set. These files are never pruned automatically, so `results/` grows by
+one file per run — delete `results/perf_*.json` periodically (it reached 549
+files / 83MB before its first cleanup).
 
 ## Architecture
 

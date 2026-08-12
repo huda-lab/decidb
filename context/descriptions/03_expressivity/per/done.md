@@ -46,6 +46,12 @@ idx_t num_groups = 0;           // 0 = ungrouped, >0 = number of groups
 
 Aggregate-local WHEN is not represented as a standalone `row_group_ids` wrapper. Each aggregate term carries a filter mask, and row grouping includes rows that pass at least one local term filter.
 
+**Grouping is computed before the right-hand side is evaluated.** It used to run 81 lines after, which is why a PER constraint could not carry a genuinely per-group bound — every aggregate emission site read row 0. Since B.5 the order is: aggregate-local filters → LHS coefficients → **grouping** → RHS → reduction.
+
+**The right-hand side uses a second group map over the same numbering.** A reducer's WHEN scopes only that reducer, so the right side must not inherit the *left* side's aggregate-local filters — in `(SUM(x) WHEN a) <= MIN(b)`, `MIN(b)` ranges over every row. `LookupOrBuildPerGroupIds` emits both maps from one cached partition, with a looser filter for the RHS and identical group ids, so group *g* means the same partition on both sides and a group the left side drops stays dropped.
+
+A PER constraint therefore carries a real **per-group bound**: `SUM(x) <= COUNT(*) PER grp` caps each group at its own row count, and `SUM(x) <= MIN(cap) PER grp` at its own minimum. See `03_expressivity/sql_functions/done.md` → "Reducers as a Bound".
+
 ---
 
 ## Use Case Example

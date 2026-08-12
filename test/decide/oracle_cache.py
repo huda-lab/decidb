@@ -9,7 +9,19 @@ Cache file: results/oracle_cache.json
 Invalidation:
   - Per-test: hash of inspect.getsource(test_fn) + db checksum
   - Global:   db checksum (size + mtime) stored at top level
-  - GC:       stale entries pruned on full (unfiltered) test runs
+  - GC:       stale entries pruned on full (unfiltered) test runs that passed
+
+Under xdist every worker builds its own OracleCache and sees only the slice of
+tests it was handed, so no worker may write the shared file: the GC would prune
+every entry the other workers owned and the last writer would win.  Workers
+instead hand back a ``worker_report()`` over xdist's ``workeroutput`` channel,
+which the controller folds together with ``merge_worker_reports()``.
+
+The report travels with the worker's shutdown event rather than through a file
+it drops on the way out.  That distinction matters for the GC: a worker that
+crashes and gets replaced delivers no report, the controller sees the gap, and
+pruning is skipped — whereas a missing file is indistinguishable from a worker
+that legitimately touched nothing, and silently costs a chunk of the cache.
 """
 
 from __future__ import annotations
@@ -51,6 +63,9 @@ class OracleCache:
             "entries": {},
         }
         self._accessed: set[str] = set()
+        #: Entries solved during this session, as opposed to loaded from disk.
+        #: This is what a worker hands back; see ``worker_report``.
+        self._stored: dict[str, Any] = {}
         self._dirty = False
         self._load()
 
@@ -82,12 +97,14 @@ class OracleCache:
     def store(self, test_id: str, test_fn: Callable, result: SolverResult) -> None:
         h = _source_hash(test_fn, self._db_checksum)
         self._accessed.add(test_id)
-        self._data["entries"][test_id] = {
+        entry = {
             "input_hash": h,
             "status": result.status.name,
             "objective_value": result.objective_value,
             "variable_values": result.variable_values,
         }
+        self._data["entries"][test_id] = entry
+        self._stored[test_id] = entry
         self._dirty = True
 
     def save(self, gc: bool = False) -> None:
@@ -106,6 +123,40 @@ class OracleCache:
         _CACHE_PATH.write_text(
             json.dumps(self._data, indent=2, sort_keys=True) + "\n"
         )
+
+    def worker_report(self) -> dict[str, Any]:
+        """This worker's contribution, for the controller to merge.
+
+        Carries only entries solved during this session — the controller reads
+        the shared file itself, so re-sending what was loaded from it would just
+        move the whole cache across the wire N times.  ``accessed`` is always
+        included, even when nothing was solved: it is what lets the controller
+        GC against the union across workers rather than one worker's slice.
+        """
+        return {
+            "db_checksum": self._db_checksum,
+            "stored": self._stored,
+            "accessed": sorted(self._accessed),
+        }
+
+
+def merge_worker_reports(
+    db_path: str, reports: list[dict[str, Any]], *, gc: bool
+) -> int:
+    """Fold xdist worker reports into the shared cache.  Returns entries kept."""
+    cache = OracleCache(db_path)
+    for report in reports:
+        # A report built against a different database is stale by definition —
+        # drop it rather than mixing checksums into one file.
+        if report.get("db_checksum") != cache._db_checksum:
+            continue
+        stored = report.get("stored") or {}
+        if stored:
+            cache._data["entries"].update(stored)
+            cache._dirty = True
+        cache._accessed.update(report.get("accessed", []))
+    cache.save(gc=gc)
+    return len(cache._data["entries"])
 
 
 # ---------------------------------------------------------------------------

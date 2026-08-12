@@ -1009,6 +1009,33 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows, {"x <= 5": "x <= (SELECT 5)"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_reversed_uncorrelated_subquery_cap_is_editable(
+        self, request, cli_fixture
+    ):
+        """The reversed spelling ``(SELECT 5) >= x`` has the same provenance.
+
+        Canonicalization swaps the complete sides, but provenance is semantic,
+        not an "original RHS" bit.  Diagnostics must therefore render the same
+        editable ``x <= 5`` clause as the forward spelling, never the flattened
+        internal name ``SUBQUERY``.
+        """
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
+            "DECIDE x(REAL) SUCH THAT (SELECT 5) >= x AND x >= lo MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        cap = _attrs(rows, "clause", "x <= 5")
+        assert cap["suggested_change"] == "x <= 10"
+        assert cap["amount"] == "5"
+        assert "SUBQUERY" not in result.stdout
+        assert not [r for r in rows if r["attribute"] == "conflict"]
+        _apply_reported_fix(cli, sql, rows, {"x <= 5": "(SELECT 5) >= x"})
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_correlated_subquery_cap_stays_per_row(self, request, cli_fixture):
         """I2 follow-up guard: a CORRELATED scalar subquery RHS (`x <= (SELECT hi)`, hi from
         the outer row) is genuinely per-row data and must NOT be tagged shared. The two

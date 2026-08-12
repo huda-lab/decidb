@@ -1,3 +1,4 @@
 duckdb>=1.0.0
 pytest>=7.0.0
+pytest-xdist>=3.0
 gurobipy>=12.0

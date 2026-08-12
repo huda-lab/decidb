@@ -58,7 +58,7 @@ public:
     DecideSense decide_sense;
     unique_ptr<Expression> decide_objective;
     //! Additive constant peeled from the parsed objective body during
-    //! NormalizeDecideObjective (e.g. the `3` in `MAXIMIZE SUM(x) + 3`). The
+    //! SimplifyDecideObjective (e.g. the `3` in `MAXIMIZE SUM(x) + 3`). The
     //! solver doesn't need this to compute `argmax`/`argmin`, but it's kept
     //! here so callers that ever want to report the actual objective value
     //! can add it back. Zero when nothing was peeled. Transferred to

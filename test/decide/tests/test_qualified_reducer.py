@@ -678,3 +678,65 @@ def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli,
         f"identity semantics fit both nations under the budget, got {q_keep}"
     assert sum(u_keep.values()) == 0, \
         f"row semantics fit neither nation under the budget, got {u_keep}"
+
+
+# ---------------------------------------------------------------------------
+# Test 13: a qualified reducer as the BOUND, not the model side
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+def test_qualified_reducer_as_a_bound(decidb_cli, duckdb_conn, oracle_solver):
+    """``SUM(n: keepN) <= SUM(n: n_nationkey) / 25`` — the qualifier de-duplicates the
+    right-hand side too.
+
+    The right side has always had the machinery (the physical layer runs the same
+    ``BuildQualifierKeepMask`` for a right-hand reducer that the left side uses), but
+    it was unreachable: the binder's RHS check validated the qualifier wrapper's second
+    child — a relation alias — as if it were a value on the bound side, and rejected the
+    whole constraint. Reachable since canonicalize.md B.4/C.1.
+
+    The de-duplication is the whole test. Four distinct nations sum to 50, so the bound
+    is 2; the join repeats each nation once per customer, and the row-weighted sum is
+    3057, which would make the bound 122 and let every nation be kept.
+    """
+    result, _ = decidb_cli.execute("""
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_nationkey IN (5, 14, 15, 16)
+        DECIDE n.keepN(BOOL)
+        SUCH THAT SUM(n: keepN) <= SUM(n: n.n_nationkey) / 25
+        MAXIMIZE SUM(n: n.n_nationkey * keepN)
+    """)
+    keep = _keep_by_nation(result, nation_col=1, keep_col=2)
+
+    nation_ids = [5, 14, 15, 16]
+    distinct_sum, row_weighted = duckdb_conn.execute("""
+        SELECT (SELECT SUM(n_nationkey) FROM
+                  (SELECT DISTINCT n_nationkey FROM nation WHERE n_nationkey IN (5,14,15,16))),
+               (SELECT SUM(n.n_nationkey) FROM customer c
+                  JOIN nation n ON c.c_nationkey = n.n_nationkey
+                  WHERE n.n_nationkey IN (5,14,15,16))
+    """).fetchone()
+    assert float(distinct_sum) / 25 < float(row_weighted) / 25, \
+        "fixture must make de-duplicated and row-weighted bounds differ"
+
+    oracle_solver.create_model("qualified_reducer_as_bound")
+    names = {n: f"keepN_{n}" for n in nation_ids}
+    for n in nation_ids:
+        oracle_solver.add_variable(names[n], VarType.BINARY)
+    # Both sides qualified: each nation is charged once, and the bound is the
+    # de-duplicated sum.
+    oracle_solver.add_constraint(
+        {names[n]: 1.0 for n in nation_ids},
+        "<=", float(distinct_sum) / 25, name="entity_cap",
+    )
+    oracle_solver.set_objective(
+        {names[n]: float(n) for n in nation_ids}, ObjSense.MAXIMIZE,
+    )
+    oracle = oracle_solver.solve()
+
+    decidb_obj = sum(n * keep.get(n, 0) for n in nation_ids)
+    assert abs(decidb_obj - oracle.objective_value) < 1e-4, \
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle.objective_value}"
+    assert sum(keep.values()) == 2, \
+        f"row-weighted bound would admit all four nations, got {keep}"

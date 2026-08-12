@@ -1235,15 +1235,30 @@ def test_composed_minmax_hard_max_constraint(decidb_cli):
 
 
 @pytest.mark.min_max
-@pytest.mark.error_binder
-def test_composed_minmax_subtraction_rejected(decidb_cli):
-    """Subtraction in a composed MIN/MAX LHS is rejected in v1."""
-    decidb_cli.assert_error("""
-        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+def test_composed_minmax_subtraction(decidb_cli):
+    """`MAX(x*v) WHEN w - MIN(x*v) WHEN w <= 3` — subtraction in a composed LHS.
+
+    Rejected before the canonicalization sign-awareness work, because a
+    subtracted term flips the direction each MIN/MAX is pushed and the walker
+    declined rather than tracking it. The MIN now arrives with sign -1, which
+    makes it pushed *up* and therefore easy, same as the MAX pushed down.
+
+    rows v=[10,12], w=true. Selecting both: MAX=12, MIN=10, spread 2 <= 3, so
+    the objective is 22. Selecting one leaves the other row's `x*v` at 0, so
+    MIN=0 and the spread exceeds 3. Selecting neither is feasible at 0.
+    The spread constraint therefore only admits the all-or-nothing choice.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1, 10.0, true), (2, 12.0, true)) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT MAX(x * v) WHEN w - MIN(x * v) WHEN w <= 3
         MAXIMIZE SUM(x * v)
-    """, match=r"does not support subtraction")
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
+    assert sorted(chosen) == [10.0, 12.0], f"expected both rows, got {chosen}"
 
 
 @pytest.mark.min_max
@@ -1253,13 +1268,15 @@ def test_composed_minmax_scalar_mult_hard_min(decidb_cli):
     """`(2 * MIN(x*v) WHEN w) + SUM(x*v) <= K` — hard-direction composed MIN with
     a scalar multiplier.
 
-    The symbolic K*WHEN fold collapses `2 * (MIN(x*v) WHEN w)` into
-    `WHEN(MIN(2*x*v), w)`, and the hard-MIN indicator layer pins z to the true MIN
-    of the scaled inner expression. Regression for two things at once: hard-
-    direction support, and the ExtractCoefficient fix that stopped dropping the
-    `2` in the un-normalized `(2*x)*v`.
+    The canonicalizer peels the `2` off the reducer and it stays outside: the
+    physical layer multiplies it into the auxiliary's contribution. The hard-MIN
+    indicator layer pins z to the true MIN of the unscaled inner expression, and the
+    outer row carries `2 * z`.
+    Regression for two things at once: hard-direction support, and the
+    ExtractCoefficient fix that stopped dropping the `2` in the un-normalized
+    `(2*x)*v`.
 
-    rows v=[10,5], w=true. Fold => MIN(2*x*v) + SUM(x*v) <= 20. Both selected:
+    rows v=[10,5], w=true. Folded => MIN(2*x*v) + SUM(x*v) <= 20. Both selected:
     MIN(20,10)=10 + SUM 15 = 25 > 20 (infeasible). Row1 alone: MIN(20,0)=0 +
     SUM 10 = 10 (feasible). Row2 alone: obj 5. MAXIMIZE SUM(x*v) => row1 only,
     objective 10.

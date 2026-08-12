@@ -8,6 +8,50 @@ Resolved entries are removed; if the fix taught a generalizable lesson, record i
 
 ---
 
+## The LHS data-term accumulator reduces by summing, whatever the term means
+
+**Location**: `FixedLinearLhsOffset` in `src/decidb/utility/ilp_model_builder.cpp:624`
+(callers at `:707` and `:819`).
+
+Every LHS term with no decision variable is folded into the bound by adding it up over
+the group's rows:
+
+```cpp
+for (each term with no decision variable)
+    for (each row in group)
+        offset += col.Get(row);      // it just sums
+```
+
+That is the correct reduction for a SUM and (after the AVG->SUM rewrite) for an AVG. It
+is not a reduction at all for anything else — it is one hard-coded fold standing in for
+the question "what does reducing this term mean?"
+
+**Why it still matters, in narrower terms than the original entry.** The obvious
+exposure is gone: data-only reducers now go RIGHT (B.4) and are evaluated per aggregate
+kind by the RHS reducer evaluator, and the SUM/AVG-only hoist that used to feed this
+accumulator was deleted at C.1. What remains is the case the canonicalizer *cannot*
+move, because §1 of `canonicalize.md` defines that pass as never opening a term: a
+constant or data subexpression inside a reducer **body**. `SUM(x + 3) <= 10` over two
+rows still routes the `3` through here, emitting `rhs=4`, which is right because the
+fold happens to be a sum. A body term whose correct reduction is not a sum would be
+silently mishandled by the same code path.
+
+So the accumulator's shape still constrains what may legally sit on the left, and that
+constraint is invisible at the call site — it reads as a generic "fold the data terms"
+helper. **The prediction that this would go dead was checked and is wrong**; it was
+recorded here as a follow-up to B.4 and survived it.
+
+**Fix direction**: make the fold explicit about which reduction it implements — either
+by naming it for SUM specifically and rejecting anything else that reaches it, or by
+routing LHS body terms through the same per-kind evaluator the RHS already has. The
+first is a guard and closes the silent-mishandling hole; the second removes the
+asymmetry but is only worth it if a non-sum body term is actually reachable.
+
+**Discovered**: 2026-08-10, scoping canonicalization Phase B.4/B.5. Re-verified and
+narrowed 2026-08-12.
+
+---
+
 ## Hard-direction MIN/MAX has only a one-hot Big-M encoding, whose relaxation weakens with row count
 
 **Location**: `src/execution/operator/decide/physical_decide.cpp:5394-5432` (flat hard MIN/MAX objective); the same encoding appears for composed terms via `EmitComposedHardMinMaxIndicators` and for nested-PER inner/outer levels.
@@ -24,25 +68,128 @@ The Big-M constant is not the weakness — `compute_big_m()` (line 4925) returns
 
 ---
 
-## Canonicalization is split across two stages, in two representations
+## Canonicalization is split across five sites, in three representations
+*(all five are now deleted; Phase C is complete)*
 
-**Location**: `src/decidb/symbolic/decide_symbolic.cpp:1272-1400` (`NormalizeComparisonExpr`, binder-time, over `ParsedExpression`); `src/execution/operator/decide/physical_decide.cpp:1610-1642` (per-row constraint extraction, model-build time, over bound `Expression`).
+**Authoritative task list: `../../canonicalize.md`.** That document is the plan, the
+status and the decision log; this entry exists only so the issue is findable from here.
+Do not track progress in both places.
 
-Putting a constraint into `Ax <= b` shape — decision terms on the left, data on the right — happens in two different places, at two different stages, over two different expression types.
+**What is still open** (everything else in the plan has landed):
 
-The binder's normalizer handles only a narrow slice. It returns the constraint untouched unless all three guards pass (`decide_symbolic.cpp:1274-1287`): the comparison is `<`, `<=`, `>`, or `>=` (**equality is never normalized**), the RHS is a numeric constant, and the LHS contains a `SUM`. Three further structural bypasses return `cmp.Copy()` for quadratic LHS, composed `MIN`/`MAX`, and aggregate-local `WHEN`.
+- **Phase D** — `VerifyCanonical()` as a debug assert (K0–K3 only). C.3 already left a
+  three-line K1 guard where the per-row re-partition used to be, which is Phase D in
+  miniature. The live constraint it records: an optimizer pass that mutates a constraint
+  **in place**, rather than going through `LogicalDecide::AddConstraint`, is the one way
+  to break K1.
+- **K3's full classification-driven rejection** is still undesigned. K3 makes the
+  canonicalizer the single rejection site, so it inherits the binder's user-facing error
+  messages for malformed constraints — a real responsibility under CLAUDE.md's
+  user-facing voice rule, flagged rather than decided.
+- **Open decisions D4** (objective canonicalization: the objective's
+  `objective_constant_offset` is `lhs_offset_expr`'s twin) and **D6** (relocating the
+  objective's grammar repair out of the symbolic layer). D1, D3, D5, D7, D8 are settled;
+  **D2 is settled for constraints** — the simplifier was deleted whole at C.4, not
+  demoted — and its remaining half (dropping SymbolicC++) is now a D4 question, since
+  only `SimplifyDecideObjective` still uses it.
 
-Everything the binder declines is re-partitioned at model build. `physical_decide.cpp:1614` collects decision references on the RHS, pushes them into `lhs_terms` with negated sign, zeroes them out of the RHS via `StripDecideVars`, and moves the LHS's data part to the bound as `lhs_offset_expr`. That is the same left/right migration the binder's normalizer performs, reimplemented against bound expressions.
+**Discovered**: 2026-07-30, writing paper §3.2. The paper's running example
+(`demand - sum(ship) <= max_shortfall`, Example 1 line 11) turned out to be a shape the
+binder's normalizer refuses — its RHS is a decision variable, so the rewrite happened in
+the physical operator instead. That asymmetry is what surfaced the split. **That example
+binds and solves as of C.2 (2026-08-12).** The binder check it died on also rejects
+paper-sweep entries B1–B4; those are a *row-varying data bound*, need per-tuple fan-out,
+and are still open, so whoever takes group B will reshape the same function.
 
-**Why it matters**: there is no single point in the pipeline that answers "what shape is a constraint in." The binder's output is canonical for aggregate constraints with a literal bound and non-canonical for everything else, so every consumer downstream must handle both. The sign-flip and offset-migration logic exists twice, in two representations, and a fix to one does not reach the other. It also makes the stage boundary undescribable: the natural sentence "the binder puts decision terms on the left and data on the right" is true of the system but false of the binder, which is what surfaced this.
+---
 
-**Fix direction — pick one home.** Two coherent end states:
+## A test in `test_per_objective.py` flips between passing and skipping across runs
 
-1. *All in the binder*, over `ParsedExpression`, before binding. The physical extractor then assumes canonical input and only reads terms off. This requires the binder to handle decision-bearing RHS, equality, and bare per-row constraints, and it requires replacing the three structural bypasses with a classification-driven normalizer — which the file's own `REFACTOR TRIPWIRE` comment (`decide_symbolic.cpp:72-76`) already identifies as the right move once a fifth path is needed. This is the option the paper's §3.2 assumes.
-2. *All at model build*, deleting the binder normalizer. Simpler, but gives up canonical form for the optimizer passes that run between binding and execution, and moves an algebraic concern into the execution operator.
+**Location**: `test/decide/tests/test_per_objective.py:1200` and `:1286` — both
+`pytest.skip(f"DecidB rejected non-convex shape: {e}")`.
 
-Option 1 is preferred: canonical form is a property of the query, not of one execution strategy, and the optimizer rewrites in `src/optimizer/decide/decide_optimizer.cpp` read constraints between the two stages.
+Two consecutive full-suite runs of the identical command (`test/decide/run_tests.sh`,
+which is all `make decide-test` does) reported different tallies: `1040 passed, 2
+skipped` then `1041 passed, 1 skipped`. Zero failures both times. The only skip whose
+reason was surfaced is the Gurobi-availability one in `test_quadratic_constraints.py`,
+which is stable; the two call sites above are the only other skips in the suite that
+depend on solver behavior rather than on the environment, so one of them is the
+candidate.
 
-**Test**: a parity suite over constraint shapes — equality, decision-on-RHS, per-row, quadratic, composed `MIN`/`MAX`, aggregate-local `WHEN` — asserting the same solver rows regardless of which stage does the partition. This must exist before either migration starts; the current split has no test that pins the two paths to the same result.
+**Why it matters**: a `skip` on a caught rejection cannot distinguish "the solver
+declined this non-convex shape today" from "a regression made DeciDB reject a shape it
+used to accept." The test reports green either way, so a real expressivity regression
+in these two shapes would be invisible. It also makes the suite tally an unreliable
+before/after signal, which is the thing every entry in `canonicalize.md` verifies
+against.
 
-**Discovered**: 2026-07-30, writing paper §3.2. The binder subsection needed a canonicalization example, and the paper's running example (`demand - sum(ship) <= max_shortfall`, Example 1 line 11) turned out to be one the binder's normalizer refuses — its RHS is a decision variable, so the rewrite happens in the physical operator instead.
+**Fix direction**: decide what the test is actually pinning. If the shape is expected to
+be accepted, assert that and let a rejection fail. If acceptance is genuinely
+solver-dependent, gate the skip on the *solver's* capability up front (as the
+Gurobi-availability skip does) rather than on catching an exception from DeciDB, so the
+skip is a property of the environment and not of the run.
+
+**Discovered**: 2026-08-12, while verifying the nested-product-in-reducer fix. Noticed
+only because that fix required comparing suite tallies across runs; irrelevant to the
+fix itself.
+
+---
+
+## `07_issues/bugs/done.md` is missing from the working tree, and `canonicalize.md` points at it
+
+**Location**: `context/descriptions/07_issues/bugs/done.md` — deleted (unstaged `D` in
+`git status`), alongside the other doc removals in the same sweep
+(`02_operations/limitations.md`, `04_optimizer/matrix_efficiency/`,
+`04_optimizer/future_work/todo.md`).
+
+`README.md:30` still describes it as the home for "lessons from resolved bugs", and
+`canonicalize.md` cites it five times — B.3's coefficient extractor with mistyped
+children, B.5's substituted reducer reference, the C.4 unblock's rebuilt product with a
+stale signature, the Phase A ABS misclassification, and the AVG type bug. Those five
+postmortems were written into the working-tree copy, so `git checkout` restores the file
+but **not** those entries; they exist only in the deleted copy.
+
+**Why it matters**: the three type-vs-representation postmortems are one family with one
+shared lesson (*rebuild by re-binding, not by copying a signature*), and canonicalize.md
+§11 leans on them as the worked examples rather than restating them. Following any of
+those five pointers today lands nowhere.
+
+**Fix direction**: decide whether the deletion was intended. If the sweep meant to fold
+resolved-bug lessons elsewhere, update `README.md:30` and canonicalize.md's five
+references to point at the new home; if it was accidental, the file needs restoring with
+the canonicalization-era entries re-added, which have to be rewritten from
+`canonicalize.md`'s summaries.
+
+**Discovered**: 2026-08-12, landing canonicalize.md C.2 — noticed when looking for where
+to file that phase's own postmortem. Irrelevant to C.2 itself; its postmortem went into
+`canonicalize.md` §7 (C.2) and §10 instead.
+
+---
+
+## `PER` on a per-row constraint slips through when a data-only reducer is present
+
+**Location**: `src/planner/expression_binder/decide_constraints_binder.cpp`,
+`IsAggregateConstraint` — `ContainsDecideAggregate(*comp.left)` accepts a reducer with no
+decision variable in it.
+
+`x <= 5 PER grp` is correctly refused ("PER can only be applied to aggregate (SUM)
+constraints") because a per-row constraint already owns one row each. But
+`SUM(price) >= x PER grp` passes the same gate: the left side contains a reducer, just
+not one over decisions, so the constraint is per-row while `PER` says otherwise. The PER
+columns are then carried into a constraint whose `lhs_is_aggregate` is false.
+
+**Why it matters**: unlike the refused case this is silent — `PER` is accepted and then
+has nothing to partition, so the user gets an answer computed as if they had not written
+it. The refusal message exists precisely because that is the confusing outcome.
+
+**Fix direction**: the honest predicate is "either side contains a reducer over decision
+variables". C.2 applied exactly that to the *right* side (a data-only reducer there is a
+bound, e.g. `x <= MIN(price)`, and must not make the constraint reduced) and deliberately
+left the left side on the looser reading, because tightening it changes which error a
+degenerate query like `SUM(price) <= 3 PER g` reports — today the more specific "SUM
+expression must reference at least one DECIDE variable" from `BindComparison`, which runs
+after the PER gate. Tightening both sides means reordering those two checks so the
+better message still wins.
+
+**Discovered**: 2026-08-12, landing C.2, while making `IsAggregateConstraint`
+side-agnostic. Pre-existing on the left side; C.2 neither widened nor narrowed it.

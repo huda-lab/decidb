@@ -86,7 +86,7 @@ bool IsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t
 
 //! Normalize constraints: factor numeric scalars from SUM products on LHS and
 //! adjust RHS/scalar accordingly; recurse through AND conjunctions.
-unique_ptr<ParsedExpression> NormalizeDecideConstraints(const ParsedExpression &expr,
+unique_ptr<ParsedExpression> SimplifyDecideConstraints(const ParsedExpression &expr,
                                                         const case_insensitive_map_t<idx_t> &decide_variables);
 
 //! Normalize objective: rewrite SUM inner as x * (row_expr) and combine numeric
@@ -99,7 +99,7 @@ unique_ptr<ParsedExpression> NormalizeDecideConstraints(const ParsedExpression &
 //! stash it on `LogicalDecide` for later retrieval (e.g. if/when DecidB
 //! surfaces the objective *value* to users, the offset must be added back).
 //! If no offset is peeled, the out parameter is left at 0.0.
-unique_ptr<ParsedExpression> NormalizeDecideObjective(const ParsedExpression &expr,
+unique_ptr<ParsedExpression> SimplifyDecideObjective(const ParsedExpression &expr,
                                                       const case_insensitive_map_t<idx_t> &decide_variables,
                                                       double &out_constant_offset);
 

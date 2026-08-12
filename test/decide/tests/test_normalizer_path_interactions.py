@@ -1,16 +1,16 @@
-"""Cross-product integration tests for the constraint normalizer paths.
+"""Cross-feature constraint shapes: quadratic / bilinear / composed-MIN-MAX × WHEN × offset.
 
-`NormalizeComparisonExpr` in `src/decidb/symbolic/decide_symbolic.cpp` has
-four mutually-exclusive paths (see the architecture comment at the top of
-that file): quadratic LHS bypass, bilinear LHS bypass, composed-MIN/MAX
-LHS bypass, and the aggregate-local WHEN path. They are first-match-wins
-on `if (...) return cmp.Copy()` early returns.
+These were written against the parsed-level constraint normalizer, which had four
+mutually-exclusive first-match-wins bypasses whose conditions were *not* disjoint —
+`(SUM(POWER(x,2)) WHEN c) + 3 <= K` matched several at once, and the tests pinned that
+whichever fired first did not break the others' structure.
 
-The bypass conditions aren't disjoint — practical queries can match
-multiple. Today this is safe because each bypass is conservative (treats
-unrecognized leaves as opaque structural terms) so it never *breaks* a
-shape it doesn't fully understand. These tests pin that property down for
-the practical combinations:
+That normalizer was deleted at `canonicalize.md` C.4. The combinations it protected are
+still the interesting ones, and now they test something stronger: each shape goes
+through `DecideCanonicalizer` with no parsed-level pass ahead of it, so a failure here
+is the canonicalizer mishandling a composite term rather than a bypass ordering bug.
+The canonicalizer has no bypasses to order — it never opens a term — so the risk being
+covered is that its additive split damages a term it should have treated as opaque.
 
   - quadratic + WHEN
   - quadratic + WHEN + additive constant offset
@@ -18,10 +18,8 @@ the practical combinations:
   - bilinear + WHEN + additive constant offset
   - composed SUM/MIN with WHEN on the MIN term
 
-If any of these regress (e.g. someone reorders the bypass checks, or
-adds a fifth one whose behavior depends on running first), the failures
-land here with concrete oracle-comparison diffs rather than as silent
-wrong answers in user queries.
+Oracle-comparison diffs, so a regression lands here concretely rather than as a silent
+wrong answer in a user query.
 """
 
 import functools

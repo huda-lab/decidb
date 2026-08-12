@@ -60,7 +60,7 @@ public:
     unique_ptr<Expression> decide_objective;
 
     // Additive constant peeled from the parsed objective body during
-    // NormalizeDecideObjective (e.g. the `3` in `MAXIMIZE SUM(x) + 3`).
+    // SimplifyDecideObjective (e.g. the `3` in `MAXIMIZE SUM(x) + 3`).
     // The solver ignores this — it doesn't change argmax/argmin — but it's
     // preserved here so a future "report the objective value" feature can
     // add it back without losing information. Zero when nothing was peeled.
@@ -118,6 +118,20 @@ public:
         int sign;                             // +1 or -1 (from subtraction)
         unique_ptr<Expression> inner_expr;    // The expression inside the aggregate
         unique_ptr<Expression> filter;        // Aggregate-local WHEN filter (optional)
+        //! Factor the canonicalizer peeled off this reducer (`2 * MAX(x*v)`), or nullptr
+        //! for none. It stays OUTSIDE the reducer: MIN/MAX are order statistics, so
+        //! pushing a factor in only commutes for a positive one, and the value may not
+        //! be known until the query runs. The physical layer evaluates it once (it is
+        //! query-wide by construction) and multiplies it into this term's contribution.
+        //!
+        //! Its sign, when known at plan time, participates in `is_easy` exactly as
+        //! `sign` does -- a scale of -2 flips the direction z is pushed just as a
+        //! subtraction would. When the sign is NOT known, `is_easy` is forced false:
+        //! the indicator layer pins z to the true MIN/MAX in both directions, which is
+        //! correct whichever sign the factor turns out to have.
+        unique_ptr<Expression> scale;
+        //! true when the term was `AGG(...) / scale` rather than `scale * AGG(...)`.
+        bool scale_divides = false;
         bool is_easy = true;                  // For MIN/MAX: easy (no Big-M) or hard (indicator).
         //! Entity scope this term's reducer is qualified by (`SUM(D: ...)`), or
         //! INVALID_INDEX when unqualified. Mirrors `Term::qualifier_scope_idx`; the
@@ -175,6 +189,16 @@ public:
     vector<unique_ptr<Expression>> entity_key_expressions;
 
 public:
+    //! Add a constraint to the SUCH THAT tree, canonicalizing it on the way in.
+    //! This is the ONLY way a constraint may enter LogicalDecide after planning,
+    //! and it exists so that constraints synthesized by DecideOptimizer (ABS
+    //! envelopes, Big-M rows, McCormick links) arrive in the same canonical shape
+    //! as the ones the user wrote. Together with the canonicalization performed in
+    //! Binder::CreatePlan, it is one of exactly two call sites of
+    //! DecideCanonicalizer -- do not add a third, and do not append to
+    //! decide_constraints directly.
+    void AddConstraint(ClientContext &context, unique_ptr<Expression> constraint);
+
     // --- Implement virtual functions ---
 
     // The output columns are the child's columns plus the new decide variables

@@ -453,6 +453,13 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				return true;
 			}
 			if (func_name_lower == "power" || func_name_lower == "pow") {
+				if (!ExpressionContainsDecideVariable(expr, variables)) {
+					// POWER over data columns only — a per-row constant, handled by the
+					// same rule as any other data-only scalar function below. The
+					// quadratic gate exists for POWER over a DECIDE variable; applying it
+					// here rejects `SUM(x * POWER(qty, 2))`, which is linear in x.
+					return true;
+				}
 				if (!allow_quadratic) {
 					error_msg = "SUM expression must remain linear in DECIDE variables — "
 					            "POWER(expr, 2) is only allowed in objectives, not constraints";
@@ -483,6 +490,9 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			return false;
 		}
 		if (func_name_lower == "**") {
+			if (!ExpressionContainsDecideVariable(expr, variables)) {
+				return true;
+			}
 			if (!allow_quadratic) {
 				error_msg = "SUM expression must remain linear in DECIDE variables — "
 				            "expr ** 2 is only allowed in objectives, not constraints";

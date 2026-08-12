@@ -40,8 +40,16 @@ static bool IsSupportedComparison(ExpressionType type) {
     }
 }
 
-static bool IsDecideConstraintLHS(DecideExpression type) {
-    return type == DecideExpression::VARIABLE || type == DecideExpression::SUM;
+//! Does this side of a comparison constrain a decision at all?
+//!
+//! This used to be `IsDecideConstraintLHS`, and the name was the whole problem: it
+//! gated a *position*, so the binder required the DECIDE expression on the left and
+//! flipped the comparison when it was not (canonicalize.md site 3). Which side a term
+//! belongs on is DecideCanonicalizer's decision, and it makes the same flip itself on
+//! the bound tree -- so the question here is side-agnostic, and a comparison is a
+//! constraint when EITHER side answers yes.
+static bool IsDecideSide(DecideExpression type) {
+    return type != DecideExpression::INVALID;
 }
 
 static bool IsAllowedOperatorChildren(const vector<unique_ptr<ParsedExpression>> &children,
@@ -61,6 +69,25 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
         case ExpressionClass::FUNCTION: {
             auto &func = expr.Cast<FunctionExpression>();
             if (func.is_operator) {
+                // A WHEN / PER / qualifier wrapper's children past the first are a
+                // predicate, PER key columns, or a relation alias -- not values on this
+                // side -- so validating them as bounds is a category error. A bare `w`
+                // is a legal WHEN condition and an illegal bound, and checking it as
+                // the latter rejected the whole wrapper. Same rule K0 already states
+                // for the canonicalizer: recurse into child 0 only.
+                //
+                // Reachable since the bind-time hoist was deleted (canonicalize.md
+                // C.1); before that, `<= SUM(b) WHEN w` was rewritten away before this
+                // check ever saw it. The physical layer has always had the matching
+                // stages -- EvaluateRhsReducerPerGroup applies the reducer's own filter
+                // and BuildQualifierKeepMask its de-duplication -- so this opens paths
+                // that were built and unreachable, not new ones.
+                if (func.function_name == WHEN_CONSTRAINT_TAG ||
+                    func.function_name == QUALIFIED_REDUCER_TAG ||
+                    IsPerConstraintTag(func.function_name)) {
+                    return !func.children.empty() &&
+                           IsAllowedConstraintRHS(*func.children[0], variables);
+                }
                 if (StringUtil::Lower(func.function_name) == "-") {
                     return false;
                 }
@@ -121,106 +148,54 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
 BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &comp = expr.Cast<ComparisonExpression>();
-    string error_msg;
-    auto left_type = GetExpressionType(*comp.left, error_msg);
 
-    // DuckDB's parser preserves the written comparison shape. DECIDE's constraint
-    // binder expects the DECIDE-bearing expression on the LHS, so normalize
-    // equivalent reversed forms like `5 >= x` to `x <= 5` before validation.
-    if (left_type == DecideExpression::INVALID && IsSupportedComparison(comp.type) &&
-        !ExpressionContainsDecideVariable(*comp.left, variables) && !ContainsDecideAggregate(*comp.left)) {
-        string right_error;
-        auto right_type = GetExpressionType(*comp.right, right_error);
-        if (IsDecideConstraintLHS(right_type)) {
-            comp.type = FlipComparisonExpression(comp.type);
-            std::swap(comp.left, comp.right);
-            left_type = right_type;
-            error_msg = right_error;
-        }
-    }
-
-    auto SimplifyZeroAddition = [&](auto &&self, unique_ptr<ParsedExpression> &node) -> void {
-        if (!node) {
-            return;
-        }
-        switch (node->GetExpressionClass()) {
-        case ExpressionClass::FUNCTION: {
-            auto &func = node->Cast<FunctionExpression>();
-            for (auto &child : func.children) {
-                self(self, child);
-            }
-            if (func.is_operator && func.function_name == "+" && func.children.size() == 2) {
-                auto IsZeroConstant = [](const ParsedExpression &expr) {
-                    if (expr.GetExpressionClass() != ExpressionClass::CONSTANT) {
-                        return false;
-                    }
-                    auto &c = expr.Cast<const ConstantExpression>();
-                    if (!c.value.type().IsNumeric()) {
-                        return false;
-                    }
-                    return fabs(c.value.GetValue<double>()) < 1e-12;
-                };
-                auto &lhs = func.children[0];
-                auto &rhs = func.children[1];
-                if (IsZeroConstant(*lhs)) {
-                    node = std::move(rhs);
-                    self(self, node);
-                    return;
-                }
-                if (IsZeroConstant(*rhs)) {
-                    node = std::move(lhs);
-                    self(self, node);
-                    return;
-                }
-            }
-            break;
-        }
-        case ExpressionClass::CAST: {
-            auto &cast = node->Cast<CastExpression>();
-            self(self, cast.child);
-            break;
-        }
-        default:
-            break;
-        }
-    };
-    SimplifyZeroAddition(SimplifyZeroAddition, comp.right);
-    // DebugPrintParsed("BindComparison.right (simplified)", *comp.right);
-    auto &right = *comp.right;
-    switch (comp.type) {
-    // Type declarations (x IS INTEGER/BOOLEAN) are now handled in the DECIDE clause,
-    // not in SUCH THAT. The COMPARE_EQUAL case here is for actual equality constraints (e.g., SUM(x) = 10)
-    case ExpressionType::COMPARE_EQUAL:
-    case ExpressionType::COMPARE_LESSTHAN:
-    case ExpressionType::COMPARE_GREATERTHAN:
-    case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-    case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-    case ExpressionType::COMPARE_NOTEQUAL: {
-        switch (left_type) {
-            case DecideExpression::VARIABLE: {
-                // Multi-variable per-row constraints allowed (e.g., ABS linearization: d >= x - c)
-                break;
-            }
-            case DecideExpression::SUM: {
-                if (!ContainsDecideAggregate(*comp.left)) {
-                    return BindResult(BinderException::Unsupported(expr, "DECIDE constraint left-hand side must contain SUM(...), AVG(...), MIN(...), or MAX(...)"));
-                }
-                if (!IsAllowedConstraintRHS(right, variables) || ExpressionContainsDecideVariable(right, variables)) {
-                    return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
-                }
-                break;
-            }
-            case DecideExpression::INVALID:
-                return BindResult(BinderException::Unsupported(expr, error_msg));
-            default:
-                return BindResult(BinderException::Unsupported(expr, StringUtil::Format("Unsupported DecideExpression '%s'(%s)", comp.left->ToString(), EnumUtil::ToString(left_type))));
-        }
-        is_top_expression = false;
-        return ExpressionBinder::BindExpression(expr_ptr, depth);
-    }
-    default:
+    if (!IsSupportedComparison(comp.type)) {
         return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT constraint clause does not support '%s'(ExpressionType::%s)", expr.ToString(), EnumUtil::ToString(comp.type))));
     }
+
+    // This function no longer rewrites the parsed tree at all. It used to do two
+    // things beyond validating: flip the sides (canonicalize.md site 3), and strip
+    // an `expr + 0` residue from the right side that the parsed-level symbolic
+    // layer left behind. That layer was deleted for constraints at C.4, so nothing
+    // rewrites a constraint before binding any more; a probe confirmed the strip
+    // never fired across the golden corpus or the suite, and it went at C.2.
+
+    // Classify BOTH sides. The comparison is a constraint when either one is a
+    // DECIDE expression -- `SUM(x) <= cap` and `cap >= SUM(x)` are the same
+    // constraint, and so are `x <= 5` and `5 >= x`. Nothing here rewrites the
+    // comparison to make that true: DecideCanonicalizer swaps the sides on the
+    // BOUND tree when every decision term sits on the right (canonicalize.md K1),
+    // so a second, earlier, parsed-level flip was the last of the five duplicate
+    // shape decisions the canonicalization plan exists to remove.
+    string left_error, right_error;
+    auto left_type = GetExpressionType(*comp.left, left_error);
+    auto right_type = GetExpressionType(*comp.right, right_error);
+
+    if (!IsDecideSide(left_type) && !IsDecideSide(right_type)) {
+        // Neither side decides anything. Report the left-hand diagnosis: it is the
+        // one the user reads first, and for the common `col <= 5` it is the accurate
+        // one -- classification only ever fails on a side, never on the relation.
+        return BindResult(BinderException::Unsupported(expr, left_error));
+    }
+
+    // A reduced constraint collapses many rows to one number, so a side of it that
+    // carries no decision has to reduce to one value too. That is a property of the
+    // BOUND, not of a position, so it is checked on whichever side is the bound;
+    // when both sides bear decisions there is no bound and nothing to check.
+    if (left_type == DecideExpression::SUM || right_type == DecideExpression::SUM) {
+        if (!ContainsDecideAggregate(*comp.left) && !ContainsDecideAggregate(*comp.right)) {
+            return BindResult(BinderException::Unsupported(expr, "DECIDE constraint must contain SUM(...), AVG(...), MIN(...), or MAX(...)"));
+        }
+        auto IsValidBound = [&](const ParsedExpression &side) {
+            return IsAllowedConstraintRHS(side, variables) && !ExpressionContainsDecideVariable(side, variables);
+        };
+        if ((!IsDecideSide(left_type) && !IsValidBound(*comp.left)) ||
+            (!IsDecideSide(right_type) && !IsValidBound(*comp.right))) {
+            return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
+        }
+    }
+    is_top_expression = false;
+    return ExpressionBinder::BindExpression(expr_ptr, depth);
 }
 
 BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
@@ -359,8 +334,14 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
 //! Check if a parsed constraint expression is aggregate (SUM-based).
 //! Unwraps optional WHEN wrapper to inspect the inner comparison.
 //! Handles both direct aggregates (SUM(...) <= K) and aggregate-local WHEN
-//! (SUM(...) WHEN cond <= K) on the comparison LHS.
-static bool IsAggregateConstraint(const ParsedExpression &expr) {
+//! (SUM(...) WHEN cond <= K), on either side of the comparison -- PER runs before
+//! the comparison is bound, and since C.2 the reducer no longer has to be written
+//! on the left (`cap >= SUM(x) PER g` is the same constraint as `SUM(x) <= cap PER g`).
+//!
+//! The right-hand side counts only when the reducer there is decision-bearing. PER
+//! partitions a *reduced* constraint, and a data-only reducer on the right is a bound
+//! (`x <= MIN(price)`), which leaves the constraint per-row and PER meaningless on it.
+static bool IsAggregateConstraint(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
     const ParsedExpression *inner = &expr;
     // Unwrap expression-level WHEN wrapper if present
     if (inner->GetExpressionClass() == ExpressionClass::FUNCTION) {
@@ -369,11 +350,14 @@ static bool IsAggregateConstraint(const ParsedExpression &expr) {
             inner = func.children[0].get();
         }
     }
-    // Check if the comparison's LHS contains a DECIDE aggregate
+    // Check whether either side of the comparison contains a DECIDE aggregate
     // (either directly or wrapped in aggregate-local WHEN)
     if (inner->GetExpressionClass() == ExpressionClass::COMPARISON) {
         auto &comp = inner->Cast<ComparisonExpression>();
         if (ContainsDecideAggregate(*comp.left)) {
+            return true;
+        }
+        if (ContainsDecideAggregate(*comp.right) && ExpressionContainsDecideVariable(*comp.right, variables)) {
             return true;
         }
     }
@@ -406,7 +390,7 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
     }
 
     // Validate: constraint must be aggregate (SUM-based)
-    if (!IsAggregateConstraint(*constraint_child)) {
+    if (!IsAggregateConstraint(*constraint_child, variables)) {
         return BindResult(BinderException::Unsupported(*expr_ptr,
             "PER can only be applied to aggregate (SUM) constraints. "
             "Per-row constraints (e.g., 'x <= 5 PER col') are not supported "

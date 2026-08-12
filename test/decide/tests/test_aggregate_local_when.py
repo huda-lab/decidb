@@ -1425,20 +1425,22 @@ def test_aggregate_local_when_objective_reassociation(
 
 
 # ===========================================================================
-# Aggregate-local WHEN combined with arithmetic — peeled in the symbolic
-# normalizer so these compositions actually work end-to-end.
+# Aggregate-local WHEN combined with arithmetic — the canonicalizer moves the
+# surrounding terms without ever opening the tagged aggregate.
 # ===========================================================================
 #
-# `NormalizeComparisonExpr` in decide_symbolic.cpp can't use the SymEngine
-# expand/simplify path on a WHEN-bearing LHS — that would flatten the
-# aggregate-local WHEN tag and lose the per-aggregate filter. Instead the
-# normalizer does a parsed-level rewrite tailored to WHEN-bearing LHSes:
-#   1. Folds constant scalars into WHEN-tagged aggregate bodies
-#      (`K * (SUM(x) WHEN c)` → `WHEN(SUM(K*x), c)`,
-#      `(SUM(x) WHEN c) / K` → `WHEN(SUM(x/K), c)`).
-#   2. Decomposes the LHS additively, peels pure-numeric terms into a
-#      single offset, and rebuilds the LHS from the structural terms.
-#   3. Moves the offset to the RHS as `RHS - offset`.
+# `DecideCanonicalizer` decomposes the bound LHS additively (through `+`, binary
+# `-`, unary `-` and widening casts) and sends every decision-free term to the
+# bound. A WHEN-tagged aggregate is just one opaque term to it, so the
+# per-aggregate filter cannot be flattened. A factor on the aggregate
+# (`K * (SUM(x) WHEN c)`) is peeled OUTWARD onto the term and stays outside the
+# reducer all the way to the solver row.
+#
+# These shapes used to be handled before binding instead, by a dedicated
+# tagged-aggregate path in `SimplifyComparisonExpr`, which folded the factor
+# INWARD (`K * (SUM(x) WHEN c)` → `WHEN(SUM(K*x), c)`) — exact for SUM/AVG and a
+# wrong answer for MIN/MAX at a negative K. That path was deleted at
+# canonicalize.md C.4; see §6 B.3 for why nothing folds inward any more.
 #
 # These tests cover each shape with oracle-verified correctness.
 
@@ -1718,26 +1720,81 @@ def test_outer_when_with_arithmetic_offset_works(
 
 
 # ===========================================================================
-# K * WHEN fold with a per-row data column (not just a numeric constant).
+# A per-row data column may NOT scale a reducer.
 # ===========================================================================
 #
-# The fold's correctness condition is "the non-WHEN factor contains no
-# decide variable" — a data column satisfies this just as well as a
-# literal. These tests pin that behavior with non-trivial per-row
-# coefficients so a future regression (e.g., tightening the fold to
-# require a constant) would fail a correctness check, not just a type
-# check.
+# These three shapes used to solve, via a parsed-level fold that rewrote
+# `col * (SUM(x) WHEN w)` into `WHEN(SUM(col * x), w)` — reading the column as a
+# per-row coefficient. That fold is gone (see DecideCanonicalizer::PeelScale): a reducer collapses many rows to one number,
+# so "which row's `col` scales it?" has no answer, and plain SQL agrees — `col *
+# SUM(x)` needs `col` in the GROUP BY. The per-row-coefficient reading is still
+# available, spelled explicitly as `SUM(col * x)`.
+#
+# Kept as rejection tests rather than deleted so the shapes stay pinned: the
+# requirement is a clear error naming the column, not silence.
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.error_binder
+def test_when_with_data_column_scalar_left_rejected(decidb_cli):
+    """`col * (SUM(x) WHEN w) <= K` — data column on the left of the `*`."""
+    decidb_cli.assert_error("""
+        SELECT id, col, w, x FROM (
+            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
+        ) t(id, col, w)
+        DECIDE x(REAL)
+        SUCH THAT col * (SUM(x) WHEN w) <= 20
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """, match=r"'col' varies per row, so it cannot multiply SUM\(x\)")
+
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.error_binder
+def test_when_with_data_column_scalar_right_rejected(decidb_cli):
+    """`(SUM(x) WHEN w) * col <= K` — data column on the right of the `*`.
+    Canonicalization converges both spellings, so both are rejected the same way."""
+    decidb_cli.assert_error("""
+        SELECT id, col, w, x FROM (
+            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
+        ) t(id, col, w)
+        DECIDE x(REAL)
+        SUCH THAT (SUM(x) WHEN w) * col <= 20
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """, match=r"'col' varies per row, so it cannot multiply SUM\(x\)")
+
+
+@pytest.mark.when
+@pytest.mark.when_constraint
+@pytest.mark.cons_aggregate
+@pytest.mark.error_binder
+def test_when_divided_by_data_column_rejected(decidb_cli):
+    """`(SUM(x) WHEN w) / col <= K` — division reads as a scale too, and the
+    message says "divide" rather than "multiply"."""
+    decidb_cli.assert_error("""
+        SELECT id, col, w, x FROM (
+            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
+        ) t(id, col, w)
+        DECIDE x(REAL)
+        SUCH THAT (SUM(x) WHEN w) / col <= 5
+            AND x <= 10
+        MAXIMIZE SUM(x)
+    """, match=r"'col' varies per row, so it cannot divide SUM\(x\)")
+
 
 @pytest.mark.when
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_when_with_data_column_scalar_left(
+def test_when_with_data_column_moved_inside(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`col * (SUM(x) WHEN w) <= K` — data column on the left of the `*`.
-    The fold rewrites to `WHEN(SUM(col * x), w)`, giving per-row
-    coefficient `col[i]` for matching rows."""
+    """The edit the rejection message asks for actually works, and gives the
+    per-row-coefficient reading the old fold produced: `SUM(col * x) WHEN w <= 20`."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(col AS DOUBLE), CAST(w AS BOOLEAN) FROM (
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
@@ -1748,7 +1805,7 @@ def test_when_with_data_column_scalar_left(
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
         ) t(id, col, w)
         DECIDE x(REAL)
-        SUCH THAT col * (SUM(x) WHEN w) <= 20
+        SUCH THAT SUM(col * x) WHEN w <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
     """
@@ -1758,7 +1815,6 @@ def test_when_with_data_column_scalar_left(
         vnames = [f"x_{i}" for i in range(n)]
         for v in vnames:
             oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
-        # col_i * SUM_{w}(x_i) <= 20  →  per-row coefficient col_i for w-rows.
         coeffs = {vnames[i]: data[i][1] for i in range(n) if data[i][2]}
         oracle.add_constraint(coeffs, "<=", 20.0, name="col_mul_when")
         oracle.set_objective(
@@ -1772,106 +1828,7 @@ def test_when_with_data_column_scalar_left(
 
     _run_constraint_test(
         decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
-        test_id="alw_col_mul_left",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, decidb_obj_fn=decidb_obj,
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_when_with_data_column_scalar_right(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
-    """`(SUM(x) WHEN w) * col <= K` — data column on the right of the `*`.
-    The fold accepts either operand order and produces the same rewrite
-    as the left-side variant."""
-    data_sql = """
-        SELECT CAST(id AS BIGINT), CAST(col AS DOUBLE), CAST(w AS BOOLEAN) FROM (
-            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
-        ) t(id, col, w)
-    """
-    decide_sql = """
-        SELECT id, col, w, x FROM (
-            VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
-        ) t(id, col, w)
-        DECIDE x(REAL)
-        SUCH THAT (SUM(x) WHEN w) * col <= 20
-            AND x <= 10
-        MAXIMIZE SUM(x)
-    """
-
-    def build(oracle, data, cols, rows):
-        n = len(data)
-        vnames = [f"x_{i}" for i in range(n)]
-        for v in vnames:
-            oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
-        coeffs = {vnames[i]: data[i][1] for i in range(n) if data[i][2]}
-        oracle.add_constraint(coeffs, "<=", 20.0, name="when_mul_col")
-        oracle.set_objective(
-            {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
-        )
-        return n, 1
-
-    def decidb_obj(rs, cs):
-        xi = cs.index("x")
-        return sum(float(r[xi]) for r in rs)
-
-    _run_constraint_test(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
-        test_id="alw_col_mul_right",
-        decide_sql=decide_sql, data_sql=data_sql,
-        build_oracle=build, decidb_obj_fn=decidb_obj,
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_when_divided_by_data_column(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
-    """`(SUM(x) WHEN w) / col <= K` — WHEN-tagged aggregate divided by a
-    per-row data column. The fold rewrites to `WHEN(SUM(x / col), w)`,
-    giving per-row coefficient `1/col[i]` for matching rows."""
-    data_sql = """
-        SELECT CAST(id AS BIGINT), CAST(col AS DOUBLE), CAST(w AS BOOLEAN) FROM (
-            VALUES (1, 2.0, true), (2, 4.0, false), (3, 1.0, true), (4, 0.5, true)
-        ) t(id, col, w)
-    """
-    decide_sql = """
-        SELECT id, col, w, x FROM (
-            VALUES (1, 2.0, true), (2, 4.0, false), (3, 1.0, true), (4, 0.5, true)
-        ) t(id, col, w)
-        DECIDE x(REAL)
-        SUCH THAT (SUM(x) WHEN w) / col <= 5
-            AND x <= 10
-        MAXIMIZE SUM(x)
-    """
-
-    def build(oracle, data, cols, rows):
-        n = len(data)
-        vnames = [f"x_{i}" for i in range(n)]
-        for v in vnames:
-            oracle.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=10.0)
-        # SUM_{w}(x_i) / col_i <= 5  →  per-row coefficient 1/col_i for w-rows.
-        coeffs = {vnames[i]: 1.0 / data[i][1] for i in range(n) if data[i][2]}
-        oracle.add_constraint(coeffs, "<=", 5.0, name="when_div_col")
-        oracle.set_objective(
-            {vnames[i]: 1.0 for i in range(n)}, ObjSense.MAXIMIZE,
-        )
-        return n, 1
-
-    def decidb_obj(rs, cs):
-        xi = cs.index("x")
-        return sum(float(r[xi]) for r in rs)
-
-    _run_constraint_test(
-        decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
-        test_id="alw_when_div_col",
+        test_id="alw_col_inside_when",
         decide_sql=decide_sql, data_sql=data_sql,
         build_oracle=build, decidb_obj_fn=decidb_obj,
     )

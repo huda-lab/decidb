@@ -11,8 +11,10 @@ that don't naturally pin `d` to `|expr|` (MAXIMIZE objective, or constraint
 shapes that don't upper-bound `d`) additionally get a Big-M sign-indicator
 binary `y` and the upper envelope `d <= expr + 2M(1-y)` and `d <= -expr + 2M*y`.
 The classifier `TagAbsConstraintsForBigM` runs before `RewriteAbs` and tags
-Path-B occurrences. See `03_expressivity/sql_functions/done.md` for the full
-Path-A / Path-B classification.
+Path-B occurrences, per ABS *occurrence* and by the sign it carries in
+`LHS - RHS` rather than by the side it was written on. See
+`03_expressivity/sql_functions/done.md` for the full Path-A / Path-B
+classification.
 
 ## Scenarios covered
 

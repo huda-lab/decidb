@@ -16,7 +16,7 @@ The `TransformExpression` lambda performs this recursively:
 - `BoundColumnRefExpression` -> `BoundReferenceExpression` using `colref.binding.column_index`
 - `BoundFunctionExpression` -> recurse into children, copy `bind_info`
 - `BoundCastExpression` -> recurse into child, re-wrap with `AddCastToType`
-- `BoundAggregateExpression` -> special case: `count_star()` is replaced with a `BoundConstantExpression(num_rows)`; other direct RHS aggregates are rejected with `InvalidInputException` (use a scalar subquery for aggregate bounds)
+- `BoundAggregateExpression` -> replaced with a reference to an extra chunk column holding that reducer's per-group value, cast back to the reducer's own type (see `EvaluateRhsReducerPerGroup`). A reducer reached with no substitution prepared — inside a WHEN condition or a coefficient, where it has no meaning — is rejected with `InvalidInputException`. The old `count_star() -> BoundConstantExpression(num_rows)` special case is gone; it used the operator's total input cardinality rather than the constraint's own rows, which was a wrong answer under `WHEN`/`PER`.
 - Constants and other expressions -> copied as-is
 
 This lambda is defined multiple times (for LHS coefficients, RHS expressions, WHEN conditions, PER columns, and objective terms) with slight variations in which expression types are handled.

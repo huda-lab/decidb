@@ -97,3 +97,25 @@ class PerfTracker:
             json.dumps([asdict(r) for r in self.records], indent=2) + "\n"
         )
         return path
+
+    def worker_report(self) -> list[dict]:
+        """This worker's records, for the controller to merge.
+
+        Under xdist each worker owns a separate tracker, so letting them each
+        call ``save_json`` would scatter one run across N timestamped files.
+        """
+        return [asdict(r) for r in self.records]
+
+
+def merge_worker_reports(reports: list[list[dict]]) -> PerfTracker:
+    """Fold xdist worker reports into a single tracker."""
+    merged = PerfTracker()
+    for report in reports:
+        for record in report:
+            try:
+                merged.records.append(PerfRecord(**record))
+            except TypeError:
+                pass
+    # Workers finish out of order; sort so the printed table is stable.
+    merged.records.sort(key=lambda r: r.test_name)
+    return merged

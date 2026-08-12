@@ -1,5 +1,6 @@
 add_subdirectory(expression)
 add_subdirectory(binder)
+add_subdirectory(decide)
 add_subdirectory(expression_binder)
 add_subdirectory(filter)
 add_subdirectory(operator)

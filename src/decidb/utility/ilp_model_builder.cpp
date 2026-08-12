@@ -85,6 +85,34 @@ VarIndexer VarIndexer::BuildRef(const SolverInput &input) {
     return idx;
 }
 
+#ifdef DEBUG
+//! The shape contract a reduced constraint's RHS must satisfy by the time it reaches
+//! this file: one value per group. `PhysicalDecide::ReduceAggregateRhsPerGroup`
+//! establishes it, which is why the per-row checks that used to live at the emission
+//! sites are gone. Debug-only — a regression here is a wrong model, not a bad query,
+//! so it should fail loudly in development rather than produce a user-facing error.
+static bool RhsIsConstantWithinGroups(const EvaluatedConstraint &ec) {
+    if (ec.rhs_values.IsUniform() || ec.rhs_values.Empty()) {
+        return true;
+    }
+    const bool has_groups = !ec.row_group_ids.empty();
+    std::unordered_map<idx_t, double> first_seen;
+    for (idx_t row = 0; row < ec.rhs_values.Size(); row++) {
+        idx_t g = has_groups ? ec.row_group_ids[row] : 0;
+        if (g == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        auto it = first_seen.find(g);
+        if (it == first_seen.end()) {
+            first_seen.emplace(g, ec.rhs_values.Get(row));
+        } else if (it->second != ec.rhs_values.Get(row)) {
+            return false;
+        }
+    }
+    return true;
+}
+#endif
+
 void BuildGroupCSR(const vector<idx_t> &row_group_ids,
                    idx_t num_groups,
                    vector<idx_t> &offsets,
@@ -645,6 +673,16 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         idx_t decide_var_idx = eval_const.variable_indices[term_idx];
 
                         if (decide_var_idx != DConstants::INVALID_INDEX) {
+                            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR) {
+                                // A query-wide decision has one column and does not vary by
+                                // row, so its term contributes once rather than once per row —
+                                // otherwise `SUM(x) + s <= 8` would silently build `... + n*s`.
+                                // The objective accumulator makes the same distinction.
+                                auto &col = eval_const.row_coefficients[term_idx];
+                                coeff_accum[static_cast<int>(indexer.Get(decide_var_idx, 0))] +=
+                                    col.Size() > 0 ? col.Get(0) : 1.0;
+                                continue;
+                            }
                             for (idx_t row = 0; row < num_rows; row++) {
                                 double coeff = eval_const.row_coefficients[term_idx][row];
                                 int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
@@ -661,19 +699,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
                 }
 
+                // One value for the whole constraint: PhysicalDecide has already
+                // reduced a row-varying bound to the tightest one and broadcast it
+                // (ReduceAggregateRhsPerGroup). No per-row check is needed here.
+                D_ASSERT(RhsIsConstantWithinGroups(eval_const));
                 double rhs = eval_const.rhs_values.Get(0);
-                if (!eval_const.rhs_values.IsUniform()) {
-                    for (idx_t r = 1; r < eval_const.rhs_values.Size(); r++) {
-                        if (eval_const.rhs_values.Get(r) != rhs) {
-                            throw InvalidInputException(
-                                "Aggregate constraint (SUM/AVG) requires a scalar right-hand side, "
-                                "but the RHS evaluates to different values per row (row 0 = %g, row %llu = %g). "
-                                "This can happen with correlated subqueries. "
-                                "For per-row bounds, use a per-row constraint (e.g., x <= column) instead.",
-                                rhs, r, eval_const.rhs_values.Get(r));
-                        }
-                    }
-                }
                 rhs -= FixedLinearLhsOffset(eval_const, nullptr, 0, num_rows);
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
                 constr.provenance.clause_id = clause_id; // F2 site 1: aggregate, ungrouped
@@ -683,10 +713,18 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.qualifier = eval_const.qualifier;
                 StampWeightLabels(constr.provenance);
                 constr.provenance.folded_terms = clause_folded_terms;
-                // An aggregate's RHS is required to be scalar (one editable knob), so
-                // it is a SHARED_LITERAL, not per-row data. This keeps PER_ROW_DATA
-                // meaning exactly "data RHS" for the conflict-summary path (I2.c).
-                constr.provenance.shape = ElasticShape::SHARED_LITERAL;
+                // Same rule as the per-row path below: a user-written literal is an
+                // editable knob; a bound derived from data is not, and its repair is a
+                // symbolic offset over the column (`SUM(x) >= demand - 50`). Paper §5
+                // makes that distinction explicit — DeciDB prefers relaxing explicit
+                // user bounds over data-derived ones. This used to be hard-coded to
+                // SHARED_LITERAL because an aggregate RHS was required to be a scalar.
+                constr.provenance.shape = eval_const.rhs_is_shared_literal
+                                              ? ElasticShape::SHARED_LITERAL
+                                              : ElasticShape::PER_ROW_DATA;
+                if (!eval_const.rhs_is_shared_literal) {
+                    constr.provenance.rhs_label = eval_const.rhs_label;
+                }
                 PushNormalizedConstraint(std::move(constr));
 
             } else {
@@ -696,18 +734,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 auto &offsets = eval_const.group_offsets;
                 auto &flat_rows = eval_const.group_row_ids;
 
-                double rhs = eval_const.rhs_values.Get(0);
-                if (!eval_const.rhs_values.IsUniform()) {
-                    for (idx_t r = 1; r < eval_const.rhs_values.Size(); r++) {
-                        if (eval_const.rhs_values.Get(r) != rhs) {
-                            throw InvalidInputException(
-                                "Aggregate PER constraint requires a scalar right-hand side, "
-                                "but the RHS evaluates to different values per row (row 0 = %g, row %llu = %g). "
-                                "This can happen with correlated subqueries.",
-                                rhs, r, eval_const.rhs_values.Get(r));
-                        }
-                    }
-                }
+                // Each group's bound is read from one of its own rows below; the
+                // physical operator guarantees it is constant within the group.
+                D_ASSERT(RhsIsConstantWithinGroups(eval_const));
 
                 bool row_scoped_fast = CanUseRowScopedFastPath(eval_const);
 
@@ -762,6 +791,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                             idx_t decide_var_idx = eval_const.variable_indices[term_idx];
                             if (decide_var_idx == DConstants::INVALID_INDEX) continue;
                             auto &col = eval_const.row_coefficients[term_idx];
+                            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR) {
+                                // One column for the whole query, so it enters each group's
+                                // row once — not once per row of that group. Same rule the
+                                // ungrouped path above applies; a PER constraint just has
+                                // more rows to get it wrong in.
+                                accum.Add(static_cast<int>(indexer.Get(decide_var_idx, 0)),
+                                          col.Size() > 0 ? col.Get(flat_rows[g_begin]) : 1.0);
+                                continue;
+                            }
                             for (idx_t k = g_begin; k < g_end; k++) {
                                 idx_t row = flat_rows[k];
                                 double coeff = col.Get(row);
@@ -772,7 +810,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         accum.Flush(constr.indices, constr.coefficients);
                     }
 
-                    double group_rhs = rhs - FixedLinearLhsOffset(eval_const, &flat_rows, g_begin, g_end);
+                    // Read this group's own bound. The guard above still proves every
+                    // row agrees, so today this equals Get(0); once the RHS carries one
+                    // value per group it is what lets each group see its own bound.
+                    // Row 0 would be wrong twice over: it may belong to another group,
+                    // and it may be excluded by WHEN.
+                    double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) -
+                                       FixedLinearLhsOffset(eval_const, &flat_rows, g_begin, g_end);
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_is_integer);
                     constr.provenance.clause_id = clause_id; // F2 site 2: aggregate + PER/WHEN
                     constr.provenance.group_key = g;
@@ -785,9 +829,16 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     constr.provenance.qualifier = eval_const.qualifier;
                     StampWeightLabels(constr.provenance);
                     constr.provenance.folded_terms = clause_folded_terms;
-                    // Scalar RHS per group → one editable knob per group (SHARED_LITERAL),
-                    // not per-row data. See site 1 (I2.c).
-                    constr.provenance.shape = ElasticShape::SHARED_LITERAL;
+                    // One bound per group. A literal is still one editable knob shared
+                    // by every group (paper §5: all rows from one clause share a slack);
+                    // a data-derived bound repairs as a symbolic offset instead. See
+                    // site 1.
+                    constr.provenance.shape = eval_const.rhs_is_shared_literal
+                                                  ? ElasticShape::SHARED_LITERAL
+                                                  : ElasticShape::PER_ROW_DATA;
+                    if (!eval_const.rhs_is_shared_literal) {
+                        constr.provenance.rhs_label = eval_const.rhs_label;
+                    }
                     PushNormalizedConstraint(std::move(constr));
                 }
             }
@@ -1042,6 +1093,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         if (is_aggregate) {
             double rhs = eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(0);
 
+            // Before the RHS was reduced per group this path read row 0's value for
+            // every group with no check at all, so a row-varying bound was silently
+            // wrong here rather than refused. Now the invariant holds by construction.
+            D_ASSERT(RhsIsConstantWithinGroups(eval_const));
+
             if (!has_groups) {
                 // Single aggregate: all rows
                 vector<idx_t> all_rows(num_rows);
@@ -1049,7 +1105,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer);
                 qc.provenance.clause_id = clause_id; // F2 site 5: quadratic aggregate, ungrouped
                 qc.provenance.kind = eval_const.kind;
-                qc.provenance.shape = ElasticShape::SHARED_LITERAL;
+                qc.provenance.shape = eval_const.rhs_is_shared_literal
+                                          ? ElasticShape::SHARED_LITERAL
+                                          : ElasticShape::PER_ROW_DATA;
+                if (!eval_const.rhs_is_shared_literal) {
+                    qc.provenance.rhs_label = eval_const.rhs_label;
+                }
                 qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
                 qc.provenance.qualifier = eval_const.qualifier;
                 model.quadratic_constraints.push_back(std::move(qc));
@@ -1067,14 +1128,24 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
                     vector<idx_t> group_rows_slice(flat_rows.begin() + g_begin,
                                                    flat_rows.begin() + g_end);
-                    auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, rhs, lhs_is_integer);
+                    // This group's own bound — see the linear PER path for why row 0
+                    // is the wrong row to read once the RHS varies by group.
+                    double group_rhs = eval_const.rhs_values.Empty()
+                                           ? 0.0
+                                           : eval_const.rhs_values.Get(flat_rows[g_begin]);
+                    auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_is_integer);
                     qc.provenance.clause_id = clause_id; // F2 site 6: quadratic aggregate + PER
                     qc.provenance.group_key = g;
                     if (g < eval_const.group_labels.size()) {
                         qc.provenance.group_label = eval_const.group_labels[g];
                     }
                     qc.provenance.kind = eval_const.kind;
-                    qc.provenance.shape = ElasticShape::SHARED_LITERAL;
+                    qc.provenance.shape = eval_const.rhs_is_shared_literal
+                                              ? ElasticShape::SHARED_LITERAL
+                                              : ElasticShape::PER_ROW_DATA;
+                    if (!eval_const.rhs_is_shared_literal) {
+                        qc.provenance.rhs_label = eval_const.rhs_label;
+                    }
                     qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
                     qc.provenance.qualifier = eval_const.qualifier;
                     model.quadratic_constraints.push_back(std::move(qc));

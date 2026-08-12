@@ -2,6 +2,7 @@
 #include "duckdb/planner/operator/logical_decide.hpp"
 
 #include "duckdb/decidb/utility/debug.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -48,6 +49,20 @@ vector<idx_t> LogicalDecide::GetTableIndex() const {
 
 string LogicalDecide::GetName() const {
 	return "DECIDE";
+}
+
+void LogicalDecide::AddConstraint(ClientContext &context, unique_ptr<Expression> constraint) {
+	DecideCanonicalizer canonicalizer(context, decide_index);
+	auto canonical = canonicalizer.CanonicalizeTree(*constraint);
+
+	if (!decide_constraints) {
+		decide_constraints = std::move(canonical);
+		return;
+	}
+	auto conj = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	conj->children.push_back(std::move(decide_constraints));
+	conj->children.push_back(std::move(canonical));
+	decide_constraints = std::move(conj);
 }
 
 void LogicalDecide::CollectTaggedExpressionStrings(const Expression &expr, vector<string> &out) {
