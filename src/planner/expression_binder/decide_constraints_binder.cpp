@@ -465,6 +465,12 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
         }
         break;
     }
+    case ExpressionClass::CAST: {
+        if (!is_top_expression) {
+            return ExpressionBinder::BindExpression(expr_ptr, depth);
+        }
+        break;
+    }
     case ExpressionClass::FUNCTION: {
         auto &func = expr.Cast<FunctionExpression>();
         // DecidB: PER constraint wrapper (outermost, wraps optional WHEN)
@@ -545,6 +551,13 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
             error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
             return DecideExpression::INVALID;
         }
+    }
+    case ExpressionClass::CAST: {
+        // A cast changes the value semantics of a DECIDE side, not its
+        // row/aggregate shape. Keep it in the parsed and bound trees so the
+        // exact-cast classifier or atomic preimage lowering can consume it.
+        auto &cast = expr.Cast<CastExpression>();
+        return GetExpressionType(*cast.child, error_msg);
     }
     default: {
         error_msg = StringUtil::Format("The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());

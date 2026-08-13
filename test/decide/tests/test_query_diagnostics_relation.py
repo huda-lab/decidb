@@ -990,9 +990,10 @@ class TestDiagnosticsRelation:
     def test_infeasible_uncorrelated_subquery_cap_is_editable(self, request, cli_fixture):
         """I2 follow-up: an UNCORRELATED scalar subquery RHS (`x <= (SELECT 5)`) flattens
         to a cross-joined column ref, structurally identical to row data — but it is one
-        shared editable cap. The binder tags it SHARED_SCALAR_SUBQUERY_TAG before flattening
-        so the engine loosens it exactly like a literal `x <= 5` would (5 → 10 against the
-        `x >= lo` = 10 floor), not as a per-row data conflict."""
+        shared editable cap. Planning stamps the flattened value with query-wide
+        provenance and canonicalization classifies the complete RHS, so the engine
+        loosens it exactly like a literal `x <= 5` would (5 → 10 against the `x >= lo`
+        = 10 floor), not as a per-row data conflict."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
@@ -1036,6 +1037,89 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows, {"x <= 5": "(SELECT 5) >= x"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "constraint",
+        ("x + 2 <= (SELECT 7)", "(SELECT 7) >= x + 2"),
+    )
+    def test_infeasible_rebuilt_query_wide_subquery_bound_is_editable(
+        self, request, cli_fixture, constraint
+    ):
+        """Classification belongs to the complete canonical bound, not one source node.
+
+        Moving the data-only ``2`` across the relation rebuilds the bound as the
+        query-wide expression ``(SELECT 7) - 2``. Both orientations must retain one
+        editable scalar cap and render only its evaluated SQL-level value.
+        """
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
+            f"DECIDE x(REAL) SUCH THAT {constraint} AND x >= lo MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        cap = _attrs(rows, "clause", "x <= 5")
+        assert cap["suggested_change"] == "x <= 10"
+        assert cap["amount"] == "5"
+        assert "SUBQUERY" not in result.stdout
+        assert "__query_wide" not in result.stdout
+        _apply_reported_fix(cli, sql, rows, {"x <= 5": constraint})
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_multiple_query_wide_subqueries_form_one_shared_bound(
+        self, request, cli_fixture
+    ):
+        """Arithmetic composed entirely from query-wide values remains one knob."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
+            "DECIDE x(REAL) SUCH THAT x <= (SELECT 2) + (SELECT 3) "
+            "AND x >= lo MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        cap = _attrs(rows, "clause", "x <= 5")
+        assert cap["suggested_change"] == "x <= 10"
+        assert cap["amount"] == "5"
+        assert "SUBQUERY" not in result.stdout
+        assert "__query_wide" not in result.stdout
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "constraint",
+        ("x <= lo + (SELECT 1)", "lo + (SELECT 1) >= x"),
+    )
+    def test_mixed_subquery_and_row_data_bound_stays_data_backed(
+        self, request, cli_fixture, constraint
+    ):
+        """One query-wide component must not promote a row-varying rebuilt bound.
+
+        The data-backed cap remains non-editable, so diagnosis loosens the explicit
+        floor. Internal flattened-subquery names are suppressed instead of appearing
+        in a virtual-offset suggestion.
+        """
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,4),(2,7)) t(id, lo) "
+            f"DECIDE x(REAL) SUCH THAT {constraint} AND x >= 100 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        floor = _attrs(rows, "clause", "x >= 100")
+        assert floor["suggested_change"] == "x >= 5"
+        assert floor["amount"] == "95"
+        assert not [
+            r for r in rows
+            if r["subject_kind"] == "clause"
+            and r["subject"].startswith("x <=")
+            and r["attribute"] == "suggested_change"
+        ]
+        assert "SUBQUERY" not in result.stdout
+        assert "__query_wide" not in result.stdout
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_correlated_subquery_cap_stays_per_row(self, request, cli_fixture):
         """I2 follow-up guard: a CORRELATED scalar subquery RHS (`x <= (SELECT hi)`, hi from
         the outer row) is genuinely per-row data and must NOT be tagged shared. The two
@@ -1062,6 +1146,8 @@ class TestDiagnosticsRelation:
             and r["subject"].startswith("x <=")
             and r["attribute"] == "suggested_change"
         ]
+        assert "SUBQUERY" not in result.stdout
+        assert "__row_varying_subquery" not in result.stdout
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)

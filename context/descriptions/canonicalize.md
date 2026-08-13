@@ -1,10 +1,11 @@
 # DECIDE constraint canonicalization
 
-**Status (2026-08-12):** the five duplicate constraint-shaping paths have been
-deleted and Step 1's adversarial contract tests are landed, but canonicalization
-is **not complete**. The remaining work is to make those regressions green: fix
-two correctness defects, implement composed reducer scales, centralize
-homogeneity validation, and enforce the invariant after optimizer rewrites.
+**Status (2026-08-13):** the five duplicate constraint-shaping paths and Step 1's
+adversarial contract tests are landed. Steps 2, 3 and 4 are complete: casts have one
+policy at one site (§3.6), scalar-subquery provenance is classified from the
+complete canonical bound rather than its original side, and nested reducer scales
+compose to one factor (§3.7). Resume at Step 5; canonicalization as a whole is
+**not complete**.
 
 This document is the authoritative specification and remaining-work list for
 constraint canonicalization. It describes current code, not the history of the
@@ -200,24 +201,45 @@ at the canonical-tree root. User-written orientation belongs to source
 provenance. This replaces the old K4 claim that the operator never changes,
 which did not match `CanonicalizeComparison` or diagnostic output.
 
-### 3.6 Cast descent
+### 3.6 Casts
 
-A cast may be distributed over an additive spine only when the conversion is
-provably exact for every input value. DuckDB accepting an implicit cast is not
-enough.
+A DECIDE model carries **one numeric domain, `DOUBLE`** — the solver interface is
+`double` throughout (`solver_input.hpp`), so every bound and coefficient lands there
+regardless of the types the expression tree held. That fact decides what a cast means
+here, and the policy lives in one place: `src/decidb/utility/decide_cast_policy.cpp`.
 
-The exactness policy should be an explicit allow-list, including cases such as:
+A cast on a decision-bearing path is exactly one of two things:
 
-- identical types;
-- integer to an integer type with at least as much range;
-- `FLOAT` to `DOUBLE`;
-- DECIMAL to DECIMAL when both fractional capacity and integral capacity are
-  preserved;
-- integer to DECIMAL only when the target can represent the entire source
-  range.
+- **Representation** — the same value in a different container. Everything the binder
+  inserts to reconcile two comparison sides is this. It is safe to look through, and
+  every consumer does so unconditionally.
+- **Computation** — a different value. The target is integral while the source is
+  fractional (`CAST(x AS INTEGER)` is `round(x)`, a step function), or a `DECIMAL`
+  target has a smaller scale. These are **rejected** at this boundary with an
+  actionable SQL-level message.
 
-Lossy or uncertain cases remain atomic. In particular, `BIGINT -> DOUBLE` is
-not exact above `2^53` and must not be distributed.
+`DecidePreservesResolution(from, to)` is the single predicate separating them, and
+`DecideCanonicalizer::ValidateDecisionCasts` is the single enforcement point. Anything
+into `DOUBLE` preserves resolution by definition — it is the edge of what DECIDE
+models, not a loss inside it.
+
+**Why this is a structural rule and not a per-site check.** A census before this work
+found 45 cast-unwrapping sites, 42 of them independent, only 12 guarded — and cast
+bugs kept recurring in whichever site was still unguarded. Guarding each site does not
+converge. Establishing the invariant once does: because no query carrying a
+value-changing decision cast leaves planning, an unguarded peel downstream cannot be
+wrong, and a *newly written* one is right by default.
+
+A cast over decision-free **data** is outside this rule entirely. It is an ordinary
+value computation the executor performs, and peeling it would change a coefficient —
+`x <= CAST(1.6 AS INTEGER)` is a bound of 2, not 1.6. `UnwrapDecideCasts` therefore
+stops at any resolution-reducing cast, which makes one helper correct on both paths.
+Rendering is the one job that peels unconditionally, via the separately named
+`StripCastsForDisplay` / `DecideDisplayString`, because its output is a label rather
+than a value.
+
+Distributing a cast over an additive spine uses the same predicate: only a
+resolution-preserving cast may be pushed onto individual terms.
 
 ### 3.7 Reducer scales
 
@@ -241,12 +263,29 @@ A legal factor must be one value for the whole query:
 - row-varying columns and correlated subqueries are illegal;
 - a decision-bearing factor is not a scale; it is a product of decisions.
 
-Nested scales such as `2 * (3 * SUM(x))` and `(SUM(x) / 2) / 3` use a composed
-query-wide scale. Typed operations must be preserved in their written order;
-the canonicalizer must not reassociate division or pre-evaluate a query-wide
-subquery. These shapes currently fall through to a late physical error, which
-is a defect: accepted nested scales must reach the same scale representation as
-their single-factor equivalents.
+Nested scales such as `2 * (3 * SUM(x))` and `(SUM(x) / 2) / 3` compose into a
+single query-wide scale. Peeling runs to exhaustion, gathering factors by role:
+multipliers compose into `M`, divisors into `D`, and the emitted factor is `M`,
+`D`, or `M / D`. A nested scale therefore reaches exactly the representation its
+single-factor equivalent does — one level, one spelling — which is what lets every
+downstream consumer keep its single-level match.
+
+The canonicalizer must not pre-evaluate a query-wide subquery: composition builds
+an expression, so `(SELECT a) * ((SELECT b) * SUM(x))` emits the factor
+`(SELECT a) * (SELECT b)` and the values still arrive at execution.
+
+Composition **does** reassociate. `(SUM(x) / 2) / 3` emits `SUM(x) / (2 * 3)`,
+which in double arithmetic is not bit-identical to dividing twice. This is a
+deliberate accepted cost, decided on 2026-08-13: the model carries one numeric
+domain (`DOUBLE`, §3.6) end to end, the discrepancy is last-ULP (~1e-16 relative,
+measured at ~35% of random triples), and solver tolerances are 1e-6 to 1e-9 — some
+ten orders of magnitude coarser. The golden dump formats with `%.10g`, so a
+composed scale is not even observable there. The alternative — a per-factor
+"is folding safe here?" predicate — is the per-site pattern §3.6 exists to remove.
+
+The known limit is magnitude: composing factors near the double range can overflow
+to `inf` or underflow to `0` where sequential application would not. DeciDB does
+not special-case this, on the same reasoning every numeric system applies.
 
 ### 3.8 Source provenance and tags
 
@@ -296,7 +335,9 @@ expanded into another constraint-shaping pass.
   optimizer-generated constraints.
 - Decision-bearing atoms are moved left and decision-free atoms right.
 - The all-decision-on-right mirror case swaps sides and flips the relation.
-- Widening-cast descent and scale peeling exist.
+- Widening-cast descent and scale peeling exist. Peeling is total: nested
+  multipliers and divisors compose into one factor, so `2 * (3 * SUM(x))`,
+  `(SUM(x) / 2) / 3` and mixed nestings rebuild at a single level (§3.7).
 - Query-wide scalar decisions may appear beside reducers.
 - Data reducers on the RHS are evaluated per group and by reducer kind.
 - Sign-aware ABS and composed MIN/MAX analysis handles migrated negative terms.
@@ -309,40 +350,52 @@ expanded into another constraint-shaping pass.
 - `LogicalDecide::AddConstraint` canonicalizes generated constraints.
 - The physical per-row path has a defensive check for decision variables on
   the RHS.
+- Casts have one policy in one module (`decide_cast_policy.cpp`) and one
+  enforcement point (`ValidateDecisionCasts`). Resolution-preserving casts are
+  transparent everywhere; value-changing ones over a decision are rejected with an
+  actionable message. See §3.6.
+- Explicit decision-bearing casts are accepted by parsed-expression shape
+  classification. Decision-free casts remain on DuckDB's ordinary expression
+  evaluation path, and are never peeled by the shared unwrap helper.
+- Scalar-subquery provenance is collected from both comparison sides before
+  flattening. Uncorrelated values remain query-wide through rebuilding;
+  correlated values remain row-varying.
+- The canonicalizer classifies the complete rebuilt RHS. Forward, reversed and
+  additive query-wide bounds share one diagnostic edit, while a bound with any
+  row-varying component remains data-backed.
+- Physical evaluation consumes the canonical RHS classification. Diagnostic
+  rendering never exposes DuckDB's internal `SUBQUERY` placeholder.
 
 ### Blocking defects and gaps
 
-1. **Lossy cast distribution can produce a wrong answer.**
-   `IsWideningNumericCast` currently treats any implicit numeric cast as safe.
-   `BIGINT -> DOUBLE` disproves that above `2^53`.
-
-2. **Reversed scalar-subquery bounds lose provenance.**
-   `x <= (SELECT 5)` diagnoses as a shared editable cap, but
-   `(SELECT 5) >= x` can report `x <= SUBQUERY + 5` after side swapping.
-
-3. **Nested reducer scales are neither normalized nor rejected at the owning
-   boundary.** They fail later in physical extraction.
-
-4. **C5/K3 validation remains downstream.**
+1. **C5/K3 validation remains downstream.**
    `PhysicalDecide::ExtractAggregateConstraintTerms` still issues user-facing
    errors for non-aggregate top-level terms.
 
-5. **The invariant is conventional, not structural.**
+2. **The invariant is conventional, not structural.**
    `VerifyCanonical()` does not exist, and optimizer passes can still mutate
    `decide_constraints` in place.
 
-6. **The `PER` gate has a homogeneity hole.**
+3. **The `PER` gate has a homogeneity hole.**
    A data-only reducer on the left can make a per-row decision constraint look
    aggregate, allowing a meaningless `PER` through.
 
-7. **`FixedLinearLhsOffset` still looks generic but always sums data-only
+4. **`FixedLinearLhsOffset` still looks generic but always sums data-only
    reducer-body terms.** It must either be explicitly SUM-specific with a guard
    or be routed through reducer-aware evaluation when another meaning is
    reachable.
 
-8. **Objective normalization remains separate unfinished work.**
-   `SimplifyDecideObjective`, `objective_constant_offset`, and objective grammar
-   repair keep the old symbolic path alive.
+5. **A decision-free NULL bound is not rejected at the planning boundary.**
+   `x + 3 <= CAST(NULL AS DOUBLE)` reaches physical bound absorption and throws
+   an internal `GetValueInternal` error. Canonical validation must reject it
+   with an actionable SQL-level message before physical planning.
+
+6. **Objective normalization remains separate unfinished work, and it carries a
+   live wrong answer.** `SimplifyDecideObjective`, `objective_constant_offset`,
+   and objective grammar repair keep the old symbolic path alive. Because that
+   path erases `CastExpression` nodes before binding,
+   `MAXIMIZE SUM(CAST(x AS INTEGER) * w)` silently optimizes `SUM(x * w)` —
+   the same cast a constraint rejects. Owned by Step 8, item 6.
 
 ---
 
@@ -385,40 +438,133 @@ The contract is now pinned by focused tests:
   non-canonical and fixed-point spellings covering side swaps, exact casts,
   scales, `WHEN` and `PER`.
 
-The red tests are intentional at this step. They reproduce the cast wrong
-answers, reversed-subquery provenance loss, late nested-scale failures, and
-downstream/missing homogeneity validation that Steps 2-5 own.
+The Step 2 cast tests, Step 3 provenance tests and Step 4 nested-scale tests are
+now green. The remaining intentional red tests reproduce the downstream and
+missing homogeneity validation that Step 5 owns.
 
-### Step 2 — make cast descent exact
+### Step 2 — one cast policy at one site (complete 2026-08-13)
 
-Replace `CastRules::ImplicitCast >= 0` as the general definition of widening.
-Implement and test the explicit exactness policy in §3.6. Leave an uncertain
-cast atomic; never distribute it merely because DuckDB permits it implicitly.
+Superseded the earlier preimage-inversion approach. That version modelled every
+type-lossy cast exactly, by inverting it: it fixed the original three `<=` failures
+but left the same bug reachable elsewhere and made ordinary queries far slower.
 
-This is the first implementation step because it closes a demonstrated wrong
-answer.
+What it cost, measured before replacement:
 
-### Step 3 — make provenance side-agnostic
+- `CAST(x+v AS DOUBLE) + CAST(y+v AS DOUBLE) <= K` still returned a wrong answer —
+  the lowering only fired when the cast wrapped the *complete* side;
+- `SUM(x) <= <decimal column>` ran **120x slower** (4.5 s vs 0.04 s at 10k rows,
+  44 s at 100k), because `HUGEINT -> DECIMAL(38,1)` is lossy by *type* and so ran a
+  full per-row lattice search — for a `SUM(x)` that cannot exceed a few thousand;
+- every such constraint also carried two rigid rows bounding `SUM(x)` to +/-1e37.
 
-Collect scalar-subquery provenance from both comparison sides before
-flattening. Carry semantic facts through canonical rebuilding rather than
-encoding the original position as "RHS".
+DuckDB solves the same problem with one predicate
+(`BoundCastExpression::CastIsInvertible`) in one rewrite rule, does no preimage
+inversion at all, and makes the cast vanish before anything downstream sees it. The
+one place it expands a comparison into an interval (`TIMESTAMP -> DATE`) is a
+hardcoded one-off. What landed follows that shape:
 
-Classify the complete rebuilt bound:
+1. `decide_cast_policy.{hpp,cpp}` is the single home: `DecidePreservesResolution`,
+   `UnwrapDecideCasts`, and the display-only `StripCastsForDisplay` /
+   `DecideDisplayString`. It replaced `numeric_cast_preimage.cpp` (430 lines).
+2. `DecideCanonicalizer::ValidateDecisionCasts` enforces §3.6 at the boundary.
+3. The three byte-identical `UnwrapCasts` helpers collapsed to one; the 11
+   `IsExactDecideNumericCast` guards in `physical_decide.cpp` were deleted as dead
+   under the invariant.
+4. `EvaluatedConstraint` lost eight cast fields, `DecideConstraint` three, and the
+   preimage lowering block plus its `cast_ne_interval` branches through the Big-M
+   `<>` expansion are gone. `source_clause_id` was kept — it is a general
+   clause-identity improvement, not cast machinery.
 
-- wholly query-wide -> shared scalar bound;
-- contains row-varying data -> per-row/per-group data.
+Verification:
 
-Forward and reversed spellings must produce equivalent diagnostic subjects and
-applicable SQL edits.
+- all 80 golden models and their results are **byte-identical to the committed
+  pre-Step-2 baseline** — the +/-1e37 rows are gone and nothing else moved;
+- `make decide-test`: 1107 passed, 7 failed — exactly the pre-existing set (six
+  Step 4/5 pins plus the NULL-bound gap), no new failures;
+- `unittest "[decidb]"`: 393 assertions pass;
+- the 120x case is back to 0.037 s, identical to the same query without a cast;
+- `git diff --check` clean.
 
-### Step 4 — implement reducer-scale totality
+Two consequences recorded rather than hidden. Past `2^53` a model and row-wise SQL
+can disagree, which is now a documented limit with its own characterization test
+rather than an accident. And removing the preimage path unmasked a pre-existing,
+unrelated gap — an infinite bound in a rebuilt additive RHS is rejected while the
+same bound alone is accepted — filed in `07_issues/bugs/todo.md`.
 
-Implement the composed nested-scale contract in §3.7 while preserving typed
-evaluation and operation order.
+### Step 3 — make provenance side-agnostic (complete 2026-08-12)
 
-In both cases, every accepted scale has one shape understood by optimizer and
-physical consumers.
+Implemented as semantic value and bound classification rather than another
+positional special case:
+
+1. `PlanSelectNode` records scalar subqueries from both comparison sides before
+   flattening. Uncorrelated flattened values carry `QUERY_WIDE_VALUE_TAG`;
+   correlated ones carry `ROW_VARYING_SUBQUERY_TAG`.
+2. `DecideCanonicalizer::FinalizeBoundProvenance` removes any stale root
+   classification, examines the complete canonical RHS, and stamps
+   `QUERY_WIDE_BOUND_TAG` only when every component is query-wide.
+3. The optimizer-generated entry point honors explicit value provenance but
+   never guesses that an arbitrary column is query-wide.
+4. Physical evaluation consumes the root classification through
+   `rhs_is_shared_scalar`; solver provenance calls the resulting elastic shape
+   `SHARED_SCALAR` to cover literals and other query-wide values uniformly.
+5. Mixed and correlated subquery bounds remain data-backed. Their diagnostics
+   use an evaluated numeric fallback rather than leaking `SUBQUERY` or an
+   internal DECIDE tag into suggested SQL.
+
+Forward/reversed direct bounds, rebuilt additive bounds, multiple query-wide
+components, mixed data bounds, correlated bounds and model idempotence are
+covered on both backends.
+
+Verification (Step 3, at the time it landed):
+
+- `make release` succeeds;
+- all 149 `test_query_diagnostics_relation.py` cases pass on their configured
+  backends;
+- the focused Step 3 plus idempotence selection passes all 21 cases;
+- the five-file canonicalizer run passes 71 of 74 cases; its three failures are
+  the two Step 4 nested-scale pins and the Step 5 row-scope validation pin;
+- all 80 golden models and result/error lines are byte-identical to the
+  immediate pre-Step-3 capture;
+- the full suite passes 1,108 of 1,115 cases. Six failures are the open Step 4/5
+  contract tests; the seventh is the NULL-bound planning-validation gap listed
+  above. No Step 3 test failed, and the emitted model corpus did not change.
+
+### Step 4 — implement reducer-scale totality (complete 2026-08-13)
+
+The fix turned out to live entirely in `PeelScale`, with **no downstream edit**.
+`PhysicalDecide::AsScaledAggregate` re-derives the factor from the tree rather than
+reading `Atom.scale`, and it matches only a single level (`factor * AGG` /
+`AGG / factor`). Peeling one level off `2 * (3 * SUM(x))` rebuilt the identical
+tree, so physical failed to match and errored late. Peeling to exhaustion and
+composing rebuilds `(2 * 3) * SUM(x)`, which the existing matcher already accepts.
+
+What landed:
+
+1. `PeelScale` loops instead of testing once, gathering factors by role —
+   multipliers into `M`, divisors into `D` — and unwrapping resolution-preserving
+   casts between levels (safe because `ValidateDecisionCasts` ran first, and
+   physical unwraps identically).
+2. The emitted factor is `M`, `D`, or `M / D`, so mixed nestings collapse to one
+   multiplication rather than needing a numerator and denominator slot.
+3. Each nesting level is judged separately, so an illegal inner factor names
+   itself: `2 * (w * SUM(x))` reports `w`, not `2`.
+4. `Atom::scale` became an owning `unique_ptr<Expression>` — a composed factor is
+   a new node and cannot be borrowed from the input tree. `Atom` is now move-only,
+   which made the two copy sites in the partition loop explicit moves.
+
+Composition reassociates in double arithmetic; §3.7 records why that is accepted.
+
+Verification:
+
+- the two nested-scale contract tests pass; the full scale file is 23/23;
+- three-level nesting, both mixed multiply/divide orders, and composed query-wide
+  subquery factors were each checked against hand-derived bounds;
+- illegal inner factors (row-varying and decision-bearing) still reject at the
+  binder with the message naming the inner factor;
+- all 80 golden models **and** their results are byte-identical to baseline;
+- `make decide-test`: 1109 passed, 5 failed — down from 7; the remaining 5 are the
+  four Step 5 homogeneity pins plus the Step 5 NULL-bound gap;
+- `git diff --check` clean.
 
 ### Step 5 — centralize homogeneity validation
 
@@ -434,6 +580,8 @@ It owns:
 - row-scoped decisions beside reducers;
 - illegal scale factors;
 - the real aggregate predicate used by `PER`.
+- rejection of decision-free bounds that evaluate to NULL, before physical
+  bound absorption or runtime evaluation.
 
 Physical extraction may keep defensive internal assertions, but a user query
 must not first discover a structural error there.
@@ -478,11 +626,23 @@ normalization contract separately:
 3. replace or remove `SimplifyDecideObjective` and SymbolicC++;
 4. preserve objective constants explicitly if exact objective-value reporting
    will need them;
-5. remove `objective_constant_offset` only after its replacement is settled.
+5. remove `objective_constant_offset` only after its replacement is settled;
+6. **the objective cast case is still open and this step owns it.** A rounding
+   cast over a decision is rejected in a constraint but silently dropped from a
+   `SUM` objective — `MAXIMIZE SUM(CAST(x AS INTEGER) * w)` optimizes
+   `SUM(x * w)` instead. The cause is item 3: `SimplifyDecideObjective` erases
+   `CastExpression` nodes at the parsed level, before binding, so the
+   `ValidateDecisionCasts` call already placed on the bound objective in
+   `plan_select_node.cpp` never sees them (`MIN`/`MAX` forms are refused earlier
+   by the binder's shape check). No new check is needed — removing the symbolic
+   rewrite closes this automatically. **Do not add a cast check inside the
+   symbolic layer**; that rebuilds the per-site pattern §3.6 exists to remove.
+   Filed in `07_issues/bugs/todo.md`.
 
 Constraint canonicalization can be declared complete before this step. The
 whole canonicalization issue can close only when this objective work is either
-landed or moved into a separately named, authoritative task.
+landed or moved into a separately named, authoritative task — and item 6 means
+that task carries a live wrong-answer case, not only cleanup.
 
 ### Step 9 — reconcile documentation and trackers
 
@@ -509,7 +669,9 @@ landed or moved into a separately named, authoritative task.
 - No downstream stage moves terms across a comparison.
 - No downstream stage decides aggregate-versus-per-row homogeneity for the
   first time.
-- Cast distribution is provably exact.
+- Casts have one policy and one enforcement point: resolution-preserving casts are
+  transparent, value-changing casts over a decision are rejected, and casts over data
+  are left alone.
 - Forward and reversed forms preserve equivalent source provenance and
   diagnostics.
 - Reducer scales are either fully canonicalized or explicitly rejected by the
@@ -535,8 +697,8 @@ landed or moved into a separately named, authoritative task.
 - this document contains no open implementation step.
 
 Passing the existing suite is necessary but not sufficient. At the start of
-this closeout the tree passed 1,059 tests and all 80 golden models, while still
-containing the lossy-cast wrong answer and reversed-subquery diagnostics defect.
+this closeout the tree passed 1,059 tests and all 80 golden models despite the
+then-undetected lossy-cast wrong answer and reversed-subquery diagnostics defect.
 
 ---
 
@@ -544,11 +706,16 @@ containing the lossy-cast wrong answer and reversed-subquery diagnostics defect.
 
 For a new agent taking over:
 
-- Start with Step 1 and work in order; do not begin with `VerifyCanonical()`.
+- Start at Step 5. Steps 1-4 are complete; do not reopen the cast policy, the
+  side-agnostic provenance path, or reducer-scale composition while centralizing
+  homogeneity validation.
 - Preserve the user's existing worktree and treat this document as the current
   contract rather than reconstructing the deleted historical phases.
-- Add each adversarial regression test before its fix, then run the focused
-  canonicalizer tests and golden diff after every step.
+- Casts are settled: one predicate (`DecidePreservesResolution`), one enforcement
+  point (`ValidateDecisionCasts`), and a deliberate separation between the semantic
+  `UnwrapDecideCasts` and the display-only `StripCastsForDisplay`. Do not add a
+  per-site cast guard; if a site needs one, the invariant is what is broken.
+  `source_clause_id` is retained and is not cast machinery.
 - Keep transformation and validation at the planning boundary; do not restore a
   binder, optimizer or physical fallback.
 - Stop and report any new wrong-answer case before expanding the refactor's scope.
@@ -567,6 +734,8 @@ test/decide/.venv/bin/python3 -m pytest \
   test/decide/tests/test_canonicalize_scale.py \
   test/decide/tests/test_canonicalize_sign.py \
   test/decide/tests/test_canonicalize_side_agnostic.py \
+  test/decide/tests/test_canonicalize_homogeneity.py \
+  test/decide/tests/test_canonicalize_idempotence.py \
   -v
 
 ./test/decide/golden/capture.sh /tmp/canonicalize-after.dump
@@ -588,6 +757,8 @@ error and cannot read `decide_diagnostics()` afterward.
 |---|---|
 | Canonical transformation | `src/planner/decide/decide_canonicalizer.cpp` |
 | Canonicalizer contract | `src/include/duckdb/planner/decide/decide_canonicalizer.hpp` |
+| Cast policy and unwrapping | `src/decidb/utility/decide_cast_policy.cpp` |
+| Cast-policy interface | `src/include/duckdb/decidb/decide_cast_policy.hpp` |
 | User-written call site and subquery provenance | `src/planner/binder/query_node/plan_select_node.cpp` |
 | Constraint binding and `PER` gate | `src/planner/expression_binder/decide_constraints_binder.cpp` |
 | Generated-constraint entry point | `src/planner/operator/logical_decide.cpp` |

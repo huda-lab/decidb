@@ -95,11 +95,12 @@ inline bool IsRelaxableForElastic(ConstraintKind kind) {
 //!   PER_ROW_DATA   — the RHS is per-row data, or the rows are genuinely independent:
 //!                    one slack per row, no single-knob edit (rolled into a conflict
 //!                    summary).
-//!   SHARED_LITERAL — one user literal RHS fans into N rows (easy MIN/MAX `MAX(e)<=K`,
-//!                    a per-row constraint with a constant RHS, a multi-instance bound):
+//!   SHARED_SCALAR  — one query-wide RHS value fans into N rows (easy MIN/MAX
+//!                    `MAX(e)<=K`, a per-row constraint with a constant or
+//!                    uncorrelated-subquery RHS, a multi-instance bound):
 //!                    the N rows of a (clause_id, group_key) block share ONE slack, so
 //!                    the reported edit is the max overshoot, not the sum.
-enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_LITERAL };
+enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_SCALAR };
 
 //! DECIDE encodes pipeline metadata in the `alias` of bound expressions. More than one
 //! tag can apply to the same node — a relation-qualified AVG is tagged by the binder
@@ -114,6 +115,15 @@ inline void AddDecideTag(string &alias, const string &tag) {
 //! True when `alias` carries `tag`, whatever else it also carries.
 inline bool HasDecideTag(const string &alias, const string &tag) {
 	return alias.find(tag) != string::npos;
+}
+
+//! Remove every occurrence of an exact DECIDE tag while preserving ordinary aliases
+//! and any other concatenated tags.
+inline void RemoveDecideTag(string &alias, const string &tag) {
+	idx_t pos;
+	while ((pos = alias.find(tag)) != string::npos) {
+		alias.erase(pos, tag.size());
+	}
 }
 
 //! Reads the payload of a prefix-shaped tag out of a possibly multi-tag alias:
@@ -199,30 +209,31 @@ static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
 
-//! Tag marking a per-row bound whose RHS was an UNCORRELATED scalar subquery
-//! (e.g. `x <= (SELECT 5)`). PlanSubqueries flattens such a subquery into a
-//! cross-joined column ref that is structurally indistinguishable from row data,
-//! so foldability alone (IsFoldable) cannot tell it from a genuinely per-row RHS
-//! (a correlated subquery / column). Detected before flattening and stamped on the
-//! rewritten RHS column-ref alias (see plan_select_node.cpp), this tag tells the
-//! elastic engine the RHS is one shared editable cap (ElasticShape::SHARED_LITERAL),
-//! not per-row data — so infeasible diagnosis reports "Loosen x <= 5 to x <= 10"
-//! instead of a data conflict. Correlated subqueries stay untagged (per-row).
-static constexpr const char *SHARED_SCALAR_SUBQUERY_TAG = "__shared_scalar_subquery__";
+//! Semantic provenance stamped on the flattened value produced by an UNCORRELATED
+//! scalar subquery. Shape alone cannot distinguish that query-wide column ref from
+//! ordinary row data after PlanSubqueries.
+static constexpr const char *QUERY_WIDE_VALUE_TAG = "__query_wide_value__";
 
-//! Returns true if the alias is SHARED_SCALAR_SUBQUERY_TAG
-inline bool IsSharedScalarSubqueryTag(const string &alias) {
-	return alias == SHARED_SCALAR_SUBQUERY_TAG;
+//! Semantic provenance stamped on a flattened CORRELATED scalar subquery. It remains
+//! row-varying; the tag exists so downstream diagnostics never quote DuckDB's internal
+//! `SUBQUERY` placeholder as if it were user SQL.
+static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery__";
+
+//! Classification stamped by DecideCanonicalizer on the complete canonical RHS when
+//! every component is query-wide. Physical evaluation consumes this fact and does not
+//! re-decide the RHS shape.
+static constexpr const char *QUERY_WIDE_BOUND_TAG = "__query_wide_bound__";
+
+inline bool IsQueryWideValueTag(const string &alias) {
+	return HasDecideTag(alias, QUERY_WIDE_VALUE_TAG);
 }
 
-//! True when the alias marks an expression that is one value for the whole query.
-//! Used by the canonicalizer to answer "may this factor scale a reducer?" —
-//! `(SELECT k FROM p) * SUM(x)` may, `weight * SUM(x)` may not. A subquery that
-//! flattening has already turned into a column ref is indistinguishable from row data
-//! by shape, so a tag is the only evidence left; an unflattened one is recognized
-//! directly from its node type and needs no tag.
-inline bool IsQueryWideConstantTag(const string &alias) {
-	return alias == SHARED_SCALAR_SUBQUERY_TAG;
+inline bool IsRowVaryingSubqueryTag(const string &alias) {
+	return HasDecideTag(alias, ROW_VARYING_SUBQUERY_TAG);
+}
+
+inline bool IsQueryWideBoundTag(const string &alias) {
+	return HasDecideTag(alias, QUERY_WIDE_BOUND_TAG);
 }
 
 //! Tag prefix for ABS upper-bound constraint linking.

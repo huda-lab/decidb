@@ -8,7 +8,8 @@ add_library_unity(
   diagnostic_solves.cpp
   debug.cpp
   ilp_model_builder.cpp
-  ilp_solver.cpp)
+  ilp_solver.cpp
+  decide_cast_policy.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_decidb_util>
     PARENT_SCOPE)

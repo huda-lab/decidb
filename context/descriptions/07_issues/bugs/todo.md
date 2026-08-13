@@ -86,3 +86,55 @@ Both orderings give `10/3`, so the pass appears to select the largest single coe
 **Note**: the symbolic simplifier does not repair this — it only fires when the LHS contains a `SUM`, so per-row constraints reach the absorption pass unnormalized. Like-term collection would mask the symptom, but the pass should accumulate regardless of the shape it is handed.
 
 **Discovered**: 2026-08-10, first use of the new `DECIDB_DUMP_MODEL` oracle while capturing baseline dumps for the canonicalization refactor.
+
+---
+
+
+
+## An infinite bound in a rebuilt additive RHS is rejected, while the same bound alone is accepted
+
+**Symptom**: `x <= 1e1000::DOUBLE` (an infinite bound) solves fine — it is absorbed as a column bound and correctly acts as "unconstrained". But move any term across the comparison so the RHS becomes an additive expression and the same bound is refused:
+
+```sql
+-- accepted, x = 6
+SUCH THAT x >= 0 AND x <= 6 AND x <= 1e1000::DOUBLE
+-- refused
+SUCH THAT x >= 0 AND x <= 6 AND x + v <= 1e1000::DOUBLE
+```
+
+```
+Invalid Input Error: DECIDE constraint right-hand side contains invalid value (NaN or Infinity) at row 0.
+```
+
+**Cause**: canonicalization rebuilds the bound as `1e1000 - v`, which evaluates to `Infinity`, and `ExtractDoubleColumn` rejects non-finite values wholesale. An infinite upper bound is not an error — it is the absence of a constraint — so the row should either be dropped or passed to the solver as its infinity sentinel.
+
+**Not cast-related.** The reproduction above uses only INTEGER columns and contains no lossy cast. It was previously visible only through `test_canonicalize_cast.py::test_lossy_cast_infinite_bounds`, because canonicalization Step 2's preimage path happened to bypass `ExtractDoubleColumn` for cast-bearing constraints and so masked the general gap for that one shape. Removing the preimage machinery unmasked it; behaviour is now uniform across cast and non-cast constraints, which is why that test was retired rather than repaired.
+
+**Where to look**: `ExtractDoubleColumn` and the RHS evaluation loop in `PhysicalDecide::Finalize` (`src/execution/operator/decide/physical_decide.cpp`); the accepted path is bound absorption in `TraverseBoundsConstraints`.
+
+**Discovered**: 2026-08-13, replacing the cast-preimage machinery with the one-site cast policy.
+
+---
+
+## A rounding cast over a decision is erased from a `SUM` objective before anything can reject it
+
+**Symptom**: the same cast is refused in a constraint and silently dropped in an objective.
+
+```sql
+-- refused, correctly:
+SUCH THAT CAST(x AS INTEGER) <= 3
+--   DECIDE cannot model CAST(x AS INTEGER): converting it to a whole number rounds it.
+
+-- accepted, and optimizes SUM(x * w) instead of SUM(round(x) * w):
+MAXIMIZE SUM(CAST(x AS INTEGER) * w)
+```
+
+`EXPLAIN` confirms the cast is already gone by the time the plan is built — the objective reads `MAXIMIZE sum((x * CAST(w AS DOUBLE)))`.
+
+**Cause**: the parsed-level symbolic simplifier (`SimplifyDecideObjective` → `ToSymbolicRecursive`, `src/decidb/symbolic/decide_symbolic.cpp:294`) drops `CastExpression` nodes when lowering the objective to its symbolic form, which runs **before** binding. `DecideCanonicalizer::ValidateDecisionCasts` is called on the bound objective in `plan_select_node.cpp` and is the right check, but it cannot see a cast that no longer exists.
+
+**Scope**: `SUM` objectives only. `MIN`/`MAX` forms are refused earlier by the binder's parsed-shape classification (`[MAXIMIZE|MINIMIZE] clause does not support 'CAST(...)'`), so the hole is not general.
+
+**Fix direction**: this is `canonicalize.md` **Step 8**, which retires `SimplifyDecideObjective` and SymbolicC++. Once the objective reaches binding un-rewritten, the existing `ValidateDecisionCasts` call closes it with no further work. Do not add a second cast check in the symbolic layer — that rebuilds the per-site pattern this policy exists to remove.
+
+**Discovered**: 2026-08-13, extending the one-site cast policy to the objective path.

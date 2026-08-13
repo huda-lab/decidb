@@ -1,4 +1,5 @@
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/decidb/decide_cast_policy.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -38,34 +39,6 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 	}
 
     if (statement.HasDecideClause()) {
-        // A per-row bound whose RHS is an UNCORRELATED scalar subquery (`x <= (SELECT 5)`)
-        // is one shared editable cap, not row data — but PlanSubqueries below flattens it
-        // into a cross-joined column ref indistinguishable from a real per-row column. The
-        // correlation info only exists NOW, before flattening, so detect those comparisons
-        // here (their nodes survive the in-place rewrite) and stamp the rewritten RHS with
-        // SHARED_SCALAR_SUBQUERY_TAG afterward so infeasible diagnosis treats them as a
-        // single loosenable bound. Correlated subqueries are left untagged (genuinely per-row).
-        vector<BoundComparisonExpression *> shared_subquery_comps;
-        std::function<void(Expression &)> collect_shared_subquery_rhs = [&](Expression &e) {
-            if (e.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-                auto &comp = e.Cast<BoundComparisonExpression>();
-                Expression *rhs = comp.right.get();
-                while (rhs->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                    rhs = rhs->Cast<BoundCastExpression>().child.get();
-                }
-                if (rhs->GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
-                    auto &subq = rhs->Cast<BoundSubqueryExpression>();
-                    if (subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated()) {
-                        shared_subquery_comps.push_back(&comp);
-                    }
-                }
-            }
-            ExpressionIterator::EnumerateChildren(e, collect_shared_subquery_rhs);
-        };
-        if (statement.decide_constraints) {
-            collect_shared_subquery_rhs(*statement.decide_constraints);
-        }
-
         // Which column refs will be ONE value for the whole query once flattening is
         // done. Canonicalization needs this to tell a legal factor on a reducer
         // (`(SELECT k FROM p) * SUM(x)`) from an illegal one (`weight * SUM(x)`, which
@@ -102,20 +75,19 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         PlanSubqueries(statement.decide_constraints, root);
         PlanSubqueries(statement.decide_objective, root);
 
-        // Read back what each uncorrelated subquery became. Recording the table index
-        // rather than tagging the node keeps this out of the alias channel, which is
-        // already carrying SHARED_SCALAR_SUBQUERY_TAG and a user-visible "SUBQUERY"
-        // name on exactly these nodes.
+        // Read back what every scalar subquery became. The table-index sets give the
+        // strict canonicalizer its planning-time evidence. The expression tags carry
+        // the same semantic fact with the flattened value so it survives copies and
+        // optimizer-generated re-canonicalization.
         auto collect_flattened_indexes = [](const vector<unique_ptr<Expression> *> &slots,
                                             unordered_set<idx_t> &out) {
             for (auto *slot : slots) {
                 if (!*slot) {
                     continue;
                 }
-                Expression *flat = slot->get();
-                while (flat->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-                    flat = flat->Cast<BoundCastExpression>().child.get();
-                }
+                // Identity, not value: a flattened subquery is the same column whatever
+                // wraps it, so this peels past any cast (see StripCastsForIdentity).
+                const Expression *flat = StripCastsForIdentity(**slot);
                 if (flat->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                     out.insert(flat->Cast<BoundColumnRefExpression>().binding.table_index);
                 }
@@ -126,11 +98,19 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         collect_flattened_indexes(uncorrelated_subquery_slots, query_wide_table_indexes);
         collect_flattened_indexes(correlated_subquery_slots, correlated_subquery_table_indexes);
 
-        // Subquery RHS is now a flattened column ref (PlanSubqueries rewrote it in place,
-        // leaving the comparison node — and our pointers to it — valid). Tag it shared.
-        for (auto *comp : shared_subquery_comps) {
-            comp->right->SetAlias(SHARED_SCALAR_SUBQUERY_TAG);
-        }
+        auto tag_flattened_values = [](const vector<unique_ptr<Expression> *> &slots,
+                                       const string &tag) {
+            for (auto *slot : slots) {
+                if (!*slot || HasDecideTag((*slot)->GetAlias(), tag)) {
+                    continue;
+                }
+                auto alias = (*slot)->GetAlias();
+                AddDecideTag(alias, tag);
+                (*slot)->SetAlias(std::move(alias));
+            }
+        };
+        tag_flattened_values(uncorrelated_subquery_slots, QUERY_WIDE_VALUE_TAG);
+        tag_flattened_values(correlated_subquery_slots, ROW_VARYING_SUBQUERY_TAG);
         // Canonicalization: the single point at which the shape of a user-written
         // constraint is decided (decision terms left, data right). Runs here rather
         // than during binding because it needs bound expressions -- a decision
@@ -138,11 +118,27 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // because it must see the flattened form PlanSubqueries just produced.
         // Everything the optimizer emits later is canonicalized by
         // LogicalDecide::AddConstraint. Those two are the only call sites.
-        if (statement.decide_constraints) {
+        {
             DecideCanonicalizer canonicalizer(context, statement.decide_index,
                                               std::move(query_wide_table_indexes),
                                               std::move(correlated_subquery_table_indexes));
-            statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+            if (statement.decide_constraints) {
+                statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+            }
+            // Objectives are not canonicalized (that is canonicalize.md Step 8), but the
+            // cast invariant is not about shape -- it is about which casts may exist at
+            // all, and AnalyzeObjective peels them exactly as constraint extraction does.
+            //
+            // INCOMPLETE, deliberately. This catches any decision cast that survives into
+            // the BOUND objective, but the parsed-level symbolic simplifier erases casts
+            // before binding, so `MAXIMIZE SUM(CAST(x AS INTEGER) * w)` never reaches
+            // here -- see 07_issues/bugs/todo.md. `MIN`/`MAX` forms are refused earlier by
+            // the binder's shape check. Closing the SUM case belongs to Step 8, which
+            // removes that simplifier; this call is what makes the objective safe the
+            // moment it does, and is a real guard for every other shape meanwhile.
+            if (statement.decide_objective) {
+                canonicalizer.ValidateDecisionCasts(*statement.decide_objective);
+            }
         }
 
         auto decide_op = make_uniq<LogicalDecide>(

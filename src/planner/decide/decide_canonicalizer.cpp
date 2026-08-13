@@ -1,6 +1,7 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 
 #include "duckdb/common/enums/expression_type.hpp"
+#include "duckdb/decidb/decide_cast_policy.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -67,96 +68,6 @@ DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &e
 	return Placement::RIGHT;
 }
 
-bool DecideCanonicalizer::IsWideningNumericCast(const LogicalType &from, const LogicalType &to) {
-	if (!from.IsNumeric() || !to.IsNumeric()) {
-		return false;
-	}
-	if (from == to) {
-		return true;
-	}
-
-	struct IntegralRange {
-		uint8_t bits;
-		uint8_t decimal_digits;
-		bool is_signed;
-	};
-	auto get_integral_range = [](const LogicalType &type, IntegralRange &range) {
-		switch (type.id()) {
-		case LogicalTypeId::TINYINT:
-			range = {8, 3, true};
-			return true;
-		case LogicalTypeId::SMALLINT:
-			range = {16, 5, true};
-			return true;
-		case LogicalTypeId::INTEGER:
-			range = {32, 10, true};
-			return true;
-		case LogicalTypeId::BIGINT:
-			range = {64, 19, true};
-			return true;
-		case LogicalTypeId::HUGEINT:
-			range = {128, 39, true};
-			return true;
-		case LogicalTypeId::UTINYINT:
-			range = {8, 3, false};
-			return true;
-		case LogicalTypeId::USMALLINT:
-			range = {16, 5, false};
-			return true;
-		case LogicalTypeId::UINTEGER:
-			range = {32, 10, false};
-			return true;
-		case LogicalTypeId::UBIGINT:
-			range = {64, 20, false};
-			return true;
-		case LogicalTypeId::UHUGEINT:
-			range = {128, 39, false};
-			return true;
-		default:
-			return false;
-		}
-	};
-
-	IntegralRange from_range {0, 0, false};
-	if (get_integral_range(from, from_range)) {
-		IntegralRange to_range {0, 0, false};
-		if (get_integral_range(to, to_range)) {
-			// The target must contain the source's complete range. A signed
-			// source never fits an unsigned target; an unsigned source needs one
-			// extra bit when crossing to a signed representation.
-			if (from_range.is_signed) {
-				return to_range.is_signed && to_range.bits >= from_range.bits;
-			}
-			return to_range.is_signed ? to_range.bits > from_range.bits
-			                          : to_range.bits >= from_range.bits;
-		}
-		if (to.id() == LogicalTypeId::DECIMAL) {
-			auto integral_capacity = DecimalType::GetWidth(to) - DecimalType::GetScale(to);
-			return integral_capacity >= from_range.decimal_digits;
-		}
-		// Integer-to-binary-float casts are intentionally not inferred from
-		// DuckDB's implicit-cast table. Some small integer types would be exact,
-		// but keeping this allow-list conservative makes any unproved case an
-		// atomic term rather than risking a changed feasible set.
-		return false;
-	}
-
-	// IEEE binary32 values are exactly representable in binary64.
-	if (from.id() == LogicalTypeId::FLOAT && to.id() == LogicalTypeId::DOUBLE) {
-		return true;
-	}
-
-	// DECIMAL widening is exact only when the target preserves both the
-	// fractional digits and the integral range.
-	if (from.id() == LogicalTypeId::DECIMAL && to.id() == LogicalTypeId::DECIMAL) {
-		auto from_scale = DecimalType::GetScale(from);
-		auto to_scale = DecimalType::GetScale(to);
-		auto from_width = DecimalType::GetWidth(from);
-		auto to_width = DecimalType::GetWidth(to);
-		return to_scale >= from_scale && (to_width - to_scale) >= (from_width - from_scale);
-	}
-	return false;
-}
 
 bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	// A factor on a reducer has to answer "are you one value for the whole query?", and
@@ -169,9 +80,12 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	// "not one of the reduced relation's own bindings" -- reads identically for
 	// `weight` but silently admits a CORRELATED subquery, which also lands on a fresh
 	// table index yet yields a different value per row.
+	if (IsQueryWideValueTag(expr.GetAlias())) {
+		return true;
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		if (!judge_column_refs) {
-			return true; // No evidence available; decline to judge rather than guess.
+			return false; // No evidence available: never promote an arbitrary column.
 		}
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		return query_wide_table_indexes.find(colref.binding.table_index) !=
@@ -182,9 +96,6 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
 		auto &subq = expr.Cast<BoundSubqueryExpression>();
 		return subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated();
-	}
-	if (IsQueryWideConstantTag(expr.GetAlias())) {
-		return true;
 	}
 	if (expr.IsFoldable()) {
 		return true;
@@ -209,14 +120,28 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	return false;
 }
 
+unique_ptr<Expression>
+DecideCanonicalizer::FinalizeBoundProvenance(unique_ptr<BoundComparisonExpression> comparison) const {
+	// Root classification describes the complete canonical bound, so never trust a
+	// copied value blindly: optimizer rewrites may have replaced children since the
+	// previous canonicalization. Component-level QUERY_WIDE_VALUE_TAG facts remain and
+	// are the semantic leaves from which the classification is recomputed.
+	auto alias = comparison->right->GetAlias();
+	RemoveDecideTag(alias, QUERY_WIDE_BOUND_TAG);
+	comparison->right->SetAlias(std::move(alias));
+	if (IsQueryWideConstant(*comparison->right)) {
+		auto bound_alias = comparison->right->GetAlias();
+		AddDecideTag(bound_alias, QUERY_WIDE_BOUND_TAG);
+		comparison->right->SetAlias(std::move(bound_alias));
+	}
+	return std::move(comparison);
+}
+
 //! Name an expression the way the user wrote it, for an error message. Everything the
 //! binder added is noise here: `CAST(weight AS DECIMAL(12,1))` is not what anyone
 //! typed, and neither is the `FILTER (WHERE w)` that an aggregate-local WHEN becomes.
 static string UserFacingName(const Expression &expr) {
-	const Expression *cur = &expr;
-	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		cur = cur->Cast<BoundCastExpression>().child.get();
-	}
+	const Expression *cur = StripCastsForIdentity(expr);
 	if (cur->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = cur->Cast<BoundAggregateExpression>();
 		if (agg.children.size() == 1) {
@@ -229,10 +154,7 @@ static string UserFacingName(const Expression &expr) {
 }
 
 bool DecideCanonicalizer::IsCorrelatedSubqueryRef(const Expression &expr) const {
-	const Expression *cur = &expr;
-	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		cur = cur->Cast<BoundCastExpression>().child.get();
-	}
+	const Expression *cur = UnwrapDecideCasts(expr);
 	if (cur->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return false;
 	}
@@ -240,74 +162,121 @@ bool DecideCanonicalizer::IsCorrelatedSubqueryRef(const Expression &expr) const 
 	return correlated_subquery_table_indexes.find(idx) != correlated_subquery_table_indexes.end();
 }
 
-const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, const Expression *&out_scale,
+const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale,
                                                  bool &out_divides) const {
 	out_scale = nullptr;
 	out_divides = false;
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-		return expr;
-	}
-	auto &func = expr.Cast<BoundFunctionExpression>();
-	bool is_mult = func.function.name == "*";
-	bool is_div = func.function.name == "/";
-	if ((!is_mult && !is_div) || func.children.size() != 2) {
-		return expr;
-	}
 
-	// Identify the reducer side. Only a DECISION-BEARING reducer is scaled here: a
-	// data-only reducer (`2 * AVG(price)` as a bound) is the RHS evaluator's business,
-	// and reaching into it would reject shapes this pass has no stake in.
+	// Only a DECISION-BEARING reducer is scaled here: a data-only reducer
+	// (`2 * AVG(price)` as a bound) is the RHS evaluator's business, and reaching into
+	// it would reject shapes this pass has no stake in.
 	auto is_scalable = [&](const Expression &e) {
 		return ContainsReducer(e) && ReferencesDecideVar(e);
 	};
-	const Expression *term = nullptr;
-	const Expression *factor = nullptr;
-	if (is_mult && is_scalable(*func.children[0]) && !ContainsReducer(*func.children[1])) {
-		term = func.children[0].get();
-		factor = func.children[1].get();
-	} else if (is_mult && is_scalable(*func.children[1]) && !ContainsReducer(*func.children[0])) {
-		term = func.children[1].get();
-		factor = func.children[0].get();
-	} else if (is_div && is_scalable(*func.children[0]) && !ContainsReducer(*func.children[1])) {
-		// Only `AGG / K` divides. `K / AGG` is not a scaled reducer at all.
-		term = func.children[0].get();
-		factor = func.children[1].get();
-		out_divides = true;
-	} else {
-		// Two reducers multiplied, or no reducer at all (`price * x` is an ordinary
-		// per-row coefficient). Not a scale; leave it as one term.
+
+	// Factors are gathered by role, not in encounter order, so that one composition
+	// rule covers `M * AGG`, `AGG / D` and every nesting of the two.
+	vector<const Expression *> multipliers;
+	vector<const Expression *> divisors;
+	const Expression *cur = &expr;
+
+	while (true) {
+		// A resolution-preserving cast between levels is transparent (see the cast
+		// policy note in decide_cast_policy.hpp): ValidateDecisionCasts already
+		// rejected every value-changing cast on a decision path before this runs, and
+		// the physical extractor unwraps the same way when it matches the rebuilt term.
+		cur = UnwrapDecideCasts(*cur);
+		if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+			break;
+		}
+		auto &func = cur->Cast<BoundFunctionExpression>();
+		bool is_mult = func.function.name == "*";
+		bool is_div = func.function.name == "/";
+		if ((!is_mult && !is_div) || func.children.size() != 2) {
+			break;
+		}
+
+		const Expression *term = nullptr;
+		const Expression *factor = nullptr;
+		bool factor_divides = false;
+		if (is_mult && is_scalable(*func.children[0]) && !ContainsReducer(*func.children[1])) {
+			term = func.children[0].get();
+			factor = func.children[1].get();
+		} else if (is_mult && is_scalable(*func.children[1]) && !ContainsReducer(*func.children[0])) {
+			term = func.children[1].get();
+			factor = func.children[0].get();
+		} else if (is_div && is_scalable(*func.children[0]) && !ContainsReducer(*func.children[1])) {
+			// Only `AGG / K` divides. `K / AGG` is not a scaled reducer at all.
+			term = func.children[0].get();
+			factor = func.children[1].get();
+			factor_divides = true;
+		} else {
+			// Two reducers multiplied, or no reducer at all (`price * x` is an ordinary
+			// per-row coefficient). Not a scale; stop here.
+			break;
+		}
+
+		// The single judgement. A reducer collapses many rows to one number, so anything
+		// multiplying it must also be one number. Each nesting level is judged
+		// separately, so the message names the factor the user actually has to fix.
+		const char *verb = factor_divides ? "divide" : "multiply";
+		if (ReferencesDecideVar(*factor)) {
+			throw BinderException(
+			    "DECIDE constraint: '%s' is a decision, so it cannot %s %s. "
+			    "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.",
+			    UserFacingName(*factor), verb, UserFacingName(*term));
+		}
+		if (!IsQueryWideConstant(*factor)) {
+			// A correlated subquery has no SQL identifier to quote -- flattening left it a
+			// column ref named "SUBQUERY" -- so name it for what the user wrote instead of
+			// echoing an internal name and suggesting `SUM(x * SUBQUERY)`, which is not
+			// something anyone can type.
+			if (IsCorrelatedSubqueryRef(*factor)) {
+				throw BinderException(
+				    "DECIDE constraint: this subquery returns a different value for each row, "
+				    "so it cannot %s %s. Move it inside the aggregate, e.g. "
+				    "SUM(x %s (SELECT ...)).",
+				    verb, UserFacingName(*term), factor_divides ? "/" : "*");
+			}
+			throw BinderException(
+			    "DECIDE constraint: '%s' varies per row, so it cannot %s %s. "
+			    "Move it inside the aggregate, e.g. SUM(x %s %s).",
+			    UserFacingName(*factor), verb, UserFacingName(*term), factor_divides ? "/" : "*",
+			    UserFacingName(*factor));
+		}
+
+		(factor_divides ? divisors : multipliers).push_back(factor);
+		cur = term;
+	}
+
+	if (multipliers.empty() && divisors.empty()) {
 		return expr;
 	}
 
-	// The single judgement. A reducer collapses many rows to one number, so anything
-	// multiplying it must also be one number.
-	const char *verb = out_divides ? "divide" : "multiply";
-	if (ReferencesDecideVar(*factor)) {
-		throw BinderException(
-		    "DECIDE constraint: '%s' is a decision, so it cannot %s %s. "
-		    "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.",
-		    UserFacingName(*factor), verb, UserFacingName(*term));
-	}
-	if (!IsQueryWideConstant(*factor)) {
-		// A correlated subquery has no SQL identifier to quote -- flattening left it a
-		// column ref named "SUBQUERY" -- so name it for what the user wrote instead of
-		// echoing an internal name and suggesting `SUM(x * SUBQUERY)`, which is not
-		// something anyone can type.
-		if (IsCorrelatedSubqueryRef(*factor)) {
-			throw BinderException(
-			    "DECIDE constraint: this subquery returns a different value for each row, "
-			    "so it cannot %s %s. Move it inside the aggregate, e.g. "
-			    "SUM(x %s (SELECT ...)).",
-			    verb, UserFacingName(*term), out_divides ? "/" : "*");
+	// Compose each role into one node, then combine the two. `M`, `D` and `M / D` are
+	// the only three results, so the rebuild in BuildAdditive stays a single level and
+	// the physical extractor's single-level match keeps working unchanged.
+	auto product = [&](const vector<const Expression *> &factors) {
+		unique_ptr<Expression> acc;
+		for (auto *factor : factors) {
+			acc = acc ? BindOp("*", std::move(acc), factor->Copy()) : factor->Copy();
 		}
-		throw BinderException(
-		    "DECIDE constraint: '%s' varies per row, so it cannot %s %s. "
-		    "Move it inside the aggregate, e.g. SUM(x %s %s).",
-		    UserFacingName(*factor), verb, UserFacingName(*term), out_divides ? "/" : "*",
-		    UserFacingName(*factor));
+		return acc;
+	};
+	auto multiplier = product(multipliers);
+	auto divisor = product(divisors);
+
+	if (!divisor) {
+		out_scale = std::move(multiplier);
+	} else if (!multiplier) {
+		out_scale = std::move(divisor);
+		out_divides = true;
+	} else {
+		// Mixed nesting collapses to a single multiplication by `M / D` rather than
+		// keeping a numerator and a denominator slot: one spelling downstream beats two.
+		out_scale = BindOp("/", std::move(multiplier), std::move(divisor));
 	}
-	out_scale = factor;
-	return *term;
+	return *cur;
 }
 
 void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Atom> &out,
@@ -336,7 +305,7 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 		// directly skips the intermediate hop, and widening composes, so the value
 		// is the same. A narrowing cast is left whole -- it becomes an ordinary
 		// term, and any outer widening cast still applies on top of it.
-		if (IsWideningNumericCast(cast.child->return_type, cast.return_type)) {
+		if (DecidePreservesResolution(cast.child->return_type, cast.return_type)) {
 			auto *target = cast_type ? cast_type : &cast.return_type;
 			vector<Atom> inner;
 			Decompose(*cast.child, sign, inner, target);
@@ -348,11 +317,11 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 			// lose the precision the original expression kept.
 			bool worth_it = inner.size() > 1;
 			for (auto &atom : inner) {
-				worth_it = worth_it && IsWideningNumericCast(atom.expr->return_type, *target);
+				worth_it = worth_it && DecidePreservesResolution(atom.expr->return_type, *target);
 			}
 			if (worth_it) {
 				for (auto &atom : inner) {
-					out.push_back(atom);
+					out.push_back(std::move(atom));
 				}
 				return;
 			}
@@ -361,13 +330,13 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 	// Every other node is a term boundary -- but a factor sitting on a reducer is
 	// peeled off it first, so the term the rest of the pipeline sees is the bare
 	// reducer and the factor travels beside it.
-	const Expression *scale = nullptr;
+	unique_ptr<Expression> scale;
 	bool divides = false;
 	auto &term = PeelScale(expr, scale, divides);
-	// Classify on the whole original term. The factor is decision-free and
+	// Classify on the whole original term. The factors are decision-free and
 	// reducer-free by construction, so this agrees with classifying `term` -- stated
 	// rather than assumed, because Classify is the part that was wrong twice before.
-	out.push_back(Atom {sign, &term, Classify(expr), cast_type, scale, divides});
+	out.push_back(Atom {sign, &term, Classify(expr), cast_type, std::move(scale), divides});
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> left,
@@ -436,8 +405,35 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 	return acc;
 }
 
+void DecideCanonicalizer::ValidateDecisionCasts(const Expression &expr) const {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		auto &cast = expr.Cast<BoundCastExpression>();
+		// Only the decision path is this pass's business. A cast over pure data is an
+		// ordinary SQL value computation -- `CAST(price AS INTEGER)` is a coefficient
+		// the executor evaluates, and rounding it is exactly what the user asked for.
+		if (ReferencesDecideVar(cast) &&
+		    !DecidePreservesResolution(cast.child->return_type, cast.return_type)) {
+			auto name = DecideDisplayString(*cast.child);
+			auto reason = DecideHasFractionalResolution(cast.return_type)
+			                  ? "keeping fewer decimal places drops part of its value"
+			                  : "converting it to a whole number rounds it";
+			throw InvalidInputException(
+			    "DECIDE cannot model CAST(%s AS %s): %s. Compare %s without the cast, or "
+			    "cast the bound instead.",
+			    name, cast.return_type.ToString(), reason, name);
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { ValidateDecisionCasts(child); });
+}
+
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
 	auto &cmp = expr.Cast<BoundComparisonExpression>();
+
+	// Check before restructuring. Every consumer downstream peels casts unguarded, so
+	// this is the boundary that makes those peels safe -- see the header note on
+	// ValidateDecisionCasts. Casts the rebuild inserts below need no re-check:
+	// FunctionBinder only ever widens to a common type, which never reduces scale.
+	ValidateDecisionCasts(cmp);
 
 	vector<Atom> left_atoms;
 	vector<Atom> right_atoms;
@@ -472,7 +468,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 	// spelling. Rebuilding an already-canonical `2 * SUM(x)` reproduces it.
 	if (left_has_decision && !right_has_decision && !Has(left_atoms, Placement::RIGHT) &&
 	    !HasScale(left_atoms)) {
-		return cmp.Copy();
+		auto copy = cmp.Copy();
+		return FinalizeBoundProvenance(unique_ptr_cast<Expression, BoundComparisonExpression>(std::move(copy)));
 	}
 
 	// No decision content anywhere. Not a shape this pass owns; leave it exactly as
@@ -503,24 +500,26 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 	// right. A term that crosses the relation flips sign.
 	vector<Atom> new_left;
 	vector<Atom> new_right;
-	auto crossed = [](const Atom &atom) {
-		// Crossing the relation flips the sign and nothing else -- the peeled scale
-		// travels with its term, since negating `2 * SUM(x)` negates the product, not
-		// the factor.
-		return Atom {-atom.sign, atom.expr, atom.placement, atom.cast_type, atom.scale, atom.scale_divides};
+	// Crossing the relation flips the sign and nothing else -- the peeled scale
+	// travels with its term, since negating `2 * SUM(x)` negates the product, not
+	// the factor. Each atom lands in exactly one destination, so it is moved rather
+	// than copied; the scale it owns has no second home.
+	auto cross = [](Atom &atom) {
+		atom.sign = -atom.sign;
+		return std::move(atom);
 	};
 	for (auto &atom : left_atoms) {
 		if (atom.placement == Placement::RIGHT) {
-			new_right.push_back(crossed(atom));
+			new_right.push_back(cross(atom));
 		} else {
-			new_left.push_back(atom);
+			new_left.push_back(std::move(atom));
 		}
 	}
 	for (auto &atom : right_atoms) {
 		if (atom.placement == Placement::LEFT) {
-			new_left.push_back(crossed(atom));
+			new_left.push_back(cross(atom));
 		} else {
-			new_right.push_back(atom);
+			new_right.push_back(std::move(atom));
 		}
 	}
 
@@ -530,17 +529,12 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 		new_rhs = make_uniq<BoundConstantExpression>(Value::DOUBLE(0));
 	}
 
-	// K5: tags are an out-of-band channel and several of them are read off the top
-	// node. Carry the comparison's own tag across, and re-stamp the right-hand
-	// side's tag when the right-hand side was rebuilt -- physical_decide reads
-	// SHARED_SCALAR_SUBQUERY_TAG off `rhs_expr` itself, so burying it one level
-	// down inside a subtraction would silently lose it.
+	// K5: comparison tags are an out-of-band channel and must survive rebuilding.
+	// Bound provenance is recomputed semantically from the complete canonical RHS;
+	// it is never copied from whichever side happened to be the original RHS.
 	auto result = make_uniq<BoundComparisonExpression>(cmp.type, std::move(new_lhs), std::move(new_rhs));
 	result->SetAlias(cmp.GetAlias());
-	if (!cmp.right->GetAlias().empty() && result->right->GetAlias().empty()) {
-		result->right->SetAlias(cmp.right->GetAlias());
-	}
-	return std::move(result);
+	return FinalizeBoundProvenance(std::move(result));
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &constraints) const {

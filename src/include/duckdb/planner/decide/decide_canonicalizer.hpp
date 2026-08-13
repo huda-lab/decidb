@@ -84,14 +84,13 @@
 namespace duckdb {
 
 class ClientContext;
+class BoundComparisonExpression;
 
 class DecideCanonicalizer {
 public:
-	//! Permissive form: no information about which column refs are query-wide, so the
-	//! pass does not judge a factor's row-varying-ness at all (every column ref counts
-	//! as query-wide). Used by LogicalDecide::AddConstraint, which canonicalizes what
-	//! the optimizer emits -- those trees are synthesized, not user-written, and the
-	//! subquery-flattening evidence this judgement needs no longer exists by then.
+	//! Provenance-only form: no table-index evidence is available, so arbitrary column
+	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
+	//! still honored. Used by LogicalDecide::AddConstraint for optimizer output.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index);
 
 	//! Strict form: `query_wide_table_indexes` are the table indexes that UNCORRELATED
@@ -121,6 +120,17 @@ public:
 	//! Canonicalize a single comparison. Pure -- `comparison` is untouched.
 	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
 
+	//! THE INVARIANT. Every cast on a decision-bearing path in `expr` preserves
+	//! resolution (see `decidb/decide_cast_policy.hpp`), or this throws with an
+	//! actionable SQL-level message.
+	//!
+	//! This is what lets the ~40 cast-peeling loops downstream stay unguarded and still
+	//! be correct: they can only ever meet a cast that is safe to peel, because a query
+	//! carrying any other kind never leaves this boundary. Deleting the check does not
+	//! make those sites wrong immediately -- it makes them silently wrong later, which
+	//! is exactly how this bug class kept recurring.
+	void ValidateDecisionCasts(const Expression &expr) const;
+
 private:
 	//! Where a term is required to sit.
 	//!   LEFT    decision-bearing -- must be on the model side
@@ -148,16 +158,18 @@ private:
 	//! (`2 * MAX(x)` -> `MAX(2*x)`) is unsound for MIN/MAX under a negative factor,
 	//! since `MAX(-2x)` is `-2*MIN(x)`. Crucially, peeling does not open the term:
 	//! this pass still cannot tell `SUM(x)` from `POWER(x-t,2)`, so totality survives.
+	//!
+	//! An Atom is move-only because `scale` owns its expression. Nested factors
+	//! (`2 * (3 * SUM(x))`) compose into a single new node that exists nowhere in the
+	//! input tree, so the slot cannot borrow the way the other members do.
 	struct Atom {
 		int sign;
 		const Expression *expr;
 		Placement placement;
 		const LogicalType *cast_type;
-		//! Factor peeled off `expr`, or nullptr. Borrowed from the input tree.
-		const Expression *scale = nullptr;
-		//! false: the term was `scale * expr`. true: it was `expr / scale`.
-		//! Kept as division rather than reciprocated -- `SUM(x)/3` has no exact
-		//! decimal reciprocal, and the consumers divide as happily as they multiply.
+		//! The composed factor on `expr`, or nullptr. Owned: see the note above.
+		unique_ptr<Expression> scale;
+		//! false: the term rebuilds as `scale * expr`. true: as `expr / scale`.
 		bool scale_divides = false;
 	};
 
@@ -167,15 +179,23 @@ private:
 	//! cast the walk descended through, or nullptr at the top of a side.
 	void Decompose(const Expression &expr, int sign, vector<Atom> &out, const LogicalType *cast_type) const;
 
-	//! If `expr` is a decision-bearing reducer with a factor on it, split the factor
-	//! out into `out_scale` / `out_divides` and return the bare reducer term. Returns
-	//! `expr` unchanged when there is nothing to peel.
+	//! If `expr` is a decision-bearing reducer with factors on it, split them out into
+	//! `out_scale` / `out_divides` and return the bare reducer term. Returns `expr`
+	//! unchanged when there is nothing to peel.
 	//!
-	//! Throws when the factor is not a legal scale, which is the single place that
+	//! Peels to exhaustion, not one level: `2 * (3 * SUM(x))` and `(SUM(x) / 2) / 3`
+	//! yield ONE factor each. That is what totality means here -- every consumer
+	//! downstream matches a single-level `factor * AGG` / `AGG / factor` shape, so a
+	//! partially peeled term is a term nothing downstream can read. Multipliers and
+	//! divisors compose into one node (`M`, `D`, or `M / D`) rather than a chain,
+	//! which reassociates in double arithmetic; that is deliberate and accepted --
+	//! the model is double end to end and the difference is last-ULP.
+	//!
+	//! Throws when a factor is not a legal scale, which is the single place that
 	//! judgement is made. A factor multiplying a reducer must be ONE value for the
 	//! whole query: `weight * SUM(x)` asks which row's weight scales a number that has
 	//! no row, and `s * SUM(x)` is a product of two decisions (bilinear), not a scale.
-	const Expression &PeelScale(const Expression &expr, const Expression *&out_scale, bool &out_divides) const;
+	const Expression &PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale, bool &out_divides) const;
 
 	//! True when `expr` evaluates to a single value for the entire query, so it may
 	//! scale a reducer. Constants qualify by folding; a column ref qualifies only by
@@ -184,14 +204,14 @@ private:
 	//! a CORRELATED subquery, which is per-row and must not qualify.
 	bool IsQueryWideConstant(const Expression &expr) const;
 
+	//! Recompute semantic provenance for the complete canonical bound. A stale root
+	//! classification is removed before inspecting the rebuilt tree; only an RHS whose
+	//! every component is query-wide receives QUERY_WIDE_BOUND_TAG.
+	unique_ptr<Expression> FinalizeBoundProvenance(unique_ptr<BoundComparisonExpression> comparison) const;
+
 	//! True when `expr` is what a CORRELATED scalar subquery flattened into. Affects
 	//! only the wording of a rejection, never the decision.
 	bool IsCorrelatedSubqueryRef(const Expression &expr) const;
-
-	//! True when `to` can represent every value of `from` exactly, so that
-	//! `CAST(a + b AS to)` and `CAST(a AS to) + CAST(b AS to)` agree. Only such a
-	//! cast may be pushed onto the individual terms of an additive spine.
-	static bool IsWideningNumericCast(const LogicalType &from, const LogicalType &to);
 
 	//! The one question this pass asks of a term. Never inspects further.
 	Placement Classify(const Expression &expr) const;
@@ -218,8 +238,8 @@ private:
 	//! the decision (they are row-varying by construction, and would be rejected by the
 	//! fail-safe default anyway) -- only the wording of the rejection.
 	unordered_set<idx_t> correlated_subquery_table_indexes;
-	//! False when the pass was given no flattening evidence, in which case it declines
-	//! to classify a column ref as row-varying rather than guessing.
+	//! False when the pass was given no flattening evidence. In that mode an arbitrary
+	//! column ref is never guessed to be query-wide; only explicit semantic tags qualify.
 	bool judge_column_refs = false;
 };
 

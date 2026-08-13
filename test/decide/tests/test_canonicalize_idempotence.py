@@ -6,7 +6,8 @@ already-canonical spelling it maps to emit byte-identical solver-neutral
 models.  This is stronger than comparing optimal values: different rows and
 bounds can share an optimum.
 
-The pairs cover side swaps, exact casts, reducer scales, and WHEN/PER wrappers.
+The pairs cover side swaps, exact casts, query-wide provenance, reducer scales,
+and WHEN/PER wrappers.
 """
 
 import os
@@ -44,6 +45,17 @@ _PAIRS = [
             DECIDE x(INT) SUCH THAT x <= 5 MAXIMIZE SUM(x)
         """,
         id="side_swap",
+    ),
+    pytest.param(
+        """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT (SELECT 7) >= x + 2 MAXIMIZE SUM(x)
+        """,
+        """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= (SELECT 7) - 2 MAXIMIZE SUM(x)
+        """,
+        id="query_wide_bound_rebuild",
     ),
     pytest.param(
         """

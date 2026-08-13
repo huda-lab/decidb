@@ -45,9 +45,9 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 		c.coefficients = {rows[i].coeff};
 		c.sense = rows[i].sense;
 		c.rhs = rows[i].rhs;
-		// These model literal-RHS bounds (`x <= 5`), so they are SHARED_LITERAL — a
+		// These model query-wide RHS bounds (`x <= 5`), so they are SHARED_SCALAR — a
 		// single editable knob — not per-row data (which routes to a conflict summary).
-		c.provenance = {i, DConstants::INVALID_INDEX, rows[i].kind, ElasticShape::SHARED_LITERAL};
+		c.provenance = {i, DConstants::INVALID_INDEX, rows[i].kind, ElasticShape::SHARED_SCALAR};
 		m.constraints.push_back(std::move(c));
 	}
 	return m;
@@ -55,7 +55,7 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 
 //! One linear constraint `coeff * x[var] <sense> rhs` over a multi-variable model,
 //! with explicit provenance for exercising shared-slack blocks (I2.a): rows sharing
-//! a `clause_id` and tagged SHARED_LITERAL collapse to one slack.
+//! a `clause_id` and tagged SHARED_SCALAR collapse to one slack.
 struct MultiVarRow {
 	int var;
 	double coeff;
@@ -370,15 +370,15 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(elastic.model.obj_coeffs[budget_block.pos_col] == 0.0);
 	}
 
-	SECTION("BuildElasticModel shares ONE slack across a SHARED_LITERAL block") {
-		// I2.a structure: three rows of one clause (clause_id 0), tagged SHARED_LITERAL,
+	SECTION("BuildElasticModel shares ONE slack across a SHARED_SCALAR block") {
+		// I2.a structure: three rows of one clause (clause_id 0), tagged SHARED_SCALAR,
 		// must collapse to a single shared slack column wired into all three rows — not
 		// three independent slacks. A second clause stays its own block.
 		SolverModel model = MakeModel(4, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
-		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
-		    {3, 1.0, '<', 9.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_LITERAL},
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		    {3, 1.0, '<', 9.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_SCALAR},
 		});
 		ElasticModel elastic = BuildElasticModel(model);
 
@@ -414,8 +414,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		duckdb::vector<string> row_labels {"x"};
 		duckdb::vector<bool> row_aux {false};
 		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
 		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
 		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
 		});
@@ -438,15 +438,15 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 12");
 	}
 
-	SECTION("PER SHARED_LITERAL folds by mode: one edit in query, per-group in expanded") {
-		// T3: a PER clause fans into N_g rows per group, all SHARED_LITERAL with the same
+	SECTION("PER SHARED_SCALAR folds by mode: one edit in query, per-group in expanded") {
+		// T3: a PER clause fans into N_g rows per group, all SHARED_SCALAR with the same
 		// clause_id but distinct group_key. query mode is the single SQL literal the user
 		// edits → ONE slack across every group; expanded mode breaks it out per group.
 		SolverModel model = MakeModel(4, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 0},
-		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 0},
-		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 1},
-		    {3, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL, 1},
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 0},
+		    {1, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 0},
+		    {2, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 1},
+		    {3, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 1},
 		});
 		// query (default): one slack spans all four rows (both groups). 4 vars + 1 slack.
 		ElasticModel q = BuildElasticModel(model);
@@ -501,11 +501,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	}
 
 	SECTION("data-RHS slack is a separate tier so an editable knob loosens first") {
-		// I2.c: an editable cap (SHARED_LITERAL) and a data floor (PER_ROW_DATA) both
+		// I2.c: an editable cap (SHARED_SCALAR) and a data floor (PER_ROW_DATA) both
 		// conflict with a rigid pin; the lexicographic data tier is frozen at zero before
 		// editable loosening, so the solver loosens the editable cap and leaves data alone.
 		SolverModel model = MakeModel(1, {
-		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
 		    {0, 1.0, '>', 3.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::PER_ROW_DATA},
 		    {0, 1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
@@ -623,7 +623,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		avg_row.rhs = 5.0;
 		avg_row.provenance.clause_id = 0;
 		avg_row.provenance.kind = ConstraintKind::USER_PARAMETER;
-		avg_row.provenance.shape = ElasticShape::SHARED_LITERAL;
+		avg_row.provenance.shape = ElasticShape::SHARED_SCALAR;
 		avg_row.provenance.avg_scaled = true;
 		m.constraints.push_back(std::move(avg_row));
 		for (int v : {0, 1}) {
@@ -664,7 +664,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		qc.rhs = 4.0;
 		qc.provenance.clause_id = 0;
 		qc.provenance.kind = ConstraintKind::USER_PARAMETER;
-		qc.provenance.shape = ElasticShape::SHARED_LITERAL;
+		qc.provenance.shape = ElasticShape::SHARED_SCALAR;
 		model.quadratic_constraints.push_back(std::move(qc));
 
 		ElasticModel elastic = BuildElasticModel(model);
@@ -699,8 +699,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// Freezing arbitrary stage-1 amounts could loosen y (giving objective 0);
 		// stage 2 maximizes x, so it must loosen x's cap to 10 and report objective 10.
 		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
-		    {1, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_LITERAL},
+		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
+		    {1, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::SHARED_SCALAR},
 		});
 		ModelConstraint floor; // rigid x + y >= 10
 		floor.indices = {0, 1};
@@ -732,7 +732,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// cap to 5. But y is free above and absent from every constraint, so MAXIMIZE y
 		// has no finite optimum once feasible; the table reports that model-level fact.
 		SolverModel model = MakeModel(2, {
-		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_LITERAL},
+		    {0, 1.0, '<', 0.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR},
 		    {0, 1.0, '>', 5.0, ConstraintKind::STRUCTURAL},
 		});
 		model.obj_coeffs = {0.0, 1.0}; // MAXIMIZE y (unbounded)
@@ -893,7 +893,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		cap.sense = '<';
 		cap.rhs = 3.0;
 		cap.provenance.kind = ConstraintKind::USER_PARAMETER;
-		cap.provenance.shape = ElasticShape::SHARED_LITERAL;
+		cap.provenance.shape = ElasticShape::SHARED_SCALAR;
 		model.constraints.push_back(std::move(cap));
 		ModelConstraint floor; // rigid x >= 3
 		floor.indices = {0};

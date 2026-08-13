@@ -28,7 +28,7 @@ Constraints may be wrapped in WHEN and/or PER layers (encoded as tagged `BoundCo
 When a `BoundComparisonExpression` is reached (the actual constraint):
 
 - The comparison type (`<=`, `>=`, `=`, etc.) and RHS expression are recorded directly.
-- The LHS is unwrapped through any `BoundCastExpression` layers.
+- The LHS is unwrapped through any `BoundCastExpression` layers via `UnwrapDecideCasts`. The peel needs no exactness check of its own: `DecideCanonicalizer::ValidateDecisionCasts` rejects every value-changing decision cast at the planning boundary, so anything reaching here only moves a value into the model's DOUBLE domain (see `canonicalize.md` §3.6).
 - **Aggregate LHS** (e.g., `SUM(x * cost)` or `SUM(x * cost) WHEN a + SUM(x * hours) WHEN b`): `ExtractAggregateConstraintTerms()` walks additive aggregate expressions, calls `ExtractConstraintTerms()` on each aggregate's child, and copies aggregate metadata onto the extracted terms. The `lhs_is_aggregate` flag is set. Aggregate-local `WHEN` filters are stored on `Term::filter`, bilinear term filters, or quadratic group filters. If the aggregate has alias `AVG_REWRITE_TAG`, the extracted terms are marked for AVG scaling.
 - **Per-row LHS**: first the **K1 guard** — `CollectDecideVarRefs()` on the RHS must find nothing. `DecideCanonicalizer` has already moved every decision-bearing term to the left, so a hit here means a rewrite broke canonical form upstream and the constraint is rejected with an internal error rather than mis-solved. Then two sub-paths:
   - **Single-variable** (simple bound like `x <= 5`): `FindDecideVariable()` identifies the variable; coefficient is implicitly 1.
@@ -40,7 +40,7 @@ When a `BoundComparisonExpression` is reached (the actual constraint):
 
 Extracts terms from the objective's aggregate expression. Handles linear, bilinear, and quadratic objectives — including **mixed** shapes where a quadratic group and linear/bilinear siblings appear inside the same SUM (e.g. `SUM(POWER(x - t, 2) + c * x)`) — and additive objective expressions with aggregate-local filters.
 
-1. Unwraps any `BoundCastExpression` layers.
+1. Unwraps any `BoundCastExpression` layers. The objective path peels without a guard of its own for the same reason the constraint path does — the canonicalizer's invariant, not per-site care, is what makes it safe.
 2. Checks for a WHEN wrapper (same `WHEN_CONSTRAINT_TAG` pattern) and extracts the condition.
 3. Expects a `BoundAggregateExpression` (SUM) or an additive expression containing aggregate terms. The SUM argument is walked by `ExtractLinearAndBilinearTerms`, which at **every** additive node probes `PhysicalDecide::DetectQuadraticPattern`:
    - `POWER(linear_expr, 2)` / `POW(linear_expr, 2)` / `(expr) ** 2` — exponent unwrapped from casts (DuckDB wraps the integer literal `2` in a `BoundCastExpression`)
@@ -126,7 +126,7 @@ All methods on `PhysicalDecide`:
   - `+` operators: recursively processes all children
   - `-` operators (binary): processes first child, then second child with sign flipped
   - `*` operators: finds the DECIDE variable (if any) and extracts the coefficient
-  - Cast expressions: recurses into the child
+  - Cast expressions: a decision-free cast is kept whole as a typed fixed term (peeling it would change the coefficient — `CAST(1.6 AS INTEGER)` is 2, not 1.6); a decision-bearing cast is peeled
   - Base case (column ref or constant): either a bare variable (coefficient = 1) or a constant term
 
 - **`ExtractAggregateConstraintTerms(expr, constraint, sign)`** and **`ExtractAggregateObjectiveTerms(expr, objective, sign)`**: Walk additive expressions of aggregate terms. Each `BoundAggregateExpression` must already be rewritten to SUM by the optimizer. These helpers copy aggregate-local `BoundAggregateExpression::filter` into the extracted term metadata and mark terms that came from `AVG_REWRITE_TAG` for Phase 2 scaling.

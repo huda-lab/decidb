@@ -87,7 +87,7 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to R ≤ R*, D ≤ D*
   row (`coeff 1·x sense k`) to the retained model and **relaxes the rigid column bound** for
   that direction (to ±1e30) so the bound is enforced only by the loosenable row. A bound on a
   **multi-instance** variable fans into one row per instance under a single synthetic
-  `clause_id`, shape `SHARED_LITERAL`, so the engine collapses them to one shared slack (the
+  `clause_id`, shape `SHARED_SCALAR`, so the engine collapses them to one shared slack (the
   knob is one literal `K` → report the max overshoot — **I2.a**). Single-instance is the N=1
   case. Default non-negativity (`lower = 0`) and the BOOLEAN `0/1` box stay rigid: a BOOLEAN
   variable's domain is applied directly to the solver column by `PhysicalDecide::Finalize`
@@ -168,7 +168,7 @@ answers two different user questions with the same engine:
 `BuildElasticModel` + `ReadElasticEdits` (`decide_diagnostic_engines.cpp`); the operator and
 the rest of the engine are unchanged. `BuildElasticModel(base, removal_bigm, slack_scope)`:
 
-- **`folds()`** — a `SHARED_LITERAL` knob always folds; a `PER_ROW_DATA` row folds **only in
+- **`folds()`** — a `SHARED_SCALAR` knob always folds; a `PER_ROW_DATA` row folds **only in
   query mode** (in expanded mode its rows stay independent, one slack each).
 - **`block_key()`** — query mode keys a block by `clause_id` alone (so all PER groups of a
   clause collapse into one slack = the single literal edit); expanded mode keys by
@@ -207,7 +207,7 @@ carrying the stripped PER key as a diagnosis-only side channel through the optim
 done, since it risks the empty-group/WHEN semantics the strip protects.)
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): `BuildElasticModel` folds a
-PER `SHARED_LITERAL` clause into one block in query mode and one-per-group in expanded; a data
+PER `SHARED_SCALAR` clause into one block in query mode and one-per-group in expanded; a data
 RHS folds to one block in query and stays independent per-row in expanded. Python differential
 (`test_query_diagnostics_relation.py`, both backends): data-RHS query virtual offset (named
 column) + expanded per-row profile; PER-aggregate query fold (one clause edit) + expanded
@@ -231,19 +231,16 @@ reads each block back. Exposing it is also the structural test seam.
 
 **Shape marker (`ConstraintProvenance::shape`, `decide.hpp::ElasticShape`).** `UNSET` is the
 invalid default; `BuildElasticModel` asserts that every relaxable row with a user `clause_id`
-has been stamped explicitly. `SHARED_LITERAL` = the RHS is one editable literal `K` shared
-across every row the clause emits; `PER_ROW_DATA` = genuine per-row **data** RHS (`x <= col`).
-Set in `ilp_model_builder.cpp`: the per-row builder tags a row `SHARED_LITERAL` when
-`EvaluatedConstraint::rhs_is_shared_literal` (set in `physical_decide.cpp` when `rhs_expr` is a
-`BOUND_CONSTANT`, is foldable, or carries the `SHARED_SCALAR_SUBQUERY_TAG` alias — see
-"uncorrelated scalar-subquery RHS" below), else `PER_ROW_DATA`; the **aggregate** sites tag
-their rows `SHARED_LITERAL` directly (an aggregate's RHS is always a single scalar knob), so
-`PER_ROW_DATA` means *exactly* "data RHS"; the absorbed-bound re-emission tags its rows
-`SHARED_LITERAL`. Quadratic aggregate rows are stamped `SHARED_LITERAL`; quadratic per-row rows
-are stamped from the same shared-literal-vs-data RHS rule before I2.d slacks the linear RHS.
+has been stamped explicitly. `SHARED_SCALAR` = the complete canonical RHS is one editable
+query-wide value shared across every row the clause emits; `PER_ROW_DATA` = genuine per-row or
+per-group **data** RHS (`x <= col`). Set in `ilp_model_builder.cpp`: linear and quadratic
+builder sites read `EvaluatedConstraint::rhs_is_shared_scalar`. Physical evaluation sets it
+directly for constants and otherwise consumes the canonical RHS's `QUERY_WIDE_BOUND_TAG`;
+foldable composite expressions receive that tag at canonicalization. Other bounds are stamped
+`PER_ROW_DATA`; the absorbed-bound re-emission uses `SHARED_SCALAR`.
 
 **Grouping (mode-aware — see "Slack-scope policy" above).** `BuildElasticModel` groups
-relaxable rows into blocks via `folds()` + `block_key()`. A `SHARED_LITERAL` block gets **one
+relaxable rows into blocks via `folds()` + `block_key()`. A `SHARED_SCALAR` block gets **one
 shared slack** wired into all N rows (`=` blocks get one shared `s⁺` and one shared `s⁻`); with
 `eᵢ − s ≤ K` on every row the single `s` is driven to the **max overshoot**, so the reported
 edit is the max (not the per-row sum) and the "which clause to relax" race is not skewed ≈N×.
@@ -431,7 +428,7 @@ through those rigid rows falls through to the static error (the empty-block guar
 remove-only; actual removal is the **I4** L0 dial — I2 only confirms the rigid behavior.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): one shared slack spans all N
-rows with the correct sign; a PER `SHARED_LITERAL` clause folds to one block in query and
+rows with the correct sign; a PER `SHARED_SCALAR` clause folds to one block in query and
 one-per-group in expanded; a data RHS folds to one block in query and stays independent per-row
 in expanded; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a data-offset tier
 defers to an editable knob; a query-mode data RHS folds to one virtual offset; strict re-quotes
@@ -700,23 +697,17 @@ domain rigid:
   so an explicitly-lowered floor (`x <= -1 AND x >= -5`, box `[-5,-1]`) stays feasible and a
   purely user-vs-user inverted box (`x >= 5 AND x <= 1`, both ≥ 0) proceeds to the elastic engine.
 
-### Uncorrelated scalar-subquery RHS (`x <= (SELECT 5)`)
+### Scalar-subquery bound provenance
 
-A per-row bound whose RHS is an **uncorrelated** scalar subquery is one shared editable cap, but
-`PlanSubqueries` flattens it into a cross-joined column ref that is structurally indistinguishable
-from genuine per-row data — `IsFoldable()` is false, so naive classification would mis-tag it
-`PER_ROW_DATA` and report a data conflict instead of an editable cap. The correlation information
-exists only *before* flattening, so `plan_select_node.cpp` (right before its `PlanSubqueries` call,
-at the single DECIDE-owned flatten site) scans the bound constraint tree for comparisons whose RHS
-is a scalar `BoundSubqueryExpression` with no correlated columns (`!BoundSubqueryExpression::IsCorrelated()`,
-unwrapping casts), holds raw pointers to those comparison nodes (which survive the in-place rewrite),
-and after flattening stamps the rewritten RHS column-ref alias with `SHARED_SCALAR_SUBQUERY_TAG`
-(`decide.hpp`). The tag rides through the optimizer and into the `DecideConstraint` (alias is
-preserved by `Copy()`); `physical_decide.cpp` ORs `IsSharedScalarSubqueryTag(rhs_expr->GetAlias())`
-into `rhs_is_shared_literal`, so the elastic engine collapses the rows to one shared slack and
-reports `Loosen x <= 5 to x <= 10`. **Correlated** subqueries are left untagged and stay
-`PER_ROW_DATA` (genuinely row-varying). Tests: `test_query_diagnostics_relation.py::
-test_infeasible_uncorrelated_subquery_cap_is_editable` / `…_correlated_subquery_cap_stays_per_row`.
+A scalar subquery becomes a column ref after `PlanSubqueries`, so correlation provenance is
+collected from **both comparison sides** before flattening. The flattened value receives
+`QUERY_WIDE_VALUE_TAG` when uncorrelated or `ROW_VARYING_SUBQUERY_TAG` when correlated.
+`DecideCanonicalizer` then classifies the complete rebuilt RHS after side swapping and term
+migration: an all-query-wide bound receives `QUERY_WIDE_BOUND_TAG`; any row-varying component
+keeps it `PER_ROW_DATA`. Physical evaluation consumes that root classification through
+`rhs_is_shared_scalar` rather than inferring provenance from the original RHS position.
+Diagnostics therefore treat `x <= (SELECT 5)` and `(SELECT 5) >= x` identically, while mixed or
+correlated bounds remain data-backed and never expose the internal `SUBQUERY` placeholder.
 
 ## Infeasibility reporting: lean cue summary + frozen vocabulary (I5)
 

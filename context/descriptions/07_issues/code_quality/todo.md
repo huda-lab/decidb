@@ -69,6 +69,7 @@ The Big-M constant is not the weakness — `compute_big_m()` (line 4925) returns
 ---
 
 ## Canonicalization is split across five sites, in three representations
+
 *(all five are now deleted; Phase C is complete)*
 
 **Authoritative task list: `../../canonicalize.md`.** That document is the plan, the
@@ -109,8 +110,7 @@ and are still open, so whoever takes group B will reshape the same function.
 `pytest.skip(f"DecidB rejected non-convex shape: {e}")`.
 
 Two consecutive full-suite runs of the identical command (`test/decide/run_tests.sh`,
-which is all `make decide-test` does) reported different tallies: `1040 passed, 2
-skipped` then `1041 passed, 1 skipped`. Zero failures both times. The only skip whose
+which is all `make decide-test` does) reported different tallies: `1040 passed, 2 skipped` then `1041 passed, 1 skipped`. Zero failures both times. The only skip whose
 reason was surfaced is the Gurobi-availability one in `test_quadratic_constraints.py`,
 which is stable; the two call sites above are the only other skips in the suite that
 depend on solver behavior rather than on the environment, so one of them is the
@@ -135,38 +135,7 @@ fix itself.
 
 ---
 
-## `07_issues/bugs/done.md` is missing from the working tree, and `canonicalize.md` points at it
-
-**Location**: `context/descriptions/07_issues/bugs/done.md` — deleted (unstaged `D` in
-`git status`), alongside the other doc removals in the same sweep
-(`02_operations/limitations.md`, `04_optimizer/matrix_efficiency/`,
-`04_optimizer/future_work/todo.md`).
-
-`README.md:30` still describes it as the home for "lessons from resolved bugs", and
-`canonicalize.md` cites it five times — B.3's coefficient extractor with mistyped
-children, B.5's substituted reducer reference, the C.4 unblock's rebuilt product with a
-stale signature, the Phase A ABS misclassification, and the AVG type bug. Those five
-postmortems were written into the working-tree copy, so `git checkout` restores the file
-but **not** those entries; they exist only in the deleted copy.
-
-**Why it matters**: the three type-vs-representation postmortems are one family with one
-shared lesson (*rebuild by re-binding, not by copying a signature*), and canonicalize.md
-§11 leans on them as the worked examples rather than restating them. Following any of
-those five pointers today lands nowhere.
-
-**Fix direction**: decide whether the deletion was intended. If the sweep meant to fold
-resolved-bug lessons elsewhere, update `README.md:30` and canonicalize.md's five
-references to point at the new home; if it was accidental, the file needs restoring with
-the canonicalization-era entries re-added, which have to be rewritten from
-`canonicalize.md`'s summaries.
-
-**Discovered**: 2026-08-12, landing canonicalize.md C.2 — noticed when looking for where
-to file that phase's own postmortem. Irrelevant to C.2 itself; its postmortem went into
-`canonicalize.md` §7 (C.2) and §10 instead.
-
----
-
-## `PER` on a per-row constraint slips through when a data-only reducer is present
+`PER` on a per-row constraint slips through when a data-only reducer is present
 
 **Location**: `src/planner/expression_binder/decide_constraints_binder.cpp`,
 `IsAggregateConstraint` — `ContainsDecideAggregate(*comp.left)` accepts a reducer with no
@@ -193,3 +162,35 @@ better message still wins.
 
 **Discovered**: 2026-08-12, landing C.2, while making `IsAggregateConstraint`
 side-agnostic. Pre-existing on the left side; C.2 neither widened nor narrowed it.
+---
+
+## Defensive scale check in physical extraction is justified by the wrong reason
+
+**Location**: `src/execution/operator/decide/physical_decide.cpp:1712-1722`,
+inside `ExtractAggregateConstraintTerms`.
+
+The comment justifies the decision-bearing-factor check with "constraints the OPTIMIZER
+emits are canonicalized by the permissive path, which does not judge factors". That is
+not true: `DecideCanonicalizer::PeelScale`'s `ReferencesDecideVar(*factor)` rejection does
+not consult `judge_column_refs`, so it fires identically on the user-written and
+generated paths. Only the *query-wide* judgement differs between them.
+
+The check is nonetheless live and correct, for a reason the comment does not give:
+`PeelScale` only judges factors on a **decision-bearing** reducer (`is_scalable` requires
+`ContainsReducer && ReferencesDecideVar`), whereas `AsScaledAggregate` matches any
+aggregate child. So `s * SUM(price)` — a decision scaling a *data-only* reducer — is
+never seen by the canonicalizer's judgement and reaches here unjudged.
+
+**Why it matters**: the stated reason implies the check is redundant for user-written
+constraints, which invites deleting it during a later cleanup. The real reason shows it
+covers a shape the canonicalizer deliberately does not own, so it must stay. A wrong
+rationale on a safety check is how safety checks get removed.
+
+**Fix direction**: correct the comment to name the data-only-reducer gap. Consider
+whether that shape should instead be rejected at the canonicalization boundary, which
+would fold it into Step 5's homogeneity validation — the same `is_scalable` asymmetry is
+what item 3 of the `canonicalize.md` defect list ("the `PER` gate has a homogeneity
+hole") is about.
+
+**Discovered**: 2026-08-13, landing canonicalize.md Step 4 (reducer-scale totality),
+while confirming which expression shapes the composed-scale form actually covers.

@@ -1,5 +1,7 @@
 #include "duckdb/optimizer/decide_optimizer.hpp"
 
+#include "duckdb/decidb/decide_cast_policy.hpp"
+
 #include <cstdlib>
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
@@ -94,15 +96,6 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 //               form when the constraint linearizes the easy way.
 static bool BoundExprReferencesDecideVar(const Expression &expr, idx_t decide_index);
 
-//! Unwrap casts.
-static Expression &UnwrapCasts(Expression &e) {
-	Expression *cur = &e;
-	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		cur = cur->Cast<BoundCastExpression>().child.get();
-	}
-	return *cur;
-}
-
 //! If `e` is a reducer with a factor on it, return the bare aggregate and report the
 //! factor; otherwise return nullptr and leave `e` to be treated as itself.
 //!
@@ -113,7 +106,7 @@ static BoundAggregateExpression *AsScaledAggregate(Expression &e, Expression *&o
                                                    bool &out_divides) {
 	out_scale = nullptr;
 	out_divides = false;
-	auto &u = UnwrapCasts(e);
+	auto &u = (*UnwrapDecideCasts(e));
 	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		return nullptr;
 	}
@@ -124,22 +117,22 @@ static BoundAggregateExpression *AsScaledAggregate(Expression &e, Expression *&o
 		return nullptr;
 	}
 	idx_t agg_child;
-	if (UnwrapCasts(*func.children[0]).GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if ((*UnwrapDecideCasts(*func.children[0])).GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		agg_child = 0;
-	} else if (is_mult && UnwrapCasts(*func.children[1]).GetExpressionClass() ==
+	} else if (is_mult && (*UnwrapDecideCasts(*func.children[1])).GetExpressionClass() ==
 	                          ExpressionClass::BOUND_AGGREGATE) {
 		agg_child = 1;
 	} else {
 		return nullptr;
 	}
 	// Two reducers multiplied is a product of aggregates, not a scaled one.
-	if (UnwrapCasts(*func.children[1 - agg_child]).GetExpressionClass() ==
+	if ((*UnwrapDecideCasts(*func.children[1 - agg_child])).GetExpressionClass() ==
 	    ExpressionClass::BOUND_AGGREGATE) {
 		return nullptr;
 	}
 	out_scale = func.children[1 - agg_child].get();
 	out_divides = is_div;
-	return &UnwrapCasts(*func.children[agg_child]).Cast<BoundAggregateExpression>();
+	return &(*UnwrapDecideCasts(*func.children[agg_child])).Cast<BoundAggregateExpression>();
 }
 
 //! The sign a factor contributes: +1, -1, or 0 when it is not known until the query
@@ -152,10 +145,7 @@ static int ScaleSignAtPlanTime(const Expression *scale, bool divides) {
 	if (!scale) {
 		return 1;
 	}
-	const Expression *cur = scale;
-	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		cur = cur->Cast<BoundCastExpression>().child.get();
-	}
+	const Expression *cur = UnwrapDecideCasts(*scale);
 	if (cur->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 		return 0;
 	}
@@ -188,10 +178,7 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 //! CAST the binder inserts around a literal so `x <> 1` reads `x <> 1`, not
 //! `x <> CAST(1 AS INTEGER)`. Falls through to the raw ToString for anything else.
 static string DiagnosisComparand(const Expression &expr) {
-	const Expression *cur = &expr;
-	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		cur = cur->Cast<BoundCastExpression>().child.get();
-	}
+	const Expression *cur = StripCastsForIdentity(expr);
 	return cur->ToString();
 }
 
@@ -404,10 +391,7 @@ static void TagAbsForBigM(Expression &expr, idx_t decide_index) {
 // Sign of a numeric constant leaf, unwrapping casts. Returns false when the
 // expression is not a statically-known number.
 static bool TryGetConstantSign(const Expression &expr, int &out_sign) {
-	auto *cur = &expr;
-	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		cur = cur->Cast<BoundCastExpression>().child.get();
-	}
+	auto *cur = UnwrapDecideCasts(expr);
 	if (cur->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 		return false;
 	}
@@ -585,25 +569,16 @@ void DecideOptimizer::RewriteComposedMinMax(LogicalDecide &decide) {
 	RewriteComposedMinMaxObjectiveTop(decide);
 }
 
-// Unwrap CAST wrappers to get at the payload expression.
-static const Expression &UnwrapCast(const Expression &e) {
-	const Expression *cur = &e;
-	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		cur = cur->Cast<BoundCastExpression>().child.get();
-	}
-	return *cur;
-}
-
 // True if the expression is a BOUND_FUNCTION for `+` (after unwrapping cast).
 static bool IsAddNode(const Expression &e) {
-	auto &u = UnwrapCast(e);
+	auto &u = (*UnwrapDecideCasts(e));
 	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
 	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == "+";
 }
 
 // True if the expression is a `-` function (both binary and unary).
 static bool IsSubNode(const Expression &e) {
-	auto &u = UnwrapCast(e);
+	auto &u = (*UnwrapDecideCasts(e));
 	if (u.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return false;
 	return StringUtil::Lower(u.Cast<BoundFunctionExpression>().function.name) == "-";
 }
@@ -612,7 +587,7 @@ static bool IsSubNode(const Expression &e) {
 // Recurses through any function node's children (not just +/-), so shapes like
 // `2 * MIN(...)` are detected and can be rejected with a clean binder error.
 static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
-	auto &u = UnwrapCast(e);
+	auto &u = (*UnwrapDecideCasts(e));
 	if (u.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = u.Cast<BoundAggregateExpression>();
 		auto name = StringUtil::Lower(agg.function.name);
@@ -637,7 +612,7 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 // nested subtraction/scaling, non-SUM/AVG/MIN/MAX aggregates).
 static void WalkComposedLhs(const Expression &e, int sign, idx_t decide_index, bool outer_push_down,
                              vector<LogicalDecide::ComposedMinMaxTerm> &out_terms) {
-	auto &u = UnwrapCast(e);
+	auto &u = (*UnwrapDecideCasts(e));
 	if (IsAddNode(u)) {
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		for (auto &child : fn.children) {
@@ -963,10 +938,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	// Unwrap any BoundCastExpression on the LHS, and any factor peeled onto it. The
 	// factor STAYS OUTSIDE the aggregate; all it does here is contribute its sign to
 	// the easy/hard classification, and ride along on whichever form is emitted.
-	Expression *lhs = comp.left.get();
-	while (lhs->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		lhs = lhs->Cast<BoundCastExpression>().child.get();
-	}
+	Expression *lhs = UnwrapDecideCasts(*comp.left);
 	Expression *scale = nullptr;
 	bool scale_divides = false;
 	BoundAggregateExpression *scaled_agg = AsScaledAggregate(*lhs, scale, scale_divides);

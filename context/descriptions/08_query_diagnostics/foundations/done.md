@@ -188,7 +188,7 @@ user-clause level instead of raw rows.
   `SolverInput::constraints` (`INVALID_INDEX` for synthetic rows); `group_key` is the
   PER/WHEN group id at emission (or row id for per-row, INVALID when ungrouped); `kind`
   is the row role. The trailing fields (added in I2) drive the elastic engine's slack
-  placement: `shape` (`ElasticShape::UNSET` / `SHARED_LITERAL` / `PER_ROW_DATA`) decides
+  placement: `shape` (`ElasticShape::UNSET` / `SHARED_SCALAR` / `PER_ROW_DATA`) decides
   whether a clause's rows share **one** slack; `UNSET` is the invalid default, and
   `BuildElasticModel` asserts that any relaxable user-clause row has been explicitly
   stamped before diagnosis reads it. `avg_scaled` / `strict` / `typed_k` carry the

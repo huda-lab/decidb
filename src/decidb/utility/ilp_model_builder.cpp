@@ -532,7 +532,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
         // F2: this clause's stable id = its position in input.constraints. Pointer
         // arithmetic survives the `continue` skips above (a trailing counter would not).
-        idx_t clause_id = static_cast<idx_t>(&eval_const - input.constraints.data());
+        idx_t clause_id = eval_const.source_clause_id != DConstants::INVALID_INDEX
+                              ? eval_const.source_clause_id
+                              : static_cast<idx_t>(&eval_const - input.constraints.data());
 
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
@@ -718,11 +720,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // symbolic offset over the column (`SUM(x) >= demand - 50`). Paper §5
                 // makes that distinction explicit — DeciDB prefers relaxing explicit
                 // user bounds over data-derived ones. This used to be hard-coded to
-                // SHARED_LITERAL because an aggregate RHS was required to be a scalar.
-                constr.provenance.shape = eval_const.rhs_is_shared_literal
-                                              ? ElasticShape::SHARED_LITERAL
+                // SHARED_SCALAR because an aggregate RHS was required to be a scalar.
+                constr.provenance.shape = eval_const.rhs_is_shared_scalar
+                                              ? ElasticShape::SHARED_SCALAR
                                               : ElasticShape::PER_ROW_DATA;
-                if (!eval_const.rhs_is_shared_literal) {
+                if (!eval_const.rhs_is_shared_scalar) {
                     constr.provenance.rhs_label = eval_const.rhs_label;
                 }
                 PushNormalizedConstraint(std::move(constr));
@@ -833,10 +835,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // by every group (paper §5: all rows from one clause share a slack);
                     // a data-derived bound repairs as a symbolic offset instead. See
                     // site 1.
-                    constr.provenance.shape = eval_const.rhs_is_shared_literal
-                                                  ? ElasticShape::SHARED_LITERAL
+                    constr.provenance.shape = eval_const.rhs_is_shared_scalar
+                                                  ? ElasticShape::SHARED_SCALAR
                                                   : ElasticShape::PER_ROW_DATA;
-                    if (!eval_const.rhs_is_shared_literal) {
+                    if (!eval_const.rhs_is_shared_scalar) {
                         constr.provenance.rhs_label = eval_const.rhs_label;
                     }
                     PushNormalizedConstraint(std::move(constr));
@@ -899,15 +901,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.group_key =
                     has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 constr.provenance.kind = eval_const.kind;
-                // I2.a: a constant-literal RHS is one editable knob shared across all
+                // I2.a: a query-wide scalar RHS is one editable knob shared across all
                 // the rows this clause emits → mark them a shared-slack block. A data
                 // RHS (e.g. `x <= col`) stays per-row independent.
-                constr.provenance.shape = eval_const.rhs_is_shared_literal
-                                              ? ElasticShape::SHARED_LITERAL
+                constr.provenance.shape = eval_const.rhs_is_shared_scalar
+                                              ? ElasticShape::SHARED_SCALAR
                                               : ElasticShape::PER_ROW_DATA;
                 // Carry the data RHS column name (`x <= cap_col`) so query-mode diagnosis
                 // can render a virtual offset (`x <= cap_col + delta`).
-                if (!eval_const.rhs_is_shared_literal) {
+                if (!eval_const.rhs_is_shared_scalar) {
                     constr.provenance.rhs_label = eval_const.rhs_label;
                 }
                 // I4: per-row `<>` disjunction rows carry their indicator (a
@@ -1105,10 +1107,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer);
                 qc.provenance.clause_id = clause_id; // F2 site 5: quadratic aggregate, ungrouped
                 qc.provenance.kind = eval_const.kind;
-                qc.provenance.shape = eval_const.rhs_is_shared_literal
-                                          ? ElasticShape::SHARED_LITERAL
+                qc.provenance.shape = eval_const.rhs_is_shared_scalar
+                                          ? ElasticShape::SHARED_SCALAR
                                           : ElasticShape::PER_ROW_DATA;
-                if (!eval_const.rhs_is_shared_literal) {
+                if (!eval_const.rhs_is_shared_scalar) {
                     qc.provenance.rhs_label = eval_const.rhs_label;
                 }
                 qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
@@ -1140,10 +1142,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         qc.provenance.group_label = eval_const.group_labels[g];
                     }
                     qc.provenance.kind = eval_const.kind;
-                    qc.provenance.shape = eval_const.rhs_is_shared_literal
-                                              ? ElasticShape::SHARED_LITERAL
+                    qc.provenance.shape = eval_const.rhs_is_shared_scalar
+                                              ? ElasticShape::SHARED_SCALAR
                                               : ElasticShape::PER_ROW_DATA;
-                    if (!eval_const.rhs_is_shared_literal) {
+                    if (!eval_const.rhs_is_shared_scalar) {
                         qc.provenance.rhs_label = eval_const.rhs_label;
                     }
                     qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
@@ -1164,10 +1166,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 qc.provenance.group_key =
                     has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 qc.provenance.kind = eval_const.kind;
-                qc.provenance.shape = eval_const.rhs_is_shared_literal
-                                          ? ElasticShape::SHARED_LITERAL
+                qc.provenance.shape = eval_const.rhs_is_shared_scalar
+                                          ? ElasticShape::SHARED_SCALAR
                                           : ElasticShape::PER_ROW_DATA;
-                if (!eval_const.rhs_is_shared_literal) {
+                if (!eval_const.rhs_is_shared_scalar) {
                     qc.provenance.rhs_label = eval_const.rhs_label;
                 }
                 model.quadratic_constraints.push_back(std::move(qc));

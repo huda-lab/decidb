@@ -69,7 +69,7 @@ enum class ElasticRepairTier {
 };
 
 //! A slack wired into one or more relaxable rows of the elastic program. A block
-//! may span N matrix rows that share ONE editable user knob (SHARED_LITERAL shapes:
+//! may span N matrix rows that share ONE editable user knob (SHARED_SCALAR shapes:
 //! easy MIN/MAX, per-row literal, multi-instance bound) so the minimal slack is the
 //! max overshoot across the block, not the sum. For `=` rows two slacks are used
 //! (s⁺, s⁻); `neg_col` is INVALID for `<` / `>` (one-sided loosening). A size-1
@@ -113,7 +113,7 @@ struct ElasticModel {
 
 //! Build the elastic program from a base model: zero the user objective, drop the
 //! quadratic objective, and add a non-negative REAL slack to every relaxable row
-//! (SHARED_LITERAL blocks share one slack across their rows; others get one each).
+//! (SHARED_SCALAR blocks share one slack across their rows; others get one each).
 //! Rigid STRUCTURAL rows are untouched; remove-only `<>` rows (USER_MECHANISM with a
 //! valid `indicator_col`) instead get a binary removal indicator (I4). `removal_bigm`
 //! is the M₂ used to neutralize a dropped `<>` (0 = auto-derive per clause from its
@@ -123,7 +123,7 @@ struct ElasticModel {
 //! slacked: "query" (default) folds a clause's data rows into ONE shared slack (the
 //! amount is the max overshoot = a single virtual query offset `x <= col + delta`);
 //! "expanded" leaves them as independent per-row slacks so the readback can expose the
-//! per-row conflict profile. SHARED_LITERAL knobs fold in both modes.
+//! per-row conflict profile. SHARED_SCALAR knobs fold in both modes.
 ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm = 0.0,
                                const string &slack_scope = "query");
 

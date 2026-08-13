@@ -251,16 +251,20 @@ struct EvaluatedConstraint {
     vector<QuadraticGroup> quadratic_groups;
     bool has_quadratic = false;
     ConstraintKind kind = ConstraintKind::USER_PARAMETER;
-    //! True when the RHS is a single constant literal `K` (not a per-row data column
-    //! or scalar aggregate). The literal is one editable knob shared across every row
-    //! this clause emits, so the elastic engine collapses those rows to ONE shared
-    //! slack (ElasticShape::SHARED_LITERAL); a data RHS stays per-row independent.
-    bool rhs_is_shared_literal = false;
 
-    //! Symbolic name of a data-backed (non-shared-literal) RHS expression (`x <= cap_col`
+    //! Stable user-clause identity retained when one cast comparison expands to
+    //! multiple boundary rows.
+    idx_t source_clause_id = DConstants::INVALID_INDEX;
+    //! True when the complete canonical RHS is one query-wide scalar value. The value
+    //! is one editable knob shared across every row this clause emits, so the elastic
+    //! engine collapses those rows to ONE shared slack (ElasticShape::SHARED_SCALAR);
+    //! a data-backed RHS stays per-row independent.
+    bool rhs_is_shared_scalar = false;
+
+    //! Symbolic name of a data-backed (non-shared-scalar) RHS expression (`x <= cap_col`
     //! → "cap_col"). Lets query-mode infeasible diagnosis render a virtual offset
     //! (`x <= cap_col + delta`) instead of a numeric representative. Empty for a shared
-    //! literal RHS. Stamped onto ConstraintProvenance::rhs_label at the per-row builder site.
+    //! scalar RHS. Stamped onto ConstraintProvenance::rhs_label at the per-row builder site.
     string rhs_label;
 
     //! True when this is a pure-linear AVG aggregate whose row coefficients were

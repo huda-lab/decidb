@@ -186,6 +186,45 @@ SUCH THAT (x - t) * (x - t) <= K
 
 **Gurobi only** — HiGHS does not support quadratic constraints. Negated and scaled forms are supported: `-POWER(expr, 2)`, `K * POWER(expr, 2)`.
 
+### 3.1 Numeric precision and casts
+
+A DECIDE model carries **one numeric domain: `DOUBLE`**, roughly 15 significant
+digits. This is not a policy choice — the solver interface is `double` throughout
+(`SolverInput` holds `vector<double>` for every bound and coefficient) and both
+Gurobi and HiGHS take doubles, so every value in a model ends up there whatever
+types the SQL expression carried.
+
+Two consequences, both of which DeciDB makes explicit rather than silent:
+
+**Type-reconciling casts are erased.** Comparing sides of different types makes SQL
+insert a cast you never wrote — `SUM(x) <= cap` becomes `HUGEINT -> DECIMAL(38,1)`
+because that is the two sides' common type. Such a cast moves a value into the model
+domain without changing it, so it is removed at the canonicalization boundary and no
+later stage has to reason about it.
+
+**Casts that change a value are rejected.** A cast is a *computation*, not a
+container change, when it reduces resolution — an integral target for a fractional
+source, or a `DECIMAL` target with a smaller scale:
+
+```sql
+DECIDE x(REAL) SUCH THAT CAST(x AS INTEGER) <= 3     -- rejected
+```
+
+`CAST(x AS INTEGER)` means `round(x)`, so that constraint is `round(x) <= 3`, i.e.
+`x < 3.5` — a step function, which is nonlinear and belongs to the same family as
+`ABS` and `MIN`/`MAX` rather than to casting. DeciDB refuses it with an actionable
+message instead of quietly answering `x <= 3`. Compare the variable directly, or
+round the bound.
+
+Casts over **data** are untouched: `x <= CAST(1.6 AS INTEGER)` is a bound of `2`,
+because there the rounding is an ordinary value computation the executor performs.
+
+**Beyond the domain.** Above `2^53` (about 9 quadrillion) a DECIDE model and
+row-by-row SQL evaluation can disagree, because SQL rounds each side of a written
+comparison independently while DeciDB folds the bound once. Such a query is outside
+what the solver could represent in any case. This limit is pinned by
+`test_canonicalize_cast.py::test_magnitudes_beyond_double_domain_are_a_documented_limit`.
+
 ## 4. Objective
 
 - **Optional**: Omitting `MAXIMIZE`/`MINIMIZE` creates a feasibility problem — the solver finds any assignment satisfying all constraints. Both Gurobi and HiGHS support this.

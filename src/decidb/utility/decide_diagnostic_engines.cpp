@@ -498,7 +498,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	SolverModel &elastic = out.model;
 	// query mode (default) folds a data-backed clause's rows into one shared slack (one
 	// virtual offset `x <= col + delta`); expanded mode keeps them independent so the
-	// readback can expose the per-row profile. SHARED_LITERAL knobs fold in both modes.
+	// readback can expose the per-row profile. SHARED_SCALAR knobs fold in both modes.
 	bool fold_data = slack_scope != "expanded";
 
 	// Rebuild the objective as an empty repair objective: zero the user's objective over
@@ -533,7 +533,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	// user; loosening it is a conflict, not a source-literal edit. It gets its own
 	// lexicographic tier. Shared/aggregate/literal knobs are editable.
 	auto has_explicit_shape = [](const ConstraintProvenance &p) {
-		return p.shape == ElasticShape::PER_ROW_DATA || p.shape == ElasticShape::SHARED_LITERAL;
+		return p.shape == ElasticShape::PER_ROW_DATA || p.shape == ElasticShape::SHARED_SCALAR;
 	};
 	auto assert_explicit_shape = [&](const ConstraintProvenance &p) {
 		if (IsRelaxableForElastic(p.kind) && p.clause_id != DConstants::INVALID_INDEX) {
@@ -626,7 +626,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	//
 	// T3 folding policy. A user knob fans into N rows; the minimal loosening is the max
 	// overshoot (a single `s` with `eᵢ − s ≤ K` is driven to the max), not the sum.
-	//   - SHARED_LITERAL (a literal cap, a PER/aggregate group row): always folds.
+	//   - SHARED_SCALAR (a query-wide cap, a PER/aggregate group row): always folds.
 	//   - PER_ROW_DATA (a data-backed RHS `x <= col`): folds only in query mode, into one
 	//     virtual offset `x <= col + delta`; in expanded mode its rows stay independent so
 	//     the readback exposes the per-row profile.
@@ -635,7 +635,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		if (p.clause_id == DConstants::INVALID_INDEX) {
 			return false;
 		}
-		if (p.shape == ElasticShape::SHARED_LITERAL) {
+		if (p.shape == ElasticShape::SHARED_SCALAR) {
 			return true;
 		}
 		return fold_data && p.shape == ElasticShape::PER_ROW_DATA;

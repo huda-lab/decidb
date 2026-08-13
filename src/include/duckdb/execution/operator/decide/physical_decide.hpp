@@ -62,6 +62,7 @@ struct DecideConstraint {
     vector<unique_ptr<Expression>> per_columns;     // DecidB: optional PER grouping columns (empty = no grouping)
     ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 
+
     // Bilinear terms in constraint (non-Boolean pairs left by optimizer)
     vector<BilinearConstraintTerm> bilinear_terms;
     bool has_bilinear = false;
