@@ -175,6 +175,14 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
+		if (fname == "norm") {
+            if (func.children.empty() || !ValidateSumArgument(*func.children.front(), variables, error_msg,
+                                                               /*allow_quadratic=*/true)) {
+                error_msg += ", found '" + expr.ToString() + "'";
+                return DecideExpression::INVALID;
+            }
+            return DecideExpression::SUM;
+        }
 		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
             auto scalar_name = FindScalarDecideVariable(*func.children.front());
             if (!scalar_name.empty()) {

@@ -47,15 +47,20 @@ typedef struct base_yy_extra_type {
 	/*
 	 * DecidB: true while lexing inside a DECIDE clause. Set when base_yylex()
 	 * returns the DECIDE token; cleared by the decide_clause grammar action.
-	 * While set, base_yylex() rewrites WHEN -> WHEN_DECIDE so the DECIDE WHEN
-	 * is a distinct token that can't collide with CASE ... WHEN ... or pollute
-	 * the global expression grammar.
+	 * While set, base_yylex() rewrites depth-0 WHEN to a DECIDE-specific token
+	 * so it can't collide with CASE ... WHEN ... or pollute the global
+	 * expression grammar.
 	 */
 	bool in_decide_clause;
 
+	/* DecidB: true after MAXIMIZE/MINIMIZE in a DECIDE clause. Objective WHEN
+	 * gets a distinct token because its condition cannot steal a trailing
+	 * constraint bound. */
+	bool in_decide_objective;
+
 	/*
 	 * DecidB: CASE...END nesting depth while inside a DECIDE clause. WHEN is
-	 * only rewritten to WHEN_DECIDE at depth 0; a WHEN belonging to a CASE
+	 * only rewritten to a DECIDE token at depth 0; a WHEN belonging to a CASE
 	 * inside a DECIDE expression must stay a normal WHEN so the CASE parses
 	 * (and is then rejected by the binder with a friendly error).
 	 */

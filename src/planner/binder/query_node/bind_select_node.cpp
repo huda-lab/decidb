@@ -1,4 +1,5 @@
 #include "duckdb/common/limits.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/aggregate/distributive_function_utils.hpp"
@@ -39,7 +40,6 @@
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
 #include "duckdb/decidb/utility/debug.hpp"
-#include "duckdb/decidb/parsed/decide_grammar_repair.hpp"
 #include "duckdb/decidb/decide_diagnostic.hpp"
 
 namespace duckdb {
@@ -692,12 +692,55 @@ static void RewriteNormL0(unique_ptr<ParsedExpression> &expr,
 //   z_1 + z_2 + ... + z_K = 1           (exactly one indicator active)
 //   x - v1*z_1 - v2*z_2 - ... - vK*z_K = 0  (x takes the selected value)
 // Each z_i is a BOOLEAN auxiliary variable.
+static unique_ptr<ParsedExpression> GateConstraintTreeWithWhen(unique_ptr<ParsedExpression> expr,
+                                                               const ParsedExpression &condition) {
+	if (expr->GetExpressionClass() == ExpressionClass::CONJUNCTION) {
+		auto &conjunction = expr->Cast<ConjunctionExpression>();
+		for (auto &child : conjunction.children) {
+			child = GateConstraintTreeWithWhen(std::move(child), condition);
+		}
+		return expr;
+	}
+	vector<unique_ptr<ParsedExpression>> when_args;
+	when_args.push_back(std::move(expr));
+	when_args.push_back(condition.Copy());
+	auto when_expr = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(when_args));
+	when_expr->is_operator = true;
+	return std::move(when_expr);
+}
+
 static void RewriteInDomain(unique_ptr<ParsedExpression> &expr,
                              case_insensitive_map_t<idx_t> &variables,
                              vector<bool> &is_boolean_var,
                              vector<string> &var_names,
                              vector<LogicalType> &var_types,
                              idx_t &in_counter) {
+	// `x IN (...) WHEN cond` starts as one WHEN-wrapped operator, but IN expands
+	// into multiple generated constraints. A top-level WHEN wrapper can carry
+	// only one constraint through binding, so distribute the condition to every
+	// generated leaf here. This is formulation-aware desugaring, not grammar
+	// association repair.
+	if (expr->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr->Cast<FunctionExpression>();
+		if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && func.children.size() == 2 &&
+		    func.children[0]->GetExpressionClass() == ExpressionClass::OPERATOR &&
+		    func.children[0]->GetExpressionType() == ExpressionType::COMPARE_IN) {
+			auto body = std::move(func.children[0]);
+			auto condition = std::move(func.children[1]);
+			RewriteInDomain(body, variables, is_boolean_var, var_names, var_types, in_counter);
+			if (body->GetExpressionClass() == ExpressionClass::CONJUNCTION) {
+				expr = GateConstraintTreeWithWhen(std::move(body), *condition);
+			} else {
+				vector<unique_ptr<ParsedExpression>> when_args;
+				when_args.push_back(std::move(body));
+				when_args.push_back(std::move(condition));
+				auto when_expr = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(when_args));
+				when_expr->is_operator = true;
+				expr = std::move(when_expr);
+			}
+			return;
+		}
+	}
 	if (expr->GetExpressionClass() == ExpressionClass::OPERATOR) {
 		auto &op = expr->Cast<OperatorExpression>();
 		if (op.type == ExpressionType::COMPARE_IN && !op.children.empty()) {
@@ -1025,43 +1068,9 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                                                   decide_variable_names);
         }
 
-        // Expand norm(expr, 0, M) (L0) first — it creates BOOLEAN indicator
-        // variables and per-row linking constraints, which are then ANDed into
-        // the SUCH THAT tree. Runs before RewriteNorm so the latter only sees
-        // the p=1/2/'inf' orders.
-        {
-            idx_t l0_counter = 0;
-            vector<unique_ptr<ParsedExpression>> l0_links;
-            double l0_tol = GetDecideL0Tolerance(context);
-            RewriteNormL0(statement.decide_objective, decide_variable_names, is_boolean_var,
-                          var_names, var_types, l0_counter, l0_links, l0_tol);
-            RewriteNormL0(statement.decide_constraints, decide_variable_names, is_boolean_var,
-                          var_names, var_types, l0_counter, l0_links, l0_tol);
-            for (auto &link : l0_links) {
-                if (statement.decide_constraints) {
-                    statement.decide_constraints = make_uniq<ConjunctionExpression>(
-                        ExpressionType::CONJUNCTION_AND, std::move(link),
-                        std::move(statement.decide_constraints));
-                } else {
-                    statement.decide_constraints = std::move(link);
-                }
-            }
-        }
-
-        // Desugar norm(expr, p) regularization terms into the existing aggregate
-        // forms (SUM(ABS)/SUM(POWER)/MAX(ABS)) before binding — in both the
-        // objective and the SUCH THAT constraints (norm-bounded constraints).
-        RewriteNorm(statement.decide_constraints);
-        RewriteNorm(statement.decide_objective);
-
-        // MIN/MAX rewrite is handled by DecideOptimizer::RewriteMinMax (post-binding).
-
-        // Rewrite IN domain constraints: x IN (v1, ..., vK) → indicator variables + constraints
-        if (statement.decide_constraints) {
-            idx_t in_counter = 0;
-            RewriteInDomain(statement.decide_constraints, decide_variable_names,
-                            is_boolean_var, var_names, var_types, in_counter);
-        }
+        // NORM and IN bind as explicit markers. Their mathematical formulation
+        // (indicators, linking rows, and aggregate rewrites) belongs to
+        // DecideOptimizer, after types/scopes/casts are known.
 
         // NOT-EQUAL (<>) indicator variables are now created by DecideOptimizer
         // (runs after binding, creates BOOLEAN indicators directly on LogicalDecide)
@@ -1088,25 +1097,16 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             // decision-free term RIGHT (B.4), so the hoist would only build a tree
             // that gets undone one stage later. Deleted 2026-08-10; see
             // the canonicalization refactor.
-            // deb("-- Parsed SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
             // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
             // DECIDE variable, before anything downstream has to interpret them.
             ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
-            statement.decide_constraints = RepairDecideConstraintGrammar(*statement.decide_constraints);
             // Source-only casts and scalar subqueries lose their written spelling
             // during binding/flattening. Give those atoms stable fragment ids now;
             // the DECIDE binder carries the tags onto the bound nodes.
             TagDecideSourceFragments(*statement.decide_constraints, decide_source_fragments);
-            // deb("-- Repaired SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
         }
         if (statement.decide_objective) {
-            // deb("-- Parsed OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
             ValidateDecideNoNonLinearScalar(context, *statement.decide_objective, decide_variable_names);
-            // Association only. The objective's structural form -- additive spine,
-            // reducer scales, the constant offset -- is decided once on the BOUND tree
-            // by DecideCanonicalizer::CanonicalizeObjective, alongside constraints.
-            statement.decide_objective = RepairDecideObjectiveGrammar(*statement.decide_objective);
-            // deb("-- Repaired OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
         }
 
         bind_context.AddGenericBinding(result->decide_index, "decide_variables", var_names, var_types);

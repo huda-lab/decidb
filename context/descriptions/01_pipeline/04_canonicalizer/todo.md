@@ -3,11 +3,10 @@
 **None.** Constraints and objectives share one boundary, the verifier covers
 both at all three insertion points, and the pass is total, pure and idempotent.
 
-Two items that were once tracked here have moved to the stages that own them:
+One item that was once tracked here has moved to the area that owns it:
 
 | Item | Now owned by |
 |---|---|
-| Fix the `WHEN` grammar so `decide_grammar_repair.cpp` can be deleted | [`../01_parser/todo.md`](../01_parser/todo.md) |
 | `DecideDegreeInternal` under-estimates degree through `POWER` | [`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md) |
 
 Neither has a canonicalization dependency in either direction.

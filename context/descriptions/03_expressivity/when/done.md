@@ -30,7 +30,12 @@ Code pointer: deferred aggregate NE expansion in `physical_decide.cpp`, after th
 
 ### Aggregate-local WHEN
 
-Aggregate-local `WHEN` attaches to a single aggregate term (independent filters per term — see spec §6.3 for syntax). One subtlety: without parentheses around the condition, existing expression-level objective syntax such as `MAXIMIZE SUM(x * profit) WHEN category = 'electronics'` is preserved as a whole-objective `WHEN` (`RepairDecideObjectiveGrammar` reassociates it).
+Aggregate-local `WHEN` attaches to a single aggregate term (independent filters
+per term — see spec §6.3 for syntax). An objective condition may contain one
+atomic comparison directly, so
+`MAXIMIZE SUM(x * profit) WHEN category = 'electronics'` has the same meaning
+with or without parentheses. A constraint-local comparison before its bound
+still needs parentheses; see the restriction below.
 
 ---
 
@@ -72,23 +77,30 @@ An empty aggregate has no well-defined value; check your WHEN clause.
 
 Basic rules (conditions reference table columns only — they're evaluated before the solver runs to build the coefficient matrix; compound `AND`/`OR` conditions require parentheses; no-WHEN means unconditional): see spec §6.4. Additional restrictions below.
 
-### Unparenthesized `NOT`, Comparisons, and Arithmetic Are Rejected
+### Constraint-local comparisons, `NOT`, and arithmetic may need parentheses
 
-The grammar production for `WHEN` conditions (`decide_when_condition = c_expr`) excludes `NOT`, comparison operators, and arithmetic. Wrapping the condition in parentheses forces it through a different grammar path that supports the full operator set:
+The constraint token keeps aggregate-local conditions narrow so it cannot steal
+the constraint bound. The objective token admits one atomic comparison because
+there is no trailing bound. Conditions containing `NOT`, arithmetic, or compound
+logic must be parenthesized on both paths:
 
 ```sql
 -- Rejected by the parser
 SUM(x * v) <= 12 WHEN NOT w
-SUM(x * v) WHEN tier = 'high' <= 10      -- also misparses in constraints
+SUM(x * v) <= 12 WHEN a + b > 5
+SUM(x * v) WHEN tier = 'high' <= 10
 
--- Correct: parenthesize the condition
-SUM(x * v) <= 12 WHEN (NOT w)
+-- Correct
 SUM(x * v) WHEN (tier = 'high') <= 10
+MAXIMIZE SUM(x * v) WHEN tier = 'high'
+SUM(x * v) <= 12 WHEN (NOT w)
+SUM(x * v) <= 12 WHEN (a + b > 5)
 ```
 
 **Actionable parser hint.** The raw bison error for these shapes (`syntax error at or near "NOT"` / `"<="`) is uninformative on its own, so DECIDE queries whose syntax error names one of the WHEN-breaking tokens get a one-line hint appended: *"wrap the WHEN condition in parentheses — e.g. WHEN (a = b), WHEN (NOT flag), or WHEN (a + b > 5)."* The augmentation lives in `src/decidb/utility/decide_parse_hints.cpp` (`MaybeAppendDecideWhenHint`), called from `src/parser/parser.cpp` at the syntax-error throw site; it is gated on the query containing `DECIDE` + `WHEN` and the error naming a break token, so it never fires on unrelated syntax errors. Pinned by `test_when_grammar.py::test_when_unparen_error_carries_paren_hint`.
 
-See `../when/todo.md` for the remaining grammar-asymmetry limitation (the objective-side reassociator still handles more shapes than the constraint side; widening the grammar is the deeper, unshipped fix).
+See `../when/todo.md` for the remaining complex-condition grammar limitation and
+the constraint-bound ambiguity.
 
 ### Expression-level and Aggregate-local WHEN Do Not Mix
 
@@ -252,7 +264,6 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
 
 - **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
   - `BindExpression()`: Handles PER stripping on objectives, then WHEN condition extraction on the objective expression. Nested `WHEN_CONSTRAINT_TAG` binds as aggregate-local.
-  - `RepairDecideObjectiveGrammar` (`src/decidb/parsed/decide_grammar_repair.cpp`): reassociates objective comparisons like `SUM(x) WHEN flag = 'R'` back into whole-objective `WHEN(flag = 'R')`.
 
 - **Base DECIDE binder**: `src/planner/expression_binder/decide_binder.cpp`
   - `BindLocalWhenAggregate()`: Binds the aggregate child, binds the data-only boolean condition, and stores the condition as `BoundAggregateExpression::filter`.

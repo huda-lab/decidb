@@ -2,8 +2,7 @@
 
 Turns SQL text into a parsed `SelectNode` carrying `decide_variables`,
 `decide_constraints`, `decide_sense` and `decide_objective`, then applies the
-rewrites that are still legitimately parsed-tree work: desugaring, association
-repair, and the two validations that need to see what the user actually typed.
+source-preserving validation that must see what the user actually typed.
 
 **This stage decides no shape.** Which side of a comparison a term sits on, which
 way the relation points, and where a factor on a reducer lives are all decided
@@ -61,42 +60,50 @@ appear the nesting is `PER(WHEN(body, condition), columns)`.
 
 The aggregate-local form (`SUM(x) WHEN active`) is a separate `c_expr`
 alternative on `func_application` and on the relation-qualified reducer form
-`func_name '(' func_arg_list ':' func_arg_list ')'`. Its condition nonterminal is
-`decide_when_condition: c_expr` — deliberately narrow, so the filter does not
-swallow the rest of the DECIDE expression. A comparison predicate therefore needs
-parentheses: `SUM(x * w) WHEN (category = 'A')`.
+`func_name '(' func_arg_list ':' func_arg_list ')'`. Constraint-local conditions
+stay at `c_expr`: in `SUM(x) WHEN active <= 20`, `active` is the condition and
+`<= 20` is the constraint bound. Comparison conditions therefore need
+parentheses on that path. Objective WHEN uses `WHEN_DECIDE_OBJECTIVE` and may
+consume one comparison between atomic operands because an objective has no
+trailing bound. This replaces the former objective parsed-tree reassociation.
+
+`decide_item_expr` closes a constraint or objective body at `DECIDE_ITEM`
+precedence. That precedence is above `AND`, so `A AND B WHEN c` and
+`A AND B PER col` attach the modifier to `B`, but below `WHEN_DECIDE` and the
+comparison operators, so the body and condition retain their SQL expression
+shape. No parsed-tree association repair is needed.
 
 ### Conflicts
 
-`grammar.y` declares `%expect 9`, itemised in its header comment: 2 inherited
-from DuckDB's PostgreSQL-derived postfix-operator states, 4 from
-`WHEN_DECIDE` (constraint item, aggregate-local atom, and the qualified-reducer
-atom), and 4 from the optional declaration slot, one per `simple_select`
-alternative. The declaration-slot four are reachable only when `from_clause` and
-`where_clause` are both empty, and both derivations build the same node, so
-bison's default shift is not load-bearing. The `WHEN_DECIDE` conflicts are keyed
-on a token the lexer emits only inside a DECIDE clause, so they cannot fire for
-ordinary SQL.
+`grammar.y` declares `%expect 6`, itemised in its header comment: 2 inherited
+from DuckDB's PostgreSQL-derived postfix-operator states and 4 from the optional
+declaration slot, one per `simple_select` alternative. The declaration-slot four
+are reachable only when `from_clause` and `where_clause` are both empty, and both
+derivations build the same node, so bison's default shift is not load-bearing.
+Aggregate-local conflicts for both DECIDE WHEN tokens and the equivalent
+qualified-reducer state are resolved explicitly by `DECIDE_ITEM` precedence.
 
 Grammar changes require `make grammar-build` (bison 2.3).
 
 ---
 
-## 2. Lexer gating: the `WHEN_DECIDE` token
+## 2. Lexer gating: the DECIDE `WHEN` tokens
 
 `third_party/libpg_query/src_backend_parser_parser.cpp`, in `base_yylex`.
 
 DECIDE's `WHEN` cannot be the global SQL `WHEN`: after a function call it
-collided with `WITHIN GROUP` and corrupted ordinary function-call parsing. So the
-lexer emits a distinct `WHEN_DECIDE` token, and only inside a DECIDE clause:
+collided with `WITHIN GROUP` and corrupted ordinary function-call parsing. So
+the lexer emits DECIDE-only tokens inside the clause:
 
 - `DECIDE` **or** `SUCH` sets `in_decide_clause` and resets `decide_case_depth`.
   `SUCH` re-arms the flag for the split clause order, where the declaration slot
   cleared it so `FROM` / `JOIN ... ON` / `WHERE` lex as ordinary SQL.
 - Grammar actions clear the flag once the clause is closed.
 - While armed, `CASE` increments `decide_case_depth` and `END` decrements it, so a
-  `CASE ... WHEN ... END` keeps its ordinary `WHEN` and still parses. Only a
-  depth-0 `WHEN` becomes `WHEN_DECIDE`.
+  `CASE ... WHEN ... END` keeps its ordinary `WHEN` and still parses.
+- A depth-0 `WHEN` becomes `WHEN_DECIDE` in constraints. After `MAXIMIZE` or
+  `MINIMIZE`, `in_decide_objective` makes it `WHEN_DECIDE_OBJECTIVE`, allowing
+  the grammar to distinguish a condition comparison from a constraint bound.
 
 No lookahead is needed for this decision.
 
@@ -128,11 +135,11 @@ grouping columns unchanged.
 
 ---
 
-## 4. Parsed-tree rewrites
+## 4. Parsed-tree preparation
 
-These run on the parsed tree, before any DECIDE binder. They physically live in
-`src/planner/binder/query_node/bind_select_node.cpp` (in `BindSelectNode`, around
-lines 1009-1109) even though the work is this stage's — see `todo.md`.
+These run on the parsed tree before DECIDE binding. They physically live in
+`src/planner/binder/query_node/bind_select_node.cpp` because the binder is the
+first consumer of the clause.
 
 In execution order:
 
@@ -140,37 +147,12 @@ In execution order:
 |---|---|---|
 | 1 | `RewriteScopedVarRefs` | Strips the table qualifier from `T.x` where `T.x` names a registered scoped variable, so constraints, objective and the SELECT list all see bare `x`. Every variable is registered under its unqualified name, and duplicates are rejected, so the bare form always resolves. |
 | 2 | `ValidateDecideNoExplicitDecisionCasts` | Rejects `CAST`, `TRY_CAST` and `::` whose child subtree contains a decision reference, in `SUCH THAT` and the objective. Target type is irrelevant. Must run here: a source cast and a binder cast are both `BoundCastExpression`, so authorship cannot be recovered later. The post-solve `SELECT` projection is not scanned. |
-| 3 | `RewriteNormL0` | Desugars `norm(expr, 0, K)` into binary indicators plus linking rows, using the session's `decide_l0_tolerance`. |
-| 4 | `RewriteNorm` | Desugars the remaining `norm()` forms. |
-| 5 | `RewriteInDomain` | Rewrites `x IN (v1, ..., vK)` on a decision variable into K binary indicators with cardinality and linking constraints. IN values referencing a decision variable are rejected. `IN` on an aggregate remains unsupported. |
-| 6 | `ValidateDecideNoNonLinearScalar` | Rejects non-linear use of a query-wide `scalar` variable before anything downstream has to interpret it. |
-| 7 | `RepairDecideConstraintGrammar` / `RepairDecideObjectiveGrammar` | Association repair — see below. |
-| 8 | `TagDecideSourceFragments` | Stamps each source fragment with an id so diagnostics can quote the user's own SQL after the tree has been rebuilt. |
+| 3 | `ValidateDecideNoNonLinearScalar` | Rejects non-linear use of a query-wide `scalar` variable before anything downstream has to interpret it. |
+| 4 | `TagDecideSourceFragments` | Stamps each source fragment with an id so diagnostics can quote the user's own SQL after the tree has been rebuilt. |
 
-### Association repair
-
-`src/decidb/parsed/decide_grammar_repair.cpp` fixes **three** mis-associations
-bison produces, and nothing else:
-
-| Written | Parses as | Repaired to |
-|---|---|---|
-| `A AND B WHEN c` | `(A AND B) WHEN c` | `A AND (B WHEN c)` |
-| `A AND B PER col` | `(A AND B) PER col` | `A AND (B PER col)` |
-| `MAXIMIZE SUM(x) WHEN a > b` | `(SUM(x) WHEN a) > b` | `SUM(x) WHEN (a > b)` |
-
-The first two share a cause: `a_expr` on the left of `WHEN_DECIDE` absorbs `AND`
-via shift/reduce, so the wrapper lands on the whole conjunction instead of the
-rightmost constraint. The third is `WHEN_DECIDE` having no declared precedence, so
-a comparison closes the `WHEN` early; the repair only fires when the `WHEN` body
-is a reducer (`IsDecideObjectiveAggregate`: `sum`/`avg`/`min`/`max`, seen through
-casts).
-
-The constraint walker's `COMPARISON` case copies the node through untouched —
-constraint shape is not this file's business.
-
-The same file also holds `ExpressionToDot`, a Graphviz dump of a parsed
-expression. It has no live callers; every call site in `bind_select_node.cpp` is
-commented out.
+`norm()` and DECIDE-variable `IN (...)` are deliberately not rewritten here.
+The binder retains bound markers, and stage 05 chooses the indicator and linking
+formulation after types, scopes, and DuckDB coercions are known.
 
 ---
 
@@ -197,9 +179,8 @@ commented out.
 | Grammar productions | `third_party/libpg_query/grammar/statements/select.y` |
 | Conflict budget and rationale | `third_party/libpg_query/grammar/grammar.y` (header comment) |
 | Reserved keywords | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` |
-| `WHEN_DECIDE` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
+| DECIDE `WHEN` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `WHEN`/`PER` tag construction | `src/parser/transform/expression/transform_operator.cpp` |
 | Parse-error hint | `src/decidb/utility/decide_parse_hints.cpp` |
-| Association repair, `ExpressionToDot` | `src/decidb/parsed/decide_grammar_repair.cpp` |
 | Parsed-tree rewrite call sites | `src/planner/binder/query_node/bind_select_node.cpp` |

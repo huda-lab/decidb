@@ -14,9 +14,11 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/decidb/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 
 namespace duckdb {
@@ -56,6 +58,8 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 		timer.Start();
 	}
 
+	RewriteNorm(decide);
+	RewriteInDomain(decide);
 	TagAbsConstraintsForBigM(optimizer.context, decide); // Must run before RewriteAbs: marks ABS nodes that need Big-M
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
@@ -68,6 +72,256 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 		timer.End();
 		fprintf(stderr, "DECIDB_BENCH: optimizer_ms=%.2f\n", timer.Elapsed() * 1000.0);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Bound DECIDE syntax markers: NORM and IN
+// ---------------------------------------------------------------------------
+
+static bool TryParseNormMarker(const string &alias, string &payload) {
+	auto start = alias.find(NORM_MARKER_TAG_PREFIX);
+	if (start == string::npos) {
+		return false;
+	}
+	start += strlen(NORM_MARKER_TAG_PREFIX);
+	auto end = alias.find("__", start);
+	if (end == string::npos) {
+		return false;
+	}
+	payload = alias.substr(start, end - start);
+	return true;
+}
+
+static void CopySourceClauseTag(const string &from_alias, Expression &to) {
+	idx_t source_id;
+	if (!TryParseSourceClauseTag(from_alias, source_id)) {
+		return;
+	}
+	auto alias = to.GetAlias();
+	AddDecideTag(alias, MakeSourceClauseTag(source_id));
+	to.SetAlias(std::move(alias));
+}
+
+static void MarkFormulationConstraint(Expression &expr, const string &source_alias) {
+	auto alias = expr.GetAlias();
+	AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
+	expr.SetAlias(std::move(alias));
+	CopySourceClauseTag(source_alias, expr);
+}
+
+static const BoundColumnRefExpression *FindDecideColumn(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &col = expr.Cast<BoundColumnRefExpression>();
+		return col.binding.table_index == decide_index ? &col : nullptr;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		return FindDecideColumn(*expr.Cast<BoundCastExpression>().child, decide_index);
+	}
+	return nullptr;
+}
+
+static bool TryGetFoldableDouble(const Expression &expr, double &value) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		try {
+			value = expr.Cast<BoundConstantExpression>().value.GetValue<double>();
+			return true;
+		} catch (...) {
+			return false;
+		}
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		return TryGetFoldableDouble(*expr.Cast<BoundCastExpression>().child, value);
+	}
+	return false;
+}
+
+static unique_ptr<Expression> WrapWithWhen(unique_ptr<Expression> constraint, const Expression *when) {
+	if (!when) {
+		return constraint;
+	}
+	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	wrapper->children.push_back(std::move(constraint));
+	wrapper->children.push_back(when->Copy());
+	wrapper->alias = WHEN_CONSTRAINT_TAG;
+	return std::move(wrapper);
+}
+
+static bool IsWhenWrapper(const Expression &expr) {
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
+	       HasDecideTag(expr.GetAlias(), WHEN_CONSTRAINT_TAG) &&
+	       expr.Cast<BoundConjunctionExpression>().children.size() == 2;
+}
+
+static unique_ptr<Expression> MakeTrueExpression() {
+	return make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+}
+
+void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
+	vector<unique_ptr<Expression>> links;
+	idx_t l0_counter = 0;
+
+	std::function<void(unique_ptr<Expression> &, const string &)> rewrite =
+	    [&](unique_ptr<Expression> &expr, const string &source_alias) {
+		if (!expr) return;
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			auto &comparison = expr->Cast<BoundComparisonExpression>();
+			rewrite(comparison.left, comparison.GetAlias());
+			rewrite(comparison.right, comparison.GetAlias());
+			return;
+		}
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			for (auto &child : expr->Cast<BoundConjunctionExpression>().children) rewrite(child, source_alias);
+			return;
+		}
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) return;
+		auto &aggregate = expr->Cast<BoundAggregateExpression>();
+		string payload;
+		if (!TryParseNormMarker(aggregate.GetAlias(), payload)) return;
+		if (aggregate.children.size() != 1) {
+			throw InternalException("DECIDE NORM marker must contain one bound expression");
+		}
+		auto old_alias = aggregate.GetAlias();
+		auto make_aggregate = [&](const string &name, unique_ptr<Expression> child) {
+			vector<unique_ptr<Expression>> children;
+			children.push_back(std::move(child));
+			auto result = optimizer.BindAggregateFunction(name, std::move(children));
+			result->alias = old_alias;
+			RemoveDecideTag(result->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+			if (aggregate.filter) result->Cast<BoundAggregateExpression>().filter = aggregate.filter->Copy();
+			return result;
+		};
+		if (payload == "1") {
+			expr = make_aggregate("sum", optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()));
+			return;
+		}
+		if (payload == "2") {
+			expr = make_aggregate("sum", optimizer.BindScalarFunction(
+			    "power", aggregate.children[0]->Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
+			return;
+		}
+		if (payload == "inf") {
+			expr = make_aggregate("max", optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()));
+			return;
+		}
+		bool auto_m = payload == "0_auto";
+		if (!auto_m && payload.rfind("0_", 0) != 0) {
+			throw InternalException("DECIDE NORM marker has invalid order payload '%s'", payload);
+		}
+		double m = 1.0;
+		if (!auto_m) {
+			try { m = std::stod(payload.substr(2)); } catch (...) {
+				throw InternalException("DECIDE NORM marker has invalid L0 bound '%s'", payload);
+			}
+		}
+		idx_t z_idx = decide.decide_variables.size();
+		string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
+		auto z = make_uniq<BoundColumnRefExpression>(z_name, LogicalType::INTEGER,
+		                                             ColumnBinding(decide.decide_index, z_idx));
+		decide.decide_variables.push_back(z->Copy());
+		decide.num_auxiliary_vars++;
+		decide.is_boolean_var.push_back(true);
+		if (!decide.variable_scopes.empty()) decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+		auto make_mz = [&]() { return optimizer.BindScalarFunction("*",
+		    make_uniq<BoundConstantExpression>(Value::DOUBLE(m)), z->Copy()); };
+		auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
+			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                                  std::move(lhs), std::move(rhs));
+			MarkFormulationConstraint(*link, source_alias);
+			links.push_back(std::move(link));
+		};
+		add_link(make_mz(), aggregate.children[0]->Copy());
+		add_link(make_mz(), optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
+		                                               aggregate.children[0]->Copy()));
+		add_link(optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()),
+		         optimizer.BindScalarFunction("*", make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context))), z->Copy()));
+		expr = make_aggregate("sum", std::move(z));
+	};
+
+	rewrite(decide.decide_objective, string());
+	rewrite(decide.decide_constraints, string());
+	for (auto &link : links) AppendConstraint(decide, std::move(link));
+}
+
+void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
+	vector<unique_ptr<Expression>> generated;
+	idx_t in_counter = 0;
+	auto emit = [&](unique_ptr<Expression> constraint, const Expression *when, const string &source_alias) {
+		MarkFormulationConstraint(*constraint, source_alias);
+		generated.push_back(WrapWithWhen(std::move(constraint), when));
+	};
+	std::function<void(unique_ptr<Expression> &, const Expression *, const string &)> rewrite =
+	    [&](unique_ptr<Expression> &expr, const Expression *when, const string &source_alias) {
+		if (!expr) return;
+		if (IsWhenWrapper(*expr)) {
+			auto &wrapper = expr->Cast<BoundConjunctionExpression>();
+			rewrite(wrapper.children[0], wrapper.children[1].get(), source_alias);
+			if (wrapper.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+			    wrapper.children[0]->Cast<BoundConstantExpression>().value.GetValue<bool>()) expr = MakeTrueExpression();
+			return;
+		}
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			for (auto &child : expr->Cast<BoundConjunctionExpression>().children) rewrite(child, when, source_alias);
+			return;
+		}
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR || expr->type != ExpressionType::COMPARE_IN) return;
+		auto &in = expr->Cast<BoundOperatorExpression>();
+		if (in.children.size() < 2) throw InternalException("DECIDE IN marker has no domain values");
+		auto *target = FindDecideColumn(*in.children[0], decide.decide_index);
+		if (!target) throw InternalException("DECIDE IN marker target is not a decision variable");
+		string local_source = source_alias.empty() ? in.GetAlias() : source_alias;
+		idx_t k = in.children.size() - 1;
+		if (target->binding.column_index < decide.is_boolean_var.size() && decide.is_boolean_var[target->binding.column_index] && k == 2) {
+			double a, b;
+			if (TryGetFoldableDouble(*in.children[1], a) && TryGetFoldableDouble(*in.children[2], b) &&
+			    ((a == 0.0 && b == 1.0) || (a == 1.0 && b == 0.0))) {
+				emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+				                                   in.children[0]->Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(0))), when, local_source);
+				expr = MakeTrueExpression();
+				return;
+			}
+		}
+		if (k == 1) {
+			emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, in.children[0]->Copy(), in.children[1]->Copy()), when, local_source);
+			expr = MakeTrueExpression();
+			return;
+		}
+		vector<unique_ptr<Expression>> indicators;
+		for (idx_t i = 0; i < k; i++) {
+			idx_t ind_idx = decide.decide_variables.size();
+			string name = "__in_ind_" + target->GetName() + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
+			auto indicator = make_uniq<BoundColumnRefExpression>(name, LogicalType::INTEGER,
+			                                                    ColumnBinding(decide.decide_index, ind_idx));
+			decide.decide_variables.push_back(indicator->Copy());
+			decide.num_auxiliary_vars++;
+			decide.is_boolean_var.push_back(true);
+			if (!decide.variable_scopes.empty()) decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+			indicators.push_back(std::move(indicator));
+		}
+		in_counter++;
+		auto cardinality = indicators[0]->Copy();
+		for (idx_t i = 1; i < k; i++) cardinality = optimizer.BindScalarFunction("+", std::move(cardinality), indicators[i]->Copy());
+		emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(cardinality),
+		                                         make_uniq<BoundConstantExpression>(Value::INTEGER(1))), when, local_source);
+		auto linking = in.children[0]->Copy();
+		bool all_constant = true;
+		double min_value = 0.0;
+		for (idx_t i = 0; i < k; i++) {
+			double value;
+			if (!TryGetFoldableDouble(*in.children[i + 1], value)) all_constant = false;
+			else min_value = std::min(min_value, value);
+			auto negative = optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::INTEGER(0)), in.children[i + 1]->Copy());
+			linking = optimizer.BindScalarFunction("+", std::move(linking), optimizer.BindScalarFunction("*", std::move(negative), indicators[i]->Copy()));
+		}
+		emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, std::move(linking),
+		                                         make_uniq<BoundConstantExpression>(Value::INTEGER(0))), when, local_source);
+		if (all_constant && min_value < 0.0) {
+			emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, in.children[0]->Copy(),
+			                                         make_uniq<BoundConstantExpression>(Value::DOUBLE(min_value))), when, local_source);
+		}
+		expr = MakeTrueExpression();
+	};
+	rewrite(decide.decide_constraints, nullptr, string());
+	for (auto &constraint : generated) AppendConstraint(decide, std::move(constraint));
 }
 
 // ---------------------------------------------------------------------------

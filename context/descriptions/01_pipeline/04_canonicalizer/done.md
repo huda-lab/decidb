@@ -83,11 +83,11 @@ physical extraction and runtime RHS/group evaluation
 
 | Stage | Responsibility once canonicalization owns shape |
 |---|---|
-| Parser / desugaring | Parse, repair association, desugar `norm()` and `IN`. Does not move comparison terms. |
+| Parser | Parse with the intended association and retain NORM/IN source structure. Does not move comparison terms. |
 | Binder | Resolve names, types, scopes, reducers, subquery correlation. Determines *whether* a comparison is a DECIDE constraint; does not flip or repartition it. |
 | Canonicalizer | Put every accepted bound comparison into §3 and reject unsupported mixtures once. |
 | Logical plan | Store canonical constraints. New ones enter only through `AddConstraint`. |
-| Optimizer | Assume canonical input; select formulations. Generated rows return through `AddConstraint`. |
+| Optimizer | Assume canonical input; lower NORM/IN and select other formulations. Generated rows return through `AddConstraint`. |
 | Physical extraction | Read model terms from the left and the bound from the right. May assert the invariant; must not repair it. |
 | Runtime evaluation | Evaluate coefficients, `WHEN`, `PER`, qualifiers, data reducers, row-varying bounds. Value operations, not shape decisions. |
 | Model builder | Accumulate coefficients and build solver-neutral rows. No SQL-expression canonicalization. |
@@ -356,8 +356,8 @@ all optimizer rewriting.
 - evaluate data, reducers, `WHEN`, `PER` or qualifiers;
 - choose a solver formulation.
 
-Association repair is not here either — it belongs to stage 01
-([`../01_parser/done.md`](../01_parser/done.md)).
+Expression association is fixed by the stage-01 grammar; this stage never
+reinterprets a parsed expression tree.
 
 ---
 

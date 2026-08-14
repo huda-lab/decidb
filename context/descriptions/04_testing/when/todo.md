@@ -31,9 +31,9 @@ Closed by `test/decide/tests/test_when_grammar.py`:
 
 - **Positive parenthesized constraint tests** (3): `WHEN (NOT w)`, `WHEN (tier = 'high')`, `WHEN (a + b > 5)` — all oracle-verified.
 - **Positive parenthesized objective tests** (3): same 3 shapes — all oracle-verified.
-- **Negative unparenthesized constraint tests** (3): pin shape-specific parser errors per `../../03_expressivity/when/todo.md` table.
-- **Negative unparenthesized objective tests** (2): `WHEN NOT w` (parser-level) and `WHEN a + b > 5` (binder-level). The third unparenthesized objective shape `WHEN tier = 'high'` is NOT a negative test because the reassociator handles it; that path is exercised in the parenthesized objective positive set.
-- **Asymmetric-error sentinel** (1): `SUM(x*v) WHEN tier = 'high' <= 10` on a constraint pins the actual `syntax error at or near "<="` parser error. The earlier doc claim that this produces an `"LHS must be a DECIDE variable or SUM expression"` message was incorrect — that's a binder-level error path that doesn't fire here because the parser bails first.
+- **Positive objective atomic-comparison equivalence** (1): unparenthesized
+  `WHEN tier = 'high'` matches the parenthesized objective form.
+- **Negative unparenthesized tests** (5): aggregate-local constraint
+  `WHEN tier = 'high'` before its bound, plus `WHEN NOT w` and
+  `WHEN a + b > 5` on both constraint and objective paths.
 - **Parenthesization-hint pin** (1): `test_when_unparen_error_carries_paren_hint` asserts the appended hint text (`wrap the WHEN condition in parentheses`) so the `MaybeAppendDecideWhenHint` augmentation cannot be silently dropped.
-
-If the grammar widens or a constraint-side reassociator is added, the sentinel test will fail; the appropriate response is to delete it and convert the case to a positive test, not to relax the regex. See `../../03_expressivity/when/todo.md` for the full asymmetry table.

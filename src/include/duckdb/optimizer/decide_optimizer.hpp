@@ -22,6 +22,8 @@ class Optimizer;
 //! scattered across the binder and physical operator.
 //!
 //! Current passes:
+//!   - RewriteNorm: lowers the bound NORM marker, including L0 indicators/links
+//!   - RewriteInDomain: lowers DECIDE variable IN lists to indicator formulations
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
 //!   - RewriteMinMax: classifies MIN/MAX constraints as easy/hard, rewrites to per-row
@@ -29,10 +31,6 @@ class Optimizer;
 //!   - RewriteNotEqual: creates indicator variables for <> constraints
 //!   - RewriteAvgToSum: rewrites AVG(expr) → SUM(expr) with alias tag for RHS scaling
 //!
-//! Future passes (to be migrated from binder):
-//!   - IN domain rewrite
-//!   - Partition-solve detection
-//!   - Variable bound propagation
 class DecideOptimizer {
 public:
 	explicit DecideOptimizer(Optimizer &optimizer);
@@ -43,6 +41,11 @@ public:
 private:
 	//! Apply all DECIDE optimization passes to a LogicalDecide node
 	void OptimizeDecide(LogicalDecide &decide);
+
+	//! Lower NORM markers before ABS/MINMAX sees their generated expressions.
+	void RewriteNorm(LogicalDecide &decide);
+	//! Lower bound COMPARE_IN markers into the existing exact indicator formulation.
+	void RewriteInDomain(LogicalDecide &decide);
 
 	//! Rewrite not-equal (<>) constraints by creating auxiliary indicator variables.
 	//! For each COMPARE_NOTEQUAL found in the constraint tree, creates a BOOLEAN

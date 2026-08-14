@@ -479,10 +479,8 @@ def test_when_not_equal(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 def test_when_constraint_ordering_invariance(decidb_cli):
     """WHEN must apply only to its constraint regardless of AND ordering.
 
-    Regression test: the grammar has a shift/reduce ambiguity where
-    "A AND B WHEN C" can parse as "(A AND B) WHEN C" instead of
-    "A AND (B WHEN C)". The normalization layer must fix this so
-    constraint ordering doesn't change semantics.
+    Regression test: `DECIDE_ITEM` precedence must keep "A AND B WHEN C" as
+    "A AND (B WHEN C)" so constraint ordering cannot change semantics.
     """
     # Order 1: unconditional BEFORE WHEN
     sql_before = """

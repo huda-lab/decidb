@@ -2,6 +2,31 @@
 
 ---
 
+## Infeasible diagnostics: atomically drop NORM-L0 and IN formulations
+
+**Pointers**: `src/decidb/utility/decide_diagnostic_engines.cpp` and
+`src/include/duckdb/decidb/ilp_model.hpp`.
+
+An `IN (...)` restriction and an L0 `norm(...)` expand to a group of cardinality,
+indicator, and linking rows. Infeasibility repair must never loosen or
+independently drop one of those rows: that would describe neither the original
+SQL clause nor a sound relaxation of it.
+
+**Required behavior**: record each formulation as one source-level,
+**drop-only** repair group. A diagnosis may propose one `DROP <original SQL
+clause>` edit for the entire group; it must not propose `LOOSEN`, a partial drop,
+or an internal indicator equation.
+
+**Design constraint**: the existing `<>` removal path is specialized and cannot
+be reused as-is. Add a general grouped-removal contract with a verified safe
+neutralization strategy before exposing this repair; do not use an arbitrary
+Big-M.
+
+**Test**: infeasible IN and L0 queries report one source-SQL DROP action, and
+prove all generated rows disappear together on both solver backends.
+
+---
+
 ## The header's pass inventory is out of date
 
 **Pointers**: `src/include/duckdb/optimizer/decide_optimizer.hpp:24-35`.
@@ -10,11 +35,10 @@ The "Current passes" comment lists four; there are seven, plus
 `TagAbsConstraintsForBigM`. Missing: `RewriteComposedMinMax`,
 `RewriteComposedMinMaxObjectiveTop`, `RewriteBilinear`.
 
-The "Future passes (to be migrated from binder)" list is also wrong. `IN` domain
-rewrite still lives in `bind_select_node.cpp` and is filed against stage 01, not
-here. "Partition-solve detection" and "variable bound propagation" do not exist in
-any form and have no design behind them — if they are still wanted they need a
-real entry, and if not the lines should go.
+The old binder-migration list is obsolete: NORM and IN are optimizer passes now.
+"Partition-solve detection" and "variable bound propagation" do not exist in any
+form and have no design behind them — if they are still wanted they need a real
+entry, and if not the lines should go.
 
 **Decision**: whether the two speculative future passes are dropped or written up.
 Dropping is the honest default; a one-line aspiration in a header is not a plan.

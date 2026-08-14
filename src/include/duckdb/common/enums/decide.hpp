@@ -214,6 +214,12 @@ static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
 
+//! A private aggregate marker emitted by the DECIDE binder for norm(expr, p).
+//! The marker is only a transport representation: DecideOptimizer must lower it
+//! before physical planning. Its payload is one of `1`, `2`, `inf`, `0_auto`,
+//! or `0_<positive-double>`.
+static constexpr const char *NORM_MARKER_TAG_PREFIX = "__decide_norm_";
+
 //! Semantic provenance stamped on the flattened value produced by an UNCORRELATED
 //! scalar subquery. Shape alone cannot distinguish that query-wide column ref from
 //! ordinary row data after PlanSubqueries.

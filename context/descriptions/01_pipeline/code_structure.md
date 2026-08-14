@@ -13,7 +13,6 @@ Stage numbers refer to [`README.md`](README.md).
 |---|---|---|
 | `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScopeInfo`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
 | `common/decide_source_info.hpp` | 03 | `ConstraintSourceInfo` — the source display registry entry |
-| `decidb/parsed/decide_grammar_repair.hpp` | 01 | Association repair, `ExpressionToDot` |
 | `decidb/utility/decide_parse_hints.hpp` | 01 | `MaybeAppendDecideWhenHint` |
 | `planner/expression_binder/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, degree, `ValidateDecideNoExplicitDecisionCasts` |
 | `planner/expression_binder/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
@@ -37,7 +36,6 @@ Stage numbers refer to [`README.md`](README.md).
 
 | Path | Stage | Lines | Contents |
 |---|---|---|---|
-| `decidb/parsed/decide_grammar_repair.cpp` | 01 | ~340 | Three association repairs, `ExpressionToDot` |
 | `decidb/utility/decide_parse_hints.cpp` | 01 | ~65 | DECIDE-aware parse-error hint |
 | `planner/expression_binder/decide_binder.cpp` | 02 | ~1,020 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
 | `planner/expression_binder/decide_constraints_binder.cpp` | 02 | ~550 | `SUCH THAT` |
@@ -63,7 +61,7 @@ Stage numbers refer to [`README.md`](README.md).
 | Path | Contents |
 |---|---|
 | `grammar/statements/select.y` | Every DECIDE production |
-| `grammar/grammar.y` | The `%expect 9` conflict budget and its rationale |
+| `grammar/grammar.y` | The `%expect 6` conflict budget and its rationale |
 | `grammar/keywords/reserved_keywords.list` | `DECIDE`, `MAXIMIZE`, `MINIMIZE`, `SUCH` |
 | `src_backend_parser_parser.cpp` | `base_yylex` — the `WHEN_DECIDE` gating |
 
@@ -163,12 +161,6 @@ classDiagram
 ---
 
 ## 3. Key entry points
-
-### `src/decidb/parsed/decide_grammar_repair.cpp` — stage 01
-- **`RepairDecideConstraintGrammar()`** — reassociates `A AND B WHEN c` and
-  `A AND B PER col`. Comparisons are copied through untouched.
-- **`RepairDecideObjectiveGrammar()`** — reassociates `SUM(x) WHEN a > b`.
-- **`ExpressionToDot()`** — Graphviz dump of a parsed expression. No live callers.
 
 ### `src/planner/expression_binder/decide_binder.cpp` — stage 02
 - **`ValidateSumArgument()`** — linear (or optionally quadratic) combination check.

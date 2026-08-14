@@ -42,9 +42,11 @@ std::string MaybeAppendDecideWhenHint(const std::string &query, const std::strin
 	if (!ContainsCI(query, "decide") || !ContainsCI(query, "when")) {
 		return error_message;
 	}
-	// The condition grammar rejects unparenthesized comparisons / NOT / arithmetic;
-	// bison reports the failure at one of these tokens. Gate on the token so we do
-	// not tack the WHEN hint onto unrelated syntax errors in DECIDE queries.
+	// Objective WHEN accepts one atomic comparison. Constraint-local WHEN stays
+	// narrow so it cannot steal the constraint bound; both paths still reject
+	// unparenthesized NOT, arithmetic, and more complex shapes. Bison reports
+	// those failures at one of these tokens. Gate on the token so we do not tack
+	// the WHEN hint onto unrelated DECIDE syntax errors.
 	static const std::array<const char *, 9> kBreakTokens = {
 	    "\"NOT\"", "\"<=\"", "\">=\"", "\"<>\"", "\"<\"", "\">\"", "\"=\"", "\"+\"", "\"-\""};
 	bool near_break_token = false;

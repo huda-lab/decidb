@@ -261,7 +261,7 @@ what the solver could represent in any case. This limit is pinned by
   - A **decision** factor is rejected as bilinear rather than as a scale: `s * SUM(x)` (with `scalar s`) is a product of two decisions.
 - A query-wide (`scalar`) decision may appear as a **bare additive term** of an aggregate constraint, since it is row-invariant: `SUM(ship) - max_shortfall <= cap` (paper §3.1). It contributes its coefficient once, not once per row. It may equally be written as the **bound** (`SUM(ship) <= max_shortfall`); which side it is on carries no meaning, because canonicalization moves every decision-bearing term to the left before anything downstream looks. A **row-scoped** decision as the bound of a reduced constraint (`SUM(x) <= y`) is rejected — there is no single `y` for a number that has no row.
 - **Either side may carry the decision.** The constraint gate classifies both sides and accepts when either is a DECIDE expression, so `5 >= x`, `10 >= SUM(x)` and `cap >= SUM(x)` are the same constraints as their mirror images. A reducer may appear on **both** sides (`SUM(x*v) <= SUM(y*v)`, `SUM(x*v) <= MAX(x*w) + 30`). What is *not* symmetric is the bound rule: a side carrying no decision must still reduce to one value per group, so a bare row-varying data column as the bound of a reduced constraint (`SUM(x) <= price`) is refused whichever side it is written on.
-- `norm(expr, p)` expresses an L_p regularization term over a decision-variable expression (lasso/ridge-style). The user supplies the weight, e.g. `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. It is desugared at bind time into existing supported forms, so it composes with WHEN/PER and works in both objectives and constraints (including norm-bounded constraints like `norm(e, 1) <= K`). Supported orders:
+- `norm(expr, p)` expresses an L_p regularization term over a decision-variable expression (lasso/ridge-style). The user supplies the weight, e.g. `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. The binder retains it as a DECIDE marker and the optimizer selects the existing formulation, so it composes with WHEN/PER and works in both objectives and constraints (including norm-bounded constraints like `norm(e, 1) <= K`). Supported orders:
   - `norm(e, 1)` → `SUM(ABS(e))` — L1 (sparse-leaning; ABS linearization).
   - `norm(e, 2)` → `SUM(POWER(e, 2))` — squared L2 / ridge (convex QP).
   - `norm(e, 'inf')` → `MAX(ABS(e))` — L-infinity (max linearization).
@@ -347,11 +347,22 @@ MAXIMIZE
 
 Each aggregate-local `WHEN` filters only that aggregate's rows. Rows outside all local aggregate filters do not contribute to that expression, but they are not removed from the query or from unrelated constraints/objectives.
 
-Comparison predicates in aggregate-local `WHEN` conditions must be parenthesized:
+Comparison predicates in aggregate-local constraint `WHEN` conditions must be
+parenthesized so the final comparison remains the constraint bound:
 
 ```sql
 SUM(x * hours) WHEN (shift = 'morning') + SUM(x * hours) WHEN (shift = 'evening') <= 40
 ```
+
+An objective has no trailing bound, so its single atomic comparison is
+unambiguous and may omit the parentheses:
+
+```sql
+MAXIMIZE SUM(x * profit) WHEN category = 'electronics'
+```
+
+Parenthesize objective conditions containing `NOT`, arithmetic, or compound
+logic as well.
 
 Do not combine expression-level `WHEN` with aggregate-local `WHEN` in the same constraint or objective; the binder rejects that shape to avoid ambiguous double-filter semantics.
 
@@ -364,6 +375,8 @@ Do not combine expression-level `WHEN` with aggregate-local `WHEN` in the same c
   ```sql
   SUM(x * weight) <= 20 WHEN (category = 'A' AND status = 'active')
   ```
+- Conditions containing `NOT` or arithmetic also require parentheses, for
+  example `WHEN (NOT active)` and `WHEN (a + b > 5)`.
 - Expressions without `WHEN` apply unconditionally to all rows.
 
 ## 7. Group-Scoped Constraints — `PER`

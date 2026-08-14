@@ -208,11 +208,26 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
     auto &op = expr.Cast<OperatorExpression>();
     switch (op.type) {
     case ExpressionType::COMPARE_IN:{
-        // Variable-level IN (x IN (1,2,3)) is rewritten before binding.
-        // If we reach here, it's an aggregate IN or unrewritten edge case.
-        return BindResult(BinderException::Unsupported(expr, StringUtil::Format(
-            "SUCH THAT does not support IN on '%s'. Only simple DECIDE variables are allowed as the IN target",
-            op.children.front()->ToString())));
+        if (op.children.size() < 2 || !IsVariableExpression(*op.children.front(), variables)) {
+            return BindResult(BinderException::Unsupported(expr, StringUtil::Format(
+                "SUCH THAT does not support IN on '%s'. Only simple DECIDE variables are allowed as the IN target",
+                op.children.front()->ToString())));
+        }
+        for (idx_t i = 1; i < op.children.size(); i++) {
+            if (ExpressionContainsDecideVariable(*op.children[i], variables)) {
+                return BindResult(BinderException::Unsupported(expr,
+                    "IN domain constraints on DECIDE variables are not yet supported. "
+                    "The values in the IN list must be constants or table columns, not DECIDE variables."));
+            }
+        }
+        // Keep the native bound operator as an optimizer marker. DuckDB binds its
+        // normal coercions here; DecideOptimizer expands it into the exact existing
+        // indicator/cardinality/linking formulation.
+        auto was_top_expression = is_top_expression;
+        is_top_expression = false;
+        auto result = ExpressionBinder::BindExpression(expr_ptr, depth);
+        is_top_expression = was_top_expression;
+        return result;
     }
     default:
         return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT constraint clause does not support '%s'(ExpressionType::%s)", expr.ToString(), EnumUtil::ToString(op.type))));
@@ -505,6 +520,14 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
+		if (fname == "norm") {
+            if (func.children.empty() || !ValidateSumArgument(*func.children.front(), variables, error_msg,
+                                                               /*allow_quadratic=*/true, /*allow_bilinear=*/true)) {
+                error_msg += ", found '" + expr.ToString() + "'";
+                return DecideExpression::INVALID;
+            }
+            return DecideExpression::SUM;
+        }
 		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
             auto scalar_name = FindScalarDecideVariable(*func.children.front());
             if (!scalar_name.empty()) {

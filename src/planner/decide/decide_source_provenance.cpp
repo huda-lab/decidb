@@ -9,7 +9,10 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+
+#include <cstring>
 
 namespace duckdb {
 
@@ -79,7 +82,7 @@ static string RenderFunction(const BoundFunctionExpression &func, const vector<s
 }
 
 static string RenderAggregate(const BoundAggregateExpression &agg, const vector<string> &fragments,
-	                            const vector<EntityScopeInfo> &entity_scopes) {
+                            const vector<EntityScopeInfo> &entity_scopes) {
 	string body;
 	for (idx_t i = 0; i < agg.children.size(); i++) {
 		if (i > 0) {
@@ -91,11 +94,50 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const vector<
 	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < entity_scopes.size()) {
 		body = entity_scopes[scope_idx].table_alias + ": " + body;
 	}
-	string result = StringUtil::Upper(agg.function.name) + "(" + body + ")";
+	string result;
+	string norm_payload;
+	auto marker_pos = agg.GetAlias().find(NORM_MARKER_TAG_PREFIX);
+	if (marker_pos != string::npos) {
+		auto begin = marker_pos + strlen(NORM_MARKER_TAG_PREFIX);
+		auto end = agg.GetAlias().find("__", begin);
+		if (end != string::npos) {
+			norm_payload = agg.GetAlias().substr(begin, end - begin);
+		}
+	}
+	if (!norm_payload.empty()) {
+		if (norm_payload == "0_auto") {
+			result = "NORM(" + body + ", 0)";
+		} else if (norm_payload.rfind("0_", 0) == 0) {
+			result = "NORM(" + body + ", 0, " + norm_payload.substr(2) + ")";
+		} else {
+			result = "NORM(" + body + ", " + norm_payload + ")";
+		}
+	} else {
+		result = StringUtil::Upper(agg.function.name) + "(" + body + ")";
+	}
 	if (agg.filter) {
 		result += " WHEN " + RenderSource(*agg.filter, fragments, entity_scopes);
 	}
 	return result;
+}
+
+template <class CALLBACK>
+static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		if ((IsPerConstraintTag(conj.GetAlias()) || HasDecideTag(conj.GetAlias(), WHEN_CONSTRAINT_TAG)) &&
+		    !conj.children.empty()) {
+			VisitSourceInOperators(*conj.children[0], callback);
+			return;
+		}
+		for (auto &child : conj.children) {
+			VisitSourceInOperators(*child, callback);
+		}
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR && expr.type == ExpressionType::COMPARE_IN) {
+		callback(expr);
+	}
 }
 
 static string RenderSource(const Expression &expr, const vector<string> &fragments,
@@ -208,8 +250,21 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       auto alias = cmp.GetAlias();
 		                       AddDecideTag(alias, MakeSourceClauseTag(source_id));
 		                       cmp.SetAlias(std::move(alias));
-		                       result.emplace_back();
+	                       result.emplace_back();
 	                       });
+	// A DECIDE-variable IN is intentionally an opaque pre-optimizer marker, not
+	// a comparison. Give it the same stable source identity now so every emitted
+	// indicator/linking row can still point back to the original SQL clause.
+	VisitSourceInOperators(constraints, [&](Expression &in) {
+		idx_t source_id = result.size();
+		auto alias = in.GetAlias();
+		AddDecideTag(alias, MakeSourceClauseTag(source_id));
+		in.SetAlias(std::move(alias));
+		ConstraintSourceInfo info;
+		info.canonical_lhs = in.ToString();
+		info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
+		result.push_back(std::move(info));
+	});
 	return result;
 }
 

@@ -3,20 +3,9 @@
 %}
 #line 5 "third_party/libpg_query/grammar/grammar.y"
 %pure-parser
-/* %expect 9:
+/* %expect 6:
  * 2 inherited shift/reduce conflicts from DuckDB's PostgreSQL-derived grammar
  *   (postfix-operator states a_expr/b_expr qual_Op).
- * 1 from the DECIDE constraint/objective WHEN_DECIDE (decide_constraint_item:
- *   a_expr . WHEN_DECIDE ...), resolved by shift; confined to DECIDE context.
- * 1 from the aggregate-local WHEN_DECIDE atom (c_expr: func_application .
- *   WHEN_DECIDE ...). Both DECIDE conflicts are keyed on WHEN_DECIDE, a token
- *   base_yylex() only emits inside a DECIDE clause, so they cannot fire for
- *   ordinary SQL — see src_backend_parser_parser.cpp.
- * 1 from the same aggregate-local WHEN_DECIDE atom, but for the relation-
- *   qualified reducer form (c_expr: func_name '(' func_arg_list ':'
- *   func_arg_list ')' . WHEN_DECIDE ...) — a qualified reducer is not a
- *   func_application, so it needs its own shift/reduce pair alongside the one
- *   above. Same resolution, same WHEN_DECIDE-only token gating.
  * 4 from the optional DECIDE declaration slot, one per simple_select
  *   alternative (simple_select: ... into_clause . decide_declaration ...). On
  *   lookahead DECIDE the parser can shift into the declaration slot or reduce
@@ -25,8 +14,12 @@
  *   empty (SELECT 1 DECIDE x(INT) SUCH THAT ...), and both derivations build
  *   the identical PGDecideClause via makeDecideClause(), so bison's default
  *   shift is correct and the resolution is not load-bearing.
+ * Aggregate-local WHEN_DECIDE conflicts are resolved explicitly: the empty
+ * within_group_clause and the plain relation-qualified reducer use
+ * DECIDE_ITEM precedence, below both DECIDE WHEN tokens, so the parser shifts
+ * WHEN. They are keyed on tokens base_yylex() emits only inside DECIDE.
  */
-%expect 9
+%expect 6
 %name-prefix="base_yy"
 %locations
 
@@ -125,10 +118,11 @@
  * NULLS_LA and WITH_LA are needed to make the grammar LALR(1).
  */
 %token		NOT_LA NULLS_LA WITH_LA
-/* DecidB: WHEN_DECIDE is a context-sensitive token. The base_yylex() filter emits
- * it in place of WHEN while inside a DECIDE clause, so the DECIDE WHEN never
- * reaches the global expression grammar. Never produced by the keyword table. */
+/* DecidB: context-sensitive WHEN tokens emitted only inside DECIDE. The
+ * objective variant lets its condition consume a comparison safely because an
+ * objective has no trailing comparison bound. Never produced by keywords. */
 %token		WHEN_DECIDE
+%token		WHEN_DECIDE_OBJECTIVE
 
 
 /* Precedence: lowest to highest */
@@ -138,6 +132,12 @@
 %left		LAMBDA_ARROW DOUBLE_ARROW
 %left		OR
 %left		AND
+/* DecidB: DECIDE_ITEM closes one constraint before a separating AND, while
+ * either DECIDE WHEN token still shifts onto that item. Comparisons bind more
+ * tightly than the tokens; the two condition nonterminals decide whether that
+ * comparison belongs to WHEN or is the constraint bound. */
+%nonassoc	DECIDE_ITEM
+%nonassoc	WHEN_DECIDE WHEN_DECIDE_OBJECTIVE
 %right		NOT
 %nonassoc	IS ISNULL NOTNULL	/* IS sets precedence for IS NULL, etc */
 %nonassoc	'<' '>' '=' LESS_EQUALS GREATER_EQUALS NOT_EQUALS

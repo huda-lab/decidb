@@ -1,26 +1,20 @@
 """WHEN-clause grammar coverage.
 
-The `decide_when_condition` non-terminal in the DecidB parser is a
-restricted `c_expr` that excludes unparenthesized `NOT`, comparison
-operators (`=`, `<`, `>`, `<=`, `>=`, `<>`), and arithmetic (`+`, `-`).
-Wrapping the condition in parentheses forces it through a fuller grammar
-production. Objectives also benefit from
-`ReassociateObjectiveWhenComparison()` in `decide_grammar_repair.cpp`, which
-patches up the most common comparison pattern even when unparenthesized
-— but only on the objective side and only for simple
-`comparison-of-aggregate` shapes.
+The constraint-side `decide_when_condition` non-terminal is deliberately
+restricted because a comparison after aggregate-local WHEN can instead be the
+constraint bound. The lexer gives objective WHEN a distinct token, so one
+comparison between atomic operands is unambiguous there. Both paths exclude
+unparenthesized `NOT` and arithmetic (`+`, `-`).
 
-This file pins the resulting empirical asymmetry:
+This file pins the resulting boundary:
   - Parenthesized forms work everywhere (oracle-verified positives).
-  - Unparenthesized comparison works on objective side only (covered as
-    a positive in the parenthesized set; documented in this file's
-    docstrings as the asymmetry).
+  - A simple unparenthesized comparison works on objectives and matches its
+    parenthesized spelling.
+  - The same aggregate-local constraint condition requires parentheses.
   - Unparenthesized `NOT` and arithmetic-comparison fail with shape-
-    specific error messages — pinned exactly so a future grammar widen
-    OR a constraint-side reassociator addition trips the test.
+    specific error messages.
 
-See `context/descriptions/03_expressivity/when/todo.md` for the full
-asymmetry table.
+See `context/descriptions/03_expressivity/when/todo.md` for the remaining gap.
 """
 
 import time
@@ -315,11 +309,8 @@ def test_when_paren_eq_objective(
 ):
     """`WHEN (tier = 'high')` — parenthesized comparison on the objective.
 
-    Note: the unparenthesized form `WHEN tier = 'high'` *also* works on
-    objectives via `ReassociateObjectiveWhenComparison()`. We only cover
-    the parenthesized form here because the unparenthesized constraint-
-    side rejection (and the asymmetric error message) is pinned in
-    `test_constraint_unparen_eq_message_sentinel` below.
+    The unparenthesized equivalent is checked separately so this grammar path
+    cannot silently regress to a parsed-tree reassociator.
     """
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(val AS DOUBLE), CAST(tier AS VARCHAR)
@@ -366,6 +357,26 @@ def test_when_paren_eq_objective(
         decide_sql=decide_sql, data_sql=data_sql,
         build_oracle=build, decidb_obj_fn=decidb_obj,
     )
+
+
+@pytest.mark.when
+@pytest.mark.when_objective
+@pytest.mark.correctness
+def test_when_unparen_eq_objective_matches_parenthesized(decidb_cli):
+    """A simple objective comparison belongs inside WHEN without a repair pass."""
+    template = """
+        SELECT id, val, tier, x FROM (
+            VALUES (1, 10.0, 'high'),
+                   (2,  5.0, 'low'),
+                   (3,  7.0, 'high')
+        ) t(id, val, tier)
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x) <= 1
+        MAXIMIZE SUM(x * val) WHEN {condition}
+    """
+    unparenthesized = decidb_cli.execute(template.format(condition="tier = 'high'"))
+    parenthesized = decidb_cli.execute(template.format(condition="(tier = 'high')"))
+    assert unparenthesized == parenthesized
 
 
 @pytest.mark.when
@@ -427,7 +438,7 @@ def test_when_paren_arith_objective(
 
 
 # ===========================================================================
-# Negative: unparenthesized WHEN conditions — pinned error messages
+# Unparenthesized WHEN conditions — supported boundary and pinned errors
 # ===========================================================================
 
 
@@ -456,12 +467,8 @@ def test_when_unparen_not_constraint_rejects(decidb_cli):
 @pytest.mark.error_parser
 @pytest.mark.error
 def test_when_unparen_eq_constraint_rejects(decidb_cli):
-    """`WHEN tier = 'high'` (unparenthesized) on a constraint — parser-level reject.
-
-    The `<=` token after the comparison is unparseable inside `c_expr`.
-    """
-    decidb_cli.assert_error(
-        """
+    """The trailing comparison is ambiguous with the constraint bound."""
+    decidb_cli.assert_error("""
         SELECT id, val, tier, x FROM (
             VALUES (1, 10.0, 'high'),
                    (2,  5.0, 'low')
@@ -469,9 +476,7 @@ def test_when_unparen_eq_constraint_rejects(decidb_cli):
         DECIDE x(BOOL)
         SUCH THAT SUM(x * val) WHEN tier = 'high' <= 8
         MAXIMIZE SUM(x * val)
-        """,
-        match=r'syntax error at or near "<="',
-    )
+    """, match=r'syntax error at or near "<="')
 
 
 @pytest.mark.when
@@ -499,12 +504,7 @@ def test_when_unparen_arith_constraint_rejects(decidb_cli):
 @pytest.mark.error_parser
 @pytest.mark.error
 def test_when_unparen_not_objective_rejects(decidb_cli):
-    """`WHEN NOT w` (unparenthesized) on an objective — parser-level reject.
-
-    `ReassociateObjectiveWhenComparison()` only handles the comparison-of-
-    aggregate shape, not unary NOT, so the parser bails before the
-    reassociator can run.
-    """
+    """`WHEN NOT w` (unparenthesized) on an objective — parser-level reject."""
     decidb_cli.assert_error(
         """
         SELECT id, val, w, x FROM (
@@ -526,13 +526,11 @@ def test_when_unparen_not_objective_rejects(decidb_cli):
 def test_when_unparen_arith_objective_rejects(decidb_cli):
     """`WHEN a + b > 5` (unparenthesized) on an objective — binder-level reject.
 
-    The parser successfully reassociates simple comparison-of-aggregate
-    on objectives, but it doesn't cover the arithmetic-then-comparison
-    shape `(SUM ... WHEN a) + b > 5`. The binder then rejects the
+    The grammar handles one comparison between atomic operands, but not the
+    arithmetic-then-comparison shape `(SUM ... WHEN a) + b > 5`. The binder rejects the
     resulting comparison expression as a top-level objective component.
-    Different error PHASE from the constraint-side parser failure — the
-    full asymmetry table is in
-    `context/descriptions/03_expressivity/when/todo.md`.
+    This reaches a different error phase from the constraint-side parser
+    failure; both shapes remain documented in the WHEN todo.
     """
     decidb_cli.assert_error(
         """
@@ -548,43 +546,6 @@ def test_when_unparen_arith_objective_rejects(decidb_cli):
     )
 
 
-# ===========================================================================
-# Asymmetric-error sentinel
-# ===========================================================================
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_constraint_unparen_eq_message_sentinel(decidb_cli):
-    """SENTINEL: pins the actual constraint-side error for unparenthesized
-    `WHEN x = y <= K`.
-
-    The error today is parser-level `syntax error at or near "<="`. The
-    objective-side equivalent works (reassociator). If/when the
-    constraint side gains the same recovery — or the grammar is widened
-    to admit unparenthesized comparisons in WHEN — this test will start
-    failing.
-
-    DO NOT silently relax this regex. The expected response is to either
-    (a) delete this test and convert the constraint case to a positive
-    test in this file, or (b) update the docs and re-pin the new error.
-    """
-    decidb_cli.assert_error(
-        """
-        SELECT id, val, tier, x FROM (
-            VALUES (1, 10.0, 'high'),
-                   (2,  5.0, 'low')
-        ) t(id, val, tier)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN tier = 'high' <= 10
-        MAXIMIZE SUM(x * val)
-        """,
-        match=r'syntax error at or near "<="',
-    )
-
-
 @pytest.mark.when
 @pytest.mark.when_constraint
 @pytest.mark.error_parser
@@ -594,7 +555,7 @@ def test_when_unparen_error_carries_paren_hint(decidb_cli):
     augmented with an actionable parenthesization hint (MaybeAppendDecideWhenHint).
 
     This pins the hint text so it is not silently dropped. If the grammar is
-    widened so unparenthesized WHEN conditions parse, delete this test.
+    widened to accept unparenthesized NOT, convert this to a positive test.
     """
     decidb_cli.assert_error(
         """

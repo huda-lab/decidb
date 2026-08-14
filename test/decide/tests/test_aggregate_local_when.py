@@ -1363,8 +1363,10 @@ def test_entity_scoped_aggregate_local_when(
 
 @pytest.mark.when
 @pytest.mark.when_constraint
+@pytest.mark.error_parser
 @pytest.mark.error
 def test_aggregate_local_when_unparenthesized_comparison_error(decidb_cli):
+    """Constraint-local comparison conditions need parentheses to protect the bound."""
     decidb_cli.assert_error("""
         SELECT name, value, tier, x FROM (
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'none')
@@ -1372,17 +1374,16 @@ def test_aggregate_local_when_unparenthesized_comparison_error(decidb_cli):
         DECIDE x(BOOL)
         SUCH THAT SUM(x * value) WHEN tier = 'high' <= 7
         MAXIMIZE SUM(x * value)
-    """)
+    """, match=r'syntax error at or near "<="')
 
 
 @pytest.mark.when
 @pytest.mark.when_objective
 @pytest.mark.correctness
-def test_aggregate_local_when_objective_reassociation(
+def test_aggregate_local_when_objective_atomic_comparison(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Objective reassociator converts ``WHEN tier = 'high'`` (unparenthesized)
-    into expression-level WHEN(tier = 'high')."""
+    """The grammar attaches an atomic comparison directly to objective WHEN."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(tier AS VARCHAR) FROM (
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'high')
@@ -1418,7 +1419,7 @@ def test_aggregate_local_when_objective_reassociation(
 
     _run_constraint_test(
         decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
-        test_id="alw_obj_reassoc",
+        test_id="alw_obj_atomic_comparison",
         decide_sql=decide_sql, data_sql=data_sql,
         build_oracle=build, decidb_obj_fn=decidb_obj,
     )

@@ -19,17 +19,19 @@ former.
 
 ## 1. Pass order
 
-`DecideOptimizer::OptimizeDecide` runs eight passes, and the order is load-bearing:
+`DecideOptimizer::OptimizeDecide` runs nine passes, and the order is load-bearing:
 
 | # | Pass | Why here |
 |---|---|---|
-| 1 | `TagAbsConstraintsForBigM` | Marks the ABS nodes that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
-| 2 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the rewrites so later passes see plain variables. |
-| 3 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
-| 4 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
-| 5 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
-| 6 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 7 | `RewriteAvgToSum` | Last, so every reducer that reaches it is settled. |
+| 1 | `RewriteNorm` | Lowers bound NORM markers before later passes see their ABS, POWER, MAX, or L0 links. |
+| 2 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to their indicator formulation. |
+| 3 | `TagAbsConstraintsForBigM` | Marks the ABS nodes that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
+| 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
+| 5 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
+| 6 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
+| 7 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
+| 8 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 9 | `RewriteAvgToSum` | Last, so every reducer that reaches it is settled. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
@@ -50,6 +52,19 @@ objective, or a constraint shape that already upper-bounds `aux`. When true
 (constraint hard direction, or `MAXIMIZE` + objective), `abs_maximize_links`
 carries the auxiliary and a binary sign indicator, and execution derives the two
 upper-bound rows from the tagged lower-bound constraints.
+
+### NORM and IN — `RewriteNorm` / `RewriteInDomain`
+
+The binder keeps `norm(...)` as an aggregate-shaped DECIDE marker so normal
+aggregate-local `WHEN` and `PER` binding remains available. The optimizer lowers
+L1, L2, and infinity norms to `SUM(ABS)`, `SUM(POWER(_, 2))`, and `MAX(ABS)`;
+L0 emits its existing Boolean indicator and exact forward/reverse links.
+
+A bound `x IN (...)` stays a native `COMPARE_IN` marker until this pass. It then
+uses the existing singleton, Boolean-domain, or cardinality/linking formulation,
+copying an expression-level `WHEN` to every generated row. These helper rows are
+structural for today’s infeasibility repair: they must never be independently
+loosened. Atomic source-level DROP repair is recorded in `todo.md`.
 
 ### Bilinear — `RewriteBilinear`
 
@@ -167,9 +182,6 @@ stage 07.
   audited against that: ABS and bilinear replace decision-bearing atoms with
   decision auxiliaries; MIN/MAX and AVG keep decision terms on the left; `<>`
   changes only metadata; composed MIN/MAX leaves a permitted placeholder.
-- Desugar `IN` or `norm()` — those still run on the parsed tree
-  ([`../01_parser/done.md`](../01_parser/done.md) §4), and whether they belong here
-  instead is an open question filed in that stage's `todo.md`.
 - Evaluate anything against data, or emit solver rows.
 
 ---

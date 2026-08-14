@@ -226,7 +226,7 @@ const ParsedExpression &UnwrapQualifiedReducer(const ParsedExpression &expr) {
 bool ContainsDecideAggregate(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<const FunctionExpression>();
-		if (!func.is_operator && IsDecideAggregateName(func.function_name)) {
+		if (!func.is_operator && (IsDecideAggregateName(func.function_name) || StringUtil::CIEquals(func.function_name, "norm"))) {
 			return true;
 		}
 		if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
@@ -297,6 +297,7 @@ bool ContainsWhenOperator(const ParsedExpression &expr) {
 static bool IsAllowedNameOverDecideVar(const string &name) {
 	auto lname = StringUtil::Lower(name);
 	if (lname == "abs" || lname == "power" || lname == "pow") return true;
+	if (lname == "norm") return true; // bound as an optimizer-owned aggregate marker below
 	if (lname == "sum" || lname == "avg" || lname == "min" || lname == "max") return true;
 	if (lname == "count" || lname == "count_star") return true;
 	if (lname == "+" || lname == "-" || lname == "*" || lname == "/" || lname == "**") return true;
@@ -808,6 +809,10 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 
 	// 3. Create the BoundAggregateExpression itself.
 	auto bound_aggregate = function_binder.BindAggregateFunction(bound_function, std::move(children));
+	// DECIDE uses aggregate aliases for semantic transport tags (qualified
+	// reducers, optimizer markers, provenance). DuckDB's generic binder does not
+	// need them here, but dropping one would make the later DECIDE pass blind.
+	bound_aggregate->alias = aggr.alias;
 	// Note: We are NOT storing this aggregate in a BoundSelectNode. We are returning it directly.
 	return BindResult(std::move(bound_aggregate));
 }
@@ -976,6 +981,71 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
     }
     if (function.is_operator && function.function_name == QUALIFIED_REDUCER_TAG) {
         return BindQualifiedReducer(function, depth);
+    }
+    // NORM is DECIDE syntax, not a catalog function. Bind it as a deliberately
+    // inert SUM aggregate marker; DecideOptimizer owns the mathematical rewrite
+    // and replaces this marker before it can reach physical planning. Keeping an
+    // aggregate-shaped marker is important: aggregate-local WHEN/PER continue to
+    // use their normal bound-tree contracts.
+    if (!function.is_operator && StringUtil::CIEquals(function.function_name, "norm")) {
+        if (function.children.size() < 2 || function.children.size() > 3) {
+            return BindResult(BinderException::Unsupported(
+                function, "norm(expr, p) takes an expression, an order (1, 2, 0, or 'inf'), and optional M for L0."));
+        }
+        if (function.children[1]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+            return BindResult(BinderException::Unsupported(
+                function, "The order p in norm(expr, p) must be a constant (1, 2, 0, or 'inf')."));
+        }
+        auto &order_value = function.children[1]->Cast<ConstantExpression>().value;
+        string payload;
+        if (order_value.type().id() == LogicalTypeId::VARCHAR) {
+            auto order = StringUtil::Lower(StringValue::Get(order_value));
+            if (order != "inf" && order != "infinity" && order != "max") {
+                return BindResult(BinderException::Unsupported(function,
+                    StringUtil::Format("Unsupported norm order '%s'. Use 0, 1, 2, or 'inf'.", order)));
+            }
+            if (function.children.size() != 2) {
+                return BindResult(BinderException::Unsupported(function, "norm(expr, 'inf') does not take M."));
+            }
+            payload = "inf";
+        } else if (order_value.type().IsNumeric()) {
+            double order = order_value.GetValue<double>();
+            if (order == 1.0) {
+                if (function.children.size() != 2) return BindResult(BinderException::Unsupported(function, "Only norm(expr, 0, M) accepts M."));
+                payload = "1";
+            } else if (order == 2.0) {
+                if (function.children.size() != 2) return BindResult(BinderException::Unsupported(function, "Only norm(expr, 0, M) accepts M."));
+                payload = "2";
+            } else if (order == 0.0) {
+                if (function.children.size() == 2) {
+                    payload = "0_auto";
+                } else {
+                    if (function.children[2]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+                        return BindResult(BinderException::Unsupported(function,
+                            "norm(expr, 0, M): the bound M must be a constant. Omit it to infer M from the data, or pass a positive literal."));
+                    }
+                    auto m = function.children[2]->Cast<ConstantExpression>().value.GetValue<double>();
+                    if (!(m > 0.0)) {
+                        return BindResult(BinderException::Unsupported(function,
+                            "The L0 bound M in norm(expr, 0, M) must be a positive constant."));
+                    }
+                    payload = "0_" + StringUtil::Format("%.17g", m);
+                }
+            } else {
+                return BindResult(BinderException::Unsupported(function,
+                    StringUtil::Format("Unsupported norm order %g. Supported: 0, 1, 2, or 'inf'.", order)));
+            }
+        } else {
+            return BindResult(BinderException::Unsupported(function,
+                "The order p in norm(expr, p) must be 0, 1, 2, or 'inf'."));
+        }
+        vector<unique_ptr<ParsedExpression>> marker_children;
+        marker_children.push_back(std::move(function.children[0]));
+        auto marker = make_uniq<FunctionExpression>("sum", std::move(marker_children));
+        marker->alias = function.alias;
+        AddDecideTag(marker->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+        expr_ptr = std::move(marker);
+        return BindFunction(expr_ptr, depth);
     }
     // Check if this is an aggregate function
     QueryErrorContext error_context(expr_ptr->GetQueryLocation());

@@ -12,8 +12,9 @@ walked end to end see [`trace_life_of_a_query.md`](trace_life_of_a_query.md).
 DeciDB extends DuckDB's parser and planner to inject a new operator. It registers:
 
 - **Reserved keywords** — `DECIDE`, `SUCH` (as in `SUCH THAT`), `MAXIMIZE`, `MINIMIZE`.
-- **A gated token** — `WHEN_DECIDE`, which the lexer emits only inside a DECIDE
-  clause, so DECIDE's postfix `WHEN` never collides with the global SQL `WHEN`.
+- **Gated tokens** — `WHEN_DECIDE` and `WHEN_DECIDE_OBJECTIVE`, which the lexer
+  emits only inside the matching DECIDE phase, so postfix `WHEN` never collides
+  with the global SQL `WHEN` and objective comparisons are unambiguous.
 - **Grammar productions** — `decide_clause`, `decide_declaration`, `decide_body`,
   `decide_tail`, `decide_constraint_item`, `decide_objective_item`.
 - **Transformer rules** — parsed nodes into `SelectNode` fields, and the tagged
@@ -32,7 +33,7 @@ grammar conflicts it introduces are keyed on that token.
 
 ```mermaid
 graph TD
-    User[User SQL] --> P[01 Parser: grammar, WHEN_DECIDE gating, desugaring, association repair]
+    User[User SQL] --> P[01 Parser: grammar, DECIDE WHEN gating, desugaring]
     P --> B[02 Binder: names, scopes, types, degree, reducers]
     B --> L[03 Logical plan: PlanSubqueries + correlation provenance]
     L --> C[04 Canonicalizer: ONE shape decision, constraints AND objective]
@@ -91,7 +92,7 @@ concurrent modifications cannot affect a running solve.
 
 | Concern | Owner | Not owner |
 |---|---|---|
-| Syntax and association | Stage 01 | Anything that moves comparison terms |
+| Syntax and expression association | Stage 01 | Anything that moves comparison terms |
 | Names, scopes, types, degree | Stage 02 | Anything that picks a formulation |
 | Where terms sit | Stage 04 | Every other stage |
 | Formulation (Big-M, McCormick, easy/hard) | Stage 05 | The binder, the physical operator |

@@ -35,8 +35,8 @@ The transformer moves three things onto the `SelectNode`: `decide_variables`
 and `decide_objective`, with `decide_sense = MAXIMIZE`.
 
 Parsed-tree rewrites: nothing fires. No qualifier to strip, no cast over a
-decision, no `norm()`, no `IN`, no mis-association to repair. The constraint
-reaches the binder exactly as written.
+decision, no `norm()`, and no `IN`. The constraint reaches the binder exactly
+as written.
 
 ## Stage 02 — Binder
 

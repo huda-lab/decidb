@@ -97,15 +97,16 @@ so this is opt-in and nothing existing changes meaning.
   argument list, not a dedicated name list: `sum(D, T: e)` and `sum(a, b)` share a prefix
   that LALR(1) cannot separate at the comma, so both sides are read as argument lists and
   the qualifier's shape is checked in the C action. The decision point becomes `:` vs `)`
-  after a completed `func_arg_list`, which is conflict-free — `%expect` stayed at 8.
+  after a completed `func_arg_list`, which is conflict-free.
   A second alternative, `func_name '(' func_arg_list ':' func_arg_list ')' WHEN_DECIDE
   decide_when_condition`, mirrors `func_application WHEN_DECIDE decide_when_condition` so
   a qualified reducer followed directly by `WHEN` also takes the tight aggregate-local-WHEN
   route instead of the loose whole-constraint one; the qualifier validation is duplicated
   inline rather than factored into a shared helper (bison actions can't call each other and
   this file has no C prologue to hang one on — the file already accepts this style of
-  duplication elsewhere). This added one more shift/reduce conflict of the same shape as
-  the existing `func_application`/`WHEN_DECIDE` one, so `%expect` moved to 9.
+  duplication elsewhere). The plain qualified-reducer production has explicit
+  `DECIDE_ITEM` precedence, so `WHEN_DECIDE` shifts into this alternative without adding an
+  expected conflict. The grammar's total conflict budget is `%expect 6`.
 - **Parse node**: `PG_AEXPR_QUALIFIED_REDUCER` (`parsenodes.hpp`) →
   `QUALIFIED_REDUCER_TAG` FunctionExpression (`transform_operator.cpp`), shaped
   `tag(aggregate, relation_name)` exactly like the aggregate-local WHEN tag.

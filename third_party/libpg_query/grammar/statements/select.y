@@ -284,12 +284,49 @@ typed_decide_variable_list:
 		;
 
 decide_when_condition:
-			c_expr
+			c_expr								%prec DECIDE_ITEM
+				{ $$ = $1; }
+		;
+
+/* Objective WHEN has no trailing comparison bound, so it may admit one
+ * comparison directly without creating the constraint-side ambiguity. */
+decide_objective_when_condition:
+			c_expr								%prec DECIDE_ITEM
+				{ $$ = $1; }
+			| d_expr '<' d_expr					%prec POSTFIXOP
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", $1, $3, @2); }
+			| d_expr '>' d_expr					%prec POSTFIXOP
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", $1, $3, @2); }
+			| d_expr '=' d_expr					%prec POSTFIXOP
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", $1, $3, @2); }
+			| d_expr LESS_EQUALS d_expr			%prec POSTFIXOP
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", $1, $3, @2); }
+			| d_expr GREATER_EQUALS d_expr		%prec POSTFIXOP
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", $1, $3, @2); }
+			| d_expr NOT_EQUALS d_expr			%prec POSTFIXOP
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", $1, $3, @2); }
+		;
+
+/* Constraint-local WHEN stays narrow because its next comparison can be the
+ * constraint bound (`SUM(x) WHEN flag <= 20`). After MAXIMIZE/MINIMIZE there
+ * is no trailing bound, so the objective token admits one atomic comparison. */
+decide_aggregate_when_condition:
+			WHEN_DECIDE decide_when_condition
+				{ $$ = $2; }
+			| WHEN_DECIDE_OBJECTIVE decide_objective_when_condition
+				{ $$ = $2; }
+		;
+
+/* One DECIDE item body. DECIDE_ITEM sits above AND but below the DECIDE WHEN
+ * tokens and comparison operators: a top-level AND belongs to
+ * decide_constraint_list, while the item's own comparisons stay intact. */
+decide_item_expr:
+			a_expr								%prec DECIDE_ITEM
 				{ $$ = $1; }
 		;
 
 decide_objective_item:
-			a_expr WHEN_DECIDE b_expr PER columnref_opt_indirection
+			decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER columnref_opt_indirection
 				{
 					/* DecidB: objective WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -297,7 +334,7 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
-			| a_expr WHEN_DECIDE b_expr PER '(' columnrefList ')'
+			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER '(' columnrefList ')'
 				{
 					/* DecidB: objective WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -305,24 +342,24 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
 				}
-			| a_expr WHEN_DECIDE b_expr
+			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition
 				{
-					/* DecidB: objective WHEN condition (b_expr excludes AND/OR) */
+					/* DecidB: objective WHEN condition (restricted grammar excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
-			| a_expr PER columnref_opt_indirection
+			| decide_item_expr PER columnref_opt_indirection
 				{
 					/* DecidB: objective PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
-			| a_expr PER '(' columnrefList ')'
+			| decide_item_expr PER '(' columnrefList ')'
 				{
 					/* DecidB: objective PER (col1, col2, ...) */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
 				}
-			| a_expr
+			| decide_item_expr
 				{ $$ = $1; }
 		;
 
@@ -439,7 +476,7 @@ decide_constraint_list:
 		;
 
 decide_constraint_item:
-			a_expr WHEN_DECIDE b_expr PER columnref_opt_indirection
+			decide_item_expr WHEN_DECIDE b_expr PER columnref_opt_indirection
 				{
 					/* DecidB: constraint WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -447,7 +484,7 @@ decide_constraint_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
-			| a_expr WHEN_DECIDE b_expr PER '(' columnrefList ')'
+			| decide_item_expr WHEN_DECIDE b_expr PER '(' columnrefList ')'
 				{
 					/* DecidB: constraint WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -455,24 +492,24 @@ decide_constraint_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
 				}
-			| a_expr WHEN_DECIDE b_expr
+			| decide_item_expr WHEN_DECIDE b_expr
 				{
 					/* DecidB: constraint WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
-			| a_expr PER columnref_opt_indirection
+			| decide_item_expr PER columnref_opt_indirection
 				{
 					/* DecidB: constraint PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
-			| a_expr PER '(' columnrefList ')'
+			| decide_item_expr PER '(' columnrefList ')'
 				{
 					/* DecidB: constraint PER (col1, col2, ...) */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
 				}
-			| a_expr
+			| decide_item_expr
 				{ $$ = $1; }
 		;
 
@@ -3036,13 +3073,13 @@ b_expr:		c_expr
  * inside parentheses, such as function arguments; that cannot introduce
  * ambiguity to the b_expr syntax.
  */
-c_expr:		d_expr
-			| func_application WHEN_DECIDE decide_when_condition	%prec POSTFIXOP
+c_expr:		d_expr									%prec DECIDE_ITEM
+			| func_application decide_aggregate_when_condition	%prec POSTFIXOP
 				{
 					/* DecidB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $2, @2);
 				}
-			| func_name '(' func_arg_list ':' func_arg_list ')'
+			| func_name '(' func_arg_list ':' func_arg_list ')'		%prec DECIDE_ITEM
 				{
 					/* DecidB: relation-qualified reducer, sum(D: expr).
 					 *
@@ -3071,7 +3108,7 @@ c_expr:		d_expr
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, qualifier, @4);
 				}
-			| func_name '(' func_arg_list ':' func_arg_list ')' WHEN_DECIDE decide_when_condition	%prec POSTFIXOP
+			| func_name '(' func_arg_list ':' func_arg_list ')' decide_aggregate_when_condition	%prec POSTFIXOP
 				{
 					/* DecidB: aggregate-local WHEN on a relation-qualified reducer,
 					 * sum(D: expr) WHEN cond. Mirrors the two productions above: the
@@ -3082,7 +3119,7 @@ c_expr:		d_expr
 					 *
 					 * Without this production, `sum(D: expr) WHEN cond` never matches
 					 * here (a qualified reducer is not a func_application, so the
-					 * WHEN_DECIDE clause right after `func_application` above cannot
+					 * aggregate-WHEN clause right after `func_application` above cannot
 					 * fire), so the token stream falls to the loose, whole-constraint
 					 * `a_expr WHEN_DECIDE b_expr` production instead, which swallows
 					 * a trailing comparison like `<= bound` into the WHEN condition.
@@ -3104,7 +3141,7 @@ c_expr:		d_expr
 					PGNode *qualified_reducer = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, qualifier, @4);
 					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", qualified_reducer, $8, @7);
+						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", qualified_reducer, $7, @7);
 				}
 			| indirection_expr_or_a_expr opt_extended_indirection
 				{
@@ -3519,7 +3556,7 @@ list_comprehension:
  */
 within_group_clause:
 			WITHIN GROUP_P '(' sort_clause ')'		{ $$ = $4; }
-			| /*EMPTY*/								{ $$ = NIL; }
+			| /*EMPTY*/								%prec DECIDE_ITEM { $$ = NIL; }
 		;
 
 filter_clause:

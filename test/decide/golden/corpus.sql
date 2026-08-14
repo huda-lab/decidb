@@ -107,7 +107,7 @@ SELECT id, x FROM items DECIDE x(INT) SUCH THAT AVG(x) <= 2 AND x <= 9 MAXIMIZE 
 -- 20 constraint-level WHEN
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 WHEN grp = 'A' AND x <= 9 MAXIMIZE SUM(x);
 
--- 21 aggregate-local WHEN (comparison predicates must be parenthesized)
+-- 21 aggregate-local WHEN (comparison condition parenthesized before the bound)
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) WHEN (grp = 'A') <= 5 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 21b two aggregate-local WHENs, additive
