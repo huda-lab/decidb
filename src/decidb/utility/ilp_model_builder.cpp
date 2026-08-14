@@ -10,6 +10,27 @@
 
 namespace duckdb {
 
+double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
+                                  const vector<idx_t> *rows, idx_t begin, idx_t end,
+                                  const char *error_context) {
+    double offset = 0.0;
+    for (idx_t term_idx = 0; term_idx < constraint.variable_indices.size(); term_idx++) {
+        if (constraint.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
+            continue;
+        }
+        if (term_idx >= constraint.linear_term_reductions.size() ||
+            constraint.linear_term_reductions[term_idx] != LinearTermReduction::SUM) {
+            throw InternalException("DECIDE %s has no SUM reduction owner", error_context);
+        }
+        auto &column = constraint.row_coefficients[term_idx];
+        for (idx_t k = begin; k < end; k++) {
+            idx_t row = rows ? (*rows)[k] : k;
+            offset += column.Get(row);
+        }
+    }
+    return offset;
+}
+
 // Shared logic for Build and BuildRef — populates all fields except entity data source
 static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
                                    const vector<EntityMapping> &entity_mappings) {
@@ -149,6 +170,7 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
 
 SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     SolverModel model;
+    model.constraint_sources = std::move(input.constraint_sources);
 
     idx_t num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
@@ -530,11 +552,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             continue;
         }
 
-        // F2: this clause's stable id = its position in input.constraints. Pointer
-        // arithmetic survives the `continue` skips above (a trailing counter would not).
-        idx_t clause_id = eval_const.source_clause_id != DConstants::INVALID_INDEX
-                              ? eval_const.source_clause_id
-                              : static_cast<idx_t>(&eval_const - input.constraints.data());
+        idx_t repair_group_id = eval_const.repair_group_id != DConstants::INVALID_INDEX
+                                    ? eval_const.repair_group_id
+                                    : static_cast<idx_t>(&eval_const - input.constraints.data());
 
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
@@ -623,24 +643,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
         }
 
-        auto FixedLinearLhsOffset = [&](const EvaluatedConstraint &ec,
-                                        const vector<idx_t> *rows,
-                                        idx_t begin,
-                                        idx_t end) -> double {
-            double offset = 0.0;
-            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-                if (ec.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
-                    continue;
-                }
-                auto &col = ec.row_coefficients[term_idx];
-                for (idx_t k = begin; k < end; k++) {
-                    idx_t row = rows ? (*rows)[k] : k;
-                    offset += col.Get(row);
-                }
-            }
-            return offset;
-        };
-
         if (is_aggregate) {
             if (!has_groups) {
                 // FAST PATH: no WHEN, no PER — one constraint summing all rows.
@@ -706,9 +708,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // (ReduceAggregateRhsPerGroup). No per-row check is needed here.
                 D_ASSERT(RhsIsConstantWithinGroups(eval_const));
                 double rhs = eval_const.rhs_values.Get(0);
-                rhs -= FixedLinearLhsOffset(eval_const, nullptr, 0, num_rows);
+                rhs -= SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows,
+                                                  "fixed aggregate LHS term");
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
-                constr.provenance.clause_id = clause_id; // F2 site 1: aggregate, ungrouped
+                constr.provenance.source_clause_id = eval_const.source_clause_id;
+                constr.provenance.repair_group_id = repair_group_id; // F2 site 1: aggregate, ungrouped
                 constr.provenance.kind = eval_const.kind;
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
                 constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
@@ -818,9 +822,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // Row 0 would be wrong twice over: it may belong to another group,
                     // and it may be excluded by WHEN.
                     double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) -
-                                       FixedLinearLhsOffset(eval_const, &flat_rows, g_begin, g_end);
+                                       SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end,
+                                                                  "fixed aggregate LHS term");
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_is_integer);
-                    constr.provenance.clause_id = clause_id; // F2 site 2: aggregate + PER/WHEN
+                    constr.provenance.source_clause_id = eval_const.source_clause_id;
+                    constr.provenance.repair_group_id = repair_group_id; // F2 site 2: aggregate + PER/WHEN
                     constr.provenance.group_key = g;
                     if (g < eval_const.group_labels.size()) {
                         constr.provenance.group_label = eval_const.group_labels[g];
@@ -897,7 +903,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
                 double rhs = eval_const.rhs_values[row] - rhs_adjustment;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_is_integer);
-                constr.provenance.clause_id = clause_id; // F2 site 3: per-row
+                constr.provenance.source_clause_id = eval_const.source_clause_id;
+                constr.provenance.repair_group_id = repair_group_id; // F2 site 3: per-row
                 constr.provenance.group_key =
                     has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 constr.provenance.kind = eval_const.kind;
@@ -1085,8 +1092,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             continue;  // Already handled as linear above
         }
 
-        // F2: clause id = position in input.constraints (see linear loop above).
-        idx_t clause_id = static_cast<idx_t>(&eval_const - input.constraints.data());
+        idx_t repair_group_id = eval_const.repair_group_id != DConstants::INVALID_INDEX
+                                    ? eval_const.repair_group_id
+                                    : static_cast<idx_t>(&eval_const - input.constraints.data());
 
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
@@ -1105,7 +1113,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 vector<idx_t> all_rows(num_rows);
                 std::iota(all_rows.begin(), all_rows.end(), 0);
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_is_integer);
-                qc.provenance.clause_id = clause_id; // F2 site 5: quadratic aggregate, ungrouped
+                qc.provenance.source_clause_id = eval_const.source_clause_id;
+                qc.provenance.repair_group_id = repair_group_id; // F2 site 5: quadratic aggregate, ungrouped
                 qc.provenance.kind = eval_const.kind;
                 qc.provenance.shape = eval_const.rhs_is_shared_scalar
                                           ? ElasticShape::SHARED_SCALAR
@@ -1136,7 +1145,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                            ? 0.0
                                            : eval_const.rhs_values.Get(flat_rows[g_begin]);
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_is_integer);
-                    qc.provenance.clause_id = clause_id; // F2 site 6: quadratic aggregate + PER
+                    qc.provenance.source_clause_id = eval_const.source_clause_id;
+                    qc.provenance.repair_group_id = repair_group_id; // F2 site 6: quadratic aggregate + PER
                     qc.provenance.group_key = g;
                     if (g < eval_const.group_labels.size()) {
                         qc.provenance.group_label = eval_const.group_labels[g];
@@ -1162,7 +1172,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 vector<idx_t> single_row{row};
                 double rhs = eval_const.rhs_values.Get(row);
                 auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_is_integer);
-                qc.provenance.clause_id = clause_id; // F2 site 7: quadratic per-row
+                qc.provenance.source_clause_id = eval_const.source_clause_id;
+                qc.provenance.repair_group_id = repair_group_id; // F2 site 7: quadratic per-row
                 qc.provenance.group_key =
                     has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 qc.provenance.kind = eval_const.kind;
@@ -1186,10 +1197,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         constr.coefficients = std::move(raw.coefficients);
         constr.sense = raw.sense;
         constr.rhs = raw.rhs;
-        // F2 site 4: synthetic linking rows (no user clause). The full structural
-        // enumeration across linearization paths is F3; this is the one site that
-        // unambiguously has no EvaluatedConstraint source.
+        // Raw rows include both structural links and user-facing composed outer
+        // constraints, so their provenance is explicit on RawConstraint rather than
+        // inferred from an EvaluatedConstraint position.
         constr.provenance.kind = raw.kind;
+        constr.provenance.shape = raw.shape;
+        constr.provenance.source_clause_id = raw.source_clause_id;
+        constr.provenance.repair_group_id = raw.repair_group_id;
         // I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
         // removal dial groups the two global rows just like a per-row `<>`.
         constr.provenance.indicator_col = raw.indicator_col;

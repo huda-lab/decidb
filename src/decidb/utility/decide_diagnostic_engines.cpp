@@ -387,6 +387,45 @@ string FormatQuadraticLhs(const SolverModel::QuadraticConstraint &qc,
 	return out.empty() ? "0" : out;
 }
 
+const ConstraintSourceInfo *FindConstraintSource(const SolverModel &model,
+	                                             const ConstraintProvenance &provenance) {
+	auto source_id = provenance.source_clause_id;
+	if (source_id == DConstants::INVALID_INDEX || source_id >= model.constraint_sources.size()) {
+		return nullptr;
+	}
+	return &model.constraint_sources[source_id];
+}
+
+string SourceAwareLhs(const SolverModel &model, const ModelConstraint &row,
+	                  const vector<ColumnProvenance> &columns) {
+	auto source = FindConstraintSource(model, row.provenance);
+	return source && !source->canonical_lhs.empty() ? source->canonical_lhs : FormatLhs(row, columns);
+}
+
+string SourceAwareQuadraticLhs(const SolverModel &model, const SolverModel::QuadraticConstraint &row,
+	                           const vector<ColumnProvenance> &columns) {
+	auto source = FindConstraintSource(model, row.provenance);
+	return source && !source->canonical_lhs.empty() ? source->canonical_lhs : FormatQuadraticLhs(row, columns);
+}
+
+ConstraintProvenance SourceAwareProvenance(const SolverModel &model, const ConstraintProvenance &provenance) {
+	auto result = provenance;
+	auto source = FindConstraintSource(model, provenance);
+	if (source && !source->qualifier.empty()) {
+		result.qualifier = source->qualifier;
+	}
+	return result;
+}
+
+string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback) {
+	auto source = FindConstraintSource(model, provenance);
+	if (source && source->rhs_kind == ConstraintSourceRhsKind::DATA_EXPRESSION &&
+	    !source->canonical_rhs.empty()) {
+		return source->canonical_rhs;
+	}
+	return provenance.rhs_label.empty() ? FormatNum(fallback) : provenance.rhs_label;
+}
+
 const char *SenseStr(char sense) {
 	return sense == '<' ? "<=" : (sense == '>' ? ">=" : "=");
 }
@@ -536,12 +575,12 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		return p.shape == ElasticShape::PER_ROW_DATA || p.shape == ElasticShape::SHARED_SCALAR;
 	};
 	auto assert_explicit_shape = [&](const ConstraintProvenance &p) {
-		if (IsRelaxableForElastic(p.kind) && p.clause_id != DConstants::INVALID_INDEX) {
+		if (IsRelaxableForElastic(p.kind) && p.repair_group_id != DConstants::INVALID_INDEX) {
 			D_ASSERT(has_explicit_shape(p));
 		}
 	};
 	auto is_data_offset = [](const ConstraintProvenance &p) {
-		return p.shape == ElasticShape::PER_ROW_DATA && p.clause_id != DConstants::INVALID_INDEX;
+		return p.shape == ElasticShape::PER_ROW_DATA && p.repair_group_id != DConstants::INVALID_INDEX;
 	};
 
 	// Scale-normalized editable slack weights (T1). The stage-1 objective sums slacks
@@ -632,7 +671,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	//     the readback exposes the per-row profile.
 	// Rows without a clause id always stay independent.
 	auto folds = [&](const ConstraintProvenance &p) {
-		if (p.clause_id == DConstants::INVALID_INDEX) {
+		if (p.repair_group_id == DConstants::INVALID_INDEX) {
 			return false;
 		}
 		if (p.shape == ElasticShape::SHARED_SCALAR) {
@@ -645,8 +684,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	// group_key). In expanded mode each PER group is its own slack (key includes it), so
 	// the profile breaks out per group.
 	auto block_key = [&](const ConstraintProvenance &p) -> std::pair<idx_t, idx_t> {
-		return fold_data ? std::make_pair(p.clause_id, static_cast<idx_t>(0))
-		                 : std::make_pair(p.clause_id, p.group_key);
+		return fold_data ? std::make_pair(p.repair_group_id, static_cast<idx_t>(0))
+		                 : std::make_pair(p.repair_group_id, p.group_key);
 	};
 	std::map<std::pair<idx_t, idx_t>, vector<idx_t>> blocks;
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
@@ -822,7 +861,8 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		// same LHS/RHS, so the first row is canonical.
 		if (sl.quadratic) {
 			const auto &orig = orig_model.quadratic_constraints[sl.rows.front()];
-			ClauseEdit e = MakeLoosenEdit(orig.provenance, FormatQuadraticLhs(orig, columns),
+			auto display_provenance = SourceAwareProvenance(orig_model, orig.provenance);
+			ClauseEdit e = MakeLoosenEdit(display_provenance, SourceAwareQuadraticLhs(orig_model, orig, columns),
 			                              orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
 			e.offset_scope = "clause";
@@ -831,8 +871,10 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		}
 		const ModelConstraint &orig = orig_model.constraints[sl.rows.front()];
 		const ConstraintProvenance &prov = orig.provenance;
+		auto display_provenance = SourceAwareProvenance(orig_model, prov);
+		string display_lhs = SourceAwareLhs(orig_model, orig, columns);
 		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA &&
-		                prov.clause_id != DConstants::INVALID_INDEX;
+		                prov.repair_group_id != DConstants::INVALID_INDEX;
 		if (expanded) {
 			// Only an unreduced per-row constraint expands row by row. A reduced
 			// constraint emits one elastic row per *group*, so a data-derived bound on
@@ -841,7 +883,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			if (data_rhs && !prov.is_aggregate) {
 				// The independent per-row slack is that row's exact overshoot, one profile
 				// entry. A debug view, not a directly pasteable edit.
-				ClauseEdit e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
+				ClauseEdit e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
 				e.edit_source = "expanded_row";
 				e.offset_scope = "row";
 				edits.push_back(std::move(e));
@@ -852,10 +894,10 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			// a symbolic offset over the column, exactly as query mode does.
 			ClauseEdit e;
 			if (data_rhs) {
-				string rhs_text = prov.rhs_label.empty() ? FormatNum(orig.rhs) : prov.rhs_label;
-				e = MakeVirtualOffsetEdit(prov, FormatLhs(orig, columns), rhs_text, sl.sense, amount);
+				string rhs_text = SourceAwareRhs(orig_model, prov, orig.rhs);
+				e = MakeVirtualOffsetEdit(display_provenance, display_lhs, rhs_text, sl.sense, amount);
 			} else {
-				e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
+				e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
 			}
 			// When PER-grouped this block is one group → break it out with its group
 			// key; otherwise there is nothing per-group to expose.
@@ -876,11 +918,11 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			// The folded shared slack `delta` is one virtual query-level offset over the
 			// data column (`x <= col + delta`). rhs_label names the column; fall back to
 			// the numeric representative RHS when it is unavailable.
-			string rhs_text = prov.rhs_label.empty() ? FormatNum(orig.rhs) : prov.rhs_label;
-			e = MakeVirtualOffsetEdit(prov, FormatLhs(orig, columns), rhs_text, sl.sense, amount);
+			string rhs_text = SourceAwareRhs(orig_model, prov, orig.rhs);
+			e = MakeVirtualOffsetEdit(display_provenance, display_lhs, rhs_text, sl.sense, amount);
 			e.edit_source = "virtual_offset";
 		} else {
-			e = MakeLoosenEdit(prov, FormatLhs(orig, columns), orig.rhs, sl.sense, amount);
+			e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
 		}
 		e.offset_scope = "clause";

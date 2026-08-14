@@ -26,23 +26,50 @@
 // A model therefore holds about 15 significant digits, and a conversion INTO
 // that domain is the edge of what DECIDE represents, not a loss inside it.
 //
-// So a cast over a decision is one of exactly two things:
+// THE POLICY HAS TWO BOUNDARIES.
 //
-//   REPRESENTATION -- the same number in a different container. Everything the
-//   binder inserts to reconcile the two sides of a comparison is this. It means
-//   nothing, and peeling it is always correct.
+//   PARSED: every user-written cast over a decision is rejected, including a
+//   cast to DOUBLE. This is the only point where authorship is observable.
 //
-//   COMPUTATION -- a different number. `CAST(x AS INTEGER)` is `round(x)`, a
-//   step function; a narrowing DECIMAL drops decimal places. These are rejected
-//   at the canonicalization boundary, because they are nonlinear operations over
-//   a decision (the same family as ABS and MIN/MAX) wearing a cast's syntax, and
-//   silently peeling one answers a different question than the user asked.
+//   BOUND: any cast whose subtree still contains a decision was inserted by
+//   DuckDB while reconciling types and is transparent to the solver's DOUBLE
+//   algebra. A data-only cast is a real DuckDB computation and is never peeled;
+//   the complete expression is evaluated first and only its result becomes DOUBLE.
 //
-// WHAT THAT BUYS. Because DecideCanonicalizer::ValidateDecisionCasts rejects the
-// second kind before a query leaves planning, every cast any downstream walker
-// can meet is of the first kind. That is what lets those walkers peel
-// unconditionally and still be correct -- not care taken at each site, but an
-// invariant established once. Add a new walker and it is right by default.
+// This split is what makes a new walker safe: shape walkers unwrap only casts
+// proven decision-bearing, while value walkers never look beneath a data cast.
+//
+// THE ONE ASSUMPTION THIS ALL RESTS ON. The BOUND rule above is sound only
+// because the PARSED rule caught every user-written cast first -- and the parsed
+// rule tells a user cast from a parser-synthesized one by a single signal: the
+// parser stamps a query location on nodes that came from typed characters
+// (`Transformer::TransformTypeCast` calls `SetQueryLocation`), and nodes it
+// invents have none to stamp. `ValidateDecideNoExplicitDecisionCasts` reads
+// exactly that signal.
+//
+// That signal is upstream bookkeeping DuckDB maintains for its own error
+// messages, not a contract owed to us, and it is one easily-omitted line --
+// `TransformBooleanTest` already builds a CastExpression without it, stamping
+// the sibling nodes on either side. Harmless there, because that cast is
+// genuinely parser-internal, which is the answer we want anyway.
+//
+// The failure directions are NOT symmetric, which is why this note exists:
+//
+//   a synthesized cast that gains a location -> a valid query is rejected.
+//       Loud, a user reports it, someone fixes it.
+//
+//   a user cast that loses its location      -> read as reconciliation noise and
+//       peeled. `CAST(x AS INTEGER)` silently models `x` instead of `round(x)`:
+//       no error, plausible output, WRONG ANSWER. That is precisely the bug
+//       class this policy exists to end, re-entering through its own front door.
+//
+// `test_all_explicit_decision_cast_syntax_is_rejected` pins CAST, TRY_CAST and
+// `::` across constraint and objective, so a regression in any cast syntax in use
+// today fails the suite. The residual exposure is a cast syntax DuckDB adds
+// later that omits the stamp. If a decision cast is ever reported as slipping
+// through, check the location stamp on its parsed node BEFORE looking anywhere
+// downstream -- every unwrap site below is unguarded by design and will look
+// innocent, because under this invariant it is.
 //
 //===----------------------------------------------------------------------===//
 
@@ -53,28 +80,20 @@
 
 namespace duckdb {
 
-//! True when `to` can still draw every distinction `from` could, so a cast
-//! between them is REPRESENTATION rather than COMPUTATION (see the file header).
-bool DecidePreservesResolution(const LogicalType &from, const LogicalType &to);
+class ClientContext;
 
-//! True when `type` can name values between whole numbers. Integral types and
-//! DECIMAL with scale 0 cannot; that is what makes a cast into them round.
-bool DecideHasFractionalResolution(const LogicalType &type);
+//! True when `expr` references a variable from the LogicalDecide binding.
+bool BoundExpressionReferencesDecide(const Expression &expr, idx_t decide_index);
 
-//! Look through the casts wrapping `expr`, stopping at the first one that would
-//! change the value. Replaces the three identical hand-rolled loops that used to
-//! live in physical_decide.cpp and decide_optimizer.cpp.
-//!
-//! On the decision path the stop condition never fires -- the canonicalizer already
-//! rejected anything that would trip it -- so this reads as "peel freely". It earns
-//! its keep on DATA: a bound like `x <= CAST(1.6 AS INTEGER)` is a rounding request
-//! the executor must actually perform, and peeling to the `1.6` underneath would cap
-//! `x` at 1 where SQL says 2. One helper is therefore correct on both paths, and a
-//! new caller does not have to know which path it is on.
-const Expression *UnwrapDecideCasts(const Expression &expr);
-Expression *UnwrapDecideCasts(Expression &expr);
+//! Look through outer cast wrappers only while the wrapper belongs to
+//! decision-bearing solver algebra. These casts were inserted by DuckDB after the
+//! parsed boundary rejected every user-written decision cast, so they are type
+//! reconciliation noise. A data-only cast is a real SQL computation and stops the
+//! walk.
+const Expression *UnwrapDecideCasts(const Expression &expr, idx_t decide_index);
+Expression *UnwrapDecideCasts(Expression &expr, idx_t decide_index);
 
-//! Strip EVERY cast, numeric or not, to reach the node's IDENTITY.
+//! Strip EVERY outer cast, numeric or not, to reach the node's IDENTITY.
 //!
 //! Correct only where the caller never reads the value: rendering a label (`grp = 'a'`
 //! should read as `grp = 'a'`, not `grp = CAST('a' AS VARCHAR)`) and reading a
@@ -86,13 +105,10 @@ Expression *UnwrapDecideCasts(Expression &expr);
 //! function.
 const Expression *StripCastsForIdentity(const Expression &expr);
 
-//! Render `expr` as the user would recognise it: every cast removed, at every depth.
-//!
-//! StripCastsForIdentity only reaches the casts wrapping the OUTSIDE of a node, which
-//! is enough for a bare column but not for an expression -- `x * w` comes back as
-//! `x * CAST(w AS DOUBLE)` because the binder's cast sits on a child. An error that
-//! quotes that is naming an object the user never typed, so anything appearing in a
-//! message or a suggested edit must come through here.
-string DecideDisplayString(const Expression &expr);
+//! Evaluate a complete foldable SQL expression and convert its result to DOUBLE.
+//! Data-only casts remain part of the computation. Returns false for a non-foldable,
+//! NULL, non-numeric, or otherwise non-evaluable expression; conversion exceptions
+//! are deliberately left to the caller's layer-specific error policy.
+bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out);
 
 } // namespace duckdb

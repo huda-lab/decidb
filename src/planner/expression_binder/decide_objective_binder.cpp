@@ -153,6 +153,14 @@ BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &e
 	}
     case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+	case ExpressionClass::CAST:
+		// Explicit decision-bearing casts were rejected from the parsed objective
+		// before rewrites. A surviving nested cast is therefore a data computation
+		// (or parser-internal representation noise) and binds with normal DuckDB rules.
+		if (!is_top_expression) {
+			return ExpressionBinder::BindExpression(expr_ptr, depth);
+		}
+		break;
 	default:
         break;
 	}

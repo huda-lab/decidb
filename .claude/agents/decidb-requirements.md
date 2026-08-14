@@ -26,7 +26,7 @@ Always ground every finding in the repo. Read, in roughly this order:
 - `context/descriptions/README.md` — navigation and reading order.
 - The feature's own area docs under `context/descriptions/` — its
   `{description}.md`, `done.md`, and `todo.md`. For expressivity keywords:
-  `03_expressivity/<keyword>/`. For diagnostics: `08_query_diagnostics/`.
+  `03_expressivity/<keyword>/`. For diagnostics: `07_query_diagnostics/`.
 - `context/descriptions/00_project_overview/syntax_reference.md` whenever the
   feature touches DECIDE syntax or semantics. Do not rely on recalled syntax.
 - The relevant `src/` paths named in `.claude/CLAUDE.md` ("Key DeciDB source

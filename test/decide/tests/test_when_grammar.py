@@ -5,7 +5,7 @@ restricted `c_expr` that excludes unparenthesized `NOT`, comparison
 operators (`=`, `<`, `>`, `<=`, `>=`, `<>`), and arithmetic (`+`, `-`).
 Wrapping the condition in parentheses forces it through a fuller grammar
 production. Objectives also benefit from
-`ReassociateObjectiveWhenComparison()` in `decide_symbolic.cpp`, which
+`ReassociateObjectiveWhenComparison()` in `decide_grammar_repair.cpp`, which
 patches up the most common comparison pattern even when unparenthesized
 — but only on the objective side and only for simple
 `comparison-of-aggregate` shapes.

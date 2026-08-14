@@ -19,6 +19,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
 | [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | division |
 | [bilinear/](bilinear/) | Bool×anything (McCormick), non-convex (Q matrix), bilinear constraints, data coefficients, WHEN composition | *(no planned features)* |
+| [explain/](explain/) | `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN (FORMAT JSON)` on a DECIDE query: node structure, the shared `WHEN`/`PER` renderer, cardinality | A live tag-leak bug in the Constraints section; layered as-written → canonical → rewritten rendering |
 | [diagnose/](diagnose/) | *(nothing implemented — no `done.md`)* | `DIAGNOSE <query>` statement prefix (paper §5); today's surface is `PRAGMA diagnose_decide` + `decide_diagnostics()` |
 
 ---

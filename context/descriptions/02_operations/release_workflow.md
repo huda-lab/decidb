@@ -89,7 +89,6 @@ Build outputs:
 
 ## Known Build Warnings (cosmetic, safe to ignore)
 
-- SymbolicC++ (macOS/Linux): `symbolic/product.h:375` dangling-else, `symbolic/sum.h:422` empty if-body — third-party.
 - DeciDB (macOS): `decide_binder.hpp:42` missing `override`, `logical_operator_type.cpp:10` unhandled `LOGICAL_DECIDE` enum in switch.
 
 ## Notes

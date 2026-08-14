@@ -30,15 +30,18 @@ Based on the topic, identify which files and docs to read:
 - Also read the relevant source files listed in those docs
 
 **Pipeline topics** — map to `context/descriptions/01_pipeline/`:
-- `parser` → `01_parser.md` + `src/decidb/symbolic/decide_symbolic.cpp`
-- `binder` → `02_binder.md` + `src/planner/expression_binder/decide_binder.cpp`
-- `optimizer` → `context/descriptions/04_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
-- `execution` → `03_execution.md` (and sub-docs `03a`-`03e`) + `src/execution/operator/decide/physical_decide.cpp`
-- `solver` → `03d_solver_backends.md` + `src/decidb/utility/ilp_solver.cpp` (facade), `src/decidb/gurobi/gurobi_solver.cpp` (Gurobi), `src/decidb/naive/deterministic_naive.cpp` (HiGHS)
-- `pipeline` (broad) → read `01_parser.md`, `02_binder.md`, `03_execution.md` for the full flow
+- `parser` → `01_parser/done.md` + `third_party/libpg_query/grammar/statements/select.y`, `src/decidb/parsed/decide_grammar_repair.cpp`
+- `binder` → `02_binder/done.md` + `src/planner/expression_binder/decide_binder.cpp`
+- `canonicalizer`, `canonical form` → `04_canonicalizer/done.md` + `src/planner/decide/decide_canonicalizer.cpp`
+- `logical plan`, `LogicalDecide` → `03_logical_plan/done.md` + `src/planner/operator/logical_decide.cpp`
+- `model building`, `VarIndexer` → `06_model_formulation/done.md` + `src/decidb/utility/ilp_model_builder.cpp`
+- `optimizer` → `context/descriptions/01_pipeline/05_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
+- `execution` → `08_execution/done.md` + `src/execution/operator/decide/physical_decide.cpp`
+- `solver` → `07_solver/done.md` + `src/decidb/utility/ilp_solver.cpp` (facade), `src/decidb/gurobi/gurobi_solver.cpp` (Gurobi), `src/decidb/naive/deterministic_naive.cpp` (HiGHS)
+- `pipeline` (broad) → read `context/descriptions/01_pipeline/README.md` for the stage map, then the stage folders it names
 
 **Concept topics** — read the optimizer docs and relevant source:
-- `Big-M`, `linearization`, `indicators`, `easy vs hard`, `auxiliary variables` → `context/descriptions/04_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
+- `Big-M`, `linearization`, `indicators`, `easy vs hard`, `auxiliary variables` → `context/descriptions/01_pipeline/05_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
 
 **File path topics** — if the argument looks like a file path, read that file directly and explain it.
 

@@ -6,7 +6,7 @@
 // Structured result returned by the solver backends and the SolveModel facade.
 // Carries the solver status (so callers can branch on the outcome instead of
 // catching an exception) alongside the solution. This is the F1 foundation of
-// the query-diagnostics area (context/descriptions/08_query_diagnostics/).
+// the query-diagnostics area (context/descriptions/07_query_diagnostics/).
 //
 //===----------------------------------------------------------------------===//
 

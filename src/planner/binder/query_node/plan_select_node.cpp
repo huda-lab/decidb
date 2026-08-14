@@ -10,6 +10,7 @@
 #include "duckdb/planner/operator/logical_limit.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/common/enums/decide.hpp"
@@ -48,8 +49,12 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // information captured HERE separates them, and it exists only before
         // flattening. Hold the owning slots: PlanSubqueries replaces the node in place,
         // so the slot is what survives to be read afterward.
-        vector<unique_ptr<Expression> *> uncorrelated_subquery_slots;
-        vector<unique_ptr<Expression> *> correlated_subquery_slots;
+        struct SourceSubquerySlot {
+            unique_ptr<Expression> *slot;
+            idx_t source_fragment_id = DConstants::INVALID_INDEX;
+        };
+        vector<SourceSubquerySlot> uncorrelated_subquery_slots;
+        vector<SourceSubquerySlot> correlated_subquery_slots;
         {
             std::function<void(unique_ptr<Expression> &)> collect_subqueries =
                 [&](unique_ptr<Expression> &slot) {
@@ -59,9 +64,11 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                             // Correlated ones are recorded only so a rejection can call
                             // them a subquery; they stay out of the query-wide set and
                             // are refused by the fail-safe default either way.
+                            idx_t source_fragment_id = DConstants::INVALID_INDEX;
+                            TryParseSourceFragmentTag(slot->GetAlias(), source_fragment_id);
                             (subq.IsCorrelated() ? correlated_subquery_slots
                                                  : uncorrelated_subquery_slots)
-                                .push_back(&slot);
+                                .push_back({&slot, source_fragment_id});
                         }
                         return;
                     }
@@ -69,6 +76,14 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 };
             if (statement.decide_constraints) {
                 collect_subqueries(statement.decide_constraints);
+            }
+            // The objective passes through the same canonicalization boundary, so it
+            // needs the same correlation evidence. Without this an UNCORRELATED
+            // subquery scaling a reducer (`(SELECT k) * MAX(x)`) is indistinguishable
+            // from a row-varying column after flattening, hits the fail-safe default,
+            // and is rejected for varying per row when it does not.
+            if (statement.decide_objective) {
+                collect_subqueries(statement.decide_objective);
             }
         }
 
@@ -79,10 +94,11 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // strict canonicalizer its planning-time evidence. The expression tags carry
         // the same semantic fact with the flattened value so it survives copies and
         // optimizer-generated re-canonicalization.
-        auto collect_flattened_indexes = [](const vector<unique_ptr<Expression> *> &slots,
+        auto collect_flattened_indexes = [](const vector<SourceSubquerySlot> &slots,
                                             unordered_set<idx_t> &out) {
-            for (auto *slot : slots) {
-                if (!*slot) {
+            for (auto &entry : slots) {
+                auto *slot = entry.slot;
+                if (!slot || !*slot) {
                     continue;
                 }
                 // Identity, not value: a flattened subquery is the same column whatever
@@ -98,14 +114,23 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         collect_flattened_indexes(uncorrelated_subquery_slots, query_wide_table_indexes);
         collect_flattened_indexes(correlated_subquery_slots, correlated_subquery_table_indexes);
 
-        auto tag_flattened_values = [](const vector<unique_ptr<Expression> *> &slots,
+        auto tag_flattened_values = [](const vector<SourceSubquerySlot> &slots,
                                        const string &tag) {
-            for (auto *slot : slots) {
-                if (!*slot || HasDecideTag((*slot)->GetAlias(), tag)) {
+            for (auto &entry : slots) {
+                auto *slot = entry.slot;
+                if (!slot || !*slot) {
                     continue;
                 }
                 auto alias = (*slot)->GetAlias();
-                AddDecideTag(alias, tag);
+                if (!HasDecideTag(alias, tag)) {
+                    AddDecideTag(alias, tag);
+                }
+                if (entry.source_fragment_id != DConstants::INVALID_INDEX) {
+                    idx_t ignored;
+                    if (!TryParseSourceFragmentTag(alias, ignored)) {
+                        AddDecideTag(alias, MakeSourceFragmentTag(entry.source_fragment_id));
+                    }
+                }
                 (*slot)->SetAlias(std::move(alias));
             }
         };
@@ -120,24 +145,24 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // LogicalDecide::AddConstraint. Those two are the only call sites.
         {
             DecideCanonicalizer canonicalizer(context, statement.decide_index,
-                                              std::move(query_wide_table_indexes),
-                                              std::move(correlated_subquery_table_indexes));
+                                               statement.variable_scopes,
+                                               std::move(query_wide_table_indexes),
+                                               std::move(correlated_subquery_table_indexes));
             if (statement.decide_constraints) {
                 statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+                canonicalizer.VerifyCanonical(*statement.decide_constraints);
+                FinalizeConstraintSourceInfo(*statement.decide_constraints,
+                                             statement.decide_constraint_sources,
+                                             statement.decide_source_fragments,
+                                             statement.entity_scopes);
             }
-            // Objectives are not canonicalized (that is canonicalize.md Step 8), but the
-            // cast invariant is not about shape -- it is about which casts may exist at
-            // all, and AnalyzeObjective peels them exactly as constraint extraction does.
-            //
-            // INCOMPLETE, deliberately. This catches any decision cast that survives into
-            // the BOUND objective, but the parsed-level symbolic simplifier erases casts
-            // before binding, so `MAXIMIZE SUM(CAST(x AS INTEGER) * w)` never reaches
-            // here -- see 07_issues/bugs/todo.md. `MIN`/`MAX` forms are refused earlier by
-            // the binder's shape check. Closing the SUM case belongs to Step 8, which
-            // removes that simplifier; this call is what makes the objective safe the
-            // moment it does, and is a real guard for every other shape meanwhile.
+            // The objective is one side of a comparison, so it belongs to the same
+            // boundary. It carries no relation to orient, which is the only part of
+            // the constraint contract that does not apply to it.
             if (statement.decide_objective) {
-                canonicalizer.ValidateDecisionCasts(*statement.decide_objective);
+                statement.decide_objective = canonicalizer.CanonicalizeObjective(
+                    *statement.decide_objective, statement.objective_constant_offset);
+                canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
             }
         }
 
@@ -154,6 +179,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         decide_op->is_boolean_var = std::move(statement.is_boolean_var);
         decide_op->entity_scopes = std::move(statement.entity_scopes);
         decide_op->variable_scopes = std::move(statement.variable_scopes);
+        decide_op->constraint_sources = std::move(statement.decide_constraint_sources);
         decide_op->entity_key_expressions = std::move(statement.entity_key_expressions);
         // ne_indicator_indices, ABS aux vars, and MIN/MAX indicator links +
         // objective types are created by DecideOptimizer (runs after plan creation)

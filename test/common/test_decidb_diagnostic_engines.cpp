@@ -47,7 +47,9 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 		c.rhs = rows[i].rhs;
 		// These model query-wide RHS bounds (`x <= 5`), so they are SHARED_SCALAR — a
 		// single editable knob — not per-row data (which routes to a conflict summary).
-		c.provenance = {i, DConstants::INVALID_INDEX, rows[i].kind, ElasticShape::SHARED_SCALAR};
+		c.provenance.repair_group_id = i;
+		c.provenance.kind = rows[i].kind;
+		c.provenance.shape = ElasticShape::SHARED_SCALAR;
 		m.constraints.push_back(std::move(c));
 	}
 	return m;
@@ -55,14 +57,14 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 
 //! One linear constraint `coeff * x[var] <sense> rhs` over a multi-variable model,
 //! with explicit provenance for exercising shared-slack blocks (I2.a): rows sharing
-//! a `clause_id` and tagged SHARED_SCALAR collapse to one slack.
+//! a `repair_group_id` and tagged SHARED_SCALAR collapse to one slack.
 struct MultiVarRow {
 	int var;
 	double coeff;
 	char sense;
 	double rhs;
 	ConstraintKind kind;
-	idx_t clause_id = DConstants::INVALID_INDEX;
+	idx_t repair_group_id = DConstants::INVALID_INDEX;
 	ElasticShape shape = ElasticShape::PER_ROW_DATA;
 	idx_t group_key = DConstants::INVALID_INDEX;
 	string rhs_label = ""; //!< data RHS column name (query-mode virtual offset)
@@ -84,7 +86,7 @@ SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
 		c.coefficients = {r.coeff};
 		c.sense = r.sense;
 		c.rhs = r.rhs;
-		c.provenance.clause_id = r.clause_id;
+		c.provenance.repair_group_id = r.repair_group_id;
 		c.provenance.kind = r.kind;
 		c.provenance.shape = r.shape;
 		c.provenance.group_key = r.group_key;
@@ -371,7 +373,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	}
 
 	SECTION("BuildElasticModel shares ONE slack across a SHARED_SCALAR block") {
-		// I2.a structure: three rows of one clause (clause_id 0), tagged SHARED_SCALAR,
+		// I2.a structure: three rows of one repair group, tagged SHARED_SCALAR,
 		// must collapse to a single shared slack column wired into all three rows — not
 		// three independent slacks. A second clause stays its own block.
 		SolverModel model = MakeModel(4, {
@@ -440,7 +442,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 	SECTION("PER SHARED_SCALAR folds by mode: one edit in query, per-group in expanded") {
 		// T3: a PER clause fans into N_g rows per group, all SHARED_SCALAR with the same
-		// clause_id but distinct group_key. query mode is the single SQL literal the user
+		// repair_group_id but distinct group_key. query mode is the single SQL literal the user
 		// edits → ONE slack across every group; expanded mode breaks it out per group.
 		SolverModel model = MakeModel(4, {
 		    {0, 1.0, '<', 5.0, ConstraintKind::USER_PARAMETER, 0, ElasticShape::SHARED_SCALAR, 0},
@@ -601,6 +603,28 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(FindRow(diag, "x < 5", "amount") == "6");
 	}
 
+	SECTION("source registry supplies canonical names, casts, RHS, and qualifiers") {
+		SolverModel model = MakeSingleVarModel({
+		    {1.0, '<', 5.0, ConstraintKind::USER_PARAMETER},
+		    {1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
+		});
+		model.constraints[0].provenance.source_clause_id = 0;
+		model.constraints[0].provenance.shape = ElasticShape::PER_ROW_DATA;
+		ConstraintSourceInfo source;
+		source.canonical_lhs = "CAST(real_x AS DOUBLE)";
+		source.canonical_rhs = "capacity";
+		source.qualifier = "WHEN enabled PER region";
+		source.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
+		model.constraint_sources.push_back(std::move(source));
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
+		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+		REQUIRE(diag.valid);
+		string clause = "CAST(real_x AS DOUBLE) <= capacity WHEN enabled PER region";
+		CHECK(FindRow(diag, clause, "suggested_change") ==
+		      "CAST(real_x AS DOUBLE) <= capacity + 3 WHEN enabled PER region");
+	}
+
 	SECTION("AVG row renders an AVG(...) label and reports the raw slack") {
 		// I2.d: a pure AVG aggregate stores coefficients pre-scaled by 1/N (avg_scaled),
 		// so the label collapses back to `AVG(x)` and the slack is reported in AVG units.
@@ -621,7 +645,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		avg_row.coefficients = {0.5, 0.5}; // (1/2)x0 + (1/2)x1 = AVG(x)
 		avg_row.sense = '<';
 		avg_row.rhs = 5.0;
-		avg_row.provenance.clause_id = 0;
+		avg_row.provenance.repair_group_id = 0;
 		avg_row.provenance.kind = ConstraintKind::USER_PARAMETER;
 		avg_row.provenance.shape = ElasticShape::SHARED_SCALAR;
 		avg_row.provenance.avg_scaled = true;
@@ -662,7 +686,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		qc.q_coefficients = {1.0}; // x²
 		qc.sense = '<';
 		qc.rhs = 4.0;
-		qc.provenance.clause_id = 0;
+		qc.provenance.repair_group_id = 0;
 		qc.provenance.kind = ConstraintKind::USER_PARAMETER;
 		qc.provenance.shape = ElasticShape::SHARED_SCALAR;
 		model.quadratic_constraints.push_back(std::move(qc));

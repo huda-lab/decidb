@@ -228,7 +228,7 @@ def test_sum_negative_constant_multiplier(
 
     Sibling of ``test_sum_negative_coeffs_aggregate`` (which uses a signed
     *column*). Here the negative coefficient is a constant literal. The
-    symbolic normalizer in ``decide_symbolic.cpp`` handles literal
+    canonicalizer in ``decide_canonicalizer.cpp`` handles literal
     multiplication as a distinct path from column-sourced coefficients; a
     sign-handling bug there would silently flip ``<= -50`` into ``>= -50``
     and widen the feasible set.

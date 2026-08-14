@@ -7,7 +7,7 @@
 // (unbounded, infeasible, or slow) populates a DecideDiagnostic,
 // it is stashed per-connection, and the decide_diagnostics() table function reads
 // it back as a fixed-schema relation. See
-// context/descriptions/08_query_diagnostics/.
+// context/descriptions/07_query_diagnostics/.
 //
 //===----------------------------------------------------------------------===//
 

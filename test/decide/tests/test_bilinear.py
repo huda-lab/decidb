@@ -769,6 +769,134 @@ class TestBilinearConstraints:
 
 
 # ===================================================================
+# Factored products: degree vs. occurrence count
+# ===================================================================
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+@pytest.mark.var_integer
+class TestFactoredProductDegree:
+    """A product whose factors are sums is degree 2, not degree 3.
+
+    `(x + y) * z` expands to `x*z + y*z` — every term bilinear, so the whole
+    expression is degree 2 and legal wherever bilinear terms are. The binder
+    used to count DECIDE variable OCCURRENCES (3 here) rather than compute
+    polynomial DEGREE (2), and rejected these as triple products.
+
+    Objectives were masked: the symbolic layer expanded the product before the
+    check ran. Constraints were never expanded, so the *same expression* was
+    accepted in MAXIMIZE and rejected in SUCH THAT. These tests pin both the
+    acceptance and the objective/constraint symmetry.
+
+    Assertions are differential — the factored spelling must agree with the
+    hand-expanded spelling — so they test the property at issue without
+    depending on a hand-computed optimum. Objective coefficients are distinct
+    powers of two so each optimum is unique and ties cannot make the
+    comparison flaky.
+    """
+
+    OBJECTIVE = "MAXIMIZE SUM(8 * x + 4 * y + 2 * z + w)"
+
+    @classmethod
+    def _run_constraint(cls, cli, constraint_expr):
+        sql = f"""
+            WITH data AS (SELECT 1 AS id, 2.0 AS p)
+            SELECT id, x, y, z, w
+            FROM data
+            DECIDE x(INT), y(INT), z(INT), w(INT)
+            SUCH THAT x >= 0 AND x <= 1 AND y >= 0 AND y <= 1
+                  AND z >= 0 AND z <= 1 AND w >= 0 AND w <= 1
+                  AND {constraint_expr}
+            {cls.OBJECTIVE}
+        """
+        return cli.execute(sql)
+
+    @pytest.mark.cons_aggregate
+    @pytest.mark.parametrize("factored,expanded", [
+        # Two-term sum times a third variable — the canonical gating shape.
+        ("SUM((x + y) * z) <= 1",
+         "SUM(x * z + y * z) <= 1"),
+        # Three-term sum: 4 occurrences, still degree 2.
+        ("SUM((x + y + z) * w) <= 1",
+         "SUM(x * w + y * w + z * w) <= 1"),
+        # Sum times sum: 4 occurrences, still degree 2.
+        ("SUM((x + y) * (z + w)) <= 1",
+         "SUM(x * z + x * w + y * z + y * w) <= 1"),
+        # Data coefficient on a factored bilinear term.
+        ("SUM(p * (x + y) * z) <= 2",
+         "SUM(p * x * z + p * y * z) <= 2"),
+        # Factored quadratic: the same variable on both sides of the product.
+        ("SUM((x + y) * x) <= 1",
+         "SUM(x * x + y * x) <= 1"),
+    ])
+    def test_factored_aggregate_constraint_matches_expanded(
+        self, decidb_cli_gurobi, factored, expanded,
+    ):
+        factored_rows, factored_cols = self._run_constraint(decidb_cli_gurobi, factored)
+        expanded_rows, expanded_cols = self._run_constraint(decidb_cli_gurobi, expanded)
+
+        assert factored_cols == expanded_cols
+        assert factored_rows == expanded_rows
+
+    @pytest.mark.cons_perrow
+    def test_factored_per_row_constraint_matches_expanded(self, decidb_cli_gurobi):
+        """The per-row path (no reducer) must accept the factored form too."""
+        factored_rows, factored_cols = self._run_constraint(
+            decidb_cli_gurobi, "(x + y) * z <= 1",
+        )
+        expanded_rows, expanded_cols = self._run_constraint(
+            decidb_cli_gurobi, "x * z + y * z <= 1",
+        )
+
+        assert factored_cols == expanded_cols
+        assert factored_rows == expanded_rows
+
+    @pytest.mark.obj_maximize
+    @pytest.mark.cons_aggregate
+    def test_same_expression_accepted_in_objective_and_constraint(self, decidb_cli_gurobi):
+        """`SUM((x + y) * z)` must bind in both clauses.
+
+        Regression for the asymmetry: accepted in MAXIMIZE (symbolic layer
+        expanded it) but rejected in SUCH THAT (nothing expanded it).
+        """
+        as_objective, _ = decidb_cli_gurobi.execute("""
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, x, y, z
+            FROM data
+            DECIDE x(INT), y(INT), z(INT)
+            SUCH THAT x >= 0 AND x <= 1 AND y >= 0 AND y <= 1 AND z >= 0 AND z <= 1
+                  AND SUM(z) = 1
+            MAXIMIZE SUM((x + y) * z)
+        """)
+        assert len(as_objective) == 1
+
+        as_constraint, _ = self._run_constraint(decidb_cli_gurobi, "SUM((x + y) * z) <= 1")
+        assert len(as_constraint) == 1
+
+    @pytest.mark.cons_aggregate
+    @pytest.mark.parametrize("constraint_expr", [
+        # Three distinct variables multiplied: genuinely degree 3.
+        "SUM(x * y * z) <= 1",
+        # A degree-2 factor multiplied by a third variable: degree 3.
+        "SUM((x + y) * z * w) <= 1",
+        "SUM((x + y) * (z * w)) <= 1",
+    ])
+    def test_genuine_degree_three_still_rejected(self, decidb_cli, constraint_expr):
+        """The fix must not widen the gate: real degree > 2 still fails."""
+        decidb_cli.assert_error(f"""
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, x, y, z, w
+            FROM data
+            DECIDE x(INT), y(INT), z(INT), w(INT)
+            SUCH THAT x >= 0 AND x <= 1 AND y >= 0 AND y <= 1
+                  AND z >= 0 AND z <= 1 AND w >= 0 AND w <= 1
+                  AND {constraint_expr}
+            {self.OBJECTIVE}
+        """, match=r"Triple|higher-order")
+
+
+# ===================================================================
 # Error cases
 # ===================================================================
 

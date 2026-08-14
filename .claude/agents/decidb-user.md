@@ -27,7 +27,7 @@ Always ground every finding in the repo. Read, in roughly this order:
 - `context/descriptions/README.md` — navigation and reading order.
 - The feature's own area docs under `context/descriptions/` — its
   `{description}.md`, `done.md`, and `todo.md`. For diagnostics specifically:
-  `08_query_diagnostics/` (the smallest-edit / least-change promise lives here).
+  `07_query_diagnostics/` (the smallest-edit / least-change promise lives here).
 - `context/descriptions/00_project_overview/syntax_reference.md` whenever the
   feature touches DECIDE syntax — this is the surface a user actually types.
 - Any demo entry point the feature ships (e.g. a `run.sh`, example queries,

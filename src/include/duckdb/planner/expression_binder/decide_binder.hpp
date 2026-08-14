@@ -52,18 +52,25 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
                          bool allow_quadratic = false, bool allow_bilinear = false);
 
-bool ContainsQuadraticPattern(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
-
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
+
+//! Reject a user-written CAST/TRY_CAST/:: whose child contains a DECIDE variable.
+//!
+//! This must run on the parsed tree before any DECIDE rewrite or binding. After
+//! binding, an explicit cast and a cast DuckDB inserted to reconcile types are both
+//! BoundCastExpression and authorship can no longer be recovered. Parser-internal
+//! casts have no query location and are deliberately ignored here.
+void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
+                                           const case_insensitive_map_t<idx_t> &variables);
 
 bool IsDecideAggregateName(const string &name);
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 bool ContainsWhenOperator(const ParsedExpression &expr);
 
 //! Reject non-linear scalar functions (SQRT, EXP, LOG, FLOOR, ...) that wrap a
-//! DECIDE variable. Throws BinderException on violation. Safe to call before
-//! symbolic normalization — catches cases that would otherwise silently strip
-//! the scalar in per-row constraints or crash in the symbolic layer. Uses the
+//! DECIDE variable. Throws BinderException on violation. Runs on the parsed tree,
+//! catching cases that would otherwise silently strip the scalar in per-row
+//! constraints or reach the model builder as an unreadable term. Uses the
 //! catalog to distinguish scalar from aggregate functions so aggregate-shaped
 //! mis-uses (e.g., BIT_AND(x), STDDEV(x)) fall through to BindAggregate's
 //! aggregate-specific error instead.

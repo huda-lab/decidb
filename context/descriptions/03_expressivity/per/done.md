@@ -71,7 +71,7 @@ MINIMIZE SUM(ABS(new_hours - hours)) PER projectID
 
 ## Scaling Considerations
 
-The number of generated constraints equals `|distinct_values| x |PER_constraints|` — O(|D|) in the worst case. This motivates the optimizer's matrix-efficiency work on high-cardinality PER columns (see [../../04_optimizer/matrix_efficiency/todo.md](../../04_optimizer/matrix_efficiency/todo.md)): constraint-to-bound conversion, skyband pruning, drop-solve-validate-refine loops.
+The number of generated constraints equals `|distinct_values| x |PER_constraints|` — O(|D|) in the worst case. This motivates the optimizer's matrix-efficiency work on high-cardinality PER columns (see [../../01_pipeline/05_optimizer/done.md](../../01_pipeline/05_optimizer/done.md)): constraint-to-bound conversion, skyband pruning, drop-solve-validate-refine loops.
 
 ---
 
@@ -82,7 +82,6 @@ The number of generated constraints equals `|distinct_values| x |PER_constraints
 - `src/include/duckdb/decidb/solver_input.hpp` — `row_group_ids` replaces `row_mask`
 - `third_party/libpg_query/` — grammar rules, keyword, enum
 - `src/parser/transform/expression/transform_operator.cpp` — transformer
-- `src/decidb/symbolic/decide_symbolic.cpp` — normalizer passthrough
 - `src/planner/expression_binder/decide_constraints_binder.cpp/.hpp` — `BindPerConstraint`
 - `src/planner/expression_binder/decide_objective_binder.cpp` — nested aggregate PER objective binding
 - `src/planner/binder/query_node/bind_select_node.cpp` — nested aggregate detection for PER objectives

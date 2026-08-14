@@ -6,7 +6,7 @@ The symbolic translator models a fixed set of arithmetic operators (`+ - * /
 SUM body used to be rejected unconditionally — even when its operands were pure
 data. But a subexpression that references no DECIDE variable is a per-row
 *constant coefficient*: `(id * 7) % 97` is data the moment the row is known.
-Those now fold to a data placeholder (see `ToSymbolicRecursive`) and are
+Those are now just atoms nothing opens, evaluated by DuckDB as coefficients, and are
 evaluated as ordinary data by the physical layer, exactly like `id * 7`.
 
 Contract pinned here:

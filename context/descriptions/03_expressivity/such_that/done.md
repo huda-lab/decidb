@@ -15,7 +15,7 @@ The `SUCH THAT` clause specifies the **constraints** of a COP query. The solver 
 **`<>` with a non-integer RHS is silently dropped (tautology).** With integer-valued LHS, `LHS <> K` for a non-integer `K` is satisfied by every integer LHS. The ±1 Big-M rewrite would wrongly exclude `floor(K)` and `ceil(K)`, so DeciDB drops such constraints rather than emitting an unsound rewrite. Three flavors:
   - **Per-row NE, uniform RHS**: whole constraint is dropped if `K` is non-integer.
   - **Per-row NE, varying RHS** (e.g. correlated subquery): only the rows whose `K_row` is non-integer are masked out (added to `row_group_ids` as `INVALID_INDEX`); the remaining rows still get the real Big-M pair.
-  - **Aggregate NE (`SUM(x) <> K`, `AVG(x) <> K`)**: handled per-group in the deferred expansion. For `AVG(x) <> K` the effective per-group RHS is `K * N_g`, so groups with integer `K * N_g` get the full Big-M pair while groups whose effective RHS is non-integer are skipped (no global `z` allocated). Mixed PER queries with some groups in each category are valid. The Big-M for each group is computed by **summing the worst-case contribution over that group's rows** (the aggregate LHS ranges over the whole group); a single per-row bound would be far below the true range and silently cap the aggregate. See `../../04_optimizer/matrix_efficiency/done.md`.
+  - **Aggregate NE (`SUM(x) <> K`, `AVG(x) <> K`)**: handled per-group in the deferred expansion. For `AVG(x) <> K` the effective per-group RHS is `K * N_g`, so groups with integer `K * N_g` get the full Big-M pair while groups whose effective RHS is non-integer are skipped (no global `z` allocated). Mixed PER queries with some groups in each category are valid. The Big-M for each group is computed by **summing the worst-case contribution over that group's rows** (the aggregate LHS ranges over the whole group); a single per-row bound would be far below the true range and silently cap the aggregate. See `../../01_pipeline/05_optimizer/done.md`.
 
   Enforced at `src/execution/operator/decide/physical_decide.cpp` (per-row guard inside the NE expansion loop; per-group guard inside the deferred-aggregate expansion before the `z_idx` allocation). Tolerance for the integer test is `1e-9`.
 
@@ -59,7 +59,7 @@ down: a *row-scoped* decision as the bound of a reduced constraint
 (`SUM(x) <= y`) is rejected by the aggregate term extractor, which names the offending
 term. A query-wide (`scalar`) one is legal, because it is row-invariant.
 
-*(History: until canonicalize.md C.2 the binder required the DECIDE expression on the
+*(History: until the canonicalization refactor the binder required the DECIDE expression on the
 left and rewrote the parsed comparison to put it there. That flip was the last of five
 places that decided constraint shape; deleting it is what opened the shapes above.)*
 
@@ -132,7 +132,7 @@ Rejected at execution time: any term whose aggregate-local `WHEN` matches zero r
 
 **Correlated scalar subqueries** are delegated to DuckDB's standard `ExpressionBinder`, which decorrelates them into joins via `PlanSubqueries`, producing per-row values:
 - **Per-row constraints**: each row gets its own RHS value from the join — `x <= (SELECT budget FROM Depts WHERE Depts.id = items.dept_id)`.
-- **Aggregate constraints**: the RHS must evaluate to the **same scalar for all rows** (an aggregate constraint compiles to a single inequality, requiring a single RHS). If the RHS varies per row, execution throws: "Aggregate constraint (SUM/AVG) requires a scalar right-hand side, but the RHS evaluates to different values per row".
+- **Aggregate constraints**: a correlated value beside the reducer is rejected during planning because it varies per row. Move it inside the reducer when row-wise participation is intended.
 
 A data-only *aggregate* RHS (`SUM(x*val) <= SUM(val)`, distinct from a subquery) stays on the right and is reduced to one value per group there — see "Data-Only Aggregate RHS in Aggregate Constraints" and "Reducers as a Bound" in [../sql_functions/done.md](../sql_functions/done.md). It was hoisted into the LHS before binding until 2026-08-10.
 
@@ -143,11 +143,10 @@ A data-only *aggregate* RHS (`SUM(x*val) <= SUM(val)`, distinct from a subquery)
 ## Code Pointers
 
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp`
-  - `BindComparison()` — handles `=`, `<`, `<=`, `>`, `>=`, `<>` (all operators on both per-row and aggregate). Classifies both sides via `GetExpressionType` and accepts when either is a DECIDE expression (`IsDecideSide`); the constraint is reduced when either classifies as `SUM`, and only then is the non-DECIDE side checked as a bound (`IsAllowedConstraintRHS` plus decision-free). It performs no rewriting — the parsed-level side flip it used to do was deleted at `canonicalize.md` C.2.
-  - `IsAggregateConstraint()` — the `PER` gate; reads both sides, but counts a right-hand reducer only when it is decision-bearing (a data-only reducer there is a bound, not what `PER` partitions)
+  - `BindComparison()` — handles `=`, `<`, `<=`, `>`, `>=`, `<>` (all operators on both per-row and aggregate). Classifies both sides via `GetExpressionType` and accepts when either is a DECIDE expression (`IsDecideSide`); the constraint is reduced when either classifies as `SUM`, and only then is the non-DECIDE side checked as a bound (`IsAllowedConstraintRHS` plus decision-free). It performs no rewriting — the parsed-level side flip it used to do was deleted at the canonicalization refactor.
   - `BindBetween()` — desugars to two comparison constraints
   - `BindOperator()` — handles IN clause
-  - `BindWhenConstraint()` / `BindPerConstraint()` — WHEN / PER modifiers
+  - `BindWhenConstraint()` / `BindPerConstraint()` — bind WHEN / PER modifiers; the canonicalizer validates `PER` against the final aggregate/per-row classification
   - Nested `WHEN` dispatch through `DecideBinder::BindLocalWhenAggregate()` — aggregate-local WHEN filters
   - Validates that only SUM, AVG, MIN, and MAX are used as aggregate functions
 - **Subquery handling**: `src/planner/expression_binder/decide_binder.cpp`

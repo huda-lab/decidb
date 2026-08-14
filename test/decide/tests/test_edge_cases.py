@@ -675,7 +675,7 @@ def test_minimize_min_objective_when_empty(decidb_cli):
 # (or `z_k` per term in the composed path) unpinned — silently wrong. All such
 # shapes (hard-direction, and composed where the SUM term would otherwise be
 # vacated) are now rejected before the solver by the empty-aggregate guard.
-# See `context/descriptions/05_testing/when/todo.md`
+# See `context/descriptions/04_testing/when/todo.md`
 # ("Empty WHEN on MIN/MAX constraints — fixed and covered").
 
 

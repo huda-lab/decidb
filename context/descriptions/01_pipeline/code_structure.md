@@ -1,53 +1,77 @@
-# Codebase Structure
+# Codebase structure
 
-This document provides a detailed map of the DeciDB implementation within the DuckDB source tree. It is intended to help developers (and LLMs) understand the physical organization of the code and the relationships between key classes.
+Where DeciDB lives inside the DuckDB source tree, and which stage owns each file.
+Stage numbers refer to [`README.md`](README.md).
 
-## 1. File Organization
+---
 
-The DeciDB extension is integrated across several layers of the DuckDB engine.
+## 1. File organization
 
-### 1.1 Include Headers (`src/include/duckdb/`)
--   **Common Enums**:
-    -   `common/enums/decide.hpp`: Defines `DecideSense` (MAX/MIN), `DecideExpression`, and other shared enums.
--   **Binder API**:
-    -   `planner/expression_binder/decide_binder.hpp`: Base class for decision binders.
-    -   `planner/expression_binder/decide_constraints_binder.hpp`: Specialized binder for `SUCH THAT`.
-    -   `planner/expression_binder/decide_objective_binder.hpp`: Specialized binder for `MAXIMIZE/MINIMIZE`.
--   **Logical Operators**:
-    -   `planner/operator/logical_decide.hpp`: Definition of the `LogicalDecide` node.
--   **Physical Operators**:
-    -   `execution/operator/decide/physical_decide.hpp`: Definition of the `PhysicalDecide` node.
--   **Symbolic Layer**:
-    -   `decidb/symbolic/decide_symbolic.hpp`: Interface to SymbolicC++.
--   **Solver & Model Headers**:
-    -   `decidb/solver_input.hpp`: `SolverInput`, `EvaluatedConstraint` structs — bridge between execution and solver.
-    -   `decidb/ilp_model.hpp`: `SolverModel`, `ModelConstraint` structs — solver-agnostic model representation.
-    -   `decidb/ilp_solver.hpp`: `SolveModel()` facade declaration.
-    -   `decidb/gurobi/gurobi_solver.hpp`: `GurobiSolver` class declaration.
-    -   `decidb/naive/deterministic_naive.hpp`: `DeterministicNaive` class declaration.
+### Headers (`src/include/duckdb/`)
 
-### 1.2 Source Implementation (`src/`)
--   **Symbolic Logic**:
-    -   `decidb/symbolic/decide_symbolic.cpp`: Implements normalization and symbolic translation.
--   **Binder Logic**:
-    -   `planner/expression_binder/decide_binder.cpp`
-    -   `planner/expression_binder/decide_constraints_binder.cpp`
-    -   `planner/expression_binder/decide_objective_binder.cpp`
--   **Planner Logic**:
-    -   `planner/operator/logical_decide.cpp`: Implementation of logical operator methods (serialization, etc.).
-    -   `execution/physical_plan/plan_decide.cpp`: Code to transform `LogicalDecide` $\rightarrow$ `PhysicalDecide`.
--   **Execution Logic**:
-    -   `execution/operator/decide/physical_decide.cpp`: The core execution engine and HiGHS integration.
--   **Solver & Model Layer**:
-    -   `decidb/utility/ilp_model_builder.cpp`: Transforms `SolverInput` → `SolverModel` (variable setup, constraint building, sanity checks).
-    -   `decidb/utility/ilp_solver.cpp`: Solver facade — dispatches to Gurobi or HiGHS.
-    -   `decidb/gurobi/gurobi_solver.cpp`: Gurobi backend using C API, COO format constraints.
-    -   `decidb/naive/deterministic_naive.cpp`: HiGHS backend using C++ API, COO→CSR conversion.
+| Path | Stage | Contents |
+|---|---|---|
+| `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScopeInfo`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
+| `common/decide_source_info.hpp` | 03 | `ConstraintSourceInfo` — the source display registry entry |
+| `decidb/parsed/decide_grammar_repair.hpp` | 01 | Association repair, `ExpressionToDot` |
+| `decidb/utility/decide_parse_hints.hpp` | 01 | `MaybeAppendDecideWhenHint` |
+| `planner/expression_binder/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, degree, `ValidateDecideNoExplicitDecisionCasts` |
+| `planner/expression_binder/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
+| `planner/expression_binder/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
+| `planner/operator/logical_decide.hpp` | 03 | `LogicalDecide`, `EntityScopeInfo`, every metadata field |
+| `planner/decide/decide_canonicalizer.hpp` | 04 | The canonical contract, in code |
+| `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
+| `decidb/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity` |
+| `optimizer/decide_optimizer.hpp` | 05 | The rewrite passes |
+| `execution/operator/decide/physical_decide.hpp` | 08 | `PhysicalDecide`, `Term`, `DecideConstraint`, `Objective` |
+| `decidb/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn`, `EntityMapping` |
+| `decidb/ilp_model.hpp` | 06 | `VarIndexer`, `SolverModel`, `ModelConstraint`, `ConstraintProvenance`, `SparseCoeffAccumulator` |
+| `decidb/ilp_solver.hpp` | 07 | `SolveModel` facade, `SolverBackend`, `SolveModelOptions` |
+| `decidb/solver_result.hpp` | 07 | `SolverStatus`, `SolverResult`, `ThrowDecideSolveError` |
+| `decidb/solver_session.hpp` | 07 | `SolverSession` — warm continuation |
+| `decidb/solver_config.hpp` | 07 | Time limits, primary and diagnostic |
+| `decidb/gurobi/gurobi_solver.hpp`, `gurobi_loader.hpp` | 07 | Gurobi backend and dynamic loading |
+| `decidb/decide_diagnostic.hpp`, `decide_diagnostic_engines.hpp`, `decide_router.hpp` | — | Query diagnostics; see `../07_query_diagnostics/` |
 
-## 2. Class Hierarchy
+### Sources (`src/`)
 
-### 2.1 Binder Inheritance
-The binder classes inherit from DuckDB's standard `ExpressionBinder` to leverage existing expression validation (e.g., checking if columns exist) while adding custom rules for linearity.
+| Path | Stage | Lines | Contents |
+|---|---|---|---|
+| `decidb/parsed/decide_grammar_repair.cpp` | 01 | ~340 | Three association repairs, `ExpressionToDot` |
+| `decidb/utility/decide_parse_hints.cpp` | 01 | ~65 | DECIDE-aware parse-error hint |
+| `planner/expression_binder/decide_binder.cpp` | 02 | ~1,020 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
+| `planner/expression_binder/decide_constraints_binder.cpp` | 02 | ~550 | `SUCH THAT` |
+| `planner/expression_binder/decide_objective_binder.cpp` | 02 | ~240 | Objective |
+| `planner/binder/query_node/bind_select_node.cpp` | 01/02 | — | Declarations, scopes, and the parsed-tree rewrites (see stage 01 `todo.md`) |
+| `planner/binder/query_node/plan_select_node.cpp` | 03/04 | ~290 | Subquery flattening, correlation provenance, the user canonicalization call |
+| `planner/operator/logical_decide.cpp` | 03 | ~415 | `AddConstraint`, `SetObjective`, EXPLAIN strings, serialization |
+| `planner/decide/decide_canonicalizer.cpp` | 04 | ~985 | The one shape boundary |
+| `planner/decide/decide_source_provenance.cpp` | 03 | ~250 | Source display capture and rendering |
+| `decidb/utility/decide_cast_policy.cpp` | 04 | ~60 | Cast unwrapping |
+| `optimizer/decide/decide_optimizer.cpp` | 05 | ~1,740 | All eight rewrite passes |
+| `execution/column_binding_resolver.cpp` | 03 | — | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
+| `execution/physical_plan/plan_decide.cpp` | 03/08 | ~170 | Logical → physical, entity key indices, verification |
+| `execution/operator/decide/physical_decide.cpp` | 08 | ~7,400 | Extraction, materialization, evaluation, emission, readback |
+| `decidb/utility/ilp_model_builder.cpp` | 06 | ~1,400 | `SolverModel::Build` |
+| `decidb/utility/ilp_solver.cpp` | 07 | ~395 | Dispatch, INF_OR_UNBD probe, ray attachment |
+| `decidb/gurobi/gurobi_solver.cpp`, `gurobi_loader.cpp` | 07 | ~830 | Gurobi backend |
+| `decidb/naive/deterministic_naive.cpp` | 07 | — | HiGHS backend |
+| `decidb/utility/decide_diagnostic*.cpp`, `decide_router.cpp` | — | ~2,100 | Diagnostics |
+
+### Grammar (`third_party/libpg_query/`)
+
+| Path | Contents |
+|---|---|
+| `grammar/statements/select.y` | Every DECIDE production |
+| `grammar/grammar.y` | The `%expect 9` conflict budget and its rationale |
+| `grammar/keywords/reserved_keywords.list` | `DECIDE`, `MAXIMIZE`, `MINIMIZE`, `SUCH` |
+| `src_backend_parser_parser.cpp` | `base_yylex` — the `WHEN_DECIDE` gating |
+
+---
+
+## 2. Class hierarchy
+
+### Binders
 
 ```mermaid
 classDiagram
@@ -58,16 +82,17 @@ classDiagram
         +BindExpression()
         +BindAggregate()
         +BindFunction()
-        +GetExpressionType()
+        +BindLocalWhenAggregate()
+        +BindQualifiedReducer()
     }
     class DecideConstraintsBinder {
-        +BindExpression()
         +BindComparison()
         +BindBetween()
         +BindOperator()
         +BindConjunction()
         +BindWhenConstraint()
         +BindPerConstraint()
+        +GetExpressionType()
     }
     class DecideObjectiveBinder {
         +BindExpression()
@@ -79,110 +104,131 @@ classDiagram
     DecideBinder <|-- DecideObjectiveBinder
 ```
 
-Note: `ValidateSumArgument()` is a free function declared in `decide_binder.hpp`, not a method on any class. It validates that an expression is a linear (or optionally quadratic) combination of decision variables.
+`ValidateSumArgument()`, `ValidateDecideNoNonLinearScalar()` and
+`ValidateDecideNoExplicitDecisionCasts()` are free functions declared in
+`decide_binder.hpp`, not methods.
 
-### 2.2 Operator Hierarchy
-Detailed view of how the new operators fit into the query plan.
+### Operators and the model path
 
 ```mermaid
 classDiagram
-    class LogicalOperator {
-        +ResolveTypes()
-    }
+    class LogicalOperator
     class LogicalDecide {
         +decide_constraints
         +decide_objective
-        +num_auxiliary_vars
-        +GetName() string
-        +ParamsToString() Map
+        +AddConstraint()
+        +SetObjective()
+        +Serialize()
     }
-
-    class PhysicalOperator {
-        +GetChunk()
+    class DecideCanonicalizer {
+        +CanonicalizeTree()
+        +CanonicalizeObjective()
+        +VerifyCanonical()
+        +ClassifyCanonicalComparison()
     }
+    class DecideOptimizer {
+        +Optimize()
+    }
+    class PhysicalOperator
     class PhysicalDecide {
-        +GlobalSinkState
+        +Sink()
         +Finalize()
         +GetData()
-        +GetName() string
-        +ParamsToString() Map
     }
-
     class SolverInput {
-        +num_rows
-        +num_decide_vars
         +constraints
         +objective_coefficients
+        +entity_mappings
     }
     class SolverModel {
-        +num_vars
         +col_lower / col_upper
         +constraints
-        +Build(SolverInput)
+        +Build(SolverInput, VarIndexer)$
     }
-    class GurobiSolver {
-        +Solve(SolverModel)$
-        +IsAvailable()$
-    }
-    class DeterministicNaive {
-        +Solve(SolverModel)$
+    class SolverSession {
+        +Solve()
+        +Continue()
     }
 
     LogicalOperator <|-- LogicalDecide
     PhysicalOperator <|-- PhysicalDecide
-    PhysicalDecide ..> SolverInput : builds
+    LogicalDecide ..> DecideCanonicalizer : AddConstraint / SetObjective
+    DecideOptimizer ..> LogicalDecide : rewrites
+    LogicalDecide ..> PhysicalDecide : plan_decide.cpp
+    PhysicalDecide ..> SolverInput : Finalize
     SolverInput ..> SolverModel : Build()
-    SolverModel ..> GurobiSolver : dispatched to
-    SolverModel ..> DeterministicNaive : fallback
+    SolverModel ..> SolverSession : Solve() / Continue()
 ```
 
-## 3. Key Methods & Responsibilities
+---
 
-### `src/decidb/symbolic/decide_symbolic.cpp`
--   **`ToSymbolicRecursive(ParsedExpression)`**: Walks a DuckDB AST and converts it to a `Symbolic` object.
--   **`SimplifyDecideConstraints(ParsedExpression)`**: Grammar repair only — reassociates the `A AND B WHEN c` precedence mis-parse and recurses through conjunctions and WHEN/PER wrappers. Comparisons are copied through unchanged; term placement is `DecideCanonicalizer`'s job, after binding.
--   **`SimplifyDecideObjective(ParsedExpression)`**: Expands and simplifies a SUM objective body with SymbolicC++, rebuilds it factored as `coefficient * decide_part`, peels a constant offset, and reassociates the same WHEN mis-parse.
+## 3. Key entry points
 
-### `src/planner/expression_binder/decide_binder.cpp`
--   **`ValidateSumArgument()`** (free function): Recursively checks that an expression is a linear combination of decision variables (or optionally quadratic when `allow_quadratic` is true). Throws "Non-linear term detected" error. Called by both `DecideConstraintsBinder` and `DecideObjectiveBinder`.
+### `src/decidb/parsed/decide_grammar_repair.cpp` — stage 01
+- **`RepairDecideConstraintGrammar()`** — reassociates `A AND B WHEN c` and
+  `A AND B PER col`. Comparisons are copied through untouched.
+- **`RepairDecideObjectiveGrammar()`** — reassociates `SUM(x) WHEN a > b`.
+- **`ExpressionToDot()`** — Graphviz dump of a parsed expression. No live callers.
 
-### `src/execution/operator/decide/physical_decide.cpp`
--   **`Sink(GlobalSinkState, LocalSinkState, DataChunk)`**: Materializes input rows into the `DecideGlobalSinkState`.
--   **`Finalize(GlobalSinkState)`**: The main driver. Evaluates constraint coefficients row-by-row, builds expression-level WHEN+PER group mappings and aggregate-local filter masks, constructs `SolverInput`, calls `SolveModel()`, and stores the solution vector.
--   **`GetData(ExecutionContext, DataChunk)`**: Streaming output. Re-scans the materialized data, projects solution values with type-specific casting (BOOLEAN/INTEGER/DOUBLE rounding), and filters out auxiliary variables.
+### `src/planner/expression_binder/decide_binder.cpp` — stage 02
+- **`ValidateSumArgument()`** — linear (or optionally quadratic) combination check.
+- **`DecideDegreeInternal()`** — polynomial degree, not occurrence count.
+- **`ValidateDecideNoExplicitDecisionCasts()`** — the cast authorship boundary.
+- **`BindLocalWhenAggregate()` / `BindQualifiedReducer()`**.
 
-### EXPLAIN Support (Logical & Physical)
--   **`LogicalDecide::GetName()`** / **`PhysicalDecide::GetName()`**: Return `"DECIDE"` for the plan renderer.
--   **`LogicalDecide::ParamsToString()`** / **`PhysicalDecide::ParamsToString()`**: Build an `InsertionOrderPreservingMap` with `Variables`, `Objective`, and `Constraints` entries. Constraints are extracted by recursively splitting the AND-tree via `CollectConstraintStrings`, unwrapping WHEN/PER wrappers into display suffixes.
+### `src/planner/decide/decide_canonicalizer.cpp` — stage 04
+- **`CanonicalizeTree()` / `CanonicalizeComparison()` / `CanonicalizeObjective()`** — pure.
+- **`Decompose()` / `PeelScale()` / `BuildAdditive()`** — shared by both clauses.
+- **`ClassifyCanonicalComparison()`** — `PER_ROW` / `AGGREGATE` / `INVALID`.
+- **`VerifyCanonical()` / `VerifyCanonicalObjective()`** — non-mutating, throwing.
 
-### `src/decidb/utility/ilp_model_builder.cpp`
--   **`SolverModel::Build(SolverInput &input, const VarIndexer &indexer)`**: Static factory that transforms evaluated constraints into a flat ILP model. Handles 3 constraint paths (aggregate ungrouped, aggregate grouped, per-row). AVG scaling is applied during coefficient evaluation before `SolverInput` reaches the model builder. Takes `SolverInput` by non-const reference so raw global constraints can be moved (not copied) into `SolverModel`. The `VarIndexer` is built once in `PhysicalDecide::Finalize()` and threaded in.
--   **`SparseCoeffAccumulator`** (declared in `ilp_model.hpp`): Reusable scratch storage used by aggregate-constraint accumulation paths in both `ilp_model_builder.cpp` and `physical_decide.cpp`. Two strategies — dense (`vector<double>` indexed by flat var idx + `touched` list) when the decide-variable index span fits a memory cap, sorted/merged `(idx, coeff)` pairs otherwise.
+### `src/planner/operator/logical_decide.cpp` — stage 03
+- **`AddConstraint()` / `SetObjective()`** — the only post-planning entry points.
+- **`CollectDecideExpressionStrings()`** — the EXPLAIN walker, shared with the
+  physical operator.
+- **`Serialize()` / `Deserialize()`** — hand-maintained.
 
-### `src/decidb/utility/ilp_solver.cpp`
--   **`SolveModel(SolverInput &input, const VarIndexer &indexer)`**: Facade that builds the SolverModel and dispatches to GurobiSolver (if available) or DeterministicNaive (HiGHS fallback). Receives the `VarIndexer` from the caller (built once in finalization) instead of constructing one internally.
+### `src/optimizer/decide/decide_optimizer.cpp` — stage 05
+- **`OptimizeDecide()`** — the eight-pass sequence.
 
-### `src/decidb/gurobi/gurobi_solver.cpp`
--   **`GurobiSolver::IsAvailable()`**: One-time lazy check for Gurobi license.
--   **`GurobiSolver::Solve(const SolverModel &)`**: Builds Gurobi model via C API, solves, returns solution vector.
+### `src/execution/operator/decide/physical_decide.cpp` — stage 08
+- **`GetGlobalSinkState()`** — constructs the sink state, which absorbs bounds and
+  extracts terms before any data arrives.
+- **`Sink()` / `Combine()`** — materialize into a `ColumnDataCollection`.
+- **`Finalize()`** — entity mappings, coefficient evaluation, model build, solve.
+- **`GetData()`** — readback with type-specific projection.
 
-### `src/decidb/naive/deterministic_naive.cpp`
--   **`DeterministicNaive::Solve(const SolverModel &)`**: Converts SolverModel to HiGHS format (COO→CSR), solves, returns solution vector.
+### `src/decidb/utility/ilp_model_builder.cpp` — stage 06
+- **`SolverModel::Build(SolverInput &, const VarIndexer &)`** — three linear
+  constraint paths plus the quadratic builder. Takes `SolverInput` by non-const
+  reference so raw global constraints can be moved.
+- **`SparseCoeffAccumulator`** — reusable scratch, dense or sorted-pairs.
 
-## 4. Table-Scoped Variable Support
+### `src/decidb/utility/ilp_solver.cpp` — stage 07
+- **`SelectSolverBackend()` / `SolveModel()` / `CreateSolverSession()`**.
 
-### Key Structs
+---
 
--   **`EntityScopeInfo`** (`src/include/duckdb/planner/operator/logical_decide.hpp`): Carries table-scoped variable metadata through the plan. Contains `table_alias`, `source_table_index`, `entity_key_bindings` (logical column bindings), `entity_key_physical_indices` (physical chunk positions, resolved during plan creation in `plan_decide.cpp`), and `scoped_variable_indices`.
--   **`EntityMapping`** (`src/include/duckdb/decidb/solver_input.hpp`): Execution-time mapping from rows to entity IDs. Contains `num_entities` and `row_to_entity` vector. Built during Phase 1.5 in `physical_decide.cpp`.
--   **`VarIndexer`** (struct, `src/include/duckdb/decidb/ilp_model.hpp`): Computes and encapsulates the three-block variable layout (row-scoped, entity-scoped, global auxiliary). Provides `Get(var_idx, row)` for index lookup and `NumInstances(var_idx)` for instance count. Built once via `Build()` (owning) in `PhysicalDecide::Finalize()` and threaded through `SolveModel()` / `SolverModel::Build()`, then moved onto `gstate.var_indexer` for readback in `GetData`. `BuildRef()` (non-owning) is retained but currently unused in production code.
+## 4. Table-scoped variables end to end
 
-### Key Code Paths
+| Struct | Where | What |
+|---|---|---|
+| `EntityScopeInfo` | `logical_decide.hpp` | `table_alias`, `source_table_index`, `entity_key_bindings`, `entity_key_physical_indices`, `scoped_variable_indices` |
+| `EntityMapping` | `solver_input.hpp` | `num_entities`, `row_to_entity` — built at execution |
+| `VarIndexer` | `ilp_model.hpp` | The four-block layout and `Get` / `InstanceColumn` / `NumInstances` |
 
--   **Grammar**: `third_party/libpg_query/grammar/statements/select.y` — `ColId '.' ColId IS variable_type` rule for qualified variable declarations.
--   **Binder**: `src/planner/binder/query_node/bind_select_node.cpp` — resolves table alias, creates `EntityScopeInfo`, stores on `BoundSelectNode`.
--   **Plan creation**: `src/execution/physical_plan/plan_decide.cpp` — transfers `EntityScopeInfo` to `LogicalDecide` / `PhysicalDecide`, resolves logical column bindings to physical chunk indices via `op.children[0]->GetColumnBindings()`.
--   **Optimizer**: `src/optimizer/decide/decide_optimizer.cpp` — auxiliary variables receive `INVALID_INDEX` scope (row-scoped); entity scope propagated via `variable_entity_scope` vector.
--   **Execution (Phase 1.5)**: `src/execution/operator/decide/physical_decide.cpp` — evaluates entity key columns, builds `EntityMapping` using `unordered_map<string, idx_t>` with NULL-safe composite key tagging.
--   **Model building**: `src/decidb/utility/ilp_model_builder.cpp` — `VarIndexer::Build()` computes three-block layout; aggregate constraint coefficients accumulated via `SparseCoeffAccumulator` (dense + touched-list, or sorted-pairs fallback) for entity-scoped variables.
--   **Readback**: `src/execution/operator/decide/physical_decide.cpp` (`GetData`) — uses `gstate.var_indexer.Get(var_idx, row)` for all variable types.
+The path:
+
+1. **Grammar** — `ColId '.' ColId '(' variable_type ')'` in `select.y`.
+2. **Binder** — resolves the alias, creates or reuses the scope via
+   `FindOrCreateEntityScope`, records `DecideVarScopeInfo::Entity(idx)`.
+3. **Logical plan** — `entity_key_expressions` keeps the key columns alive through
+   column pruning.
+4. **Plan creation** — `plan_decide.cpp` resolves logical bindings to physical
+   chunk indices against the child's `GetColumnBindings()`.
+5. **Optimizer** — auxiliary variables are global, not entity-scoped.
+6. **Execution PHASE 1.5** — composite NULL-safe key → entity id → `row_to_entity`.
+7. **Model building** — one solver column per entity; coefficients from rows sharing
+   an entity **accumulate** through `SparseCoeffAccumulator`.
+8. **Readback** — `var_indexer.Get(var_idx, row)`, so every row of an entity gets the
+   same value.

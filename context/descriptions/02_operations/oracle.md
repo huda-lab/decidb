@@ -126,7 +126,7 @@ native implication that does not require a hand-picked Big-M.
 not installed or the Gurobi environment cannot start (missing/expired
 license), raises `ImportError` with a clear message. HiGHS is not a fallback
 on the oracle side; the separate DeciDB CLI-side HiGHS backend documented
-in `01_pipeline/03d_solver_backends.md` is unrelated.
+in `01_pipeline/07_solver/done.md` is unrelated.
 
 ### 3.2 Comparison (`comparison/compare.py`)
 
@@ -472,7 +472,7 @@ bash run_tests.sh -k "test_my_new_query" -v
 8. **Gurobi is mandatory on the oracle side.** If gurobipy isn't installed or
    no valid Gurobi license is available, `run_tests.sh` pre-flights the
    failure and exits with a clear error. There is no HiGHS fallback on the
-   oracle side; the DeciDB CLI's HiGHS fallback (`01_pipeline/03d_solver_backends.md`)
+   oracle side; the DeciDB CLI's HiGHS fallback (`01_pipeline/07_solver/done.md`)
    is unrelated.
 
 9. **TPC-H scale factor sensitivity.** Tests are tuned for SF-0.01

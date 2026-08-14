@@ -84,6 +84,11 @@ enum class ObjectiveAggregateType : uint8_t {
 //!   STRUCTURAL     — synthesized definition/linking row; rigid.
 enum class ConstraintKind : uint8_t { USER_PARAMETER, USER_MECHANISM, STRUCTURAL };
 
+//! Reduction that owns a linear term in a canonical constraint LHS. Fixed
+//! (decision-free) terms may only reach the model builder through a SUM reducer;
+//! a NONE fixed term there means an earlier canonical-shape invariant was broken.
+enum class LinearTermReduction : uint8_t { NONE, SUM };
+
 inline bool IsRelaxableForElastic(ConstraintKind kind) {
 	return kind == ConstraintKind::USER_PARAMETER;
 }
@@ -98,7 +103,7 @@ inline bool IsRelaxableForElastic(ConstraintKind kind) {
 //!   SHARED_SCALAR  — one query-wide RHS value fans into N rows (easy MIN/MAX
 //!                    `MAX(e)<=K`, a per-row constraint with a constant or
 //!                    uncorrelated-subquery RHS, a multi-instance bound):
-//!                    the N rows of a (clause_id, group_key) block share ONE slack, so
+//!                    the N rows of a (repair_group_id, group_key) block share ONE slack, so
 //!                    the reported edit is the max overshoot, not the sum.
 enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_SCALAR };
 
@@ -152,7 +157,7 @@ static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
 
 //! Returns true if the alias is PER_CONSTRAINT_TAG
 inline bool IsPerConstraintTag(const string &alias) {
-	return alias == PER_CONSTRAINT_TAG;
+	return HasDecideTag(alias, PER_CONSTRAINT_TAG);
 }
 
 //! Tag used by the parser to mark a relation-qualified reducer, `sum(D: expr)`.
@@ -218,6 +223,40 @@ static constexpr const char *QUERY_WIDE_VALUE_TAG = "__query_wide_value__";
 //! row-varying; the tag exists so downstream diagnostics never quote DuckDB's internal
 //! `SUBQUERY` placeholder as if it were user SQL.
 static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery__";
+
+//! Stable source-comparison identity. The payload indexes the per-DECIDE
+//! ConstraintSourceInfo registry; it survives canonical rebuilding and optimizer
+//! one-to-many rewrites but is never used to group elastic slacks.
+static constexpr const char *SOURCE_CLAUSE_TAG_PREFIX = "__source_clause_";
+
+//! Parsed-source fragment identity for casts and scalar subqueries whose spelling
+//! cannot be reconstructed after binding/PlanSubqueries.
+static constexpr const char *SOURCE_FRAGMENT_TAG_PREFIX = "__source_fragment_";
+
+inline string MakeSourceClauseTag(idx_t source_clause_id) {
+	return string(SOURCE_CLAUSE_TAG_PREFIX) + to_string(source_clause_id) + "__";
+}
+
+inline string MakeSourceFragmentTag(idx_t fragment_id) {
+	return string(SOURCE_FRAGMENT_TAG_PREFIX) + to_string(fragment_id) + "__";
+}
+
+inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, idx_t &value) {
+	string digits;
+	if (!ExtractDecideTagPayload(alias, prefix, digits) || digits.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	value = static_cast<idx_t>(std::stoull(digits));
+	return true;
+}
+
+inline bool TryParseSourceClauseTag(const string &alias, idx_t &source_clause_id) {
+	return TryParseDecideIndexTag(alias, SOURCE_CLAUSE_TAG_PREFIX, source_clause_id);
+}
+
+inline bool TryParseSourceFragmentTag(const string &alias, idx_t &fragment_id) {
+	return TryParseDecideIndexTag(alias, SOURCE_FRAGMENT_TAG_PREFIX, fragment_id);
+}
 
 //! Classification stamped by DecideCanonicalizer on the complete canonical RHS when
 //! every component is query-wide. Physical evaluation consumes this fact and does not

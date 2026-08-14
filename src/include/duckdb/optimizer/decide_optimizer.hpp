@@ -95,6 +95,11 @@ private:
 	//! Objective-side MIN/MAX detection and rewriting.
 	//! Handles flat (non-PER) and nested PER objectives.
 	void RewriteMinMaxObjective(LogicalDecide &decide);
+	//! The tree half of RewriteMinMaxObjective, split out so the objective can be
+	//! detached, rewritten, and reinstalled through LogicalDecide::SetObjective. It
+	//! cannot detach at the end instead: the rewrite writes through a pointer that
+	//! walks INTO the tree past PER/WHEN wrappers and casts, and it has early returns.
+	void RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective);
 
 	//! Detect ABS(expr) over decide variables, create auxiliary REAL variables,
 	//! replace ABS nodes with aux var references, and generate linearization constraints.

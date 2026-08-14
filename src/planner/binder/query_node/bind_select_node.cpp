@@ -34,11 +34,12 @@
 #include "duckdb/planner/expression_binder/where_binder.hpp"
 #include "duckdb/planner/expression_binder/decide_binder.hpp"
 #include "duckdb/planner/expression_binder/decide_constraints_binder.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
 #include "duckdb/decidb/utility/debug.hpp"
-#include "duckdb/decidb/symbolic/decide_symbolic.hpp"
+#include "duckdb/decidb/parsed/decide_grammar_repair.hpp"
 #include "duckdb/decidb/decide_diagnostic.hpp"
 
 namespace duckdb {
@@ -445,10 +446,9 @@ static bool ReferencesDecideVariable(ParsedExpression &expr,
 // regular DuckDB binder (used for SELECT/ORDER/etc.) and the per-row branch
 // of DecideConstraintsBinder both resolve it through the generic
 // `decide_variables` binding instead of routing `Table` to the real table
-// binding (which has no such column). The aggregate-SUM path already strips
-// qualifiers via SymbolicC++ round-trip in SimplifyDecideConstraints; this
-// pre-pass extends that behavior uniformly to per-row constraints, the
-// SELECT list, and the objective.
+// binding (which has no such column). This pre-pass strips the qualifier
+// uniformly across aggregate SUM bodies, per-row constraints, the SELECT list
+// and the objective, so no later stage has to recognize the qualified spelling.
 static void RewriteScopedVarRefs(unique_ptr<ParsedExpression> &expr,
                                   const case_insensitive_map_t<idx_t> &variables) {
 	if (!expr) {
@@ -883,6 +883,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         vector<string> var_names;
         vector<LogicalType> var_types;
         vector<bool> is_boolean_var;  // Track which variables are BOOLEAN for generating bounds
+        vector<string> decide_source_fragments;
 
         // Table-scoped variable tracking
         vector<EntityScopeInfo> entity_scopes;
@@ -1011,6 +1012,19 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             RewriteScopedVarRefs(sel_expr, decide_variable_names);
         }
 
+        // This is the only point where cast authorship is still observable. Reject
+        // explicit casts over decisions before DECIDE generates any parsed nodes and
+        // before DuckDB binding adds its own type-reconciliation casts. SELECT-list
+        // expressions are intentionally outside this solver-algebra policy.
+        if (statement.decide_constraints) {
+            ValidateDecideNoExplicitDecisionCasts(*statement.decide_constraints,
+                                                  decide_variable_names);
+        }
+        if (statement.decide_objective) {
+            ValidateDecideNoExplicitDecisionCasts(*statement.decide_objective,
+                                                  decide_variable_names);
+        }
+
         // Expand norm(expr, 0, M) (L0) first — it creates BOOLEAN indicator
         // variables and per-row linking constraints, which are then ANDed into
         // the SUCH THAT tree. Runs before RewriteNorm so the latter only sees
@@ -1073,25 +1087,26 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             // EvaluateRhsReducerPerGroup), and the canonicalizer classifies every
             // decision-free term RIGHT (B.4), so the hoist would only build a tree
             // that gets undone one stage later. Deleted 2026-08-10; see
-            // context/descriptions/canonicalize.md C.1.
+            // the canonicalization refactor.
             // deb("-- Parsed SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
             // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
-            // DECIDE variable. Must run before SimplifyDecideConstraints — the
-            // symbolic layer throws InternalException on unknown functions, and
-            // the per-row path would silently strip them.
+            // DECIDE variable, before anything downstream has to interpret them.
             ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
-            statement.decide_constraints = SimplifyDecideConstraints(*statement.decide_constraints, decide_variable_names);
-            // deb("-- Normalized SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
+            statement.decide_constraints = RepairDecideConstraintGrammar(*statement.decide_constraints);
+            // Source-only casts and scalar subqueries lose their written spelling
+            // during binding/flattening. Give those atoms stable fragment ids now;
+            // the DECIDE binder carries the tags onto the bound nodes.
+            TagDecideSourceFragments(*statement.decide_constraints, decide_source_fragments);
+            // deb("-- Repaired SUCH THAT (DOT) --\n", ExpressionToDot(*statement.decide_constraints));
         }
         if (statement.decide_objective) {
             // deb("-- Parsed OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
             ValidateDecideNoNonLinearScalar(context, *statement.decide_objective, decide_variable_names);
-            double peeled_offset = 0.0;
-            statement.decide_objective = SimplifyDecideObjective(*statement.decide_objective,
-                                                                   decide_variable_names,
-                                                                   peeled_offset);
-            result->objective_constant_offset = peeled_offset;
-            // deb("-- Normalized OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
+            // Association only. The objective's structural form -- additive spine,
+            // reducer scales, the constant offset -- is decided once on the BOUND tree
+            // by DecideCanonicalizer::CanonicalizeObjective, alongside constraints.
+            statement.decide_objective = RepairDecideObjectiveGrammar(*statement.decide_objective);
+            // deb("-- Repaired OBJECTIVE (DOT) --\n", ExpressionToDot(*statement.decide_objective));
         }
 
         bind_context.AddGenericBinding(result->decide_index, "decide_variables", var_names, var_types);
@@ -1116,6 +1131,11 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             DecideConstraintsBinder decide_constraints_binder (*this, context, decide_variable_names, scalar_variable_names, &qualifier_context);
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
+            if (result->decide_constraints) {
+                result->decide_constraint_sources = InitializeConstraintSourceInfo(
+                    *result->decide_constraints, decide_source_fragments, entity_scopes);
+                result->decide_source_fragments = decide_source_fragments;
+            }
             // Types are now determined from the DECIDE clause, not from constraint binding
         }
         if (statement.decide_objective) {

@@ -1440,7 +1440,7 @@ def test_aggregate_local_when_objective_reassociation(
 # tagged-aggregate path in `SimplifyComparisonExpr`, which folded the factor
 # INWARD (`K * (SUM(x) WHEN c)` → `WHEN(SUM(K*x), c)`) — exact for SUM/AVG and a
 # wrong answer for MIN/MAX at a negative K. That path was deleted at
-# canonicalize.md C.4; see §6 B.3 for why nothing folds inward any more.
+# the canonicalization refactor; see §6 B.3 for why nothing folds inward any more.
 #
 # These tests cover each shape with oracle-verified correctness.
 

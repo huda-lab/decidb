@@ -94,9 +94,10 @@ Full documentation lives in `[context/descriptions/](context/descriptions/)`. St
 Key areas:
 
 - `[00_project_overview/](context/descriptions/00_project_overview/)` — Syntax specification
-- `[01_pipeline/](context/descriptions/01_pipeline/)` — Query processing architecture
+- `[01_pipeline/](context/descriptions/01_pipeline/)` — The eight pipeline stages, one folder each
 - `[03_expressivity/](context/descriptions/03_expressivity/)` — Feature status (WHEN, PER, aggregates, etc.)
-- `[04_optimizer/](context/descriptions/04_optimizer/)` — Optimizer rewrite strategies
+- `[01_pipeline/04_canonicalizer/](context/descriptions/01_pipeline/04_canonicalizer/)` — The constraint/objective shape contract
+- `[01_pipeline/05_optimizer/](context/descriptions/01_pipeline/05_optimizer/)` — Optimizer rewrite strategies
 
 ## Research
 

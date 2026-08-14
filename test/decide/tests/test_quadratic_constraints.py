@@ -450,6 +450,43 @@ class TestQuadraticConstraintCorrectness:
         )
 
     @_expect_gurobi
+    def test_query_wide_subquery_scales_squared_reducer(
+        self, decidb_cli, oracle_solver
+    ):
+        """A flattened scalar subquery factor is evaluated once before Q construction.
+
+        The factor is deliberately outside SUM, which is the canonical scaled-reducer
+        shape: ``3 * SUM(POWER(x, 2)) <= 75``.
+        """
+        sql = """
+            SELECT id, ROUND(x, 4) AS x
+            FROM (VALUES (1), (2)) data(id)
+            DECIDE x(REAL)
+            SUCH THAT x >= 0 AND x <= 100
+                AND (SELECT max(s) FROM (VALUES (3.0)) scale(s))
+                    * SUM(POWER(x, 2)) <= 75
+            MAXIMIZE SUM(x)
+        """
+        rows, cols = decidb_cli.execute(sql)
+
+        oracle_solver.create_model("qcp_query_wide_scale")
+        for i in range(2):
+            oracle_solver.add_variable(
+                f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=100.0,
+            )
+        oracle_solver.add_quadratic_constraint(
+            linear={},
+            quadratic={(f"x_{i}", f"x_{i}"): 3.0 for i in range(2)},
+            sense="<=", rhs=75.0, name="query_wide_scale",
+        )
+        oracle_solver.set_objective(
+            {f"x_{i}": 1.0 for i in range(2)}, ObjSense.MAXIMIZE,
+        )
+
+        x_col = cols.index("x")
+        _assert_oracle_obj(oracle_solver, sum(float(r[x_col]) for r in rows))
+
+    @_expect_gurobi
     def test_data_dependent_coefficients(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):

@@ -3,6 +3,7 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -13,6 +14,20 @@ namespace duckdb {
 
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
     D_ASSERT(op.children.size() == 1);
+    // Both clauses are verified after ALL optimizer rewriting and before any logical
+    // expression is moved into the physical operator. The objective is checked here
+    // for the same reason the constraints are: every rewrite that touches it now
+    // re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
+    // canonical form should fail loudly rather than reach the extractor.
+    if (op.decide_constraints || op.decide_objective) {
+        DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes);
+        if (op.decide_constraints) {
+            canonicalizer.VerifyCanonical(*op.decide_constraints);
+        }
+        if (op.decide_objective) {
+            canonicalizer.VerifyCanonicalObjective(*op.decide_objective);
+        }
+    }
     // Capture child column bindings BEFORE CreatePlan: several logical operators
     // (notably LogicalProjection) move their `expressions` vector into the physical
     // op during CreatePlan, which leaves GetColumnBindings() returning an empty
@@ -53,6 +68,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->bilinear_links = std::move(op.bilinear_links);
     decide_op->abs_maximize_links = std::move(op.abs_maximize_links);
     decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
+    decide_op->constraint_sources = std::move(op.constraint_sources);
     decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
     decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
     decide_op->flat_objective_agg = op.flat_objective_agg;

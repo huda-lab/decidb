@@ -13,6 +13,7 @@
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/materialized_query_result.hpp"
 
@@ -24,7 +25,8 @@ DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &
     : DecideBinder(binder, context, variables, scalar_variables, qualifier_context) {
 }
 
-static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
+static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
+                                                 const case_insensitive_map_t<idx_t> &variables);
 
 static bool IsSupportedComparison(ExpressionType type) {
     switch (type) {
@@ -44,7 +46,7 @@ static bool IsSupportedComparison(ExpressionType type) {
 //!
 //! This used to be `IsDecideConstraintLHS`, and the name was the whole problem: it
 //! gated a *position*, so the binder required the DECIDE expression on the left and
-//! flipped the comparison when it was not (canonicalize.md site 3). Which side a term
+//! flipped the comparison when it was not (the canonicalization refactor). Which side a term
 //! belongs on is DecideCanonicalizer's decision, and it makes the same flip itself on
 //! the bound tree -- so the question here is side-agnostic, and a comparison is a
 //! constraint when EITHER side answers yes.
@@ -55,14 +57,15 @@ static bool IsDecideSide(DecideExpression type) {
 static bool IsAllowedOperatorChildren(const vector<unique_ptr<ParsedExpression>> &children,
                                       const case_insensitive_map_t<idx_t> &variables) {
     for (auto &child : children) {
-        if (!IsAllowedConstraintRHS(*child, variables)) {
+        if (!IsAllowedDecisionFreeBoundExpression(*child, variables)) {
             return false;
         }
     }
     return true;
 }
 
-static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
+                                                 const case_insensitive_map_t<idx_t> &variables) {
     switch (expr.GetExpressionClass()) {
         case ExpressionClass::CONSTANT:
             return true;
@@ -76,8 +79,9 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
                 // the latter rejected the whole wrapper. Same rule K0 already states
                 // for the canonicalizer: recurse into child 0 only.
                 //
-                // Reachable since the bind-time hoist was deleted (canonicalize.md
-                // C.1); before that, `<= SUM(b) WHEN w` was rewritten away before this
+                // Reachable since the bind-time hoist was deleted by the
+                // canonicalization refactor; before that, `<= SUM(b) WHEN w` was
+                // rewritten away before this
                 // check ever saw it. The physical layer has always had the matching
                 // stages -- EvaluateRhsReducerPerGroup applies the reducer's own filter
                 // and BuildQualifierKeepMask its de-duplication -- so this opens paths
@@ -86,7 +90,7 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
                     func.function_name == QUALIFIED_REDUCER_TAG ||
                     IsPerConstraintTag(func.function_name)) {
                     return !func.children.empty() &&
-                           IsAllowedConstraintRHS(*func.children[0], variables);
+                           IsAllowedDecisionFreeBoundExpression(*func.children[0], variables);
                 }
                 if (StringUtil::Lower(func.function_name) == "-") {
                     return false;
@@ -94,7 +98,7 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
                 if (!IsAllowedOperatorChildren(func.children, variables)) {
                     return false;
                 }
-                if (func.filter && !IsAllowedConstraintRHS(*func.filter, variables)) {
+                if (func.filter && !IsAllowedDecisionFreeBoundExpression(*func.filter, variables)) {
                     return false;
                 }
                 return true;
@@ -107,7 +111,7 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
                 if (func.children.size() != 1) {
                     return false;
                 }
-                if (func.filter && !IsAllowedConstraintRHS(*func.filter, variables)) {
+                if (func.filter && !IsAllowedDecisionFreeBoundExpression(*func.filter, variables)) {
                     return false;
                 }
                 if (ExpressionContainsDecideVariable(*func.children[0], variables)) {
@@ -116,11 +120,11 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
                 return true;
             }
             for (auto &child : func.children) {
-                if (!IsAllowedConstraintRHS(*child, variables)) {
+                if (!IsAllowedDecisionFreeBoundExpression(*child, variables)) {
                     return false;
                 }
             }
-            if (func.filter && !IsAllowedConstraintRHS(*func.filter, variables)) {
+            if (func.filter && !IsAllowedDecisionFreeBoundExpression(*func.filter, variables)) {
                 return false;
             }
             return true;
@@ -131,7 +135,7 @@ static bool IsAllowedConstraintRHS(const ParsedExpression &expr, const case_inse
         }
         case ExpressionClass::CAST: {
             auto &cast = expr.Cast<CastExpression>();
-            return IsAllowedConstraintRHS(*cast.child, variables);
+            return IsAllowedDecisionFreeBoundExpression(*cast.child, variables);
         }
         case ExpressionClass::SUBQUERY: {
             auto &subquery = expr.Cast<SubqueryExpression>();
@@ -154,7 +158,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
     }
 
     // This function no longer rewrites the parsed tree at all. It used to do two
-    // things beyond validating: flip the sides (canonicalize.md site 3), and strip
+    // things beyond validating: flip the sides (the canonicalization refactor), and strip
     // an `expr + 0` residue from the right side that the parsed-level symbolic
     // layer left behind. That layer was deleted for constraints at C.4, so nothing
     // rewrites a constraint before binding any more; a probe confirmed the strip
@@ -164,7 +168,7 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
     // DECIDE expression -- `SUM(x) <= cap` and `cap >= SUM(x)` are the same
     // constraint, and so are `x <= 5` and `5 >= x`. Nothing here rewrites the
     // comparison to make that true: DecideCanonicalizer swaps the sides on the
-    // BOUND tree when every decision term sits on the right (canonicalize.md K1),
+    // BOUND tree when every decision term sits on the right (the canonicalization refactor),
     // so a second, earlier, parsed-level flip was the last of the five duplicate
     // shape decisions the canonicalization plan exists to remove.
     string left_error, right_error;
@@ -187,7 +191,8 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
             return BindResult(BinderException::Unsupported(expr, "DECIDE constraint must contain SUM(...), AVG(...), MIN(...), or MAX(...)"));
         }
         auto IsValidBound = [&](const ParsedExpression &side) {
-            return IsAllowedConstraintRHS(side, variables) && !ExpressionContainsDecideVariable(side, variables);
+            return IsAllowedDecisionFreeBoundExpression(side, variables) &&
+                   !ExpressionContainsDecideVariable(side, variables);
         };
         if ((!IsDecideSide(left_type) && !IsValidBound(*comp.left)) ||
             (!IsDecideSide(right_type) && !IsValidBound(*comp.right))) {
@@ -331,39 +336,6 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
     return BindResult(std::move(result));
 }
 
-//! Check if a parsed constraint expression is aggregate (SUM-based).
-//! Unwraps optional WHEN wrapper to inspect the inner comparison.
-//! Handles both direct aggregates (SUM(...) <= K) and aggregate-local WHEN
-//! (SUM(...) WHEN cond <= K), on either side of the comparison -- PER runs before
-//! the comparison is bound, and since C.2 the reducer no longer has to be written
-//! on the left (`cap >= SUM(x) PER g` is the same constraint as `SUM(x) <= cap PER g`).
-//!
-//! The right-hand side counts only when the reducer there is decision-bearing. PER
-//! partitions a *reduced* constraint, and a data-only reducer on the right is a bound
-//! (`x <= MIN(price)`), which leaves the constraint per-row and PER meaningless on it.
-static bool IsAggregateConstraint(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
-    const ParsedExpression *inner = &expr;
-    // Unwrap expression-level WHEN wrapper if present
-    if (inner->GetExpressionClass() == ExpressionClass::FUNCTION) {
-        auto &func = inner->Cast<FunctionExpression>();
-        if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
-            inner = func.children[0].get();
-        }
-    }
-    // Check whether either side of the comparison contains a DECIDE aggregate
-    // (either directly or wrapped in aggregate-local WHEN)
-    if (inner->GetExpressionClass() == ExpressionClass::COMPARISON) {
-        auto &comp = inner->Cast<ComparisonExpression>();
-        if (ContainsDecideAggregate(*comp.left)) {
-            return true;
-        }
-        if (ContainsDecideAggregate(*comp.right) && ExpressionContainsDecideVariable(*comp.right, variables)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &func = expr_ptr->Cast<FunctionExpression>();
     D_ASSERT(func.children.size() >= 2);
@@ -389,13 +361,10 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
         }
     }
 
-    // Validate: constraint must be aggregate (SUM-based)
-    if (!IsAggregateConstraint(*constraint_child, variables)) {
-        return BindResult(BinderException::Unsupported(*expr_ptr,
-            "PER can only be applied to aggregate (SUM) constraints. "
-            "Per-row constraints (e.g., 'x <= 5 PER col') are not supported "
-            "because each row already has its own constraint."));
-    }
+    // Aggregate eligibility is deliberately deferred until the bound comparison has
+    // been canonicalized. Parsed shape cannot distinguish `SUM(p) + x <= 10` (a
+    // per-row decision beside a data-only reducer) from a homogeneous aggregate row.
+    // DecideCanonicalizer validates the completed shape and owns the PER error.
 
     // Bind the constraint child through normal dispatch (handles WHEN recursively)
     is_top_expression = true;
@@ -437,14 +406,23 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
 }
 
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
-	if (binding_when_condition) {
-		return ExpressionBinder::BindExpression(expr_ptr, depth);
-	}
-	if (depth > 0) {
-		return ExpressionBinder::BindExpression(expr_ptr, depth);
-	}
-	auto &expr = *expr_ptr;
-	switch (expr.GetExpressionClass()) {
+    auto result = BindExpressionInternal(expr_ptr, depth, root_expression);
+    if (!result.HasError() && result.expression) {
+        PreserveDecideSourceFragment(*expr_ptr, *result.expression);
+    }
+    return result;
+}
+
+BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
+                                                            bool root_expression) {
+    if (binding_when_condition) {
+        return ExpressionBinder::BindExpression(expr_ptr, depth);
+    }
+    if (depth > 0) {
+        return ExpressionBinder::BindExpression(expr_ptr, depth);
+    }
+    auto &expr = *expr_ptr;
+    switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF: {
         if (!is_top_expression) {
             return ExpressionBinder::BindExpression(expr_ptr, depth);
@@ -489,7 +467,7 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
             return BindFunction(expr_ptr, depth);
         }
         break;
-	}
+    }
     case ExpressionClass::COMPARISON:
         return BindComparison(expr_ptr, depth);
     case ExpressionClass::OPERATOR: {
@@ -498,17 +476,18 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
         }
         return BindOperator(expr_ptr, depth);
     }
-	case ExpressionClass::BETWEEN:
+    case ExpressionClass::BETWEEN:
         return BindBetween(expr_ptr, depth);
     case ExpressionClass::CONJUNCTION:
         return BindConjunction(expr_ptr, depth);
-    case ExpressionClass::SUBQUERY: {
+    case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
-    }
-	default:
+    default:
         break;
-	}
-    return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT clause does not support '%s'(ExpressionClass::%s)", expr.ToString(), EnumUtil::ToString(expr.GetExpressionClass()))));
+    }
+    return BindResult(BinderException::Unsupported(
+        expr, StringUtil::Format("SUCH THAT clause does not support '%s'(ExpressionClass::%s)", expr.ToString(),
+                                EnumUtil::ToString(expr.GetExpressionClass()))));
 }
 
 DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){

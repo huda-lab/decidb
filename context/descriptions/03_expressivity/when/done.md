@@ -30,7 +30,7 @@ Code pointer: deferred aggregate NE expansion in `physical_decide.cpp`, after th
 
 ### Aggregate-local WHEN
 
-Aggregate-local `WHEN` attaches to a single aggregate term (independent filters per term — see spec §6.3 for syntax). One subtlety: without parentheses around the condition, existing expression-level objective syntax such as `MAXIMIZE SUM(x * profit) WHEN category = 'electronics'` is preserved as a whole-objective `WHEN` (the symbolic layer reassociates it).
+Aggregate-local `WHEN` attaches to a single aggregate term (independent filters per term — see spec §6.3 for syntax). One subtlety: without parentheses around the condition, existing expression-level objective syntax such as `MAXIMIZE SUM(x * profit) WHEN category = 'electronics'` is preserved as a whole-objective `WHEN` (`RepairDecideObjectiveGrammar` reassociates it).
 
 ---
 
@@ -103,7 +103,7 @@ Move the shared condition into each aggregate-local filter, or keep one expressi
 
 ### Aggregate-local WHEN Composes with Constraint-LHS Arithmetic
 
-Constant offsets and constant scalar factors on a WHEN-tagged aggregate are supported in constraints — the symbolic normalizer rewrites them at the parsed-expression level (without touching the WHEN tag) before the per-row extractor runs:
+Constant offsets and constant scalar factors on a WHEN-tagged aggregate are supported in constraints. `DecideCanonicalizer` handles them on the bound tree, without touching the WHEN tag:
 
 ```sql
 -- All OK: WHEN-tagged aggregate composed with constants on the constraint LHS
@@ -121,9 +121,9 @@ SUCH THAT SUM(x) + 3 <= 10 WHEN active
 
 **How it works**: `DecideCanonicalizer` (`src/planner/decide/decide_canonicalizer.cpp`) decomposes the bound LHS additively — through `+`, binary `-`, unary `-` and widening casts — and moves every decision-free term to the bound. A WHEN-tagged aggregate is just a term to it: the pass never looks inside one, so the per-aggregate filter cannot be flattened. A factor on the aggregate (`K * (SUM(x) WHEN c)`, `(SUM(x) WHEN c) / K`) is **peeled outward** onto the term rather than folded into its body, and stays outside all the way to the solver row.
 
-Until 2026-08-12 this was done twice — the parsed-level `SimplifyComparisonExpr` had a dedicated tagged-aggregate path that did the same additive peel before binding, and folded the factor *inward*, which is a wrong answer for `MIN`/`MAX` under a negative factor. Both are gone; see `../../canonicalize.md` §6 B.3 and §7 C.4.
+Until 2026-08-12 this was done twice — a parsed-level tagged-aggregate path did the same additive peel before binding, and folded the factor *inward*, which is a wrong answer for `MIN`/`MAX` under a negative factor. That path is gone; see `../../01_pipeline/04_canonicalizer/done.md` §3.7.
 
-Objectives are still handled at the parsed level, and there the offset peel remains: `MAXIMIZE (SUM(x) WHEN cond) + 3`, `MAXIMIZE 2 * (SUM(x) WHEN cond)`, and combinations like `MINIMIZE SUM(x) + SUM(y) WHEN c - 7` are all supported. Additive constants don't affect `argmax`/`argmin` so the peel drops them from the body (stored on `LogicalDecide.objective_constant_offset` for any future feature that reports the objective value).
+**Objectives go through the same boundary.** `MAXIMIZE (SUM(x) WHEN cond) + 3`, `MAXIMIZE 2 * (SUM(x) WHEN cond)`, and combinations like `MINIMIZE SUM(x) + SUM(y) WHEN c - 7` are all supported, and are handled by `DecideCanonicalizer::CanonicalizeObjective` on the bound tree rather than at the parsed level. Additive constants don't move `argmax`/`argmin`, so they are peeled out of the body onto `LogicalDecide::objective_constant_offset` — which *accumulates*, so the constant the user wrote survives every later optimizer rewrite.
 
 > **Parser limitation (unchanged)**: writing `SUM(x) WHEN cond + 3 <= K` without parentheses around the condition is a plain `Parser Error` because aggregate-local `WHEN` binds tighter than `>`/`<=` per `POSTFIXOP` precedence, and `%nonassoc` comparisons can't chain. Use `SUM(x) WHEN (cond) + 3 <= K` (parens around the condition).
 
@@ -198,11 +198,11 @@ Decomposing into multiple WHEN constraints fails here because the conditions ove
 
 ### Rejection of inline CASE inside DECIDE
 
-A `CASE` expression placed directly inside a DECIDE constraint or objective is rejected with a friendly user-facing error that points to the supported alternatives (postfix `WHEN`, `PER`, CTE pre-computation). Both the binder path (CASE inside `SUM`/`MIN`/`MAX`/`AVG`) and the symbolic-translation path (CASE elsewhere in a constraint or objective) surface the same message — no stack trace, no internal-error wording. See `src/planner/expression_binder/decide_binder.cpp` (`ValidateSumArgumentInternal`) and `src/decidb/symbolic/decide_symbolic.cpp` (`ToSymbolicRecursive`).
+A `CASE` expression placed directly inside a DECIDE constraint or objective is rejected with a friendly user-facing error that points to the supported alternatives (postfix `WHEN`, `PER`, CTE pre-computation). The friendly message comes from `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide_binder.cpp` and fires for a CASE **inside** a reducer. A CASE elsewhere in a constraint currently falls through to the generic binder message instead — see [`todo.md`](todo.md).
 
 ### How DECIDE `WHEN` is tokenized (`WHEN_DECIDE`)
 
-The DECIDE `WHEN` keyword is lexed as a **distinct token `WHEN_DECIDE`**, separate from the `WHEN` used by SQL `CASE … WHEN … THEN`. The scanner filter `base_yylex` (`third_party/libpg_query/src_backend_parser_parser.cpp`) sets an `in_decide_clause` flag when it returns the `DECIDE` token (cleared by the `decide_clause` grammar action) and, while set, rewrites `WHEN` → `WHEN_DECIDE`. The DECIDE grammar productions (`c_expr` aggregate-local atom, `decide_constraint_item`, `decide_objective_item` in `grammar/statements/select.y`) reference `WHEN_DECIDE`, so the DECIDE WHEN never enters the global expression grammar — which previously corrupted ordinary function-call parsing (see `context/descriptions/07_issues/bugs/done.md`).
+The DECIDE `WHEN` keyword is lexed as a **distinct token `WHEN_DECIDE`**, separate from the `WHEN` used by SQL `CASE … WHEN … THEN`. The scanner filter `base_yylex` (`third_party/libpg_query/src_backend_parser_parser.cpp`) sets an `in_decide_clause` flag when it returns the `DECIDE` token (cleared by the `decide_clause` grammar action) and, while set, rewrites `WHEN` → `WHEN_DECIDE`. The DECIDE grammar productions (`c_expr` aggregate-local atom, `decide_constraint_item`, `decide_objective_item` in `grammar/statements/select.y`) reference `WHEN_DECIDE`, so the DECIDE WHEN never enters the global expression grammar — which previously corrupted ordinary function-call parsing (it collided with `WITHIN GROUP` after a function call). See `../../01_pipeline/01_parser/done.md` §2.
 
 The rewrite is suppressed inside a `CASE … END` (tracked by `decide_case_depth`), so a `CASE` written inside a DECIDE expression still parses with ordinary `WHEN` and is then rejected by the binder with the friendly error above — rather than failing with a raw parser syntax error.
 
@@ -252,7 +252,7 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
 
 - **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
   - `BindExpression()`: Handles PER stripping on objectives, then WHEN condition extraction on the objective expression. Nested `WHEN_CONSTRAINT_TAG` binds as aggregate-local.
-  - Objective normalization in `src/decidb/symbolic/decide_symbolic.cpp`: reassociates legacy objective comparisons like `SUM(x) WHEN flag = 'R'` back into whole-objective `WHEN(flag = 'R')`.
+  - `RepairDecideObjectiveGrammar` (`src/decidb/parsed/decide_grammar_repair.cpp`): reassociates objective comparisons like `SUM(x) WHEN flag = 'R'` back into whole-objective `WHEN(flag = 'R')`.
 
 - **Base DECIDE binder**: `src/planner/expression_binder/decide_binder.cpp`
   - `BindLocalWhenAggregate()`: Binds the aggregate child, binds the data-only boolean condition, and stores the condition as `BoundAggregateExpression::filter`.

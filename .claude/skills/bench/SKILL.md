@@ -92,7 +92,7 @@ Consider factors like:
 - Regressions vs previous commits if comparison data is available
 - What the query's DECIDE clause actually does (read the SQL) and whether the formulation could be tighter
 
-Also check `context/descriptions/06_performance/` for already-applied optimizations so you don't re-suggest one.
+Also check `context/descriptions/05_performance/` for already-applied optimizations so you don't re-suggest one.
 
 Point to specific files and code paths in your suggestions. Be concrete and actionable, not generic.
 

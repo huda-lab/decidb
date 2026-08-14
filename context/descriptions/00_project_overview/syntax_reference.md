@@ -194,30 +194,33 @@ digits. This is not a policy choice — the solver interface is `double` through
 Gurobi and HiGHS take doubles, so every value in a model ends up there whatever
 types the SQL expression carried.
 
-Two consequences, both of which DeciDB makes explicit rather than silent:
+Three consequences are explicit:
 
-**Type-reconciling casts are erased.** Comparing sides of different types makes SQL
-insert a cast you never wrote — `SUM(x) <= cap` becomes `HUGEINT -> DECIMAL(38,1)`
-because that is the two sides' common type. Such a cast moves a value into the model
-domain without changing it, so it is removed at the canonicalization boundary and no
-later stage has to reason about it.
-
-**Casts that change a value are rejected.** A cast is a *computation*, not a
-container change, when it reduces resolution — an integral target for a fractional
-source, or a `DECIMAL` target with a smaller scale:
+**Do not cast decision expressions in solver clauses.** `CAST`, `TRY_CAST`, and `::`
+are rejected when their input contains a decision variable in `SUCH THAT` or the
+objective. This is independent of the target type:
 
 ```sql
-DECIDE x(REAL) SUCH THAT CAST(x AS INTEGER) <= 3     -- rejected
+SUCH THAT CAST(x AS INTEGER) <= 3     -- rejected
+SUCH THAT TRY_CAST(x AS DOUBLE) <= 3  -- rejected
+MAXIMIZE SUM(x::DOUBLE)               -- rejected
 ```
 
-`CAST(x AS INTEGER)` means `round(x)`, so that constraint is `round(x) <= 3`, i.e.
-`x < 3.5` — a step function, which is nonlinear and belongs to the same family as
-`ABS` and `MIN`/`MAX` rather than to casting. DeciDB refuses it with an actionable
-message instead of quietly answering `x <= 3`. Compare the variable directly, or
-round the bound.
+Decision values already enter the solver as DOUBLE, so a cast to DOUBLE is redundant.
+Other targets introduce SQL computations such as rounding that are not supported
+solver algebra. Compare the decision directly and cast the data or bound instead.
 
-Casts over **data** are untouched: `x <= CAST(1.6 AS INTEGER)` is a bound of `2`,
-because there the rounding is an ordinary value computation the executor performs.
+**Data casts retain DuckDB semantics.** `x <= CAST(1.6 AS INTEGER)` has a bound of 2,
+and `SUM(x * CAST(weight AS INTEGER))` uses the cast result as its coefficient.
+DuckDB evaluates the complete typed data expression first; DeciDB converts only its
+result to DOUBLE when building the solver model.
+
+**Internal casts are transparent.** DuckDB may insert casts to reconcile SQL types,
+for example when comparing `SUM(x)` with a DECIMAL column. Those binder-generated
+wrappers over decision algebra are implementation detail and do not change the model.
+
+This restriction does not affect ordinary SQL. A cast in a standard query or in the
+post-solve `SELECT` list, including `SELECT CAST(x AS INTEGER)`, behaves normally.
 
 **Beyond the domain.** Above `2^53` (about 9 quadrillion) a DECIDE model and
 row-by-row SQL evaluation can disagree, because SQL rounds each side of a written

@@ -52,20 +52,31 @@ string LogicalDecide::GetName() const {
 }
 
 void LogicalDecide::AddConstraint(ClientContext &context, unique_ptr<Expression> constraint) {
-	DecideCanonicalizer canonicalizer(context, decide_index);
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes);
 	auto canonical = canonicalizer.CanonicalizeTree(*constraint);
+	canonicalizer.VerifyCanonical(*canonical);
 
 	if (!decide_constraints) {
 		decide_constraints = std::move(canonical);
-		return;
+	} else {
+		auto conj = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		conj->children.push_back(std::move(decide_constraints));
+		conj->children.push_back(std::move(canonical));
+		decide_constraints = std::move(conj);
 	}
-	auto conj = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	conj->children.push_back(std::move(decide_constraints));
-	conj->children.push_back(std::move(canonical));
-	decide_constraints = std::move(conj);
 }
 
-void LogicalDecide::CollectTaggedExpressionStrings(const Expression &expr, vector<string> &out) {
+void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> objective) {
+	if (!objective) {
+		decide_objective = nullptr;
+		return;
+	}
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes);
+	decide_objective = canonicalizer.CanonicalizeObjective(*objective, objective_constant_offset);
+	canonicalizer.VerifyCanonicalObjective(*decide_objective);
+}
+
+void CollectDecideExpressionStrings(const Expression &expr, vector<string> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
@@ -86,17 +97,17 @@ void LogicalDecide::CollectTaggedExpressionStrings(const Expression &expr, vecto
 			}
 			// Recurse into child[0]; append PER suffix to each leaf
 			vector<string> inner;
-			CollectTaggedExpressionStrings(*conj.children[0], inner);
+			CollectDecideExpressionStrings(*conj.children[0], inner);
 			for (auto &s : inner) {
 				out.push_back(s + per_suffix);
 			}
 			return;
 		}
-		if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
 			// WHEN wrapper: child[0] is the constraint, child[1] is the condition
 			string when_suffix = " WHEN " + conj.children[1]->GetName();
 			vector<string> inner;
-			CollectTaggedExpressionStrings(*conj.children[0], inner);
+			CollectDecideExpressionStrings(*conj.children[0], inner);
 			for (auto &s : inner) {
 				out.push_back(s + when_suffix);
 			}
@@ -104,7 +115,7 @@ void LogicalDecide::CollectTaggedExpressionStrings(const Expression &expr, vecto
 		}
 		// Regular AND conjunction: recurse on each child
 		for (auto &child : conj.children) {
-			CollectTaggedExpressionStrings(*child, out);
+			CollectDecideExpressionStrings(*child, out);
 		}
 		return;
 	}
@@ -132,7 +143,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	if (decide_objective) {
 		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectTaggedExpressionStrings(*decide_objective, objective_strs);
+		CollectDecideExpressionStrings(*decide_objective, objective_strs);
 		for (idx_t i = 0; i < objective_strs.size(); i++) {
 			if (i > 0) {
 				obj_info += "\n";
@@ -147,7 +158,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	// Constraints: walk the AND-tree and collect individual constraints
 	if (decide_constraints) {
 		vector<string> constraint_strs;
-		CollectTaggedExpressionStrings(*decide_constraints, constraint_strs);
+		CollectDecideExpressionStrings(*decide_constraints, constraint_strs);
 		string constraints_info;
 		for (idx_t i = 0; i < constraint_strs.size(); i++) {
 			if (i > 0) {
@@ -168,7 +179,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 // only definition. entity_scopes (vector<EntityScopeInfo>) and
 // variable_scopes (vector<DecideVarScopeInfo>) are structs the generator's
 // direct member-mapping can't express, so they're flattened into parallel
-// primitive vectors on the wire; ids 200-233 (below) are the single
+// primitive vectors on the wire; ids 200-237 (below) are the single
 // authoritative registry of this operator's serialized fields.
 void LogicalDecide::Serialize(Serializer &serializer) const {
 	LogicalOperator::Serialize(serializer);
@@ -252,6 +263,20 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<idx_t>>(222, "scope_binding_cols", scope_binding_cols);
 	serializer.WritePropertyWithDefault<vector<idx_t>>(223, "scope_var_counts", scope_var_counts);
 	serializer.WritePropertyWithDefault<vector<idx_t>>(224, "scope_var_indices", scope_var_indices);
+	vector<string> source_lhs;
+	vector<string> source_rhs;
+	vector<string> source_qualifiers;
+	vector<uint8_t> source_rhs_kinds;
+	for (auto &source : constraint_sources) {
+		source_lhs.push_back(source.canonical_lhs);
+		source_rhs.push_back(source.canonical_rhs);
+		source_qualifiers.push_back(source.qualifier);
+		source_rhs_kinds.push_back(static_cast<uint8_t>(source.rhs_kind));
+	}
+	serializer.WritePropertyWithDefault<vector<string>>(234, "constraint_source_lhs", source_lhs);
+	serializer.WritePropertyWithDefault<vector<string>>(235, "constraint_source_rhs", source_rhs);
+	serializer.WritePropertyWithDefault<vector<string>>(236, "constraint_source_qualifiers", source_qualifiers);
+	serializer.WritePropertyWithDefault<vector<uint8_t>>(237, "constraint_source_rhs_kinds", source_rhs_kinds);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -357,6 +382,31 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 			}
 			var_offset += num_vars;
 			result->entity_scopes.push_back(std::move(scope));
+		}
+	}
+	vector<string> source_lhs;
+	vector<string> source_rhs;
+	vector<string> source_qualifiers;
+	vector<uint8_t> source_rhs_kinds;
+	deserializer.ReadPropertyWithDefault<vector<string>>(234, "constraint_source_lhs", source_lhs);
+	deserializer.ReadPropertyWithDefault<vector<string>>(235, "constraint_source_rhs", source_rhs);
+	deserializer.ReadPropertyWithDefault<vector<string>>(236, "constraint_source_qualifiers", source_qualifiers);
+	deserializer.ReadPropertyWithDefault<vector<uint8_t>>(237, "constraint_source_rhs_kinds", source_rhs_kinds);
+	if (!source_lhs.empty()) {
+		idx_t count = source_lhs.size();
+		if (source_rhs.size() != count || source_qualifiers.size() != count || source_rhs_kinds.size() != count) {
+			throw SerializationException("LogicalDecide constraint source provenance has inconsistent field lengths");
+		}
+		for (idx_t i = 0; i < count; i++) {
+			if (source_rhs_kinds[i] > static_cast<uint8_t>(ConstraintSourceRhsKind::DATA_EXPRESSION)) {
+				throw SerializationException("LogicalDecide constraint source provenance contains an invalid RHS kind");
+			}
+			ConstraintSourceInfo info;
+			info.canonical_lhs = std::move(source_lhs[i]);
+			info.canonical_rhs = std::move(source_rhs[i]);
+			info.qualifier = std::move(source_qualifiers[i]);
+			info.rhs_kind = static_cast<ConstraintSourceRhsKind>(source_rhs_kinds[i]);
+			result->constraint_sources.push_back(std::move(info));
 		}
 	}
 	return std::move(result);

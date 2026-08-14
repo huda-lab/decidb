@@ -134,16 +134,17 @@ struct FoldedAggTerm {
 //! Row → clause provenance carried by every emitted constraint (F2). Lets diagnosis
 //! report at the user-clause level instead of at raw matrix rows.
 struct ConstraintProvenance {
-    //! Index into SolverInput::constraints of the user clause that produced this row.
-    //! DConstants::INVALID_INDEX for synthetic/structural rows with no user clause.
-    idx_t clause_id = DConstants::INVALID_INDEX;
+    //! Stable source comparison used only for display provenance.
+    idx_t source_clause_id = DConstants::INVALID_INDEX;
+    //! Elastic grouping identity. DConstants::INVALID_INDEX for rigid/source-less rows.
+    idx_t repair_group_id = DConstants::INVALID_INDEX;
     //! PER/WHEN group id at emission (or the row id for per-row clauses).
     //! DConstants::INVALID_INDEX when the clause is ungrouped.
     idx_t group_key = DConstants::INVALID_INDEX;
     //! User parameter vs rigid mechanism/structural row (see ConstraintKind).
     ConstraintKind kind = ConstraintKind::USER_PARAMETER;
     //! Elastic-diagnosis shape (I2): does this row share ONE slack with its
-    //! (clause_id, group_key) siblings, or get its own? Relaxable user-clause
+    //! (repair_group_id, group_key) siblings, or get its own? Relaxable user-clause
     //! rows must be stamped explicitly by the builder site.
     ElasticShape shape = ElasticShape::UNSET;
     //! True when the row's coefficients were pre-scaled by 1/N_g for an AVG rewrite.
@@ -237,6 +238,8 @@ struct SolverModel {
 
     //! Constraints (linear)
     vector<ModelConstraint> constraints;
+    //! Stable source display registry, indexed by source_clause_id.
+    vector<ConstraintSourceInfo> constraint_sources;
 
     //! Quadratic constraints: sum(linear) + sum(q * x_i * x_j) <sense> rhs
     //! Used for bilinear terms in constraints (QCQP). Gurobi only.

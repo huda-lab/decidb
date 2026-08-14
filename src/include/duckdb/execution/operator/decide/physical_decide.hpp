@@ -21,6 +21,7 @@ struct Term {
     int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
     unique_ptr<Expression> filter;       // Optional aggregate-local WHEN filter
     bool avg_scale = false;              // True when this term came from AVG and needs 1/N scaling
+    LinearTermReduction reduction = LinearTermReduction::NONE;
     //! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
     //! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
     //! entity_mappings; coefficient evaluation keeps one row per tuple identity
@@ -61,6 +62,8 @@ struct DecideConstraint {
     unique_ptr<Expression> when_condition;           // DecidB: optional WHEN condition (nullptr = unconditional)
     vector<unique_ptr<Expression>> per_columns;     // DecidB: optional PER grouping columns (empty = no grouping)
     ConstraintKind kind = ConstraintKind::USER_PARAMETER;
+    //! Stable origin in PhysicalDecide::constraint_sources.
+    idx_t source_clause_id = DConstants::INVALID_INDEX;
 
 
     // Bilinear terms in constraint (non-Boolean pairs left by optimizer)
@@ -74,6 +77,9 @@ struct DecideConstraint {
     struct QuadraticGroup {
         vector<Term> inner_terms;  // Inner linear expression of POWER(inner, 2)
         double sign = 1.0;         // +1, -1, or scalar (from negation/scaling)
+        //! Query-wide reducer scale not known until the relational input runs.
+        unique_ptr<Expression> scale;
+        bool scale_divides = false;
         unique_ptr<Expression> filter; // Optional aggregate-local WHEN filter
         bool avg_scale = false;    // True when this group came from AVG and needs 1/N scaling
         //! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
@@ -155,6 +161,9 @@ public:
 
     // The bound constraints expression
     unique_ptr<Expression> decide_constraints;
+
+    //! Stable source display registry copied from LogicalDecide.
+    vector<ConstraintSourceInfo> constraint_sources;
 
     // The optimization sense (MINIMIZE or MAXIMIZE)
     DecideSense decide_sense;
@@ -299,7 +308,7 @@ public:
     //!   K * quadratic_pattern (K constant, either side).
     //! Cast wrappers are unwrapped transparently. The `inner linear expression`
     //! returned is the argument inside POWER / one side of the self-product.
-    QuadraticPattern DetectQuadraticPattern(const Expression &expr) const;
+    QuadraticPattern DetectQuadraticPattern(ClientContext &context, const Expression &expr) const;
 };
 
 } // namespace duckdb

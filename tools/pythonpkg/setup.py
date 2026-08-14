@@ -429,8 +429,6 @@ else:
     import package_build
 
     include_directories += [os.path.join('..', '..', include) for include in package_build.third_party_includes()]
-    # Add DecidB third-party dependencies (SymbolicC++)
-    include_directories += [os.path.join('..', '..', 'third_party', 'symboliccpp')]
     toolchain_args += ['-I' + x for x in package_build.includes(extensions)]
 
     result_libraries = package_build.get_libraries(existing_duckdb_dir, libraries, extensions)

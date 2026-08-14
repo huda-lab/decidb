@@ -30,7 +30,7 @@ Unparenthesized WHEN conditions behave differently across constraint side, objec
 
 | WHEN shape | Constraint side | Objective side |
 |---|---|---|
-| `WHEN x = y` (comparison) | Parser error: `syntax error at or near "<="` (the `<=` token after the comparison is unparseable inside `c_expr`) | **Works** — `ReassociateObjectiveWhenComparison()` in `decide_symbolic.cpp` rewrites `(SUM(...) WHEN x) = y` into `SUM(...) WHEN (x = y)` |
+| `WHEN x = y` (comparison) | Parser error: `syntax error at or near "<="` (the `<=` token after the comparison is unparseable inside `c_expr`) | **Works** — `ReassociateObjectiveWhenComparison()` in `src/decidb/parsed/decide_grammar_repair.cpp` rewrites `(SUM(...) WHEN x) = y` into `SUM(...) WHEN (x = y)` |
 | `WHEN NOT x` | Parser error: `syntax error at or near "NOT"` | Parser error: `syntax error at or near "NOT"` (reassociator only handles comparison-of-aggregate, not unary NOT) |
 | `WHEN a + b > 5` | Parser error: `syntax error at or near "<="` | Binder error: `[MAXIMIZE\|MINIMIZE] clause does not support '...'(ExpressionClass::COMPARISON)` (parser succeeds via reassociator path but the resulting expression is not a valid objective component) |
 
@@ -53,3 +53,32 @@ SUM(x * value) <= 12 WHEN (a + b > 5)
 **Potential fixes**: (a) extend `ReassociateObjectiveWhenComparison()` to cover constraints (would handle `WHEN x = y` on the constraint side); (b) widen the `decide_when_condition` grammar to admit `NOT`, comparisons, and arithmetic directly (requires `make grammar-build`) — this is the cleanest fix but touches the regenerated parser.
 
 **Fix (c) shipped.** The parser error now carries an actionable parenthesization hint (`MaybeAppendDecideWhenHint`, `src/decidb/utility/decide_parse_hints.cpp`, called from `src/parser/parser.cpp`) — see `done.md` → "Actionable parser hint". This addresses the *messaging* half of the asymmetry; the underlying grammar restriction (needing parens at all) remains, so (a)/(b) are still the deeper fixes. The sentinel test in `test_when_grammar.py` stays valid because the hint is appended to — not a replacement for — the original `syntax error` text.
+
+---
+
+## A `CASE` outside a reducer gets the generic binder message, not the friendly one
+
+`ValidateSumArgumentInternal` produces the intended message — naming postfix
+`WHEN`, `PER`, and CTE pre-computation as the alternatives — but only for a `CASE`
+**inside** a reducer. A `CASE` elsewhere in a constraint falls through to DuckDB's
+generic wording.
+
+```sql
+-- friendly (inside a reducer)
+SUCH THAT SUM(x * (CASE WHEN a>0 THEN 1 ELSE 2 END)) <= 5
+  → CASE expressions are not supported inside DECIDE constraints or objectives.
+    Use postfix WHEN … PER … or a CTE/subquery …
+
+-- generic (outside a reducer)
+SUCH THAT x + (CASE WHEN a>0 THEN 1 ELSE 2 END) <= 5
+  → SUCH THAT clause does not support 'CASE  WHEN ((a > 0)) THEN (1) ELSE 2 END'
+    (ExpressionClass::CASE)
+```
+
+The second path used to be covered by the parsed-level symbolic translator, which
+was deleted. The fix is to move the `CASE` check to where the constraint binder
+classifies an unsupported expression class, so both spellings share one message —
+`ExpressionClass::CASE` is internal jargon a SQL user cannot act on.
+
+**Discovered**: 2026-08-14, verifying this document against the running binary
+during the pipeline documentation restructure.

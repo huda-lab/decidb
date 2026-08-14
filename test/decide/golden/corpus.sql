@@ -184,8 +184,7 @@ DECIDE i.keep(BOOL) SUCH THAT SUM(i: keep) <= 2 MAXIMIZE SUM(i.price * keep);
 
 -- ---------------------------------------------------------------------------
 -- Shapes unlocked by Phase A (sign-aware ABS Big-M + composed MIN/MAX).
--- Before Phase A the canonicalizer declined every one of these (decision terms
--- on both sides), so they were handled by the physical fallback or rejected.
+-- Canonicalization now places every decision term before these optimizer rewrites.
 -- ---------------------------------------------------------------------------
 
 -- 40 ABS on both sides: canonicalizes to `ABS(x-3) - ABS(x-9) <= 0`, so aux1
@@ -199,9 +198,8 @@ SUCH THAT x <= 20 AND ABS(x - 3) <= ABS(x - 9) MAXIMIZE SUM(x);
 SELECT id, x, y FROM items DECIDE x(REAL), y(REAL)
 SUCH THAT x <= 20 AND y <= 20 AND ABS(x - 3) - ABS(y - 9) <= 0 MAXIMIZE SUM(x) + SUM(y);
 
--- 42 negated reducer in an additive LHS
--- (`SUM(x) <= SUM(y)` is the same constraint but is rejected earlier, by the
--- binder's one-sided IsDecideConstraintLHS check -- that is Phase C.2, not A.)
+-- 42 negated reducer in an additive LHS. The equivalent
+-- `SUM(x) <= SUM(y)` is accepted by the side-agnostic binder and canonicalizer.
 SELECT id, x, y FROM items DECIDE x(INT), y(INT)
 SUCH THAT SUM(x) - SUM(y) <= 0 AND x <= 5 AND y <= 3 MAXIMIZE SUM(x);
 
@@ -218,12 +216,9 @@ SUCH THAT 3 - MAX(x) <= 0 AND x <= 9 MINIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
 -- Cast-lid shapes (Phase B.2). DuckDB wraps a whole comparison side in a cast
--- whenever the side's natural type differs from the comparison's resolved type,
--- so the additive spine arrives sealed. Descending widening casts is what lets
--- the canonicalizer split these; without it the whole side is one opaque term
--- and the work falls to the physical fallback. These are model-identical today
--- BECAUSE that fallback still exists -- they become the discriminating cases
--- when Phase C.3 deletes it.
+-- whenever the side's natural type differs from the comparison's resolved type.
+-- The canonicalizer descends binder-added decision casts and exposes the additive
+-- spine before physical extraction consumes the canonical form.
 -- ---------------------------------------------------------------------------
 
 -- 45 two aggregate-local WHEN reducers, one negated, under a DECIMAL->DOUBLE

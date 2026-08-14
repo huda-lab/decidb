@@ -220,7 +220,7 @@ def test_qualified_minmax(decidb_cli, duckdb_conn, agg, sense, perf_tracker):
     Nation 0 is excluded so no identity has a zero coefficient, which would pin MIN
     at 0 and make the comparison vacuous. The coefficient is a bare column rather
     than `n_nationkey + 1` because an additive coefficient inside a MIN/MAX objective
-    trips a pre-existing Gurobi load failure — see 07_issues/bugs/todo.md.
+    trips a pre-existing Gurobi load failure — see 06_issues/bugs/todo.md.
     """
     template = """
         SELECT c.c_custkey, n.n_nationkey, keepN
@@ -693,7 +693,7 @@ def test_qualified_reducer_as_a_bound(decidb_cli, duckdb_conn, oracle_solver):
     ``BuildQualifierKeepMask`` for a right-hand reducer that the left side uses), but
     it was unreachable: the binder's RHS check validated the qualifier wrapper's second
     child — a relation alias — as if it were a value on the bound side, and rejected the
-    whole constraint. Reachable since canonicalize.md B.4/C.1.
+    whole constraint. Reachable since the canonicalization refactor.
 
     The de-duplication is the whole test. Four distinct nations sum to 50, so the bound
     is 2; the join repeats each nation once per customer, and the row-weighted sum is

@@ -153,7 +153,7 @@ def test_rhs_avg_mixed_with_other_terms(decidb_cli):
     DOUBLE->DOUBLE.
 
     A bare `<= AVG(b)` never exercised this: the bind-time hoist moved it left and
-    scaled it there. That hoist is gone (canonicalize.md C.1), so both forms now go
+    scaled it there. That hoist is gone (the canonicalization refactor), so both forms now go
     through this path.
     """
     # AVG(b) = 5.0, so the bound is 10 and exactly one weight-10 item fits: the

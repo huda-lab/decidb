@@ -14,7 +14,7 @@ When one factor is declared `BOOL`, the product `b * x` is exactly linearized us
 explicitly (`x <= K`) **or inferred** by implied-bound propagation from a
 non-negative `<=`/`=` constraint such as `SUM(x) <= K` (which implies `x <= K`).
 Only when no finite bound can be derived does DeciDB reject with the "finite upper
-bound" error. See `../../04_optimizer/matrix_efficiency/done.md`. Note: implied-bound
+bound" error. See `../../01_pipeline/05_optimizer/done.md`. Note: implied-bound
 propagation does **not** fire for a **signed** (negative-lower-bound) `x`, so a
 signed `x` in a bilinear product must carry an *explicit* finite upper bound.
 
@@ -89,7 +89,7 @@ Only bilinear (`x * y`, different variables, each linear in decide vars) and qua
 - `POWER(x, 2) * POWER(x, 2)` (x⁴) — identical squared self-product
 - `x * x * y`, `POWER(POWER(x, 2), 2)` (x⁴), etc.
 
-Without this guard the bilinear emitter would silently treat the inner POWER / nested-`*` factor as an opaque "data coefficient", producing a wrong Q matrix or crashing the coefficient evaluator. See `problem_types/done.md` → "Quadratic objective detection" Code Pointer for the shared helper and the corresponding test rows in `05_testing/quadratic/done.md`.
+Without this guard the bilinear emitter would silently treat the inner POWER / nested-`*` factor as an opaque "data coefficient", producing a wrong Q matrix or crashing the coefficient evaluator. See `problem_types/done.md` → "Quadratic objective detection" Code Pointer for the shared helper and the corresponding test rows in `04_testing/quadratic/done.md`.
 
 ---
 
@@ -98,8 +98,6 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 ### Pipeline Flow
 
 1. **Binder** (`decide_binder.cpp`): Relaxed validation to allow `decide_count == 2` products when `allow_quadratic` or `allow_bilinear` is true. Triple products (`a * b * c`) rejected. `allow_bilinear` parameter added for constraints (separate from `allow_quadratic` to prevent POWER in constraints).
-
-2. **Symbolic** (`decide_symbolic.cpp`): Bilinear expressions now go through SymEngine's normal `expand().simplify()` path. The previous bypass (`SumInnerContainsBilinear`) was removed because the physical extractor's flat-factor classifier handles any post-expansion shape. Only quadratic expressions (`POWER` / self-product) still bypass SymEngine (to preserve the recognizable QP structure).
 
 3. **Optimizer** (`decide_optimizer.cpp`): `RewriteBilinear()` pass runs after `RewriteAbs`, before `RewriteMinMax`. Walks both objective and constraint expressions:
    - Detects `*` nodes where both children reference different decide variables
@@ -113,7 +111,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
    - `ExtractLinearAndBilinearTerms()`: separates linear and bilinear terms in objectives
    - `ExtractConstraintTerms()`: same for constraints
    - `ClassifyNormalizedProduct()`: flattens any nested `*` tree into leaf factors, partitions them into decide-variable indices (`decide_factors`) and data expressions (`coefficient_factors`). Handles arbitrary groupings like `(a*b)*(x*y)` and `a*b*x*y` identically.
-   - `BuildCoefficientFromFactors()`: rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms. Each binary `*` is re-bound through `RebindOperator` for the operands actually present — reusing the original multiply's signature over a reshaped factor list silently reinterprets the operands' physical representation (see `01_pipeline/03a_expression_analysis.md` and `07_issues/bugs/done.md`).
+   - `BuildCoefficientFromFactors()`: rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms. Each binary `*` is re-bound through `RebindOperator` for the operands actually present — reusing the original multiply's signature over a reshaped factor list silently reinterprets the operands' physical representation (see `../../01_pipeline/08_execution/done.md` §3, "Rebuilding is never hand-assembled").
    - Linear terms (`decide_factors.size() == 1`) fall through to `ExtractTerms` (uses `ExtractCoefficientWithoutVariable` on the original tree for type-safe coefficient extraction).
    - McCormick generation: uses `BilinearLink` metadata + resolved bounds to emit the envelope corners `w <= U*b`, `w >= x - U*(1-b)`, `w <= x - L*(1-b)`, and (only when `L < 0`) `w >= L*b`; widens the aux's lower bound to `L` for signed `x`
    - Evaluates bilinear coefficients per-row, applies WHEN mask
@@ -141,7 +139,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 
 - **Binder validation**: `src/planner/expression_binder/decide_binder.cpp` — `ValidateSumArgumentInternal()`, `allow_bilinear` parameter
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp` — passes `allow_bilinear=true`
-- **Symbolic normalization (bilinear)**: no longer applies to constraints. The parsed-level constraint simplifier was deleted at `canonicalize.md` C.4, so a bilinear constraint reaches the binder as written and `DecideCanonicalizer` decides its shape without opening the product. In a bilinear *objective*, `SimplifyDecideObjective` still expands with SymbolicC++, and its one bypass (`SumInnerIsQuadratic`) fires on POWER shapes only — bare `SUM(x*y)` takes the default path
+- **Canonicalization**: a bilinear product is one atomic term. `DecideCanonicalizer` decides the constraint's shape and the objective's spine without ever opening the product, in both clauses identically — see `../../01_pipeline/04_canonicalizer/done.md` §3.3. Distribution over a sum happens later, at physical extraction (`TryDistributeMultiplyOverAdd`)
 - **Optimizer rewrite**: `src/optimizer/decide/decide_optimizer.cpp` — `RewriteBilinear()`, `FindAndReplaceBilinear()`
 - **Boolean type tracking**: `src/include/duckdb/planner/operator/logical_decide.hpp` — `is_boolean_var`
 - **Bilinear link struct**: `src/include/duckdb/planner/operator/logical_decide.hpp` — `BilinearLink`

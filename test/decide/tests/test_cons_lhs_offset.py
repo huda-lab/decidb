@@ -3,7 +3,7 @@ variable on the RHS must be enforced.
 
 Previously the LHS constant/data part was silently dropped in the multi-variable
 per-row path, so `(10 - x) <= y` (meaning `x + y >= 10`) was treated as
-`x + y >= 0`. See 07_issues/bugs/done.md.
+`x + y >= 0`.
 """
 
 import pytest

@@ -27,7 +27,7 @@ When `DUCKDB_BINARY_DIR` is **not** set (the normal `pip install .` path):
 When `DUCKDB_BINARY_DIR` **is** set:
 1. Only the Python binding sources (`tools/pythonpkg/src/`) are compiled.
 2. Links against the pre-built `duckdb_static` library and extension libraries found in the binary dir.
-3. Third-party includes (including SymbolicC++, HiGHS) are added via `package_build.third_party_includes()`.
+3. Third-party includes (HiGHS among them) are added via `package_build.third_party_includes()`.
 
 ## 3. Bundled Extensions
 Extensions are compiled directly into the `_decidb.so` binary ("baked in"). They require no network access or downloads at runtime.

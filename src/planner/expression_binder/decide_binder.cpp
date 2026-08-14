@@ -88,6 +88,90 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 	return CountDecideVariableOccurrencesInternal(expr, variables) > 0;
 }
 
+//! Polynomial degree of `expr` in DECIDE variables. Degree is NOT the number of
+//! variable occurrences: an additive node contributes the MAX of its terms'
+//! degrees, not their sum, because `(x + y) * z` expands to `x*z + y*z` and is
+//! therefore degree 2 -- three occurrences, but a legal bilinear term.
+//!
+//! Occurrence counting stood in for this while the symbolic layer pre-expanded
+//! products over sums, which hid the difference. Shapes other than the additive /
+//! multiplicative / division spine fall back to the occurrence count, which never
+//! underestimates for them and preserves the previous behavior exactly.
+static idx_t DecideDegreeInternal(const ParsedExpression &expr,
+                                  const case_insensitive_map_t<idx_t> &variables) {
+	if (IsVariableExpression(expr, variables)) {
+		return 1;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+		return DecideDegreeInternal(*expr.Cast<const CastExpression>().child, variables);
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (func.is_operator) {
+			auto name_lower = StringUtil::Lower(func.function_name);
+			if (name_lower == "+" || name_lower == "-") {
+				idx_t degree = 0;
+				for (auto &child : func.children) {
+					auto child_degree = DecideDegreeInternal(*child, variables);
+					if (child_degree > degree) {
+						degree = child_degree;
+					}
+				}
+				return degree;
+			}
+			if (name_lower == "*") {
+				idx_t degree = 0;
+				for (auto &child : func.children) {
+					degree += DecideDegreeInternal(*child, variables);
+				}
+				return degree;
+			}
+			if (name_lower == "/" && func.children.size() == 2) {
+				// A decision-bearing divisor is rejected separately, so the
+				// divisor is data and contributes no degree.
+				return DecideDegreeInternal(*func.children[0], variables);
+			}
+		}
+	}
+	return CountDecideVariableOccurrencesInternal(expr, variables);
+}
+
+void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
+                                           const case_insensitive_map_t<idx_t> &variables) {
+	if (expr.GetExpressionClass() == ExpressionClass::CAST) {
+		auto &cast = expr.Cast<const CastExpression>();
+		// Transformer::TransformTypeCast stamps CAST, TRY_CAST and :: with their
+		// source location. CastExpression nodes synthesized by the parser itself
+		// (for example for a boolean test) have no location and are not user casts.
+		if (cast.GetQueryLocation().IsValid() && ExpressionContainsDecideVariable(*cast.child, variables)) {
+			throw BinderException(
+			    cast,
+			    "DECIDE does not allow casts over decision expressions: '%s'. "
+			    "Decision values are modeled directly as DOUBLE. Remove the cast; "
+			    "casts over data-only expressions are allowed.",
+			    cast.ToString());
+		}
+	}
+
+	// ParsedExpressionIterator::EnumerateChildren does not enter the QueryNode of
+	// a scalar subquery. Walk it explicitly so a correlated decision reference
+	// cannot hide an explicit cast inside the subquery body.
+	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
+		auto &subquery_expr = expr.Cast<const SubqueryExpression>();
+		if (subquery_expr.subquery && subquery_expr.subquery->node) {
+			ParsedExpressionIterator::EnumerateQueryNodeChildren(
+			    const_cast<QueryNode &>(*subquery_expr.subquery->node),
+			    [&](unique_ptr<ParsedExpression> &child) {
+				    ValidateDecideNoExplicitDecisionCasts(*child, variables);
+			    },
+			    [&](TableRef &ref) {});
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		ValidateDecideNoExplicitDecisionCasts(child, variables);
+	});
+}
+
 bool IsDecideAggregateName(const string &name) {
 	auto lname = StringUtil::Lower(name);
 	return lname == "sum" || lname == "avg" || lname == "min" || lname == "max";
@@ -235,9 +319,8 @@ static bool IsAggregateFunctionName(ClientContext &context, const FunctionExpres
 // Reject any non-linear scalar function that wraps a DECIDE variable. Mirrors
 // the COUNT(decide_var) guard in BindAggregate: catch the mis-use at bind time
 // with a semantic-specific message instead of letting it slip through to
-// symbolic normalization (which throws InternalException on unknown functions)
-// or per-row execution (which would silently strip the scalar, producing
-// wrong answers). Functions that only wrap table columns are fine — the
+// per-row execution, which would silently strip the scalar and produce wrong
+// answers. Functions that only wrap table columns are fine — the
 // wrapper folds to a per-row constant before the solver sees it.
 // True if this function is POWER / POW / **. These share the same validation:
 // exponent must be a constant numeric 2. All other exponents are non-linear
@@ -251,9 +334,8 @@ static bool IsPowerFunction(const FunctionExpression &func) {
 // Reject POWER(base, exp) when base contains a decide variable and exp is not
 // a constant numeric 2. Mirrors ValidateQuadraticPower's error messages so
 // test matchers and user-facing wording are consistent across SUM and non-SUM
-// contexts. Must run before symbolic normalization — FromSymbolic would
-// otherwise throw InternalException on non-integer exponents, exposing a C++
-// stack trace to users.
+// contexts. Running at bind time keeps a bad exponent from reaching the
+// quadratic extractor, which recognizes only POWER(linear_expr, 2).
 static void ValidatePowerExponent(const FunctionExpression &func,
                                   const case_insensitive_map_t<idx_t> &variables) {
 	if (func.children.size() != 2) {
@@ -533,7 +615,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				}
 			}
 			if (func_name_lower == "*") {
-				idx_t decide_count = CountDecideVariableOccurrencesInternal(expr, variables);
+				idx_t decide_count = DecideDegreeInternal(expr, variables);
 				if (decide_count > 2) {
 					error_msg = "Triple or higher-order products of DECIDE variables are not supported "
 					            "(total degree > 2)";
@@ -583,8 +665,8 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		}
 		// An operator the model doesn't understand (`%`, bitwise ops, …) is still
 		// fine if this subexpression references no DECIDE variable: it's a per-row
-		// constant coefficient. The symbolic layer folds it to a data placeholder
-		// (see ToSymbolicRecursive) and the physical layer evaluates it as data.
+		// constant coefficient: canonicalization keeps it whole as one atom and the
+		// physical layer evaluates it as ordinary data.
 		// Only genuinely variable-bearing uses of an unsupported operator are rejected.
 		if (!ExpressionContainsDecideVariable(expr, variables)) {
 			return true;
@@ -624,42 +706,6 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
                                        EnumUtil::ToString(expr.GetExpressionClass()));
         return false;
     }
-}
-
-// Check if an expression contains any quadratic pattern (POWER(_, 2), **, or identical multiplication).
-// Used to detect quadratic objectives for early MAXIMIZE rejection at bind time.
-bool ContainsQuadraticPattern(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
-	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
-		return false;
-	}
-	auto &func = expr.Cast<FunctionExpression>();
-	string fname = StringUtil::Lower(func.function_name);
-	if (fname == "power" || fname == "pow" || fname == "**") {
-		if (func.children.size() == 2 &&
-		    func.children[1]->GetExpressionClass() == ExpressionClass::CONSTANT) {
-			auto &exp_const = func.children[1]->Cast<ConstantExpression>();
-			try {
-				double exp_val = exp_const.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-				if (exp_val == 2.0 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
-					return true;
-				}
-			} catch (...) {}
-		}
-	}
-	if (fname == "*" && func.children.size() == 2) {
-		idx_t decide_count = CountDecideVariableOccurrencesInternal(expr, variables);
-		if (decide_count > 1) {
-			// Both identical multiplication (QP) and bilinear products (x*y) are non-linear
-			return true;
-		}
-	}
-	// Recurse into children
-	for (auto &child : func.children) {
-		if (ContainsQuadraticPattern(*child, variables)) {
-			return true;
-		}
-	}
-	return false;
 }
 
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,

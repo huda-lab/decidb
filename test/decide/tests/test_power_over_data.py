@@ -11,7 +11,7 @@ call and required the base to reference a DECIDE variable, so
 reference at least one DECIDE variable"*. That was invisible because the parsed-level
 constraint simplifier ran first and lowered ``POWER(qty, 2)`` into ``qty * qty``
 through SymbolicC++, so no ``POWER`` node ever reached the binder. Deleting that layer
-(canonicalize.md C.4) exposed the gate, and the fix is to skip it when the call
+(the canonicalization refactor) exposed the gate, and the fix is to skip it when the call
 contains no DECIDE variable — the rule the named-function arm beside it already used.
 
 Two things changed that these tests pin:

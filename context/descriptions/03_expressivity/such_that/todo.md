@@ -27,7 +27,7 @@ wrappers on the composed constraint/objective, non-constant RHS, and equality
 
 ### Related orthogonal limitation: empty-WHEN on hard-direction MIN/MAX — resolved
 
-This used to silently produce wrong answers (the `z_k` auxiliary floated free with no linking constraints). It is now rejected before the solver runs by the empty-aggregate guard (`physical_decide.cpp:1064`), which fires on every empty aggregate regardless of shape or direction. Constraint- and objective-side coverage lives in `test_edge_cases.py`; see `05_testing/when/todo.md` → "Empty WHEN on MIN/MAX constraints — fixed and covered".
+This used to silently produce wrong answers (the `z_k` auxiliary floated free with no linking constraints). It is now rejected before the solver runs by the empty-aggregate guard (`physical_decide.cpp:1064`), which fires on every empty aggregate regardless of shape or direction. Constraint- and objective-side coverage lives in `test_edge_cases.py`; see `04_testing/when/todo.md` → "Empty WHEN on MIN/MAX constraints — fixed and covered".
 
 ---
 

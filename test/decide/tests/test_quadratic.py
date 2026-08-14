@@ -1464,8 +1464,8 @@ def test_qp_mixed_negated_quadratic(
 # ===========================================================================
 # Nested outer-SUM of aggregate-of-quadratic (PER on QP objective)
 # ===========================================================================
-# These tests exercise the SumInnerIsQuadratic nested-aggregate extension in
-# decide_symbolic.cpp. Before the fix, MINIMIZE SUM(SUM(POWER(x - const, 2)))
+# These tests exercise the nested-aggregate quadratic shape. Before the fix,
+# MINIMIZE SUM(SUM(POWER(x - const, 2)))
 # PER grp was rejected by the binder because POWER expansion produced a
 # __SUM__ placeholder that leaked through the nested-SUM validator. After the
 # fix, normalization preserves the raw AST and the post-bind optimizer's
@@ -1692,7 +1692,7 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
     """Regression: MINIMIZE SUM(SUM(POWER(x, 2))) PER grp — no constant term
     in POWER. This form accidentally passed validation pre-fix (the factoring
     didn't leak a __SUM__ placeholder because there was no data-only sum to
-    fold). Post-fix it takes the SumInnerIsQuadratic nested path instead;
+    fold). Post-fix it takes the nested quadratic path instead;
     end-to-end result must be identical.
     """
     data_sql = """

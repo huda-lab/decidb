@@ -61,7 +61,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		SolverModel model = BuildModel(input);
 
 		REQUIRE(model.constraints.size() == 1);
-		CHECK(model.constraints[0].provenance.clause_id == 0);
+		CHECK(model.constraints[0].provenance.repair_group_id == 0);
 		CHECK(model.constraints[0].provenance.group_key == DConstants::INVALID_INDEX);
 		CHECK(model.constraints[0].provenance.kind == ConstraintKind::USER_PARAMETER);
 		CHECK(IsRelaxableForElastic(model.constraints[0].provenance.kind));
@@ -78,7 +78,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 
 		REQUIRE(model.constraints.size() == 2);
 		for (auto &c : model.constraints) {
-			CHECK(c.provenance.clause_id == 0);
+			CHECK(c.provenance.repair_group_id == 0);
 			CHECK(c.provenance.kind == ConstraintKind::USER_PARAMETER);
 		}
 		// Groups emit in order g = 0, 1.
@@ -94,7 +94,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 
 		REQUIRE(model.constraints.size() == 3);
 		for (auto &c : model.constraints) {
-			CHECK(c.provenance.clause_id == 0);
+			CHECK(c.provenance.repair_group_id == 0);
 			CHECK(c.provenance.group_key == DConstants::INVALID_INDEX);
 			CHECK(c.provenance.kind == ConstraintKind::USER_PARAMETER);
 		}
@@ -109,9 +109,9 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 
 		// 1 aggregate row + 3 per-row rows.
 		REQUIRE(model.constraints.size() == 4);
-		CHECK(model.constraints[0].provenance.clause_id == 0);
+		CHECK(model.constraints[0].provenance.repair_group_id == 0);
 		for (idx_t i = 1; i < 4; i++) {
-			CHECK(model.constraints[i].provenance.clause_id == 1);
+			CHECK(model.constraints[i].provenance.repair_group_id == 1);
 		}
 	}
 
@@ -131,8 +131,48 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		// User clause first, structural global row appended last.
 		CHECK(model.constraints[0].provenance.kind == ConstraintKind::USER_PARAMETER);
 		CHECK(model.constraints[1].provenance.kind == ConstraintKind::STRUCTURAL);
-		CHECK(model.constraints[1].provenance.clause_id == DConstants::INVALID_INDEX);
+		CHECK(model.constraints[1].provenance.repair_group_id == DConstants::INVALID_INDEX);
 		CHECK(!IsRelaxableForElastic(model.constraints[1].provenance.kind));
+	}
+
+	SECTION("raw rows preserve source identity separately from repair grouping") {
+		SolverInput input = MakeBaseInput(1, 1);
+		SolverInput::RawConstraint raw;
+		raw.indices = {0};
+		raw.coefficients = {1.0};
+		raw.sense = '<';
+		raw.rhs = 5.0;
+		raw.kind = ConstraintKind::USER_PARAMETER;
+		raw.shape = ElasticShape::SHARED_SCALAR;
+		raw.source_clause_id = 7;
+		raw.repair_group_id = 11;
+		input.global_constraints.push_back(std::move(raw));
+
+		SolverModel model = BuildModel(input);
+
+		REQUIRE(model.constraints.size() == 1);
+		CHECK(model.constraints[0].provenance.source_clause_id == 7);
+		CHECK(model.constraints[0].provenance.repair_group_id == 11);
+		CHECK(model.constraints[0].provenance.shape == ElasticShape::SHARED_SCALAR);
+	}
+
+	SECTION("fixed aggregate LHS offsets require an explicit SUM owner") {
+		SolverInput valid = MakeBaseInput(2, 1);
+		EvaluatedConstraint ec = MakeAggregate({0, DConstants::INVALID_INDEX}, 2, 10.0);
+		ec.row_coefficients[1] = CoefficientColumn::MakeScalar(3.0, 2);
+		ec.linear_term_reductions = {LinearTermReduction::SUM, LinearTermReduction::SUM};
+		valid.constraints.push_back(std::move(ec));
+
+		SolverModel model = BuildModel(valid);
+		REQUIRE(model.constraints.size() == 1);
+		CHECK(model.constraints[0].rhs == 4.0);
+
+		SolverInput invalid = MakeBaseInput(2, 1);
+		EvaluatedConstraint malformed = MakeAggregate({0, DConstants::INVALID_INDEX}, 2, 10.0);
+		malformed.row_coefficients[1] = CoefficientColumn::MakeScalar(3.0, 2);
+		malformed.linear_term_reductions = {LinearTermReduction::SUM, LinearTermReduction::NONE};
+		invalid.constraints.push_back(std::move(malformed));
+		CHECK_THROWS_AS(BuildModel(invalid), InternalException);
 	}
 
 }

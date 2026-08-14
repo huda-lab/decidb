@@ -31,6 +31,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -200,6 +201,17 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
 		}
 		out.push_back(dv * sign);
 	}
+}
+
+//! Bound absorption is deliberately a shape optimization, not a constant folder.
+//! Keep its historical eligibility (a literal with optional cast wrappers), while
+//! evaluating the eligible expression whole so a data cast retains SQL semantics.
+static bool IsCastWrappedConstant(const Expression &expr) {
+	const Expression *current = &expr;
+	while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		current = current->Cast<BoundCastExpression>().child.get();
+	}
+	return current->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
 }
 
 //! Streaming typed-hash grouping. Assigns group IDs during the chunk scan
@@ -569,12 +581,13 @@ static bool IsBoundMultiply(const Expression &expr) {
 	return func.function.name == "*";
 }
 
-static void CollectMultiplicativeFactors(const Expression &expr, vector<const Expression *> &factors) {
-	const Expression *cur = UnwrapDecideCasts(expr);
+static void CollectMultiplicativeFactors(const Expression &expr, idx_t decide_index,
+                                         vector<const Expression *> &factors) {
+	const Expression *cur = UnwrapDecideCasts(expr, decide_index);
 	if (IsBoundMultiply(*cur)) {
 		auto &func = cur->Cast<BoundFunctionExpression>();
 		for (auto &child : func.children) {
-			CollectMultiplicativeFactors(*child, factors);
+			CollectMultiplicativeFactors(*child, decide_index, factors);
 		}
 		return;
 	}
@@ -588,7 +601,7 @@ static void CollectMultiplicativeFactors(const Expression &expr, vector<const Ex
 //! fail when the types disagree. It reinterprets the children's *physical*
 //! representation, which silently yields a wrong number and can read past the
 //! end of a narrower vector. DECIDE has now hit that failure mode three times
-//! (see `07_issues/bugs/done.md`), always where a subtree was rebuilt after
+//! (see `06_issues/bugs/done.md`), always where a subtree was rebuilt after
 //! terms were dropped or distributed. Binding through `FunctionBinder` is the
 //! only rebuild that stays correct for arbitrary children: it picks the
 //! implementation for these argument types, computes the matching return type
@@ -615,8 +628,9 @@ static unique_ptr<Expression> RebindMultiply(ClientContext &context, unique_ptr<
 
 //! Fold a flattened factor list back into a product. Each binary node is bound
 //! for its own operands rather than inheriting the original `*`'s signature:
-//! `CollectMultiplicativeFactors` both unwraps casts and (via its callers) drops
-//! factors, so neither the operand types nor the arity survive the round trip.
+//! `CollectMultiplicativeFactors` looks through binder casts over decision algebra
+//! and (via its callers) drops factors, so neither the operand types nor the arity
+//! survive the round trip. Data casts remain complete factors.
 static unique_ptr<Expression> BuildCoefficientFromFactors(ClientContext &context,
                                                           const vector<const Expression *> &factors) {
 	if (factors.empty()) {
@@ -646,10 +660,11 @@ static unique_ptr<Expression> BuildCoefficientFromFactors(ClientContext &context
 // Returns empty when no additive factor is present (caller falls through to
 // the existing classification logic).
 static vector<pair<int, unique_ptr<Expression>>>
-TryDistributeMultiplyOverAdd(ClientContext &context, const BoundFunctionExpression &mul_expr) {
+TryDistributeMultiplyOverAdd(ClientContext &context, const BoundFunctionExpression &mul_expr,
+                             idx_t decide_index) {
 	vector<pair<int, unique_ptr<Expression>>> out;
 	vector<const Expression *> factors;
-	CollectMultiplicativeFactors(mul_expr, factors);
+	CollectMultiplicativeFactors(mul_expr, decide_index, factors);
 
 	int additive_idx = -1;
 	for (idx_t i = 0; i < factors.size(); i++) {
@@ -695,7 +710,7 @@ TryDistributeMultiplyOverAdd(ClientContext &context, const BoundFunctionExpressi
 }
 
 static bool TryGetBareDecideFactor(const Expression &expr, const PhysicalDecide &op, idx_t &var_idx) {
-	const Expression *cur = UnwrapDecideCasts(expr);
+	const Expression *cur = UnwrapDecideCasts(expr, op.decide_index);
 	if (cur->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return false;
 	}
@@ -705,7 +720,7 @@ static bool TryGetBareDecideFactor(const Expression &expr, const PhysicalDecide 
 
 static bool ClassifyNormalizedProduct(const Expression &expr, const PhysicalDecide &op,
                                       NormalizedProductTerm &result) {
-	const Expression *root = UnwrapDecideCasts(expr);
+	const Expression *root = UnwrapDecideCasts(expr, op.decide_index);
 	if (!IsBoundMultiply(*root)) {
 		return false;
 	}
@@ -714,7 +729,7 @@ static bool ClassifyNormalizedProduct(const Expression &expr, const PhysicalDeci
 	result.mul_func = &root->Cast<BoundFunctionExpression>();
 
 	vector<const Expression *> factors;
-	CollectMultiplicativeFactors(*root, factors);
+	CollectMultiplicativeFactors(*root, op.decide_index, factors);
 	for (auto *factor : factors) {
 		idx_t var_idx = DConstants::INVALID_INDEX;
 		if (TryGetBareDecideFactor(*factor, op, var_idx)) {
@@ -946,9 +961,10 @@ struct PhysicalDecide::QuadraticPattern {
     double sign = 1.0;
 };
 
-PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(const Expression &expr) const {
-    // Unwrap any cast wrappers on the incoming expression.
-    const Expression *cur = UnwrapDecideCasts(expr);
+PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(ClientContext &context,
+                                                                        const Expression &expr) const {
+    // Look through binder-generated wrappers over the decision-bearing expression.
+    const Expression *cur = UnwrapDecideCasts(expr, decide_index);
     if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
         return {};
     }
@@ -965,7 +981,7 @@ PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(const Ex
 
     // -(quadratic)
     if (fname == "-" && func.children.size() == 1) {
-        auto inner = DetectQuadraticPattern(*func.children[0]);
+        auto inner = DetectQuadraticPattern(context, *func.children[0]);
         if (inner.inner_linear_expr) {
             return {inner.inner_linear_expr, -inner.sign};
         }
@@ -974,12 +990,10 @@ PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(const Ex
     // K * quadratic or quadratic * K (constant on either side)
     if (fname == "*" && func.children.size() == 2) {
         for (idx_t side = 0; side < 2; side++) {
-            const Expression *maybe_const = UnwrapDecideCasts(*func.children[side].get());
-            if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                double cval = maybe_const->Cast<BoundConstantExpression>()
-                                  .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+            double cval;
+            if (TryEvaluateFoldableDouble(context, *func.children[side], cval)) {
                 if (cval != 0.0) {
-                    auto inner = DetectQuadraticPattern(*func.children[1 - side]);
+                    auto inner = DetectQuadraticPattern(context, *func.children[1 - side]);
                     if (inner.inner_linear_expr) {
                         return {inner.inner_linear_expr, cval * inner.sign};
                     }
@@ -990,12 +1004,10 @@ PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(const Ex
 
     // POWER / POW / **  with literal exponent 2
     if ((fname == "power" || fname == "pow" || fname == "**") && func.children.size() == 2) {
-        const Expression *exp_expr = UnwrapDecideCasts(*func.children[1].get());
-        if (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-            double exponent = exp_expr->Cast<BoundConstantExpression>()
-                                  .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+        double exponent;
+        if (TryEvaluateFoldableDouble(context, *func.children[1], exponent)) {
             if (exponent == 2.0) {
-                const Expression *inner = UnwrapDecideCasts(*func.children[0].get());
+                const Expression *inner = UnwrapDecideCasts(*func.children[0], decide_index);
                 if (FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
                     // Shape matches POWER(expr, 2); reject expr that is itself
                     // degree > 1 in decide vars (e.g. POWER(POWER(x,2), 2) =
@@ -1018,7 +1030,7 @@ PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(const Ex
     if (fname == "*" && func.children.size() == 2 &&
         Expression::Equals(*func.children[0], *func.children[1]) &&
         FindDecideVariable(*func.children[0]) != DConstants::INVALID_INDEX) {
-        const Expression *inner = UnwrapDecideCasts(*func.children[0].get());
+        const Expression *inner = UnwrapDecideCasts(*func.children[0], decide_index);
         // Identical-child self-product matches `(expr)*(expr)`; the inner
         // must be linear in decide vars or the product is degree > 2 (e.g.
         // POWER(x,2) * POWER(x,2) = x^4, (x*y) * (x*y) = x^2 y^2).
@@ -1074,7 +1086,7 @@ void PhysicalDecide::ExtractTerms(ClientContext &context, const Expression &expr
             // distribute first so each resulting product is `coef * var`-shaped.
             // Without this, ExtractCoefficientWithoutVariable would silently
             // drop the additive structure and produce a wrong coefficient.
-            auto distributed = TryDistributeMultiplyOverAdd(context, func);
+            auto distributed = TryDistributeMultiplyOverAdd(context, func, decide_index);
             if (!distributed.empty()) {
                 for (auto &kv : distributed) {
                     idx_t before = out_terms.size();
@@ -1316,48 +1328,6 @@ string PhysicalDecide::GetName() const {
 	return "DECIDE";
 }
 
-static void CollectTaggedExpressionStringsPhysical(const Expression &expr, vector<string> &out) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
-			string per_suffix = " PER ";
-			bool parenthesize = conj.children.size() > 2;
-			if (parenthesize) {
-				per_suffix += "(";
-			}
-			for (idx_t i = 1; i < conj.children.size(); i++) {
-				if (i > 1) {
-					per_suffix += ", ";
-				}
-				per_suffix += conj.children[i]->GetName();
-			}
-			if (parenthesize) {
-				per_suffix += ")";
-			}
-			vector<string> inner;
-			CollectTaggedExpressionStringsPhysical(*conj.children[0], inner);
-			for (auto &s : inner) {
-				out.push_back(s + per_suffix);
-			}
-			return;
-		}
-		if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
-			string when_suffix = " WHEN " + conj.children[1]->GetName();
-			vector<string> inner;
-			CollectTaggedExpressionStringsPhysical(*conj.children[0], inner);
-			for (auto &s : inner) {
-				out.push_back(s + when_suffix);
-			}
-			return;
-		}
-		for (auto &child : conj.children) {
-			CollectTaggedExpressionStringsPhysical(*child, out);
-		}
-		return;
-	}
-	out.push_back(expr.GetName());
-}
-
 InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 
@@ -1377,7 +1347,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		// rather than the raw internal tag or a generic conjunction form.
 		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectTaggedExpressionStringsPhysical(*decide_objective, objective_strs);
+		CollectDecideExpressionStrings(*decide_objective, objective_strs);
 		for (idx_t i = 0; i < objective_strs.size(); i++) {
 			if (i > 0) {
 				obj_info += "\n";
@@ -1391,7 +1361,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 
 	if (decide_constraints) {
 		vector<string> constraint_strs;
-		CollectTaggedExpressionStringsPhysical(*decide_constraints, constraint_strs);
+		CollectDecideExpressionStrings(*decide_constraints, constraint_strs);
 		string constraints_info;
 		for (idx_t i = 0; i < constraint_strs.size(); i++) {
 			if (i > 0) {
@@ -1484,12 +1454,14 @@ struct UserBoundSpec {
     //! infeasible diagnosis re-quotes the suggestion as `<` / `>` against it.
     bool strict = false;
     double typed_k = 0.0;
+    idx_t source_clause_id = DConstants::INVALID_INDEX;
 };
 
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
-    explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
-        : data(context, op.children[0]->GetTypes()), context(context), op(op) {
+	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
+	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
+	      canonicalizer(context, op.decide_index, op.variable_scopes) {
         // Pre-absorb simple variable bounds (x OP const / BETWEEN) into column-bound
         // arrays so AnalyzeConstraint can skip emitting one DecideConstraint per row
         // for constraints that are fully captured by column bounds.
@@ -1568,6 +1540,7 @@ public:
             }
             terms[i].avg_scale = is_avg;
             terms[i].qualifier_scope_idx = qualifier_scope;
+            terms[i].reduction = LinearTermReduction::SUM;
         }
     }
 
@@ -1613,16 +1586,14 @@ public:
         if (quadratic_before == constraint.quadratic_groups.size()) {
             return;
         }
-        // A quadratic group carries a numeric multiplier rather than an expression, so
-        // scaling one needs the factor's value here. Read it straight off the node, the
-        // way the scaled-quadratic detection below already does -- there is no
-        // ClientContext at analysis time to evaluate anything richer.
+        // Fold a literal immediately. A query-wide subquery scale cannot be evaluated
+        // until the relational input has run, so retain it on the quadratic group.
         if (!scale.IsFoldable()) {
-            throw InvalidInputException(
-                "DECIDE constraint: a squared term cannot be multiplied by '%s', whose value "
-                "is not known until the query runs. Use a constant factor, or move it inside "
-                "the aggregate as SUM(%s * POWER(...)).",
-                scale.GetName(), scale.GetName());
+            for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
+                constraint.quadratic_groups[i].scale = scale.Copy();
+                constraint.quadratic_groups[i].scale_divides = divides;
+            }
+            return;
         }
         double factor = ExpressionExecutor::EvaluateScalar(context, scale)
                             .DefaultCastAs(LogicalType::DOUBLE)
@@ -1635,58 +1606,26 @@ public:
         }
     }
 
-    //! If `expr` is a reducer with a factor peeled onto it by the canonicalizer
-    //! (`2 * SUM(x)`, `SUM(x) / 2`), return the bare reducer and report the factor.
-    //! Only ONE spelling has to be recognized here -- factor on the left for `*` --
-    //! because canonicalization converged `SUM(x) * 2` and friends onto it.
-    //! Name an expression the way the user wrote it: strip the casts the binder added.
-    static string ScaleUserName(const Expression &expr) {
+	//! Name an expression the way the user wrote it: strip the casts the binder added.
+	static string ScaleUserName(const Expression &expr) {
         const Expression *cur = StripCastsForIdentity(expr);
         auto name = cur->GetName();
         return name.empty() ? cur->ToString() : name;
     }
 
-    static const Expression *AsScaledAggregate(const Expression &expr, const Expression *&out_scale,
-                                               bool &out_divides,
-                                               const BoundFunctionExpression *&out_func) {
-        out_scale = nullptr;
-        out_divides = false;
-        out_func = nullptr;
-        if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-            return nullptr;
-        }
-        auto &func = expr.Cast<BoundFunctionExpression>();
-        bool is_mult = func.function.name == "*";
-        bool is_div = func.function.name == "/";
-        if ((!is_mult && !is_div) || func.children.size() != 2) {
-            return nullptr;
-        }
-        // Both orders are matched for `*`. Canonicalization puts the factor on the
-        // left, but it only runs on CONSTRAINTS -- an objective reaches here spelled
-        // however the user wrote it. `/` is not commutative: only `AGG / K` qualifies.
-        idx_t agg_child;
-        if (UnwrapDecideCasts(*func.children[0])->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-            agg_child = 0;
-        } else if (is_mult && UnwrapDecideCasts(*func.children[1])->GetExpressionClass() ==
-                                  ExpressionClass::BOUND_AGGREGATE) {
-            agg_child = 1;
-        } else {
-            return nullptr;
-        }
-        // Two reducers multiplied is a product of aggregates, not a scaled one.
-        if (UnwrapDecideCasts(*func.children[1 - agg_child])->GetExpressionClass() ==
-            ExpressionClass::BOUND_AGGREGATE) {
-            return nullptr;
-        }
-        out_scale = func.children[1 - agg_child].get();
-        out_divides = is_div;
-        out_func = &func;
-        return UnwrapDecideCasts(*func.children[agg_child]);
-    }
-
-    void ExtractAggregateConstraintTerms(const Expression &expr, DecideConstraint &constraint, int sign) {
+	void ExtractAggregateConstraintTerms(const Expression &expr, DecideConstraint &constraint, int sign) {
         if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-            ExtractAggregateConstraintTerms(*expr.Cast<BoundCastExpression>().child, constraint, sign);
+            if (op.FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
+                ExtractAggregateConstraintTerms(*expr.Cast<BoundCastExpression>().child, constraint, sign);
+            } else {
+                idx_t before = constraint.lhs_terms.size();
+                op.ExtractTerms(context, expr, constraint.lhs_terms);
+                if (sign == -1) {
+                    for (idx_t i = before; i < constraint.lhs_terms.size(); i++) {
+                        constraint.lhs_terms[i].sign *= -1;
+                    }
+                }
+            }
             return;
         }
         if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
@@ -1710,17 +1649,15 @@ public:
         // A scaled reducer: unwrap to the reducer, extract it, then apply the factor to
         // everything that came out.
         {
-            const Expression *scale = nullptr;
-            bool divides = false;
-            const BoundFunctionExpression *scale_func = nullptr;
-            if (const Expression *agg_expr = AsScaledAggregate(expr, scale, divides, scale_func)) {
-                // Belt and braces: the canonicalizer rejects a decision-bearing factor
-                // before a user-written constraint reaches here, but constraints the
-                // OPTIMIZER emits are canonicalized by the permissive path, which does
-                // not judge factors. Reading a decision column as a coefficient crashes
-                // in evaluation rather than failing cleanly, so check here too.
+			ScaledAggregateMatch scale_match;
+			if (TryMatchScaledAggregate(expr, op.decide_index, scale_match)) {
+				auto scale = scale_match.scale;
+                // Defensive invariant: both user-written and optimizer-generated
+                // constraints pass canonical validation. Keep this guard so an
+                // in-place optimizer mutation cannot turn a decision into a coefficient
+                // and crash during evaluation.
                 if (op.FindDecideVariable(*scale) != DConstants::INVALID_INDEX) {
-                    throw InvalidInputException(
+                    throw InternalException(
                         "DECIDE constraint: '%s' is a decision, so it cannot multiply an "
                         "aggregate. Only constants and query-wide values can scale "
                         "SUM/AVG/MIN/MAX.",
@@ -1729,9 +1666,9 @@ public:
                 idx_t linear_before = constraint.lhs_terms.size();
                 idx_t bilinear_before = constraint.bilinear_terms.size();
                 idx_t quadratic_before = constraint.quadratic_groups.size();
-                ExtractAggregateConstraintTerms(*agg_expr, constraint, sign);
-                ApplyScaleToExtracted(*scale_func, *scale, divides, constraint, linear_before,
-                                      bilinear_before, quadratic_before);
+				ExtractAggregateConstraintTerms(*scale_match.aggregate, constraint, sign);
+				ApplyScaleToExtracted(*scale_match.function, *scale, scale_match.divides, constraint, linear_before,
+				                      bilinear_before, quadratic_before);
                 return;
             }
         }
@@ -1744,16 +1681,15 @@ public:
             return;
         }
         if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-            throw InvalidInputException("DECIDE aggregate constraint LHS contains a non-aggregate term: %s.\n"
-                                        "Use SUM/MIN/MAX/AVG of an expression in decision variables.",
-                                        expr.ToString());
+            throw InternalException("DECIDE aggregate constraint LHS contains a non-reducer term after canonical "
+                                    "verification: %s", expr.ToString());
         }
 
         auto &agg = expr.Cast<BoundAggregateExpression>();
         auto agg_name = StringUtil::Lower(agg.function.name);
         if (agg_name != "sum") {
-            throw InvalidInputException("DECIDE optimizer should rewrite aggregate '%s' to SUM before execution",
-                                        agg.function.name);
+            throw InternalException("DECIDE optimizer did not rewrite aggregate '%s' to SUM before execution",
+                                    agg.function.name);
         }
         bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
         idx_t qualifier_scope = QualifierScopeOf(agg);
@@ -1807,7 +1743,7 @@ public:
                     break;
                 }
                 // DecidB: Check if this is a WHEN constraint wrapper
-                if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+                if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
                     // child[0] = the actual constraint, child[1] = the WHEN condition
                     AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(),
                                       std::move(per_columns));
@@ -1836,37 +1772,32 @@ public:
                 auto constraint = make_uniq<DecideConstraint>();
                 constraint->comparison_type = comp.type;
                 constraint->rhs_expr = comp.right->Copy();
+                TryParseSourceClauseTag(comp.GetAlias(), constraint->source_clause_id);
 
                 // Parse not-equal indicator tag if present
-                if (comp.alias.size() > strlen(NE_INDICATOR_TAG_PREFIX) + 2 &&
-                    comp.alias.substr(0, strlen(NE_INDICATOR_TAG_PREFIX)) == NE_INDICATOR_TAG_PREFIX) {
-                    auto payload = comp.alias.substr(strlen(NE_INDICATOR_TAG_PREFIX));
-                    payload = payload.substr(0, payload.size() - 2);  // strip trailing "__"
+                string payload;
+                if (ExtractDecideTagPayload(comp.alias, NE_INDICATOR_TAG_PREFIX, payload)) {
                     constraint->ne_indicator_idx = std::stoull(payload);
                     constraint->kind = ConstraintKind::USER_MECHANISM;
                 }
 
                 // Parse ABS MAXIMIZE upper-bound tag: marks a lower-bound ABS constraint
                 // (aux >= inner or aux >= -inner) that needs Big-M upper bounds at finalization.
-                if (comp.alias == STRUCTURAL_CONSTRAINT_TAG) {
+                if (HasDecideTag(comp.alias, STRUCTURAL_CONSTRAINT_TAG)) {
                     constraint->kind = ConstraintKind::STRUCTURAL;
                 }
-                if (comp.alias.size() > strlen(ABS_UB_POS_TAG_PREFIX) + 2 &&
-                    comp.alias.substr(0, strlen(ABS_UB_POS_TAG_PREFIX)) == ABS_UB_POS_TAG_PREFIX) {
-                    auto payload = comp.alias.substr(strlen(ABS_UB_POS_TAG_PREFIX));
-                    constraint->abs_y_idx = std::stoull(payload.substr(0, payload.size() - 2));
+                if (ExtractDecideTagPayload(comp.alias, ABS_UB_POS_TAG_PREFIX, payload)) {
+                    constraint->abs_y_idx = std::stoull(payload);
                     constraint->abs_is_pos_bound = true;
                     constraint->kind = ConstraintKind::STRUCTURAL;
-                } else if (comp.alias.size() > strlen(ABS_UB_NEG_TAG_PREFIX) + 2 &&
-                           comp.alias.substr(0, strlen(ABS_UB_NEG_TAG_PREFIX)) == ABS_UB_NEG_TAG_PREFIX) {
-                    auto payload = comp.alias.substr(strlen(ABS_UB_NEG_TAG_PREFIX));
-                    constraint->abs_y_idx = std::stoull(payload.substr(0, payload.size() - 2));
+                } else if (ExtractDecideTagPayload(comp.alias, ABS_UB_NEG_TAG_PREFIX, payload)) {
+                    constraint->abs_y_idx = std::stoull(payload);
                     constraint->abs_is_pos_bound = false;
                     constraint->kind = ConstraintKind::STRUCTURAL;
                 }
 
                 // Detect easy-direction MIN/MAX optimizer rewrite (see decide.hpp).
-                if (comp.alias == MINMAX_EASY_REWRITE_TAG) {
+                if (HasDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG)) {
                     constraint->was_minmax_easy = true;
                 }
 
@@ -1879,14 +1810,23 @@ public:
                 }
 
                 // Extract terms from LHS
-                // Peeling is unconditional and safe: DecideCanonicalizer rejects any
-                // decision-bearing cast that would change a value, so a cast reaching
-                // here only moves one into the model's DOUBLE domain.
-                Expression *lhs = UnwrapDecideCasts(*comp.left);
+                // Only binder-generated wrappers over decision algebra are transparent.
+                // A data cast is a SQL computation and UnwrapDecideCasts stops at it.
+                Expression *lhs = UnwrapDecideCasts(*comp.left, op.decide_index);
 
-                if (BoundExpressionContainsAggregate(*lhs)) {
+	                auto constraint_class = canonicalizer.ClassifyCanonicalComparison(comp);
+                if (constraint_class == CanonicalConstraintClass::INVALID) {
+                    throw InternalException(
+                        "DECIDE constraint reached physical extraction with invalid aggregate/per-row "
+                        "homogeneity: '%s'. Canonical validation must reject this during planning.",
+                        comp.ToString());
+                }
+
+                if (constraint_class == CanonicalConstraintClass::AGGREGATE) {
                     // Aggregate constraint. Handles both legacy single aggregates and
-                    // additive aggregate expressions with aggregate-local WHEN filters.
+                    // additive aggregate expressions with aggregate-local WHEN filters. The
+                    // classification comes from the canonical boundary rather than aggregate
+                    // presence alone, so a data-only RHS reducer cannot change row semantics.
                     constraint->lhs_is_aggregate = true;
                     ExtractAggregateConstraintTerms(*lhs, *constraint, 1);
                 } else {
@@ -1898,7 +1838,7 @@ public:
                     // invariant was broken upstream -- by a new optimizer rewrite that
                     // mutates a constraint in place instead of going through
                     // LogicalDecide::AddConstraint, most likely. This used to be a second
-                    // implementation of the partition (canonicalize.md sites 4/5); it was
+                    // implementation of the partition (the canonicalization refactor); it was
                     // verified unreachable across the golden corpus and the full suite
                     // before being replaced by the check, so a wrong answer here would
                     // otherwise be silent.
@@ -1953,7 +1893,7 @@ public:
         // single scalar quadratic_sign. Additional quadratic groups (e.g.
         // `SUM(POWER(x,2)) + SUM(POWER(y,2))`) would need per-group Q matrices
         // downstream and are explicitly rejected.
-        auto quad_pattern = op.DetectQuadraticPattern(expr);
+        auto quad_pattern = op.DetectQuadraticPattern(context, expr);
         if (quad_pattern.inner_linear_expr) {
             double effective_sign = quad_pattern.sign * static_cast<double>(sign);
             if (obj.has_quadratic) {
@@ -2007,7 +1947,7 @@ public:
                 // Distribute before ClassifyNormalizedProduct (which throws on
                 // additive factors). See ExtractConstraintTerms for rationale.
                 {
-                    auto distributed = TryDistributeMultiplyOverAdd(context, func);
+                    auto distributed = TryDistributeMultiplyOverAdd(context, func, op.decide_index);
                     if (!distributed.empty()) {
                         for (auto &kv : distributed) {
                             ExtractLinearAndBilinearTerms(*kv.second, obj, sign * kv.first, filter);
@@ -2034,11 +1974,14 @@ public:
             }
         }
 
-        // Handle casts
+        // A decision-bearing cast here is binder noise. Preserve a data-only cast
+        // as a complete fixed term so DuckDB performs the written computation.
         if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
             auto &cast = expr.Cast<BoundCastExpression>();
-            ExtractLinearAndBilinearTerms(*cast.child, obj, sign, filter);
-            return;
+            if (op.FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
+                ExtractLinearAndBilinearTerms(*cast.child, obj, sign, filter);
+                return;
+            }
         }
 
         // Not bilinear — delegate to linear extraction
@@ -2083,18 +2026,16 @@ public:
             // Helper: try to detect POWER(expr, 2), POW(expr, 2), expr ** 2,
             // or (expr)*(expr) self-product. Returns the inner expression on success.
             auto TryDetectConstraintQuadratic = [&](const Expression *test_expr) -> const Expression * {
-                test_expr = UnwrapDecideCasts(*test_expr);
+                test_expr = UnwrapDecideCasts(*test_expr, op.decide_index);
                 if (test_expr->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return nullptr;
                 auto &qf = test_expr->Cast<BoundFunctionExpression>();
                 string qname = StringUtil::Lower(qf.function.name);
                 // POWER/POW/** with exponent 2
                 if ((qname == "power" || qname == "pow" || qname == "**") && qf.children.size() == 2) {
-                    const Expression *exp_expr = UnwrapDecideCasts(*qf.children[1].get());
-                    if (exp_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                        double exponent = exp_expr->Cast<BoundConstantExpression>()
-                                              .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                    double exponent;
+                    if (TryEvaluateFoldableDouble(context, *qf.children[1], exponent)) {
                         if (exponent == 2.0) {
-                            const Expression *inner = UnwrapDecideCasts(*qf.children[0]);
+                            const Expression *inner = UnwrapDecideCasts(*qf.children[0], op.decide_index);
                             if (op.FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
                                 if (!op.IsLinearInDecideVars(*inner)) {
                                     throw InvalidInputException(
@@ -2111,7 +2052,7 @@ public:
                 if (qname == "*" && qf.children.size() == 2 &&
                     Expression::Equals(*qf.children[0], *qf.children[1]) &&
                     op.FindDecideVariable(*qf.children[0]) != DConstants::INVALID_INDEX) {
-                    const Expression *inner = UnwrapDecideCasts(*qf.children[0]);
+                    const Expression *inner = UnwrapDecideCasts(*qf.children[0], op.decide_index);
                     if (!op.IsLinearInDecideVars(*inner)) {
                         throw InvalidInputException(
                             "DECIDE constraint contains a self-product of a non-linear "
@@ -2143,10 +2084,8 @@ public:
                 // Scaled quadratic: const * POWER(expr, 2) or POWER(expr, 2) * const
                 if (func.children.size() == 2) {
                     for (idx_t side = 0; side < 2; side++) {
-                        const Expression *maybe_const = UnwrapDecideCasts(*func.children[side].get());
-                        if (maybe_const->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                            double cval = maybe_const->Cast<BoundConstantExpression>()
-                                              .value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                        double cval;
+                        if (TryEvaluateFoldableDouble(context, *func.children[side], cval)) {
                             if (cval != 0.0) {
                                 const Expression *inner = TryDetectConstraintQuadratic(func.children[1 - side].get());
                                 if (inner) {
@@ -2170,7 +2109,7 @@ public:
                 // hard-direction rewrites and other paths the symbolic normalizer
                 // didn't fully expand.
                 {
-                    auto distributed = TryDistributeMultiplyOverAdd(context, func);
+                    auto distributed = TryDistributeMultiplyOverAdd(context, func, op.decide_index);
                     if (!distributed.empty()) {
                         for (auto &kv : distributed) {
                             ExtractConstraintTerms(*kv.second, constr, sign * kv.first, filter);
@@ -2210,9 +2149,9 @@ public:
                     }
                 }
             } else {
-                // Decision-bearing: safe to peel unconditionally, because
-                // DecideCanonicalizer::ValidateDecisionCasts already rejected every
-                // cast here that would change a value.
+                // Decision-bearing casts surviving binding are DuckDB's internal
+                // type-reconciliation wrappers; explicit source casts were rejected
+                // on the parsed tree.
                 ExtractConstraintTerms(*cast.child, constr, sign, filter);
             }
             return;
@@ -2273,17 +2212,14 @@ public:
         if (squared_before == obj.squared_terms.size()) {
             return;
         }
-        const Expression *literal = UnwrapDecideCasts(scale);
-        if (literal->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+        double factor;
+        if (!TryEvaluateFoldableDouble(context, scale, factor)) {
             throw InvalidInputException(
                 "DECIDE objective: a squared term cannot be multiplied by '%s', whose value is "
                 "not known until the query runs. Use a constant factor, or move it inside the "
                 "aggregate as SUM(%s * POWER(...)).",
                 scale.GetName(), scale.GetName());
         }
-        double factor = literal->Cast<BoundConstantExpression>()
-                            .value.DefaultCastAs(LogicalType::DOUBLE)
-                            .GetValue<double>();
         if (divides && factor == 0.0) {
             throw InvalidInputException("DECIDE objective: division by zero in a squared term.");
         }
@@ -2293,7 +2229,11 @@ public:
     void ExtractAggregateObjectiveTerms(const Expression &expr, Objective &obj, int sign) {
         if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
             auto &cast = expr.Cast<BoundCastExpression>();
-            ExtractAggregateObjectiveTerms(*cast.child, obj, sign);
+            if (op.FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
+                ExtractAggregateObjectiveTerms(*cast.child, obj, sign);
+            } else {
+                ExtractLinearAndBilinearTerms(expr, obj, sign);
+            }
             return;
         }
         if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
@@ -2318,10 +2258,9 @@ public:
         // multiply the factor into everything it produced. Mirrors the constraint
         // side; objectives are not canonicalized, so both spellings arrive as written.
         {
-            const Expression *obj_scale = nullptr;
-            bool obj_divides = false;
-            const BoundFunctionExpression *obj_scale_func = nullptr;
-            if (const Expression *agg_expr = AsScaledAggregate(expr, obj_scale, obj_divides, obj_scale_func)) {
+			ScaledAggregateMatch scale_match;
+			if (TryMatchScaledAggregate(expr, op.decide_index, scale_match)) {
+				auto obj_scale = scale_match.scale;
                 // The canonicalizer vets a factor before it gets here -- but it only runs
                 // on CONSTRAINTS, so an objective arrives unvetted and this is the first
                 // place that can say no. A decision on both sides of the `*` is a product
@@ -2337,9 +2276,9 @@ public:
                 idx_t linear_before = obj.terms.size();
                 idx_t bilinear_before = obj.bilinear_terms.size();
                 idx_t squared_before = obj.squared_terms.size();
-                ExtractAggregateObjectiveTerms(*agg_expr, obj, sign);
-                ApplyScaleToObjective(*obj_scale_func, *obj_scale, obj_divides, obj, linear_before,
-                                      bilinear_before, squared_before);
+				ExtractAggregateObjectiveTerms(*scale_match.aggregate, obj, sign);
+				ApplyScaleToObjective(*scale_match.function, *obj_scale, scale_match.divides, obj, linear_before,
+				                      bilinear_before, squared_before);
                 return;
             }
         }
@@ -2385,7 +2324,7 @@ public:
     }
 
     void AnalyzeObjective(const unique_ptr<Expression>& expr_ptr) {
-        auto *expr = UnwrapDecideCasts(*expr_ptr.get());
+        auto *expr = UnwrapDecideCasts(*expr_ptr, op.decide_index);
 
         // DecidB: Check for PER wrapper on objective (outermost layer)
         vector<unique_ptr<Expression>> per_cols;
@@ -2395,7 +2334,7 @@ public:
                 for (idx_t i = 1; i < conj.children.size(); i++) {
                     per_cols.push_back(conj.children[i]->Copy());
                 }
-                expr = UnwrapDecideCasts(*conj.children[0].get());
+                expr = UnwrapDecideCasts(*conj.children[0], op.decide_index);
             }
         }
 
@@ -2403,10 +2342,10 @@ public:
         unique_ptr<Expression> when_cond;
         if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
             auto &conj = expr->Cast<BoundConjunctionExpression>();
-            if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+            if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
                 when_cond = conj.children[1]->Copy();
                 // Unwrap to get the actual objective expression
-                expr = UnwrapDecideCasts(*conj.children[0].get());
+                expr = UnwrapDecideCasts(*conj.children[0], op.decide_index);
             }
         }
 
@@ -2474,7 +2413,7 @@ public:
                 // DecidB WHEN: skip entirely — WHEN constraints are conditional (per-row),
                 // so they must NOT contribute to global variable bounds.
                 // E.g., "x <= 0 WHEN condition" should NOT set upper_bounds[x] = 0 globally.
-                if (conj.alias == WHEN_CONSTRAINT_TAG && conj.children.size() == 2) {
+                if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
                     break;
                 }
                 // AND expression - recurse on all children
@@ -2486,12 +2425,14 @@ public:
 
             case ExpressionClass::BOUND_COMPARISON: {
                 auto &comp = expr.Cast<BoundComparisonExpression>();
+                idx_t source_clause_id = DConstants::INVALID_INDEX;
+                TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
 
                 // Only extract global bounds from simple "x OP constant" constraints,
                 // where x is a bare DECIDE variable (possibly cast-wrapped).
                 // Multi-variable expressions (e.g., x - 3*z_1 - 5*z_2 = 0 from IN rewrite)
                 // must NOT be treated as single-variable bounds.
-                auto *lhs = UnwrapDecideCasts(*comp.left);
+                auto *lhs = UnwrapDecideCasts(*comp.left, op.decide_index);
 
                 if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                     // Simple single-variable LHS — check if it's a DECIDE variable
@@ -2506,24 +2447,12 @@ public:
                     }
 
                     if (var_idx != DConstants::INVALID_INDEX) {
-                        // Extract bound value from RHS, unwrapping CASTs
-                        // (DuckDB may insert implicit casts like CAST(5 AS INTEGER))
-                        auto *rhs_ptr = UnwrapDecideCasts(*comp.right);
-                        if (rhs_ptr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                            auto &rhs = rhs_ptr->Cast<BoundConstantExpression>();
-
-                            // Cast to double - handle both INTEGER and DOUBLE types
-                            double bound_value;
-                            if (rhs.value.type().id() == LogicalTypeId::INTEGER ||
-                                rhs.value.type().id() == LogicalTypeId::BIGINT) {
-                                bound_value = static_cast<double>(rhs.value.GetValue<int64_t>());
-                            } else if (rhs.value.type().id() == LogicalTypeId::DOUBLE ||
-                                       rhs.value.type().id() == LogicalTypeId::FLOAT) {
-                                bound_value = rhs.value.GetValue<double>();
-                            } else {
-                                // Try default cast
-                                bound_value = rhs.value.GetValue<double>();
-                            }
+                        // Preserve the historical literal-only absorption shape. For an
+                        // eligible cast-wrapped literal, evaluate the complete expression
+                        // with DuckDB semantics and convert only its result.
+                        double bound_value;
+                        if (IsCastWrappedConstant(*comp.right) &&
+                            TryEvaluateFoldableDouble(context, *comp.right, bound_value)) {
 
                             bool is_integer_var =
                                 (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
@@ -2558,10 +2487,10 @@ public:
                             // the spec carries the same integer-strict normalization.
                             if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
-                                if (RecordBound('<', bound_value)) user_absorbed_bounds.push_back({var_idx, '<', bound_value});
+                                if (RecordBound('<', bound_value)) user_absorbed_bounds.push_back({var_idx, '<', bound_value, false, 0.0, source_clause_id});
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
-                                if (RecordBound('>', bound_value)) user_absorbed_bounds.push_back({var_idx, '>', bound_value});
+                                if (RecordBound('>', bound_value)) user_absorbed_bounds.push_back({var_idx, '>', bound_value, false, 0.0, source_clause_id});
                             } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
                                 // Intersect (like `<=`/`>=`), never overwrite: two equalities
                                 // on one variable (`x = 5 AND x = 10`) must invert the box
@@ -2569,18 +2498,18 @@ public:
                                 // resolved to the last value written.
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
-                                if (RecordBound('=', bound_value)) user_absorbed_bounds.push_back({var_idx, '=', bound_value});
+                                if (RecordBound('=', bound_value)) user_absorbed_bounds.push_back({var_idx, '=', bound_value, false, 0.0, source_clause_id});
                             } else if (comp.type == ExpressionType::COMPARE_LESSTHAN && is_integer_var) {
                                 // x < bound → x <= bound-1 for integers. REAL strict
                                 // inequality has no valid absorption — leave it for
                                 // the constraint path which rejects with a clear error.
                                 // Carry strict + typed_k so the diagnosis re-quotes `< bound`.
                                 upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value - 1.0);
-                                if (RecordBound('<', bound_value - 1.0)) user_absorbed_bounds.push_back({var_idx, '<', bound_value - 1.0, true, bound_value});
+                                if (RecordBound('<', bound_value - 1.0)) user_absorbed_bounds.push_back({var_idx, '<', bound_value - 1.0, true, bound_value, source_clause_id});
                             } else if (comp.type == ExpressionType::COMPARE_GREATERTHAN && is_integer_var) {
                                 // x > bound → x >= bound+1 for integers.
                                 lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value + 1.0);
-                                if (RecordBound('>', bound_value + 1.0)) user_absorbed_bounds.push_back({var_idx, '>', bound_value + 1.0, true, bound_value});
+                                if (RecordBound('>', bound_value + 1.0)) user_absorbed_bounds.push_back({var_idx, '>', bound_value + 1.0, true, bound_value, source_clause_id});
                             } else {
                                 absorbed = false;
                             }
@@ -2596,7 +2525,7 @@ public:
             case ExpressionClass::BOUND_BETWEEN: {
                 auto &between = expr.Cast<BoundBetweenExpression>();
 
-                auto *input = UnwrapDecideCasts(*between.input);
+                auto *input = UnwrapDecideCasts(*between.input, op.decide_index);
 
                 if (input->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
                     auto &colref = input->Cast<BoundColumnRefExpression>();
@@ -2626,21 +2555,15 @@ public:
                             return true;
                         };
 
-                        auto ExtractBound = [](const Expression *e) -> double {
-                            e = UnwrapDecideCasts(*e);
-                            if (e->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
-                                return std::numeric_limits<double>::quiet_NaN();
-                            }
-                            auto &c = e->Cast<BoundConstantExpression>();
-                            if (c.value.type().id() == LogicalTypeId::INTEGER ||
-                                c.value.type().id() == LogicalTypeId::BIGINT) {
-                                return static_cast<double>(c.value.GetValue<int64_t>());
-                            }
-                            return c.value.GetValue<double>();
+                        auto ExtractBound = [&](const Expression &e) -> double {
+                            double value;
+                            return IsCastWrappedConstant(e) && TryEvaluateFoldableDouble(context, e, value)
+                                       ? value
+                                       : std::numeric_limits<double>::quiet_NaN();
                         };
 
-                        double lo = ExtractBound(between.lower.get());
-                        double hi = ExtractBound(between.upper.get());
+                        double lo = ExtractBound(*between.lower);
+                        double hi = ExtractBound(*between.upper);
 
                         // BETWEEN is absorbed but (unlike COMPARISON) never tracked
                         // for re-emission until now. Record each finite side as its
@@ -2689,6 +2612,7 @@ public:
     ClientContext &context;
 
     const PhysicalDecide &op;
+    DecideCanonicalizer canonicalizer;
 
     vector<unique_ptr<DecideConstraint>> constraints;
     unique_ptr<Objective> objective;
@@ -3598,7 +3522,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         EvaluatedConstraint eval_const;
         eval_const.comparison_type = constraint->comparison_type;
-        eval_const.source_clause_id = c;
+        eval_const.source_clause_id = constraint->source_clause_id;
+        eval_const.repair_group_id = c;
         // Preserve whether the original LHS was an aggregate (e.g., SUM(...))
         eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
         eval_const.minmax_indicator_idx = constraint->minmax_indicator_idx;
@@ -3624,6 +3549,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // dumping the per-row numeric fan-out.
         for (auto &term : constraint->lhs_terms) {
             eval_const.variable_indices.push_back(term.variable_index);
+            eval_const.linear_term_reductions.push_back(term.reduction);
             eval_const.coefficient_labels.push_back(term.coefficient ? term.coefficient->GetName()
                                                                       : string());
         }
@@ -4251,6 +4177,42 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 EvaluatedConstraint::QuadraticGroup eqg;
                 eqg.sign = qg.sign;
 
+                if (qg.scale) {
+                    const Expression &transformed =
+                        CachedTransformToChunkExpression(chunk_expr_cache, *qg.scale, context);
+                    ExpressionExecutor scale_executor(context);
+                    scale_executor.AddExpression(transformed);
+                    ColumnDataScanState scale_scan;
+                    gstate.data.InitializeScan(scale_scan);
+                    DataChunk scale_chunk;
+                    scale_chunk.Initialize(context, gstate.data.Types());
+                    bool got_scale = false;
+                    while (!got_scale && gstate.data.Scan(scale_scan, scale_chunk)) {
+                        if (scale_chunk.size() == 0) {
+                            continue;
+                        }
+                        DataChunk scale_result;
+                        scale_result.Initialize(context, {transformed.return_type});
+                        scale_executor.Execute(scale_chunk, scale_result);
+                        Value value = scale_result.data[0].GetValue(0);
+                        if (value.IsNull()) {
+                            throw InvalidInputException(
+                                "DECIDE constraint: the factor on a squared aggregate evaluated to NULL.");
+                        }
+                        double factor = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                        if (!std::isfinite(factor)) {
+                            throw InvalidInputException(
+                                "DECIDE constraint: the factor on a squared aggregate is not finite (NaN/Inf).");
+                        }
+                        if (qg.scale_divides && factor == 0.0) {
+                            throw InvalidInputException(
+                                "DECIDE constraint: division by zero -- the factor on a squared aggregate evaluated to 0.");
+                        }
+                        eqg.sign *= qg.scale_divides ? 1.0 / factor : factor;
+                        got_scale = true;
+                    }
+                }
+
                 vector<LogicalType> q_types;
                 ExpressionExecutor q_executor(context);
                 eqg.row_coefficients.resize(qg.inner_terms.size());
@@ -4624,6 +4586,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // `x OP const` / BETWEEN constraints; those comparisons were skipped in
     // AnalyzeConstraint so we don't re-emit them as per-row model rows.
     solver_input.lower_bounds = gstate.absorbed_lower_bounds;
+    solver_input.constraint_sources = constraint_sources;
     // Resolve the "unset" sentinel to the default lower bound 0: a variable the
     // query never explicitly lowered stays non-negative. Variables with an
     // explicit (possibly negative) lower-bound constraint keep their absorbed
@@ -5479,16 +5442,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             if (ec.ne_avg_rhs_scale) {
                 rhs *= static_cast<double>(g_size);
             }
-            double fixed_offset = 0.0;
-            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-                if (ec.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
-                    continue;
-                }
-                auto &col = ec.row_coefficients[term_idx];
-                for (idx_t k = g_begin; k < g_end; k++) {
-                    fixed_offset += col.Get(flat_rows[k]);
-                }
-            }
+            double fixed_offset = SumFixedAggregateLhsOffset(
+                ec, &flat_rows, g_begin, g_end, "fixed aggregate <> term");
             rhs -= fixed_offset;
 
             // Integer-RHS guard: with integer LHS (already enforced by
@@ -5560,6 +5515,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             rc1.indices.push_back(static_cast<int>(z_idx));
             rc1.coefficients.push_back(-M);
             rc1.kind = ConstraintKind::USER_MECHANISM;
+            rc1.source_clause_id = ec.source_clause_id;
+            rc1.repair_group_id = ec.repair_group_id;
             rc1.indicator_col = z_idx;
             solver_input.global_constraints.push_back(std::move(rc1));
 
@@ -5572,6 +5529,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             rc2.indices.push_back(static_cast<int>(z_idx));
             rc2.coefficients.push_back(-M);
             rc2.kind = ConstraintKind::USER_MECHANISM;
+            rc2.source_clause_id = ec.source_clause_id;
+            rc2.repair_group_id = ec.repair_group_id;
             rc2.indicator_col = z_idx;
             solver_input.global_constraints.push_back(std::move(rc2));
         }
@@ -6566,6 +6525,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 throw InternalException("Composed MIN/MAX: unexpected comparison type.");
             }
             outer.kind = ConstraintKind::USER_PARAMETER;
+            outer.shape = ElasticShape::SHARED_SCALAR;
+            outer.source_clause_id = spec.source_clause_id;
+            outer.repair_group_id = solver_input.constraints.size() +
+                                    solver_input.global_constraints.size();
             solver_input.global_constraints.push_back(std::move(outer));
         }
     }
@@ -7047,7 +7010,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 row.coefficients.push_back(1.0);
                 row.sense = b.sense;
                 row.rhs = b.k;
-                row.provenance.clause_id = bound_clause_id;
+                row.provenance.source_clause_id = b.source_clause_id;
+                row.provenance.repair_group_id = bound_clause_id;
                 row.provenance.group_key = DConstants::INVALID_INDEX;
                 row.provenance.kind = ConstraintKind::USER_PARAMETER;
                 row.provenance.shape = ElasticShape::SHARED_SCALAR;

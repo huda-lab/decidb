@@ -10,8 +10,12 @@
 
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/decide_source_info.hpp"
 
 namespace duckdb {
+
+//! Render WHEN/PER wrappers as DECIDE postfix syntax for logical and physical EXPLAIN.
+void CollectDecideExpressionStrings(const Expression &expr, vector<string> &out);
 
 //! Tracks entity-scope metadata for decision variables scoped to a base table.
 //! When a variable is declared as "T.x IS BOOLEAN", it has one value per unique
@@ -53,17 +57,22 @@ public:
     // The bound constraints expression
     unique_ptr<Expression> decide_constraints;
 
+    //! Stable source display registry, indexed by source_clause_id.
+    vector<ConstraintSourceInfo> constraint_sources;
+
     // The optimization sense (MINIMIZE or MAXIMIZE)
     DecideSense decide_sense;
 
     // The bound objective function expression
     unique_ptr<Expression> decide_objective;
 
-    // Additive constant peeled from the parsed objective body during
-    // SimplifyDecideObjective (e.g. the `3` in `MAXIMIZE SUM(x) + 3`).
-    // The solver ignores this — it doesn't change argmax/argmin — but it's
-    // preserved here so a future "report the objective value" feature can
-    // add it back without losing information. Zero when nothing was peeled.
+    // Additive constant peeled from the objective body by
+    // DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
+    // `MAXIMIZE SUM(x) + 3`). The solver ignores this — it doesn't change
+    // argmax/argmin — but it's preserved here so a future "report the objective
+    // value" feature can add it back without losing information. SetObjective ADDS
+    // to it, so a later optimizer rewrite cannot discard the user's constant.
+    // Zero when nothing was peeled.
     double objective_constant_offset = 0.0;
 
     // Number of auxiliary variables at the end of decide_variables (created by binder and optimizer)
@@ -143,6 +152,7 @@ public:
         vector<ComposedMinMaxTerm> terms;
         unique_ptr<Expression> rhs_expr;      // RHS expression (typically scalar constant)
         ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >)
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
     };
     vector<ComposedMinMaxConstraint> composed_minmax_constraints;
 
@@ -199,6 +209,18 @@ public:
     //! decide_constraints directly.
     void AddConstraint(ClientContext &context, unique_ptr<Expression> constraint);
 
+    //! Replace the objective, canonicalizing it on the way in. This is the objective's
+    //! counterpart to AddConstraint and the ONLY way DecideOptimizer may install a
+    //! rewritten objective (AVG scaling, MIN/MAX auxiliaries, ABS envelopes, bilinear
+    //! links). Before it existed the four rewrite sites assigned decide_objective
+    //! directly, so optimizer output was never re-canonicalized or verified while
+    //! constraint output always was.
+    //!
+    //! Any additive constant the rewrite leaves behind is ADDED to
+    //! objective_constant_offset rather than replacing it, so the offset peeled from
+    //! what the user wrote survives every later rewrite.
+    void SetObjective(ClientContext &context, unique_ptr<Expression> objective);
+
     // --- Implement virtual functions ---
 
     // The output columns are the child's columns plus the new decide variables
@@ -217,11 +239,6 @@ protected:
     // The table indices that this operator produces
     vector<idx_t> GetTableIndex() const override;
 
-private:
-    //! Recursively render a tagged expression (constraint AND-tree or objective),
-    //! unwrapping WHEN/PER wrappers into postfix suffixes for display. Used for
-    //! both the Constraints and Objective EXPLAIN rows so they render symmetrically.
-    static void CollectTaggedExpressionStrings(const Expression &expr, vector<string> &out);
 };
 
 } // namespace duckdb

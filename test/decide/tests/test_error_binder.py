@@ -290,7 +290,7 @@ class TestBinderErrors:
 
     # `SUM(x*v) <= SUM(y*v)` used to be rejected here, sharing this file's "not a
     # scalar or aggregate without DECIDE variables" message because the bound was
-    # itself a reducer over decision variables. canonicalize.md C.2 made the gate
+    # itself a reducer over decision variables. the canonicalization refactor made the gate
     # side-agnostic and the shape solves; it is now oracle-verified in
     # test_canonicalize_side_agnostic.py::test_aggregate_vs_aggregate.
 
@@ -438,16 +438,19 @@ class TestBinderErrors:
                 MINIMIZE SUM(POWER(x * y, 2)) LIMIT 1
             """, match=r"products of different DECIDE variables|linear in DECIDE variables")
 
-    def test_perrow_null_rhs_rejected(self, decidb_cli):
-        """NULL on the RHS of a per-row constraint reaches the binder as a
-        CAST expression (DuckDB types NULL as unresolved). The binder rejects
-        before we'd subtract an INVALID_INDEX coefficient from NULL."""
-        decidb_cli.assert_error("""
+    @pytest.mark.parametrize("constraint", [
+        "x <= CAST(NULL AS DOUBLE)",
+        "x + 3 <= CAST(NULL AS DOUBLE)",
+        "CAST(NULL AS DOUBLE) >= x + 3",
+    ])
+    def test_perrow_null_rhs_rejected(self, decidb_cli, constraint):
+        """Direct, rebuilt and reversed known-NULL bounds fail during planning."""
+        decidb_cli.assert_error(f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL)
-                SUCH THAT x + 3 <= CAST(NULL AS DOUBLE)
+                SUCH THAT {constraint}
                 MAXIMIZE SUM(x) LIMIT 1
-            """, match=r"does not support|clause")
+            """, match=r"Binder Error: DECIDE constraint bound evaluates to NULL.*COALESCE")
 
     # --- WHEN error cases ---
 

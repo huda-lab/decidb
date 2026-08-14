@@ -31,7 +31,7 @@ so "it solved" does not distinguish a correct bound from a garbage one.
 
 The shapes below were originally chosen because each reached the rebuild through a
 different decline of the parsed-level constraint simplifier, which distributed the body
-first in the common case. That layer was deleted at canonicalize.md C.4, so all of them
+first in the common case. That layer was deleted at the canonicalization refactor, so all of them
 now reach the rebuild directly.
 
 Covers:
@@ -208,7 +208,7 @@ def test_nested_product_scaled_reducer(decidb_cli):
     When this was written, the parsed-level simplifier distributed such a body before
     binding, which is why the bug hid for so long; a scaled reducer was one of the
     shapes it declined, so this reached the rebuild from a second direction. That layer
-    was deleted at canonicalize.md C.4, so every test in this file now reaches the
+    was deleted at the canonicalization refactor, so every test in this file now reaches the
     rebuild directly. Kept because the scaled-reducer path multiplies the factor in at
     the physical layer, which the others do not exercise.
 

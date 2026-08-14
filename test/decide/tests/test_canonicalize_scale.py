@@ -561,17 +561,20 @@ def test_scaled_composed_minmax_over_a_join(decidb_cli):
 def test_decision_factor_in_objective_rejected(decidb_cli):
     """``MAXIMIZE s * SUM(x)`` — a decision on both sides of the `*`.
 
-    The objective needs its own check. ``DecideCanonicalizer`` vets factors, but it
-    runs on CONSTRAINTS only, so an objective reaches the extractor unvetted. Without
-    this guard the decision column was read as a data coefficient and evaluation
-    crashed with an internal DuckDB assertion rather than a message.
+    A factor on a reducer must be one value for the whole query, and a decision is
+    not. ``DecideCanonicalizer`` vets objective factors at the planning boundary with
+    the same ``PeelScale`` rule it applies to constraints, so the rejection names the
+    specific reducer (``SUM(x)``) rather than "an aggregate". The physical extractor
+    keeps its own check as a defensive invariant, but it is no longer the first place
+    that can say no — without a guard the decision column was read as a data
+    coefficient and evaluation crashed with an internal DuckDB assertion.
     """
     decidb_cli.assert_error("""
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT), scalar s(INT)
         SUCH THAT x <= 5 AND s <= 3 AND SUM(x) <= 4
         MAXIMIZE s * SUM(x)
-    """, match=r"'s' is a decision, so it cannot multiply an aggregate")
+    """, match=r"'s' is a decision, so it cannot multiply SUM\(x\)")
 
 
 @pytest.mark.min_max

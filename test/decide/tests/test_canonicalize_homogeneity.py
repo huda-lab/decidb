@@ -32,6 +32,39 @@ def test_query_wide_decision_beside_data_reducer(decidb_cli):
 
 @pytest.mark.var_integer
 @pytest.mark.cons_aggregate
+@pytest.mark.per_clause
+@pytest.mark.correctness
+def test_query_wide_decision_beside_per_data_reducer(decidb_cli):
+    """The same scalar participates in every PER group's reduced bound."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, grp, p, s
+        FROM (VALUES (1, 'a', 1), (2, 'a', 2), (3, 'b', 3)) t(id, grp, p)
+        DECIDE scalar s(INT)
+        SUCH THAT SUM(p) + s <= 10 PER grp AND s <= 10
+        MAXIMIZE s
+    """)
+    si = cols.index("s")
+    assert {int(r[si]) for r in rows} == {7}, rows
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_row_scoped_decision_inside_reducer_remains_legal(decidb_cli):
+    """Row scope is legal when the reducer owns the row-to-one collapse."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, p, x
+        FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, p)
+        DECIDE x(INT)
+        SUCH THAT SUM(p * x) <= 6 AND x <= 3
+        MAXIMIZE SUM(x)
+    """)
+    xi = cols.index("x")
+    assert sum(int(r[xi]) * int(r[cols.index("p")]) for r in rows) <= 6
+
+
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
 @pytest.mark.error_binder
 @pytest.mark.error
 def test_row_scoped_decision_beside_data_reducer_rejected(decidb_cli):
@@ -63,15 +96,29 @@ def test_entity_scoped_decision_beside_global_reducer_rejected(decidb_cli):
 
 
 @pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.error_binder
+@pytest.mark.error
+def test_row_varying_coefficient_on_scalar_beside_reducer_rejected(decidb_cli):
+    """A scalar decision is not query-wide once multiplied by a row column."""
+    decidb_cli.assert_error("""
+        SELECT id, p, s
+        FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, p)
+        DECIDE scalar s(INT)
+        SUCH THAT SUM(p) + p * s <= 100
+        MAXIMIZE s
+    """, match=r"Binder Error: DECIDE constraint.*varies per row.*outside.*(?:reducer|SUM)")
+
+
+@pytest.mark.var_integer
 @pytest.mark.per_clause
 @pytest.mark.error_binder
 @pytest.mark.error
 def test_data_only_reducer_cannot_make_per_row_constraint_eligible_for_per(decidb_cli):
     """Moving ``SUM(p)`` to the bound reveals ``x`` as a per-row constraint.
 
-    The existing PER error is already the user-facing contract; the regression
-    is that the pre-canonicalization gate currently sees the data-only reducer
-    and lets the meaningless wrapper through.
+    The existing PER error is the user-facing contract.  This pins the final
+    canonical classification rather than the removed parsed-shape gate.
     """
     decidb_cli.assert_error("""
         SELECT id, grp, p, x

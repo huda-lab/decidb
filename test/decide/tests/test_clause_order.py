@@ -255,7 +255,7 @@ class TestClauseOrderErrors:
         The message is currently the missing-``SUCH THAT`` one — the first
         declaration's slot closes when the second ``DECIDE`` appears where
         ``SUCH THAT`` was expected. Logged as a message-quality issue in
-        ``07_issues/code_quality/todo.md``; this test pins the rejection, not
+        ``06_issues/code_quality/todo.md``; this test pins the rejection, not
         the wording beyond "it is a parser error".
         """
         decidb_cli.assert_error("""
@@ -295,7 +295,7 @@ def test_split_order_over_subquery_source(decidb_cli, perf_tracker):
 
     The declaration names a source that the parser has not read yet — it sits
     textually before the subquery it scopes over. Entity scoping over a subquery
-    regressed once before (`05_testing/entity_scope/done.md`), so the
+    regressed once before (`04_testing/entity_scope/done.md`), so the
     table-scoped form is what is exercised here.
     """
     rows, cols = decidb_cli.execute("""

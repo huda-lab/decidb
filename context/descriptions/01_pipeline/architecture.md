@@ -1,60 +1,103 @@
-# System Architecture
+# System architecture
 
-## 1. High-Level Design
+How DeciDB attaches to DuckDB, and the shape of the whole DECIDE path. For the
+stage-by-stage detail see [`README.md`](README.md) and each stage's `done.md`;
+for the file map see [`code_structure.md`](code_structure.md); for one query
+walked end to end see [`trace_life_of_a_query.md`](trace_life_of_a_query.md).
 
-DeciDB is implemented as an extension to DuckDB. It leverages DuckDB's extensible parser and planner architecture to inject new query operators. The system follows a pipelined execution model where the `DECIDE` clause is treated as a specialized aggregation step that occurs after standard filtering and before final projection.
+---
 
-For the component-by-component breakdown (symbolic layer, binders, DecideOptimizer, PhysicalDecide, solver backends) and file map, see `code_structure.md`. For a concrete end-to-end example, see `trace_life_of_a_query.md`.
+## 1. Integration with DuckDB
 
-## 2. Query Lifecycle
+DeciDB extends DuckDB's parser and planner to inject a new operator. It registers:
 
-The execution of a decision query follows these stages:
+- **Reserved keywords** — `DECIDE`, `SUCH` (as in `SUCH THAT`), `MAXIMIZE`, `MINIMIZE`.
+- **A gated token** — `WHEN_DECIDE`, which the lexer emits only inside a DECIDE
+  clause, so DECIDE's postfix `WHEN` never collides with the global SQL `WHEN`.
+- **Grammar productions** — `decide_clause`, `decide_declaration`, `decide_body`,
+  `decide_tail`, `decide_constraint_item`, `decide_objective_item`.
+- **Transformer rules** — parsed nodes into `SelectNode` fields, and the tagged
+  `WHEN` / `PER` wrapper expressions.
+- **A logical operator** — `LogicalDecide`, with hand-written serialization.
+- **An optimizer pass** — `DecideOptimizer`.
+- **A physical operator** — `PhysicalDecide`.
+
+The design goal is to keep core DuckDB changes small and DeciDB's own code
+cohesive. Standard SQL is unaffected: the DECIDE-specific token is gated, and the
+grammar conflicts it introduces are keyed on that token.
+
+---
+
+## 2. Query lifecycle
 
 ```mermaid
 graph TD
-    User[User SQL Query] --> Parser
-    subgraph DuckDB + DeciDB Extension
-    Parser[Parser (DuckDB + Symbolic Layer)] --> Binder
-    Binder[Binder (Validation & Types)] --> Planner
-    Planner[Logical Planner] --> Opt[Optimizer]
-    Opt --> Phys[Physical Planner]
-    Phys --> Exec[Execution Engine]
-    
-    subgraph DeciDB Execution
-        Exec --> Data[Materialize Candidates]
-        Data --> Matrix[Build Solver Matrix]
-        Matrix --> Model[SolverModel Builder]
-        Model --> Solver[Solver: Gurobi (primary) / HiGHS (slow fallback)]
-        Solver --> Result[Map Solution to Rows]
-    end
-    end
-    Result --> Output[Result Table]
+    User[User SQL] --> P[01 Parser: grammar, WHEN_DECIDE gating, desugaring, association repair]
+    P --> B[02 Binder: names, scopes, types, degree, reducers]
+    B --> L[03 Logical plan: PlanSubqueries + correlation provenance]
+    L --> C[04 Canonicalizer: ONE shape decision, constraints AND objective]
+    C --> O[05 Optimizer: formulation choice; output re-canonicalized]
+    O --> PH[Physical plan: verify canonical once more]
+    PH --> S[08 Sink: materialize surviving rows]
+    S --> F[08 Finalize: entity mappings, extraction, coefficients]
+    F --> M[06 Model formulation: VarIndexer, COO, Q matrix]
+    M --> SV[07 Solver: Gurobi preferred / HiGHS fallback]
+    SV --> R[08 GetData: project values back onto rows by scope]
+    R --> Out[Result rows]
 ```
 
-## 3. Detailed Data Flow
+---
 
-### 3.1 Parsing & Normalization
-When the parser encounters a `DECIDE` clause, it invokes the Symbolic Layer. This layer:
-1.  Identifies decision variables.
-2.  Normalizes constraints into the form `SUM(coeff * variable) <= constant`.
-3.  Separates row-varying coefficients (dependent on table columns) from decision variables.
+## 3. Three structural decisions
 
-### 3.2 Plan Generation
-The planner inserts a `LogicalDecide` operator into the query tree. Crucially, this operator is placed **above** the source-table scan and `Filter` operators. This ensures that the solver only considers rows that satisfy the `WHERE` clause, significantly reducing the problem size.
+### The operator sits above the scan and the filter
 
-### 3.3 Physical Execution
-The `PhysicalDecide` operator works in a "stop-and-go" fashion (pipeline breaker):
-1.  **Sink Phase**: It consumes all input tuples from its child operator (the candidate items). These tuples are buffered in memory.
-2.  **Entity Mapping (Phase 1.5)**: For table-scoped (entity-scoped) variables, the operator evaluates entity key columns per row and builds a row-to-entity mapping. This determines which rows share the same solver variable instance.
-3.  **Model Building**: It iterates over the buffered tuples to compute the coefficients for the objective function and constraints. The `VarIndexer` computes a three-block variable layout: row-scoped variables (one per row), entity-scoped variables (one per unique entity), and global auxiliary variables. The indexer replaces the previous flat `row * num_vars + var_idx` formula with scope-aware indexing.
-4.  **Solve Phase**: The constructed model is passed to `SolverModel::Build()` which creates a solver-agnostic representation, then `SolveModel()` dispatches to Gurobi (primary, significantly faster in practice) or HiGHS (slow fallback if Gurobi is unavailable).
-5.  **Source Phase**: Once the solver returns, the operator augments the buffered tuples with the solution values (e.g., `x=1` or `x=0`) and streams them to the next operator (e.g., `SELECT` list projection). For entity-scoped variables, all rows belonging to the same entity receive the same solution value via `VarIndexer::Get(var_idx, row)`.
+`LogicalDecide` is inserted above the source scan and any `Filter`, so rows
+eliminated by `WHERE` never become decision variables. For most queries this is
+the single most impactful thing in the whole system — each surviving row is a
+solver column.
 
-> **Note**: The execution phase is documented in detail across five sub-documents: expression analysis (03a), coefficient evaluation (03b), model building (03c), solver backends (03d), and result projection (03e). See each for implementation details.
+A `Projection` sits above `LogicalDecide` and prunes auxiliary variable columns,
+so the user's result contains only what they declared.
 
-## 4. Integration Point
-DeciDB links against DuckDB as a loadable extension. It registers:
--   New Parser Keywords: `DECIDE`, `SUCH THAT`, `MAXIMIZE`, `MINIMIZE`.
--   New Transformer Rules: To convert parsed nodes into logical operators.
--   New Physical Operator: `PhysicalDecide`.
--   EXPLAIN Support: Both `LogicalDecide` and `PhysicalDecide` override `GetName()` and `ParamsToString()` to produce structured DECIDE node output in `EXPLAIN`, `EXPLAIN ANALYZE`, and `EXPLAIN (FORMAT JSON)`. See `01_pipeline/04_explain.md` for details.
+### Shape is decided exactly once
+
+Which side of a comparison each term sits on, which way the relation points, and
+where a factor on a reducer lives are decided by `DecideCanonicalizer`, on the
+bound tree, before the optimizer runs. Every stage below consumes that shape and
+none re-decides it; a release-build verifier enforces it at three points.
+
+That is stage 04's whole reason to exist as a stage, and
+[`04_canonicalizer/done.md`](04_canonicalizer/done.md) §1 explains why a pass that
+may decline can never be a single home.
+
+### Execution is stop-and-go
+
+`PhysicalDecide` is a pipeline breaker. The optimal value of any one decision
+depends on the entire dataset, so the operator must consume all of its input
+before producing a row:
+
+1. **Sink** — buffer every tuple into a `ColumnDataCollection`.
+2. **Finalize** — build entity mappings, evaluate every coefficient, `WHEN` mask
+   and `PER` group against that buffer, build the solver-neutral model, solve.
+3. **Source** — re-scan the buffer and append solution values.
+
+Read consistency follows: the optimization runs on the snapshot the query saw, and
+concurrent modifications cannot affect a running solve.
+
+---
+
+## 4. What runs where
+
+| Concern | Owner | Not owner |
+|---|---|---|
+| Syntax and association | Stage 01 | Anything that moves comparison terms |
+| Names, scopes, types, degree | Stage 02 | Anything that picks a formulation |
+| Where terms sit | Stage 04 | Every other stage |
+| Formulation (Big-M, McCormick, easy/hard) | Stage 05 | The binder, the physical operator |
+| Numeric values | Stage 08 | The canonicalizer, which never evaluates |
+| Backend translation | Stage 07 | Anything that inspects a SQL plan |
+
+Solver integration stays backend-agnostic: Gurobi and HiGHS must both remain valid
+implementations, and a Gurobi-only API is an accelerator with a Big-M fallback,
+never a dependency.

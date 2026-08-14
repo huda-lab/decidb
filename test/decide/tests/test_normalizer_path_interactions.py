@@ -5,7 +5,7 @@ mutually-exclusive first-match-wins bypasses whose conditions were *not* disjoin
 `(SUM(POWER(x,2)) WHEN c) + 3 <= K` matched several at once, and the tests pinned that
 whichever fired first did not break the others' structure.
 
-That normalizer was deleted at `canonicalize.md` C.4. The combinations it protected are
+That normalizer was deleted at the canonicalization refactor. The combinations it protected are
 still the interesting ones, and now they test something stronger: each shape goes
 through `DecideCanonicalizer` with no parsed-level pass ahead of it, so a failure here
 is the canonicalizer mishandling a composite term rather than a bypass ordering bug.
@@ -68,12 +68,11 @@ def _solve_and_compare(oracle_solver, decidb_obj, tol=5e-2):
 # Quadratic LHS bypass + aggregate-local WHEN
 # ===========================================================================
 #
-# Bypass-order question: WHEN check fires first (line ~997 in
-# decide_symbolic.cpp), but the WHEN path's additive walk treats
-# `SUM(POWER(x, 2)) WHEN c` as one opaque structural term — no constants
-# to peel, no `K * WHEN` to fold. The rebuilt LHS is identical to the
-# original. The QP detector downstream still recognizes the
-# WHEN-tagged-quadratic-SUM shape and emits the right Q matrix.
+# `SUM(POWER(x, 2)) WHEN c` is one atomic term to the canonicalizer — it is
+# never opened, so there are no constants to peel and no `K * WHEN` to fold,
+# and the rebuilt LHS is identical to the original. The QP detector downstream
+# still recognizes the WHEN-tagged-quadratic-SUM shape and emits the right Q
+# matrix.
 
 @pytest.mark.quadratic
 @pytest.mark.when

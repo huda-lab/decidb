@@ -101,8 +101,8 @@ def test_qualified_column_distinguishes_self_join_sides(
 def test_qualified_column_in_objective_only(decidb_cli, duckdb_conn):
     """A qualified coefficient in the objective alone still binds.
 
-    Guards the FromSymbolic restore path independently of the constraint path:
-    the objective is the only place the ambiguous name appears.
+    Guards qualified-name resolution in the objective independently of the
+    constraint path: the objective is the only place the ambiguous name appears.
     """
     sql = """
         SELECT n1.n_nationkey, x

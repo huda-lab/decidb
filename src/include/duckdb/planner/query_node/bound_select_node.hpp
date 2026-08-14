@@ -16,6 +16,7 @@
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 
 namespace duckdb {
@@ -55,14 +56,18 @@ public:
     //! The DECIDE clause
     vector<unique_ptr<Expression>> decide_variables;
     unique_ptr<Expression> decide_constraints;
+    //! Stable display provenance captured before PlanSubqueries and finalized after
+    //! canonicalization. source_fragments preserves casts/subqueries while planning.
+    vector<ConstraintSourceInfo> decide_constraint_sources;
+    vector<string> decide_source_fragments;
     DecideSense decide_sense;
     unique_ptr<Expression> decide_objective;
-    //! Additive constant peeled from the parsed objective body during
-    //! SimplifyDecideObjective (e.g. the `3` in `MAXIMIZE SUM(x) + 3`). The
-    //! solver doesn't need this to compute `argmax`/`argmin`, but it's kept
-    //! here so callers that ever want to report the actual objective value
-    //! can add it back. Zero when nothing was peeled. Transferred to
-    //! LogicalDecide at plan time.
+    //! Additive constant peeled from the objective body by
+    //! DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
+    //! `MAXIMIZE SUM(x) + 3`). The solver doesn't need this to compute
+    //! `argmax`/`argmin`, but it's kept here so callers that ever want to report
+    //! the actual objective value can add it back. Zero when nothing was peeled.
+    //! Transferred to LogicalDecide at plan time.
     double objective_constant_offset = 0.0;
     //! Number of auxiliary variables (e.g. from IN domain rewrite) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;

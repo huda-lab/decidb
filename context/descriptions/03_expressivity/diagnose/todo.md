@@ -2,7 +2,7 @@
 
 *(No `done.md` in this folder: nothing of this construct is implemented yet. Today's
 diagnosis surface is the `diagnose_decide` session setting and the
-`decide_diagnostics()` table function — see `../../08_query_diagnostics/`.)*
+`decide_diagnostics()` table function — see `../../07_query_diagnostics/`.)*
 
 ---
 
@@ -31,7 +31,7 @@ diagnosis, which is the opposite of today's default. Three readings, not yet cho
 1. **Prefix replaces auto.** `diagnose_decide` drops to `off` by default; only a
    `DIAGNOSE`-prefixed query is diagnosed. Matches the draft literally. Cost: a user who
    does not already know the keyword never learns why their query failed — the argument
-   `08_query_diagnostics/README.md` makes for on-by-default is given up.
+   `07_query_diagnostics/README.md` makes for on-by-default is given up.
 2. **Prefix is an escalation on top of auto.** A bare failed query still gets its one-line
    diagnosed error (today's behavior); `DIAGNOSE` additionally *returns the diagnosis as a
    relation* instead of raising, which is what makes it `EXPLAIN ANALYZE`-like and removes
@@ -64,7 +64,7 @@ much as it changes the code, so settle it in the draft first.
 - Execution: the diagnosis engines already exist and run inside the physical decide
   operator; the prefix only changes *who consumes the result* — the retained diagnosis is
   emitted as rows instead of being folded into an error. See
-  `../../08_query_diagnostics/router/done.md` for the terminal that currently makes that
+  `../../07_query_diagnostics/router/done.md` for the terminal that currently makes that
   decision.
 
 **Test**: `test/decide/tests/` — a `DIAGNOSE`-prefixed infeasible query returns the repair
@@ -72,7 +72,7 @@ rows and does *not* raise; the same query unprefixed keeps whatever behavior the
 above fixes; `DIAGNOSE` under `diagnose_decide='off'` behaves as decided.
 
 **Done file**: create `done.md` in this folder when it ships, and update the interface
-description in `../../08_query_diagnostics/README.md` plus the syntax reference
+description in `../../07_query_diagnostics/README.md` plus the syntax reference
 (`../../00_project_overview/syntax_reference.md`).
 
 *Logged 2026-08-02, during paper §5 review (confirmed by the user as intended design that

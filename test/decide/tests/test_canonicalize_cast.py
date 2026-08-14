@@ -1,24 +1,15 @@
-"""Exact cast descent in the canonicalizer's additive spine.
+"""The DECIDE cast boundary and DOUBLE solver ingress.
 
-A bound expression tree is typed, and DuckDB inserts casts wherever a scalar
-function's children do not already match the resolved signature
-(``FunctionBinder::CastToFunctionArguments``), plus one around each whole
-comparison side when the two sides' types differ. So a DECIDE constraint's
-additive spine routinely arrives sealed inside a cast. Treating that cast as a
-term boundary makes the whole side one opaque term, and the canonicalizer
-declines.
+DuckDB inserts bound casts while reconciling ordinary SQL types. Those internal
+wrappers are transparent when they contain decision algebra; the solver model
+has one numeric domain, DOUBLE. User-authored ``CAST``, ``TRY_CAST`` and ``::``
+over a decision expression are rejected earlier, from the parsed tree, even when
+their target is DOUBLE.
 
-``Decompose`` descends **widening numeric** casts and re-applies them per term
-on rebuild. Widening is the load-bearing word: ``CAST(1.6 + 1.6 AS INTEGER)`` is
-3 while ``CAST(1.6 AS INTEGER) + CAST(1.6 AS INTEGER)`` is 4, so a narrowing
-cast must stay a boundary.
-
-Cast descent is legal only when the target type represents every source value
-exactly.  The oracle cases below deliberately cross the ``2^53`` boundary:
-DuckDB allows ``BIGINT`` and high-precision ``DECIMAL`` to cast implicitly to
-``DOUBLE``, but those conversions are not exact.  Moving terms through such a
-cast changes the feasible set.  Exact DECIMAL widening remains a positive
-control.
+Data-only casts remain ordinary DuckDB computations. They are evaluated with
+DuckDB semantics before their resulting coefficient or bound is converted once
+to DOUBLE for the solver. The oracle cases below cover both sides of that split,
+including the documented precision limit beyond ``2^53``.
 
 Covers:
   - test_cast_lid_mixed_placement: reducer (LEFT) beside a scalar subquery
@@ -28,8 +19,9 @@ Covers:
     negated, under a cast lid
   - test_bigint_to_double_cast_lid_preserves_sql_semantics: the exactness cliff
     immediately around 2^53
-  - test_decimal_cast_lid_exactness: exact DECIMAL widening versus an inexact
-    DECIMAL-to-DOUBLE conversion
+  - explicit decision-cast rejection in constraints and objectives
+  - data-cast preservation in bounds and objective coefficients
+  - SELECT projection casts, which are ordinary post-solve SQL
 """
 
 import csv
@@ -251,9 +243,10 @@ def test_bigint_to_double_cast_lid_preserves_sql_semantics(
     """Implicit ``BIGINT -> DOUBLE`` must agree with SQL inside the model domain.
 
     DECIDE carries one numeric domain, DOUBLE (see ``syntax_reference.md`` ->
-    Numeric precision), so a cast into it is erased.  Wherever the values involved
-    are representable there -- which is everything below ``2^53`` -- the erased
-    form and direct SQL evaluation must give the same answer.  The behaviour past
+    Numeric precision), so binder-generated wrappers over decision algebra are
+    transparent. Wherever the values involved are representable there -- which is
+    everything below ``2^53`` -- the model and direct SQL evaluation must give the
+    same answer. The behaviour past
     that boundary is pinned separately by
     ``test_magnitudes_beyond_double_domain_are_a_documented_limit``.
     """
@@ -284,7 +277,7 @@ def test_bigint_to_double_cast_lid_preserves_sql_semantics(
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_decimal_cast_lid_exactness(
+def test_decimal_mixed_types_match_sql_in_domain(
     decidb_cli, duckdb_conn, value_sql, limit_sql
 ):
     """DECIMAL widening and DECIMAL -> DOUBLE both agree with SQL in-domain.
@@ -318,12 +311,12 @@ def test_decimal_cast_lid_exactness(
 def test_cast_agrees_with_sql_for_every_relation(
     decidb_cli, duckdb_conn, value_sql, limit_sql, relation
 ):
-    """Every SQL comparison survives cast erasure, on both signs and with scale."""
+    """Every relation agrees after internal casts enter the DOUBLE model domain."""
     actual, expected = _solve_cast_relation_case(
         decidb_cli, duckdb_conn, value_sql, relation, limit_sql
     )
     assert actual == expected, (
-        f"wrong {relation} preimage for {value_sql}: "
+        f"wrong {relation} result for {value_sql}: "
         f"DeciDB={actual}, direct DuckDB={expected}"
     )
 
@@ -400,9 +393,9 @@ def test_cast_aggregate_per_bounds(decidb_cli, duckdb_conn):
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_explicit_lossy_cast_excludes_duckdb_overflow_domain(decidb_cli, duckdb_conn):
-    """Conversion-error source values lie outside the cast's defined domain."""
-    rows, cols = decidb_cli.execute("""
+def test_explicit_decision_cast_is_rejected_before_model_build(decidb_cli):
+    """A cast around any decision-bearing subtree is unsupported solver algebra."""
+    decidb_cli.assert_error("""
         SELECT id, value, lim, x
         FROM (VALUES (1, 2147483646::BIGINT, 2147483647::INTEGER))
              t(id, value, lim)
@@ -410,25 +403,7 @@ def test_explicit_lossy_cast_excludes_duckdb_overflow_domain(decidb_cli, duckdb_
         SUCH THAT x >= 0 AND x <= 3
           AND CAST(x + value AS INTEGER) <= lim
         MAXIMIZE SUM(x)
-    """)
-    actual = int(rows[0][cols.index("x")])
-
-    feasible = []
-    for candidate in range(4):
-        try:
-            matches = duckdb_conn.execute(
-                "SELECT CAST(?::BIGINT + 2147483646::BIGINT AS INTEGER) "
-                "<= 2147483647::INTEGER",
-                [candidate],
-            ).fetchone()[0]
-        except Exception as exc:
-            # The source point is outside DuckDB CAST's defined domain only
-            # when the engine reports an integer conversion overflow.
-            assert "out of range" in str(exc).lower() or "overflow" in str(exc).lower()
-            continue
-        if matches:
-            feasible.append(candidate)
-    assert actual == max(feasible) == 1
+    """, match=r"Binder Error: DECIDE does not allow casts over decision expressions")
 
 
 @pytest.mark.var_integer
@@ -453,10 +428,10 @@ def test_decision_free_lossy_cast_uses_duckdb_evaluation(decidb_cli, duckdb_conn
 @pytest.mark.cons_perrow
 @pytest.mark.query_diagnostics
 @pytest.mark.correctness
-def test_lossy_cast_generated_rows_keep_one_diagnostic_clause(
+def test_mixed_numeric_equality_keeps_one_diagnostic_clause(
     request, cli_fixture
 ):
-    """An equality's two preimage boundaries remain one editable user clause."""
+    """A mixed-numeric equality remains one editable user clause."""
     cli = request.getfixturevalue(cli_fixture)
     result = cli.execute_script(
         ".mode csv\n"
@@ -485,7 +460,7 @@ def test_lossy_cast_generated_rows_keep_one_diagnostic_clause(
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_lossy_cast_highs_and_gurobi_match(
+def test_mixed_numeric_highs_and_gurobi_match(
     decidb_cli_highs, decidb_cli_gurobi, duckdb_conn
 ):
     sql = """
@@ -564,30 +539,109 @@ def test_magnitudes_beyond_double_domain_are_a_documented_limit(
     )
 
 
+@pytest.mark.parametrize(
+    ("cast_expression", "location"),
+    [
+        pytest.param("CAST(x AS DOUBLE)", "constraint", id="cast_constraint"),
+        pytest.param("TRY_CAST(x AS DOUBLE)", "constraint", id="try_cast_constraint"),
+        pytest.param("x::DOUBLE", "constraint", id="colon_cast_constraint"),
+        pytest.param("CAST(x AS DOUBLE)", "objective", id="cast_objective"),
+        pytest.param("TRY_CAST(x AS DOUBLE)", "objective", id="try_cast_objective"),
+        pytest.param("x::DOUBLE", "objective", id="colon_cast_objective"),
+    ],
+)
 @pytest.mark.var_integer
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-def test_decision_bearing_cast_in_objective(decidb_cli, oracle_solver):
-    """The objective path erases casts on the same terms as the constraint path.
-
-    `ExtractLinearAndBilinearTerms` and `ExtractAggregateObjectiveTerms` peel casts
-    without any guard of their own; they are correct only because the canonicalizer
-    rejects value-changing decision casts first.  Nothing covered the objective side
-    of that before, so a divergence here would have been silent.
-    """
-    rows, cols = decidb_cli.execute("""
-        SELECT id, w, x
-        FROM (VALUES (1, 2.5), (2, 3.5), (3, 1.5)) t(id, w)
+@pytest.mark.error_binder
+@pytest.mark.error
+def test_all_explicit_decision_cast_syntax_is_rejected(
+    decidb_cli, cast_expression, location
+):
+    constraint = f"{cast_expression} <= 4" if location == "constraint" else "x <= 4"
+    objective = f"SUM({cast_expression})" if location == "objective" else "SUM(x)"
+    decidb_cli.assert_error(f"""
+        SELECT id, x
+        FROM (VALUES (1)) t(id)
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 4 AND SUM(x) <= 6
-        MAXIMIZE SUM(CAST(x AS DOUBLE) * w)
+        SUCH THAT x >= 0 AND {constraint}
+        MAXIMIZE {objective}
+    """, match=r"Binder Error: DECIDE does not allow casts over decision expressions")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        pytest.param("""
+            SELECT id, s
+            FROM (VALUES (1)) t(id)
+            DECIDE scalar s(INT)
+            SUCH THAT CAST(s AS DOUBLE) <= 4
+            MAXIMIZE s
+        """, id="query_wide"),
+        pytest.param("""
+            SELECT n.n_nationkey, keepN
+            FROM nation n
+            DECIDE n.keepN(BOOL)
+            SUCH THAT CAST(n.keepN AS DOUBLE) <= 1
+            MAXIMIZE SUM(keepN)
+        """, id="entity_scoped_qualified"),
+    ],
+)
+@pytest.mark.error_binder
+@pytest.mark.error
+def test_explicit_cast_rejection_covers_all_decision_scopes(decidb_cli, sql):
+    decidb_cli.assert_error(
+        sql,
+        match=r"Binder Error: DECIDE does not allow casts over decision expressions",
+    )
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_data_cast_in_objective_is_evaluated_before_double_ingress(decidb_cli):
+    """Erasing the INTEGER cast would choose id=2; preserving it chooses id=1."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, w, penalty, x
+        FROM (VALUES (1, 1.6, 10.0), (2, 2.4, 8.0)) t(id, w, penalty)
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x) <= 1
+        MAXIMIZE SUM(x * CAST(w AS INTEGER) * penalty)
     """)
     ci = {name: i for i, name in enumerate(cols)}
     chosen = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
-    weights = {1: 2.5, 2: 3.5, 3: 1.5}
+    assert chosen == {1: 1, 2: 0}, chosen
 
-    assert sum(chosen.values()) <= 6
-    # Greedy is optimal here: spend the budget on the heaviest rows first.
-    assert chosen == {1: 2, 2: 4, 3: 0}, chosen
-    achieved = sum(weights[i] * v for i, v in chosen.items())
-    assert abs(achieved - 19.0) < 1e-9, achieved
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_perrow
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_data_cast_in_constraint_coefficient_is_preserved(decidb_cli):
+    """Erasing the INTEGER cast would admit both rows instead of only id=2."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, w, x
+        FROM (VALUES (1, 1.6), (2, 1.4)) t(id, w)
+        DECIDE x(BOOL)
+        SUCH THAT x * CAST(w AS INTEGER) <= 1.8
+        MAXIMIZE SUM(x)
+    """)
+    ci = {name: i for i, name in enumerate(cols)}
+    chosen = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
+    assert chosen == {1: 0, 2: 1}, chosen
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+def test_select_projection_cast_over_solved_decision_is_allowed(decidb_cli):
+    """SELECT is post-solve SQL and is intentionally outside the algebra rule."""
+    rows, cols = decidb_cli.execute("""
+        SELECT id, CAST(x AS INTEGER) AS rounded_x
+        FROM (VALUES (1)) t(id)
+        DECIDE x(REAL)
+        SUCH THAT x >= 0 AND x <= 1.5
+        MAXIMIZE SUM(x)
+    """)
+    assert cols == ["id", "rounded_x"]
+    assert int(rows[0][1]) == 2

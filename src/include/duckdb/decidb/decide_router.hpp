@@ -7,7 +7,7 @@
 // pure classifier — given the solve result and the diagnose_decide mode, it names
 // the terminal the operator should route to. It owns no engine invocation and no
 // execution/operator types, so the decision tree is unit-testable in isolation.
-// See context/descriptions/08_query_diagnostics/router/.
+// See context/descriptions/07_query_diagnostics/router/.
 //
 //===----------------------------------------------------------------------===//
 

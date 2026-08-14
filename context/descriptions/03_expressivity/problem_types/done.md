@@ -123,7 +123,7 @@ Optimum of `SUM(POWER(x - t, 2) + c * x)` with no other binding constraints is `
 
 When one factor in a product of two different DECIDE variables is declared `BOOL`, the product `b * x` is exactly linearized using McCormick envelopes. This produces an equivalent MILP reformulation — no relaxation, exact for binary variables. Works with both Gurobi and HiGHS.
 
-**Requires**: A finite upper bound on the non-Boolean variable — explicit (`x <= K`) or inferred via implied-bound propagation from a non-negative constraint like `SUM(x) <= K` (see `../../04_optimizer/matrix_efficiency/done.md`). Bool×Bool uses simpler AND-linearization (no Big-M needed).
+**Requires**: A finite upper bound on the non-Boolean variable — explicit (`x <= K`) or inferred via implied-bound propagation from a non-negative constraint like `SUM(x) <= K` (see `../../01_pipeline/05_optimizer/done.md`). Bool×Bool uses simpler AND-linearization (no Big-M needed).
 
 ```sql
 -- Boolean x Real objective (both solvers)
@@ -326,8 +326,8 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 - Constraint forms: [such_that/done.md](../such_that/done.md)
 - SQL functions and linearization: [sql_functions/done.md](../sql_functions/done.md)
 - Bilinear terms (`x * y`): [bilinear/done.md](../bilinear/done.md)
-- Solver backends and dispatch: [01_pipeline/03d_solver_backends.md](../../01_pipeline/03d_solver_backends.md)
-- Model building (variable type -> solver flags): [01_pipeline/03c_model_building.md](../../01_pipeline/03c_model_building.md)
+- Solver backends and dispatch: [01_pipeline/07_solver/done.md](../../01_pipeline/07_solver/done.md)
+- Model building (variable type -> solver flags): [01_pipeline/06_model_formulation/done.md](../../01_pipeline/06_model_formulation/done.md)
 
 ---
 
@@ -374,9 +374,10 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 
 - **Feasibility support**: Grammar rule in `third_party/libpg_query/grammar/statements/select.y` accepts `DECIDE ... SUCH THAT ...` without objective. `DecideSense::FEASIBILITY` flows through parser → binder → physical → model builder. Model builder sets all objective coefficients to zero.
 
-- **Symbolic normalization skip**: `src/decidb/symbolic/decide_symbolic.cpp`
-  - Objectives only. `SumInnerIsQuadratic` prevents symbolic expansion from destroying the `POWER(linear, 2)` pattern the QP extractor matches on.
-  - Constraints need no skip: nothing expands them before binding since `canonicalize.md` C.4 deleted that layer, and `DecideCanonicalizer` never opens a term.
+- **No pre-binding expansion**: nothing expands a constraint or an objective before
+  binding, so the `POWER(linear, 2)` pattern the QP extractor matches on always survives
+  intact. `DecideCanonicalizer` never opens a term either, so no skip or bypass is needed
+  anywhere for quadratic shapes.
 
 - **Bilinear implementation**: See [bilinear/done.md](../bilinear/done.md) for full implementation details including:
   - McCormick rewrite pass in optimizer (`RewriteBilinear`)

@@ -1,6 +1,6 @@
 """The constraint gate no longer cares which side the decision was written on.
 
-canonicalize.md C.2 deleted the last of the five duplicate shape-deciding sites:
+the canonicalization refactor deleted the last of the five duplicate shape-deciding sites:
 a parsed-level flip in ``DecideConstraintsBinder::BindComparison`` that swapped
 ``5 >= x`` into ``x <= 5`` because everything downstream demanded the DECIDE
 expression on the left. ``DecideCanonicalizer`` makes the same swap on the bound

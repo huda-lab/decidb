@@ -38,7 +38,6 @@ def third_party_includes():
     includes += [os.path.join('third_party', 'utf8proc', 'include')]
     includes += [os.path.join('third_party', 'yyjson', 'include')]
     includes += [os.path.join('third_party', 'zstd', 'include')]
-    includes += [os.path.join('third_party', 'symboliccpp')]
     includes += [os.path.join('third_party', 'highs')]
     includes += [os.path.join('third_party', 'highs', 'highs')]
     includes += [os.path.join('third_party', 'highs', 'extern')]

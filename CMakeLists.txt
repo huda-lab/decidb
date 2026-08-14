@@ -661,7 +661,6 @@ include_directories(third_party/mbedtls/include)
 include_directories(third_party/jaro_winkler)
 include_directories(third_party/yyjson/include)
 include_directories(third_party/zstd/include)
-include_directories(third_party/symboliccpp)
 include_directories(third_party/highs)
 include_directories(third_party/highs/highs)
 

@@ -482,7 +482,7 @@ def test_scalar_with_not_equal(decidb_cli, perf_tracker):
 
 
 # ---------------------------------------------------------------------------
-# Test 10: A scalar on the RHS of a reduced constraint (canonicalize.md C.2)
+# Test 10: A scalar on the RHS of a reduced constraint (the canonicalization refactor)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.cons_aggregate
@@ -490,7 +490,7 @@ def test_scalar_with_not_equal(decidb_cli, perf_tracker):
 def test_scalar_as_aggregate_rhs(decidb_cli, oracle_solver):
     """`SUM(x) <= cap` — the paper's §3.1 shape, with the decision on the *bound*.
 
-    Rejected until canonicalize.md C.2, which made the binder's constraint gate
+    Rejected until the canonicalization refactor, which made the binder's constraint gate
     side-agnostic: it now accepts a comparison when either side bears a decision
     and lets `DecideCanonicalizer` move `cap` onto the model side (K1). Nothing
     new happens downstream — `SUM(x) - cap <= 0` is the shape B.3 already landed,

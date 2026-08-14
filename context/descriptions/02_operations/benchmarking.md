@@ -357,7 +357,7 @@ python3 benchmark/decide/run_benchmarks.py --compare abc1234
 
 ### Recording Results
 
-Whenever a commit is made for the purpose of improving performance, a corresponding entry MUST be added to `context/descriptions/06_performance/`. One file per optimization batch, named `{NNN}_{baseline_commit}_{evaluated_commit}.md` where `NNN` is a zero-padded sequential log number (e.g., `002_9c3a53fb62_6bc8ae1412.md`), recording the change set, hypothesis, and measured outcome (with references to the commit hash and the benchmark JSON files used for the comparison). The `06_performance/README.md` index lists all entries. The log is append-only — superseded entries get a new entry referencing the old one rather than being rewritten.
+Whenever a commit is made for the purpose of improving performance, a corresponding entry MUST be added to `context/descriptions/05_performance/`. One file per optimization batch, named `{NNN}_{baseline_commit}_{evaluated_commit}.md` where `NNN` is a zero-padded sequential log number (e.g., `002_9c3a53fb62_6bc8ae1412.md`), recording the change set, hypothesis, and measured outcome (with references to the commit hash and the benchmark JSON files used for the comparison). The `05_performance/README.md` index lists all entries. The log is append-only — superseded entries get a new entry referencing the old one rather than being rewritten.
 
 ## Makefile Targets
 

@@ -524,10 +524,10 @@ class TestDiagnosticsRelation:
         edits = _clause_edits(rows)
         # One clause carries the whole repair — never a fractional split across two.
         assert len(edits) == 1, rows
-        assert edits[0]["subject"] == "y + x >= 10", rows  # same clause on both backends
-        assert edits[0]["suggested_change"] == "y + x >= 0"
-        assert "diagnosis points to clause `y + x >= 10`" in result.stderr.lower()
-        _apply_reported_fix(cli, sql, rows, {"y + x >= 10": "x + y >= 10"})
+        assert edits[0]["subject"] == "x + y >= 10", rows  # same clause on both backends
+        assert edits[0]["suggested_change"] == "x + y >= 0"
+        assert "diagnosis points to clause `x + y >= 10`" in result.stderr.lower()
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_between_bound_is_loosened(self, request, cli_fixture):
@@ -567,8 +567,8 @@ class TestDiagnosticsRelation:
         assert {r["state"] for r in rows} == {"infeasible"}
         amounts = [float(r["value"]) for r in rows if r["attribute"] == "amount"]
         assert sum(amounts) == pytest.approx(7.0)
-        assert _attrs(rows, "clause", "x <= 5")
-        _apply_reported_fix(cli, sql, rows, {"x <= 5": "MAX(x) <= 5"})
+        assert _attrs(rows, "clause", "MAX(x) <= 5")
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_multi_instance_bound_shares_one_slack(self, request, cli_fixture):
@@ -609,6 +609,40 @@ class TestDiagnosticsRelation:
         assert cap["suggested_change"] == "x <= 12"
         assert cap["amount"] == "7"
         _apply_reported_fix(cli, sql, rows, {"x <= 5": "5 >= x"})
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_explicit_data_cast_keeps_source_spelling(self, request, cli_fixture):
+        """Diagnostics use source provenance for a data expression, including an
+        explicit cast that must not be replaced by a flattened/internal name."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,-1)) t(id, cap) "
+            "DECIDE x(REAL) SUCH THAT x <= CAST(cap AS DOUBLE) MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        clause = "x <= CAST(cap AS DOUBLE)"
+        edit = _attrs(rows, "clause", clause)
+        assert edit["edit_kind"] == "loosen"
+        assert edit["suggested_change"] == f"{clause} + 1"
+        assert "__source_" not in result.stdout
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_when_per_source_qualifier_order(self, request, cli_fixture):
+        """A source label retains both wrappers in DECIDE grammar order."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1,'a',true),(2,'a',false)) t(id, grp, active) "
+            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 WHEN active PER grp MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, mode="auto")
+
+        rows = _rows(result)
+        clause = "SUM(x) >= 5 WHEN active PER grp"
+        edit = _attrs(rows, "clause", clause)
+        assert edit["edit_kind"] == "loosen"
+        assert "PER grp WHEN" not in result.stdout
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_per_group_query_mode_folds_to_one_edit(self, request, cli_fixture):
@@ -819,7 +853,7 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_boolean_data_conflict_gets_real_diagnosis(self, request, cli_fixture):
-        """DomainSpec regression guard (07_issues/code_quality: "BOOL domains round-trip
+        """DomainSpec regression guard (06_issues/code_quality: "BOOL domains round-trip
         through the constraint tree instead of being variable bounds" — fixed by applying
         a BOOLEAN's `[0,1]` domain directly to the solver column instead of synthesizing
         `x >= 0 AND x <= 1` rows). Two BOOLEAN variables, no bound anywhere near the 0/1
@@ -955,13 +989,13 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        cap = _attrs(rows, "clause", "10000*x <= 0")
+        cap = _attrs(rows, "clause", "10000 * x <= 0")
         assert cap["edit_kind"] == "loosen"
         assert cap["edit_source"] == "source_literal"
-        assert cap["suggested_change"] == "10000*x <= 10000"
+        assert cap["suggested_change"] == "10000 * x <= 10000"
         assert cap["amount"] == "10000"
         assert not [r for r in rows if r["attribute"] == "edit_source" and r["value"] == "virtual_offset"]
-        _apply_reported_fix(cli, sql, rows)
+        _apply_reported_fix(cli, sql, rows, {"10000 * x <= 0": "10000*x <= 0"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_foldable_rhs_cap_is_editable(self, request, cli_fixture):
@@ -1332,12 +1366,15 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        cap = _attrs(rows, "clause", "10000000*x <= 50000000")
+        cap = _attrs(rows, "clause", "10000000 * x <= 50000000")
         assert cap["edit_kind"] == "loosen"
-        assert cap["suggested_change"] == "10000000*x <= 60000000"
+        assert cap["suggested_change"] == "10000000 * x <= 60000000"
         assert cap["amount"] == "10000000"
         assert not [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
-        _apply_reported_fix(cli, sql, rows)
+        _apply_reported_fix(
+            cli, sql, rows,
+            {"10000000 * x <= 50000000": "10000000*x <= 50000000"},
+        )
 
     @pytest.mark.parametrize("objective, expected_drop, drop_sql, expected_objective", [
         ("MINIMIZE SUM(x)", "x <> 0", "x <> 0", "0"),
@@ -1591,8 +1628,8 @@ class TestInfeasibleHeadlineAndRendering:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ungrouped_weighted_sum_folds_with_uniform_coeff(self, request, cli_fixture):
-        """A uniform-coefficient weighted SUM folds to `SUM(c*x)` (never a raw `x + x`
-        fan-out). The infeasibility (`SUM(x) >= 1` vs `SUM(5*x) <= -1`) is repaired by a
+        """A uniform-valued data coefficient keeps the written `SUM(x * w)` source
+        expression (never a raw `x + x` fan-out). The infeasibility is repaired by a
         single objective-preserving edit: loosen the budget to `<= 5` so one `x` can be
         chosen (achievable objective 1). Before the boolean bound-absorption fix, `x` was
         wrongly pinned to 0 (the budget `<= -1` absorbed `x <= -0.2`), which forced a
@@ -1605,12 +1642,12 @@ class TestInfeasibleHeadlineAndRendering:
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
-        assert _attrs(rows, "clause", "SUM(5*x) <= -1")["suggested_change"] == "SUM(5*x) <= 5"
+        assert _attrs(rows, "clause", "SUM(x * w) <= -1")["suggested_change"] == "SUM(x * w) <= 5"
         assert _attrs(rows, "model", "NULL")["achievable_objective"] == "1"
         assert "x + x" not in result.stdout
         # The single objective-preserving fix loosens only the budget clause.
         err = result.stderr.lower()
-        assert "diagnosis points to clause `sum(5*x) <= -1`" in err
+        assert "diagnosis points to clause `sum(x * w) <= -1`" in err
         assert " or loosen " not in err
         _apply_reported_fix(cli, sql, rows, {"SUM(5*x) <= -1": "SUM(x * w) <= -1"})
 

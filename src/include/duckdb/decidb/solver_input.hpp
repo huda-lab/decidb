@@ -13,6 +13,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/planner/expression.hpp"
 
@@ -212,6 +213,9 @@ struct EvaluatedConstraint {
     //! symbolically instead of dumping the per-row numeric fan-out. Empty entries (constant
     //! coefficients / non-aggregate rows) fall back to the numeric reconstruction.
     vector<string> coefficient_labels;
+    //! Parallel to variable_indices. Records which canonical reducer owns each
+    //! linear term so fixed LHS offsets cannot silently acquire generic SUM semantics.
+    vector<LinearTermReduction> linear_term_reductions;
     CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
@@ -255,6 +259,9 @@ struct EvaluatedConstraint {
     //! Stable user-clause identity retained when one cast comparison expands to
     //! multiple boundary rows.
     idx_t source_clause_id = DConstants::INVALID_INDEX;
+    //! Elastic grouping identity. Kept separate because one source comparison can
+    //! produce multiple independently repairable rows/directions.
+    idx_t repair_group_id = DConstants::INVALID_INDEX;
     //! True when the complete canonical RHS is one query-wide scalar value. The value
     //! is one editable knob shared across every row this clause emits, so the elastic
     //! engine collapses those rows to ONE shared slack (ElasticShape::SHARED_SCALAR);
@@ -301,6 +308,12 @@ struct EvaluatedConstraint {
     mutable vector<idx_t> group_row_ids;
 };
 
+//! Sum decision-free LHS terms over a row range after checking that each one is
+//! explicitly owned by a canonical SUM reducer.
+double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
+                                  const vector<idx_t> *rows, idx_t begin, idx_t end,
+                                  const char *error_context);
+
 //! Maps result rows to unique entities in a source table.
 //! Used for table-scoped decision variables where one variable value
 //! is shared across all result rows from the same base table entity.
@@ -321,6 +334,7 @@ struct SolverInput {
 
     // Constraints
     vector<EvaluatedConstraint> constraints;
+    vector<ConstraintSourceInfo> constraint_sources;
 
     // Linear objective
     vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
@@ -375,6 +389,9 @@ struct SolverInput {
         char sense;     // '<' (<=), '>' (>=), '=' (==)
         double rhs;
         ConstraintKind kind = ConstraintKind::STRUCTURAL;
+        ElasticShape shape = ElasticShape::UNSET;
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
+        idx_t repair_group_id = DConstants::INVALID_INDEX;
         //! Flat column of the `<>` disjunction binary this row belongs to (mirrors
         //! ConstraintProvenance::indicator_col). Set at the aggregate-`<>` global
         //! site so the infeasible removal dial groups the two rows; INVALID otherwise.
