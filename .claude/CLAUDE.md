@@ -22,10 +22,10 @@ the contract below it, but must not take over its responsibilities. These are
 the same eight stages documented in `context/descriptions/01_pipeline/`, one
 folder each.
 
-1. **Parser and parsed representation** — parse SQL/DECIDE syntax, repair
-   association, desugar `norm()` and `IN`, and retain source structure. Do not
-   perform binding, optimization, or solver work, and do not move comparison
-   terms.
+1. **Parser and parsed representation** — parse SQL/DECIDE syntax, resolve
+   `WHEN` association in the grammar, and retain source structure. Do not
+   perform binding, optimization, or solver work, do not move comparison terms,
+   and do not desugar a formulation on the parsed tree.
 2. **Binder and semantic analysis** — resolve names, scopes, types, polynomial
    degree, and DECIDE validity. Produce a clear bound representation; do not
    execute or solve, and do not flip or repartition a comparison.
@@ -38,9 +38,10 @@ folder each.
    per reducer scale. Never open a term algebraically. This is the only layer
    that decides shape, and no later layer may re-decide it.
 5. **DECIDE optimization and rewriting** — assume canonical input and select
-   mathematical formulations (ABS, MIN/MAX, AVG, `<>`, bilinear). Return every
-   emitted row through layer 3's entry points. Do not parse SQL, execute
-   relations, decide shape, or call a solver.
+   mathematical formulations (`norm`, `IN`, ABS, MIN/MAX, AVG, `<>`, bilinear).
+   Lower the binder's `norm`/`IN` markers here, where types, scopes and casts
+   are known. Return every emitted row through layer 3's entry points. Do not
+   parse SQL, execute relations, decide shape, or call a solver.
 6. **Model formulation** — translate the evaluated decision problem into a
    solver-neutral model. Own model variables, constraints, objectives, and
    indexing.

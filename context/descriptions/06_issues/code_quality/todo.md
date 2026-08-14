@@ -111,16 +111,3 @@ Nothing computes a wrong answer: physical extraction rejects all three shapes (`
 
 **Discovered**: 2026-08-14, auditing the degree fix during the canonicalization refactor.
 
----
-
-## The committed golden baseline is older than the corpus it baselines
-
-**Location**: `test/decide/golden/baseline.dump` (+ `.results`) vs `test/decide/golden/corpus.sql`.
-
-`baseline.dump` was captured 2026-08-12; `corpus.sql` was last edited 2026-08-13 and currently has uncommitted changes. Diffing a fresh capture against the committed baseline therefore reports differences that are corpus edits, not regressions.
-
-**Why it matters**: `capture.sh`'s whole purpose is to be a characterization oracle — a change claiming not to alter the built model is verified by diffing dumps. A baseline that no longer corresponds to the corpus silently removes that guarantee, and the natural reaction to a noisy diff is to stop trusting it. Step 8's verification worked around this by capturing its own before/after pair, which is correct method but does not repair the committed artifact.
-
-**Fix**: regenerate `baseline.dump` and `baseline.dump.results` in the same commit that settles `corpus.sql`.
-
-**Discovered**: 2026-08-14, during the canonicalization refactor measurement.

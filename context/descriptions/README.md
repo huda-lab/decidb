@@ -48,7 +48,7 @@ flow diagram: [`01_pipeline/README.md`](01_pipeline/README.md).
 
 | # | Stage | Owns | Key source |
 |---|---|---|---|
-| 01 | [parser](01_pipeline/01_parser/done.md) | Grammar, DECIDE `WHEN` lexing, transformer, desugaring | `grammar/statements/select.y`, `bind_select_node.cpp` |
+| 01 | [parser](01_pipeline/01_parser/done.md) | Grammar, DECIDE `WHEN` lexing and precedence, transformer | `grammar/statements/select.y`, `bind_select_node.cpp` |
 | 02 | [binder](01_pipeline/02_binder/done.md) | Names, scopes, types, degree, reducers, DECIDE validity | `decide_binder.cpp`, `decide_constraints_binder.cpp` |
 | 03 | [logical_plan](01_pipeline/03_logical_plan/done.md) | `LogicalDecide`, subquery provenance, `AddConstraint`/`SetObjective`, serialization | `logical_decide.cpp`, `plan_select_node.cpp` |
 | 04 | [canonicalizer](01_pipeline/04_canonicalizer/done.md) | The one shape boundary — decisions left, bound right, one spelling per reducer scale | `decide_canonicalizer.cpp` |

@@ -183,9 +183,9 @@ it is auxiliary. Auxiliary variables are pruned from the bind context so they ne
 appear in `SELECT *`; they exist only in the solver's variable space.
 `num_auxiliary_vars` travels to `LogicalDecide` and `PhysicalDecide`.
 
-The binder itself creates auxiliaries only through the parsed-tree desugarings
-that run in `BindSelectNode` (IN-domain and `norm` indicators — stage 01). ABS,
-MIN/MAX, `<>` and bilinear auxiliaries are the optimizer's (stage 05).
+The binder creates no auxiliaries of its own. `norm` and `IN` bind as markers
+and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
+(stage 05). No formulation runs on the parsed tree.
 
 ---
 
