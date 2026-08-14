@@ -438,6 +438,44 @@ class TestBinderErrors:
                 MINIMIZE SUM(POWER(x * y, 2)) LIMIT 1
             """, match=r"products of different DECIDE variables|linear in DECIDE variables")
 
+    @pytest.mark.parametrize("expr", [
+        "POWER(x, 2) * y",
+        "POWER(x, 2) * POWER(y, 2)",
+    ])
+    def test_power_degree_rejected_in_constraint(self, decidb_cli, expr):
+        """POWER contributes degree(base) * n, so these reach the binder gate.
+
+        Before the degree function understood POWER, POWER(x, 2) counted as
+        degree 1 and these passed the gate, to be refused much later by physical
+        extraction with a message naming a normalization pass that no longer
+        exists. Pin the rejection at the binder, where it is worded for a user."""
+        decidb_cli.assert_error(f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(REAL), y(REAL)
+                SUCH THAT SUM({expr}) <= 10 AND x <= 5 AND y <= 5
+                MAXIMIZE SUM(x) LIMIT 1
+            """, match=r"Binder Error:.*higher-order products.*total degree > 2")
+
+    def test_power_degree_rejected_in_objective(self, decidb_cli):
+        """Same shape in an objective takes the same path and the same error."""
+        decidb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(REAL), y(REAL)
+                SUCH THAT x <= 5 AND y <= 5
+                MINIMIZE SUM(POWER(x, 2) * y) LIMIT 1
+            """, match=r"Binder Error:.*higher-order products.*total degree > 2")
+
+    def test_power_squared_scaled_by_constant_still_accepted(self, decidb_cli):
+        """Guard the other side of the degree change: a constant factor adds no
+        degree, so `3 * POWER(x, 2)` stays quadratic and must keep working."""
+        rows, _ = decidb_cli.execute("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(REAL)
+                SUCH THAT x <= 5
+                MINIMIZE SUM(3 * POWER(x, 2)) LIMIT 1
+            """)
+        assert rows
+
     @pytest.mark.parametrize("constraint", [
         "x <= CAST(NULL AS DOUBLE)",
         "x + 3 <= CAST(NULL AS DOUBLE)",

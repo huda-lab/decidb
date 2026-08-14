@@ -53,6 +53,23 @@ objective, or a constraint shape that already upper-bounds `aux`. When true
 carries the auxiliary and a binary sign indicator, and execution derives the two
 upper-bound rows from the tagged lower-bound constraints.
 
+`TagAbsConstraintsForBigM` decides this by reading the constraint as `E <op> 0`
+and asking whether each ABS term's signed position pushes its auxiliary down.
+`CollectAbsWithSign` folds signs through `+`, unary and binary `-`, casts,
+aggregate bodies, and constant factors. A factor whose value is not known until
+execution — a data column, as in `SUM(w * ABS(x - t))` — yields sign 0, which
+never matches the pinning direction and so forces Big-M.
+
+That is deliberately conservative: a row whose `w` happens to be positive gets
+an envelope it does not need. Assuming such a factor positive is unsound, since
+a negative `w` makes enlarging the auxiliary *relax* the row, and the constraint
+silently stops binding. The cost was measured 2026-08-14 on a weighted-ABS
+constraint over TPC-H `lineitem`, comparing a literal coefficient (pinned, no
+Big-M) against an all-ones column (Big-M) so the two models are mathematically
+identical: 0.16s vs 0.65s at 30K rows and 0.26s vs 1.29s at 60K, same optimum
+both ways. A ~5x constant factor, still near-linear in row count — cheap enough
+that deciding sign per row at execution time is not warranted.
+
 ### NORM and IN — `RewriteNorm` / `RewriteInDomain`
 
 The binder keeps `norm(...)` as an aggregate-shaped DECIDE marker so normal

@@ -531,3 +531,22 @@ MAXIMIZE SUM(x * price);
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT 0 - SUM(x) <= -6 AND x <= 5
 MINIMIZE SUM(x);
+
+-- Data-column coefficients on ABS. A column's sign is unknown at plan time, so
+-- the ABS auxiliary cannot be assumed pinned and gets a Big-M indicator. These
+-- were classified "pinned, no Big-M" until the unknown-sign fix, which made
+-- `SUM(w * ABS(...))` unsound wherever `w` could be negative.
+
+-- 80 non-negative coefficient. `weight` is positive in this fixture, but that is
+-- a fact about the data, not about the plan, so Big-M is emitted anyway. This is
+-- the conservative cost of the fix.
+SELECT id, x FROM items DECIDE x(INT)
+SUCH THAT SUM(weight * ABS(x - 2)) <= 20 AND x <= 9
+MAXIMIZE SUM(x);
+
+-- 81 genuinely mixed-sign coefficient: `price - 25` spans -15..15 over the
+-- fixture. Without Big-M the negative rows' auxiliaries float free and the
+-- constraint is weaker than written.
+SELECT id, x FROM items DECIDE x(INT)
+SUCH THAT SUM((price - 25) * ABS(x - 2)) <= 5 AND x <= 9
+MAXIMIZE SUM(x);

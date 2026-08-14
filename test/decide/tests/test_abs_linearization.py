@@ -1197,3 +1197,66 @@ def test_abs_on_both_sides(decidb_cli):
     for xv in xs:
         assert abs(xv - 6.0) <= 1e-4, f"expected x=6, got {xv}"
         assert abs(xv - 3.0) <= abs(xv - 9.0) + 1e-4
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_abs_data_column_coefficient_may_be_negative(decidb_cli, oracle_solver):
+    """SUM(w * ABS(x - t)) <= K where w is a column that goes negative.
+
+    A column's sign is not known at plan time. On a row where w < 0, enlarging
+    that row's ABS auxiliary makes the constraint easier to satisfy, so an
+    auxiliary held only by the cheap one-sided bounds (d >= u, d >= -u) drifts
+    above |x - t| and the constraint stops meaning what it says. Such an
+    auxiliary needs the Big-M encoding that pins d to the exact absolute value.
+
+    Regression pin: while the sign walk assumed an unknown factor was positive,
+    DecidB answered x = 0 on every row here — the constraint was satisfied
+    entirely by letting the auxiliary float, without moving x at all.
+    """
+    rows_data = [(-1.0, 3.0), (2.0, 1.0)]  # (w, t) per row
+    decidb_rows, cols = decidb_cli.execute("""
+        SELECT id, x FROM (VALUES (1, -1, 3), (2, 2, 1)) t(id, w, tgt)
+        DECIDE x(REAL)
+        SUCH THAT SUM(w * ABS(x - tgt)) <= -5 AND x <= 10 AND x >= 0
+        MINIMIZE SUM(x)
+    """)
+    ci = {name: i for i, name in enumerate(cols)}
+    decidb_obj = sum(float(r[ci["x"]]) for r in decidb_rows)
+
+    n = len(rows_data)
+    big_m = 40.0  # any M >= max|x - t| = 9 over the declared box
+    oracle_solver.create_model("abs_negative_data_coefficient")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.add_variable(f"d_{i}", VarType.CONTINUOUS, lb=0.0, ub=big_m)
+        oracle_solver.add_variable(f"y_{i}", VarType.BINARY)
+
+    # d_i = |x_i - t_i| exactly: two lower bounds, plus two indicator-selected
+    # upper bounds so the auxiliary cannot drift upward.
+    for i, (_, t) in enumerate(rows_data):
+        oracle_solver.add_constraint(
+            {f"d_{i}": 1.0, f"x_{i}": -1.0}, ">=", -t, name=f"lo_pos_{i}")
+        oracle_solver.add_constraint(
+            {f"d_{i}": 1.0, f"x_{i}": 1.0}, ">=", t, name=f"lo_neg_{i}")
+        oracle_solver.add_constraint(
+            {f"d_{i}": 1.0, f"x_{i}": -1.0, f"y_{i}": big_m}, "<=", -t + big_m,
+            name=f"up_pos_{i}")
+        oracle_solver.add_constraint(
+            {f"d_{i}": 1.0, f"x_{i}": 1.0, f"y_{i}": -big_m}, "<=", t,
+            name=f"up_neg_{i}")
+
+    oracle_solver.add_constraint(
+        {f"d_{i}": rows_data[i][0] for i in range(n)}, "<=", -5.0,
+        name="weighted_abs")
+    oracle_solver.set_objective(
+        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MINIMIZE)
+    result = oracle_solver.solve()
+
+    assert result.status == SolverStatus.OPTIMAL
+    assert abs(decidb_obj - result.objective_value) <= 1e-4, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Oracle={result.objective_value:.6f}"
+    )

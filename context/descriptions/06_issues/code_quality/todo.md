@@ -98,16 +98,3 @@ about what the test pins, not documentation cleanup.
 documentation restructure.
 
 ---
-
-## `DecideDegreeInternal` under-estimates degree through `POWER`, so degree-3 products are caught late
-
-**Location**: `src/planner/expression_binder/decide_binder.cpp:100-137` (`DecideDegreeInternal`); the late rejection comes from `src/execution/operator/decide/physical_decide.cpp:742`.
-
-The degree function handles the `+`/`-`/`*`/`/` spine exactly and falls back to occurrence counting for everything else, `POWER` included. So `POWER(x,2)` reports degree 1 rather than 2, and `SUM(POWER(x,2) * y)` — genuinely degree 3 — passes the binder gate at line 620.
-
-Nothing computes a wrong answer: physical extraction rejects all three shapes (`POWER(x,2) * y` in a constraint, the same in an objective, and `POWER(x,2) * POWER(y,2)`), verified 2026-08-14. But the rejection arrives as an `Invalid Input Error` from the extractor instead of a `Binder Error`, and its wording is both stale and jargon-laden: *"still references decision variables after normalization (total degree > 2 or unexpanded nonlinear product)"* names a normalization pass that no longer exists and offers the user no edit.
-
-**Why it matters**: the fix is ~6 lines — a `POWER`/`**` case returning `degree(base) * n` for constant `n` — and it would move the message to the boundary that already words these well. Left out of the Step 8 change deliberately, to keep the degree fix provably scoped to the measured failure: tightening `POWER` could reject shapes that pass today, which needs its own before/after run rather than riding along.
-
-**Discovered**: 2026-08-14, auditing the degree fix during the canonicalization refactor.
-

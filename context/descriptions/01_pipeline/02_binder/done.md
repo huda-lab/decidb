@@ -89,6 +89,8 @@ cast                         -> degree(child)
 *                            -> sum over children
 / (binary)                   -> degree(numerator)   (a decision-bearing divisor
                                                      is rejected separately)
+POWER(base, n) / base ** n   -> degree(base) * n    (constant non-negative
+                                                     integer n only)
 anything else                -> occurrence count (never underestimates)
 ```
 
@@ -98,10 +100,13 @@ expands to `x*z + y*z`. Counting occurrences rejected it as degree > 2 in
 be pre-expanded by a separate normalizer. Degree ≤ 2 is the gate; degree 2 is
 routed to the quadratic / bilinear paths downstream.
 
-Known gap: `POWER` falls through to the occurrence-count branch, so
-`POWER(x,2)` reports degree 1 and a genuinely degree-3 `SUM(POWER(x,2) * y)`
-passes this gate and is rejected later by physical extraction. See
-`../../06_issues/code_quality/todo.md`.
+The `POWER` case is what keeps `SUM(POWER(x,2) * y)` — genuinely degree 3 — from
+passing the gate. While `POWER` fell through to occurrence counting it reported
+degree 1, and the shape was refused much later by physical extraction, in
+extractor vocabulary rather than as a `Binder Error`. A fractional, negative or
+non-constant exponent is not a polynomial degree at all; `ValidatePowerExponent`
+rejects those, so they keep the occurrence-count fallback rather than being
+given a number here.
 
 ---
 

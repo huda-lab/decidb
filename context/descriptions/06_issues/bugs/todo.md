@@ -91,25 +91,6 @@ SUCH THAT 0 * SUM(x) <= -1           -- factor outside the reducer
 
 ---
 
-## ABS Big-M analysis assumes a data coefficient is non-negative (live, data-dependent)
-
-**Status**: reachable today, no canonicalization required. Deliberately left open by Phase A of the canonicalization refactor, which fixes only the *syntactic* half of the same root cause. **Scheduled** (decided 2026-08-10): fix after the canonicalization plan completes, not inside it — it is independent of the five-site refactor, and Phase C.3 churns the same ABS emission path. Do not pull it forward without re-deciding.
-
-**Symptom**: `SUCH THAT SUM(w * ABS(x - t)) <= K` is classified "sound, no Big-M" regardless of `w`. For any row where `w < 0`, that row's ABS auxiliary is free to float upward — making it larger makes the row easier — so the auxiliary no longer equals `|x - t|` and the constraint is weaker than written. Wrong results, not just a weak relaxation.
-
-**Cause**: same root as the entry above. `ClassifyAbsConstraints` (`decide_optimizer.cpp:290`) asks only "does this side contain an ABS over a decide var, and does the relation upper-bound this side?" via `ContainsAbsOverDecideVar`, which walks the whole side without tracking the sign of the path it took. Phase A makes the walk sign-aware through `+`, binary `-`, unary `-` and negative numeric literals — all statically known. A data-column factor's sign is not known until execution, so Phase A leaves it optimistic.
-
-**Why it was scoped out of Phase A**: the only sound *static* answer for an unknown-sign factor is "assume it may be negative, add Big-M", which would put a binary indicator on every coefficient-scaled ABS constraint including the common `w >= 0` case. Phase A's mandate was to not regress on canonicalization, not to close every sign hole.
-
-**Two candidate fixes, in the order they should be tried:**
-
-1. **Conservative, then measure.** Tag Big-M whenever a factor's sign is not statically known — roughly a one-line change to `CollectAbsWithSign`'s `*`/`/` branch, sound immediately. Then run `/bench` and find out what it actually costs. The claim that this is "a large performance regression" is an **assumption, never measured**; if the benchmark says otherwise, this is the whole fix and option 2 is unnecessary work. Try this first.
-2. **Decide per row at execution time.** Only if the measurement shows a real regression. The physical layer already evaluates `w` per row (`EvaluateTermCoefs`), so the Big-M rows could be emitted only for rows whose coefficient is actually negative. The obstacle is that the `y` indicator is allocated at **plan** time (`decide_optimizer.cpp:1153`, inside `if (needs_bigm)`), so it cannot be decided lazily as the code stands. The shape of the fix: make the plan-time tag tri-state (pinned / needs-Big-M / sign-unknown), allocate `y` speculatively for sign-unknown, emit the Big-M rows at runtime only where needed, and fix the unused `y` to a constant so presolve drops the column.
-
-**Discovered**: 2026-08-10, reading `ClassifyAbsConstraints` while scoping Phase A of the canonicalization refactor.
-
----
-
 ## Bound absorption uses a single term's coefficient when a variable appears more than once in a constraint
 
 **Symptom**: a per-row constraint whose LHS mentions the same decision variable in several additive terms gets a column bound derived from one term's coefficient rather than from their sum. The bound is loose, never wrong — the emitted row still carries the correct combined coefficient — so results are correct but the LP relaxation is weaker than it should be.

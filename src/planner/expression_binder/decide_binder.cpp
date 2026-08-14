@@ -97,6 +97,8 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 //! products over sums, which hid the difference. Shapes other than the additive /
 //! multiplicative / division spine fall back to the occurrence count, which never
 //! underestimates for them and preserves the previous behavior exactly.
+static bool IsPowerFunction(const FunctionExpression &func);
+
 static idx_t DecideDegreeInternal(const ParsedExpression &expr,
                                   const case_insensitive_map_t<idx_t> &variables) {
 	if (IsVariableExpression(expr, variables)) {
@@ -107,6 +109,28 @@ static idx_t DecideDegreeInternal(const ParsedExpression &expr,
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<const FunctionExpression>();
+		// POWER(base, n) / base ** n multiplies the base's degree by a constant,
+		// non-negative integer exponent. Without this the occurrence-count fallback
+		// reports POWER(x, 2) as degree 1, so SUM(POWER(x, 2) * y) -- genuinely
+		// degree 3 -- passes the gate and is rejected much later by physical
+		// extraction, with wording that names a pass which no longer exists.
+		// A fractional, negative or non-constant exponent is not a polynomial
+		// degree at all; ValidatePowerExponent rejects those, so they keep the
+		// fallback rather than being given a number here.
+		if (IsPowerFunction(func) && func.children.size() == 2 &&
+		    func.children[1]->GetExpressionClass() == ExpressionClass::CONSTANT) {
+			auto &exp_const = func.children[1]->Cast<const ConstantExpression>();
+			double exp_val;
+			try {
+				exp_val = exp_const.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+			} catch (...) {
+				exp_val = -1.0;
+			}
+			if (exp_val >= 0.0 && exp_val == static_cast<double>(static_cast<int64_t>(exp_val))) {
+				return DecideDegreeInternal(*func.children[0], variables) *
+				       static_cast<idx_t>(exp_val);
+			}
+		}
 		if (func.is_operator) {
 			auto name_lower = StringUtil::Lower(func.function_name);
 			if (name_lower == "+" || name_lower == "-") {

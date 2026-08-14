@@ -608,10 +608,11 @@ static bool TryGetConstantSign(ClientContext &context, const Expression &expr, i
 // Only structure whose sign is known at plan time is traversed with a flip: `+`,
 // binary and unary `-`, casts, aggregate bodies, and numeric literal factors. A
 // factor whose sign is not known until execution -- a data column, as in
-// `SUM(w * ABS(x - t))` -- is traversed optimistically as positive. That is a
-// real (pre-existing, data-dependent) unsoundness, filed in
-// 06_issues/bugs/todo.md; closing it means deciding per row at execution time,
-// not tightening this walk.
+// `SUM(w * ABS(x - t))` -- yields sign 0, "unknown", which never matches the
+// pinning direction and so forces Big-M. That is conservative: for `w >= 0` the
+// aux would have been pinned without it. Deciding per row at execution time
+// would recover those rows, but the indicator is allocated at plan time, so it
+// cannot be chosen lazily as the code stands.
 static void CollectAbsWithSign(ClientContext &context, Expression &expr, int sign, idx_t decide_index,
                                vector<std::pair<Expression *, int>> &out) {
 	if (!ContainsAbsOverDecideVar(expr, decide_index)) {
@@ -647,14 +648,21 @@ static void CollectAbsWithSign(ClientContext &context, Expression &expr, int sig
 			return;
 		}
 		if (name == "*" || name == "/") {
-			// Fold the sign of every constant factor; a non-constant factor keeps
-			// the sign as-is (optimistic, see the note above). For division only the
-			// numerator can carry an ABS, but the divisor's sign still applies.
+			// Fold the sign of every constant factor. For division only the numerator
+			// can carry an ABS, but the divisor's sign still applies.
+			//
+			// A factor that is not a statically-known number and does not itself carry
+			// the ABS is a data-dependent multiplier -- `w` in `SUM(w * ABS(x - t))`.
+			// Its sign is unknown until execution, so the whole path sign becomes 0.
+			// An ABS-bearing factor is the term being collected rather than a
+			// multiplier, and is non-negative by construction, so it never flips.
 			int factor_sign = 1;
 			for (auto &child : func.children) {
 				int child_sign;
 				if (TryGetConstantSign(context, *child, child_sign)) {
 					factor_sign *= child_sign;
+				} else if (!ContainsAbsOverDecideVar(*child, decide_index)) {
+					factor_sign = 0;
 				}
 			}
 			for (auto &child : func.children) {
