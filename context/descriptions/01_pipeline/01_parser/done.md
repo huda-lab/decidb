@@ -183,4 +183,3 @@ formulation after types, scopes, and DuckDB coercions are known.
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `WHEN`/`PER` tag construction | `src/parser/transform/expression/transform_operator.cpp` |
 | Parse-error hint | `src/decidb/utility/decide_parse_hints.cpp` |
-| Parsed-tree rewrite call sites | `src/planner/binder/query_node/bind_select_node.cpp` |

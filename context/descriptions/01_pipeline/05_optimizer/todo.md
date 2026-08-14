@@ -27,29 +27,6 @@ prove all generated rows disappear together on both solver backends.
 
 ---
 
-## The header's pass inventory is out of date
-
-**Pointers**: `src/include/duckdb/optimizer/decide_optimizer.hpp:24-35`.
-
-The "Current passes" comment lists four; there are seven, plus
-`TagAbsConstraintsForBigM`. Missing: `RewriteComposedMinMax`,
-`RewriteComposedMinMaxObjectiveTop`, `RewriteBilinear`.
-
-The old binder-migration list is obsolete: NORM and IN are optimizer passes now.
-"Partition-solve detection" and "variable bound propagation" do not exist in any
-form and have no design behind them — if they are still wanted they need a real
-entry, and if not the lines should go.
-
-**Decision**: whether the two speculative future passes are dropped or written up.
-Dropping is the honest default; a one-line aspiration in a header is not a plan.
-
-**Test**: n/a — comment only.
-
-**Done file**: `done.md` §1 already carries the real inventory; this just makes the
-header agree with it.
-
----
-
 ## No cost-based backend or formulation selection
 
 **Pointers**: `SelectSolverBackend()` in `src/decidb/utility/ilp_solver.cpp`;

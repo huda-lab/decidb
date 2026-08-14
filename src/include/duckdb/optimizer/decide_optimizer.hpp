@@ -21,11 +21,15 @@ class Optimizer;
 //! This centralizes all DECIDE-specific transformations that were previously
 //! scattered across the binder and physical operator.
 //!
-//! Current passes:
+//! Current passes, in the order OptimizeDecide runs them:
 //!   - RewriteNorm: lowers the bound NORM marker, including L0 indicators/links
 //!   - RewriteInDomain: lowers DECIDE variable IN lists to indicator formulations
+//!   - TagAbsConstraintsForBigM: marks the ABS nodes needing a Big-M envelope.
+//!     Must precede RewriteAbs, which replaces the nodes it marks
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
+//!   - RewriteBilinear: McCormick linearization for Boolean × anything products
+//!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
 //!   - RewriteMinMax: classifies MIN/MAX constraints as easy/hard, rewrites to per-row
 //!     or SUM+indicator, handles objectives (flat and nested PER)
 //!   - RewriteNotEqual: creates indicator variables for <> constraints

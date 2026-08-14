@@ -30,7 +30,7 @@ Based on the topic, identify which files and docs to read:
 - Also read the relevant source files listed in those docs
 
 **Pipeline topics** — map to `context/descriptions/01_pipeline/`:
-- `parser` → `01_parser/done.md` + `third_party/libpg_query/grammar/statements/select.y`, `src/decidb/parsed/decide_grammar_repair.cpp`
+- `parser` → `01_parser/done.md` + `third_party/libpg_query/grammar/statements/select.y`, `third_party/libpg_query/src_backend_parser_parser.cpp`
 - `binder` → `02_binder/done.md` + `src/planner/expression_binder/decide_binder.cpp`
 - `canonicalizer`, `canonical form` → `04_canonicalizer/done.md` + `src/planner/decide/decide_canonicalizer.cpp`
 - `logical plan`, `LogicalDecide` → `03_logical_plan/done.md` + `src/planner/operator/logical_decide.cpp`

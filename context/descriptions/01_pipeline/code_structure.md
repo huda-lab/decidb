@@ -40,7 +40,7 @@ Stage numbers refer to [`README.md`](README.md).
 | `planner/expression_binder/decide_binder.cpp` | 02 | ~1,020 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
 | `planner/expression_binder/decide_constraints_binder.cpp` | 02 | ~550 | `SUCH THAT` |
 | `planner/expression_binder/decide_objective_binder.cpp` | 02 | ~240 | Objective |
-| `planner/binder/query_node/bind_select_node.cpp` | 01/02 | — | Declarations, scopes, and the parsed-tree rewrites (see stage 01 `todo.md`) |
+| `planner/binder/query_node/bind_select_node.cpp` | 02 | — | DECIDE declarations, scopes, and scoped-variable spelling. No formulation runs here |
 | `planner/binder/query_node/plan_select_node.cpp` | 03/04 | ~290 | Subquery flattening, correlation provenance, the user canonicalization call |
 | `planner/operator/logical_decide.cpp` | 03 | ~415 | `AddConstraint`, `SetObjective`, EXPLAIN strings, serialization |
 | `planner/decide/decide_canonicalizer.cpp` | 04 | ~985 | The one shape boundary |

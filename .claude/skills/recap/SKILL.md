@@ -54,7 +54,7 @@ For each changed area, read the corresponding documentation to understand the fe
 ### 4. Group changes by area
 
 Classify every changed file into one of these groups:
-- **Grammar/Parser** — `.y` files, `decide_grammar_repair.cpp`
+- **Grammar/Parser** — `.y` files, `src_backend_parser_parser.cpp` (`base_yylex`), `decide_parse_hints.cpp`
 - **Binder** — `decide_binder.cpp`, `decide_constraints_binder.cpp`, `decide_objective_binder.cpp`, `bind_select_node.cpp`, `plan_select_node.cpp`
 - **Canonicalizer** — `decide_canonicalizer.cpp`, `decide_source_provenance.cpp`
 - **Optimizer** — `decide_optimizer.cpp`

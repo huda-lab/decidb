@@ -384,7 +384,7 @@ SUCH THAT category IN ('A', 'B', 'C')   -- table column (SQL filter)
 SUCH THAT x IN (0, 1, 3)                -- decision variable domain restriction
 ```
 
-**Decision variable IN**: `x IN (v1, ..., vK)` is rewritten at bind time into K auxiliary binary indicator variables with two constraints:
+**Decision variable IN**: `x IN (v1, ..., vK)` binds as a marker and is lowered by `DecideOptimizer::RewriteInDomain` into K auxiliary binary indicator variables with two constraints:
 - Cardinality: `z_1 + ... + z_K = 1` (exactly one value selected)
 - Linking: `x = v1*z_1 + ... + vK*z_K` (x takes the selected value)
 
@@ -394,7 +394,7 @@ SUCH THAT x IN (0, 1, 3)                -- decision variable domain restriction
 - `x IN (0, 1)` on BOOL → trivially satisfied, no rewrite
 - `x IN (v)` single value → rewritten to `x = v`
 
-**Code**: `bind_select_node.cpp` (`RewriteInDomain()`), called before constraint binding. IN on aggregates (e.g., `SUM(x) IN (...)`) remains unsupported.
+**Code**: `decide_optimizer.cpp` (`DecideOptimizer::RewriteInDomain`), run on the bound tree. IN on aggregates (e.g., `SUM(x) IN (...)`) remains unsupported.
 
 ---
 
@@ -429,10 +429,11 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 `norm(expr, p)` exposes a lasso/ridge-style regularization term over a
 decision-variable expression. The user supplies the weight as an ordinary
 coefficient, e.g. `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. It is
-desugared **before binding** in `bind_select_node.cpp` (`RewriteNorm` for
-p = 1 / 2 / 'inf'; `RewriteNormL0` for p = 0), so it inherits all downstream
-handling (ABS / MAX / POWER linearization, WHEN, PER) and works in both
-objectives and constraints.
+kept as a DECIDE marker through binding and lowered by
+`DecideOptimizer::RewriteNorm` (p = 1 / 2 / 'inf' and the p = 0 indicator
+links), so it inherits all downstream handling (ABS / MAX / POWER
+linearization, WHEN, PER) and works in both objectives and constraints. Lowering
+after binding means types, scopes and casts are already resolved.
 
 | `p` | desugars to | meaning | class |
 | --- | ----------- | ------- | ----- |
@@ -463,7 +464,7 @@ objectives and constraints.
   exact (`z = 0 ⇒ expr = 0`) so "zero" rows read back as clean `0`; the trade-off is
   a small **dead zone** — a value *forced* into `(0, tol)` has no valid `z` and is
   reported infeasible (pathological, and genuinely tolerance-ambiguous).
-  Code: `bind_select_node.cpp` (`RewriteNormL0`); the tolerance setting lives in
+  Code: `decide_optimizer.cpp` (`DecideOptimizer::RewriteNorm`); the tolerance setting lives in
   `decide_diagnostic.cpp` (`L0ToleranceSetCallback` / `GetDecideL0Tolerance`).
 - **Big-M source.** `norm(expr, 0)` uses a placeholder `M` on the forward links
   (indicator `__l0auto_ind_*`) and the physical operator fills a tight per-problem

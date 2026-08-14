@@ -79,7 +79,7 @@ the backend a contradictory pair.
 
 ## 2. Degree, not occurrence count
 
-`DecideDegreeInternal` (`decide_binder.cpp:100-137`) computes the polynomial
+`DecideDegreeInternal` (`decide_binder.cpp:102-161`) computes the polynomial
 degree of an expression in the decision variables:
 
 ```
