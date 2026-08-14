@@ -76,6 +76,26 @@ void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> 
 	canonicalizer.VerifyCanonicalObjective(*decide_objective);
 }
 
+//! Name an expression for EXPLAIN without leaking the pipeline metadata DECIDE stamps into
+//! its alias. `GetName()` returns the alias whenever one is set, so a constraint tagged with
+//! its source clause renders as `__source_clause_0__` rather than as the SQL the user wrote.
+//!
+//! The stripped alias wins when anything survives: for a PER key or any other column
+//! reference the alias IS the name, and `ToString()` falls back to a binding index (`#[3.1]`)
+//! once it is gone. Only an alias that was nothing but tags falls through to the expression
+//! itself, which is what a comparison or an aggregate wants anyway.
+static string RenderDecideExpressionName(const Expression &expr) {
+	const auto &alias = expr.GetAlias();
+	if (alias.empty()) {
+		return expr.GetName();
+	}
+	auto stripped = StripDecideTags(alias);
+	if (!stripped.empty()) {
+		return stripped;
+	}
+	return expr.ToString();
+}
+
 void CollectDecideExpressionStrings(const Expression &expr, vector<string> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
@@ -90,7 +110,7 @@ void CollectDecideExpressionStrings(const Expression &expr, vector<string> &out)
 				if (i > 1) {
 					per_suffix += ", ";
 				}
-				per_suffix += conj.children[i]->GetName();
+				per_suffix += RenderDecideExpressionName(*conj.children[i]);
 			}
 			if (parenthesize) {
 				per_suffix += ")";
@@ -105,7 +125,7 @@ void CollectDecideExpressionStrings(const Expression &expr, vector<string> &out)
 		}
 		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
 			// WHEN wrapper: child[0] is the constraint, child[1] is the condition
-			string when_suffix = " WHEN " + conj.children[1]->GetName();
+			string when_suffix = " WHEN " + RenderDecideExpressionName(*conj.children[1]);
 			vector<string> inner;
 			CollectDecideExpressionStrings(*conj.children[0], inner);
 			for (auto &s : inner) {
@@ -119,8 +139,8 @@ void CollectDecideExpressionStrings(const Expression &expr, vector<string> &out)
 		}
 		return;
 	}
-	// Leaf node (comparison or other): use ToString for the full expression
-	out.push_back(expr.GetName());
+	// Leaf node (comparison or other): render the full expression, not its tag
+	out.push_back(RenderDecideExpressionName(expr));
 }
 
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {

@@ -131,6 +131,30 @@ inline void RemoveDecideTag(string &alias, const string &tag) {
 	}
 }
 
+//! Remove every DECIDE tag from an alias, leaving whatever ordinary alias it was appended
+//! to: "cost__source_clause_0____when_constraint__" yields "cost", and an alias that was
+//! nothing but tags yields "".
+//!
+//! Tags are only ever appended (`AddDecideTag`), so they are always a suffix, and each one
+//! opens and closes with `__` without containing `__` internally. Peeling closing-delimited
+//! runs off the end therefore strips exactly the tags: a user alias is only touched if it
+//! itself ends in a `__`-delimited run.
+//!
+//! Use this at every user-facing render site. `GetName()` returns the alias whenever one is
+//! set, so a tagged expression prints its internal tag instead of its SQL unless the tags
+//! are stripped first.
+inline string StripDecideTags(const string &alias) {
+	string result = alias;
+	while (result.size() > 2 && result.compare(result.size() - 2, 2, "__") == 0) {
+		auto open = result.rfind("__", result.size() - 3);
+		if (open == string::npos) {
+			break;
+		}
+		result.erase(open);
+	}
+	return result;
+}
+
 //! Reads the payload of a prefix-shaped tag out of a possibly multi-tag alias:
 //! ("__qualified_by_2____avg_rewrite__", "__qualified_by_") yields "2". The payload runs
 //! from the end of the prefix to the tag's closing `__`, so payloads may contain single

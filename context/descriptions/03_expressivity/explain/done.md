@@ -29,14 +29,17 @@ The DECIDE node prints three sections:
 │   MAXIMIZE sum((x * v))   │
 │                           │
 │        Constraints:       │
-│    __source_clause_0__    │
+│ (sum((x * w)) <= CAST(6 AS│
+│          HUGEINT))        │
 │                           │
 │          ~3 Rows          │
 └─────────────┬─────────────┘
 ```
 
-The Constraints line above is **a bug, not the intended output** — see
-[`todo.md`](todo.md). It should read `(sum((x * w)) <= 6)`.
+The `CAST` is a cast the binder inserted while reconciling types, not something
+the user wrote; rendering it is a live issue filed in
+[`../../06_issues/bugs/todo.md`](../../06_issues/bugs/todo.md). The line should
+read `(sum((x * w)) <= 6)`.
 
 ---
 
@@ -52,7 +55,7 @@ unreadable line, so `CollectDecideExpressionStrings`
 | `PER` wrapper (`IsPerConstraintTag`, ≥2 children) | Build the suffix from `children[1..N]` — ` PER col`, or ` PER (col1, col2)` when there is more than one — recurse into child 0, append to every leaf |
 | `WHEN` wrapper (`WHEN_CONSTRAINT_TAG`, 2 children) | Suffix ` WHEN <condition>` from child 1, recurse into child 0, append to every leaf |
 | Plain `AND` | Recurse into each child |
-| Leaf | `expr.GetName()` |
+| Leaf | `RenderDecideExpressionName` |
 
 Producing, for example:
 
@@ -68,6 +71,20 @@ postfix suffixes identically and keeps the two rows symmetric. Calling
 `__when_constraint__` tag — because `GetName()` short-circuits to the alias
 whenever one is set. That divergence was a real bug once; the shared walker is
 what fixed it.
+
+**Every rendered node is stripped of its DECIDE tags first.** The pipeline stores
+metadata — the source clause, the `WHEN`/`PER` role, reducer scope — in an
+expression's alias, and `GetName()` returns the alias whenever one is set, so
+rendering a tagged node naively prints `__source_clause_0__` where its SQL should
+be. `RenderDecideExpressionName` applies `StripDecideTags`
+(`duckdb/common/enums/decide.hpp`), which peels the appended `__`-delimited runs
+off the end of the alias.
+
+What survives the strip wins, and that ordering is load-bearing: a `PER` key is a
+column reference whose alias *is* its name, and `BoundColumnRefExpression::ToString()`
+falls back to a binding index (`#[3.1]`) once the alias is gone — so ` PER grp`
+would degrade to ` PER #[3.1]`. Only an alias that was nothing but tags falls
+through to the expression itself, which is what a comparison or an aggregate wants.
 
 **There is no physical-layer duplicate.** `PhysicalDecide::ParamsToString`
 (`physical_decide.cpp:1350, 1364`) calls the same `CollectDecideExpressionStrings`

@@ -9,48 +9,41 @@ in `.claude/lessons.md`.
 
 ---
 
-## `EXPLAIN` prints `__source_clause_N__` instead of every constraint (live)
+## `EXPLAIN` renders binder-inserted casts over the user's own terms
 
-**Symptom**: the Constraints section of the DECIDE node renders one internal tag
-per constraint rather than the constraint's SQL. The Objective row is correct.
-
-**Reproduction** (`build/release/decidb`, 2026-08-14):
-
-```sql
-CREATE TABLE it(id INT, w INT, v INT);
-INSERT INTO it VALUES (1,3,5),(2,4,7),(3,2,3);
-EXPLAIN SELECT id, x FROM it DECIDE x(BOOL)
-        SUCH THAT SUM(x*w) <= 6 AND x <= 1
-        MAXIMIZE SUM(x*v);
-```
+**Symptom**: the Constraints and Objective rows of the DECIDE node show the
+implicit casts DuckDB's binder inserted while reconciling types, so a constraint
+the user wrote as `SUM(x * l_quantity) <= 100` renders as:
 
 ```
-│        Constraints:       │
-│    __source_clause_0__    │
-│    __source_clause_1__    │
+(sum((CAST(x AS DECIMAL(18,0)) * l_quantity)) <= CAST(100 AS DECIMAL(38,2)))
 ```
 
-Expected: `(sum((x * w)) <= 6)` and `(x <= 1)`.
+Expected: `(sum((x * l_quantity)) <= 100)`. The casts are an artifact of binding,
+not something the user wrote or can edit.
 
-**Cause**: the leaf case of `CollectDecideExpressionStrings`
-(`src/planner/operator/logical_decide.cpp:123`) emits `expr.GetName()`.
-`GetName()` short-circuits to the expression's **alias** whenever one is set, and
-source-provenance tagging stamps `__source_clause_N__` into that alias. The
-objective escapes because it carries no source-clause tag.
+**Why it is open now**: this was invisible until the `__source_clause_N__` leak
+below it was fixed — the whole row used to print as one internal tag, so nothing
+about the expression underneath was observable.
 
-This is the same failure mode the shared walker was introduced to fix for
-`__when_constraint__`, reintroduced by a different tag — which suggests the real
-fix is at the leaf, not per-tag: strip DECIDE tags from the alias before printing,
-or call the underlying `ToString()` rather than `GetName()`.
+**Where to look**: `RenderDecideExpressionName` /
+`CollectDecideExpressionStrings` in `src/planner/operator/logical_decide.cpp`
+render the leaf with `ToString()`, which prints the tree as bound. Layer 8 already
+solves exactly this for diagnosis labels — `RenderWhenPredicate` and
+`RenderDiagnosticRhsLabel` in `src/execution/operator/decide/physical_decide.cpp`
+recurse through the tree unwrapping casts via `StripCastsForIdentity`, which
+`decide_cast_policy.hpp` documents as correct precisely for label rendering. The
+infeasible-diagnosis path is clean for this reason and prints
+``SUM(x * w) >= 100 WHEN grp = 'a'``.
 
-**Not yet checked**: whether `EXPLAIN (FORMAT JSON)` and the diagnostics renderers
-have the same leak — both read the same walker, and the DECIDE tag helpers
-(`HasDecideTag` / tag payload lookup) already exist to strip it.
+The open question is ownership, not mechanism: EXPLAIN renders the bound tree at
+layer 3, while the diagnosis label is rebuilt at layer 8 from evaluated ILP
+provenance (`weight_labels` / `rhs_label` / `qualifier`), so the two cannot share
+the layer-8 renderer as it stands. Either a cast-unwrapping recursive renderer
+belongs beside the walker in layer 3, or the two renderers get consolidated into
+one user-facing expression renderer both layers call.
 
-**Discovered**: 2026-08-14, running a real `EXPLAIN` to ground
-`03_expressivity/explain/done.md` during the pipeline documentation restructure.
-The doc's previous example output predated source tagging, so the regression was
-invisible on paper.
+**Discovered**: 2026-08-14, immediately after fixing the source-clause tag leak.
 
 ---
 

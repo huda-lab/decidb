@@ -23,6 +23,8 @@ import pytest
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 
+from ._output_helpers import assert_no_internal_leak
+
 
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
@@ -104,8 +106,8 @@ def test_mod_function_data_coefficient_matches_oracle(decidb_cli, duckdb_conn, o
     operator). Same contract as the operator case: it folds to a per-row
     coefficient and the optimum matches an independent oracle.
 
-    Regression pin for the data-only scalar-function fold — before it,
-    `ToSymbolicRecursive` raised INTERNAL on named data-only functions."""
+    Regression pin for the data-only scalar-function fold — before it, a named
+    data-only function raised INTERNAL instead of folding to a coefficient."""
     sql = """
         SELECT id, x FROM range(1, 6) t(id)
         DECIDE x(BOOL)
@@ -199,18 +201,4 @@ class TestUnsupportedOperatorOverVariableRejection:
             SUCH THAT SUM(((id * 7) % x)) <= 3
             MAXIMIZE SUM(x)
         """
-        result = decidb_cli.execute_raw(sql)
-        combined = result.stderr + result.stdout
-        forbidden = [
-            "INTERNAL Error",
-            "Stack Trace",
-            "ToSymbolicRecursive",
-            "assertion failure",
-        ]
-        for token in forbidden:
-            assert token not in combined, (
-                f"Found {token!r} in output — operator rejection regressed to "
-                f"the internal-error path.\n"
-                f"stdout: {result.stdout[:500]}\n"
-                f"stderr: {result.stderr[:500]}"
-            )
+        assert_no_internal_leak(decidb_cli.execute_raw(sql), "operator rejection")

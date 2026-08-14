@@ -19,6 +19,8 @@ aggregate-specific code path will trip if it bypasses the new arm.
 
 import pytest
 
+from ._output_helpers import assert_no_internal_leak
+
 
 @pytest.mark.error_binder
 @pytest.mark.error
@@ -120,21 +122,7 @@ class TestCaseExpressionRejection:
             SUCH THAT SUM(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END) >= 1
             MAXIMIZE SUM(x * s_acctbal)
         """
-        result = decidb_cli.execute_raw(sql)
-        combined = result.stderr + result.stdout
-        forbidden = [
-            "INTERNAL Error",
-            "Stack Trace",
-            "ToSymbolicRecursive",
-            "assertion failure",
-        ]
-        for token in forbidden:
-            assert token not in combined, (
-                f"Found {token!r} in output — CASE rejection regressed to "
-                f"the internal-error path.\n"
-                f"stdout: {result.stdout[:500]}\n"
-                f"stderr: {result.stderr[:500]}"
-            )
+        assert_no_internal_leak(decidb_cli.execute_raw(sql), "CASE rejection")
 
     def test_case_inside_per_grouped_constraint_is_rejected(self, decidb_cli):
         """PER-wrapped constraint with CASE inside still rejected.

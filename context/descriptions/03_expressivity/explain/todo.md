@@ -2,20 +2,16 @@
 
 ---
 
-## Every constraint renders as `__source_clause_N__`
+## Constraints render the binder's implicit casts
 
 **This is live and reproducible.** Full entry, with the reproduction, in
 [`../../06_issues/bugs/todo.md`](../../06_issues/bugs/todo.md).
 
-Short form: the leaf case of `CollectDecideExpressionStrings` emits
-`expr.GetName()`, which short-circuits to the expression's alias when one is set —
-and source-provenance tagging now stamps `__source_clause_N__` into that alias. So
-the Constraints section prints internal tags instead of SQL. The Objective row is
-unaffected because it is not source-tagged.
-
-It is the same failure mode the shared walker was introduced to fix for
-`__when_constraint__`, reintroduced by a different tag. Fix it before the layered
-rendering below, which builds on this renderer.
+Short form: a constraint written `SUM(x * l_quantity) <= 100` renders as
+`(sum((CAST(x AS DECIMAL(18,0)) * l_quantity)) <= CAST(100 AS DECIMAL(38,2)))`.
+The casts are binding artifacts, not the user's SQL. Layer 8 already unwraps them
+for diagnosis labels; the open question is where a shared user-facing renderer
+should live.
 
 ---
 
@@ -58,8 +54,9 @@ identity, or a rendering model that tolerates one-to-many and one-to-none.
 `source_clause_id` now exists and is stable through physical extraction,
 `SolverInput`, `SolverModel` and elastic diagnostics — it was added for
 diagnostics after this was filed, and is very likely the identity this needs. It
-is also the thing currently leaking into the output above, so the two items should
-be picked up together.
+reaches the renderer as a tag on the expression's alias, which the leaf now strips
+(`RenderDecideExpressionName`); reading it back as an identity rather than
+discarding it is what this item needs.
 
 **Scope notes**
 
