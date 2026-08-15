@@ -205,6 +205,17 @@ public:
     // Empty when the objective is not composed.
     vector<LogicalDecide::ComposedMinMaxTerm> composed_minmax_objective_terms;
 
+    // --- Absorbed variable bounds (decided by DecideOptimizer::AbsorbVariableBounds) ---
+    //
+    // The decision column box, already resolved upstream. Finalize copies these into
+    // SolverInput; comparisons folded into them carry ABSORBED_BOUND_TAG so term
+    // extraction skips them. Execution consumes this, it does not re-derive it.
+    vector<double> absorbed_lower_bounds;
+    vector<double> absorbed_upper_bounds;
+    // Every absorbed user bound, kept so the infeasible diagnosis can re-emit it as a
+    // slackable row and quote it as written. A BETWEEN contributes two entries.
+    vector<LogicalDecide::UserBoundSpec> user_absorbed_bounds;
+
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
     // Flat (non-PER) objective: original aggregate type before rewrite to SUM

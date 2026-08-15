@@ -111,4 +111,12 @@ const Expression *StripCastsForIdentity(const Expression &expr);
 //! are deliberately left to the caller's layer-specific error policy.
 bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out);
 
+//! True for a literal under any number of cast wrappers.
+//!
+//! This is an ELIGIBILITY test, not a folder: it asks whether an expression is a
+//! constant the user wrote, so bound absorption stays a shape optimization rather
+//! than becoming a general constant folder. Pair it with TryEvaluateFoldableDouble,
+//! which evaluates the whole expression so a data cast keeps its SQL semantics.
+bool IsCastWrappedConstant(const Expression &expr);
+
 } // namespace duckdb

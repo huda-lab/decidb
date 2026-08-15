@@ -161,6 +161,38 @@ public:
     //! objective is a single aggregate (handled by RewriteMinMaxObjective) or plain linear.
     vector<ComposedMinMaxTerm> composed_minmax_objective_terms;
 
+    // --- Absorbed variable bounds (set by DecideOptimizer::AbsorbVariableBounds) ---
+
+    //! A user-written simple bound that was folded into a decision column's box instead
+    //! of being emitted as a model row. Kept so the infeasible diagnosis can re-emit it
+    //! as a slackable row and quote it back as the user wrote it.
+    struct UserBoundSpec {
+        idx_t decide_var_idx; //!< index into decide_variables
+        char sense;           //!< '<' (<= K), '>' (>= K), '=' (== K)
+        double k;             //!< the (integer-strict-normalized) bound value
+        //! True when the user wrote a strict `<` / `>` that was integer-normalized into
+        //! `k` (e.g. `x < 10` → k=9). `typed_k` carries the user's original literal so the
+        //! re-emitted row mirrors `ConstraintProvenance::strict` / `typed_k` and the
+        //! infeasible diagnosis re-quotes the suggestion as `<` / `>` against it.
+        bool strict = false;
+        double typed_k = 0.0;
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
+    };
+
+    //! Sentinel for "no explicit lower bound was written". Not 0, so that an explicit
+    //! negative lower bound (`x >= -5`, `BETWEEN -10 AND 10`, a negative IN minimum) is
+    //! honored instead of being clamped up to 0. The std::max combiner still picks the
+    //! tightest of several `>=` bounds, and physical Finalize resolves anything still at
+    //! the sentinel to the default 0 floor.
+    static constexpr double ABSORBED_LOWER_UNSET = -1e30;
+
+    //! Per-decision-variable box, sized to decide_variables. Physical execution copies
+    //! these into SolverInput instead of re-walking the constraint tree.
+    vector<double> absorbed_lower_bounds;
+    vector<double> absorbed_upper_bounds;
+    //! Every absorbed user bound, in absorption order. A BETWEEN contributes two specs.
+    vector<UserBoundSpec> user_absorbed_bounds;
+
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
     // Flat (non-PER) objective: original aggregate type before rewrite to SUM

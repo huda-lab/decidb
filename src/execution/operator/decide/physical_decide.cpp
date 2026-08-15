@@ -212,17 +212,6 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
 	}
 }
 
-//! Bound absorption is deliberately a shape optimization, not a constant folder.
-//! Keep its historical eligibility (a literal with optional cast wrappers), while
-//! evaluating the eligible expression whole so a data cast retains SQL semantics.
-static bool IsCastWrappedConstant(const Expression &expr) {
-	const Expression *current = &expr;
-	while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		current = current->Cast<BoundCastExpression>().child.get();
-	}
-	return current->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
-}
-
 //! Streaming typed-hash grouping. Assigns group IDs during the chunk scan
 //! instead of materializing all key Values up front. Representative key tuples
 //! are stored once per group (size O(num_groups)), not once per row, and only
@@ -1439,55 +1428,24 @@ static void CollectDecideVarRefs(const Expression &expr, int sign,
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
 
-//! Sentinel marking "no explicit lower-bound constraint" during bound absorption.
-//! Resolved to the default 0 in Finalize for any variable the query never lowered.
-//! Distinct from a real bound: signed variables use finite negative bounds only
-//! (no -inf domain), so no legitimate lower bound is anywhere near this value.
-static constexpr double ABSORBED_LOWER_UNSET = -1e30;
-
-//! A user-written simple bound (`x OP const` / `x BETWEEN a AND b`) that was
-//! absorbed into the column-bound arrays instead of emitted as a matrix row, so it
-//! carries no provenance and is invisible to the elastic engine. The infeasible
-//! diagnosis re-emits these as USER_PARAMETER slackable rows (I1, decision 1a). One
-//! spec per user-written direction: BETWEEN yields two (lower + upper). Intrinsic
-//! domains are NOT recorded — default non-negativity never is, and a bound on a
-//! BOOLEAN is skipped only when it merely restates the 0/1 box (`>= 0` / `<= 1`);
-//! a genuine BOOLEAN pin (`x <= 0`, `x >= 1`, `x = 1`) IS recorded.
-struct UserBoundSpec {
-    idx_t decide_var_idx; //!< index into op.decide_variables
-    char sense;           //!< '<' (<= K), '>' (>= K), '=' (== K)
-    double k;             //!< the (integer-strict-normalized) bound value
-    //! True when the user wrote a strict `<` / `>` that was integer-normalized into
-    //! `k` (e.g. `x < 10` → k=9). `typed_k` carries the user's original literal so the
-    //! re-emitted row mirrors `ConstraintProvenance::strict` / `typed_k` and the
-    //! infeasible diagnosis re-quotes the suggestion as `<` / `>` against it.
-    bool strict = false;
-    double typed_k = 0.0;
-    idx_t source_clause_id = DConstants::INVALID_INDEX;
-};
+//! Bound absorption is decided at layer 05 (DecideOptimizer::AbsorbVariableBounds).
+//! `UserBoundSpec` and the `ABSORBED_LOWER_UNSET` sentinel live on LogicalDecide with
+//! it; execution reads the resulting box rather than deriving one.
+using UserBoundSpec = LogicalDecide::UserBoundSpec;
+static constexpr double ABSORBED_LOWER_UNSET = LogicalDecide::ABSORBED_LOWER_UNSET;
 
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
 	      canonicalizer(context, op.decide_index, op.variable_scopes) {
-        // Pre-absorb simple variable bounds (x OP const / BETWEEN) into column-bound
-        // arrays so AnalyzeConstraint can skip emitting one DecideConstraint per row
-        // for constraints that are fully captured by column bounds.
+        // The decision column box was resolved by DecideOptimizer::AbsorbVariableBounds.
+        // A variable still at ABSORBED_LOWER_UNSET is one the query never lowered, and
+        // Finalize resolves it to the default 0 floor.
         idx_t num_decide_vars = op.decide_variables.size();
-        // Initialize lower bounds to an "unset" sentinel rather than 0 so that an
-        // explicit negative lower-bound constraint (e.g. `x >= -5`, `BETWEEN -10
-        // AND 10`) is honored instead of clamped to 0. The std::max combiners in
-        // TraverseBoundsConstraints still pick the tightest of multiple `>=`
-        // constraints (max(-1e30, k) == k), and Finalize resolves any variable
-        // still at the sentinel to the default 0 (non-negative unless the query
-        // explicitly lowers the bound). See ABSORBED_LOWER_UNSET.
-        absorbed_lower_bounds.assign(num_decide_vars, ABSORBED_LOWER_UNSET);
-        absorbed_upper_bounds.assign(num_decide_vars, 1e30);
-        if (op.decide_constraints) {
-            TraverseBoundsConstraints(*op.decide_constraints, absorbed_lower_bounds,
-                                      absorbed_upper_bounds);
-        }
+        absorbed_lower_bounds = op.absorbed_lower_bounds;
+        absorbed_upper_bounds = op.absorbed_upper_bounds;
+        user_absorbed_bounds = op.user_absorbed_bounds;
 
         // A user bound that contradicts the variable's INTRINSIC domain (a non-negative
         // REAL/INTEGER's `>= 0` floor, or a BOOLEAN's `0/1` box) is a deterministic semantic
@@ -1768,13 +1726,11 @@ public:
             case ExpressionClass::BOUND_COMPARISON: {
                 auto &comp = expr.Cast<BoundComparisonExpression>();
 
-                // Skip comparisons whose entire semantics are already captured in
-                // column bounds by the constructor's absorption pass. Emitting a
-                // DecideConstraint here would add num_rows redundant model rows.
-                // WHEN-wrapped comparisons are never absorbed (see
-                // TraverseBoundsConstraints WHEN_CONSTRAINT_TAG branch), so
-                // skipping here is safe.
-                if (absorbed_bound_exprs.count(&expr)) {
+                // Skip comparisons the optimizer already folded into the column box.
+                // Emitting a DecideConstraint here would add num_rows redundant model
+                // rows. The comparison is still in the tree so EXPLAIN renders it; the
+                // tag is the decision, and it was made at layer 05.
+                if (HasDecideTag(comp.alias, ABSORBED_BOUND_TAG)) {
                     break;
                 }
 
@@ -2399,226 +2355,6 @@ public:
         }
     }
 
-    //===--------------------------------------------------------------------===//
-    // Variable Bounds Extraction (Part 3)
-    //===--------------------------------------------------------------------===//
-
-    // Absorbs literal `x OP const` / BETWEEN constraints the query actually wrote
-    // into the column-bound arrays. A variable's intrinsic domain (BOOLEAN 0/1,
-    // default non-negativity) is never represented here — it comes from
-    // `is_boolean_var` directly (see PhysicalDecide::Finalize) — so this only ever
-    // sees genuine user constraints.
-    void TraverseBoundsConstraints(const Expression &expr,
-                                   vector<double> &lower_bounds,
-                                   vector<double> &upper_bounds) {
-        switch (expr.GetExpressionClass()) {
-            case ExpressionClass::BOUND_CONJUNCTION: {
-                auto &conj = expr.Cast<BoundConjunctionExpression>();
-                // DecidB PER: only recurse into the constraint (child[0]), skip the columns
-                if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
-                    TraverseBoundsConstraints(*conj.children[0], lower_bounds, upper_bounds);
-                    break;
-                }
-                // DecidB WHEN: skip entirely — WHEN constraints are conditional (per-row),
-                // so they must NOT contribute to global variable bounds.
-                // E.g., "x <= 0 WHEN condition" should NOT set upper_bounds[x] = 0 globally.
-                if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
-                    break;
-                }
-                // AND expression - recurse on all children
-                for (auto &child : conj.children) {
-                    TraverseBoundsConstraints(*child, lower_bounds, upper_bounds);
-                }
-                break;
-            }
-
-            case ExpressionClass::BOUND_COMPARISON: {
-                auto &comp = expr.Cast<BoundComparisonExpression>();
-                idx_t source_clause_id = DConstants::INVALID_INDEX;
-                TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
-
-                // Only extract global bounds from simple "x OP constant" constraints,
-                // where x is a bare DECIDE variable (possibly cast-wrapped).
-                // Multi-variable expressions (e.g., x - 3*z_1 - 5*z_2 = 0 from IN rewrite)
-                // must NOT be treated as single-variable bounds.
-                auto *lhs = UnwrapDecideCasts(*comp.left, op.decide_index);
-
-                if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                    // Simple single-variable LHS — check if it's a DECIDE variable
-                    auto &colref = lhs->Cast<BoundColumnRefExpression>();
-                    idx_t var_idx = DConstants::INVALID_INDEX;
-                    for (idx_t i = 0; i < op.decide_variables.size(); i++) {
-                        auto &decide_var = op.decide_variables[i]->Cast<BoundColumnRefExpression>();
-                        if (colref.binding == decide_var.binding) {
-                            var_idx = i;
-                            break;
-                        }
-                    }
-
-                    if (var_idx != DConstants::INVALID_INDEX) {
-                        // Preserve the historical literal-only absorption shape. For an
-                        // eligible cast-wrapped literal, evaluate the complete expression
-                        // with DuckDB semantics and convert only its result.
-                        double bound_value;
-                        // A non-finite bound is left for the constraint path, which
-                        // already reads it the way the solver does: `x <= +inf` is no
-                        // bound, `x >= +inf` has no solution, and NaN is an error naming
-                        // the arithmetic. Absorbing it instead would write it into the
-                        // column box, where `min`/`max` against the ±1e30 sentinels keep
-                        // an upper bound but not a lower one — so the same infinity
-                        // silently vanished in one direction and reached the model
-                        // validator as an internal error in the other.
-                        if (IsCastWrappedConstant(*comp.right) &&
-                            TryEvaluateFoldableDouble(context, *comp.right, bound_value) &&
-                            std::isfinite(bound_value)) {
-
-                            bool is_integer_var =
-                                (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
-                                 op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
-                            // The intrinsic `[0,1]` domain of a BOOLEAN-domain variable
-                            // (`op.is_boolean_var`) is applied directly to the solver
-                            // column in PhysicalDecide::Finalize, never synthesized as a
-                            // constraint — so a bare `x >= 0` / `x <= 1` only reaches here
-                            // if the user wrote it themselves, redundantly restating the
-                            // domain. That restatement is never a loosenable parameter:
-                            // apply it to the column bounds (a no-op, since the intrinsic
-                            // domain already enforces it) but do NOT record it for elastic
-                            // re-emission. A genuine user PIN on a BOOLEAN (`x <= 0`,
-                            // `x >= 1`, `x = 1`) tightens the box below/above the domain
-                            // and IS recorded — erasing it made the elastic model diverge
-                            // from the user's query (wrong or missing infeasible diagnoses).
-                            bool is_bool_var =
-                                var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx];
-                            auto RecordBound = [&](char sense, double k) {
-                                if (is_bool_var) {
-                                    // Skip only domain restatements: an upper at/above 1
-                                    // or a lower at/below 0 does not tighten [0,1].
-                                    if (sense == '<' && k >= 1.0) return false;
-                                    if (sense == '>' && k <= 0.0) return false;
-                                }
-                                return true;
-                            };
-                            bool absorbed = true;
-                            // Apply bound based on comparison type. Each absorbed
-                            // direction is also recorded as a UserBoundSpec so the
-                            // infeasible diagnosis can re-emit it as a slackable row;
-                            // the spec carries the same integer-strict normalization.
-                            if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-                                upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
-                                if (RecordBound('<', bound_value)) user_absorbed_bounds.push_back({var_idx, '<', bound_value, false, 0.0, source_clause_id});
-                            } else if (comp.type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-                                lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
-                                if (RecordBound('>', bound_value)) user_absorbed_bounds.push_back({var_idx, '>', bound_value, false, 0.0, source_clause_id});
-                            } else if (comp.type == ExpressionType::COMPARE_EQUAL) {
-                                // Intersect (like `<=`/`>=`), never overwrite: two equalities
-                                // on one variable (`x = 5 AND x = 10`) must invert the box
-                                // (lower 10 > upper 5) so the conflict is caught, not silently
-                                // resolved to the last value written.
-                                lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
-                                upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
-                                if (RecordBound('=', bound_value)) user_absorbed_bounds.push_back({var_idx, '=', bound_value, false, 0.0, source_clause_id});
-                            } else if (comp.type == ExpressionType::COMPARE_LESSTHAN && is_integer_var) {
-                                // x < bound → x <= bound-1 for integers. REAL strict
-                                // inequality has no valid absorption — leave it for
-                                // the constraint path which rejects with a clear error.
-                                // Carry strict + typed_k so the diagnosis re-quotes `< bound`.
-                                upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value - 1.0);
-                                if (RecordBound('<', bound_value - 1.0)) user_absorbed_bounds.push_back({var_idx, '<', bound_value - 1.0, true, bound_value, source_clause_id});
-                            } else if (comp.type == ExpressionType::COMPARE_GREATERTHAN && is_integer_var) {
-                                // x > bound → x >= bound+1 for integers.
-                                lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value + 1.0);
-                                if (RecordBound('>', bound_value + 1.0)) user_absorbed_bounds.push_back({var_idx, '>', bound_value + 1.0, true, bound_value, source_clause_id});
-                            } else {
-                                absorbed = false;
-                            }
-                            if (absorbed) {
-                                absorbed_bound_exprs.insert(&expr);
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-
-            case ExpressionClass::BOUND_BETWEEN: {
-                auto &between = expr.Cast<BoundBetweenExpression>();
-
-                auto *input = UnwrapDecideCasts(*between.input, op.decide_index);
-
-                if (input->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                    auto &colref = input->Cast<BoundColumnRefExpression>();
-                    idx_t var_idx = DConstants::INVALID_INDEX;
-                    for (idx_t i = 0; i < op.decide_variables.size(); i++) {
-                        auto &decide_var = op.decide_variables[i]->Cast<BoundColumnRefExpression>();
-                        if (colref.binding == decide_var.binding) {
-                            var_idx = i;
-                            break;
-                        }
-                    }
-
-                    if (var_idx != DConstants::INVALID_INDEX) {
-                        bool is_integer_var =
-                            (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
-                             op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
-                        // Same BOOLEAN rule as the COMPARISON arm: record a side only
-                        // when it tightens the intrinsic [0,1] box (a genuine user pin),
-                        // never when it merely restates the domain.
-                        bool is_bool_var =
-                            var_idx < op.is_boolean_var.size() && op.is_boolean_var[var_idx];
-                        auto RecordBound = [&](char sense, double k) {
-                            if (is_bool_var) {
-                                if (sense == '<' && k >= 1.0) return false;
-                                if (sense == '>' && k <= 0.0) return false;
-                            }
-                            return true;
-                        };
-
-                        auto ExtractBound = [&](const Expression &e) -> double {
-                            double value;
-                            return IsCastWrappedConstant(e) && TryEvaluateFoldableDouble(context, e, value)
-                                       ? value
-                                       : std::numeric_limits<double>::quiet_NaN();
-                        };
-
-                        double lo = ExtractBound(*between.lower);
-                        double hi = ExtractBound(*between.upper);
-
-                        // BETWEEN is absorbed but (unlike COMPARISON) never tracked
-                        // for re-emission until now. Record each finite side as its
-                        // own UserBoundSpec so the infeasible diagnosis loosens
-                        // BETWEEN uniformly with the other simple bounds (I1).
-                        if (!std::isnan(lo)) {
-                            // A strict lower side (`a <` …) is integer-normalized to lo+1;
-                            // carry strict + the user's typed literal so the diagnosis
-                            // re-quotes `> a` rather than the normalized `>= a+1`.
-                            bool lo_strict = !between.lower_inclusive && is_integer_var;
-                            double lo_typed = lo;
-                            if (lo_strict) lo += 1.0;
-                            lower_bounds[var_idx] = std::max(lower_bounds[var_idx], lo);
-                            if (RecordBound('>', lo)) user_absorbed_bounds.push_back({var_idx, '>', lo, lo_strict, lo_typed});
-                        }
-                        if (!std::isnan(hi)) {
-                            bool hi_strict = !between.upper_inclusive && is_integer_var;
-                            double hi_typed = hi;
-                            if (hi_strict) hi -= 1.0;
-                            upper_bounds[var_idx] = std::min(upper_bounds[var_idx], hi);
-                            if (RecordBound('<', hi)) user_absorbed_bounds.push_back({var_idx, '<', hi, hi_strict, hi_typed});
-                        }
-                    }
-                }
-                break;
-            }
-
-            case ExpressionClass::BOUND_CONSTANT: {
-                // Type declarations return dummy constants - skip them
-                break;
-            }
-
-            default:
-                break;
-        }
-    }
-
     mutex lock;
     // This collection will hold all the data from the child operator
     ColumnDataCollection data;
@@ -2635,18 +2371,11 @@ public:
     vector<unique_ptr<DecideConstraint>> constraints;
     unique_ptr<Objective> objective;
 
-    //! Variable bounds populated once in the constructor from simple
-    //! `x OP const` / `x BETWEEN a AND b` constraints. Finalize copies these
-    //! into solver_input instead of re-walking the expression tree.
+    //! Local copies of the decision column box and the absorbed-bound records that
+    //! DecideOptimizer::AbsorbVariableBounds resolved. Finalize copies the box into
+    //! solver_input; the infeasible diagnosis re-emits the records as slackable rows.
     vector<double> absorbed_lower_bounds;
     vector<double> absorbed_upper_bounds;
-    //! BOUND_COMPARISON expression pointers that were fully absorbed into
-    //! column bounds — AnalyzeConstraint skips these to avoid emitting
-    //! `num_rows` redundant per-row model rows per absorbed bound.
-    std::unordered_set<const Expression *> absorbed_bound_exprs;
-    //! Structured record of every user-written simple bound absorbed above, kept so
-    //! the infeasible diagnosis can re-emit them as slackable rows (I1, decision 1a).
-    //! Recorded for both COMPARISON and BETWEEN (the latter as two specs).
     vector<UserBoundSpec> user_absorbed_bounds;
 
     //===--------------------------------------------------------------------===//
@@ -7167,7 +6896,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // slack and reports the max overshoot (I2.a). Single-instance is the N=1 case
         // (a size-1 block). Only genuine user bounds reach here — a variable's
         // intrinsic domain (BOOLEAN 0/1, default non-negativity) is never recorded in
-        // user_absorbed_bounds (see TraverseBoundsConstraints), so it stays rigid.
+        // user_absorbed_bounds (see DecideOptimizer::AbsorbVariableBounds), so it stays
+        // rigid.
         // A BOOLEAN pin (`x <= 0`, `x >= 1`, `x = 1`) IS recorded; its column is
         // opened only back to the intrinsic [0,1] — never past it — so the pin
         // becomes loosenable while the 0/1 domain itself stays rigid.

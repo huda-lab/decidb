@@ -31,7 +31,8 @@ former.
 | 6 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
 | 7 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
 | 8 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 9 | `RewriteAvgToSum` | Last, so every reducer that reaches it is settled. |
+| 9 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
+| 10 | `AbsorbVariableBounds` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
@@ -144,6 +145,63 @@ it with `SUM`'s integral type while its value stays fractional. Keeping the tag 
 objective terms is what makes a mixed `AVG(a) + SUM(b)` preserve true AVG
 semantics.
 
+### Bound absorption — `AbsorbVariableBounds`
+
+`x <= 10` is one fact about a column, so it belongs in that column's box rather than
+in `num_rows` identical model rows. A box is also strictly better for the solver:
+smaller model, tighter presolve. The pass folds every simple `x OP const` and
+`x BETWEEN a AND b` into `absorbed_lower_bounds` / `absorbed_upper_bounds` on
+`LogicalDecide`, and tags the comparison `ABSORBED_BOUND_TAG` so physical extraction
+skips it.
+
+A bound qualifies when the LHS is a bare decision variable — not inside a reducer —
+and the RHS is a literal under any number of casts. Recursion goes through `AND` and
+into child 0 only of `PER` and `WHEN`. **A `WHEN`-guarded comparison is never
+absorbed**: it is conditional per row, not a domain.
+
+- `<=` tightens the upper bound (`min`), `>=` the lower (`max`), `=` intersects both.
+  Intersecting rather than assigning is what makes `x = 5 AND x = 10` invert the box
+  and be caught, instead of silently resolving to whichever was written last.
+- Strict `<` / `>` on an integer tighten by ±1, carrying the user's typed literal so
+  the diagnosis re-quotes `< 10` rather than the normalized `<= 9`.
+- Strict `<` / `>` on a REAL variable are deliberately **not** absorbed. The pass
+  declines, the comparison stays a row, and `ApplyComparisonSense` in the model
+  builder rejects it with a message naming the clause.
+- A non-finite constant is **not** absorbed either: the box has one sentinel per
+  direction and cannot hold it.
+
+Lower bounds start at `ABSORBED_LOWER_UNSET` (-1e30) rather than 0, so an explicit
+negative bound is honored instead of clamped up. Stage 08 resolves anything still at
+the sentinel to the default 0 floor.
+
+Each absorbed bound is also recorded as a `UserBoundSpec` so infeasible diagnosis can
+re-emit it as a loosenable row — absorbed bounds carry no row provenance otherwise. A
+variable's *intrinsic* domain is excluded: a BOOLEAN's `[0,1]` box is never
+synthesized as a constraint, so it only appears here when the user restated it
+redundantly, and `is_boolean_var` is consulted to skip that restatement. A genuine
+BOOLEAN pin (`x <= 0`, `x >= 1`) does tighten the box and is recorded.
+
+**Why it runs last.** `RewriteInDomain` emits a floor-lowering `x >= min_value` for
+an all-constant `IN` domain whose minimum is negative — itself an absorbable shape.
+Absorb before that pass and the floor stays at 0, the negative domain value becomes
+unreachable, and the solver returns a *different answer* rather than an error.
+Running last also guarantees every auxiliary variable created by `RewriteAbs`,
+`RewriteBilinear` and `RewriteMinMax` already exists before the box is sized.
+
+**Why here and not stage 04.** "Bound or row" looks like shape, which stage 04 owns,
+but stage 04's contract rules it out three times: that pass is pure (it returns a new
+tree; absorption writes into bound arrays), it is total and never declines
+(absorption declines on strict-`<`-over-REAL), and §5 explicitly excludes choosing a
+solver formulation, which bound-versus-row is. Stage 05 already chooses formulations
+with types in scope and is forbidden only from evaluating *data* — a foldable literal
+is not data.
+
+**Why the comparison is tagged rather than replaced.** `RewriteComposedMinMax`
+replaces a handled comparison with a `TRUE` placeholder, but that is the wrong
+precedent here: `EXPLAIN` renders the constraint list from this tree, and the user
+wrote this bound. Tagging moves the decision upstream without changing what the user
+sees.
+
 ---
 
 ## 3. A factor on a reducer stays outside
@@ -198,7 +256,8 @@ stage 07.
 - Decide which side of a comparison a term sits on — stage 04. Every pass here was
   audited against that: ABS and bilinear replace decision-bearing atoms with
   decision auxiliaries; MIN/MAX and AVG keep decision terms on the left; `<>`
-  changes only metadata; composed MIN/MAX leaves a permitted placeholder.
+  changes only metadata; composed MIN/MAX leaves a permitted placeholder;
+  `AbsorbVariableBounds` only annotates.
 - Evaluate anything against data, or emit solver rows.
 
 ---

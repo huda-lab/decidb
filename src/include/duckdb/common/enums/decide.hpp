@@ -238,6 +238,17 @@ static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
 
+//! Tag marking a simple `x OP const` comparison whose entire meaning the optimizer
+//! folded into the decision column's box (`LogicalDecide::absorbed_*_bounds`), so it
+//! must not also be emitted as a model row. Set on the BoundComparisonExpression.alias
+//! by DecideOptimizer::AbsorbVariableBounds; read by physical term extraction.
+//!
+//! The comparison deliberately stays in the tree rather than being replaced by a TRUE
+//! placeholder: EXPLAIN renders the constraint list from this tree, and the user wrote
+//! this bound, so it keeps rendering. The tag moves the *decision* upstream without
+//! moving the rendering.
+static constexpr const char *ABSORBED_BOUND_TAG = "__absorbed_bound__";
+
 //! A private aggregate marker emitted by the DECIDE binder for norm(expr, p).
 //! The marker is only a transport representation: DecideOptimizer must lower it
 //! before physical planning. Its payload is one of `1`, `2`, `inf`, `0_auto`,

@@ -59,4 +59,11 @@ bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, d
 	return true;
 }
 
+bool IsCastWrappedConstant(const Expression &expr) {
+	// StripCastsForIdentity is the right tool despite its warning: only the innermost
+	// node's CLASS is read here, never its value. The value comes from evaluating the
+	// complete expression via TryEvaluateFoldableDouble, casts included.
+	return StripCastsForIdentity(expr)->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+}
+
 } // namespace duckdb

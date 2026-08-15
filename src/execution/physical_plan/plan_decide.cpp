@@ -71,6 +71,9 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->constraint_sources = std::move(op.constraint_sources);
     decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
     decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
+    decide_op->absorbed_lower_bounds = std::move(op.absorbed_lower_bounds);
+    decide_op->absorbed_upper_bounds = std::move(op.absorbed_upper_bounds);
+    decide_op->user_absorbed_bounds = std::move(op.user_absorbed_bounds);
     decide_op->flat_objective_agg = op.flat_objective_agg;
     decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
     decide_op->per_inner_agg = op.per_inner_agg;

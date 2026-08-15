@@ -34,43 +34,26 @@ query saw. Concurrent modifications cannot affect a running solve.
 
 ---
 
-## 2. Bound absorption
+## 2. The absorbed variable box
 
-`TraverseBoundsConstraints()` runs first, before any term extraction, and pulls
-simple per-variable bounds (`x >= 5`, `x <= 10`, `x BETWEEN 0 AND 100`) out of the
-constraint tree and into column-bound arrays. A bound qualifies when the LHS is a
-bare DECIDE variable — not inside a reducer — and the RHS is a constant.
+Whether a simple bound (`x <= 10`) becomes a column box or a model row is decided
+at stage 05 — see [`../05_optimizer/done.md`](../05_optimizer/done.md), "Bound
+absorption". This stage consumes that decision and does not re-derive it.
 
-The traversal recurses through `AND`, and into child 0 only of `PER` and `WHEN`
-wrappers. **A `WHEN`-guarded comparison is never absorbed**: it is conditional per
-row, not a domain.
+The sink state copies `op.absorbed_lower_bounds`, `op.absorbed_upper_bounds` and
+`op.user_absorbed_bounds` in its constructor. Three consumers read them:
 
-- `<=` tightens the upper bound (`min`), `>=` the lower (`max`), `=` sets both.
-- Strict `<` / `>` on an integer variable tighten by ±1.
-- Strict `<` / `>` on a REAL variable are deliberately **not** absorbed, so
-  `ApplyComparisonSense` in the model builder reaches them and rejects them with a
-  clear message rather than silently approximating.
-- A non-finite constant is **not** absorbed either, for the same reason: the box has
-  one sentinel per direction and cannot hold it. It stays a constraint row, where the
-  solver reads it — see [Validation](#validation).
+- `Finalize` copies the box into `SolverInput`, resolving any lower bound still at
+  `ABSORBED_LOWER_UNSET` to the default 0 floor — non-negative unless the query
+  explicitly said otherwise.
+- The domain-contradiction guard below reads the box to reject a user bound that
+  contradicts a variable's intrinsic domain.
+- The infeasible diagnosis re-emits each `UserBoundSpec` as a loosenable row.
 
-Lower bounds start at an `ABSORBED_LOWER_UNSET` sentinel rather than 0, so an
-explicit negative bound (`x >= -5`, `BETWEEN -10 AND 10`) is honored instead of
-clamped. `max(-1e30, k) == k` still picks the tightest of several `>=`
-constraints, and `Finalize` resolves anything still at the sentinel to 0 —
-non-negative unless the query explicitly says otherwise.
-
-Absorbed comparisons are recorded in `gstate.absorbed_bound_exprs` and skipped by
-`AnalyzeConstraint`, so they do not also produce `num_rows` redundant per-row
-model rows.
-
-Each absorbed bound is additionally recorded as a `UserBoundSpec {var, sense, k}`
-in `gstate.user_absorbed_bounds` so infeasible diagnosis can re-emit it as a
-loosenable row — it carries no provenance otherwise. **A variable's intrinsic
-domain is excluded**: a BOOLEAN's `[0,1]` box is never synthesized as a constraint
-at all, so one only appears here when the user redundantly restated it, and the
-recording consults `op.is_boolean_var` to skip that restatement (and the default
-non-negativity for any type).
+`AnalyzeConstraint` skips any comparison tagged `ABSORBED_BOUND_TAG`, so an
+absorbed bound does not also produce `num_rows` redundant per-row model rows. The
+comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
+the user wrote.
 
 ### Domain contradictions are a static error, not a diagnosis
 
@@ -370,9 +353,9 @@ on the strict path purely because of how it was written. It is now uniform: an
 infinite bound behaves the same in every spelling, and the solver decides what it
 means. `inf - inf` is still NaN, and still refused.
 
-**A non-finite bound is not absorbed into the column box.** `TraverseBoundsConstraints`
-folds a bare `x OP const` into `lower_bounds` / `upper_bounds`, each initialized to a
-±1e30 sentinel and tightened with `min` / `max`. Those sentinels swallow an infinity
+**A non-finite bound is not absorbed into the column box.** `AbsorbVariableBounds`
+(stage 05) folds a bare `x OP const` into `lower_bounds` / `upper_bounds`, each
+initialized to a ±1e30 sentinel and tightened with `min` / `max`. Those sentinels swallow an infinity
 in one direction and keep it in the other, so one spelling of one bound became "no
 bound" and its mirror reached the bounds validator as a non-finite column — an
 internal error, which also invalidates the connection for every later query in the

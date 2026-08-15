@@ -57,7 +57,7 @@ fix itself.
 
 ## Theme: work that sits in the physical layer without needing a row
 
-Seven entries below came from one audit (2026-08-15) and share a root cause. They are listed here so the shared reasoning is not re-derived seven times; each entry stands alone and can be picked up independently.
+Seven entries came from one audit (2026-08-15) and share a root cause; six remain below. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
 
 `physical_decide.cpp` is 7,614 lines against 1,998 for layer 05, 1,402 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
 
@@ -67,13 +67,14 @@ Seven entries below came from one audit (2026-08-15) and share a root cause. The
 |---|---|
 | Linear-form flattening runs at execution time, without a binder | 05 |
 | No pass collects like terms | 05 |
-| Bound absorption decides constraint shape at execution time | 05 or 04 |
 | Degree and linearity are analyzed twice, in two layers | 02 |
 | Each linearized formulation is split between the layer that chooses it and the layer that encodes it | 06 |
 | Three renderers answer one question about showing users their own expressions | shared |
 | Structural and value validation sit in the same guards | 02, partly |
 
-Destinations are candidates, not decisions; each entry names the questions its chunk has to answer first. The table order implies no batch order. Three entries do carry a real dependency, recorded in an **Ordering** paragraph in each: absorption gates flattening, which in turn gates like-term collection. The other four are independent of everything, including each other.
+Destinations are candidates, not decisions; each entry names the questions its chunk has to answer first. The table order implies no batch order. One real dependency remains, recorded in an **Ordering** paragraph in each: flattening gates like-term collection. The others are independent of everything, including each other.
+
+Bound absorption shipped to layer 5 on 2026-08-15 and is documented in [`../../01_pipeline/05_optimizer/done.md`](../../01_pipeline/05_optimizer/done.md). It had gated flattening; it no longer does.
 
 **Verifying a chunk.** A structural refactor that changes no semantics must leave the golden dump byte-identical, so `./test/decide/golden/capture.sh` and a clean `diff` against `test/decide/golden/baseline.dump` is the primary signal, alongside `make decide-test`. A chunk that legitimately changes the model (a tightened bound, a different encoding) must show `baseline.dump.results` unchanged before the baseline is recaptured.
 
@@ -91,7 +92,7 @@ None of this reads a row. It needs types, not data.
 
 **Fix direction**: layer 5 is the one layer permitted to do mathematics on the bound tree, and already rewrites trees for ABS, MIN/MAX and bilinear with types, scopes and casts known. Producing the linear form there would let layer 8 read a prepared list instead of deriving one. Open questions for whoever picks this up: what the prepared form is (a field on the bound node, or a side table on `LogicalDecide`); whether coefficients stay expressions until layer 8 evaluates them, which they must, since they reference data columns; and whether the scale folding moves in the same chunk as the extraction or a later one. Larger than it looks — extraction is entangled with quadratic and bilinear classification.
 
-**Ordering**: gated by "Bound absorption decides constraint shape at execution time" — see the ordering note in that entry. Also do this before "No pass collects like terms", which needs flat terms to group and would otherwise require a second flattener that this entry then replaces.
+**Ordering**: no longer gated — bound absorption moved to layer 5 on 2026-08-15, which deleted the `absorbed_bound_exprs` pointer handshake that used to couple absorption and extraction to the same layer. Extraction now has nothing to skip beyond an alias tag it can read anywhere. Still do this before "No pass collects like terms", which needs flat terms to group and would otherwise require a second flattener that this entry then replaces.
 
 **Discovered**: 2026-08-15, during a full audit of what the physical layer owns, prompted by the repeated-coefficient bound bug. Shares a root cause with the six entries below; see the theme heading above.
 
@@ -110,22 +111,6 @@ None of this reads a row. It needs types, not data.
 **Ordering**: take this *after* "Linear-form flattening runs at execution time", not before. It looks like the smallest entry here and is a tempting opening move, but collection needs flat terms to group; doing it first means writing a second flattener at layer 5 that the flattening entry then replaces. Nothing is waiting on this one — the bug that produced it is already fixed by the defensive accumulate — so there is no cost to taking it late.
 
 **Discovered**: 2026-08-15, while fixing the repeated-coefficient bound bug.
-
----
-
-## Bound absorption decides constraint shape at execution time
-
-**Location**: `src/execution/operator/decide/physical_decide.cpp:2411` (`TraverseBoundsConstraints`), with the absorbed set consumed at `:1777`.
-
-`x <= 10` never becomes a constraint row. It is folded into the column's box instead, which is both smaller and tighter for the solver; `x < 10` on an integer becomes `x <= 9`. The pass reads a comparison, a variable and a literal — no rows.
-
-**Why it matters**: "encode this as a bound rather than a row" is a formulation choice, and it is made two stages after the layer that owns formulation choice. Because it happens at layer 8, `EXPLAIN` still shows a constraint the solver will never receive, and the elastic diagnosis engine has to reconstruct the absorbed bounds separately as `UserBoundSpec` records to re-emit them as loosenable rows — provenance that would come for free if the decision were made upstream.
-
-**Fix direction**: layer 5 is the candidate; layer 4 is worth ruling in or out first, since "bound or row" is arguably shape rather than formulation, and layer 4 already owns shape. Whoever picks this up should decide the layer before touching code.
-
-**Ordering**: this entry gates "Linear-form flattening runs at execution time". The two passes are coupled by pointer identity — absorption records absorbed comparisons as `Expression*` in `absorbed_bound_exprs`, and extraction consults that set at `:1776` to avoid re-emitting them as rows. That works only because both walk the same tree in the same layer. Moving extraction up while absorption stays here breaks the handshake, so absorption moves first or in the same chunk. Moving it first is cleaner: once bounds are removed upstream, extraction has nothing to skip and the handshake stops existing rather than having to be reproduced across a layer boundary.
-
-**Discovered**: 2026-08-15, physical-layer audit.
 
 ---
 
@@ -181,7 +166,7 @@ Two kinds of check are interleaved. Structural ones — a strict inequality on a
 
 **Fix direction**: the sorting test is "could this have been said without reading a row?" Structural checks move to layer 2; value checks stay. Open question: whether the strict-`<`-on-REAL case in particular should keep its current deliberate routing, which exists so the model builder produces the message — moving it means moving the message too, and the current one was written to satisfy the user-facing-output rule.
 
-**Ordering**: independent, but cheapest immediately after "Bound absorption decides constraint shape at execution time". The strict-`<`-on-REAL case *is* absorption's mechanism — the value is left unabsorbed precisely so the model builder rejects it — so whoever has just moved absorption already holds the context this entry needs. Taken separately, that context gets rebuilt twice. The remaining guards in this entry are unaffected and can be left alone.
+**Ordering**: independent. The strict-`<`-on-REAL case *is* absorption's mechanism — the value is left unabsorbed precisely so the model builder rejects it — and absorption moved to layer 5 on 2026-08-15 with that routing deliberately unchanged. The decline now happens in `DecideOptimizer::AbsorbVariableBounds`, so this entry's question is whether the *rejection* should follow it up to layer 2 and take its message along. The remaining guards in this entry are unaffected and can be left alone.
 
 **Discovered**: 2026-08-15, physical-layer audit.
 

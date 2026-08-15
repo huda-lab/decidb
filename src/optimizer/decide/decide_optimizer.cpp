@@ -8,6 +8,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -67,6 +68,9 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	RewriteMinMax(decide);       // Classify + rewrite min/max (creates indicators and SUM nodes)
 	RewriteNotEqual(decide);
 	RewriteAvgToSum(decide);
+	// Must stay last: RewriteInDomain emits a floor-lowering bound that is itself
+	// absorbable, and every auxiliary variable must exist before the box is sized.
+	AbsorbVariableBounds(decide);
 
 	if (bench) {
 		timer.End();
@@ -1985,6 +1989,214 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
 		FindAndReplaceBilinear(child, decide, links);
 	});
+}
+
+// ---------------------------------------------------------------------------
+// Bound absorption: a bound, not a row
+// ---------------------------------------------------------------------------
+//
+// `x <= 10` is one fact about a column, so it belongs in that column's box rather
+// than in `num_rows` identical model rows. Choosing between the two is a
+// formulation decision, which is why it lives here and not in physical execution.
+//
+// The pass reads a comparison, a decision variable and a foldable literal. It never
+// touches data, so it needs types, not rows.
+
+//! Resolve a decision variable's index from an expression, or INVALID_INDEX.
+static idx_t MatchDecideVariable(const Expression &expr, LogicalDecide &decide) {
+	auto *unwrapped = UnwrapDecideCasts(const_cast<Expression &>(expr), decide.decide_index);
+	if (unwrapped->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		return DConstants::INVALID_INDEX;
+	}
+	auto &colref = unwrapped->Cast<BoundColumnRefExpression>();
+	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
+		auto &decide_var = decide.decide_variables[i]->Cast<BoundColumnRefExpression>();
+		if (colref.binding == decide_var.binding) {
+			return i;
+		}
+	}
+	return DConstants::INVALID_INDEX;
+}
+
+void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
+	auto &lower_bounds = decide.absorbed_lower_bounds;
+	auto &upper_bounds = decide.absorbed_upper_bounds;
+
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_CONJUNCTION: {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		// PER: only the constraint (child 0) carries bounds; the grouping columns do not.
+		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
+			AbsorbBoundsInExpression(*conj.children[0], decide);
+			break;
+		}
+		// WHEN: conditional per-row constraints must NOT contribute to a global bound.
+		// `x <= 0 WHEN c` does not mean `x <= 0` everywhere.
+		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
+			break;
+		}
+		for (auto &child : conj.children) {
+			AbsorbBoundsInExpression(*child, decide);
+		}
+		break;
+	}
+
+	case ExpressionClass::BOUND_COMPARISON: {
+		auto &comp = expr.Cast<BoundComparisonExpression>();
+		idx_t source_clause_id = DConstants::INVALID_INDEX;
+		TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
+
+		// Only a bare decision variable against a constant is a bound. A multi-variable
+		// LHS (`x - 3*z_1 - 5*z_2 = 0`, the IN linking row) is a genuine relation.
+		idx_t var_idx = MatchDecideVariable(*comp.left, decide);
+		if (var_idx == DConstants::INVALID_INDEX) {
+			break;
+		}
+
+		// A non-finite bound is left for the constraint path, which already reads it the
+		// way the solver does: `x <= +inf` is no bound, `x >= +inf` has no solution, and
+		// NaN is an error naming the arithmetic. Absorbing it instead would write it into
+		// the column box, where min/max against the ±1e30 sentinels keep an upper bound
+		// but not a lower one — the same infinity silently vanishing in one direction and
+		// reaching the model validator as an internal error in the other.
+		double bound_value;
+		if (!IsCastWrappedConstant(*comp.right) ||
+		    !TryEvaluateFoldableDouble(optimizer.context, *comp.right, bound_value) ||
+		    !std::isfinite(bound_value)) {
+			break;
+		}
+
+		bool is_integer_var = (decide.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
+		                       decide.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
+		// A BOOLEAN-domain variable's intrinsic [0,1] box is applied to the solver column
+		// directly, never synthesized as a constraint — so a bare `x >= 0` / `x <= 1` only
+		// gets here if the user restated the domain redundantly. Apply it to the box (a
+		// no-op) but do NOT record it: a restatement is not a loosenable parameter. A
+		// genuine pin (`x <= 0`, `x >= 1`, `x = 1`) does tighten the box and IS recorded —
+		// erasing those made the elastic model diverge from the user's query.
+		bool is_bool_var = var_idx < decide.is_boolean_var.size() && decide.is_boolean_var[var_idx];
+		auto RecordBound = [&](char sense, double k) {
+			if (is_bool_var) {
+				if (sense == '<' && k >= 1.0) return false;
+				if (sense == '>' && k <= 0.0) return false;
+			}
+			return true;
+		};
+		auto Record = [&](char sense, double k, bool strict, double typed_k) {
+			if (RecordBound(sense, k)) {
+				decide.user_absorbed_bounds.push_back({var_idx, sense, k, strict, typed_k, source_clause_id});
+			}
+		};
+
+		bool absorbed = true;
+		if (comp.type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+			upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
+			Record('<', bound_value, false, 0.0);
+		} else if (comp.type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+			lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
+			Record('>', bound_value, false, 0.0);
+		} else if (comp.type == ExpressionType::COMPARE_EQUAL) {
+			// Intersect, never overwrite: two equalities on one variable (`x = 5 AND
+			// x = 10`) must invert the box so the conflict is caught, not silently
+			// resolved to whichever was written last.
+			lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value);
+			upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value);
+			Record('=', bound_value, false, 0.0);
+		} else if (comp.type == ExpressionType::COMPARE_LESSTHAN && is_integer_var) {
+			// `x < k` → `x <= k-1` for integers. A REAL strict inequality has no valid
+			// absorption, so it falls through to `absorbed = false` and the constraint
+			// path rejects it with a message naming the clause.
+			upper_bounds[var_idx] = std::min(upper_bounds[var_idx], bound_value - 1.0);
+			Record('<', bound_value - 1.0, true, bound_value);
+		} else if (comp.type == ExpressionType::COMPARE_GREATERTHAN && is_integer_var) {
+			lower_bounds[var_idx] = std::max(lower_bounds[var_idx], bound_value + 1.0);
+			Record('>', bound_value + 1.0, true, bound_value);
+		} else {
+			absorbed = false;
+		}
+
+		if (absorbed) {
+			// The comparison stays in the tree so EXPLAIN keeps rendering what the user
+			// wrote; the tag is what stops it also becoming a model row.
+			AddDecideTag(comp.alias, ABSORBED_BOUND_TAG);
+		}
+		break;
+	}
+
+	case ExpressionClass::BOUND_BETWEEN: {
+		auto &between = expr.Cast<BoundBetweenExpression>();
+		idx_t var_idx = MatchDecideVariable(*between.input, decide);
+		if (var_idx == DConstants::INVALID_INDEX) {
+			break;
+		}
+
+		bool is_integer_var = (decide.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
+		                       decide.decide_variables[var_idx]->return_type.id() == LogicalTypeId::BIGINT);
+		bool is_bool_var = var_idx < decide.is_boolean_var.size() && decide.is_boolean_var[var_idx];
+		auto RecordBound = [&](char sense, double k) {
+			if (is_bool_var) {
+				if (sense == '<' && k >= 1.0) return false;
+				if (sense == '>' && k <= 0.0) return false;
+			}
+			return true;
+		};
+
+		auto ExtractBound = [&](const Expression &e) -> double {
+			double value;
+			return IsCastWrappedConstant(e) && TryEvaluateFoldableDouble(optimizer.context, e, value)
+			           ? value
+			           : std::numeric_limits<double>::quiet_NaN();
+		};
+
+		double lo = ExtractBound(*between.lower);
+		double hi = ExtractBound(*between.upper);
+
+		// Each finite side is recorded as its own spec so the infeasible diagnosis
+		// loosens BETWEEN uniformly with the other simple bounds.
+		if (!std::isnan(lo)) {
+			// A strict lower side is integer-normalized to lo+1; carry the user's typed
+			// literal so the diagnosis re-quotes `> a` rather than the normalized `>= a+1`.
+			bool lo_strict = !between.lower_inclusive && is_integer_var;
+			double lo_typed = lo;
+			if (lo_strict) lo += 1.0;
+			lower_bounds[var_idx] = std::max(lower_bounds[var_idx], lo);
+			if (RecordBound('>', lo)) {
+				decide.user_absorbed_bounds.push_back({var_idx, '>', lo, lo_strict, lo_typed,
+				                                      DConstants::INVALID_INDEX});
+			}
+		}
+		if (!std::isnan(hi)) {
+			bool hi_strict = !between.upper_inclusive && is_integer_var;
+			double hi_typed = hi;
+			if (hi_strict) hi -= 1.0;
+			upper_bounds[var_idx] = std::min(upper_bounds[var_idx], hi);
+			if (RecordBound('<', hi)) {
+				decide.user_absorbed_bounds.push_back({var_idx, '<', hi, hi_strict, hi_typed,
+				                                      DConstants::INVALID_INDEX});
+			}
+		}
+		break;
+	}
+
+	case ExpressionClass::BOUND_CONSTANT:
+		// Type declarations and rewrite placeholders (`TRUE`) carry no bound.
+		break;
+
+	default:
+		break;
+	}
+}
+
+void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
+	// Sized here rather than at construction so every auxiliary variable created by the
+	// preceding passes is already counted.
+	idx_t num_decide_vars = decide.decide_variables.size();
+	decide.absorbed_lower_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_LOWER_UNSET);
+	decide.absorbed_upper_bounds.assign(num_decide_vars, 1e30);
+
+	if (decide.decide_constraints) {
+		AbsorbBoundsInExpression(*decide.decide_constraints, decide);
+	}
 }
 
 void DecideOptimizer::AppendConstraint(LogicalDecide &decide, unique_ptr<Expression> constraint) {
