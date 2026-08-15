@@ -151,6 +151,20 @@ The binder asks only whether *either* side bears a decision. It does not flip
 Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
 `BindConjunction`, `BindWhenConstraint`, `BindPerConstraint`.
 
+### What may be a bound
+
+When one side reduces (`SUM`, `AVG`, `MIN`, `MAX`), the other side must reduce to a
+single value too, and `IsAllowedDecisionFreeBoundExpression` decides which shapes
+qualify: constants, operators and functions over allowed operands, casts, scalar
+subqueries, and data-only reducers with their own `WHEN`. A bare column does not
+qualify — it has one value per row, not one per group. Arithmetic composes freely,
+`-` included: a bound is evaluated as an expression over the row, so subtraction is
+no different from addition. (`-` alone was refused for a while, a leftover from the
+parsed-level symbolic layer that used to move terms across the comparison. It also
+rejected `-5.0::DOUBLE`, where the minus is the literal's own sign, so a negative
+bound could not be written with a cast at all.) Wrapper tags recurse into child 0
+only: a `WHEN` predicate or a `PER` key is not a value on that side.
+
 ### Subqueries
 
 Both uncorrelated and correlated **scalar** subqueries are supported, and are

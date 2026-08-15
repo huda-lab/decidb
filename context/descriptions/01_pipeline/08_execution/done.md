@@ -50,6 +50,9 @@ row, not a domain.
 - Strict `<` / `>` on a REAL variable are deliberately **not** absorbed, so
   `ApplyComparisonSense` in the model builder reaches them and rejects them with a
   clear message rather than silently approximating.
+- A non-finite constant is **not** absorbed either, for the same reason: the box has
+  one sentinel per direction and cannot hold it. It stays a constraint row, where the
+  solver reads it — see [Validation](#validation).
 
 Lower bounds start at an `ABSORBED_LOWER_UNSET` sentinel rather than 0, so an
 explicit negative bound (`x >= -5`, `BETWEEN -10 AND 10`) is honored instead of
@@ -81,6 +84,33 @@ pipeline, before the elastic engine ever sees it:
 
 A purely user-vs-user inverted box such as `x >= 5 AND x <= 1` does **not** match
 and proceeds to the elastic engine, which reports a least-change loosen.
+
+### Implied bounds from constraint data
+
+`DecidePropagateImpliedBounds()` runs after coefficient evaluation and derives a
+second, data-driven source of column bounds. For a constraint
+`Sum_t a_t x_t (<=|=) K` where every variable is non-negative and every
+coefficient is non-negative, each instance satisfies `x <= K / a` — the other
+terms only help — so the shared upper bound is `max_r K_r / a_r`. This turns
+declared-unbounded variables into bounded ones, which is what makes a finite and
+tight Big-M possible. Only provably-implied bounds are applied, so the feasible
+region and the optimum are unchanged.
+
+`a_r` is the variable's **combined** coefficient at that row. A variable can hold
+several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
+over the same decision), and all of them name the same solver column, so the pass
+walks distinct variables and sums every term naming each one — `10/5 = 2`, not
+`10/3`. The addition belongs here rather than in canonicalization because
+coefficients are evaluated numbers by this point; at layer 4 they are still
+unevaluated expressions over data columns, and combining them there would mean
+opening terms algebraically, which that layer does not do.
+
+The pass is a single sweep, not a fixpoint: a bound derived for one variable is
+not fed back to tighten others in the same pass. It skips constraints it cannot
+reason about soundly — any negative coefficient, bilinear or quadratic terms,
+MIN/MAX and `<>` indicator rows, and `WHEN`-conditional constraints (whose bound
+would wrongly cap the excluded rows, since the derived bound is shared across all
+of a variable's rows).
 
 ---
 
@@ -329,6 +359,54 @@ Every coefficient and RHS value is checked after evaluation:
   by zero, arithmetic overflow, NULL propagation through math).
 
 Both apply to constraint and objective coefficients alike.
+
+**Infinity is admitted for one value only: the row's `rhs`.** An infinite bound is
+not an error there — it is the absence of a constraint (`<= +inf`) or one nothing
+satisfies (`>= +inf`) — and the model validator has always accepted a non-finite
+`rhs` while rejecting NaN. A constant bound was never checked at all, so the per-row
+expression path was the only one refusing what the rest of the pipeline handled;
+canonicalization rebuilds `x + v <= K` as `x <= K - v`, which put the *same* bound
+on the strict path purely because of how it was written. It is now uniform: an
+infinite bound behaves the same in every spelling, and the solver decides what it
+means. `inf - inf` is still NaN, and still refused.
+
+**A non-finite bound is not absorbed into the column box.** `TraverseBoundsConstraints`
+folds a bare `x OP const` into `lower_bounds` / `upper_bounds`, each initialized to a
+±1e30 sentinel and tightened with `min` / `max`. Those sentinels swallow an infinity
+in one direction and keep it in the other, so one spelling of one bound became "no
+bound" and its mirror reached the bounds validator as a non-finite column — an
+internal error, which also invalidates the connection for every later query in the
+session. Absorption is an optimization, not a semantic step, so a non-finite value is
+left unabsorbed and takes the ordinary constraint path: `x >= +inf` becomes one
+infeasible row and `x <= +inf` one satisfied row, the same answer the rebuilt
+spelling `x + v >= +inf` gives.
+
+The exception is Big-M. `DecideTightPerRowBigM` and the ABS-maximize linearization
+need a constant that dominates the row's range, and nothing finite dominates
+infinity. But a bound only has to be linearized when it constrains something, so each
+rewrite classifies the bound first and only a finite one asks for an `M`:
+
+- **`<>`** — a bound no integer can equal makes the row a tautology, and the drop is
+  ordered before the Big-M is computed. Its per-row and aggregate spellings share one
+  predicate (`NEIsIntegerValuedRhs`), which requires a finite value outright:
+  `inf - round(inf)` is NaN, and a comparison against NaN is false whichever way it
+  is written, so an inline copy of the test silently let an infinite bound through to
+  the Big-M.
+- **MIN / MAX** — `ClassifyMinMaxBound` reads the direction the infinity points. A
+  hard MAX is "some active row has LHS >= K", so `K = -inf` holds for every
+  assignment and the group is dropped, while `K = +inf` is out of every row's reach
+  and the group is re-emitted as a plain per-row constraint carrying that bound —
+  an ordinary infeasibility naming the user's clause, not a refusal. MIN is the
+  mirror image. The verdict is per group because `ReduceAggregateRhsPerGroup` has
+  already collapsed a row-varying bound to the tightest one, which is also what
+  settles a group whose rows mix finite and infinite bounds.
+- **ABS** — the infinity is in the expression *inside* `ABS()`, not in the bound, so
+  there is no direction to read and no constant that bounds the range. It is refused,
+  naming the column and the row.
+
+What still reaches the refusal in `DecideTightPerRowBigM` is a bound with no reading
+at all — NaN — and the auto-`M` `norm(e, 0)` links, whose `M` bounds an expression
+rather than answering a comparison.
 
 ### Output
 

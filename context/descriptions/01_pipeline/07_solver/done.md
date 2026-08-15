@@ -102,21 +102,31 @@ internal re-solves before the user sees anything.
 facade the operator calls. In order:
 
 1. `SolverModel::Build(input, indexer)`. A `DecideInfeasibleModelException` here
-   means infeasibility was proven during build — return `INFEASIBLE` with no
-   model.
+   means infeasibility was proven by a throw that abandoned the half-built model —
+   return `INFEASIBLE` with no model, and diagnosis cannot run. Only the
+   conflicting-column-bounds check still exits this way, and only with diagnosis
+   off. Because no model comes back, the operator must treat an unretained model
+   (`num_vars == 0`) as "no diagnosis available" rather than walk it.
 2. `DumpSolverModel(model)` — a no-op unless `DECIDB_DUMP_MODEL` is set. Emitted
    on the freshly built model so diagnostic re-solves never pollute the dump. This
    is the golden corpus's characterization oracle.
 3. Record `model_constraint_rows` before anything moves the model.
-4. Under `tolerate_infeasible_bounds` (diagnosis mode), `Build` keeps an inverted
+4. `model.build_proven_infeasible`: a constraint reduced to a coefficient-free row
+   against a bound it cannot meet (`SUM(0 * x) <= -1`, `x - x <= -1`). `Build`
+   keeps that row — with its source provenance — instead of throwing, so the model
+   survives for the elastic engine to name and relax the clause. No backend is
+   asked to load a row with no coefficients: this short-circuits to `INFEASIBLE`,
+   retaining the model. Unconditional, unlike the box below; with diagnosis off the
+   retained model is simply discarded.
+5. Under `tolerate_infeasible_bounds` (diagnosis mode), `Build` keeps an inverted
    column box rather than throwing, so the model survives for the elastic engine.
    That box *is* infeasible and some backends reject it at load — HiGHS errors
    hard and poisons the session — so this short-circuits to `INFEASIBLE`,
    retaining the model, without ever handing the inverted box to a solver.
-5. Solve on a live session.
-6. `DisambiguateInfOrUnbd`.
-7. `AttachUnboundedRayIfRequested`.
-8. Hand back the session, then the model, to whoever asked.
+6. Solve on a live session.
+7. `DisambiguateInfOrUnbd`.
+8. `AttachUnboundedRayIfRequested`.
+9. Hand back the session, then the model, to whoever asked.
 
 ### Disambiguating INF_OR_UNBD
 

@@ -271,6 +271,36 @@ def _picked_pair_ids(rows, cols, left, right):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
+def test_aggregate_bound_may_subtract(decidb_cli):
+    """A bound may subtract, not only add.
+
+    The binder refused `-` on the bound side of a reduced constraint while allowing
+    `+`, so `SUM(x*cost) <= 12 - 2` and every other subtraction was rejected as "not
+    a scalar". It also caught the minus in `-5.0::DOUBLE`, which is the literal's own
+    sign, leaving no way to write a negative bound with a cast. Each spelling below
+    is paired with the equivalent literal so a wrong value fails as loudly as a
+    rejection would.
+    """
+    query = """
+        SELECT id, cost, value, x
+        FROM (
+            VALUES (1, 4.0, 10.0), (2, 5.0, 20.0), (3, 2.0, 15.0)
+        ) t(id, cost, value)
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x * cost) <= {bound}
+        MAXIMIZE SUM(x * value)
+    """
+    for bound, same_as in (("12 - 2", "10"), ("-(2) + 12", "10"), ("12.0 - 2.0::DOUBLE", "10")):
+        rows, cols = decidb_cli.execute(query.format(bound=bound))
+        expected, expected_cols = decidb_cli.execute(query.format(bound=same_as))
+        assert _picked_ids(rows, cols) == _picked_ids(expected, expected_cols), \
+            f"bound `{bound}` did not behave like `{same_as}`"
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
 def test_sum_body_data_only_offset_plain(decidb_cli):
     """`SUM(x + cost) <= K` subtracts SUM(cost), not just the scalar literals."""
     rows, cols = decidb_cli.execute("""

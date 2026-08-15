@@ -92,9 +92,14 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
                     return !func.children.empty() &&
                            IsAllowedDecisionFreeBoundExpression(*func.children[0], variables);
                 }
-                if (StringUtil::Lower(func.function_name) == "-") {
-                    return false;
-                }
+                // `-` used to be refused outright while `+` was allowed. Nothing
+                // downstream needs that asymmetry: a bound is evaluated as an
+                // expression over the row, so subtraction and negation compose from
+                // allowed operands exactly like addition does. The ban dated from the
+                // parsed-level symbolic layer, which moved terms across the comparison
+                // and is gone. It also refused `-5.0::DOUBLE`, where the minus is the
+                // literal's own sign, so a negative bound could not be written with a
+                // cast at all.
                 if (!IsAllowedOperatorChildren(func.children, variables)) {
                     return false;
                 }

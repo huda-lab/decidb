@@ -503,10 +503,14 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     };
 
-    // Drop constraints whose LHS reduced to 0 (all coefficients cancelled or
-    // all variables absorbed into column bounds). A tautology is skipped; a
-    // violated constant constraint is rejected early so the solver doesn't
-    // have to diagnose it.
+    // Handle constraints whose LHS reduced to 0 (all coefficients cancelled or
+    // all variables absorbed into column bounds). A tautology is dropped; a
+    // violated constant constraint (`0 <= -1`) is KEPT as a coefficient-free row
+    // and flags the model, so the whole model still gets built and retained.
+    // Keeping the row is what lets the infeasible-diagnosis engine name and relax
+    // the offending clause — it stays a USER_PARAMETER row with its own source
+    // provenance, and the elastic weighting already guards an all-zero row. No
+    // backend ever sees it: SolveModel short-circuits on the flag.
     auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
         if (!constr.indices.empty()) {
             model.constraints.push_back(std::move(constr));
@@ -522,8 +526,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             violated = std::abs(constr.rhs) > EPS;
         }
         if (violated) {
-            throw DecideInfeasibleModelException(
-                "DECIDE optimization is infeasible: a SUCH THAT constraint cannot be satisfied.");
+            model.build_proven_infeasible = true;
+            model.constraints.push_back(std::move(constr));
+            return;
         }
         // Tautology (0 <= k>=0, 0 >= k<=0, 0 = 0) — drop.
     };

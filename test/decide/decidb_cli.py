@@ -137,6 +137,32 @@ class DecidBCli:
         rows = [tuple(d[c] for c in cols) for d in rows_dicts]
         return rows, cols
 
+    def dump_model(self, sql: str, path, *, timeout: float = 120) -> str:
+        """Run a query with ``DECIDB_DUMP_MODEL`` on and return the dumped model text.
+
+        The solver-neutral dump is the only place where presolve decisions —
+        column bounds, row coefficients — are observable from a test. Two queries
+        can share an optimum and still build different models, so anything about
+        model *shape* has to be asserted here rather than through result rows.
+        """
+        env = {**os.environ, **(self.env or {}), "DECIDB_DUMP_MODEL": str(path)}
+        proc = subprocess.run(
+            [self.exe, self.db, "-readonly", "-c", sql],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        errors = [
+            line for line in proc.stderr.splitlines()
+            if line and not line.startswith("Warning:")
+        ]
+        if errors:
+            raise DecidBCliError("\n".join(errors))
+        if not Path(path).exists():
+            raise AssertionError(f"query emitted no model:\n{sql}")
+        return Path(path).read_text()
+
     def execute_raw(
         self, sql: str, *, timeout: float = 120
     ) -> subprocess.CompletedProcess:

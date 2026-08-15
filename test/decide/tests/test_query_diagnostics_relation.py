@@ -1777,3 +1777,62 @@ class TestEqualityBoundConflict:
         out = cli.execute_script(".mode csv\n" + sql + ";\n").stdout
         rows = list(csv.DictReader(io.StringIO(out)))
         assert len(rows) == 1 and float(rows[0]["x"]) == pytest.approx(expected)
+
+
+@pytest.mark.query_diagnostics
+class TestDegenerateCoefficientFreeRow:
+    """A constraint that keeps no decision term at all (`SUM(0 * x) <= -1`, or
+    `x - x <= -1` where the terms cancel) is still a user clause with a bound, so it
+    is diagnosed like any other: named, and loosened to the nearest bound 0 can meet.
+
+    Such a row used to be discarded at build time, taking the whole model with it —
+    diagnosis then ran against a model that was never populated and aborted fatally.
+    The row is now kept coefficient-free, and no backend is asked to load it.
+    """
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize("clause,subject,fixed", [
+        ("SUM(0*x) <= -1", "SUM(0 * x) <= -1", "SUM(0 * x) <= 0"),
+        ("x - x <= -1", "x - x <= -1", "x - x <= 0"),
+        ("0*x >= 1", "0 * x >= 1", "0 * x >= 0"),
+    ])
+    def test_degenerate_row_is_named_and_loosened(
+        self, request, cli_fixture, clause, subject, fixed
+    ):
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            f"DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+
+        assert "infeasible" in result.stderr.lower()
+        assert "INTERNAL Error" not in result.stderr, result.stderr
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        edit = _attrs(rows, "clause", subject)
+        assert edit["edit_kind"] == "loosen"
+        # The left side is 0 whatever x does, so the least change is to move the
+        # bound to 0 — the one value that admits it.
+        assert edit["suggested_change"] == fixed
+        _apply_reported_fix(cli, sql, rows, {subject: clause})
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_degenerate_row_does_not_mask_a_second_conflict(self, request, cli_fixture):
+        """The degenerate row is repaired independently: a genuine conflict elsewhere
+        in the same query is still found and reported alongside it."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x(INT) SUCH THAT x <= 5 AND SUM(x) >= 100 AND SUM(0*x) <= -1 "
+            "MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+
+        rows = _rows(result)
+        subjects = {e["subject"] for e in _clause_edits(rows)}
+        assert "SUM(0 * x) <= -1" in subjects
+        assert subjects - {"SUM(0 * x) <= -1"}, (
+            f"the second conflict was not reported: {subjects}"
+        )
+        _apply_reported_fix(cli, sql, rows, {"SUM(0 * x) <= -1": "SUM(0*x) <= -1"})

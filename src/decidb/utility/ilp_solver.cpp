@@ -286,7 +286,12 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 	try {
 		model = SolverModel::Build(input, indexer);
 	} catch (const DecideInfeasibleModelException &) {
-		// Infeasibility proven during Build: no model exists to retain.
+		// Infeasibility proven during Build by a throw that abandoned the half-built
+		// model, so there is nothing to retain and diagnosis cannot run. Only the
+		// conflicting-column-bounds check still throws this way, and only when
+		// diagnosis is off (under diagnosis it keeps the inverted box instead) — the
+		// unsatisfiable-constraint case flags `build_proven_infeasible` and keeps its
+		// model. The operator must treat an unretained model as "no diagnosis".
 		SolverResult result;
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
@@ -300,6 +305,22 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 	// per-row spec becomes a row per data row, one PER spec a row per group. Captured here,
 	// before any `std::move(model)` below.
 	idx_t built_constraint_rows = model.constraints.size() + model.quadratic_constraints.size();
+	// Build proved a constraint unsatisfiable while assembling the model: a row whose
+	// left-hand side reduced to no terms at all, against a bound it cannot meet
+	// (`SUM(0 * x) <= -1`, `x - x <= -1`). The row was kept so diagnosis can name and
+	// relax it, but it is a coefficient-free row that no backend should be asked to
+	// load. Short-circuit to INFEASIBLE here — retaining the model — for the same
+	// reason as the inverted column box below. Unconditional: with diagnosis off the
+	// retained model is simply discarded and the operator throws its static error.
+	if (model.build_proven_infeasible) {
+		SolverResult result;
+		result.status = SolverStatus::INFEASIBLE;
+		result.model_constraint_rows = built_constraint_rows;
+		if (retained_model) {
+			*retained_model = std::move(model);
+		}
+		return result;
+	}
 	// Under diagnosis (tolerate_infeasible_bounds), Build keeps an inverted column box
 	// (col_lower > col_upper) instead of throwing, so the model can be retained for the
 	// elastic engine. But the box IS infeasible, and some backends reject it at load

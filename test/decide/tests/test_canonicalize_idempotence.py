@@ -10,28 +10,7 @@ The pairs cover side swaps, exact casts, query-wide provenance, reducer scales,
 and WHEN/PER wrappers.
 """
 
-import os
-import subprocess
-
 import pytest
-
-
-def _dump_model(cli, sql, path):
-    env = {**os.environ, **(cli.env or {}), "DECIDB_DUMP_MODEL": str(path)}
-    result = subprocess.run(
-        [cli.exe, cli.db, "-readonly", "-c", sql],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=env,
-    )
-    errors = [
-        line for line in result.stderr.splitlines()
-        if line and not line.startswith("Warning:")
-    ]
-    assert not errors, "\n".join(errors)
-    assert path.exists(), f"query emitted no model:\n{sql}"
-    return path.read_text()
 
 
 _PAIRS = [
@@ -106,6 +85,6 @@ _PAIRS = [
 @pytest.mark.parametrize(("written", "canonical"), _PAIRS)
 @pytest.mark.correctness
 def test_canonical_spelling_is_model_fixed_point(decidb_cli, tmp_path, written, canonical):
-    written_dump = _dump_model(decidb_cli, written, tmp_path / "written.dump")
-    canonical_dump = _dump_model(decidb_cli, canonical, tmp_path / "canonical.dump")
+    written_dump = decidb_cli.dump_model(written, tmp_path / "written.dump")
+    canonical_dump = decidb_cli.dump_model(canonical, tmp_path / "canonical.dump")
     assert written_dump == canonical_dump

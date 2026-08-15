@@ -77,13 +77,23 @@ so callers branch on the outcome. This gates the whole area.
     check-ray: ray present reuses the unbounded terminal with the caveat `It may
     instead be infeasible.`, and no ray routes to the infeasible terminal. Under
     `off`, it still falls to the static `ThrowDecideSolveError` `INF_OR_UNBD` branch.
-- **Pre-solve model-builder infeasibility is normalized.** Contradictory normalized
-  rows and contradictory accumulated bounds throw `DecideInfeasibleModelException`
-  inside `SolverModel::Build`; `SolveModel` catches that internal exception and
-  returns `SolverResult{status = INFEASIBLE}`. A fast contradiction such as
-  `x >= 5 AND x <= 1` therefore reaches the same `PhysicalDecide::Finalize` gate as
-  backend-reported infeasibility, instead of bypassing diagnostics with a direct
-  builder error.
+- **Pre-solve model-builder infeasibility is normalized.** Both contradictory
+  accumulated bounds and a violated coefficient-free row are decided inside
+  `SolverModel::Build` and reported as `SolverResult{status = INFEASIBLE}`, so a
+  fast contradiction such as `x >= 5 AND x <= 1` reaches the same
+  `PhysicalDecide::Finalize` gate as backend-reported infeasibility instead of
+  bypassing diagnostics with a direct builder error. The two differ in whether a
+  model comes back. A violated coefficient-free row (`SUM(0 * x) <= -1`,
+  `x - x <= -1`) is **kept** in the model and sets `build_proven_infeasible`, so
+  diagnosis runs normally and names the clause. Contradictory bounds still throw
+  `DecideInfeasibleModelException` when diagnosis is off, abandoning the half-built
+  model; under diagnosis the inverted box is kept instead.
+- **An unretained model means no diagnosis, and the operator says so.** When
+  `SolveModel` returns INFEASIBLE from a throw, `retained_model` is left
+  default-constructed — no columns, no rows. The infeasible arm checks
+  `num_vars == 0` up front and falls to the static error rather than indexing an
+  empty model. `SolverModel::num_vars` is default-initialized to 0 for exactly this
+  reason: the check is only meaningful if "never populated" is representable.
 - **The throw lives in the operator.** `PhysicalDecide::Finalize`
   (`physical_decide.cpp`) branches on status: optimal → store the solution
   (`SUBOPTIMAL` also stores it, with a "not proven best" caveat); other

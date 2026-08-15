@@ -7,7 +7,67 @@ implied (never cutting the optimum), and the inferred bound must correctly enabl
 Big-M / McCormick formulations that previously required an explicit bound.
 """
 
+import re
+
 import pytest
+
+
+def _column_upper_bounds(dump: str) -> list[float]:
+    """Upper bounds of the dumped model's columns, in column order."""
+    return [float(m) for m in re.findall(r"^col \d+: .*?\bub=(\S+)", dump, re.M)]
+
+
+@pytest.mark.correctness
+def test_repeated_variable_bound_uses_the_combined_coefficient(decidb_cli, tmp_path):
+    """`2*ship + 3*ship <= 10` implies ship <= 2, not 10/3.
+
+    Both terms name the same solver column, so the implied bound follows from
+    their sum (5), not from either coefficient alone. Reading one term gave
+    10/3 = 3.33 — sound, but 1.67x loose, and the looseness propagates into
+    every Big-M derived from this column's range.
+
+    Asserted on the model dump because results cannot see this: the emitted row
+    always carried the correct combined `0:5`, so the optimum was already right
+    and no result-level test could fail. Both orderings are run because the old
+    behaviour picked the largest single coefficient, which is order-independent
+    and would survive a one-ordering test.
+    """
+    sql = """
+        SELECT id, ship FROM (VALUES (1)) t(id)
+        DECIDE ship(INT) SUCH THAT {lhs} <= 10 MAXIMIZE SUM(ship)
+    """
+    # A distinct dump path per query: DECIDB_DUMP_MODEL appends, so reusing one
+    # file would leave the second parse reading both models.
+    for i, lhs in enumerate(("2 * ship + 3 * ship", "3 * ship + 2 * ship")):
+        dump = decidb_cli.dump_model(
+            sql.format(lhs=lhs), tmp_path / f"repeated_{i}.dump")
+        assert _column_upper_bounds(dump) == [2.0], \
+            f"`{lhs} <= 10` did not combine its coefficients:\n{dump}"
+
+
+@pytest.mark.correctness
+def test_single_term_bounds_are_unchanged(decidb_cli, tmp_path):
+    """The combining loop must not disturb the ordinary one-term-per-variable case.
+
+    `3*ship <= 10` still implies ship <= 10/3, and a second variable in the same
+    constraint is still bounded independently of the first.
+    """
+    single = decidb_cli.dump_model(
+        """
+            SELECT id, ship FROM (VALUES (1)) t(id)
+            DECIDE ship(INT) SUCH THAT 3 * ship <= 10 MAXIMIZE SUM(ship)
+        """,
+        tmp_path / "single.dump")
+    assert _column_upper_bounds(single) == pytest.approx([10.0 / 3.0])
+
+    two_vars = decidb_cli.dump_model(
+        """
+            SELECT id, ship, hold FROM (VALUES (1)) t(id)
+            DECIDE ship(INT), hold(INT)
+            SUCH THAT 2 * ship + 5 * hold <= 10 MAXIMIZE SUM(ship + hold)
+        """,
+        tmp_path / "two_vars.dump")
+    assert _column_upper_bounds(two_vars) == pytest.approx([5.0, 2.0])
 
 
 @pytest.mark.correctness

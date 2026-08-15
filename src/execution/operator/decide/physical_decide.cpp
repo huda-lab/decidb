@@ -163,8 +163,17 @@ static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
 //! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
 //! Throws InvalidInputException on NULL or non-finite values, citing `err_context`.
 //! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
+//!
+//! `allow_infinite` relaxes the check to NaN-only, and is used exclusively for the
+//! value that becomes a model row's `rhs`. An infinite bound is not an error there:
+//! it is the absence of a constraint (`<= +inf`) or a constraint nothing satisfies
+//! (`>= +inf`), both of which the solver contract already expresses — the model
+//! validator accepts a non-finite rhs and rejects only NaN, and the constant and
+//! absorbed-bound RHS paths have always passed infinities straight through. A
+//! coefficient has no such reading, so every other caller stays strict.
 static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
-                                vector<double> &out, const char *err_context) {
+                                vector<double> &out, const char *err_context,
+                                bool allow_infinite = false) {
 	if (count == 0) {
 		return;
 	}
@@ -189,15 +198,15 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
 				err_context, out.size());
 		}
 		double dv = data[idx];
-		if (!std::isfinite(dv)) {
+		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
 			throw InvalidInputException(
-				"DECIDE %s contains invalid value (NaN or Infinity) at row %llu. "
+				"DECIDE %s contains invalid value (%s) at row %llu. "
 				"Common causes:\n"
 				"  • Division by zero in the expression\n"
 				"  • Arithmetic overflow in calculations\n"
 				"  • NULL values that propagated through math operations\n"
 				"Check your expressions and input data.",
-				err_context, out.size());
+				err_context, allow_infinite ? "NaN" : "NaN or Infinity", out.size());
 		}
 		out.push_back(dv * sign);
 	}
@@ -2451,8 +2460,17 @@ public:
                         // eligible cast-wrapped literal, evaluate the complete expression
                         // with DuckDB semantics and convert only its result.
                         double bound_value;
+                        // A non-finite bound is left for the constraint path, which
+                        // already reads it the way the solver does: `x <= +inf` is no
+                        // bound, `x >= +inf` has no solution, and NaN is an error naming
+                        // the arithmetic. Absorbing it instead would write it into the
+                        // column box, where `min`/`max` against the ±1e30 sentinels keep
+                        // an upper bound but not a lower one — so the same infinity
+                        // silently vanished in one direction and reached the model
+                        // validator as an internal error in the other.
                         if (IsCastWrappedConstant(*comp.right) &&
-                            TryEvaluateFoldableDouble(context, *comp.right, bound_value)) {
+                            TryEvaluateFoldableDouble(context, *comp.right, bound_value) &&
+                            std::isfinite(bound_value)) {
 
                             bool is_integer_var =
                                 (op.decide_variables[var_idx]->return_type.id() == LogicalTypeId::INTEGER ||
@@ -2749,6 +2767,14 @@ static double DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices,
 //! unbounded variables (no query is rejected; behavior matches the prior code).
 static constexpr double DECIDE_BIGM_FALLBACK = 1e6;
 
+//! The bound a row actually imposes: its right-hand side less the constant part of
+//! its left-hand side. This is the value a Big-M has to dominate, so it is also the
+//! value a caller must classify before asking for an M over it.
+static double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row) {
+    double rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(row);
+    return rhs - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row);
+}
+
 //! Tight scalar Big-M for a per-row indicator constraint: the maximum over
 //! active rows of |rhs[r]| + (worst-case row contribution), plus a 1-unit margin
 //! that covers the integer-step band of the `<>` rewrite (harmless slack for the
@@ -2760,14 +2786,26 @@ static double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
                                     idx_t num_rows) {
     bool has_unbounded = false;
     double M = 0.0;
-    bool uniform_rhs = ec.rhs_values.IsUniform();
     for (idx_t r = 0; r < num_rows; r++) {
         if (!ec.row_group_ids.empty() &&
             ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
             continue;
         }
-        double rhs = uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
-        rhs -= DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, r);
+        double rhs = DecideRowEffectiveBound(ec, r);
+        // An infinite bound reaches the model unchanged everywhere else — it is
+        // simply "no constraint" or "no solution" — but it cannot be linearized:
+        // M has to dominate the row's slack, and nothing finite dominates
+        // infinity. Refuse it here, in SQL terms, rather than let a non-finite
+        // coefficient reach the model validator as an internal error. Callers that
+        // can read an infinity by direction (`<>`, MIN/MAX) classify it before
+        // getting here, so what still arrives is a bound with no reading at all.
+        if (!std::isfinite(rhs)) {
+            throw InvalidInputException(
+                "DECIDE cannot rewrite this constraint: its bound is %s at "
+                "row %llu, and rewriting ABS, MIN, MAX or <> needs a finite bound. "
+                "Compare against a finite value instead.",
+                std::isnan(rhs) ? "NaN" : "Infinity", r);
+        }
         double rhs_mag = std::abs(rhs);
         double range = rhs_mag + DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
                                                     r, lower_bounds, upper_bounds, has_unbounded);
@@ -2780,11 +2818,34 @@ static double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
     return M;
 }
 
+//! What an infinite bound means for a hard MIN/MAX constraint.
+enum class MinMaxBoundKind : uint8_t {
+    LINEARIZE,  //!< finite bound: needs the indicator + Big-M rewrite
+    VACUOUS,    //!< every assignment satisfies it: the constraint can be dropped
+    NO_SOLUTION //!< no assignment satisfies it: report it as an infeasibility
+};
+
+//! A hard MAX reads "some active row has LHS >= K" and a hard MIN "some active row
+//! has LHS <= K", so an infinite K is answered by the direction it points, not by
+//! the rewrite's ability to encode it: `MAX(x) >= -inf` and `MIN(x) <= +inf` hold
+//! for every assignment, `MAX(x) >= +inf` and `MIN(x) <= -inf` for none. Classifying
+//! first is what keeps a constraint that constrains nothing from being refused for
+//! lacking a finite M — the same order the `<>` rewrite uses. NaN is neither case
+//! and stays on the finite path, where the Big-M guard still names it.
+static MinMaxBoundKind ClassifyMinMaxBound(double bound, bool is_max_agg) {
+    if (!std::isinf(bound)) {
+        return MinMaxBoundKind::LINEARIZE;
+    }
+    bool out_of_reach = (bound > 0.0) == is_max_agg;
+    return out_of_reach ? MinMaxBoundKind::NO_SOLUTION : MinMaxBoundKind::VACUOUS;
+}
+
 //! Data-driven implied-bound propagation. For a non-negative `<=`/`=` constraint
 //! Sum_t a_t x_t (<=|=) K with a_t >= 0 and x_t >= 0, each variable instance
 //! satisfies x <= K / a (the other non-negative terms only help), so a sound
 //! shared upper bound is max over the variable's positive-coefficient rows of
-//! K_r / a_r. This converts many declared-unbounded variables into bounded ones,
+//! K_r / a_r, where a_r is the variable's COMBINED coefficient at that row --
+//! see the per-variable loop below. This converts many declared-unbounded variables into bounded ones,
 //! enabling a finite, correct, tighter Big-M. Only provably-implied bounds are
 //! applied, so the feasible region — and the optimum — are unchanged.
 //!
@@ -2865,7 +2926,26 @@ static void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &cons
             if (v == DConstants::INVALID_INDEX) {
                 continue;
             }
-            const auto &col = ec.row_coefficients[t];
+            // A variable can occupy several additive terms of the SAME constraint
+            // (`2*ship + 3*ship <= 10`, or two reducers over the same decision), and
+            // every one of them names the same solver column. The implied bound
+            // follows from their combined coefficient (10/5 = 2), never from one
+            // term's alone (10/3 = 3.33, sound but 1.67x looser) — reading a single
+            // term silently drops the others' contribution. So handle each variable
+            // once, at its first term, and sum every term that names it. The
+            // coefficients are evaluated numbers by now, which is why the addition
+            // belongs here and not in canonicalization, where they are still
+            // unevaluated expressions over data columns.
+            bool already_handled = false;
+            for (idx_t prev = 0; prev < t; prev++) {
+                if (ec.variable_indices[prev] == v) {
+                    already_handled = true;
+                    break;
+                }
+            }
+            if (already_handled) {
+                continue;
+            }
             double bound = 0.0;
             // The shared bound ub_x applies to EVERY row instance of x. A row
             // bounds x only if it is active (not WHEN-excluded) AND x has a
@@ -2884,7 +2964,12 @@ static void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &cons
             for (idx_t r = 0; r < num_rows; r++) {
                 bool excluded = !ec.row_group_ids.empty() &&
                                 ec.row_group_ids[r] == DConstants::INVALID_INDEX;
-                double a = col.Get(r);
+                double a = 0.0;
+                for (idx_t t2 = t; t2 < ec.variable_indices.size(); t2++) {
+                    if (ec.variable_indices[t2] == v) {
+                        a += ec.row_coefficients[t2].Get(r);
+                    }
+                }
                 if (excluded || a <= 1e-15) {
                     every_row_constrained = false;
                     break;
@@ -3938,8 +4023,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 rhs_result.Reset();
                 rhs_executor.Execute(*eval_chunk, rhs_result);
                 auto &rhs_col = eval_const.rhs_values.MutableDense();
+                // Infinities are admitted here and nowhere else: this column becomes
+                // the model row's `rhs`, where ±inf is a meaningful bound. Canonical-
+                // ization rebuilds `x + v <= K` as `x <= K - v`, so an infinite K that
+                // was absorbed as a column bound in its bare spelling must stay legal
+                // in its rebuilt one. `inf - inf` still yields NaN and is still refused.
                 ExtractDoubleColumn(rhs_result.data[0], scan_chunk.size(), 1.0, rhs_col,
-                                    "constraint right-hand side");
+                                    "constraint right-hand side", /*allow_infinite=*/true);
                 eval_const.rhs_values.SyncSize();
                 scanned += scan_chunk.size();
             }
@@ -4675,6 +4765,76 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             idx_t indicator_idx = ec.minmax_indicator_idx;
             bool is_max_agg = (ec.minmax_agg_type == "max");
 
+            // Classify each group's bound before asking for a Big-M over it. The RHS
+            // reaching here already holds one value per group: ReduceAggregateRhsPerGroup
+            // collapsed a row-varying bound to the tightest one (MAX for `>=`, MIN for
+            // `<=`), which is also what settles a group that mixed finite and infinite
+            // bounds — the infinity either dominates the reduction or is dominated by a
+            // finite value. So a group's verdict is any of its rows' verdicts, and only
+            // a linearizable group reaches DecideTightPerRowBigM.
+            {
+                bool has_groups = !ec.row_group_ids.empty();
+                idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
+                vector<MinMaxBoundKind> group_kind(group_count, MinMaxBoundKind::LINEARIZE);
+                vector<bool> group_active(group_count, false);
+                for (idx_t r = 0; r < num_rows; r++) {
+                    idx_t g = has_groups ? ec.row_group_ids[r] : 0;
+                    if (g == DConstants::INVALID_INDEX || g >= group_count) {
+                        continue;
+                    }
+                    group_kind[g] = ClassifyMinMaxBound(DecideRowEffectiveBound(ec, r), is_max_agg);
+                    group_active[g] = true;
+                }
+                bool any_vacuous = false, any_no_solution = false, any_linearize = false;
+                for (idx_t g = 0; g < group_count; g++) {
+                    if (!group_active[g]) {
+                        continue;
+                    }
+                    any_vacuous |= group_kind[g] == MinMaxBoundKind::VACUOUS;
+                    any_no_solution |= group_kind[g] == MinMaxBoundKind::NO_SOLUTION;
+                    any_linearize |= group_kind[g] == MinMaxBoundKind::LINEARIZE;
+                }
+                if (any_vacuous || any_no_solution) {
+                    // Row-level masking is how a group is excluded, so an ungrouped
+                    // constraint needs its (implicit) single group materialized first.
+                    if (!has_groups) {
+                        ec.row_group_ids.assign(num_rows, 0);
+                        ec.num_groups = 1;
+                    }
+                    if (any_no_solution) {
+                        // With the bound out of every row's reach there is no disjunction
+                        // left to encode — each row fails it on its own — so the group is
+                        // emitted as a plain per-row constraint carrying that bound. That
+                        // is what every constraint with an unreachable bound already does,
+                        // and the solver reports it as an infeasibility naming this clause
+                        // rather than a rewrite refusing the query.
+                        EvaluatedConstraint ec_no_solution = ec;
+                        ec_no_solution.minmax_indicator_idx = DConstants::INVALID_INDEX;
+                        ec_no_solution.lhs_is_aggregate = false;
+                        for (idx_t r = 0; r < num_rows; r++) {
+                            idx_t g = ec_no_solution.row_group_ids[r];
+                            if (g != DConstants::INVALID_INDEX &&
+                                group_kind[g] != MinMaxBoundKind::NO_SOLUTION) {
+                                ec_no_solution.row_group_ids[r] = DConstants::INVALID_INDEX;
+                            }
+                        }
+                        new_constraints.push_back(std::move(ec_no_solution));
+                    }
+                    // Drop every group the rewrite has no work for: a vacuous one
+                    // constrains nothing, and an unsatisfiable one was just emitted.
+                    for (idx_t r = 0; r < num_rows; r++) {
+                        idx_t g = ec.row_group_ids[r];
+                        if (g != DConstants::INVALID_INDEX &&
+                            group_kind[g] != MinMaxBoundKind::LINEARIZE) {
+                            ec.row_group_ids[r] = DConstants::INVALID_INDEX;
+                        }
+                    }
+                    if (!any_linearize) {
+                        continue; // no group left to rewrite
+                    }
+                }
+            }
+
             // Compute Big-M from variable bounds. Skip constant LHS terms
             // (var_idx == INVALID_INDEX) — they have no associated variable
             // bound; their contribution will be folded into the RHS by the
@@ -4795,9 +4955,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // `LHS <> K` is a tautology (no integer can equal K). The ±1 Big-M rewrite
     // would emit `LHS <= K-1 ∨ LHS >= K+1`, which on the integer lattice
     // wrongly excludes floor(K) and ceil(K) — both of which the original
-    // predicate accepted. Treat such RHS values as a silent drop.
+    // predicate accepted. Treat such RHS values as a silent drop. An infinite K
+    // is the same case for the same reason — no integer equals it — and it must
+    // drop rather than reach the Big-M constant, which cannot dominate infinity.
     auto NEIsIntegerValuedRhs = [](double k) {
-        return std::abs(k - std::round(k)) < 1e-9;
+        return std::isfinite(k) && std::abs(k - std::round(k)) < 1e-9;
     };
 
     if (!ne_indicator_indices.empty()) {
@@ -4824,9 +4986,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     deferred_ne_aggregate.push_back(std::move(deferred));
                     // Don't add to new_constraints — handled via global_constraints later
                 } else {
-                    // Tight data-driven per-row Big-M for the inline NE expansion.
-                    double M = DecideTightPerRowBigM(ec, solver_input.lower_bounds,
-                                                     solver_input.upper_bounds, num_rows);
                     // Per-row NE: expand inline with row-scoped indicator variable.
                     //
                     // Integer-valued RHS guard. If RHS is uniform and non-integer,
@@ -4859,6 +5018,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                             continue; // every row is a tautology — drop the constraint
                         }
                     }
+                    // Tight data-driven per-row Big-M for the inline NE expansion.
+                    // Computed after the tautology filter: a row this rewrite never
+                    // emits must not be asked for an M, and an infinite bound is
+                    // exactly such a row (`LHS <> Infinity` always holds), so it is
+                    // dropped above rather than refused by the Big-M guard.
+                    double M = DecideTightPerRowBigM(ec, solver_input.lower_bounds,
+                                                     solver_input.upper_bounds, num_rows);
                     idx_t indicator_var_idx = ec.ne_indicator_idx;
 
                     // Build indicator coefficient column. If no WHEN/PER filter, every
@@ -5071,7 +5237,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             bool abs_unbounded = false;
             double M = 0.0;
             for (idx_t r = 0; r < num_rows; r++) {
-                double row_bound = std::abs(c1.rhs_values.Get(r)) +
+                // The link's bound carries the constant part of the expression the
+                // user wrote inside ABS. Infinity there admits no finite M (see
+                // DecideTightPerRowBigM), and the value came from their data, so
+                // name that rather than the linearization.
+                double link_rhs = c1.rhs_values.Get(r);
+                if (!std::isfinite(link_rhs)) {
+                    throw InvalidInputException(
+                        "The expression inside ABS() evaluates to Infinity at row %llu, "
+                        "so DECIDE cannot bound it. Check that column for an overflow, "
+                        "or exclude the row with WHERE.",
+                        r);
+                }
+                double row_bound = std::abs(link_rhs) +
                                    DecideRowTermRange(c1.variable_indices, c1.row_coefficients, r,
                                                       solver_input.lower_bounds, solver_input.upper_bounds,
                                                       abs_unbounded, link.aux_idx);
@@ -5453,8 +5631,12 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // Skip the group entirely. For AVG <> with mixed group sizes,
             // some groups may have integer K*N_g and others not — each is
             // handled independently. No global z is allocated for skipped
-            // groups, so the model stays clean.
-            if (std::abs(rhs - std::round(rhs)) >= 1e-9) {
+            // groups, so the model stays clean. The predicate is shared with the
+            // per-row path: spelling the negation inline here let an infinite K
+            // through, because `inf - round(inf)` is NaN and every comparison
+            // against NaN is false — so the group reached the Big-M below and
+            // built an infinite coefficient instead of dropping as a tautology.
+            if (!NEIsIntegerValuedRhs(rhs)) {
                 continue;
             }
 
@@ -6957,6 +7139,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         SolverResult terminal_result = solve_result;
         if (terminal_result.status == SolverStatus::INF_OR_UNBD) {
             terminal_result.status = SolverStatus::INFEASIBLE;
+        }
+        // No model was retained: SolveModel returned INFEASIBLE from a Build that threw
+        // before it finished (conflicting column bounds with diagnosis off), so
+        // `retained_model` is still default-constructed — no columns, no rows. Every
+        // step below indexes it by column, so bail to the static error instead. Diagnosis
+        // has nothing to work from; saying so plainly beats walking an empty model.
+        if (retained_model.num_vars == 0) {
+            ClearDecideDiagnostic(context);
+            ThrowDecideSolveError(terminal_result);
         }
         vector<string> var_labels;
         vector<bool> var_is_aux;

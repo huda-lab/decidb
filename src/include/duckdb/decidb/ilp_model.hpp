@@ -212,7 +212,11 @@ struct ModelConstraint {
 //! Solver-agnostic optimization model, ready for any backend to consume.
 //! Supports linear objectives (LP/MILP) and convex quadratic objectives (QP/MIQP).
 struct SolverModel {
-    idx_t num_vars;            //!< Total number of variables across all three blocks (row-scoped + entity-scoped + global auxiliary)
+    //! Total number of variables across all three blocks (row-scoped + entity-scoped +
+    //! global auxiliary). Initialized so a default-constructed model (one Build never
+    //! populated) reads as empty rather than as garbage: every `col < num_vars` guard
+    //! downstream depends on it.
+    idx_t num_vars = 0;
 
     //! Per-variable configuration (size = num_vars)
     vector<double> col_lower;  //!< Lower bounds
@@ -254,6 +258,16 @@ struct SolverModel {
         ConstraintProvenance provenance; //!< Row → clause origin (F2)
     };
     vector<QuadraticConstraint> quadratic_constraints;
+
+    //! Set by Build when a constraint was proven unsatisfiable while the model was being
+    //! assembled — a row whose left-hand side reduced to no terms at all (every decision
+    //! coefficient cancelled or evaluated to zero) against a bound it cannot meet, e.g.
+    //! `SUM(0 * x) <= -1` or `x - x <= -1`. The row is KEPT (coefficient-free) and carries
+    //! its own provenance, so the infeasible-diagnosis engine can relax it like any other
+    //! user row. Build never throws for this: SolveModel short-circuits to INFEASIBLE
+    //! without handing the model to a backend, exactly as it does for an inverted column
+    //! box, so the model still exists for diagnosis.
+    bool build_proven_infeasible = false;
 
     //! Build a SolverModel from a SolverInput (the shared model-building logic).
     //! Takes a non-const reference because raw global constraints are moved out of `input`

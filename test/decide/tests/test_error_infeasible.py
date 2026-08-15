@@ -179,6 +179,81 @@ class TestInfeasibleModels:
 
 @pytest.mark.error_infeasible
 @pytest.mark.error
+@pytest.mark.edge_case
+class TestDegenerateConstraintRows:
+    """A constraint whose left-hand side keeps no decision term at all — every
+    coefficient is literally zero, or they cancel — still has to be answered as an
+    ordinary infeasibility when its bound rules out 0.
+
+    The row reaches the model builder with an empty coefficient list. It is kept
+    (flagging the model build-proven infeasible) rather than thrown away, so the
+    model still exists for the infeasible-diagnosis engine to name and relax the
+    clause. The vacuously-satisfied counterpart (`SUM(0 * x) <= 1`) is dropped and
+    solves normally — covered by `test_per_zero_coefficient_group`.
+    """
+
+    # Every spelling that reduces to a coefficient-free row: a literal zero factor
+    # inside or outside the reducer, either operand order, and cancellation (which
+    # contains no zero literal at all).
+    DEGENERATE_CLAUSES = [
+        "0 * x <= -1",
+        "SUM(0 * x) <= -1",
+        "SUM(x * 0) <= -1",
+        "0 * SUM(x) <= -1",
+        "x - x <= -1",
+        "SUM(x) - SUM(x) <= -1",
+        "0 * x >= 1",
+        "x - x = 1",
+    ]
+
+    @pytest.mark.parametrize("clause", DEGENERATE_CLAUSES)
+    def test_degenerate_row_reports_infeasible(self, decidb_cli, clause):
+        """Each spelling is reported as infeasible and names its own clause."""
+        decidb_cli.assert_error(
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            f"DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x)",
+            match=r"(?i)infeasible",
+        )
+
+    @pytest.mark.parametrize("clause", DEGENERATE_CLAUSES)
+    def test_degenerate_row_leaves_the_connection_usable(self, decidb_cli, clause):
+        """The failure must be an ordinary error, not a fatal one.
+
+        Regression: this used to abort inside the diagnosis path with an internal
+        assertion, which invalidates the database — every later statement on the
+        connection then failed with "database has been invalidated". Both statements
+        run on one connection via stdin, so the follow-up SELECT proves the session
+        survived.
+        """
+        result = decidb_cli.execute_script(
+            ".mode csv\n"
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            f"DECIDE x(INT) SUCH THAT x <= 5 AND {clause} MAXIMIZE SUM(x);\n"
+            "SELECT 42 AS survived;\n"
+        )
+        assert "invalidated" not in result.stderr.lower(), result.stderr
+        assert "INTERNAL Error" not in result.stderr, result.stderr
+        assert "survived\n42" in result.stdout, (
+            f"connection did not survive the failure:\n{result.stdout}\n{result.stderr}"
+        )
+
+    def test_oracle_agrees_the_model_is_infeasible(self, oracle_solver):
+        """Independent confirmation that `0 * x <= -1` really is infeasible, so the
+        rejection above is the correct answer and not a builder artefact."""
+        oracle_solver.create_model("infeas_zero_coefficient_row")
+        vnames = ["x_0", "x_1"]
+        for v in vnames:
+            oracle_solver.add_variable(v, VarType.INTEGER, lb=0.0, ub=5.0)
+        for i, v in enumerate(vnames):
+            oracle_solver.add_constraint({v: 0.0}, "<=", -1.0, name=f"zero_row_{i}")
+        oracle_solver.set_objective(
+            {v: 1.0 for v in vnames}, ObjSense.MAXIMIZE,
+        )
+        assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
+
+
+@pytest.mark.error_infeasible
+@pytest.mark.error
 class TestUnboundedModels:
     """DecidB should detect unbounded models (as opposed to infeasible ones).
     The oracle cross-verifies by independently returning UNBOUNDED. Gurobi's

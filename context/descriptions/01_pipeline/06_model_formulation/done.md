@@ -160,10 +160,18 @@ selected row set before the quadratic constraint is finalized.
 
 Every path pushes through `PushNormalizedConstraint()` rather than
 `model.constraints.push_back()`. It drops empty-LHS tautologies (`0 <= k` for
-`k>=0`, `0 >= k` for `k<=0`, `0 = 0`) and throws `InvalidInputException` for a
-*violated* empty-LHS row — for example `0 <= -1` after bounds absorption and term
-cancellation. Surfacing that here gives a clearer error than a solver status code
-would.
+`k>=0`, `0 >= k` for `k<=0`, `0 = 0`).
+
+A *violated* empty-LHS row — `0 <= -1` after bounds absorption and term
+cancellation, as written by `SUM(0 * x) <= -1` or `x - x <= -1` — is **kept**, and
+sets `model.build_proven_infeasible`. The row stays coefficient-free and keeps its
+own `source_clause_id`, which is what lets the infeasible-diagnosis engine name the
+clause and report a least-change repair (`SUM(0 * x) <= 0`) instead of a bare
+status. The infeasibility is still decided here, not by a solver: `SolveModel`
+short-circuits on the flag, so no backend is handed a row with no coefficients.
+
+Emitting nothing and throwing instead would take the whole model with it — every
+later consumer, diagnosis included, then has no model to read.
 
 ### Reservation
 
