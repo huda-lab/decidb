@@ -449,6 +449,36 @@ row 6: sense== rhs=0 nnz=4 | 8:1 9:-1 10:-3 11:-5
 row 7: sense== rhs=0 nnz=4 | 12:1 13:-1 14:-3 15:-5
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
+sense: minimize
+num_vars: 16
+num_rows: 8
+num_qrows: 0
+col 0: lb=-5 ub=1e+30 int=1 bin=0 obj=1
+col 1: lb=0 ub=1 int=1 bin=1 obj=0
+col 2: lb=0 ub=1 int=1 bin=1 obj=0
+col 3: lb=0 ub=1 int=1 bin=1 obj=0
+col 4: lb=-5 ub=1e+30 int=1 bin=0 obj=1
+col 5: lb=0 ub=1 int=1 bin=1 obj=0
+col 6: lb=0 ub=1 int=1 bin=1 obj=0
+col 7: lb=0 ub=1 int=1 bin=1 obj=0
+col 8: lb=-5 ub=1e+30 int=1 bin=0 obj=1
+col 9: lb=0 ub=1 int=1 bin=1 obj=0
+col 10: lb=0 ub=1 int=1 bin=1 obj=0
+col 11: lb=0 ub=1 int=1 bin=1 obj=0
+col 12: lb=-5 ub=1e+30 int=1 bin=0 obj=1
+col 13: lb=0 ub=1 int=1 bin=1 obj=0
+col 14: lb=0 ub=1 int=1 bin=1 obj=0
+col 15: lb=0 ub=1 int=1 bin=1 obj=0
+row 0: sense== rhs=1 nnz=3 | 1:1 2:1 3:1
+row 1: sense== rhs=1 nnz=3 | 5:1 6:1 7:1
+row 2: sense== rhs=1 nnz=3 | 9:1 10:1 11:1
+row 3: sense== rhs=1 nnz=3 | 13:1 14:1 15:1
+row 4: sense== rhs=0 nnz=4 | 0:1 1:5 2:-3 3:-7
+row 5: sense== rhs=0 nnz=4 | 4:1 5:5 6:-3 7:-7
+row 6: sense== rhs=0 nnz=4 | 8:1 9:5 10:-3 11:-7
+row 7: sense== rhs=0 nnz=4 | 12:1 13:5 14:-3 15:-7
+=== END MODEL DUMP ===
+=== DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 4
 num_rows: 0

@@ -26,8 +26,13 @@ def _common_lineitem(duckdb_conn, where_clause):
 
 
 def _build_in_domain_model(oracle, test_id, data, domain, big_M,
-                           when_mask=None, explicit_bool=False):
-    """Create vars for each row, apply IN (domain), return var name list."""
+                           when_mask=None, explicit_bool=False, lb=0.0):
+    """Create vars for each row, apply IN (domain), return var name list.
+
+    `lb` mirrors DecidB's own floor: a decision variable is non-negative unless
+    something lowers it, and a domain containing a negative value is what lowers
+    it (see the negative-minimum branch of the IN rewrite).
+    """
     oracle.create_model(test_id)
     n = len(data)
     vnames = [f"x_{i}" for i in range(n)]
@@ -35,7 +40,7 @@ def _build_in_domain_model(oracle, test_id, data, domain, big_M,
         if explicit_bool:
             oracle.add_variable(v, VarType.BINARY)
         else:
-            oracle.add_variable(v, VarType.INTEGER, lb=0.0, ub=big_M)
+            oracle.add_variable(v, VarType.INTEGER, lb=lb, ub=big_M)
     if not explicit_bool:
         for i, v in enumerate(vnames):
             if when_mask is None or when_mask[i]:
@@ -237,6 +242,65 @@ def test_in_minimize_picks_smallest(
     )
     perf_tracker.record(
         "in_minimize_picks_smallest", decidb_time, build_time, result.solve_time_seconds,
+        n, n * 4, 0, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.cons_in
+@pytest.mark.var_integer
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_in_negative_domain_lowers_floor(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """x IN (-5, 3, 7) MINIMIZE — a negative domain value must stay reachable.
+
+    A decision variable's floor is 0 unless something lowers it. A domain whose
+    minimum is negative is what lowers it, so -5 is only selectable if that floor
+    actually moves. If it does not, the model is left with x >= 0 and the solver
+    settles for 3 — a wrong answer rather than an error, which is why this is
+    pinned against the oracle rather than against the model dump.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x(INT)
+        SUCH THAT x IN (-5, 3, 7)
+        MINIMIZE SUM(x * l_quantity)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
+    n = len(data)
+
+    t_build = time.perf_counter()
+    vnames = _build_in_domain_model(
+        oracle_solver, "in_negative_domain_lowers_floor", data, [-5, 3, 7],
+        big_M=7.0, lb=-5.0,
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
+        assert row[x_idx] in (-5, 3, 7), f"x escaped the domain: x={row[x_idx]}"
+        assert row[x_idx] == -5, (
+            f"MINIMIZE over a non-negative-coefficient objective should pick the "
+            f"smallest domain value: x={row[x_idx]}"
+        )
+
+    cmp = compare_solutions(
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
+    )
+    perf_tracker.record(
+        "in_negative_domain_lowers_floor", decidb_time, build_time, result.solve_time_seconds,
         n, n * 4, 0, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )

@@ -152,6 +152,11 @@ SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <> 2 AND x <= 4 MAXIMIZE SUM(x
 -- 32 IN domain
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT x IN (1, 3, 5) MAXIMIZE SUM(x);
 
+-- 32b IN domain with a negative minimum: the rewrite emits a floor-lowering
+-- bound that absorption folds into the column box. Pins that the bound is
+-- absorbed rather than emitted as a row.
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x IN (-5, 3, 7) MINIMIZE SUM(x);
+
 -- 33 quadratic constraint
 SELECT id, x FROM items DECIDE x(REAL) SUCH THAT SUM(POWER(x - 2, 2)) <= 4 AND x <= 9 MAXIMIZE SUM(x);
 
