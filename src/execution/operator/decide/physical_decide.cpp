@@ -516,11 +516,6 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
 	}
 }
 
-struct NormalizedProductTerm {
-	const BoundFunctionExpression *mul_func = nullptr;
-	vector<const Expression *> coefficient_factors;
-	vector<idx_t> decide_factors;
-};
 
 //! User-facing rendering of a WHEN predicate for diagnosis labels: unwrap the implicit
 //! CASTs the binder inserts around literals (so `grp = 'a'` reads cleanly instead of
@@ -572,615 +567,18 @@ static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
 	return found;
 }
 
-static bool IsBoundMultiply(const Expression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-		return false;
-	}
-	auto &func = expr.Cast<BoundFunctionExpression>();
-	return func.function.name == "*";
-}
 
-static void CollectMultiplicativeFactors(const Expression &expr, idx_t decide_index,
-                                         vector<const Expression *> &factors) {
-	const Expression *cur = UnwrapDecideCasts(expr, decide_index);
-	if (IsBoundMultiply(*cur)) {
-		auto &func = cur->Cast<BoundFunctionExpression>();
-		for (auto &child : func.children) {
-			CollectMultiplicativeFactors(*child, decide_index, factors);
-		}
-		return;
-	}
-	factors.push_back(cur);
-}
 
-//! Re-resolve a binary operator against the children it is actually being given.
-//!
-//! Rebuilding a `BoundFunctionExpression` by hand — reusing another node's
-//! `function` / `return_type` / `bind_info` over different children — does not
-//! fail when the types disagree. It reinterprets the children's *physical*
-//! representation, which silently yields a wrong number and can read past the
-//! end of a narrower vector. DECIDE has now hit that failure mode three times
-//! (see `06_issues/bugs/done.md`), always where a subtree was rebuilt after
-//! terms were dropped or distributed. Binding through `FunctionBinder` is the
-//! only rebuild that stays correct for arbitrary children: it picks the
-//! implementation for these argument types, computes the matching return type
-//! and bind data, and inserts whatever casts the signature needs.
-static unique_ptr<Expression> RebindOperator(ClientContext &context, const string &name,
-                                             vector<unique_ptr<Expression>> children) {
-	FunctionBinder function_binder(context);
-	ErrorData error;
-	auto result = function_binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
-	if (error.HasError()) {
-		throw InternalException("DECIDE failed to rebind '%s' while rebuilding a coefficient: %s", name,
-		                       error.Message());
-	}
-	return result;
-}
 
-static unique_ptr<Expression> RebindMultiply(ClientContext &context, unique_ptr<Expression> lhs,
-                                             unique_ptr<Expression> rhs) {
-	vector<unique_ptr<Expression>> children;
-	children.push_back(std::move(lhs));
-	children.push_back(std::move(rhs));
-	return RebindOperator(context, "*", std::move(children));
-}
 
-//! Fold a flattened factor list back into a product. Each binary node is bound
-//! for its own operands rather than inheriting the original `*`'s signature:
-//! `CollectMultiplicativeFactors` looks through binder casts over decision algebra
-//! and (via its callers) drops factors, so neither the operand types nor the arity
-//! survive the round trip. Data casts remain complete factors.
-static unique_ptr<Expression> BuildCoefficientFromFactors(ClientContext &context,
-                                                          const vector<const Expression *> &factors) {
-	if (factors.empty()) {
-		return nullptr;
-	}
-	if (factors.size() == 1) {
-		return factors[0]->Copy();
-	}
-
-	auto result = factors[0]->Copy();
-	for (idx_t i = 1; i < factors.size(); i++) {
-		result = RebindMultiply(context, std::move(result), factors[i]->Copy());
-	}
-	return result;
-}
-
-// Distribute multiplication over addition/subtraction: when a `*` chain has
-// an additive (`+` / `-` / unary-`-`) factor, expand into a vector of
-// (sign, product) pairs, each a pure `*` chain with the additive factor
-// replaced by one of its addends. The caller recurses into each pair with
-// its sign applied, so `K * (a - b*x)` becomes `(+1, K*a)` and `(-1, K*b*x)`.
-//
-// Without this expansion, `ClassifyNormalizedProduct` rejects the `(a - b*x)`
-// factor as "unexpanded nonlinear product" because it isn't a bare decide-var
-// reference, even though the algebraic form is linear in decision vars.
-//
-// Returns empty when no additive factor is present (caller falls through to
-// the existing classification logic).
-static vector<pair<int, unique_ptr<Expression>>>
-TryDistributeMultiplyOverAdd(ClientContext &context, const BoundFunctionExpression &mul_expr,
-                             idx_t decide_index) {
-	vector<pair<int, unique_ptr<Expression>>> out;
-	vector<const Expression *> factors;
-	CollectMultiplicativeFactors(mul_expr, decide_index, factors);
-
-	int additive_idx = -1;
-	for (idx_t i = 0; i < factors.size(); i++) {
-		const Expression *f = factors[i];
-		if (f->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) continue;
-		auto &ff = f->Cast<BoundFunctionExpression>();
-		if (ff.function.name == "+" && ff.children.size() >= 1) {
-			additive_idx = (int)i; break;
-		}
-		if (ff.function.name == "-" &&
-		    (ff.children.size() == 1 || ff.children.size() == 2)) {
-			additive_idx = (int)i; break;
-		}
-	}
-	if (additive_idx < 0) return out;
-
-	auto &add_func = factors[additive_idx]->Cast<BoundFunctionExpression>();
-	vector<pair<int, const Expression *>> addends;
-	if (add_func.function.name == "+") {
-		for (auto &c : add_func.children) addends.push_back({1, c.get()});
-	} else { // "-"
-		if (add_func.children.size() == 2) {
-			addends.push_back({1, add_func.children[0].get()});
-			addends.push_back({-1, add_func.children[1].get()});
-		} else {
-			addends.push_back({-1, add_func.children[0].get()});
-		}
-	}
-
-	for (auto &kv : addends) {
-		int s = kv.first;
-		const Expression *ad = kv.second;
-		vector<const Expression *> new_factors;
-		for (idx_t j = 0; j < factors.size(); j++) {
-			if ((int)j == additive_idx) continue;
-			new_factors.push_back(factors[j]);
-		}
-		new_factors.push_back(ad);
-		auto prod = BuildCoefficientFromFactors(context, new_factors);
-		out.push_back({s, std::move(prod)});
-	}
-	return out;
-}
-
-static bool TryGetBareDecideFactor(const Expression &expr, const PhysicalDecide &op, idx_t &var_idx) {
-	const Expression *cur = UnwrapDecideCasts(expr, op.decide_index);
-	if (cur->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-		return false;
-	}
-	var_idx = op.FindDecideVariable(*cur);
-	return var_idx != DConstants::INVALID_INDEX;
-}
-
-static bool ClassifyNormalizedProduct(const Expression &expr, const PhysicalDecide &op,
-                                      NormalizedProductTerm &result) {
-	const Expression *root = UnwrapDecideCasts(expr, op.decide_index);
-	if (!IsBoundMultiply(*root)) {
-		return false;
-	}
-
-	result = NormalizedProductTerm();
-	result.mul_func = &root->Cast<BoundFunctionExpression>();
-
-	vector<const Expression *> factors;
-	CollectMultiplicativeFactors(*root, op.decide_index, factors);
-	for (auto *factor : factors) {
-		idx_t var_idx = DConstants::INVALID_INDEX;
-		if (TryGetBareDecideFactor(*factor, op, var_idx)) {
-			result.decide_factors.push_back(var_idx);
-			continue;
-		}
-		if (op.FindDecideVariable(*factor) != DConstants::INVALID_INDEX) {
-			throw InvalidInputException(
-			    "DECIDE expression contains an unsupported product factor that still "
-			    "references decision variables after normalization (total degree > 2 "
-			    "or unexpanded nonlinear product). Products must be data factors times "
-			    "one DECIDE variable, or data factors times two different DECIDE variables.");
-		}
-		result.coefficient_factors.push_back(factor);
-	}
-
-	if (result.decide_factors.size() > 2) {
-		throw InvalidInputException(
-		    "DECIDE expression contains a product of decision variables with total degree > 2. "
-		    "Only linear products and bilinear products of two different DECIDE variables are supported.");
-	}
-	if (result.decide_factors.size() == 2 && result.decide_factors[0] == result.decide_factors[1]) {
-		throw InvalidInputException(
-		    "DECIDE expression contains a same-variable product that is not in a supported "
-		    "quadratic form. Use POWER(linear_expr, 2) or (linear_expr) * (linear_expr) "
-		    "for quadratic terms.");
-	}
-	return true;
-}
-
-//===--------------------------------------------------------------------===//
-// Expression Analysis Helper Functions
-//===--------------------------------------------------------------------===//
-
-// ExpressionIterator::EnumerateChildren has no const overload; this wrapper
-// isolates the const_cast so no call site needs to mention it.
-static void EnumerateChildrenConst(const Expression &expr,
-                                   const std::function<void(unique_ptr<Expression> &)> &callback) {
-	ExpressionIterator::EnumerateChildren(const_cast<Expression &>(expr), callback);
-}
-
-idx_t PhysicalDecide::FindDecideVariable(const Expression &expr) const {
-    // Base case: check if this is a column reference to a DECIDE variable
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-        auto &colref = expr.Cast<BoundColumnRefExpression>();
-        auto it = decide_variable_map.find(colref.binding);
-        if (it != decide_variable_map.end()) {
-            return it->second;
-        }
-    }
-
-    // Recursive case: search in children
-    idx_t result = DConstants::INVALID_INDEX;
-    EnumerateChildrenConst(expr, [&](unique_ptr<Expression> &child) {
-        if (result == DConstants::INVALID_INDEX && child) {
-            result = FindDecideVariable(*child);
-        }
-    });
-    return result;
-}
-
-bool PhysicalDecide::ContainsVariable(const Expression &expr, idx_t var_idx) const {
-    // Check if this expression is the variable we're looking for
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-        auto &colref = expr.Cast<BoundColumnRefExpression>();
-        auto &decide_var = decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
-        return colref.binding == decide_var.binding;
-    }
-
-    // Recursively check children
-    bool found = false;
-    EnumerateChildrenConst(expr, [&](unique_ptr<Expression> &child) {
-        if (!found && child && ContainsVariable(*child, var_idx)) {
-            found = true;
-        }
-    });
-    return found;
-}
-
-bool PhysicalDecide::IsLinearInDecideVars(const Expression &expr) const {
-    // Column refs and constants: a decide-var col-ref contributes degree 1;
-    // non-decide col-refs and constants contribute degree 0. Both are linear.
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-        expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT ||
-        expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
-        return true;
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-        return IsLinearInDecideVars(*expr.Cast<BoundCastExpression>().child);
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-        auto &func = expr.Cast<BoundFunctionExpression>();
-        string fname = StringUtil::Lower(func.function.name);
-
-        // Additive operators preserve linearity iff every child is linear.
-        if (fname == "+" || fname == "-") {
-            for (auto &child : func.children) {
-                if (!IsLinearInDecideVars(*child)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        // Multiplication is linear iff at most one factor contains a decide
-        // variable and every factor is itself linear. Two var-carrying factors
-        // (e.g. x * y, x * POWER(y,2)) push the product to degree ≥ 2.
-        if (fname == "*") {
-            idx_t factors_with_vars = 0;
-            for (auto &child : func.children) {
-                if (!IsLinearInDecideVars(*child)) {
-                    return false;
-                }
-                if (FindDecideVariable(*child) != DConstants::INVALID_INDEX) {
-                    factors_with_vars++;
-                }
-            }
-            return factors_with_vars <= 1;
-        }
-
-        // Division is linear iff the divisor is decide-var-free and the
-        // numerator is linear. `x / 2` is a coefficient scale (linear);
-        // `x / y` is non-linear (already rejected upstream by the bind-time
-        // validator, but we guard here anyway for defence-in-depth).
-        if (fname == "/" && func.children.size() == 2) {
-            if (FindDecideVariable(*func.children[1]) != DConstants::INVALID_INDEX) {
-                return false;
-            }
-            return IsLinearInDecideVars(*func.children[0]);
-        }
-
-        // Any other function (POWER, SIN, ABS, ...) is linear only when none
-        // of its arguments reference a decide variable (it is a pure data
-        // expression evaluated at runtime into a coefficient).
-        return FindDecideVariable(expr) == DConstants::INVALID_INDEX;
-    }
-
-    // Unknown expression classes: linear only if they contain no decide var.
-    return FindDecideVariable(expr) == DConstants::INVALID_INDEX;
-}
-
-unique_ptr<Expression> PhysicalDecide::ExtractCoefficientWithoutVariable(ClientContext &context, const Expression &expr,
-                                                                        idx_t var_idx) const {
-    // If this IS the variable itself, return constant 1
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-        auto &colref = expr.Cast<BoundColumnRefExpression>();
-        auto &decide_var = decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
-        if (colref.binding == decide_var.binding) {
-            return make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
-        }
-    }
-
-    // If it's a multiplication, filter out children containing the variable
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-        auto &func = expr.Cast<BoundFunctionExpression>();
-        if (func.function.name == "*") {
-            vector<unique_ptr<Expression>> filtered_children;
-            for (auto &child : func.children) {
-                if (!ContainsVariable(*child, var_idx)) {
-                    filtered_children.push_back(child->Copy());
-                    continue;
-                }
-                // Child contains the variable: recurse to keep its non-variable
-                // scalar/data factors — `(2*x)` yields `2`, a bare `x` yields `1`.
-                // Dropping the whole child (the previous behavior) silently lost
-                // nested coefficients like the `2` in `(2*x)*v`, which reaches here
-                // un-normalized on the composed MIN/MAX path. The already-normalized
-                // `x*(2*v)` form is unchanged (its variable child is the bare `x`).
-                auto sub = ExtractCoefficientWithoutVariable(context, *child, var_idx);
-                if (sub->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-                    auto &cv = sub->Cast<BoundConstantExpression>().value;
-                    if (!cv.IsNull() && cv.type().IsNumeric() &&
-                        cv.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 1.0) {
-                        continue; // bare variable contributes no scalar factor
-                    }
-                }
-                filtered_children.push_back(std::move(sub));
-            }
-
-            if (filtered_children.empty()) {
-                return make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
-            }
-            if (filtered_children.size() == 1) {
-                return std::move(filtered_children[0]);
-            }
-
-            // Rebuild the multiplication by re-binding it for the children that
-            // actually remain. Dropping the variable also drops the casts above it,
-            // so a child can come back narrower than the original signature expects
-            // (`CAST(x * price AS DECIMAL(38,2))` yields a bare DECIMAL(15,2)
-            // `price`), and dropping a child shifts the rest out of alignment with
-            // `function.arguments`. Reusing the original bound function through
-            // either of those does not fail — it reinterprets the physical
-            // representation and silently computes a wrong coefficient. See
-            // `RebindOperator`.
-            auto result = std::move(filtered_children[0]);
-            for (idx_t i = 1; i < filtered_children.size(); i++) {
-                result = RebindMultiply(context, std::move(result), std::move(filtered_children[i]));
-            }
-            return result;
-        }
-    }
-
-    // A complete-side semantic cast has already been consumed by constraint
-    // analysis before coefficient extraction. Preserve a decision-free cast;
-    // the remaining decision cast is a wrapper inside the already-classified
-    // coefficient product.
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-        auto &cast = expr.Cast<BoundCastExpression>();
-        if (FindDecideVariable(expr) == DConstants::INVALID_INDEX) {
-            return expr.Copy();
-        }
-        return ExtractCoefficientWithoutVariable(context, *cast.child, var_idx);
-    }
-
-    // Otherwise, return a copy of the entire expression (no variable in it)
-    return expr.Copy();
-}
-
-//! Result of DetectQuadraticPattern. `inner_linear_expr` is a non-owning
-//! pointer into the tree rooted at the caller's expression (valid only
-//! while that tree is alive). `sign` carries the scalar multiplier from
-//! negation and constant-times-quadratic patterns (e.g. `-POWER(x,2)` → -1,
-//! `(-2)*POWER` → -2). When `inner_linear_expr == nullptr`, no pattern
-//! matched. Defined here (not in the header) so the lifetime contract stays
-//! internal to this translation unit.
-struct PhysicalDecide::QuadraticPattern {
-    const Expression *inner_linear_expr = nullptr;
-    double sign = 1.0;
-};
-
-PhysicalDecide::QuadraticPattern PhysicalDecide::DetectQuadraticPattern(ClientContext &context,
-                                                                        const Expression &expr) const {
-    // Look through binder-generated wrappers over the decision-bearing expression.
-    const Expression *cur = UnwrapDecideCasts(expr, decide_index);
-    if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-        return {};
-    }
-    auto &func = cur->Cast<BoundFunctionExpression>();
-    string fname = StringUtil::Lower(func.function.name);
-
-    // Fast path: nothing below this point can match on names outside this set.
-    // Without the gate every recursive additive (`+`) node in the objective
-    // tree would pay for the self-product `ToString() == ToString()` compare,
-    // which is O(subtree-size) — turning the walker into O(n^2) on deep sums.
-    if (fname != "-" && fname != "*" && fname != "power" && fname != "pow" && fname != "**") {
-        return {};
-    }
-
-    // -(quadratic)
-    if (fname == "-" && func.children.size() == 1) {
-        auto inner = DetectQuadraticPattern(context, *func.children[0]);
-        if (inner.inner_linear_expr) {
-            return {inner.inner_linear_expr, -inner.sign};
-        }
-    }
-
-    // K * quadratic or quadratic * K (constant on either side)
-    if (fname == "*" && func.children.size() == 2) {
-        for (idx_t side = 0; side < 2; side++) {
-            double cval;
-            if (TryEvaluateFoldableDouble(context, *func.children[side], cval)) {
-                if (cval != 0.0) {
-                    auto inner = DetectQuadraticPattern(context, *func.children[1 - side]);
-                    if (inner.inner_linear_expr) {
-                        return {inner.inner_linear_expr, cval * inner.sign};
-                    }
-                }
-            }
-        }
-    }
-
-    // POWER / POW / **  with literal exponent 2
-    if ((fname == "power" || fname == "pow" || fname == "**") && func.children.size() == 2) {
-        double exponent;
-        if (TryEvaluateFoldableDouble(context, *func.children[1], exponent)) {
-            if (exponent == 2.0) {
-                const Expression *inner = UnwrapDecideCasts(*func.children[0], decide_index);
-                if (FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
-                    // Shape matches POWER(expr, 2); reject expr that is itself
-                    // degree > 1 in decide vars (e.g. POWER(POWER(x,2), 2) =
-                    // x^4, POWER(x*y, 2) = x^2 y^2) rather than silently
-                    // emitting an x^2-shaped Q term.
-                    if (!IsLinearInDecideVars(*inner)) {
-                        throw InvalidInputException(
-                            "DECIDE objective/constraint contains a non-linear expression "
-                            "inside POWER(..., 2) (total degree > 2 in decision variables). "
-                            "Only POWER(linear_expr, 2) is supported; rewrite the expression "
-                            "or combine it into a single quadratic group.");
-                    }
-                    return {inner, 1.0};
-                }
-            }
-        }
-    }
-
-    // (expr) * (expr) with identical children containing a DECIDE variable
-    if (fname == "*" && func.children.size() == 2 &&
-        Expression::Equals(*func.children[0], *func.children[1]) &&
-        FindDecideVariable(*func.children[0]) != DConstants::INVALID_INDEX) {
-        const Expression *inner = UnwrapDecideCasts(*func.children[0], decide_index);
-        // Identical-child self-product matches `(expr)*(expr)`; the inner
-        // must be linear in decide vars or the product is degree > 2 (e.g.
-        // POWER(x,2) * POWER(x,2) = x^4, (x*y) * (x*y) = x^2 y^2).
-        if (!IsLinearInDecideVars(*inner)) {
-            throw InvalidInputException(
-                "DECIDE objective/constraint contains a self-product of a non-linear "
-                "expression (e.g. POWER(x, 2) * POWER(x, 2) or (x*y) * (x*y)), total "
-                "degree > 2 in decision variables. Only (linear_expr) * (linear_expr) "
-                "is supported as a quadratic pattern.");
-        }
-        return {inner, 1.0};
-    }
-
-    return {};
-}
-
-void PhysicalDecide::ExtractTerms(ClientContext &context, const Expression &expr, vector<Term> &out_terms) const {
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-        auto &func = expr.Cast<BoundFunctionExpression>();
-
-        // Addition: recursively process all children
-        if (func.function.name == "+") {
-            for (auto &child : func.children) {
-                ExtractTerms(context, *child, out_terms);
-            }
-            return;
-        }
-
-        // Subtraction: first child positive, second child negated
-        if (func.function.name == "-" && func.children.size() == 2) {
-            ExtractTerms(context, *func.children[0], out_terms);
-            idx_t before = out_terms.size();
-            ExtractTerms(context, *func.children[1], out_terms);
-            for (idx_t i = before; i < out_terms.size(); i++) {
-                out_terms[i].sign *= -1;
-            }
-            return;
-        }
-
-        // Unary minus: recurse and flip sign of every produced term.
-        if (func.function.name == "-" && func.children.size() == 1) {
-            idx_t before = out_terms.size();
-            ExtractTerms(context, *func.children[0], out_terms);
-            for (idx_t i = before; i < out_terms.size(); i++) {
-                out_terms[i].sign *= -1;
-            }
-            return;
-        }
-
-        // Multiplication: extract variable and coefficient
-        if (func.function.name == "*") {
-            // If the `*` chain has an additive factor (e.g. `K * (1 - pick)`),
-            // distribute first so each resulting product is `coef * var`-shaped.
-            // Without this, ExtractCoefficientWithoutVariable would silently
-            // drop the additive structure and produce a wrong coefficient.
-            auto distributed = TryDistributeMultiplyOverAdd(context, func, decide_index);
-            if (!distributed.empty()) {
-                for (auto &kv : distributed) {
-                    idx_t before = out_terms.size();
-                    ExtractTerms(context, *kv.second, out_terms);
-                    if (kv.first == -1) {
-                        for (idx_t i = before; i < out_terms.size(); i++) {
-                            out_terms[i].sign *= -1;
-                        }
-                    }
-                }
-                return;
-            }
-
-            idx_t var_idx = FindDecideVariable(func);
-
-            if (var_idx == DConstants::INVALID_INDEX) {
-                // No variable found - this is a constant term
-                out_terms.push_back(Term{DConstants::INVALID_INDEX, func.Copy()});
-            } else {
-                // Variable found - extract coefficient
-                auto coef = ExtractCoefficientWithoutVariable(context, func, var_idx);
-                out_terms.push_back(Term{var_idx, std::move(coef)});
-            }
-            return;
-        }
-
-        // Division by a DECIDE-variable-free expression: recurse into the
-        // numerator and wrap every produced term's coefficient in `coef / divisor`.
-        // Division where the divisor itself contains a decide variable is
-        // non-linear and is already rejected upstream by the bind-time validator.
-        // Cast both sides to the `/` function's expected argument types so
-        // an extracted integer coefficient doesn't silently turn into
-        // integer-division truncation (e.g., `x/2` gave 0 when coef was INT 1).
-        if (func.function.name == "/" && func.children.size() == 2 &&
-            FindDecideVariable(*func.children[1]) == DConstants::INVALID_INDEX) {
-            idx_t before = out_terms.size();
-            ExtractTerms(context, *func.children[0], out_terms);
-            D_ASSERT(func.function.arguments.size() == 2);
-            const auto &num_type = func.function.arguments[0];
-            const auto &denom_type = func.function.arguments[1];
-            for (idx_t i = before; i < out_terms.size(); i++) {
-                auto coef = BoundCastExpression::AddDefaultCastToType(
-                    std::move(out_terms[i].coefficient), num_type);
-                auto divisor = BoundCastExpression::AddDefaultCastToType(
-                    func.children[1]->Copy(), denom_type);
-                vector<unique_ptr<Expression>> div_children;
-                div_children.push_back(std::move(coef));
-                div_children.push_back(std::move(divisor));
-                out_terms[i].coefficient = make_uniq_base<Expression, BoundFunctionExpression>(
-                    func.return_type, func.function, std::move(div_children), nullptr);
-            }
-            return;
-        }
-    }
-
-    // Handle casts
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-        auto &cast = expr.Cast<BoundCastExpression>();
-        if (FindDecideVariable(expr) == DConstants::INVALID_INDEX) {
-            // A decision-free cast is a real DuckDB value operation and belongs
-            // in the coefficient/fixed-offset expression exactly as written.
-            out_terms.push_back(Term{DConstants::INVALID_INDEX, expr.Copy()});
-        } else {
-            ExtractTerms(context, *cast.child, out_terms);
-        }
-        return;
-    }
-
-    // Base case: constant or simple column reference
-    idx_t var_idx = FindDecideVariable(expr);
-    if (var_idx == DConstants::INVALID_INDEX) {
-        // Constant term
-        out_terms.push_back(Term{DConstants::INVALID_INDEX, expr.Copy()});
-    } else {
-        // Just a variable (coefficient = 1)
-        out_terms.push_back(Term{var_idx,
-            make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
-    }
-}
-
-static bool BoundExpressionContainsAggregate(const Expression &expr) {
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-        return true;
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-        auto &cast = expr.Cast<BoundCastExpression>();
-        return BoundExpressionContainsAggregate(*cast.child);
-    }
-    bool found = false;
-    EnumerateChildrenConst(expr, [&](unique_ptr<Expression> &child) {
-        if (!found && child && BoundExpressionContainsAggregate(*child)) {
-            found = true;
-        }
-    });
-    return found;
+//! Entity scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
+//! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
+//! The prepared terms already carry this on `qualifier_scope_idx`; a data-side reducer
+//! on the RHS is evaluated here from the tree, so it reads the tag itself.
+static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
+	idx_t scope_idx = DConstants::INVALID_INDEX;
+	TryParseQualifiedReducerTag(agg.alias, scope_idx);
+	return scope_idx;
 }
 
 // DecidB: reject an aggregate whose effective row set is empty (after WHEN
@@ -1379,51 +777,6 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 // Multi-variable per-row constraint helpers
 //===--------------------------------------------------------------------===//
 
-//! Collect DECIDE variable references from a bound expression, tracking sign
-//! through subtraction operators. Used for multi-variable per-row constraints.
-struct ExprVarRef {
-    idx_t var_idx;
-    int sign; // +1 or -1
-};
-
-static void CollectDecideVarRefs(const Expression &expr, int sign,
-                                  vector<ExprVarRef> &refs,
-                                  const PhysicalDecide &op) {
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-        idx_t var_idx = op.FindDecideVariable(expr);
-        if (var_idx != DConstants::INVALID_INDEX) {
-            refs.push_back({var_idx, sign});
-        }
-        return;
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-        auto &func = expr.Cast<BoundFunctionExpression>();
-        if (func.function.name == "-" && func.children.size() == 2) {
-            CollectDecideVarRefs(*func.children[0], sign, refs, op);
-            CollectDecideVarRefs(*func.children[1], -sign, refs, op);
-            return;
-        }
-        if (func.function.name == "+" && func.children.size() == 2) {
-            CollectDecideVarRefs(*func.children[0], sign, refs, op);
-            CollectDecideVarRefs(*func.children[1], sign, refs, op);
-            return;
-        }
-        if (func.function.name == "*" && func.children.size() == 2) {
-            // Multiplication: descend into both children to find decide variables.
-            // Sign propagates unchanged — * doesn't flip algebraic sign, it changes
-            // the coefficient magnitude, which this walk does not measure.
-            CollectDecideVarRefs(*func.children[0], sign, refs, op);
-            CollectDecideVarRefs(*func.children[1], sign, refs, op);
-            return;
-        }
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-        auto &cast = expr.Cast<BoundCastExpression>();
-        CollectDecideVarRefs(*cast.child, sign, refs, op);
-        return;
-    }
-    // Constants, data columns, etc.: no DECIDE vars
-}
 
 //===--------------------------------------------------------------------===//
 // Sink (Collecting Data)
@@ -1482,895 +835,24 @@ public:
             }
         }
 
-        // Analyze constraints and objective using new visitor-based approach
-        AnalyzeConstraint(op.decide_constraints);
-        if (op.decide_objective) {
-            AnalyzeObjective(op.decide_objective);
-        }
-
         // Minimal: keep constructor lean; detailed solver output comes from HiGHS
-    }
-
-    //! Entity scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
-    //! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
-    static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
-        idx_t scope_idx = DConstants::INVALID_INDEX;
-        TryParseQualifiedReducerTag(agg.alias, scope_idx);
-        return scope_idx;
-    }
-
-    static void ApplyAggregateMetadata(vector<Term> &terms, idx_t begin, const BoundAggregateExpression &agg) {
-        bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-        idx_t qualifier_scope = QualifierScopeOf(agg);
-        for (idx_t i = begin; i < terms.size(); i++) {
-            if (agg.filter) {
-                terms[i].filter = agg.filter->Copy();
-            }
-            terms[i].avg_scale = is_avg;
-            terms[i].qualifier_scope_idx = qualifier_scope;
-            terms[i].reduction = LinearTermReduction::SUM;
-        }
-    }
-
-    //! Multiply everything the aggregate under a peeled scale just produced by that
-    //! scale. Folding the factor into the reducer's body is what the canonicalizer
-    //! refuses to do, because at the parsed level the aggregate may still be MIN/MAX
-    //! and `MAX(-2x)` is `-2*MIN(x)`, not `-2*MAX(x)`. Here it is safe and exact: the
-    //! optimizer has already rewritten every MIN/MAX to SUM (asserted below), and a
-    //! sum distributes over any factor regardless of sign.
-    //!
-    //! `scale_func` is the bound `*` or `/` node the factor came from; reusing its
-    //! FunctionData is how the coefficient gets rebuilt without a binder here, the
-    //! same way ExtractTerms handles `expr / K`.
-    void ApplyScaleToExtracted(const BoundFunctionExpression &scale_func, const Expression &scale,
-                               bool divides, DecideConstraint &constraint, idx_t linear_before,
-                               idx_t bilinear_before, idx_t quadratic_before) {
-        auto scaled = [&](unique_ptr<Expression> coef) {
-            const auto &lhs_type = scale_func.function.arguments[divides ? 0 : 1];
-            const auto &rhs_type = scale_func.function.arguments[divides ? 1 : 0];
-            vector<unique_ptr<Expression>> children;
-            // `scale * coef` keeps the factor on the left, matching the canonical
-            // spelling; `coef / scale` has to keep the operand order division needs.
-            if (divides) {
-                children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), lhs_type));
-                children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), rhs_type));
-            } else {
-                children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), rhs_type));
-                children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), lhs_type));
-            }
-            return make_uniq_base<Expression, BoundFunctionExpression>(
-                scale_func.return_type, scale_func.function, std::move(children), nullptr);
-        };
-        for (idx_t i = linear_before; i < constraint.lhs_terms.size(); i++) {
-            constraint.lhs_terms[i].coefficient = scaled(std::move(constraint.lhs_terms[i].coefficient));
-        }
-        for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
-            auto &bt = constraint.bilinear_terms[i];
-            // A null coefficient means 1.0; the scale becomes the whole coefficient.
-            bt.coefficient = bt.coefficient
-                                 ? scaled(std::move(bt.coefficient))
-                                 : scaled(make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1)));
-        }
-        if (quadratic_before == constraint.quadratic_groups.size()) {
-            return;
-        }
-        // Fold a literal immediately. A query-wide subquery scale cannot be evaluated
-        // until the relational input has run, so retain it on the quadratic group.
-        if (!scale.IsFoldable()) {
-            for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-                constraint.quadratic_groups[i].scale = scale.Copy();
-                constraint.quadratic_groups[i].scale_divides = divides;
-            }
-            return;
-        }
-        double factor = ExpressionExecutor::EvaluateScalar(context, scale)
-                            .DefaultCastAs(LogicalType::DOUBLE)
-                            .GetValue<double>();
-        if (divides && factor == 0.0) {
-            throw InvalidInputException("DECIDE constraint: division by zero in a squared term.");
-        }
-        for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-            constraint.quadratic_groups[i].sign *= divides ? 1.0 / factor : factor;
-        }
-    }
-
-	//! Name an expression the way the user wrote it: strip the casts the binder added.
-	static string ScaleUserName(const Expression &expr) {
-        const Expression *cur = StripCastsForIdentity(expr);
-        auto name = cur->GetName();
-        return name.empty() ? cur->ToString() : name;
-    }
-
-	void ExtractAggregateConstraintTerms(const Expression &expr, DecideConstraint &constraint, int sign) {
-        if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-            if (op.FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
-                ExtractAggregateConstraintTerms(*expr.Cast<BoundCastExpression>().child, constraint, sign);
-            } else {
-                idx_t before = constraint.lhs_terms.size();
-                op.ExtractTerms(context, expr, constraint.lhs_terms);
-                if (sign == -1) {
-                    for (idx_t i = before; i < constraint.lhs_terms.size(); i++) {
-                        constraint.lhs_terms[i].sign *= -1;
-                    }
-                }
-            }
-            return;
-        }
-        if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-            auto &func = expr.Cast<BoundFunctionExpression>();
-            if (func.function.name == "+") {
-                for (auto &child : func.children) {
-                    ExtractAggregateConstraintTerms(*child, constraint, sign);
-                }
-                return;
-            }
-            if (func.function.name == "-" && func.children.size() == 2) {
-                ExtractAggregateConstraintTerms(*func.children[0], constraint, sign);
-                ExtractAggregateConstraintTerms(*func.children[1], constraint, -sign);
-                return;
-            }
-            if (func.function.name == "-" && func.children.size() == 1) {
-                ExtractAggregateConstraintTerms(*func.children[0], constraint, -sign);
-                return;
-            }
-        }
-        // A scaled reducer: unwrap to the reducer, extract it, then apply the factor to
-        // everything that came out.
-        {
-			ScaledAggregateMatch scale_match;
-			if (TryMatchScaledAggregate(expr, op.decide_index, scale_match)) {
-				auto scale = scale_match.scale;
-                // Defensive invariant: both user-written and optimizer-generated
-                // constraints pass canonical validation. Keep this guard so an
-                // in-place optimizer mutation cannot turn a decision into a coefficient
-                // and crash during evaluation.
-                if (op.FindDecideVariable(*scale) != DConstants::INVALID_INDEX) {
-                    throw InternalException(
-                        "DECIDE constraint: '%s' is a decision, so it cannot multiply an "
-                        "aggregate. Only constants and query-wide values can scale "
-                        "SUM/AVG/MIN/MAX.",
-                        ScaleUserName(*scale));
-                }
-                idx_t linear_before = constraint.lhs_terms.size();
-                idx_t bilinear_before = constraint.bilinear_terms.size();
-                idx_t quadratic_before = constraint.quadratic_groups.size();
-				ExtractAggregateConstraintTerms(*scale_match.aggregate, constraint, sign);
-				ApplyScaleToExtracted(*scale_match.function, *scale, scale_match.divides, constraint, linear_before,
-				                      bilinear_before, quadratic_before);
-                return;
-            }
-        }
-        // A query-wide (`scalar`) decision is row-invariant, so it is a complete term of
-        // an aggregate constraint on its own -- there is nothing for a reducer to collapse.
-        // This is K3's "reducer or row-invariant" rule; the objective path already reads
-        // the same way (see ExtractAggregateObjectiveTerms).
-        if (IsScalarDecideTerm(expr)) {
-            ExtractConstraintTerms(expr, constraint, sign);
-            return;
-        }
-        if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-            throw InternalException("DECIDE aggregate constraint LHS contains a non-reducer term after canonical "
-                                    "verification: %s", expr.ToString());
-        }
-
-        auto &agg = expr.Cast<BoundAggregateExpression>();
-        auto agg_name = StringUtil::Lower(agg.function.name);
-        if (agg_name != "sum") {
-            throw InternalException("DECIDE optimizer did not rewrite aggregate '%s' to SUM before execution",
-                                    agg.function.name);
-        }
-        bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-        idx_t qualifier_scope = QualifierScopeOf(agg);
-
-        idx_t linear_before = constraint.lhs_terms.size();
-        idx_t bilinear_before = constraint.bilinear_terms.size();
-        idx_t quadratic_before = constraint.quadratic_groups.size();
-        ExtractConstraintTerms(*agg.children[0], constraint, sign);
-        ApplyAggregateMetadata(constraint.lhs_terms, linear_before, agg);
-        for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
-            if (agg.filter) {
-                constraint.bilinear_terms[i].filter = agg.filter->Copy();
-            }
-            constraint.bilinear_terms[i].avg_scale = is_avg;
-            constraint.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
-        }
-        for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-            if (agg.filter) {
-                constraint.quadratic_groups[i].filter = agg.filter->Copy();
-            }
-            constraint.quadratic_groups[i].avg_scale = is_avg;
-            constraint.quadratic_groups[i].qualifier_scope_idx = qualifier_scope;
-        }
-
-        string minmax_payload;
-        if (ExtractDecideTagPayload(agg.alias, MINMAX_INDICATOR_TAG_PREFIX, minmax_payload)) {
-            auto sep = minmax_payload.find('_');
-            constraint.minmax_indicator_idx = std::stoull(minmax_payload.substr(0, sep));
-            constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
-            constraint.kind = ConstraintKind::USER_MECHANISM;
-        }
-    }
-
-    void AnalyzeConstraint(const unique_ptr<Expression>& expr_ptr,
-                           unique_ptr<Expression> when_condition = nullptr,
-                           vector<unique_ptr<Expression>> per_columns = {}) {
-        auto &expr = *expr_ptr;
-        switch (expr.GetExpressionClass()) {
-            case ExpressionClass::BOUND_CONJUNCTION: {
-                auto &conj = expr.Cast<BoundConjunctionExpression>();
-                // DecidB: PER wrapper — outermost layer
-                if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
-                    // child[0] = the constraint (possibly WHEN-wrapped)
-                    // children[1..N] = the PER column expressions
-                    vector<unique_ptr<Expression>> per_cols;
-                    for (idx_t i = 1; i < conj.children.size(); i++) {
-                        per_cols.push_back(conj.children[i]->Copy());
-                    }
-                    AnalyzeConstraint(conj.children[0], std::move(when_condition),
-                                      std::move(per_cols));
-                    break;
-                }
-                // DecidB: Check if this is a WHEN constraint wrapper
-                if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
-                    // child[0] = the actual constraint, child[1] = the WHEN condition
-                    AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(),
-                                      std::move(per_columns));
-                    break;
-                }
-                // Regular conjunction: recursively analyze each child
-                for (auto &child : conj.children) {
-                    AnalyzeConstraint(child);
-                }
-                break;
-            }
-
-            case ExpressionClass::BOUND_COMPARISON: {
-                auto &comp = expr.Cast<BoundComparisonExpression>();
-
-                // Skip comparisons the optimizer already folded into the column box.
-                // Emitting a DecideConstraint here would add num_rows redundant model
-                // rows. The comparison is still in the tree so EXPLAIN renders it; the
-                // tag is the decision, and it was made at layer 05.
-                if (HasDecideTag(comp.alias, ABSORBED_BOUND_TAG)) {
-                    break;
-                }
-
-                auto constraint = make_uniq<DecideConstraint>();
-                constraint->comparison_type = comp.type;
-                constraint->rhs_expr = comp.right->Copy();
-                TryParseSourceClauseTag(comp.GetAlias(), constraint->source_clause_id);
-
-                // Parse not-equal indicator tag if present
-                string payload;
-                if (ExtractDecideTagPayload(comp.alias, NE_INDICATOR_TAG_PREFIX, payload)) {
-                    constraint->ne_indicator_idx = std::stoull(payload);
-                    constraint->kind = ConstraintKind::USER_MECHANISM;
-                }
-
-                // Parse ABS MAXIMIZE upper-bound tag: marks a lower-bound ABS constraint
-                // (aux >= inner or aux >= -inner) that needs Big-M upper bounds at finalization.
-                if (HasDecideTag(comp.alias, STRUCTURAL_CONSTRAINT_TAG)) {
-                    constraint->kind = ConstraintKind::STRUCTURAL;
-                }
-                if (ExtractDecideTagPayload(comp.alias, ABS_UB_POS_TAG_PREFIX, payload)) {
-                    constraint->abs_y_idx = std::stoull(payload);
-                    constraint->abs_is_pos_bound = true;
-                    constraint->kind = ConstraintKind::STRUCTURAL;
-                } else if (ExtractDecideTagPayload(comp.alias, ABS_UB_NEG_TAG_PREFIX, payload)) {
-                    constraint->abs_y_idx = std::stoull(payload);
-                    constraint->abs_is_pos_bound = false;
-                    constraint->kind = ConstraintKind::STRUCTURAL;
-                }
-
-                // Detect easy-direction MIN/MAX optimizer rewrite (see decide.hpp).
-                if (HasDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG)) {
-                    constraint->was_minmax_easy = true;
-                }
-
-                // DecidB: Store WHEN condition and PER columns if present
-                if (when_condition) {
-                    constraint->when_condition = std::move(when_condition);
-                }
-                if (!per_columns.empty()) {
-                    constraint->per_columns = std::move(per_columns);
-                }
-
-                // Extract terms from LHS
-                // Only binder-generated wrappers over decision algebra are transparent.
-                // A data cast is a SQL computation and UnwrapDecideCasts stops at it.
-                Expression *lhs = UnwrapDecideCasts(*comp.left, op.decide_index);
-
-	                auto constraint_class = canonicalizer.ClassifyCanonicalComparison(comp);
-                if (constraint_class == CanonicalConstraintClass::INVALID) {
-                    throw InternalException(
-                        "DECIDE constraint reached physical extraction with invalid aggregate/per-row "
-                        "homogeneity: '%s'. Canonical validation must reject this during planning.",
-                        comp.ToString());
-                }
-
-                if (constraint_class == CanonicalConstraintClass::AGGREGATE) {
-                    // Aggregate constraint. Handles both legacy single aggregates and
-                    // additive aggregate expressions with aggregate-local WHEN filters. The
-                    // classification comes from the canonical boundary rather than aggregate
-                    // presence alone, so a data-only RHS reducer cannot change row semantics.
-                    constraint->lhs_is_aggregate = true;
-                    ExtractAggregateConstraintTerms(*lhs, *constraint, 1);
-                } else {
-                    // Per-row constraint (e.g., x <= 5, or multi-variable: d >= x - c)
-                    constraint->lhs_is_aggregate = false;
-
-                    // K1 guard. DecideCanonicalizer puts every decision-bearing term on
-                    // the left, so a decision variable reaching the RHS here means the
-                    // invariant was broken upstream -- by a new optimizer rewrite that
-                    // mutates a constraint in place instead of going through
-                    // LogicalDecide::AddConstraint, most likely. This used to be a second
-                    // implementation of the partition (the canonicalization refactor); it was
-                    // verified unreachable across the golden corpus and the full suite
-                    // before being replaced by the check, so a wrong answer here would
-                    // otherwise be silent.
-                    vector<ExprVarRef> rhs_refs;
-                    CollectDecideVarRefs(*comp.right, +1, rhs_refs, op);
-                    if (!rhs_refs.empty()) {
-                        throw InternalException(
-                            "DECIDE constraint is not canonical: decision variable on the right-hand "
-                            "side of '%s'. Constraints must be canonicalized by DecideCanonicalizer "
-                            "before reaching the physical operator.",
-                            comp.right->ToString());
-                    }
-
-                    if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                        // Simple single-variable constraint (e.g., x <= 5)
-                        idx_t var_idx = op.FindDecideVariable(*lhs);
-                        if (var_idx != DConstants::INVALID_INDEX) {
-                            constraint->lhs_terms.push_back(Term{
-                                var_idx,
-                                make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))
-                            });
-                        }
-                    } else {
-                        // Multi-variable per-row constraint with complex LHS
-                        // (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0,
-                        //  or POWER(x - target, 2) <= K quadratic constraint)
-                        ExtractConstraintTerms(*lhs, *constraint, 1);
-                    }
-                }
-
-                constraints.push_back(std::move(constraint));
-                break;
-            }
-
-            default:
-                break;
-        }
-    }
-
-    //! Walk a SUM argument expression tree and split into linear terms and bilinear terms.
-    //! Bilinear terms (x * y where both are decide variables) go to objective->bilinear_terms.
-    //! Linear terms (c * x, constants) go to objective->terms via ExtractTerms.
-    void ExtractLinearAndBilinearTerms(const Expression &expr, Objective &obj, int sign,
-                                       const Expression *filter = nullptr) {
-        // DecidB: detect quadratic patterns (POWER / x*x / negated / const * POWER)
-        // *before* any linear-structure traversal. This allows mixed shapes like
-        // SUM(POWER(x-t, 2) + penalty*x) to route the POWER leaf into squared_terms
-        // while the `+` recursion below sends the linear sibling into terms.
-        //
-        // The objective currently supports exactly one quadratic group per
-        // objective (the inner expression of a single SUM(POWER(...))), with a
-        // single scalar quadratic_sign. Additional quadratic groups (e.g.
-        // `SUM(POWER(x,2)) + SUM(POWER(y,2))`) would need per-group Q matrices
-        // downstream and are explicitly rejected.
-        auto quad_pattern = op.DetectQuadraticPattern(context, expr);
-        if (quad_pattern.inner_linear_expr) {
-            double effective_sign = quad_pattern.sign * static_cast<double>(sign);
-            if (obj.has_quadratic) {
-                throw InvalidInputException(
-                    "DECIDE objective contains multiple quadratic (POWER / (expr)*(expr)) "
-                    "groups. Only a single quadratic group plus linear terms is supported; "
-                    "combine them mathematically or rewrite the objective."
-                );
-            }
-            obj.has_quadratic = true;
-            obj.quadratic_sign = effective_sign;
-            idx_t before = obj.squared_terms.size();
-            op.ExtractTerms(context, *quad_pattern.inner_linear_expr, obj.squared_terms);
-            if (filter) {
-                for (idx_t i = before; i < obj.squared_terms.size(); i++) {
-                    obj.squared_terms[i].filter = filter->Copy();
-                }
-            }
-            return;
-        }
-
-        if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-            auto &func = expr.Cast<BoundFunctionExpression>();
-            string fname = func.function.name;
-
-            // Addition: recurse on all children
-            if (fname == "+") {
-                for (auto &child : func.children) {
-                    ExtractLinearAndBilinearTerms(*child, obj, sign, filter);
-                }
-                return;
-            }
-
-            // Subtraction: first child same sign, second negated
-            if (fname == "-" && func.children.size() == 2) {
-                ExtractLinearAndBilinearTerms(*func.children[0], obj, sign, filter);
-                ExtractLinearAndBilinearTerms(*func.children[1], obj, -sign, filter);
-                return;
-            }
-
-            // Unary negation
-            if (fname == "-" && func.children.size() == 1) {
-                ExtractLinearAndBilinearTerms(*func.children[0], obj, -sign, filter);
-                return;
-            }
-
-            // Multiplication: the parsed normalizer is responsible for algebraic
-            // expansion; at physical planning we only flatten already-normalized
-            // product factors for classification.
-            if (fname == "*") {
-                // Distribute before ClassifyNormalizedProduct (which throws on
-                // additive factors). See ExtractConstraintTerms for rationale.
-                {
-                    auto distributed = TryDistributeMultiplyOverAdd(context, func, op.decide_index);
-                    if (!distributed.empty()) {
-                        for (auto &kv : distributed) {
-                            ExtractLinearAndBilinearTerms(*kv.second, obj, sign * kv.first, filter);
-                        }
-                        return;
-                    }
-                }
-                NormalizedProductTerm product;
-                if (ClassifyNormalizedProduct(func, op, product)) {
-                    if (product.decide_factors.size() == 2) {
-                        Objective::BilinearTerm bt;
-                        bt.var_a = product.decide_factors[0];
-                        bt.var_b = product.decide_factors[1];
-                        bt.coefficient = BuildCoefficientFromFactors(context, product.coefficient_factors);
-                        bt.sign = sign;
-                        if (filter) {
-                            bt.filter = filter->Copy();
-                        }
-                        obj.bilinear_terms.push_back(std::move(bt));
-                        obj.has_bilinear = true;
-                        return;
-                    }
-                }
-            }
-        }
-
-        // A decision-bearing cast here is binder noise. Preserve a data-only cast
-        // as a complete fixed term so DuckDB performs the written computation.
-        if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-            auto &cast = expr.Cast<BoundCastExpression>();
-            if (op.FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
-                ExtractLinearAndBilinearTerms(*cast.child, obj, sign, filter);
-                return;
-            }
-        }
-
-        // Not bilinear — delegate to linear extraction
-        idx_t before = obj.terms.size();
-        op.ExtractTerms(context, expr, obj.terms);
-        // Apply sign to newly added terms
-        if (sign == -1) {
-            for (idx_t i = before; i < obj.terms.size(); i++) {
-                obj.terms[i].sign *= -1;
-            }
-        }
-        if (filter) {
-            for (idx_t i = before; i < obj.terms.size(); i++) {
-                obj.terms[i].filter = filter->Copy();
-            }
-        }
-    }
-
-    //! Extract linear and bilinear terms from a SUM argument in a constraint.
-    //! Similar to ExtractLinearAndBilinearTerms but outputs to DecideConstraint fields.
-    void ExtractConstraintTerms(const Expression &expr, DecideConstraint &constr, int sign,
-                                const Expression *filter = nullptr) {
-        if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-            auto &func = expr.Cast<BoundFunctionExpression>();
-            string fname = func.function.name;
-
-            if (fname == "+") {
-                for (auto &child : func.children) {
-                    ExtractConstraintTerms(*child, constr, sign, filter);
-                }
-                return;
-            }
-            if (fname == "-" && func.children.size() == 2) {
-                ExtractConstraintTerms(*func.children[0], constr, sign, filter);
-                ExtractConstraintTerms(*func.children[1], constr, -sign, filter);
-                return;
-            }
-            if (fname == "-" && func.children.size() == 1) {
-                ExtractConstraintTerms(*func.children[0], constr, -sign, filter);
-                return;
-            }
-            // Helper: try to detect POWER(expr, 2), POW(expr, 2), expr ** 2,
-            // or (expr)*(expr) self-product. Returns the inner expression on success.
-            auto TryDetectConstraintQuadratic = [&](const Expression *test_expr) -> const Expression * {
-                test_expr = UnwrapDecideCasts(*test_expr, op.decide_index);
-                if (test_expr->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return nullptr;
-                auto &qf = test_expr->Cast<BoundFunctionExpression>();
-                string qname = StringUtil::Lower(qf.function.name);
-                // POWER/POW/** with exponent 2
-                if ((qname == "power" || qname == "pow" || qname == "**") && qf.children.size() == 2) {
-                    double exponent;
-                    if (TryEvaluateFoldableDouble(context, *qf.children[1], exponent)) {
-                        if (exponent == 2.0) {
-                            const Expression *inner = UnwrapDecideCasts(*qf.children[0], op.decide_index);
-                            if (op.FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
-                                if (!op.IsLinearInDecideVars(*inner)) {
-                                    throw InvalidInputException(
-                                        "DECIDE constraint contains a non-linear expression "
-                                        "inside POWER(..., 2) (total degree > 2 in decision "
-                                        "variables). Only POWER(linear_expr, 2) is supported.");
-                                }
-                                return inner;
-                            }
-                        }
-                    }
-                }
-                // Self-product: (expr)*(expr) with identical sides
-                if (qname == "*" && qf.children.size() == 2 &&
-                    Expression::Equals(*qf.children[0], *qf.children[1]) &&
-                    op.FindDecideVariable(*qf.children[0]) != DConstants::INVALID_INDEX) {
-                    const Expression *inner = UnwrapDecideCasts(*qf.children[0], op.decide_index);
-                    if (!op.IsLinearInDecideVars(*inner)) {
-                        throw InvalidInputException(
-                            "DECIDE constraint contains a self-product of a non-linear "
-                            "expression (e.g. POWER(x, 2) * POWER(x, 2)), total degree > 2 "
-                            "in decision variables. Only (linear_expr) * (linear_expr) is "
-                            "supported as a quadratic pattern.");
-                    }
-                    return inner;
-                }
-                return nullptr;
-            };
-
-            // Direct POWER/self-product detection
-            {
-                const Expression *inner = TryDetectConstraintQuadratic(&func);
-                if (inner) {
-                    DecideConstraint::QuadraticGroup qg;
-                    qg.sign = static_cast<double>(sign);
-                    if (filter) {
-                        qg.filter = filter->Copy();
-                    }
-                    op.ExtractTerms(context, *inner, qg.inner_terms);
-                    constr.quadratic_groups.push_back(std::move(qg));
-                    constr.has_quadratic = true;
-                    return;
-                }
-            }
-            if (fname == "*") {
-                // Scaled quadratic: const * POWER(expr, 2) or POWER(expr, 2) * const
-                if (func.children.size() == 2) {
-                    for (idx_t side = 0; side < 2; side++) {
-                        double cval;
-                        if (TryEvaluateFoldableDouble(context, *func.children[side], cval)) {
-                            if (cval != 0.0) {
-                                const Expression *inner = TryDetectConstraintQuadratic(func.children[1 - side].get());
-                                if (inner) {
-                                    DecideConstraint::QuadraticGroup qg;
-                                    qg.sign = static_cast<double>(sign) * cval;
-                                    if (filter) {
-                                        qg.filter = filter->Copy();
-                                    }
-                                    op.ExtractTerms(context, *inner, qg.inner_terms);
-                                    constr.quadratic_groups.push_back(std::move(qg));
-                                    constr.has_quadratic = true;
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                }
-                // Distribution must come BEFORE ClassifyNormalizedProduct, since
-                // the classifier throws on additive factors instead of returning
-                // false. Shapes like `K * (1 - pick)` reach here from MIN/MAX
-                // hard-direction rewrites and other paths the symbolic normalizer
-                // didn't fully expand.
-                {
-                    auto distributed = TryDistributeMultiplyOverAdd(context, func, op.decide_index);
-                    if (!distributed.empty()) {
-                        for (auto &kv : distributed) {
-                            ExtractConstraintTerms(*kv.second, constr, sign * kv.first, filter);
-                        }
-                        return;
-                    }
-                }
-                NormalizedProductTerm product;
-                if (ClassifyNormalizedProduct(func, op, product)) {
-                    if (product.decide_factors.size() == 2) {
-                        BilinearConstraintTerm bt;
-                        bt.var_a = product.decide_factors[0];
-                        bt.var_b = product.decide_factors[1];
-                        bt.coefficient = BuildCoefficientFromFactors(context, product.coefficient_factors);
-                        bt.sign = sign;
-                        if (filter) {
-                            bt.filter = filter->Copy();
-                        }
-                        constr.bilinear_terms.push_back(std::move(bt));
-                        constr.has_bilinear = true;
-                        return;
-                    }
-                }
-            }
-        }
-        if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-            auto &cast = expr.Cast<BoundCastExpression>();
-            if (op.FindDecideVariable(expr) == DConstants::INVALID_INDEX) {
-                // A decision-free cast is a real value operation the executor performs,
-                // so it stays whole as a typed fixed term. Peeling it would change the
-                // coefficient -- see .claude/lessons.md on rebinding narrowed children.
-                idx_t before = constr.lhs_terms.size();
-                op.ExtractTerms(context, expr, constr.lhs_terms);
-                if (sign == -1) {
-                    for (idx_t i = before; i < constr.lhs_terms.size(); i++) {
-                        constr.lhs_terms[i].sign *= -1;
-                    }
-                }
-            } else {
-                // Decision-bearing casts surviving binding are DuckDB's internal
-                // type-reconciliation wrappers; explicit source casts were rejected
-                // on the parsed tree.
-                ExtractConstraintTerms(*cast.child, constr, sign, filter);
-            }
-            return;
-        }
-        // Linear — delegate to ExtractTerms
-        idx_t before = constr.lhs_terms.size();
-        op.ExtractTerms(context, expr, constr.lhs_terms);
-        if (sign == -1) {
-            for (idx_t i = before; i < constr.lhs_terms.size(); i++) {
-                constr.lhs_terms[i].sign *= -1;
-            }
-        }
-        if (filter) {
-            for (idx_t i = before; i < constr.lhs_terms.size(); i++) {
-                constr.lhs_terms[i].filter = filter->Copy();
-            }
-        }
-    }
-
-    //! True when the decision referenced by `expr` is query-wide (`scalar`).
-    //! Such a term is a complete objective contribution on its own: it maps to a
-    //! single solver column, so there is no reducer to collapse it.
-    bool IsScalarDecideTerm(const Expression &expr) const {
-        idx_t var_idx = op.FindDecideVariable(expr);
-        return var_idx != DConstants::INVALID_INDEX && var_idx < op.variable_scopes.size() &&
-               op.variable_scopes[var_idx].IsScalar();
-    }
-
-    //! Objective twin of ApplyScaleToExtracted: multiply a factor that stayed outside a
-    //! reducer into everything the reducer produced. `quadratic_sign` is a number
-    //! rather than an expression, so a squared term needs the factor's value here.
-    void ApplyScaleToObjective(const BoundFunctionExpression &scale_func, const Expression &scale,
-                               bool divides, Objective &obj, idx_t linear_before,
-                               idx_t bilinear_before, idx_t squared_before) {
-        auto scaled = [&](unique_ptr<Expression> coef) {
-            const auto &lhs_type = scale_func.function.arguments[divides ? 0 : 1];
-            const auto &rhs_type = scale_func.function.arguments[divides ? 1 : 0];
-            vector<unique_ptr<Expression>> children;
-            if (divides) {
-                children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), lhs_type));
-                children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), rhs_type));
-            } else {
-                children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), rhs_type));
-                children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), lhs_type));
-            }
-            return make_uniq_base<Expression, BoundFunctionExpression>(
-                scale_func.return_type, scale_func.function, std::move(children), nullptr);
-        };
-        for (idx_t i = linear_before; i < obj.terms.size(); i++) {
-            obj.terms[i].coefficient = scaled(std::move(obj.terms[i].coefficient));
-        }
-        for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
-            auto &bt = obj.bilinear_terms[i];
-            bt.coefficient = bt.coefficient
-                                 ? scaled(std::move(bt.coefficient))
-                                 : scaled(make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1)));
-        }
-        if (squared_before == obj.squared_terms.size()) {
-            return;
-        }
-        double factor;
-        if (!TryEvaluateFoldableDouble(context, scale, factor)) {
-            throw InvalidInputException(
-                "DECIDE objective: a squared term cannot be multiplied by '%s', whose value is "
-                "not known until the query runs. Use a constant factor, or move it inside the "
-                "aggregate as SUM(%s * POWER(...)).",
-                scale.GetName(), scale.GetName());
-        }
-        if (divides && factor == 0.0) {
-            throw InvalidInputException("DECIDE objective: division by zero in a squared term.");
-        }
-        obj.quadratic_sign *= divides ? 1.0 / factor : factor;
-    }
-
-    void ExtractAggregateObjectiveTerms(const Expression &expr, Objective &obj, int sign) {
-        if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-            auto &cast = expr.Cast<BoundCastExpression>();
-            if (op.FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
-                ExtractAggregateObjectiveTerms(*cast.child, obj, sign);
-            } else {
-                ExtractLinearAndBilinearTerms(expr, obj, sign);
-            }
-            return;
-        }
-        if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-            auto &func = expr.Cast<BoundFunctionExpression>();
-            if (func.function.name == "+") {
-                for (auto &child : func.children) {
-                    ExtractAggregateObjectiveTerms(*child, obj, sign);
-                }
-                return;
-            }
-            if (func.function.name == "-" && func.children.size() == 2) {
-                ExtractAggregateObjectiveTerms(*func.children[0], obj, sign);
-                ExtractAggregateObjectiveTerms(*func.children[1], obj, -sign);
-                return;
-            }
-            if (func.function.name == "-" && func.children.size() == 1) {
-                ExtractAggregateObjectiveTerms(*func.children[0], obj, -sign);
-                return;
-            }
-        }
-        // A factor left outside a reducer (`2 * SUM(x*p)`): extract the reducer, then
-        // multiply the factor into everything it produced. Mirrors the constraint
-        // side; objectives are not canonicalized, so both spellings arrive as written.
-        {
-			ScaledAggregateMatch scale_match;
-			if (TryMatchScaledAggregate(expr, op.decide_index, scale_match)) {
-				auto obj_scale = scale_match.scale;
-                // The canonicalizer vets a factor before it gets here -- but it only runs
-                // on CONSTRAINTS, so an objective arrives unvetted and this is the first
-                // place that can say no. A decision on both sides of the `*` is a product
-                // of two decisions (bilinear), not a scaled reducer; treating it as a
-                // coefficient reads a decision column as data and crashes in evaluation.
-                if (op.FindDecideVariable(*obj_scale) != DConstants::INVALID_INDEX) {
-                    throw InvalidInputException(
-                        "DECIDE objective: '%s' is a decision, so it cannot multiply an "
-                        "aggregate. Only constants and query-wide values can scale "
-                        "SUM/AVG/MIN/MAX.",
-                        ScaleUserName(*obj_scale));
-                }
-                idx_t linear_before = obj.terms.size();
-                idx_t bilinear_before = obj.bilinear_terms.size();
-                idx_t squared_before = obj.squared_terms.size();
-				ExtractAggregateObjectiveTerms(*scale_match.aggregate, obj, sign);
-				ApplyScaleToObjective(*scale_match.function, *obj_scale, scale_match.divides, obj, linear_before,
-				                      bilinear_before, squared_before);
-                return;
-            }
-        }
-        // A query-wide decision contributes without a reducer.
-        if (IsScalarDecideTerm(expr)) {
-            ExtractLinearAndBilinearTerms(expr, obj, sign, nullptr);
-            return;
-        }
-        if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-            throw InvalidInputException(
-                "DECIDE objective contains a non-aggregate term: %s.\n"
-                "The objective must be a SUM/MIN/MAX/AVG of an expression in decision variables.\n"
-                "If you wrapped an aggregate inside another function (e.g. POWER(AVG(x), 2)), "
-                "use the supported shape SUM(POWER(x, 2)) instead.",
-                expr.ToString());
-        }
-
-        auto &agg = expr.Cast<BoundAggregateExpression>();
-        auto agg_name = StringUtil::Lower(agg.function.name);
-        if (agg_name != "sum") {
-            throw InvalidInputException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
-                                        agg.function.name);
-        }
-        bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-        idx_t qualifier_scope = QualifierScopeOf(agg);
-
-        idx_t before = obj.terms.size();
-        idx_t bilinear_before = obj.bilinear_terms.size();
-        idx_t squared_before = obj.squared_terms.size();
-        ExtractLinearAndBilinearTerms(*agg.children[0], obj, sign, agg.filter.get());
-        for (idx_t i = before; i < obj.terms.size(); i++) {
-            obj.terms[i].avg_scale = is_avg;
-            obj.terms[i].qualifier_scope_idx = qualifier_scope;
-        }
-        for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
-            obj.bilinear_terms[i].avg_scale = is_avg;
-            obj.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
-        }
-        for (idx_t i = squared_before; i < obj.squared_terms.size(); i++) {
-            obj.squared_terms[i].avg_scale = is_avg;
-            obj.squared_terms[i].qualifier_scope_idx = qualifier_scope;
-        }
-    }
-
-    void AnalyzeObjective(const unique_ptr<Expression>& expr_ptr) {
-        auto *expr = UnwrapDecideCasts(*expr_ptr, op.decide_index);
-
-        // DecidB: Check for PER wrapper on objective (outermost layer)
-        vector<unique_ptr<Expression>> per_cols;
-        if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-            auto &conj = expr->Cast<BoundConjunctionExpression>();
-            if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
-                for (idx_t i = 1; i < conj.children.size(); i++) {
-                    per_cols.push_back(conj.children[i]->Copy());
-                }
-                expr = UnwrapDecideCasts(*conj.children[0], op.decide_index);
-            }
-        }
-
-        // DecidB: Check for WHEN wrapper on objective (inside PER, if present)
-        unique_ptr<Expression> when_cond;
-        if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-            auto &conj = expr->Cast<BoundConjunctionExpression>();
-            if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
-                when_cond = conj.children[1]->Copy();
-                // Unwrap to get the actual objective expression
-                expr = UnwrapDecideCasts(*conj.children[0], op.decide_index);
-            }
-        }
-
-        if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-            auto &agg = expr->Cast<BoundAggregateExpression>();
-
-            objective = make_uniq<Objective>();
-
-            // Walk the SUM argument. ExtractLinearAndBilinearTerms recognises
-            // quadratic patterns (POWER/(expr)*(expr)/negated/K*POWER) at any
-            // position in `+`/`-` trees and routes them into squared_terms, so
-            // the same walker handles pure QP, pure linear+bilinear, and the
-            // mixed forms (e.g. SUM(POWER(x-t, 2) + penalty*x)) uniformly.
-            idx_t before = objective->terms.size();
-            idx_t bilinear_before = objective->bilinear_terms.size();
-            idx_t squared_before = objective->squared_terms.size();
-            ExtractLinearAndBilinearTerms(*agg.children[0], *objective, 1, agg.filter.get());
-            bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-            idx_t qualifier_scope = QualifierScopeOf(agg);
-            for (idx_t i = before; i < objective->terms.size(); i++) {
-                objective->terms[i].avg_scale = is_avg;
-                objective->terms[i].qualifier_scope_idx = qualifier_scope;
-            }
-            for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
-                objective->bilinear_terms[i].avg_scale = is_avg;
-                objective->bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
-            }
-            for (idx_t i = squared_before; i < objective->squared_terms.size(); i++) {
-                objective->squared_terms[i].avg_scale = is_avg;
-                objective->squared_terms[i].qualifier_scope_idx = qualifier_scope;
-            }
-
-            objective->when_condition = std::move(when_cond);
-            objective->per_columns = std::move(per_cols);
-        } else if (BoundExpressionContainsAggregate(*expr) || IsScalarDecideTerm(*expr)) {
-            // The second arm covers an objective made only of query-wide decisions
-            // (e.g. `minimize max_shortfall`), which carries no aggregate at all.
-            objective = make_uniq<Objective>();
-            ExtractAggregateObjectiveTerms(*expr, *objective, 1);
-            objective->when_condition = std::move(when_cond);
-            objective->per_columns = std::move(per_cols);
-        }
     }
 
     mutex lock;
     // This collection will hold all the data from the child operator
     ColumnDataCollection data;
 
-    //! Kept so the term extractors can re-bind a rebuilt product through
-    //! `FunctionBinder` instead of reusing another node's signature — see
-    //! `RebindOperator`. Analysis runs entirely inside this state's constructor,
-    //! so the reference stays valid for every use.
+    //! Needed to evaluate coefficient expressions against the materialized rows.
     ClientContext &context;
 
     const PhysicalDecide &op;
     DecideCanonicalizer canonicalizer;
 
-    vector<unique_ptr<DecideConstraint>> constraints;
-    unique_ptr<Objective> objective;
+    //! The flattened constraints and objective, decided by BuildDecidePreparedModel
+    //! (stage 05). Aliases rather than copies: this state evaluates their
+    //! coefficients against the data, it does not derive or alter their shape.
+    const vector<unique_ptr<DecideConstraint>> &constraints = op.prepared.constraints;
+    const unique_ptr<DecideObjective> &objective = op.prepared.objective;
 
     //! Local copies of the decision column box and the absorbed-bound records that
     //! DecideOptimizer::AbsorbVariableBounds resolved. Finalize copies the box into
@@ -2964,7 +1446,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
         // Stage 2: relation-qualified reducers (`sum(D: cost)`) contribute once per
         // distinct entity, not once per joined row.
-        idx_t scope_idx = DecideGlobalSinkState::QualifierScopeOf(agg);
+        idx_t scope_idx = QualifierScopeOf(agg);
         if (scope_idx != DConstants::INVALID_INDEX) {
             auto dedup = BuildQualifierKeepMask(entity_mappings, scope_idx, group_ids);
             if (keep.empty()) {
@@ -3839,7 +2321,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // inside a single scan over gstate.data — doubling coefficient evaluators
         // was cheap, but doubling the ColumnDataCollection scan was not.
         struct ObjBucket {
-            vector<Term> *src_terms;
+            vector<DecideTerm> *src_terms;
             vector<CoefficientColumn> *out_coeffs;
             vector<idx_t> *out_var_indices;
             vector<TermFilterState> *out_term_filters;
@@ -4529,7 +3011,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // Accumulator for a MIN/MAX linking row (`z - expr op bound`).
     //
-    // Term arrays are indexed by term, not by variable, so the same solver column
+    // DecideTerm arrays are indexed by term, not by variable, so the same solver column
     // reaches one row more than once in two situations: `(c + 1) * x` distributes
     // into `c*x + 1*x`, and an entity-scoped or scalar variable resolves to a
     // single column across every row it spans. A repeated column index is rejected
@@ -4600,8 +3082,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     };
 
     // Same accumulation for the composed paths, whose terms arrive as a
-    // `Term` list plus per-term evaluated coefficient columns.
-    auto AddComposedRowTerms = [&](MinMaxLinkRow &link, const vector<Term> &inner_terms,
+    // `DecideTerm` list plus per-term evaluated coefficient columns.
+    auto AddComposedRowTerms = [&](MinMaxLinkRow &link, const vector<DecideTerm> &inner_terms,
                                    const vector<vector<double>> &per_term_coefs, idx_t row) {
         for (idx_t it = 0; it < inner_terms.size(); it++) {
             double coeff = per_term_coefs[it][row];
@@ -5082,7 +3564,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // |z - inner_i|; constant inner terms cancel in the spread. This mirrors the
     // flat (non-composed) hard MIN/MAX emission (PATH A) so both share one M model.
     auto EmitComposedHardMinMaxIndicators =
-        [&](idx_t z_idx, bool is_max, const vector<Term> &inner_terms,
+        [&](idx_t z_idx, bool is_max, const vector<DecideTerm> &inner_terms,
             const vector<vector<double>> &per_term_coefs, const vector<bool> &filter_mask,
             const string &label) {
         bool unbounded = false;
@@ -5159,8 +3641,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // no outer WHEN/PER wrappers.
     // ================================================================
     if (!composed_minmax_constraints.empty()) {
-        // Helper: evaluate a Term's per-row coefficient (scaled by term.sign)
-        auto EvaluateTermCoefs = [&](const Term &term) -> vector<double> {
+        // Helper: evaluate a DecideTerm's per-row coefficient (scaled by term.sign)
+        auto EvaluateTermCoefs = [&](const DecideTerm &term) -> vector<double> {
             vector<double> coefs;
             coefs.reserve(num_rows);
             const Expression &transformed =
@@ -5273,7 +3755,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 double scale = 1.0;
                 bool is_easy;
                 vector<bool> filter_mask;
-                vector<Term> inner_terms;
+                // Non-owning: the flattened terms live on the ComposedMinMaxTerm, prepared at stage 05.
+                const vector<DecideTerm> *inner_terms = nullptr;
                 vector<vector<double>> per_term_coefs;
                 idx_t z_idx = DConstants::INVALID_INDEX;
                 string label; //!< User source text (`MAX(x)`) naming this term's global z.
@@ -5301,8 +3784,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     ta.label = StringUtil::Upper(term.agg_name) + "(" + term.inner_expr->ToString() + ")";
                 }
 
-                ExtractTerms(context, *term.inner_expr, ta.inner_terms);
-                for (auto &inner_t : ta.inner_terms) {
+                ta.inner_terms = &term.inner_terms;
+                for (auto &inner_t : (*ta.inner_terms)) {
                     ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t));
                 }
                 if (term.filter) {
@@ -5371,7 +3854,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 for (idx_t row = 0; row < num_rows; row++) {
                     if (!ta.filter_mask[row]) continue;
                     MinMaxLinkRow link;
-                    AddComposedRowTerms(link, ta.inner_terms, ta.per_term_coefs, row);
+                    AddComposedRowTerms(link, (*ta.inner_terms), ta.per_term_coefs, row);
                     SolverInput::RawConstraint rc;
                     rc.indices.push_back((int)ta.z_idx);
                     rc.coefficients.push_back(1.0);
@@ -5389,7 +3872,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
                 if (ta.is_easy) continue;
                 EmitComposedHardMinMaxIndicators(ta.z_idx, ta.agg_name == "max",
-                                                 ta.inner_terms, ta.per_term_coefs,
+                                                 (*ta.inner_terms), ta.per_term_coefs,
                                                  ta.filter_mask, ta.label);
             }
 
@@ -5413,8 +3896,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                         }
                         avg_divisor = static_cast<double>(cnt);
                     }
-                    for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
-                        auto &inner_t = ta.inner_terms[it];
+                    for (idx_t it = 0; it < (*ta.inner_terms).size(); it++) {
+                        auto &inner_t = (*ta.inner_terms)[it];
                         for (idx_t row = 0; row < num_rows; row++) {
                             if (!ta.filter_mask[row]) continue;
                             double coef = ta.per_term_coefs[it][row] * (double)ta.sign * ta.scale / avg_divisor;
@@ -5466,7 +3949,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // terms only, no outer PER/WHEN on the objective.
     // ================================================================
     if (!composed_minmax_objective_terms.empty()) {
-        auto EvaluateTermCoefsObj = [&](const Term &term) -> vector<double> {
+        auto EvaluateTermCoefsObj = [&](const DecideTerm &term) -> vector<double> {
             vector<double> coefs;
             coefs.reserve(num_rows);
             const Expression &transformed =
@@ -5559,7 +4042,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             double scale = 1.0;
             bool is_easy;
             vector<bool> filter_mask;
-            vector<Term> inner_terms;
+            // Non-owning: the flattened terms live on the ComposedMinMaxTerm, prepared at stage 05.
+            const vector<DecideTerm> *inner_terms = nullptr;
             vector<vector<double>> per_term_coefs;
             idx_t z_idx = DConstants::INVALID_INDEX;
             string label; //!< User source text (`MAX(x)`) naming this term's global z.
@@ -5587,8 +4071,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
                     ta.label = StringUtil::Upper(term.agg_name) + "(" + term.inner_expr->ToString() + ")";
                 }
-                ExtractTerms(context, *term.inner_expr, ta.inner_terms);
-                for (auto &inner_t : ta.inner_terms) {
+                ta.inner_terms = &term.inner_terms;
+                for (auto &inner_t : (*ta.inner_terms)) {
                     ta.per_term_coefs.push_back(EvaluateTermCoefsObj(inner_t));
                 }
                 if (term.filter) {
@@ -5647,7 +4131,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             for (idx_t row = 0; row < num_rows; row++) {
                 if (!ta.filter_mask[row]) continue;
                 MinMaxLinkRow link;
-                AddComposedRowTerms(link, ta.inner_terms, ta.per_term_coefs, row);
+                AddComposedRowTerms(link, (*ta.inner_terms), ta.per_term_coefs, row);
                 SolverInput::RawConstraint rc;
                 rc.indices.push_back((int)ta.z_idx);
                 rc.coefficients.push_back(1.0);
@@ -5665,7 +4149,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             if (ta.kind != LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) continue;
             if (ta.is_easy) continue;
             EmitComposedHardMinMaxIndicators(ta.z_idx, ta.agg_name == "max",
-                                             ta.inner_terms, ta.per_term_coefs,
+                                             (*ta.inner_terms), ta.per_term_coefs,
                                              ta.filter_mask, ta.label);
         }
 
@@ -5688,8 +4172,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (cnt == 0) continue;
                     avg_divisor = (double)cnt;
                 }
-                for (idx_t it = 0; it < ta.inner_terms.size(); it++) {
-                    auto &inner_t = ta.inner_terms[it];
+                for (idx_t it = 0; it < (*ta.inner_terms).size(); it++) {
+                    auto &inner_t = (*ta.inner_terms)[it];
                     if (inner_t.variable_index == DConstants::INVALID_INDEX) continue;
                     auto &dst = obj_coef_accum[inner_t.variable_index];
                     if (dst.empty()) dst.assign(num_rows, 0.0);

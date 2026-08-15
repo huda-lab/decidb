@@ -269,7 +269,7 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
   - `BindLocalWhenAggregate()`: Binds the aggregate child, binds the data-only boolean condition, and stores the condition as `BoundAggregateExpression::filter`.
 
 - **Execution**: `src/execution/operator/decide/physical_decide.cpp`
-  - `AnalyzeConstraint()`: Signature takes `when_condition` and `per_columns`. PER tag is unwrapped first (outermost), then WHEN tag is unwrapped inside it.
+  - `AnalyzeConstraint()` (`src/optimizer/decide/decide_linear_form.cpp`): Signature takes `when_condition` and `per_columns`. PER tag is unwrapped first (outermost), then WHEN tag is unwrapped inside it.
   - `ExtractAggregateConstraintTerms()` / `ExtractAggregateObjectiveTerms()`: Extract additive aggregate expressions and copy aggregate-local filters onto linear, bilinear, and quadratic terms.
   - `Finalize()`, WHEN+PER unified grouping section: `has_when` / `has_per` flags determine evaluation path.
   - `Finalize()`, WHEN evaluation: WHEN condition evaluated into a `when_mask` boolean vector.

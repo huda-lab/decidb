@@ -11,6 +11,7 @@
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
+#include "duckdb/planner/decide/decide_prepared_model.hpp"
 
 namespace duckdb {
 
@@ -147,6 +148,10 @@ public:
         //! physical layer folds the matching de-duplication mask into `filter`'s mask so a
         //! qualified reducer keeps its identity semantics inside a composed clause.
         idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+        //! `inner_expr` flattened into additive terms by BuildDecidePreparedModel, so
+        //! the composed emitter reads prepared terms like every other construct rather
+        //! than re-deriving them once the rows are in.
+        vector<DecideTerm> inner_terms;
     };
     struct ComposedMinMaxConstraint {
         vector<ComposedMinMaxTerm> terms;
@@ -229,6 +234,14 @@ public:
     //! sync by the pruner's rebinding pass) and copies them back into
     //! entity_scopes.entity_key_bindings.
     vector<unique_ptr<Expression>> entity_key_expressions;
+
+    // --- Prepared linear form (built by BuildDecidePreparedModel, stage 05) ---
+
+    //! Every constraint and the objective, already flattened into additive terms.
+    //! Physical execution evaluates each term's coefficient against the relational
+    //! input; it does not re-derive the shape. Empty until the DECIDE optimizer's
+    //! final pass fills it, and moved into PhysicalDecide at physical planning.
+    DecidePreparedModel prepared;
 
 public:
     //! Add a constraint to the SUCH THAT tree, canonicalizing it on the way in.

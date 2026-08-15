@@ -1,14 +1,19 @@
 # Stage 05 — DECIDE optimizer
 
 Chooses the **mathematical formulation** for every construct the solver cannot take
-literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and composed reducers. It
-assumes canonical input and produces canonical output; it never decides shape,
-parses SQL, executes relations, or calls a solver.
+literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and composed reducers, and
+then **flattens the finished tree into the prepared linear form** that execution
+consumes. It assumes canonical input and produces canonical output; it never
+decides shape, parses SQL, executes relations, or calls a solver.
 
 **Key source files**
 
-- `src/optimizer/decide/decide_optimizer.cpp` (~1,700 lines)
+- `src/optimizer/decide/decide_optimizer.cpp` (~2,200 lines) — the rewrites
+- `src/optimizer/decide/decide_linear_form.cpp` (~1,600 lines) — the flattening
 - `src/include/duckdb/optimizer/decide_optimizer.hpp`
+- `src/include/duckdb/optimizer/decide_linear_form.hpp`
+- `src/include/duckdb/planner/decide/decide_prepared_model.hpp` — the form itself,
+  owned by stage 03 because `LogicalDecide` is what carries it across the boundary
 
 Every constraint it emits re-enters through `LogicalDecide::AddConstraint` and
 every objective through `LogicalDecide::SetObjective`, both of which
@@ -19,7 +24,7 @@ former.
 
 ## 1. Pass order
 
-`DecideOptimizer::OptimizeDecide` runs nine passes, and the order is load-bearing:
+`DecideOptimizer::OptimizeDecide` runs ten passes, and the order is load-bearing:
 
 | # | Pass | Why here |
 |---|---|---|
@@ -36,6 +41,52 @@ former.
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
+
+An eleventh pass, `BuildDecidePreparedModel`, belongs to this stage but is
+**triggered later** — see §1a.
+
+---
+
+## 1a. Linear-form flattening — `BuildDecidePreparedModel`
+
+Turns each canonical comparison and the objective into additive terms:
+`sign * coefficient * variable`. This is where DECIDE does its linear algebra —
+distributing `K * (1 - pick)` into `K - K*pick`, pulling coefficients out of `*`
+chains, pushing a divisor into every produced coefficient, folding unary minus,
+stripping binder casts, and multiplying a peeled reducer scale into everything the
+reducer produced.
+
+The output is `LogicalDecide::prepared`, a `DecidePreparedModel`: a
+`vector<DecideConstraint>` plus an optional `DecideObjective`. It also fills
+`ComposedMinMaxTerm::inner_terms`, so every construct reaches execution as
+prepared terms rather than one path re-deriving its own.
+
+**A coefficient stays an unevaluated `Expression`.** `SUM(x * price)` yields the
+coefficient `price`, which is a number only once a row exists. Everything else
+about a term — which variable it names, its sign, which reducer produced it, which
+filter applies, which entity scope qualifies it — is a fact about types and
+structure and is settled here. The pass reads no data.
+
+**Why it is here and not at execution.** Doing this algebra needs a binder: every
+rebuilt subtree goes through `RebindOperator` → `FunctionBinder::BindScalarFunction`
+so the operator is resolved for the children it is actually given. Performing it
+downstream of the binder meant reconstructing bound nodes by hand from another
+node's `FunctionData`, which does not fail on a type mismatch — it reinterprets the
+children's physical representation and returns a plausible wrong number. That
+workaround is gone.
+
+**Why it is triggered from `plan_decide.cpp` rather than inside `OptimizeDecide`.**
+The prepared terms hold *copies* of coefficient subtrees. `RemoveUnusedColumns`,
+`ColumnLifetimeAnalyzer` and late materialization all run **after**
+`OptimizerType::DECIDE_OPTIMIZER` and rebind the operator's own expressions;
+copies taken during `OptimizeDecide` keep column bindings that no longer name the
+right input columns, which silently reads the wrong data column into a
+coefficient. `PhysicalPlanGenerator::CreatePlan(LogicalDecide &)` is the first
+point at which bindings are final, and it is already the checkpoint where
+`VerifyCanonical` runs for the same "everything is settled now" reason. The pass
+runs immediately after that verification, so the ordering `verify → flatten` is
+preserved. **Ownership is unaffected**: the code lives in
+`src/optimizer/decide/`, and nothing in `src/execution/` performs the algebra.
 
 ---
 
@@ -258,7 +309,8 @@ stage 07.
   decision auxiliaries; MIN/MAX and AVG keep decision terms on the left; `<>`
   changes only metadata; composed MIN/MAX leaves a permitted placeholder;
   `AbsorbVariableBounds` only annotates.
-- Evaluate anything against data, or emit solver rows.
+- Evaluate anything against data, or emit solver rows. Flattening produces
+  coefficient *expressions*; turning them into numbers is stage 08.
 
 ---
 
@@ -266,8 +318,11 @@ stage 07.
 
 | Concern | Location |
 |---|---|
-| All passes | `src/optimizer/decide/decide_optimizer.cpp` |
+| The rewrites | `src/optimizer/decide/decide_optimizer.cpp` |
+| Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |
 | Pass inventory and helper contracts | `src/include/duckdb/optimizer/decide_optimizer.hpp` |
+| The prepared form's structures | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
+| Where flattening is triggered | `src/execution/physical_plan/plan_decide.cpp` |
 | Metadata the passes write | `src/include/duckdb/planner/operator/logical_decide.hpp` |
 | Canonicalizing entry points | `src/planner/operator/logical_decide.cpp` |
 | Per-function user-facing semantics | `../../03_expressivity/sql_functions/done.md` |

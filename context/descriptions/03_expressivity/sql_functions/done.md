@@ -260,7 +260,7 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 - Constraint classifier: `TagAbsConstraintsForBigM` in `decide_optimizer.cpp` runs before `RewriteAbs`. Walks the constraint tree; for each comparison, `CollectAbsWithSign` gathers every ABS occurrence with the sign it carries in `LHS - RHS`, classifies each as Path A (sign pushes `d` down) or Path B (it does not), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
 - Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`. Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to `AbsPairInfo`. Phase 2 emits the lower envelope unconditionally. For each pair where `needs_bigm || (in_objective && MAXIMIZE)`, also allocates the `y` binary, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX`, and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The link vector is named `abs_maximize_links` for historical reasons but covers both Big-M users (objective MAXIMIZE and constraint hard-direction).
 - Tag constants: `ABS_UB_POS_TAG_PREFIX`, `ABS_UB_NEG_TAG_PREFIX`, `ABS_NEEDS_BIGM_TAG` in `decide.hpp`.
-- Execution: `physical_decide.cpp` — tag parsing in `AnalyzeConstraint` sets `DecideConstraint::abs_y_idx`/`abs_is_pos_bound`; these are copied to `EvaluatedConstraint`; the Big-M finalization block (after the bilinear block) iterates `abs_maximize_links`, computes M from variable bounds, and emits two derived `EvaluatedConstraint`s (C_ub1 and C_ub2) per ABS term. The error message at finite-bound check is generic (covers both objective-MAXIMIZE and constraint hard-direction triggers).
+- Tag parsing in `AnalyzeConstraint` (`decide_linear_form.cpp`) sets `DecideConstraint::abs_y_idx`/`abs_is_pos_bound`; execution copies them onward: these are copied to `EvaluatedConstraint`; the Big-M finalization block (after the bilinear block) iterates `abs_maximize_links`, computes M from variable bounds, and emits two derived `EvaluatedConstraint`s (C_ub1 and C_ub2) per ABS term. The error message at finite-bound check is generic (covers both objective-MAXIMIZE and constraint hard-direction triggers).
 - Transfer: `plan_decide.cpp` moves `abs_maximize_links` from logical to physical operator.
 - Serialization: `logical_decide.cpp` (`LogicalDecide::Serialize`/`Deserialize`, hand-maintained) fields 230/231 (`abs_maximize_link_aux`, `abs_maximize_link_y`).
 
@@ -301,7 +301,7 @@ MINIMIZE SUM(POWER(x / weight - 1, 2))     -- OK: data-column divisor in QP
 
 **Code**:
 - Bind-time validation: `IsAllowedNameOverDecideVar` and the dedicated `/`-arm of `ValidateDecideNoNonLinearScalar` (per-row pre-pass) and `ValidateSumArgumentInternal` (SUM/POWER inner) in `src/planner/expression_binder/decide_binder.cpp` reject any `/` whose divisor contains a decide variable.
-- Per-row extraction: `ExtractTerms` at `src/execution/operator/decide/physical_decide.cpp` walks `/` by recursing into the numerator and wrapping each emitted coefficient as `coef / divisor`.
+- Per-row extraction: `ExtractTerms` at `src/optimizer/decide/decide_linear_form.cpp` walks `/` by recursing into the numerator and wrapping each emitted coefficient as `coef / divisor`.
 - QP linearity check: `IsLinearInDecideVars` in the same file accepts `/` when the divisor is decide-var-free, so quadratic patterns like `POWER(x/2 - 1, 2)` reach the QP extractor.
 
 ### Data-only operators and named functions the algebra doesn't model (`%`, bitwise, `mod()`, `floor()`, …)
@@ -339,7 +339,7 @@ SUCH THAT 2 * x + 3 <= 11      -- x <= 4
 SUCH THAT x / 2 + 1 <= 3       -- x <= 4
 ```
 
-**Code**: `ExtractTerms` in `src/execution/operator/decide/physical_decide.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`. `ExtractConstraintTerms` delegates there. In `src/decidb/utility/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
+**Code**: `ExtractTerms` in `src/optimizer/decide/decide_linear_form.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`. `ExtractConstraintTerms` delegates there. In `src/decidb/utility/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
 
 **Tests**: `test/decide/tests/test_cons_perrow.py` — `test_perrow_linear_lhs_upper_bound` (parametrized over `x+c`, `x-c`, `x/c`, `c*x+c`, `x/c+c`, `x+c-c`), `test_perrow_unary_minus_lower_bound`, `test_perrow_data_column_in_lhs`, all oracle-verified.
 

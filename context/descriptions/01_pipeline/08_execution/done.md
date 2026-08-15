@@ -1,15 +1,16 @@
 # Stage 08 — Physical execution and readback
 
-Runs the relational input, extracts model terms from the canonical trees,
-evaluates every coefficient and grouping against the materialized data, invokes
-the solver contract, and projects the solution back onto rows. It implements no
-rewrites and no backend-specific formulation.
+Runs the relational input, evaluates every prepared coefficient and grouping
+against the materialized data, invokes the solver contract, and projects the
+solution back onto rows. It implements no rewrites, no backend-specific
+formulation, and no algebra: the constraints and objective arrive already
+flattened into terms.
 
 `PhysicalDecide` is a **blocking** operator: the optimal value of any one decision
 depends on the whole dataset, so it must consume its entire input before it can
 produce a row.
 
-**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~7,400 lines)
+**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~4,800 lines)
 **Header**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
 
 ---
@@ -18,16 +19,16 @@ produce a row.
 
 | # | Where | What |
 |---|---|---|
-| 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Bound absorption, then term extraction from the canonical trees |
+| 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the absorbed variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
 | 3 | `Finalize` PHASE 1.5 | Build entity mappings for table-scoped variables |
 | 4 | `Finalize` PHASE 2 | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
 | 5 | `Finalize` PHASE 3 | `SolverModel::Build` (stage 06) → `SolveModel` (stage 07) |
 | 6 | `GetData` | Project solution values back onto rows |
 
-**Extraction precedes materialization.** The sink state is constructed before the
-first `Sink` call, so steps 1 and 2 are in that order — extraction is purely
-structural and needs no data.
+The sink state is constructed before the first `Sink` call, so step 1 sees no
+data — which is fine, because it derives nothing. Flattening already happened at
+plan time (stage 05).
 
 Read consistency follows from step 2: the optimization runs on the snapshot the
 query saw. Concurrent modifications cannot affect a running solve.
@@ -50,7 +51,7 @@ The sink state copies `op.absorbed_lower_bounds`, `op.absorbed_upper_bounds` and
   contradicts a variable's intrinsic domain.
 - The infeasible diagnosis re-emits each `UserBoundSpec` as a loosenable row.
 
-`AnalyzeConstraint` skips any comparison tagged `ABSORBED_BOUND_TAG`, so an
+Flattening skips any comparison tagged `ABSORBED_BOUND_TAG`, so an
 absorbed bound does not also produce `num_rows` redundant per-row model rows. The
 comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
 the user wrote.
@@ -88,107 +89,38 @@ of a variable's rows).
 
 ---
 
-## 3. Term extraction
+## 3. The prepared linear form
 
-`AnalyzeConstraint()` and `AnalyzeObjective()` turn bound expression trees into
-`DecideConstraint` / `Objective` structs. The goal is purely structural: which
-variable each term references, and what coefficient expression multiplies it.
-Numeric evaluation is PHASE 2's job.
+Execution does **not** flatten expressions. `LogicalDecide::prepared` arrives
+already decomposed into additive terms by `BuildDecidePreparedModel` (stage 05,
+`src/optimizer/decide/decide_linear_form.cpp`), moved into
+`PhysicalDecide::prepared` at physical planning. `DecideGlobalSinkState` aliases it:
 
-This stage **consumes** the canonical shape and never repairs it. Invalid decision
-placement or aggregate shape here is an internal invariant failure, not a
-user-facing repair point.
+```cpp
+const vector<unique_ptr<DecideConstraint>> &constraints = op.prepared.constraints;
+const unique_ptr<DecideObjective> &objective = op.prepared.objective;
+```
 
-### Wrappers
+**What this stage receives.** For every constraint: its terms, each naming a
+variable index, a sign, a still-unevaluated coefficient `Expression`, an optional
+aggregate-local filter, an AVG-scaling flag and an entity-scope qualifier; plus the
+RHS expression, the comparison type, the `WHEN` condition, the `PER` columns, and
+the metadata linking it to indicators and diagnosis provenance. The objective
+arrives the same way, with `squared_terms` and `bilinear_terms` alongside `terms`.
+`ComposedMinMaxTerm::inner_terms` carries the composed MIN/MAX path's terms, so no
+construct is left re-deriving its own.
 
-Constraints may be wrapped, as tagged `BoundConjunctionExpression`s:
+**What this stage does with it.** Evaluates the coefficient expressions against the
+materialized rows (PHASE 2), and nothing else. Which variable a term names and what
+multiplies it were settled upstream, where a binder was in scope.
 
-| Alias | Children | Handling |
-|---|---|---|
-| `PER_CONSTRAINT_TAG` | `[constraint, col...]` | extract `per_columns`, recurse into child 0 |
-| `WHEN_CONSTRAINT_TAG` | `[constraint, condition]` | extract `when_condition`, recurse into child 0 |
-| *(none)* | N children | plain `AND` — each child is an independent constraint |
-
-### Constraint LHS
-
-The LHS is unwrapped with `UnwrapDecideCasts(expr, decide_index)`. The parsed
-boundary already rejected every user-authored cast over decision algebra, so this
-looks only through DuckDB's bound type-reconciliation wrappers and **stops at a
-data-only cast**.
-
-- **Aggregate LHS** — `ExtractAggregateConstraintTerms()` walks additive aggregate
-  expressions, calls `ExtractConstraintTerms()` on each reducer's child, and copies
-  reducer metadata onto the extracted terms. `lhs_is_aggregate` is set.
-  Aggregate-local `WHEN` filters land on `Term::filter`, on bilinear term filters,
-  or on quadratic group filters. A reducer aliased `AVG_REWRITE_TAG` marks its
-  terms for AVG scaling.
-- **Per-row LHS** — first the **C2 guard**: `CollectDecideVarRefs()` on the RHS must
-  find nothing. The canonicalizer has already moved every decision-bearing term
-  left, so a hit means a rewrite broke canonical form upstream, and the constraint
-  is rejected with an internal error rather than mis-solved. Then either a
-  single-variable bound (`FindDecideVariable`, coefficient 1) or a complex additive
-  LHS (`ExtractConstraintTerms`) such as `z_0 + z_1 = 1` or `d - x >= -c`.
-
-### Objective
-
-`AnalyzeObjective()` handles linear, bilinear and quadratic objectives, including
-**mixed** shapes where a quadratic group and linear siblings appear inside one
-reducer (`SUM(POWER(x - t, 2) + c * x)`).
-
-The reducer argument is walked by `ExtractLinearAndBilinearTerms`, which probes
-`DetectQuadraticPattern` at **every** additive node. That detector recognizes:
-
-- `POWER(linear, 2)` / `POW(linear, 2)` / `expr ** 2` — the exponent unwrapped from
-  casts, since DuckDB wraps the literal `2` in a `BoundCastExpression`;
-- `(expr) * (expr)` self-products with identical `ToString()`;
-- `-(pattern)` and `K * pattern` for constant `K` on either side, nesting into
-  composed signs.
-
-A match routes the inner linear expression into `squared_terms` with a scalar
-`quadratic_sign`; linear and bilinear siblings in the same `+`/`-` tree go into
-`terms` / `bilinear_terms` from the same walk. Pure-linear, pure-quadratic and
-mixed objectives therefore share one traversal.
-
-**At most one quadratic group per objective.** A second match raises
-`InvalidInputException` — `SUM(POWER(x,2)) + SUM(POWER(y,2))` is rejected —
-because downstream Q construction assumes a single scalar sign.
-
-**Degree guard.** `IsLinearInDecideVars` is applied to the inner of every
-POWER/self-product and to each side of a bilinear `*`. Degree > 2 shapes
-(`POWER(x,2)*POWER(x,2)`, `POWER(x,2)*POWER(y,2)`, `a*POWER(x,2)`,
-`POWER(POWER(x,2),2)`) are rejected rather than silently misclassified as a
-lower-degree Q or a bilinear with a garbage coefficient.
-
-### Rebuilding is never hand-assembled
-
-`RebindOperator(context, name, children)` (and its `RebindMultiply` wrapper)
-re-resolve an operator against the children it is actually given, via
-`FunctionBinder::BindScalarFunction`. **Every rebuild of a reshaped subtree must go
-through it.**
-
-Hand-assembling a `BoundFunctionExpression` from another node's `function` /
-`return_type` / `bind_info` does not fail when the children's types disagree — it
-reinterprets their *physical* representation, returning a plausible wrong number
-and potentially reading past the end of a narrower vector. DECIDE has hit that
-failure mode three times. Two things guarantee a mismatch after a rewrite:
-distribution replaces a factor with one of its addends (narrower than the sum it
-came from), and dropping a factor shifts the survivors out of alignment with
-`function.arguments`. This is why `ExtractTerms` and
-`ExtractCoefficientWithoutVariable` take a `ClientContext`.
-
-### Helpers
-
-| Function | Purpose |
-|---|---|
-| `FindDecideVariable(expr)` | First `BoundColumnRefExpression` matching a DECIDE variable, or `INVALID_INDEX` |
-| `ContainsVariable(expr, var_idx)` | Whether a specific variable appears |
-| `IsLinearInDecideVars(expr)` | Degree ≤ 1 in the decision variables |
-| `ExtractCoefficientWithoutVariable(ctx, expr, var)` | `x * 5 * l_tax` → `5 * l_tax`; constant 1 when `expr` *is* the variable |
-| `ExtractTerms(ctx, expr, out)` | Decompose a reducer argument: `+` recurses, binary `-` flips sign, `*` splits variable from coefficient, a decision-free cast stays whole as a typed fixed term (peeling it would change the value — `CAST(1.6 AS INTEGER)` is 2), a decision-bearing cast is peeled |
-| `TryDistributeMultiplyOverAdd` | Distributes a product over a sum, rebinding each node |
-| `BuildCoefficientFromFactors(ctx, factors)` | Folds a flattened factor list back into a product |
-| `CombineBilinearCoefficients(a, b, mul)` | Merges coefficients from both sides of a bilinear product; no coefficient for `1 * 1` |
-| `CollectDecideVarRefs(expr, sign, refs, op)` | Sign-tracking reference collection; its only remaining caller is the C2 guard, which needs emptiness rather than signs |
+**The shape is asserted, never repaired.** A decision variable on the RHS, a
+non-reducer term in an aggregate LHS, an unrewritten MIN/MAX — each is an internal
+invariant failure raised by the flattening pass at plan time, not something
+execution fixes. The structures themselves are documented in
+`src/include/duckdb/planner/decide/decide_prepared_model.hpp`; the algebra that
+produces them, and why it cannot live here, is
+[`../05_optimizer/done.md`](../05_optimizer/done.md) §1a.
 
 ---
 
@@ -463,7 +395,9 @@ last `num_auxiliary_vars` slots.
 | Concern | Location |
 |---|---|
 | Everything above | `src/execution/operator/decide/physical_decide.cpp` |
-| `Term`, `DecideConstraint`, `Objective`, operator fields | `src/include/duckdb/execution/operator/decide/physical_decide.hpp` |
+| Operator fields | `src/include/duckdb/execution/operator/decide/physical_decide.hpp` |
+| `DecideTerm`, `DecideConstraint`, `DecideObjective` | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
+| The pass that fills them | `src/optimizer/decide/decide_linear_form.cpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver_input.hpp` |
 | Logical → physical, entity key indices, input column names | `src/execution/physical_plan/plan_decide.cpp` |
 | Binding resolution shielding | `src/execution/column_binding_resolver.cpp` |

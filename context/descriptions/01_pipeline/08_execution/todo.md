@@ -2,25 +2,23 @@
 
 ---
 
-## `physical_decide.cpp` is ~7,400 lines and holds four distinct concerns
+## `physical_decide.cpp` is ~4,800 lines and `Finalize` still holds several concerns
 
-**Pointers**: `src/execution/operator/decide/physical_decide.cpp`. Its own section
-markers already name the split: *Expression Transform Helpers* (45),
-*Expression Analysis Helper Functions* (763), *Multi-variable per-row constraint
-helpers* (1379), *Sink* (1429), the `DecideGlobalSinkState` class (1460-2660),
-data-driven Big-M (2696), the slow-solve checkpoint report (3070), `Finalize`
-(3214-7287) and *Source* (7287).
+**Pointers**: `src/execution/operator/decide/physical_decide.cpp`.
 
-`Finalize` alone is ~4,000 lines and spans three phases plus composed MIN/MAX
-emission, the deferred `<>` expansion, the ABS `MAXIMIZE` upper-bound derivation
-and the auto-`M` refill.
+Two of the original four concerns are gone. Term extraction moved to layer 05
+(`decide_linear_form.cpp`, 2026-08-15) and the data-free emitters moved to layer 06
+(`ilp_linearization.cpp`, same day), taking the file from 7,344 to 4,843 lines.
 
-**Decision needed before starting**: the natural seams are not the phase markers.
-Term extraction (structural, no data) and coefficient evaluation (numeric, needs
-the materialized chunk) are genuinely different jobs with different inputs, and
-the mechanism-specific emitters (composed MIN/MAX, `<>`, ABS Big-M, auto-`M`) are
-each self-contained. But every one of them reads `DecideGlobalSinkState`, so the
-split has to decide what that state's interface is rather than just moving code.
+What remains is `Finalize`, still the bulk of the file: three phases plus the
+nested-`PER` two-level emission, the ABS `MAXIMIZE` upper-bound derivation and the
+auto-`M` refill. The nested-`PER` emitter has its own entry in
+[`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md);
+it is an emitter fused with a late evaluation pass, so it is not a move.
+
+**Decision needed before starting**: whether the remaining split is by phase or by
+mechanism. Everything left reads `DecideGlobalSinkState`, so the split has to
+decide what that state's interface is rather than just moving code.
 
 **Test**: all 80 golden models byte-identical; `make decide-test` unchanged. This
 is a pure refactor, so a non-identical dump is a failure, not a finding.

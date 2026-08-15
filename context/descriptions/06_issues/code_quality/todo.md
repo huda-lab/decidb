@@ -57,22 +57,22 @@ fix itself.
 
 ## Theme: work that sits in the physical layer without needing a row
 
-Seven entries came from one audit (2026-08-15) and share a root cause; five remain below, plus the `<>` remainder of a sixth. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
+Seven entries came from one audit (2026-08-15) and share a root cause; four remain below, plus the `<>` remainder of a fifth. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
 
-`physical_decide.cpp` is 6,359 lines against 2,217 for layer 05, 1,402 + 1,012 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
+`physical_decide.cpp` is 4,843 lines against 2,218 + 1,614 for layer 05, 1,402 + 1,012 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
 
-**Why they ended up there.** Coefficients are expressions over user data, so they can only become numbers once the relational input has run. That put coefficient evaluation at layer 08, correctly. Everything else that touches those same expression trees then followed it down, whether or not it needed the data. The code records this: `ApplyScaleToExtracted` rebuilds a scaled coefficient by reusing the original node's `FunctionData` because, in its own comment, that is how it gets rebuilt "without a binder here" — layer 08 reconstructing binder output because it sits downstream of the binder.
+**Why they ended up there.** Coefficients are expressions over user data, so they can only become numbers once the relational input has run. That put coefficient evaluation at layer 08, correctly. Everything else that touches those same expression trees then followed it down, whether or not it needed the data. The code recorded this: `ApplyScaleToExtracted` rebuilt a scaled coefficient by reusing the original node's `FunctionData` because, in its own comment, that was how it got rebuilt "without a binder here" — layer 08 reconstructing binder output because it sat downstream of the binder. The flattening entry that fixed this shipped 2026-08-15.
 
 | Entry | Candidate destination |
 |---|---|
-| Linear-form flattening runs at execution time, without a binder | 05 |
+| ~~Linear-form flattening runs at execution time, without a binder~~ — shipped 2026-08-15 | 05 |
 | No pass collects like terms | 05 |
 | Degree and linearity are analyzed twice, in two layers | 02 |
 | Each linearized formulation is split between the layer that chooses it and the layer that encodes it | 06 |
 | Three renderers answer one question about showing users their own expressions | shared |
 | ~~Structural and value validation sit in the same guards~~ — shipped 2026-08-15; only the `<>` refusal remains | 02, partly |
 
-Destinations are candidates, not decisions; each entry names the questions its chunk has to answer first. The table order implies no batch order. One real dependency remains, recorded in an **Ordering** paragraph in each: flattening gates like-term collection. The others are independent of everything, including each other.
+Destinations are candidates, not decisions; each entry names the questions its chunk has to answer first. The table order implies no batch order. The one dependency that spanned entries — flattening gating like-term collection — is discharged: flattening shipped to layer 05 on 2026-08-15 and is documented in [`../../01_pipeline/05_optimizer/done.md`](../../01_pipeline/05_optimizer/done.md) §1a. The remaining entries are independent of everything, including each other.
 
 Bound absorption shipped to layer 5 on 2026-08-15 and is documented in [`../../01_pipeline/05_optimizer/done.md`](../../01_pipeline/05_optimizer/done.md). It had gated flattening; it no longer does.
 
@@ -80,35 +80,17 @@ Bound absorption shipped to layer 5 on 2026-08-15 and is documented in [`../../0
 
 ---
 
-## Linear-form flattening runs at execution time, without a binder
-
-**Location**: `src/execution/operator/decide/physical_decide.cpp` — `ExtractTerms` (`:1059`), `TryDistributeMultiplyOverAdd` (`:671`), `ExtractCoefficientWithoutVariable` (`:883`), `ApplyScaleToExtracted` / `ApplyScaleToObjective` (`:1566`, `:2195`).
-
-Layer 8 turns a bound constraint tree into a list of `(variable, coefficient)` terms, and doing so performs real algebra: it distributes `K * (1 - pick)` into `K - K*pick`, pulls coefficients out of `*` chains, pushes a divisor into every produced coefficient with cast repair so `x / 2` does not truncate, strips casts, and folds unary minus. `ApplyScaleToExtracted` additionally pushes an outer factor into each coefficient, so `2 * SUM(x * price)` yields coefficients `2 * price`.
-
-None of this reads a row. It needs types, not data.
-
-**Why it matters**: the algebra is performed where no binder is in scope, so new expression nodes cannot be bound the ordinary way. `ApplyScaleToExtracted` works around this by reusing the original node's `FunctionData` — its own comment says this is how the coefficient gets rebuilt "without a binder here". A workaround of that shape is a reliable signal that the code sits downstream of where it belongs. The flattened form is also invisible to `EXPLAIN`, which still renders the unflattened tree, and every later pass that wants linear terms either re-walks the tree or trusts an invariant it cannot check.
-
-**Fix direction**: layer 5 is the one layer permitted to do mathematics on the bound tree, and already rewrites trees for ABS, MIN/MAX and bilinear with types, scopes and casts known. Producing the linear form there would let layer 8 read a prepared list instead of deriving one. Open questions for whoever picks this up: what the prepared form is (a field on the bound node, or a side table on `LogicalDecide`); whether coefficients stay expressions until layer 8 evaluates them, which they must, since they reference data columns; and whether the scale folding moves in the same chunk as the extraction or a later one. Larger than it looks — extraction is entangled with quadratic and bilinear classification.
-
-**Ordering**: no longer gated — bound absorption moved to layer 5 on 2026-08-15, which deleted the `absorbed_bound_exprs` pointer handshake that used to couple absorption and extraction to the same layer. Extraction now has nothing to skip beyond an alias tag it can read anywhere. Still do this before "No pass collects like terms", which needs flat terms to group and would otherwise require a second flattener that this entry then replaces.
-
-**Discovered**: 2026-08-15, during a full audit of what the physical layer owns, prompted by the repeated-coefficient bound bug. Shares a root cause with the six entries below; see the theme heading above.
-
----
-
 ## No pass collects like terms
 
-**Location**: nothing implements it. Layer 4 is forbidden to (`04_canonicalizer/done.md` §5), and no later layer claimed it.
+**Location**: nothing implements it. Layer 4 is forbidden to (`04_canonicalizer/done.md` §5), and no later layer claimed it. The terms it would group are `DecideTerm` lists produced by `BuildDecidePreparedModel` (`src/optimizer/decide/decide_linear_form.cpp`).
 
 `2*ship + 3*ship <= 10` reaches the solver as two terms naming one column. Every downstream consumer then has to remember they are the same variable.
 
 **Why it matters**: one consumer did not, and that was the implied-bound bug fixed 2026-08-15 — it derived a column bound from one term's coefficient instead of their sum. The model builder folds duplicate column entries when writing the matrix row, so the emitted row was always correct and no result-level test could fail; only the model dump showed it. The same trap is waiting for any future pass that iterates `variable_indices` without asking whether an index can repeat.
 
-**Fix direction**: the natural home is beside the linear-form flattening above, since collection is a grouping step over already-flat terms. Two constraints hold wherever it lands: it must emit through `AddConstraint` rather than editing a tree in place (layer 4's C2 rule), and it must not merge across reducer boundaries — `SUM(x) + SUM(x)` may merge, `SUM(x) + MIN(x)` may not. Pass ordering is an open question: ABS, IN and bilinear rewrites emit fresh terms, so collection either runs after them or runs twice. The defensive accumulate now in `DecidePropagateImpliedBounds` stays either way.
+**Fix direction**: the natural home is beside the linear-form flattening in `src/optimizer/decide/decide_linear_form.cpp`, since collection is a grouping step over already-flat terms. Two constraints hold wherever it lands: it must emit through `AddConstraint` rather than editing a tree in place (layer 4's C2 rule), and it must not merge across reducer boundaries — `SUM(x) + SUM(x)` may merge, `SUM(x) + MIN(x)` may not. Pass ordering is an open question: ABS, IN and bilinear rewrites emit fresh terms, so collection either runs after them or runs twice. The defensive accumulate now in `DecidePropagateImpliedBounds` stays either way.
 
-**Ordering**: take this *after* "Linear-form flattening runs at execution time", not before. It looks like the smallest entry here and is a tempting opening move, but collection needs flat terms to group; doing it first means writing a second flattener at layer 5 that the flattening entry then replaces. Nothing is waiting on this one — the bug that produced it is already fixed by the defensive accumulate — so there is no cost to taking it late.
+**Ordering**: unblocked. Flattening shipped to layer 05 on 2026-08-15, so the flat terms this needs to group now exist as `DecideTerm` lists on `LogicalDecide::prepared`.
 
 **Discovered**: 2026-08-15, while fixing the repeated-coefficient bound bug.
 
@@ -116,13 +98,13 @@ None of this reads a row. It needs types, not data.
 
 ## Degree and linearity are analyzed twice, in two layers
 
-**Location**: `src/execution/operator/decide/physical_decide.cpp:821` (`IsLinearInDecideVars`) and `:968` (`QuadraticPattern`), against the binder's own degree analysis at `src/planner/expression_binder/decide_binder.cpp:91`.
+**Location**: `src/optimizer/decide/decide_linear_form.cpp` (`IsLinearInDecideVars`, `DetectQuadraticPattern`), against the binder's own degree analysis at `src/planner/expression_binder/decide_binder.cpp:91`.
 
-The binder computes polynomial degree to decide whether a DECIDE expression is valid at all. Layer 8 re-derives the same property to route an expression to the linear, quadratic or bilinear extraction path.
+The binder computes polynomial degree to decide whether a DECIDE expression is valid at all. The flattening pass re-derives the same property to route an expression to the linear, quadratic or bilinear extraction path.
 
-**Why it matters**: CLAUDE.md gives degree to layer 2. Two independent implementations can disagree, and when they do the failure lands at execution time in extractor vocabulary rather than at bind time as a sentence about the query. The binder's own comment records exactly that having happened: before the `POWER` fix, `SUM(POWER(x, 2) * y)` "passes the gate and is rejected much later by physical extraction" (`decide_binder.cpp:115`). That fix closed the gap for one operator; the duplication that allowed it is still here.
+**Why it matters**: CLAUDE.md gives degree to layer 2. Two independent implementations can disagree, and when they do the failure lands at plan time in extractor vocabulary rather than at bind time as a sentence about the query. (Flattening moved to layer 05 on 2026-08-15, which relocated this duplication but did not remove it — the point of the entry.) The binder's own comment records exactly that having happened: before the `POWER` fix, `SUM(POWER(x, 2) * y)` "passes the gate and is rejected much later by physical extraction" (`decide_binder.cpp:115`). That fix closed the gap for one operator; the duplication that allowed it is still here.
 
-**Fix direction**: compute once at layer 2 and carry the answer on the bound node so layer 8 reads a field. Open question: how much the binder's classification would have to grow, since layer 8's version distinguishes shapes the binder currently has no reason to name (self-product versus `POWER(expr, 2)`, bilinear versus quadratic). Worth measuring that gap before committing.
+**Fix direction**: compute once at layer 2 and carry the answer on the bound node so the flattening pass reads a field. Open question: how much the binder's classification would have to grow, since the flattener's version distinguishes shapes the binder currently has no reason to name (self-product versus `POWER(expr, 2)`, bilinear versus quadratic). Worth measuring that gap before committing.
 
 **Discovered**: 2026-08-15, physical-layer audit.
 

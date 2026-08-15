@@ -90,7 +90,7 @@ Verification runs once more at physical-plan entry.
 
 The sink state is constructed **before** the first row arrives.
 `TraverseBoundsConstraints` finds nothing to absorb — the only constraint has a
-reducer on its left, so it is not a bound. `AnalyzeConstraint` produces one
+reducer on its left, so it is not a bound. Flattening (`AnalyzeConstraint`) produces one
 `DecideConstraint` with `lhs_is_aggregate = true` and one `Term`
 `{variable_index: 0, coefficient: weight, sign: +1}`. `AnalyzeObjective` produces
 one term with coefficient `value`.

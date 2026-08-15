@@ -36,7 +36,7 @@ Cross-cutting issues that do not belong to a single stage live in
 | 05 | [optimizer/](05_optimizer/) | Formulation choice: NORM, DECIDE-variable IN, ABS, MIN/MAX easy/hard, AVG→SUM, `<>`, bilinear McCormick, composed MIN/MAX | `src/optimizer/decide/decide_optimizer.cpp` |
 | 06 | [model_formulation/](06_model_formulation/) | `SolverInput` → `SolverModel`: variable layout, coefficient accumulation, bounds | `src/decidb/utility/ilp_model_builder.cpp` |
 | 07 | [solver/](07_solver/) | Backend dispatch, Gurobi and HiGHS translation, status normalization, time limits | `src/decidb/utility/ilp_solver.cpp`, `src/decidb/gurobi/` |
-| 08 | [execution/](08_execution/) | Materialization, term extraction, coefficient evaluation, entity mapping, readback | `src/execution/operator/decide/physical_decide.cpp` |
+| 08 | [execution/](08_execution/) | Materialization, coefficient evaluation, entity mapping, readback | `src/execution/operator/decide/physical_decide.cpp` |
 
 ---
 

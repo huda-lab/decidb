@@ -4,6 +4,7 @@
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/optimizer/decide_linear_form.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -28,6 +29,14 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
             canonicalizer.VerifyCanonicalObjective(*op.decide_objective);
         }
     }
+    // Flatten the verified tree into the prepared linear form. The pass itself is
+    // owned by stage 05 (src/optimizer/decide/decide_linear_form.cpp); it is TRIGGERED
+    // here because this is the first point at which column bindings are final. The
+    // prepared terms hold copies of the coefficient subtrees, and RemoveUnusedColumns,
+    // ColumnLifetimeAnalyzer and late materialization all rebind the operator's own
+    // expressions after the DECIDE optimizer runs -- copies taken earlier would keep
+    // bindings that no longer name the right input columns.
+    BuildDecidePreparedModel(context, op);
     // Capture child column bindings BEFORE CreatePlan: several logical operators
     // (notably LogicalProjection) move their `expressions` vector into the physical
     // op during CreatePlan, which leaves GetColumnBindings() returning an empty
@@ -81,6 +90,9 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->per_inner_is_easy = op.per_inner_is_easy;
     decide_op->per_outer_is_easy = op.per_outer_is_easy;
     decide_op->per_inner_was_avg = op.per_inner_was_avg;
+    // The flattened constraints and objective, produced by the DECIDE optimizer's
+    // final pass. Execution evaluates their coefficients; it does not re-derive them.
+    decide_op->prepared = std::move(op.prepared);
 
     // Resolve entity key column bindings to physical data chunk positions.
     // The child's GetColumnBindings() gives us the mapping from logical

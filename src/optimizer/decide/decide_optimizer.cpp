@@ -68,8 +68,9 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	RewriteMinMax(decide);       // Classify + rewrite min/max (creates indicators and SUM nodes)
 	RewriteNotEqual(decide);
 	RewriteAvgToSum(decide);
-	// Must stay last: RewriteInDomain emits a floor-lowering bound that is itself
-	// absorbable, and every auxiliary variable must exist before the box is sized.
+	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
+	// that is itself absorbable, and every auxiliary variable must exist before the
+	// box is sized.
 	AbsorbVariableBounds(decide);
 
 	if (bench) {
