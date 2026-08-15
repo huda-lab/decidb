@@ -75,6 +75,38 @@ node's `FunctionData`, which does not fail on a type mismatch — it reinterpret
 children's physical representation and returns a plausible wrong number. That
 workaround is gone.
 
+### Like-term collection
+
+After flattening, every list that becomes a **linear** solver row is grouped:
+constraint `lhs_terms`, the objective's `terms`, and each
+`ComposedMinMaxTerm::inner_terms`. `2*ship + 3*ship` becomes one term with
+coefficient `2 + 3`. A term contributes `sign * coefficient`, so a group merges as
+`sign_first * (coef_first ± coef_next ± ...)`, taking `-` exactly when a term's
+sign differs from the group's.
+
+**Naming the same variable is not sufficient.** A term also records *which rows it
+applies to* and *which reducer produced it*, and `TermsAreLike` refuses to merge
+across any of that:
+
+| Field | Why it separates two terms |
+|---|---|
+| `reduction` | A reducer term and a row-invariant one are summed differently downstream |
+| `filter` | The aggregate-local `WHEN`. `SUM(x) WHEN a` and `SUM(x) WHEN b` are one column over two row sets |
+| `avg_scale` | AVG divides by the group's row count; merging before that scaling applies the division to both |
+| `qualifier_scope_idx` | Selects a de-duplication mask (`sum(D: ...)`) — again a statement about which rows contribute |
+
+Constants (`INVALID_INDEX`) are left alone: a fixed offset folded into the RHS is
+not a repeated column. Quadratic and bilinear terms are left alone too — they feed
+an outer product rather than a linear row.
+
+**This closes a trap, not a defect.** The model builder already folded duplicate
+column entries when writing the matrix row, so the emitted model was always
+correct and no result-level test could fail. But every other consumer had to
+remember that a variable index can repeat, and one did not: the implied-bound
+derivation read a single term's coefficient instead of the sum. That is why the
+golden dump is unchanged by this pass — and why `test_like_term_collection.py`
+pins the *non*-merges, which are the observable direction.
+
 **Why it is triggered from `plan_decide.cpp` rather than inside `OptimizeDecide`.**
 The prepared terms hold *copies* of coefficient subtrees. `RemoveUnusedColumns`,
 `ColumnLifetimeAnalyzer` and late materialization all run **after**

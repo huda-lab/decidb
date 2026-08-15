@@ -57,7 +57,7 @@ fix itself.
 
 ## Theme: work that sits in the physical layer without needing a row
 
-Seven entries came from one audit (2026-08-15) and share a root cause; four remain below, plus the `<>` remainder of a fifth. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
+Seven entries came from one audit (2026-08-15) and share a root cause; three remain below, plus the `<>` remainder of a fourth. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
 
 `physical_decide.cpp` is 4,843 lines against 2,218 + 1,614 for layer 05, 1,402 + 1,012 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
 
@@ -66,33 +66,17 @@ Seven entries came from one audit (2026-08-15) and share a root cause; four rema
 | Entry | Candidate destination |
 |---|---|
 | ~~Linear-form flattening runs at execution time, without a binder~~ — shipped 2026-08-15 | 05 |
-| No pass collects like terms | 05 |
+| ~~No pass collects like terms~~ — shipped 2026-08-15 | 05 |
 | Degree and linearity are analyzed twice, in two layers | 02 |
 | Each linearized formulation is split between the layer that chooses it and the layer that encodes it | 06 |
 | Three renderers answer one question about showing users their own expressions | shared |
 | ~~Structural and value validation sit in the same guards~~ — shipped 2026-08-15; only the `<>` refusal remains | 02, partly |
 
-Destinations are candidates, not decisions; each entry names the questions its chunk has to answer first. The table order implies no batch order. The one dependency that spanned entries — flattening gating like-term collection — is discharged: flattening shipped to layer 05 on 2026-08-15 and is documented in [`../../01_pipeline/05_optimizer/done.md`](../../01_pipeline/05_optimizer/done.md) §1a. The remaining entries are independent of everything, including each other.
+Destinations are candidates, not decisions; each entry names the questions its chunk has to answer first. The table order implies no batch order. The one dependency that spanned entries — flattening gating like-term collection — is discharged: both shipped to layer 05 on 2026-08-15 and are documented in [`../../01_pipeline/05_optimizer/done.md`](../../01_pipeline/05_optimizer/done.md) §1a. The remaining entries are independent of everything, including each other.
 
 Bound absorption shipped to layer 5 on 2026-08-15 and is documented in [`../../01_pipeline/05_optimizer/done.md`](../../01_pipeline/05_optimizer/done.md). It had gated flattening; it no longer does.
 
 **Verifying a chunk.** A structural refactor that changes no semantics must leave the golden dump byte-identical, so `./test/decide/golden/capture.sh` and a clean `diff` against `test/decide/golden/baseline.dump` is the primary signal, alongside `make decide-test`. A chunk that legitimately changes the model (a tightened bound, a different encoding) must show `baseline.dump.results` unchanged before the baseline is recaptured.
-
----
-
-## No pass collects like terms
-
-**Location**: nothing implements it. Layer 4 is forbidden to (`04_canonicalizer/done.md` §5), and no later layer claimed it. The terms it would group are `DecideTerm` lists produced by `BuildDecidePreparedModel` (`src/optimizer/decide/decide_linear_form.cpp`).
-
-`2*ship + 3*ship <= 10` reaches the solver as two terms naming one column. Every downstream consumer then has to remember they are the same variable.
-
-**Why it matters**: one consumer did not, and that was the implied-bound bug fixed 2026-08-15 — it derived a column bound from one term's coefficient instead of their sum. The model builder folds duplicate column entries when writing the matrix row, so the emitted row was always correct and no result-level test could fail; only the model dump showed it. The same trap is waiting for any future pass that iterates `variable_indices` without asking whether an index can repeat.
-
-**Fix direction**: the natural home is beside the linear-form flattening in `src/optimizer/decide/decide_linear_form.cpp`, since collection is a grouping step over already-flat terms. Two constraints hold wherever it lands: it must emit through `AddConstraint` rather than editing a tree in place (layer 4's C2 rule), and it must not merge across reducer boundaries — `SUM(x) + SUM(x)` may merge, `SUM(x) + MIN(x)` may not. Pass ordering is an open question: ABS, IN and bilinear rewrites emit fresh terms, so collection either runs after them or runs twice. The defensive accumulate now in `DecidePropagateImpliedBounds` stays either way.
-
-**Ordering**: unblocked. Flattening shipped to layer 05 on 2026-08-15, so the flat terms this needs to group now exist as `DecideTerm` lists on `LogicalDecide::prepared`.
-
-**Discovered**: 2026-08-15, while fixing the repeated-coefficient bound bug.
 
 ---
 

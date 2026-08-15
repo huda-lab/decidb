@@ -18,6 +18,7 @@
 #include "duckdb/planner/operator/logical_decide.hpp"
 
 #include <functional>
+#include <unordered_map>
 
 namespace duckdb {
 
@@ -223,6 +224,22 @@ public:
 		}
 		for (auto &term : op.composed_minmax_objective_terms) {
 			ExtractTerms(*term.inner_expr, term.inner_terms);
+		}
+
+		// Group like terms, once, over every list that becomes a linear solver row.
+		for (auto &constraint : op.prepared.constraints) {
+			CollectLikeTerms(constraint->lhs_terms);
+		}
+		if (op.prepared.objective) {
+			CollectLikeTerms(op.prepared.objective->terms);
+		}
+		for (auto &spec : op.composed_minmax_constraints) {
+			for (auto &term : spec.terms) {
+				CollectLikeTerms(term.inner_terms);
+			}
+		}
+		for (auto &term : op.composed_minmax_objective_terms) {
+			CollectLikeTerms(term.inner_terms);
 		}
 	}
 
@@ -732,6 +749,88 @@ private:
 			out_terms.push_back(
 			    DecideTerm {var_idx, make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
 		}
+	}
+
+	//===------------------------------------------------------------------===//
+	// Like-term collection
+	//===------------------------------------------------------------------===//
+
+	//! Whether two terms describe the same contribution and may be summed into one.
+	//!
+	//! Naming the same variable is not enough. A term also carries *which rows it
+	//! applies to* and *which reducer produced it*, and two terms that disagree on
+	//! any of that are different contributions that happen to share a column:
+	//!
+	//! - `reduction` separates a reducer term from a row-invariant one. `SUM(x)` and
+	//!   a query-wide `x` in the same clause are summed differently downstream.
+	//! - `filter` is the aggregate-local `WHEN`. `SUM(x) WHEN a` and `SUM(x) WHEN b`
+	//!   name one column over two row sets; merging them would apply one mask to both.
+	//! - `avg_scale` divides by the group's row count, so an AVG term and a SUM term
+	//!   are not summable before that scaling happens.
+	//! - `qualifier_scope_idx` selects a de-duplication mask (`sum(D: ...)`), which is
+	//!   again a statement about which rows contribute.
+	//!
+	//! Constants (`INVALID_INDEX`) are deliberately left alone: they are a fixed
+	//! offset folded into the RHS, not a repeated column, and they are not what any
+	//! consumer iterating `variable_indices` can trip over.
+	static bool TermsAreLike(const DecideTerm &a, const DecideTerm &b) {
+		if (a.variable_index == DConstants::INVALID_INDEX || a.variable_index != b.variable_index) {
+			return false;
+		}
+		if (a.reduction != b.reduction || a.avg_scale != b.avg_scale ||
+		    a.qualifier_scope_idx != b.qualifier_scope_idx) {
+			return false;
+		}
+		if ((a.filter == nullptr) != (b.filter == nullptr)) {
+			return false;
+		}
+		return !a.filter || a.filter->Equals(*b.filter);
+	}
+
+	//! Sum like terms into one, in place, preserving first-occurrence order.
+	//!
+	//! `2*ship + 3*ship` used to reach the solver as two terms naming one column. The
+	//! model builder folded the duplicate when writing the matrix row, so the emitted
+	//! model was always right -- but every other consumer had to remember that an
+	//! index can repeat, and one of them did not: the implied-bound derivation read a
+	//! single term's coefficient instead of the sum (fixed 2026-08-15 by a defensive
+	//! accumulate, which stays). Collecting here removes the trap at its source.
+	//!
+	//! A term contributes `sign * coefficient`, so a group merges as
+	//! `sign_first * (coef_first ± coef_next ± ...)`, taking `-` exactly when a term's
+	//! sign differs from the group's. The result is bound through `FunctionBinder`
+	//! like every other rebuilt coefficient.
+	void CollectLikeTerms(vector<DecideTerm> &terms) const {
+		if (terms.size() < 2) {
+			return;
+		}
+		vector<DecideTerm> out;
+		out.reserve(terms.size());
+		// Bucket by variable so the scan for a match stays short on a wide clause.
+		unordered_map<idx_t, vector<idx_t>> candidates;
+		for (auto &term : terms) {
+			idx_t target = DConstants::INVALID_INDEX;
+			auto bucket = candidates.find(term.variable_index);
+			if (bucket != candidates.end()) {
+				for (auto slot : bucket->second) {
+					if (TermsAreLike(out[slot], term)) {
+						target = slot;
+						break;
+					}
+				}
+			}
+			if (target == DConstants::INVALID_INDEX) {
+				candidates[term.variable_index].push_back(out.size());
+				out.push_back(std::move(term));
+				continue;
+			}
+			vector<unique_ptr<Expression>> children;
+			children.push_back(std::move(out[target].coefficient));
+			children.push_back(std::move(term.coefficient));
+			out[target].coefficient =
+			    RebindOperator(context, out[target].sign == term.sign ? "+" : "-", std::move(children));
+		}
+		terms = std::move(out);
 	}
 
 	//===------------------------------------------------------------------===//
