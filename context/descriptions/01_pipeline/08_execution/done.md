@@ -355,26 +355,15 @@ left unabsorbed and takes the ordinary constraint path: `x >= +inf` becomes one
 infeasible row and `x <= +inf` one satisfied row, the same answer the rebuilt
 spelling `x + v >= +inf` gives.
 
-The exception is Big-M. `DecideTightPerRowBigM` and the ABS-maximize linearization
-need a constant that dominates the row's range, and nothing finite dominates
-infinity. But a bound only has to be linearized when it constrains something, so each
-rewrite classifies the bound first and only a finite one asks for an `M`:
+The exception is Big-M, which needs a constant that dominates the row's range, and
+nothing finite dominates infinity. Every rewrite that faces this — `<>`, MIN/MAX,
+ABS — classifies the bound before asking for an `M`, and all of that now lives at
+stage 06 along with the rows it guards. See
+[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
 
-- **`<>`** — a bound no integer can equal makes the row a tautology, and the drop is
-  ordered before the Big-M is computed. Its per-row and aggregate spellings share one
-  predicate (`NEIsIntegerValuedRhs`), which requires a finite value outright:
-  `inf - round(inf)` is NaN, and a comparison against NaN is false whichever way it
-  is written, so an inline copy of the test silently let an infinite bound through to
-  the Big-M.
-- **MIN / MAX** — classified at stage 06, which also emits the rows. See
-  [`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
-- **ABS** — the infinity is in the expression *inside* `ABS()`, not in the bound, so
-  there is no direction to read and no constant that bounds the range. It is refused,
-  naming the column and the row.
-
-What still reaches the refusal in `DecideTightPerRowBigM` is a bound with no reading
-at all — NaN — and the auto-`M` `norm(e, 0)` links, whose `M` bounds an expression
-rather than answering a comparison.
+The one Big-M still derived here is the auto-`M` refill for `norm(e, 0)` links,
+whose `M` bounds an expression rather than answering a comparison, so there is no
+bound to classify. It calls `DecideTightPerRowBigM` across the stage boundary.
 
 ### Output
 
@@ -403,9 +392,12 @@ every active row gets `-M` and every excluded row 0.
 ## 6. PHASE 3 — build and solve
 
 Hands off to stage 06 ([`../06_model_formulation/done.md`](../06_model_formulation/done.md))
-and stage 07 ([`../07_solver/done.md`](../07_solver/done.md)). Also emitted here:
-data-driven Big-M refill for auto-`M` links, composed MIN/MAX row emission, the
-deferred `<>` expansion, and the ABS `MAXIMIZE` upper-bound derivation.
+and stage 07 ([`../07_solver/done.md`](../07_solver/done.md)). The hand-off happens
+early: `solver_input.constraints` is populated as soon as bounds are resolved, and
+the linearization passes then work on it in place. Still emitted here: the
+data-driven Big-M refill for auto-`M` links (it needs `decide_variables` to find the
+`__l0auto_ind_` names), composed MIN/MAX row emission, and the nested-`PER`
+two-level formulation.
 
 A slow-solve checkpoint report runs when a solve exceeds its budget; see
 [`../../07_query_diagnostics/slow/done.md`](../../07_query_diagnostics/slow/done.md).

@@ -59,7 +59,7 @@ fix itself.
 
 Seven entries came from one audit (2026-08-15) and share a root cause; six remain below. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
 
-`physical_decide.cpp` is 6,902 lines against 2,217 for layer 05, 1,402 + 428 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
+`physical_decide.cpp` is 6,359 lines against 2,217 for layer 05, 1,402 + 1,012 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
 
 **Why they ended up there.** Coefficients are expressions over user data, so they can only become numbers once the relational input has run. That put coefficient evaluation at layer 08, correctly. Everything else that touches those same expression trees then followed it down, whether or not it needed the data. The code records this: `ApplyScaleToExtracted` rebuilds a scaled coefficient by reusing the original node's `FunctionData` because, in its own comment, that is how it gets rebuilt "without a binder here" — layer 08 reconstructing binder output because it sits downstream of the binder.
 
@@ -130,22 +130,17 @@ The binder computes polynomial degree to decide whether a DECIDE expression is v
 
 ## Each linearized formulation is split between the layer that chooses it and the layer that encodes it
 
-**Partly shipped 2026-08-15.** The Big-M constants and the flat hard MIN/MAX emitter moved to layer 6 as `src/decidb/utility/ilp_linearization.cpp`, documented in [`../../01_pipeline/06_model_formulation/done.md`](../../01_pipeline/06_model_formulation/done.md) §9. What remains is below.
+**Mostly shipped 2026-08-15**, across two slices. Every emitter with no physical dependency now lives at layer 6 in `src/decidb/utility/ilp_linearization.cpp` — Big-M constants and implied bounds, hard MIN/MAX, `<>` (both the per-row expansion and the deferred aggregate one), McCormick, and ABS-under-MAXIMIZE. Documented in [`../../01_pipeline/06_model_formulation/done.md`](../../01_pipeline/06_model_formulation/done.md) §9. `physical_decide.cpp` went 7,344 → 6,359.
 
-**Location**: `src/execution/operator/decide/physical_decide.cpp`, Finalize PHASE 3 — deferred aggregate `<>` expansion, the per-row `<>` expansion, composed MIN/MAX hard-direction indicators, ABS-under-MAXIMIZE upper bounds, McCormick rows for bilinear, and the nested-PER two-level formulation.
+**What remains is one emitter, and it is not a move**: the nested-`PER` two-level formulation, plus the composed MIN/MAX row emission that shares its scaffolding.
 
-Layer 5 decides the formulation and stops. `RewriteNotEqual` creates the binary indicator and, by its own comment, leaves the constraint expression unmodified; layer 8 later expands it into the two Big-M rows that actually encode the disjunction. ABS, bilinear and the composed MIN/MAX paths follow the same split.
+**Location**: `src/execution/operator/decide/physical_decide.cpp`, Finalize PHASE 3, from the two-level `PER` auxiliary construction onward.
 
-**Why it matters**: no single file describes how any of these constructs is encoded. Reading `decide_optimizer.cpp` tells you a `<>` becomes an indicator, and nothing about the rows; reading `physical_decide.cpp` tells you the rows, and nothing about why.
+**Why it is different from the ones that shipped.** The others were pure functions of `SolverInput` wearing a physical-layer costume. This one re-scans `gstate.data` with an `ExpressionExecutor` at six sites *inside* the emitter, evaluating inner expressions that PHASE 2 never evaluated. So it is not "an emitter that ended up downstream" — it is an emitter fused with a late evaluation pass.
 
-**Fix direction**: layer 6 *receives* the evaluated numbers these emitters need — `SolverInput` already carries evaluated coefficients, bounds and group ids — and layer 6's charter is model variables, constraints and indexing. The emitters and their constants move together; a Big-M is meaningless apart from the row it scales, so splitting them would only relocate the seam.
+**Fix direction**: hoist the evaluation into PHASE 2 first, so the nested-`PER` path receives evaluated coefficients like every other construct, and only then move the emission to layer 6. Open question: whether PHASE 2 can evaluate those inner expressions without knowing the group structure the emitter derives, or whether the two are genuinely interleaved — if they are, this becomes a question about the `PER` contract rather than about layer placement. Worth answering before committing to the move.
 
-**The open question is answered: no, the structural half cannot move to layer 5.** Three reasons, each independently sufficient. (1) These emitters address variables by *flat solver column index* (`indicator_idx`, `global_block_start + g`), an indexing scheme that does not exist until `VarIndexer` is built. (2) The row count is itself data — hard `MAX` emits one indicator per active row plus `SUM(y) >= 1` over the survivors. (3) Group structure (`row_group_ids`, `num_groups`) comes from evaluating the `PER`/`WHEN` column. Layer 5 correctly stops at "this becomes an indicator"; both halves belong at layer 6.
-
-**The remaining emitters are not uniform, and that is the real scoping question.** Sorted by whether they touch anything physical:
-
-- **Clean** — per-row `<>` expansion, McCormick, ABS-maximize, deferred aggregate `<>`. No `ClientContext`, no `DataChunk`, no `Expression`; the last needs `VarIndexer` but no data. These can move the same way the MIN/MAX emitter did.
-- **Entangled** — the nested-PER two-level formulation re-scans `gstate.data` with an `ExpressionExecutor` at six sites *inside* the emitter, evaluating inner expressions that PHASE 2 never evaluated. Moving it means first hoisting that evaluation into PHASE 2, which is a design task of its own and closer to the flattening entry's risk profile than to a mechanical move. Take it as a separate chunk or explicitly leave it.
+**Verification note**: both shipped slices left `baseline.dump` byte-identical, and this one should too. If it cannot, that is evidence the evaluation and the emission are not separable, which is the finding rather than a failure.
 
 **Discovered**: 2026-08-15, physical-layer audit.
 
@@ -186,7 +181,7 @@ By that test the three guards sort cleanly and only one is contentious:
 - the **structural half** (the LHS references a REAL decision variable) is knowable at bind time and should reject there, naming the clause and the declared type;
 - the **value half** (a data column produced a non-integer coefficient) genuinely needs the scan and stays at layer 8.
 
-Four sites share this shape, so the chunk is a little larger than one guard but well bounded: `ilp_model_builder.cpp:481`, `:493` (per-row strict), `:1070`, `:1081` (aggregate strict), plus the sibling `<>` refusal at `physical_decide.cpp:4700` (`NELhsIsIntegerValued`), which is the same conjunction in a different construct. Take the `<>` one in the same chunk or explicitly leave it — do not split the pair silently.
+Four sites share this shape, so the chunk is a little larger than one guard but well bounded: `ilp_model_builder.cpp:481`, `:493` (per-row strict), `:1070`, `:1081` (aggregate strict), plus the sibling `<>` refusal in `NELhsIsIntegerValued` (now `src/decidb/utility/ilp_linearization.cpp`, moved there 2026-08-15 with the `<>` emitter), which is the same conjunction in a different construct. Take the `<>` one in the same chunk or explicitly leave it — do not split the pair silently.
 
 **Test surface**: 8 assertions in `test/decide/tests/test_cons_comparison.py`, all routed through two module-level regexes (`_STRICT_LT_REAL_MSG`, `_STRICT_GT_REAL_MSG`) plus `_NE_REAL_MSG`, so a message change is a three-line edit there rather than eight.
 

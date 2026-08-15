@@ -334,6 +334,69 @@ infinite bounds.
 Emitted rows carry `ConstraintKind::USER_MECHANISM`: they are rigid mechanism
 rows, not user parameters, so diagnosis does not offer to loosen them.
 
+### `<>` disjunctions
+
+`LinearizeNotEqual()` encodes `x <> K` as the disjunctive pair
+`x - M*z <= K-1` / `x - M*z >= K+1-M`, where `z` is the binary stage 05 created.
+Both rows carry the same `ne_indicator_idx`, which is what lets the elastic engine
+group them and offer removal rather than loosening half a disjunction.
+
+Two guards run before any `M` is asked for, and the order matters:
+
+- **`NELhsIsIntegerValued`** refuses a REAL variable or a non-integer coefficient
+  outright. The ±1 band is only exact on the integer lattice; on a continuous
+  variable it would silently cut the feasible points in `(K-1, K+1)`.
+- **`NEIsIntegerValuedRhs`** *drops* a comparison whose bound no integer can equal,
+  because every assignment already satisfies it. Emitting the pair anyway would
+  wrongly exclude `floor(K)` and `ceil(K)`. An infinite `K` is the same case for the
+  same reason, and it must drop here rather than reach the Big-M — the predicate
+  requires finiteness outright, since `inf - round(inf)` is NaN and every comparison
+  against NaN is false.
+
+A per-row spelling with a row-varying bound masks only its non-integer rows, via
+`row_group_ids`, instead of dropping the whole constraint.
+
+**Aggregate spellings cannot expand in place.** They need one *global* binary per
+group, and the group's `M` must cover the summed range over its rows — a single
+per-row bound is far too small at scale and would silently cap the aggregate. So
+`LinearizeNotEqual` moves them to a deferred list and
+`ExpandDeferredAggregateNotEqual()` finishes them once `VarIndexer` exists,
+emitting `SolverInput::RawConstraint`s in flat column space. Each group allocates
+its own `z` and carries the clause text stage 05 recorded, so a dropped aggregate
+`<>` can be named in a repair. Groups skipped by the integer-RHS guard allocate no
+`z`, so the model stays clean.
+
+### Bilinear products
+
+`LinearizeBilinear()` emits the McCormick envelope for each `w = b * x` link, with
+`b` Boolean and `x` in `[L, U]`:
+
+| Row | Condition |
+|---|---|
+| `w <= U*b` | always |
+| `w >= x - U*(1-b)` | always |
+| `w <= x - L*(1-b)` | `L < 0`; collapses to `w <= x` when `L >= 0` |
+| `w >= L*b` | `L < 0` only |
+
+For `L >= 0` the lower corner is implied by `w`'s own non-negative bound, so three
+rows suffice. For `L < 0` all four are emitted and `w`'s own lower bound is widened
+so the product can reach the negative value of `x` at `b = 1`. A missing finite
+upper bound on `x` is refused by name — there is no envelope without it.
+
+### ABS under MAXIMIZE
+
+Stage 05 emits `aux >= inner` and `aux >= -inner` and tags them via `abs_y_idx` /
+`abs_is_pos_bound`. Under MINIMIZE those two alone pin `aux = |inner|`, because the
+objective pushes `aux` down. Under MAXIMIZE they do not — `aux` is free to run
+above `|inner|` — so `LinearizeAbsMaximize()` pairs the tagged rows and derives the
+matching Big-M upper bounds that close it.
+
+This site is **strict about bounds**: unlike the indicator paths there is no
+fallback constant, so a contributing variable with no finite bound is named and
+refused rather than given `DECIDE_BIGM_FALLBACK`. An infinity in the bound carries
+the constant part of the expression the user wrote inside `ABS()`, so the refusal
+names that and the row, not the linearization.
+
 ---
 
 ## 10. Source map
@@ -341,7 +404,8 @@ rows, not user parameters, so diagnosis does not offer to loosen them.
 | Concern | Location |
 |---|---|
 | `SolverModel::Build`, all constraint paths, Q construction | `src/decidb/utility/ilp_model_builder.cpp` |
-| Implied bounds, Big-M constants, hard MIN/MAX rows | `src/decidb/utility/ilp_linearization.cpp` |
+| Implied bounds, Big-M constants, MIN/MAX, `<>`, McCormick, ABS rows | `src/decidb/utility/ilp_linearization.cpp` |
+| `BilinearLinkSpec`, `AbsMaximizeLinkSpec` — the formulation tags | `src/include/duckdb/decidb/solver_input.hpp` |
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/ilp_model.hpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver_input.hpp` |
 | Golden model corpus (the characterization oracle) | `test/decide/golden/` |

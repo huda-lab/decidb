@@ -322,6 +322,24 @@ struct EntityMapping {
     vector<idx_t> row_to_entity;     //! [row_idx] -> entity_id (0..num_entities-1)
 };
 
+//! Links a McCormick auxiliary `w` to the pair it linearizes: `w = b * x`, with
+//! `b` Boolean and `x` bounded. Stage 05 chooses the auxiliary and records the
+//! link; stage 06 derives the corner constraints from `x`'s evaluated bounds.
+struct BilinearLinkSpec {
+    idx_t aux_idx;       //!< auxiliary variable w
+    idx_t bool_var_idx;  //!< Boolean variable b
+    idx_t other_var_idx; //!< non-Boolean variable x
+};
+
+//! Links an ABS auxiliary to its binary sign indicator. Stage 05 emits the two
+//! lower bounds (`aux >= inner`, `aux >= -inner`) and records the link; under
+//! MAXIMIZE those alone leave `aux` free to run above `|inner|`, so stage 06
+//! derives the matching Big-M upper bounds that pin it.
+struct AbsMaximizeLinkSpec {
+    idx_t aux_idx; //!< ABS auxiliary variable
+    idx_t y_idx;   //!< binary sign indicator
+};
+
 //! Input for the deterministic solver
 struct SolverInput {
     idx_t num_rows;
@@ -335,6 +353,12 @@ struct SolverInput {
     // Constraints
     vector<EvaluatedConstraint> constraints;
     vector<ConstraintSourceInfo> constraint_sources;
+
+    // Formulations stage 05 chose and stage 06 encodes. Each is a tag pointing at
+    // auxiliary variables the optimizer already created; the rows that realize
+    // them need evaluated bounds, so they are derived at stage 06.
+    vector<BilinearLinkSpec> bilinear_links;
+    vector<AbsMaximizeLinkSpec> abs_maximize_links;
 
     // Linear objective
     vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows

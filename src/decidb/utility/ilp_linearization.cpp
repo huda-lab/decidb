@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace duckdb {
 
@@ -256,11 +257,13 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
     }
 }
 
-void LinearizeMinMaxIndicators(vector<EvaluatedConstraint> &constraints,
-                               const vector<double> &lower_bounds,
-                               const vector<double> &upper_bounds, idx_t num_rows) {
+void LinearizeMinMaxIndicators(SolverInput &input) {
+    const auto &lower_bounds = input.lower_bounds;
+    const auto &upper_bounds = input.upper_bounds;
+    const idx_t num_rows = input.num_rows;
+
     vector<EvaluatedConstraint> new_constraints;
-    for (auto &ec : constraints) {
+    for (auto &ec : input.constraints) {
         // Skip constraints without a minmax indicator tag
         if (ec.minmax_indicator_idx == DConstants::INVALID_INDEX) {
             new_constraints.push_back(std::move(ec));
@@ -422,7 +425,588 @@ void LinearizeMinMaxIndicators(vector<EvaluatedConstraint> &constraints,
             new_constraints.push_back(std::move(ec_sum));
         }
     }
-    constraints = std::move(new_constraints);
+    input.constraints = std::move(new_constraints);
+}
+
+//===--------------------------------------------------------------------===//
+// `<>` disjunctions
+//===--------------------------------------------------------------------===//
+
+//! The ±1 band is only semantically exact when the LHS is integer-valued. For a REAL
+//! variable or a non-integer coefficient the band `(K-1, K+1)` wrongly excludes
+//! feasible continuous points. Mirrors the strict-inequality guard in
+//! `ilp_model_builder.cpp::IsEvalConstraintLhsIntegerValued`.
+static bool NELhsIsIntegerValued(const EvaluatedConstraint &ec,
+                                 const vector<LogicalType> &variable_types) {
+    for (idx_t i = 0; i < ec.variable_indices.size(); i++) {
+        idx_t vi = ec.variable_indices[i];
+        if (vi == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        const auto &t = variable_types[vi];
+        if (t == LogicalType::DOUBLE || t == LogicalType::FLOAT) {
+            return false;
+        }
+        if (!ec.row_coefficients[i].AllIntegral()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+//! Companion check on the RHS. With integer-valued LHS and a non-integer K,
+//! `LHS <> K` is a tautology (no integer can equal K). The ±1 Big-M rewrite would
+//! emit `LHS <= K-1 ∨ LHS >= K+1`, which on the integer lattice wrongly excludes
+//! floor(K) and ceil(K) — both of which the original predicate accepted. Treat such
+//! RHS values as a silent drop. An infinite K is the same case for the same reason —
+//! no integer equals it — and it must drop rather than reach the Big-M constant,
+//! which cannot dominate infinity.
+static bool NEIsIntegerValuedRhs(double k) {
+    return std::isfinite(k) && std::abs(k - std::round(k)) < 1e-9;
+}
+
+void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate) {
+    const idx_t num_rows = input.num_rows;
+
+    vector<EvaluatedConstraint> new_constraints;
+    for (auto &ec : input.constraints) {
+        if (ec.ne_indicator_idx == DConstants::INVALID_INDEX) {
+            new_constraints.push_back(std::move(ec));
+            continue;
+        }
+        if (!NELhsIsIntegerValued(ec, input.variable_types)) {
+            throw InvalidInputException(
+                "Inequality '<>' is not supported when the left-hand side "
+                "involves a REAL variable or a non-integer coefficient. "
+                "The integer-step rewrite (x <> K → x <= K-1 OR x >= K+1) "
+                "would cut continuous feasible points in the band (K-1, K+1).");
+        }
+        if (ec.lhs_is_aggregate) {
+            // Aggregate NE: defer to after var_indexer is built. Expanded with a
+            // single global z per group, whose Big-M comes from that group's SUMMED
+            // range — a single per-row bound would be far too small. The per-group
+            // integer-RHS check (for AVG <> where the rescaled K*N_g may or may not
+            // be integer) lives in the deferred expansion; we don't filter here.
+            deferred_aggregate.push_back(ec); // copy before the loop moves on
+            continue;                         // not added to new_constraints
+        }
+
+        // Per-row NE: expand inline with the row-scoped indicator variable.
+        //
+        // Integer-valued RHS guard. If RHS is uniform and non-integer, every row's
+        // `LHS <> K` is a tautology — drop the whole constraint. If RHS varies per
+        // row (e.g. correlated subquery), mask out only the non-integer rows by
+        // marking them INVALID_INDEX in row_group_ids so the model builder skips
+        // them. The remaining rows still get the real Big-M pair.
+        if (ec.rhs_values.IsUniform()) {
+            if (!NEIsIntegerValuedRhs(ec.rhs_values.UniformValue())) {
+                continue; // drop ec entirely (tautology)
+            }
+        } else {
+            // Build/extend a mask. row_group_ids may be empty (no WHEN/PER); in that
+            // case materialize one initialised to group 0 so individual rows can be
+            // excluded by setting INVALID_INDEX.
+            if (ec.row_group_ids.empty()) {
+                ec.row_group_ids.assign(num_rows, 0);
+                ec.num_groups = 1;
+            }
+            idx_t dropped = 0;
+            for (idx_t r = 0; r < num_rows; r++) {
+                if (ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+                    continue;
+                }
+                if (!NEIsIntegerValuedRhs(ec.rhs_values.Get(r))) {
+                    ec.row_group_ids[r] = DConstants::INVALID_INDEX;
+                    dropped++;
+                }
+            }
+            if (dropped == num_rows) {
+                continue; // every row is a tautology — drop the constraint
+            }
+        }
+
+        // Tight data-driven per-row Big-M for the inline NE expansion. Computed
+        // after the tautology filter: a row this rewrite never emits must not be
+        // asked for an M, and an infinite bound is exactly such a row
+        // (`LHS <> Infinity` always holds), so it is dropped above rather than
+        // refused by the Big-M guard.
+        double M = DecideTightPerRowBigM(ec, input.lower_bounds, input.upper_bounds, num_rows);
+        idx_t indicator_var_idx = ec.ne_indicator_idx;
+
+        // Build the indicator coefficient column. With no WHEN/PER filter every row
+        // gets -M (broadcast scalar). Otherwise only the active rows hold -M and the
+        // rest are 0 — stored as SparseMasked instead of Dense to skip the
+        // per-excluded-row 0 allocation. ec.row_group_ids is iterated in row order,
+        // so the resulting sparse_indices list is already sorted ascending (the
+        // SparseMasked invariant).
+        CoefficientColumn indicator_coeffs;
+        if (ec.row_group_ids.empty()) {
+            indicator_coeffs = CoefficientColumn::MakeScalar(-M, num_rows);
+        } else {
+            vector<idx_t> active_indices;
+            active_indices.reserve(num_rows / 8);
+            for (idx_t r = 0; r < num_rows; r++) {
+                if (ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
+                    active_indices.push_back(r);
+                }
+            }
+            indicator_coeffs = CoefficientColumn::MakeSparseMasked(
+                num_rows, std::move(active_indices), -M);
+        }
+
+        auto BuildShiftedRhs = [&](double shift) {
+            if (ec.rhs_values.IsUniform()) {
+                return CoefficientColumn::MakeScalar(ec.rhs_values.UniformValue() + shift, num_rows);
+            }
+            auto col = CoefficientColumn::MakeDense(num_rows, 0.0);
+            for (idx_t r = 0; r < num_rows; r++) {
+                col.Set(r, ec.rhs_values.Get(r) + shift);
+            }
+            return col;
+        };
+
+        // Constraint 1: x - M*z <= K - 1
+        EvaluatedConstraint ec1;
+        ec1.variable_indices = ec.variable_indices;
+        ec1.row_coefficients = ec.row_coefficients;
+        ec1.variable_indices.push_back(indicator_var_idx);
+        ec1.row_coefficients.push_back(indicator_coeffs);
+        ec1.rhs_values = BuildShiftedRhs(-1.0);
+        ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec1.lhs_is_aggregate = false; // per-row
+        ec1.row_group_ids = ec.row_group_ids;
+        ec1.num_groups = ec.num_groups;
+        ec1.group_labels = ec.group_labels;
+        ec1.qualifier = ec.qualifier;
+        ec1.kind = ConstraintKind::USER_MECHANISM;
+        // I4: tag this disjunction row with its indicator so the elastic engine can
+        // group the pair and offer removal (remove-only `<>`).
+        ec1.ne_indicator_idx = indicator_var_idx;
+        new_constraints.push_back(std::move(ec1));
+
+        // Constraint 2: x - M*z >= K + 1 - M
+        EvaluatedConstraint ec2;
+        ec2.variable_indices = ec.variable_indices;
+        ec2.row_coefficients = ec.row_coefficients;
+        ec2.variable_indices.push_back(indicator_var_idx);
+        ec2.row_coefficients.push_back(std::move(indicator_coeffs));
+        ec2.rhs_values = BuildShiftedRhs(1.0 - M);
+        ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+        ec2.lhs_is_aggregate = false; // per-row
+        ec2.row_group_ids = ec.row_group_ids;
+        ec2.num_groups = ec.num_groups;
+        ec2.group_labels = ec.group_labels;
+        ec2.qualifier = ec.qualifier;
+        ec2.kind = ConstraintKind::USER_MECHANISM;
+        // I4: same indicator as ec1 — both rows form one removable `<>`.
+        ec2.ne_indicator_idx = indicator_var_idx;
+        new_constraints.push_back(std::move(ec2));
+    }
+    input.constraints = std::move(new_constraints);
+}
+
+void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
+                                     vector<EvaluatedConstraint> &deferred_aggregate,
+                                     const vector<pair<idx_t, string>> &aux_var_expressions) {
+    if (deferred_aggregate.empty()) {
+        return;
+    }
+    const idx_t num_rows = input.num_rows;
+
+    // Reusable scratch for per-group LHS accumulation (replaces a per-group
+    // unordered_map<int,double>). The decide-variable flat indices are bounded by
+    // var_indexer.global_block_start, so the dense accumulator is sized to that —
+    // tighter than total_vars and unaffected by the globals appended as we go.
+    SparseCoeffAccumulator accum;
+    {
+        constexpr idx_t DENSE_CAP = 1u << 20;
+        idx_t decide_var_index_span = var_indexer.global_block_start;
+        if (decide_var_index_span <= DENSE_CAP) {
+            accum.BeginDense(decide_var_index_span);
+        } else {
+            accum.BeginSparse(num_rows); // hint; per-group merging keeps actual size small
+        }
+    }
+
+    for (auto &ec : deferred_aggregate) {
+        bool has_groups = !ec.row_group_ids.empty();
+
+        // I4 (aggregate `<>`): clause text used to name a dropped aggregate `<>`.
+        // Stage 05 recorded "(SUM(x) <> K)" in aux_var_expressions keyed by the
+        // indicator decide-var; carry it onto every global z this `ec` allocates so
+        // the infeasible removal dial can label the DROP edit.
+        string ne_label;
+        for (auto &ae : aux_var_expressions) {
+            if (ae.first == ec.ne_indicator_idx) {
+                ne_label = ae.second;
+                break;
+            }
+        }
+
+        // Build group → rows mapping. For grouped constraints reuse the CSR index
+        // already attached to ec; for ungrouped, materialize the trivial
+        // single-group CSR locally.
+        idx_t num_groups_to_process = 1;
+        vector<idx_t> ungrouped_offsets;
+        vector<idx_t> ungrouped_flat;
+        const vector<idx_t> *offsets_ptr = nullptr;
+        const vector<idx_t> *flat_ptr = nullptr;
+        if (has_groups) {
+            BuildGroupCSR(ec.row_group_ids, ec.num_groups, ec.group_offsets, ec.group_row_ids);
+            num_groups_to_process = ec.num_groups;
+            offsets_ptr = &ec.group_offsets;
+            flat_ptr = &ec.group_row_ids;
+        } else {
+            ungrouped_offsets = {0, num_rows};
+            ungrouped_flat.resize(num_rows);
+            for (idx_t r = 0; r < num_rows; r++) {
+                ungrouped_flat[r] = r;
+            }
+            offsets_ptr = &ungrouped_offsets;
+            flat_ptr = &ungrouped_flat;
+        }
+        const auto &offsets = *offsets_ptr;
+        const auto &flat_rows = *flat_ptr;
+
+        for (idx_t g = 0; g < num_groups_to_process; g++) {
+            idx_t g_begin = offsets[g];
+            idx_t g_end = offsets[g + 1];
+            if (g_begin == g_end) {
+                continue;
+            }
+            idx_t g_size = g_end - g_begin;
+
+            // Base (unscaled) RHS, read from a row that actually belongs to this
+            // group. For AVG(x) <> K we store the original K in rhs_values and
+            // multiply by the group size below.
+            double rhs = ec.rhs_values.Get(flat_rows[g_begin]);
+            if (ec.ne_avg_rhs_scale) {
+                rhs *= static_cast<double>(g_size);
+            }
+            double fixed_offset = SumFixedAggregateLhsOffset(
+                ec, &flat_rows, g_begin, g_end, "fixed aggregate <> term");
+            rhs -= fixed_offset;
+
+            // Integer-RHS guard: with integer LHS (already enforced by
+            // NELhsIsIntegerValued at deferral time) and a non-integer K,
+            // `LHS <> K` is a tautology — every integer LHS satisfies it. The ±1
+            // Big-M rewrite would wrongly cut floor(K) and ceil(K). Skip the group
+            // entirely. For AVG <> with mixed group sizes, some groups may have
+            // integer K*N_g and others not — each is handled independently. No
+            // global z is allocated for skipped groups, so the model stays clean.
+            // The predicate is shared with the per-row path: spelling the negation
+            // inline here let an infinite K through, because `inf - round(inf)` is
+            // NaN and every comparison against NaN is false — so the group reached
+            // the Big-M below and built an infinite coefficient instead of dropping
+            // as a tautology.
+            if (!NEIsIntegerValuedRhs(rhs)) {
+                continue;
+            }
+
+            // Tight per-group Big-M: the aggregate LHS ranges over the SUM of this
+            // group's rows, so M must cover the summed magnitude. A single per-row
+            // bound is far too small at scale and would silently cap the aggregate.
+            bool grp_unbounded = false;
+            double grp_range = 0.0;
+            for (idx_t k = g_begin; k < g_end; k++) {
+                grp_range += DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
+                                                flat_rows[k], input.lower_bounds,
+                                                input.upper_bounds, grp_unbounded);
+            }
+            double M = grp_range + std::abs(rhs) + 1.0;
+            if (grp_unbounded) {
+                M = std::max(M, DECIDE_BIGM_FALLBACK);
+            }
+
+            // Allocate one global binary z for this group
+            idx_t z_idx = var_indexer.global_block_start + input.num_global_vars;
+            input.num_global_vars++;
+            input.global_variable_types.push_back(LogicalType::BOOLEAN);
+            input.global_lower_bounds.push_back(0.0);
+            input.global_upper_bounds.push_back(1.0);
+            input.global_obj_coeffs.push_back(0.0);
+            input.global_variable_labels.push_back(ne_label);
+
+            // Accumulate LHS coefficients for active rows in this group.
+            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+                idx_t decide_var_idx = ec.variable_indices[term_idx];
+                if (decide_var_idx == DConstants::INVALID_INDEX) {
+                    continue;
+                }
+                auto &col = ec.row_coefficients[term_idx];
+                for (idx_t k = g_begin; k < g_end; k++) {
+                    idx_t row = flat_rows[k];
+                    double coeff = col.Get(row);
+                    if (std::abs(coeff) < 1e-15) {
+                        continue;
+                    }
+                    int var_idx = static_cast<int>(var_indexer.Get(decide_var_idx, row));
+                    accum.Add(var_idx, coeff);
+                }
+            }
+
+            // Flush once into a deduped (idx, coeff) snapshot reused for both rc1 and rc2.
+            vector<int> common_indices;
+            vector<double> common_coefs;
+            accum.Flush(common_indices, common_coefs);
+
+            // ec1: SUM(coeffs) - M*z <= K - 1
+            SolverInput::RawConstraint rc1;
+            rc1.sense = '<';
+            rc1.rhs = rhs - 1.0;
+            rc1.indices = common_indices;
+            rc1.coefficients = common_coefs;
+            rc1.indices.push_back(static_cast<int>(z_idx));
+            rc1.coefficients.push_back(-M);
+            rc1.kind = ConstraintKind::USER_MECHANISM;
+            rc1.source_clause_id = ec.source_clause_id;
+            rc1.repair_group_id = ec.repair_group_id;
+            rc1.indicator_col = z_idx;
+            input.global_constraints.push_back(std::move(rc1));
+
+            // ec2: SUM(coeffs) - M*z >= K + 1 - M
+            SolverInput::RawConstraint rc2;
+            rc2.sense = '>';
+            rc2.rhs = rhs + 1.0 - M;
+            rc2.indices = std::move(common_indices);
+            rc2.coefficients = std::move(common_coefs);
+            rc2.indices.push_back(static_cast<int>(z_idx));
+            rc2.coefficients.push_back(-M);
+            rc2.kind = ConstraintKind::USER_MECHANISM;
+            rc2.source_clause_id = ec.source_clause_id;
+            rc2.repair_group_id = ec.repair_group_id;
+            rc2.indicator_col = z_idx;
+            input.global_constraints.push_back(std::move(rc2));
+        }
+    }
+}
+
+//===--------------------------------------------------------------------===//
+// Bilinear products and ABS
+//===--------------------------------------------------------------------===//
+
+void LinearizeBilinear(SolverInput &input, const vector<string> &var_names) {
+    const idx_t num_rows = input.num_rows;
+
+    // For (w = b * x) with b Boolean and x in [L, U] the exact linearization is:
+    //   w <= U*b                  (ec1)
+    //   w >= x - U*(1-b)          (ec2)
+    //   w <= x - L*(1-b)          (ec3, upper corner)
+    //   w >= L*b                  (ec4, lower corner)
+    // For L >= 0 the lower corner is implied by w's own non-negative bound, and ec3
+    // simplifies to the plain structural `w <= x` (w=0 at b=0 is enforced by ec1).
+    // We emit exactly those two-plus-one constraints in that case — stage 05 no
+    // longer emits the structural `w <= x` (it lives here). For L < 0 we emit the
+    // full four corners and widen w's own lower bound so the product can take the
+    // negative value of x when b=1.
+    for (auto &link : input.bilinear_links) {
+        double U = input.upper_bounds[link.other_var_idx];
+        double L = input.lower_bounds[link.other_var_idx];
+        if (U >= 1e20) {
+            throw InvalidInputException(
+                "Bilinear term requires a finite upper bound on variable '%s'. "
+                "Add a constraint like '%s <= <bound>' to provide one.",
+                var_names[link.other_var_idx], var_names[link.other_var_idx]);
+        }
+
+        // ec1: w <= U * b  (i.e., w - U*b <= 0)
+        EvaluatedConstraint ec1;
+        ec1.variable_indices = {link.aux_idx, link.bool_var_idx};
+        ec1.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
+        ec1.row_coefficients.push_back(CoefficientColumn::MakeScalar(-U, num_rows));
+        ec1.rhs_values.AssignScalar(num_rows, 0.0);
+        ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec1.lhs_is_aggregate = false;
+        ec1.kind = ConstraintKind::STRUCTURAL;
+        input.constraints.push_back(std::move(ec1));
+
+        // ec2: w >= x - U*(1-b) = x - U + U*b
+        // Rearranged: w - x + U*b >= -U  →  1*w + (-1)*x + (-U)*b >= -U
+        EvaluatedConstraint ec2;
+        ec2.variable_indices = {link.aux_idx, link.other_var_idx, link.bool_var_idx};
+        ec2.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+        ec2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, num_rows));  // -x
+        ec2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-U, num_rows));    // -U*b
+        ec2.rhs_values.AssignScalar(num_rows, -U);
+        ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+        ec2.lhs_is_aggregate = false;
+        ec2.kind = ConstraintKind::STRUCTURAL;
+        input.constraints.push_back(std::move(ec2));
+
+        // ec3: upper corner. L >= 0 → plain `w <= x`; L < 0 → `w <= x - L*(1-b)`,
+        // i.e. w - x - L*b <= -L.
+        EvaluatedConstraint ec3;
+        if (L < 0.0) {
+            ec3.variable_indices = {link.aux_idx, link.other_var_idx, link.bool_var_idx};
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, num_rows));  // -x
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-L, num_rows));    // -L*b
+            ec3.rhs_values.AssignScalar(num_rows, -L);
+        } else {
+            ec3.variable_indices = {link.aux_idx, link.other_var_idx};
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec3.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, num_rows));  // -x
+            ec3.rhs_values.AssignScalar(num_rows, 0.0);
+        }
+        ec3.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec3.lhs_is_aggregate = false;
+        ec3.kind = ConstraintKind::STRUCTURAL;
+        input.constraints.push_back(std::move(ec3));
+
+        // ec4: lower corner `w >= L*b`, only needed when x can be negative. Also
+        // widen the aux's own lower bound so w may equal the negative x at b=1.
+        if (L < 0.0) {
+            input.lower_bounds[link.aux_idx] = std::min(input.lower_bounds[link.aux_idx], L);
+            EvaluatedConstraint ec4;
+            ec4.variable_indices = {link.aux_idx, link.bool_var_idx};
+            ec4.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));   // +w
+            ec4.row_coefficients.push_back(CoefficientColumn::MakeScalar(-L, num_rows));    // -L*b
+            ec4.rhs_values.AssignScalar(num_rows, 0.0);
+            ec4.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+            ec4.lhs_is_aggregate = false;
+            ec4.kind = ConstraintKind::STRUCTURAL;
+            input.constraints.push_back(std::move(ec4));
+        }
+    }
+}
+
+void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
+    if (input.abs_maximize_links.empty()) {
+        return;
+    }
+    const idx_t num_rows = input.num_rows;
+
+    // For each link, find the two tagged lower-bound EvaluatedConstraints
+    // (C1: aux >= inner tagged ABS_UB_POS, C2: aux >= -inner tagged ABS_UB_NEG) and emit:
+    //   C_ub1: derived from C1, add y with coeff +2M, comparison <=, rhs[r] += 2M
+    //   C_ub2: derived from C2, add y with coeff -2M, comparison <=, rhs unchanged
+    // Together with C1/C2 these force aux = |inner| under MAXIMIZE.
+    struct AbsConstraintPair {
+        idx_t c1 = DConstants::INVALID_INDEX;
+        idx_t c2 = DConstants::INVALID_INDEX;
+    };
+    unordered_map<idx_t, AbsConstraintPair> abs_tag_map;
+    for (idx_t ci = 0; ci < input.constraints.size(); ci++) {
+        auto &ec = input.constraints[ci];
+        if (ec.abs_y_idx == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        if (ec.abs_is_pos_bound) {
+            abs_tag_map[ec.abs_y_idx].c1 = ci;
+        } else {
+            abs_tag_map[ec.abs_y_idx].c2 = ci;
+        }
+    }
+
+    // Reserve up-front so the two push_back calls per link cannot reallocate
+    // input.constraints. With capacity guaranteed, references to existing C1/C2 stay
+    // valid across appends and we don't need defensive copies of their fields.
+    input.constraints.reserve(input.constraints.size() + 2 * input.abs_maximize_links.size());
+
+    for (auto &link : input.abs_maximize_links) {
+        auto it = abs_tag_map.find(link.y_idx);
+        D_ASSERT(it != abs_tag_map.end() &&
+                 it->second.c1 != DConstants::INVALID_INDEX &&
+                 it->second.c2 != DConstants::INVALID_INDEX);
+
+        const auto &c1 = input.constraints[it->second.c1];
+        const auto &c2 = input.constraints[it->second.c2];
+
+        // Compute M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|),
+        // reusing the shared per-row range helper (skipping the aux term). This
+        // upper-bounds |inner| across all rows and variable values. Unlike the
+        // indicator sites, ABS-maximize is STRICT: if no finite bound can be derived
+        // for a contributing variable, there is no valid M, so we throw rather than
+        // fall back. (Implied-bound propagation may have already supplied a bound,
+        // in which case this succeeds.)
+        bool abs_unbounded = false;
+        double M = 0.0;
+        for (idx_t r = 0; r < num_rows; r++) {
+            // The link's bound carries the constant part of the expression the user
+            // wrote inside ABS. Infinity there admits no finite M (see
+            // DecideTightPerRowBigM), and the value came from their data, so name
+            // that rather than the linearization.
+            double link_rhs = c1.rhs_values.Get(r);
+            if (!std::isfinite(link_rhs)) {
+                throw InvalidInputException(
+                    "The expression inside ABS() evaluates to Infinity at row %llu, "
+                    "so DECIDE cannot bound it. Check that column for an overflow, "
+                    "or exclude the row with WHERE.",
+                    r);
+            }
+            double row_bound = std::abs(link_rhs) +
+                               DecideRowTermRange(c1.variable_indices, c1.row_coefficients, r,
+                                                  input.lower_bounds, input.upper_bounds,
+                                                  abs_unbounded, link.aux_idx);
+            M = std::max(M, row_bound);
+        }
+        if (abs_unbounded) {
+            // Locate an offending variable to name in the error.
+            idx_t bad = DConstants::INVALID_INDEX;
+            for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
+                idx_t v = c1.variable_indices[t];
+                if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
+                    continue;
+                }
+                if (input.upper_bounds[v] >= 1e20 || input.lower_bounds[v] <= -1e20) {
+                    bad = v;
+                    break;
+                }
+            }
+            const string &name = var_names[bad];
+            throw InvalidInputException(
+                "ABS over decision variable requires a finite bound on '%s' "
+                "for the Big-M sign-indicator linearization. Add constraints "
+                "'%s >= <lower>' and '%s <= <upper>'. (Triggered by "
+                "MAXIMIZE SUM(ABS(...)) or by a hard-direction ABS constraint "
+                "such as ABS(...) >= K or ABS(...) = K.)",
+                name, name, name);
+        }
+        double two_M = 2.0 * M;
+
+        auto ShiftRhs = [&](const CoefficientColumn &src, double delta) {
+            if (src.IsUniform()) {
+                return CoefficientColumn::MakeScalar(src.UniformValue() + delta, num_rows);
+            }
+            auto out = CoefficientColumn::MakeDense(num_rows, 0.0);
+            for (idx_t r = 0; r < num_rows; r++) {
+                out.Set(r, src.Get(r) + delta);
+            }
+            return out;
+        };
+
+        // C_ub1: same as C1 but add y_idx with coeff +2M, flip to <=, rhs[r] += 2M
+        EvaluatedConstraint ec_ub1;
+        ec_ub1.variable_indices = c1.variable_indices;
+        ec_ub1.row_coefficients = c1.row_coefficients;
+        ec_ub1.variable_indices.push_back(link.y_idx);
+        ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(two_M, num_rows));
+        ec_ub1.rhs_values = ShiftRhs(c1.rhs_values, two_M);
+        ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec_ub1.lhs_is_aggregate = false;
+        ec_ub1.row_group_ids = c1.row_group_ids;
+        ec_ub1.num_groups = c1.num_groups;
+        ec_ub1.group_labels = c1.group_labels;
+        ec_ub1.qualifier = c1.qualifier;
+        ec_ub1.kind = ConstraintKind::STRUCTURAL;
+        input.constraints.push_back(std::move(ec_ub1));
+
+        // C_ub2: same as C2 but add y_idx with coeff -2M, flip to <=, rhs unchanged
+        EvaluatedConstraint ec_ub2;
+        ec_ub2.variable_indices = c2.variable_indices;
+        ec_ub2.row_coefficients = c2.row_coefficients;
+        ec_ub2.variable_indices.push_back(link.y_idx);
+        ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-two_M, num_rows));
+        ec_ub2.rhs_values = c2.rhs_values;
+        ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        ec_ub2.lhs_is_aggregate = false;
+        ec_ub2.row_group_ids = c2.row_group_ids;
+        ec_ub2.num_groups = c2.num_groups;
+        ec_ub2.group_labels = c2.group_labels;
+        ec_ub2.qualifier = c2.qualifier;
+        ec_ub2.kind = ConstraintKind::STRUCTURAL;
+        input.constraints.push_back(std::move(ec_ub2));
+    }
 }
 
 } // namespace duckdb

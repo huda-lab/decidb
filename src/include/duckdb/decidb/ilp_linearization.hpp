@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "duckdb/decidb/solver_input.hpp"
+#include "duckdb/decidb/ilp_model.hpp"
 
 namespace duckdb {
 
@@ -73,12 +73,46 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
 //!   MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M, and SUM(y) >= 1
 //!   MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M, and SUM(y) >= 1
 //! Constraints are matched to their indicator variables via `minmax_indicator_idx`
-//! (not positionally). Untagged constraints pass through unchanged, so `constraints`
-//! is replaced in place by the encoded list. A group whose bound is unreachable in
-//! its own direction is emitted as a plain per-row constraint instead, and a group
-//! whose bound every assignment satisfies is dropped.
-void LinearizeMinMaxIndicators(vector<EvaluatedConstraint> &constraints,
-                               const vector<double> &lower_bounds,
-                               const vector<double> &upper_bounds, idx_t num_rows);
+//! (not positionally). Untagged constraints pass through unchanged, so
+//! `input.constraints` is replaced in place by the encoded list. A group whose bound
+//! is unreachable in its own direction is emitted as a plain per-row constraint
+//! instead, and a group whose bound every assignment satisfies is dropped.
+void LinearizeMinMaxIndicators(SolverInput &input);
+
+//! Encode every constraint stage 05 tagged with a `<>` indicator as the disjunctive
+//! Big-M pair `x - M*z <= K-1` / `x - M*z >= K+1-M`.
+//!
+//! Per-row spellings are expanded in place with the row-scoped indicator. Aggregate
+//! spellings cannot be: they need one *global* binary per group, and the group's
+//! Big-M must cover the summed range rather than a single row's, so they are moved
+//! into `deferred_aggregate` and finished by `ExpandDeferredAggregateNotEqual` once
+//! the `VarIndexer` exists.
+//!
+//! Refuses a left-hand side that is not integer-valued — the ±1 band is only exact
+//! on the integer lattice — and silently drops a comparison whose bound no integer
+//! can equal, since every assignment already satisfies it.
+void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate);
+
+//! Finish the aggregate `<>` spellings `LinearizeNotEqual` deferred, one global
+//! binary per non-empty group, emitting into `input.global_constraints` in flat
+//! column space. `aux_var_expressions` supplies the clause text stage 05 recorded
+//! for the indicator, so a dropped aggregate `<>` can be named in a repair.
+void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
+                                     vector<EvaluatedConstraint> &deferred_aggregate,
+                                     const vector<pair<idx_t, string>> &aux_var_expressions);
+
+//! Emit the McCormick envelope for every `w = b * x` link. For `x >= 0` the lower
+//! corner is implied by `w`'s own non-negative bound and the upper corner collapses
+//! to the plain structural `w <= x`, so three rows suffice; for `x < 0` all four
+//! corners are emitted and `w`'s lower bound is widened so the product can reach the
+//! negative value. Requires a finite upper bound on `x` and names it if missing.
+void LinearizeBilinear(SolverInput &input, const vector<string> &var_names);
+
+//! Emit the Big-M upper bounds that pin an ABS auxiliary to `|inner|` under MAXIMIZE.
+//! Stage 05 emitted the two lower bounds and tagged them (`abs_is_pos_bound`); this
+//! pairs them by `abs_y_idx` and derives the matching upper bounds. Strict about
+//! bounds: unlike the indicator sites there is no fallback constant, so a
+//! contributing variable with no finite bound is named and refused.
+void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names);
 
 } // namespace duckdb
