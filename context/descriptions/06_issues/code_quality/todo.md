@@ -158,13 +158,30 @@ Layer 8 strips the binder's implicit casts before rendering a diagnosis label; l
 
 ## Structural and value validation sit in the same guards
 
-**Location**: `src/execution/operator/decide/physical_decide.cpp` — `RejectEmptyAggregate` (`:1201`), the NaN/Infinity checks in `ExtractDoubleColumn` (`:174`), and the deliberate non-absorption of strict `<` / `>` on REAL variables (`:2520`) that defers rejection to `ApplyComparisonSense` in the model builder.
+**Location**: two layers, since absorption moved. Layer 8: `RejectEmptyAggregate` (`src/execution/operator/decide/physical_decide.cpp:1190`, called at `:3325`, `:3578`, `:3595`) and the NaN/Infinity checks in `ExtractDoubleColumn` (`:174`, the test itself at `:201`). Layer 5: the deliberate decline on strict `<` / `>` over a REAL variable (`src/optimizer/decide/decide_optimizer.cpp:2133`, `:2139` — `absorbed = target.is_integer`), which defers the rejection to `ApplyComparisonSense` (`src/decidb/utility/ilp_model_builder.cpp:474`).
 
 Two kinds of check are interleaved. Structural ones — a strict inequality on a REAL decision has no valid encoding — are knowable from types alone. Value ones — a NaN coefficient, an aggregate over zero rows — can only be caught once data is in hand.
 
 **Why it matters**: a structural refusal reported at execution time arrives after a full scan, and is phrased in the vocabulary of whichever pass happened to catch it. The same refusal at bind time is immediate and can name the clause the user wrote.
 
-**Fix direction**: the sorting test is "could this have been said without reading a row?" Structural checks move to layer 2; value checks stay. Open question: whether the strict-`<`-on-REAL case in particular should keep its current deliberate routing, which exists so the model builder produces the message — moving it means moving the message too, and the current one was written to satisfy the user-facing-output rule.
+**Fix direction**: the sorting test is "could this have been said without reading a row?" Structural checks move to layer 2; value checks stay.
+
+By that test the three guards sort cleanly and only one is contentious:
+
+- **`ExtractDoubleColumn` NaN/Infinity** — pure value check, needs the column. Stays at layer 8. Not part of this chunk.
+- **`RejectEmptyAggregate`** — value check (how many rows survived `WHERE`/`WHEN`), needs the scan. Stays at layer 8. Not part of this chunk.
+- **strict `<` / `>` on a REAL decision** — the only structural one. `x < 10.5` on a REAL has no valid encoding, and that is knowable from the declared type alone, with no data.
+
+**The refusal is a conjunction, and that is the actual defect.** Every one of these guards rejects on "a REAL variable **or** a non-integer coefficient" — a structural condition OR'd with a value condition, tested at the only point where both are known. That is why they are interleaved: not carelessness, but a single predicate doing two jobs. Splitting it is the work:
+
+- the **structural half** (the LHS references a REAL decision variable) is knowable at bind time and should reject there, naming the clause and the declared type;
+- the **value half** (a data column produced a non-integer coefficient) genuinely needs the scan and stays at layer 8.
+
+Four sites share this shape, so the chunk is a little larger than one guard but well bounded: `ilp_model_builder.cpp:481`, `:493` (per-row strict), `:1070`, `:1081` (aggregate strict), plus the sibling `<>` refusal at `physical_decide.cpp:4700` (`NELhsIsIntegerValued`), which is the same conjunction in a different construct. Take the `<>` one in the same chunk or explicitly leave it — do not split the pair silently.
+
+**Test surface**: 8 assertions in `test/decide/tests/test_cons_comparison.py`, all routed through two module-level regexes (`_STRICT_LT_REAL_MSG`, `_STRICT_GT_REAL_MSG`) plus `_NE_REAL_MSG`, so a message change is a three-line edit there rather than eight.
+
+Open question for whoever takes it: whether the model-builder guard survives as a backstop once layer 2 rejects the structural half early, or is narrowed to the value half only. A backstop that can no longer fire is dead code; one that can still fire on the coefficient path is not.
 
 **Ordering**: independent. The strict-`<`-on-REAL case *is* absorption's mechanism — the value is left unabsorbed precisely so the model builder rejects it — and absorption moved to layer 5 on 2026-08-15 with that routing deliberately unchanged. The decline now happens in `DecideOptimizer::AbsorbVariableBounds`, so this entry's question is whether the *rejection* should follow it up to layer 2 and take its message along. The remaining guards in this entry are unaffected and can be left alone.
 
