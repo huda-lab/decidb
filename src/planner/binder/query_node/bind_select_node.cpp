@@ -677,6 +677,12 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
             // DECIDE variable, before anything downstream has to interpret them.
             ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
+            // A strict `<` / `>` over a REAL decision has no exact encoding, and the
+            // declared type says so without reading a row. Rejecting here names the
+            // variable and quotes the clause; the model builder keeps only the value
+            // half of the refusal (a data column yielding a fractional coefficient).
+            ValidateDecideNoStrictComparisonOnReal(*statement.decide_constraints, decide_variable_names,
+                                                   var_types);
             // Source-only casts and scalar subqueries lose their written spelling
             // during binding/flattening. Give those atoms stable fragment ids now;
             // the DECIDE binder carries the tags onto the bound nodes.

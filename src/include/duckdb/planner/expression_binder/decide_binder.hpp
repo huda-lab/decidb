@@ -78,6 +78,25 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
                                      const ParsedExpression &expr,
                                      const case_insensitive_map_t<idx_t> &variables);
 
+//! Reject a strict `<` / `>` whose comparison references a REAL decision variable.
+//!
+//! DeciDB encodes a strict inequality by stepping the bound (`< K` becomes
+//! `<= K-1`), which is exact only when the compared side is confined to integer
+//! points. A REAL decision has no such confinement, so the step would cut feasible
+//! continuous solutions and return a wrong optimum.
+//!
+//! This is the structural half of a refusal that also has a value half: a data
+//! column can produce a fractional coefficient over integer decisions, which is
+//! knowable only after the scan and stays in the model builder. The declared type
+//! is knowable here, from the query text alone, so this half rejects at bind time
+//! and can name the variable and the clause the user wrote.
+//!
+//! `variable_types` is indexed as the DECIDE columns are; `variables` maps every
+//! spelling (bare and table-qualified) of a declared name onto that index.
+void ValidateDecideNoStrictComparisonOnReal(const ParsedExpression &expr,
+                                            const case_insensitive_map_t<idx_t> &variables,
+                                            const vector<LogicalType> &variable_types);
+
 
 // inline void DebugPrintParsed(const string &tag, const ParsedExpression &expr) {
 // 	deb("[BINDER] ", tag, ": ", expr.ToString());

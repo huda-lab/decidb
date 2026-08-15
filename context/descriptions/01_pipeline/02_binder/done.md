@@ -174,6 +174,36 @@ subqueries are rejected, as is any subquery referencing a decision variable
 `plan_select_node.cpp`, at the only point where it is still visible — see
 [`../03_logical_plan/done.md`](../03_logical_plan/done.md).
 
+### Strict `<` / `>` over a REAL decision
+
+DeciDB encodes a strict inequality by stepping the bound: `< K` becomes `<= K-1`.
+That is exact only when the compared side lands on integers. A REAL decision takes
+any value up to the bound, so the step would cut feasible points — `SUM(x) = 4.7`
+satisfies `< 5` but not `<= 4`.
+
+The declared type settles that without reading a row, so
+`ValidateDecideNoStrictComparisonOnReal` rejects it here, naming the variable and
+quoting the clause. It runs on the parsed tree beside the other DECIDE validators,
+and it checks **comparisons in constraint position only** — descending through
+conjunctions and through the constraint child of a `WHEN` / `PER` wrapper, the same
+way `DecideConstraintsBinder` dispatches. A comparison nested inside an operand is a
+boolean value, not a model row: in the misparse `(SUM(x) WHEN w > 1) + 3 <= 10` the
+`> 1` is added to `3`, and the resulting type error is the better diagnosis.
+
+Both sides are read, because canonicalization has not run yet and `5 > SUM(x)` is as
+likely a spelling as `SUM(x) < 5`. Reading a side is not moving one.
+
+The refusal is stated on the declared type, not on what the term becomes. An L0 count
+(`norm(e, 0, M)`) reaches the solver as a sum of 0/1 indicators, so the integer step
+would in fact be exact there even for a REAL decision — that shape is refused anyway,
+so what DECIDE accepts does not depend on which linearization a term happens to
+receive. `<= K-1` expresses the same cap.
+
+This is the structural half of a refusal that also has a value half. A fractional
+coefficient produced by a data column (`SUM(0.5 * x) < 5` on an INTEGER `x`) is
+knowable only after the scan and is refused by the model builder — see
+[`../08_execution/done.md`](../08_execution/done.md).
+
 ### `PER`
 
 `BindPerConstraint` requires the `PER` expression to reference a table column —

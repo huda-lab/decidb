@@ -3,6 +3,8 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
+#include "duckdb/parser/expression/conjunction_expression.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -462,6 +464,104 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
 		ValidateDecideNoNonLinearScalar(context, child, variables);
 	});
+}
+
+//! Name of the first REAL-declared decision variable referenced by `expr`, as the
+//! user spelled it, or empty if there is none. Walks scalar-subquery bodies for the
+//! same reason ValidateDecideNoExplicitDecisionCasts does: a correlated decision
+//! reference can sit inside one, and EnumerateChildren does not enter a QueryNode.
+static string FindRealDecideVariable(const ParsedExpression &expr,
+                                     const case_insensitive_map_t<idx_t> &variables,
+                                     const vector<LogicalType> &variable_types) {
+	if (IsVariableExpression(expr, variables)) {
+		const auto &colref = expr.Cast<const ColumnRefExpression>();
+		string key = colref.IsQualified()
+		    ? (colref.GetTableName() + "." + colref.GetColumnName())
+		    : colref.GetColumnName();
+		auto it = variables.find(key);
+		if (it != variables.end() && it->second < variable_types.size()) {
+			const auto &type = variable_types[it->second];
+			if (type == LogicalType::DOUBLE || type == LogicalType::FLOAT) {
+				return colref.GetColumnName();
+			}
+		}
+	}
+
+	string found;
+	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
+		auto &subquery_expr = expr.Cast<const SubqueryExpression>();
+		if (subquery_expr.subquery && subquery_expr.subquery->node) {
+			ParsedExpressionIterator::EnumerateQueryNodeChildren(
+			    const_cast<QueryNode &>(*subquery_expr.subquery->node),
+			    [&](unique_ptr<ParsedExpression> &child) {
+				    if (found.empty()) {
+					    found = FindRealDecideVariable(*child, variables, variable_types);
+				    }
+			    },
+			    [&](TableRef &ref) {});
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		if (found.empty()) {
+			found = FindRealDecideVariable(child, variables, variable_types);
+		}
+	});
+	return found;
+}
+
+void ValidateDecideNoStrictComparisonOnReal(const ParsedExpression &expr,
+                                            const case_insensitive_map_t<idx_t> &variables,
+                                            const vector<LogicalType> &variable_types) {
+	// Only comparisons in constraint position are checked — the ones that become
+	// model rows and would therefore be encoded by stepping the bound. A comparison
+	// nested inside an operand is a boolean value, not a constraint: in the misparse
+	// `(SUM(x) WHEN w > 1) + 3 <= 10` the `> 1` is added to 3, and the type error
+	// that names is a better diagnosis than anything said about strictness. So this
+	// descends the way DecideConstraintsBinder does — through conjunctions and
+	// through the constraint child of a WHEN / PER wrapper — and no further.
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::CONJUNCTION: {
+		auto &conj = expr.Cast<const ConjunctionExpression>();
+		for (const auto &child : conj.children) {
+			ValidateDecideNoStrictComparisonOnReal(*child, variables, variable_types);
+		}
+		return;
+	}
+	case ExpressionClass::FUNCTION: {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (func.is_operator && !func.children.empty() &&
+		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG)) {
+			// children[0] is the constraint; the rest are the condition / PER columns.
+			ValidateDecideNoStrictComparisonOnReal(*func.children[0], variables, variable_types);
+		}
+		return;
+	}
+	case ExpressionClass::COMPARISON: {
+		auto type = expr.GetExpressionType();
+		if (type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN) {
+			auto &comp = expr.Cast<const ComparisonExpression>();
+			// Both sides, because canonicalization has not run yet: the user may have
+			// written `5 > x` as readily as `x < 5`, and reading a side is not moving one.
+			string real_var = FindRealDecideVariable(*comp.left, variables, variable_types);
+			if (real_var.empty()) {
+				real_var = FindRealDecideVariable(*comp.right, variables, variable_types);
+			}
+			if (!real_var.empty()) {
+				bool is_less = type == ExpressionType::COMPARE_LESSTHAN;
+				throw BinderException(
+				    comp,
+				    "Strict inequality '%s' is not supported over the REAL decision '%s': '%s'. "
+				    "A REAL decision takes any value up to the bound, so there is no next value "
+				    "to stop at. Use '%s' instead, and move the bound by one step if the compared "
+				    "quantity is a count or other whole number.",
+				    is_less ? "<" : ">", real_var, comp.ToString(), is_less ? "<=" : ">=");
+			}
+		}
+		return;
+	}
+	default:
+		return;
+	}
 }
 
 //! Collect the set of DECIDE variable indices referenced by an expression.

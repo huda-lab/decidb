@@ -20,13 +20,20 @@ from comparison.compare import compare_solutions
 
 from ._oracle_helpers import add_ne_indicator
 
+# A strict inequality over a REAL decision is refused at bind time: the declared
+# type settles it without reading a row, so the message names the variable and
+# quotes the clause. A strict inequality whose variables are all integer but whose
+# coefficients are not is a different refusal, raised by the model builder once the
+# coefficients have been evaluated.
 _STRICT_LT_REAL_MSG = re.compile(
-    r"Strict inequality '<' is not supported when the left-hand side "
-    r"involves a REAL variable or a non-integer coefficient"
+    r"Strict inequality '<' is not supported over the REAL decision"
 )
 _STRICT_GT_REAL_MSG = re.compile(
-    r"Strict inequality '>' is not supported when the left-hand side "
-    r"involves a REAL variable or a non-integer coefficient"
+    r"Strict inequality '>' is not supported over the REAL decision"
+)
+_STRICT_LT_COEFF_MSG = re.compile(
+    r"Strict inequality '<' is not supported here: a coefficient in the "
+    r"left-hand side is not a whole number"
 )
 _STRICT_QUADRATIC_MSG = re.compile(
     r"Strict inequality \('<' / '>'\) is not supported on constraints with "
@@ -599,6 +606,61 @@ def test_real_perrow_strict_rejected(decidb_cli):
 
 
 @pytest.mark.cons_comparison
+@pytest.mark.var_real
+def test_real_strict_rejection_names_variable_and_clause(decidb_cli):
+    """The REAL refusal is structural, so it can quote what the user wrote.
+
+    Nothing about `qty(REAL)` and `<` needs a row, so the refusal happens while
+    binding and has the query text in hand. That is the point of rejecting there:
+    the message can name the offending decision and echo the clause, which the
+    model builder — working on evaluated coefficients — cannot do.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, qty
+        FROM lineitem WHERE l_orderkey < 10
+        DECIDE qty(REAL)
+        SUCH THAT qty < 5
+        MAXIMIZE SUM(qty)
+    """
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
+    message = exc_info.value.message
+    assert _STRICT_LT_REAL_MSG.search(message), f"Unexpected error: {message}"
+    assert "'qty'" in message, f"Message does not name the decision: {message}"
+    assert "qty < 5" in message, f"Message does not quote the clause: {message}"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+def test_real_strict_rejected_even_when_l0_count_is_integral(decidb_cli):
+    """A REAL decision under norm(..., 0, M) is refused too — deliberately.
+
+    The L0 term itself reaches the solver as a sum of 0/1 indicators, so the
+    integer step would in fact be exact here. The refusal is stated on the
+    declared type instead, so that what DECIDE accepts does not depend on which
+    linearization a term happens to receive. `<= K-1` expresses the same cap.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, new_qty
+        FROM lineitem WHERE l_orderkey < 10
+        DECIDE new_qty(REAL)
+        SUCH THAT new_qty >= 0 AND new_qty <= 100
+            AND norm(new_qty - l_quantity, 0, 1000) < 3
+        MAXIMIZE SUM(new_qty)
+    """
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
+    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
+        f"Unexpected error: {exc_info.value.message}"
+    )
+
+    # The suggested spelling is accepted and caps the count at 2.
+    rows, _ = decidb_cli.execute(sql.replace("< 3", "<= 2"))
+    assert rows, "norm(..., 0, M) <= 2 should solve"
+
+
+@pytest.mark.cons_comparison
 @pytest.mark.var_integer
 @pytest.mark.cons_aggregate
 def test_integer_fractional_coeff_strict_rejected(decidb_cli):
@@ -613,7 +675,7 @@ def test_integer_fractional_coeff_strict_rejected(decidb_cli):
     """
     with pytest.raises(DecidBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
+    assert _STRICT_LT_COEFF_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
 

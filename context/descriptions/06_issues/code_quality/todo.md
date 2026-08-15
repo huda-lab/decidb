@@ -57,7 +57,7 @@ fix itself.
 
 ## Theme: work that sits in the physical layer without needing a row
 
-Seven entries came from one audit (2026-08-15) and share a root cause; six remain below. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
+Seven entries came from one audit (2026-08-15) and share a root cause; five remain below, plus the `<>` remainder of a sixth. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
 
 `physical_decide.cpp` is 6,359 lines against 2,217 for layer 05, 1,402 + 1,012 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
 
@@ -70,7 +70,7 @@ Seven entries came from one audit (2026-08-15) and share a root cause; six remai
 | Degree and linearity are analyzed twice, in two layers | 02 |
 | Each linearized formulation is split between the layer that chooses it and the layer that encodes it | 06 |
 | Three renderers answer one question about showing users their own expressions | shared |
-| Structural and value validation sit in the same guards | 02, partly |
+| ~~Structural and value validation sit in the same guards~~ — shipped 2026-08-15; only the `<>` refusal remains | 02, partly |
 
 Destinations are candidates, not decisions; each entry names the questions its chunk has to answer first. The table order implies no batch order. One real dependency remains, recorded in an **Ordering** paragraph in each: flattening gates like-term collection. The others are independent of everything, including each other.
 
@@ -160,35 +160,23 @@ Layer 8 strips the binder's implicit casts before rendering a diagnosis label; l
 
 ---
 
-## Structural and value validation sit in the same guards
+## The `<>` refusal still tests structure and value in one predicate
 
-**Location**: two layers, since absorption moved. Layer 8: `RejectEmptyAggregate` (`src/execution/operator/decide/physical_decide.cpp:1190`, called at `:3325`, `:3578`, `:3595`) and the NaN/Infinity checks in `ExtractDoubleColumn` (`:174`, the test itself at `:201`). Layer 5: the deliberate decline on strict `<` / `>` over a REAL variable (`src/optimizer/decide/decide_optimizer.cpp:2133`, `:2139` — `absorbed = target.is_integer`), which defers the rejection to `ApplyComparisonSense` (`src/decidb/utility/ilp_model_builder.cpp:474`).
+**Location**: `NELhsIsIntegerValued` (`src/decidb/utility/ilp_linearization.cpp:439`, thrown at `:477`).
 
-Two kinds of check are interleaved. Structural ones — a strict inequality on a REAL decision has no valid encoding — are knowable from types alone. Value ones — a NaN coefficient, an aggregate over zero rows — can only be caught once data is in hand.
+The strict-`<` / `>` version of this conjunction was split on 2026-08-15: the REAL-variable half now rejects at bind time (`ValidateDecideNoStrictComparisonOnReal`, stage 02) and the fractional-coefficient half stays in the model builder. See [`../../01_pipeline/02_binder/done.md`](../../01_pipeline/02_binder/done.md) §4 and [`../../01_pipeline/06_model_formulation/done.md`](../../01_pipeline/06_model_formulation/done.md) §5.
 
-**Why it matters**: a structural refusal reported at execution time arrives after a full scan, and is phrased in the vocabulary of whichever pass happened to catch it. The same refusal at bind time is immediate and can name the clause the user wrote.
+`<>` was deliberately left out of that chunk, so it still rejects on "a REAL variable **or** a non-integer coefficient" at model-build time — the same single predicate doing two jobs, in a different construct. A `<>` over a REAL decision is refused only after a full scan, in the vocabulary of the linearization pass rather than the user's clause.
 
-**Fix direction**: the sorting test is "could this have been said without reading a row?" Structural checks move to layer 2; value checks stay.
+**Fix direction**: the same split, and it should be smaller than the strict one was, because the bind-time machinery now exists. Extend `ValidateDecideNoStrictComparisonOnReal` to `COMPARE_NOTEQUAL` (or generalize its name), leave the coefficient half where it is, and make the REAL branch of `NELhsIsIntegerValued` an `InternalException` for the same reason the strict one is.
 
-By that test the three guards sort cleanly and only one is contentious:
+Two things to settle first, neither of which the strict chunk answered:
 
-- **`ExtractDoubleColumn` NaN/Infinity** — pure value check, needs the column. Stays at layer 8. Not part of this chunk.
-- **`RejectEmptyAggregate`** — value check (how many rows survived `WHERE`/`WHEN`), needs the scan. Stays at layer 8. Not part of this chunk.
-- **strict `<` / `>` on a REAL decision** — the only structural one. `x < 10.5` on a REAL has no valid encoding, and that is knowable from the declared type alone, with no data.
+- `<>` has a **silent-drop** case the strict path does not: `NEIsIntegerValuedRhs` treats an integer-valued LHS with a fractional or infinite `K` as a tautology and drops the row. A bind-time refusal on the LHS must not change which queries reach that drop.
+- The strict chunk chose to refuse on the **declared type** rather than on what the term becomes, so `norm(e, 0, M) < K` on a REAL decision is refused even though its L0 count is integral. Whether `<>` follows the same rule or is more permissive should be a deliberate choice, not an accident of implementation.
 
-**The refusal is a conjunction, and that is the actual defect.** Every one of these guards rejects on "a REAL variable **or** a non-integer coefficient" — a structural condition OR'd with a value condition, tested at the only point where both are known. That is why they are interleaved: not carelessness, but a single predicate doing two jobs. Splitting it is the work:
+**Test surface**: `_NE_REAL_MSG` in `test/decide/tests/test_cons_comparison.py` (one assertion, `test_real_sum_not_equal_rejected`).
 
-- the **structural half** (the LHS references a REAL decision variable) is knowable at bind time and should reject there, naming the clause and the declared type;
-- the **value half** (a data column produced a non-integer coefficient) genuinely needs the scan and stays at layer 8.
-
-Four sites share this shape, so the chunk is a little larger than one guard but well bounded: `ilp_model_builder.cpp:481`, `:493` (per-row strict), `:1070`, `:1081` (aggregate strict), plus the sibling `<>` refusal in `NELhsIsIntegerValued` (now `src/decidb/utility/ilp_linearization.cpp`, moved there 2026-08-15 with the `<>` emitter), which is the same conjunction in a different construct. Take the `<>` one in the same chunk or explicitly leave it — do not split the pair silently.
-
-**Test surface**: 8 assertions in `test/decide/tests/test_cons_comparison.py`, all routed through two module-level regexes (`_STRICT_LT_REAL_MSG`, `_STRICT_GT_REAL_MSG`) plus `_NE_REAL_MSG`, so a message change is a three-line edit there rather than eight.
-
-Open question for whoever takes it: whether the model-builder guard survives as a backstop once layer 2 rejects the structural half early, or is narrowed to the value half only. A backstop that can no longer fire is dead code; one that can still fire on the coefficient path is not.
-
-**Ordering**: independent. The strict-`<`-on-REAL case *is* absorption's mechanism — the value is left unabsorbed precisely so the model builder rejects it — and absorption moved to layer 5 on 2026-08-15 with that routing deliberately unchanged. The decline now happens in `DecideOptimizer::AbsorbVariableBounds`, so this entry's question is whether the *rejection* should follow it up to layer 2 and take its message along. The remaining guards in this entry are unaffected and can be left alone.
-
-**Discovered**: 2026-08-15, physical-layer audit.
+**Discovered**: 2026-08-15, physical-layer audit; scoped out of the strict-inequality chunk the same day.
 
 ---

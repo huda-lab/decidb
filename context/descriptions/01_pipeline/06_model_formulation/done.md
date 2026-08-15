@@ -196,9 +196,23 @@ backend does the same for its COO arrays.
 
 `'>'` and `'<'` mean `>=` and `<=` — standard ILP convention. Strict inequalities
 are converted by adjusting the RHS, which is exact for integer variables. It is
-*not* exact for continuous ones, which is why a strict `<` / `>` on a REAL variable
-is deliberately not absorbed into bounds upstream: it reaches here and is rejected
-with a clear message instead of being silently approximated.
+*not* exact for continuous ones, so `IsEvalConstraintLhsIntegerValued` gates the
+rewrite and reports the two ways an LHS can fail it differently, because only one
+of them is still the user's to fix here:
+
+- **A fractional coefficient** (`SUM(0.5 * x) < 5` on an INTEGER `x`, or any data
+  column that evaluates to a non-integer) is knowable only now, once coefficients
+  have been evaluated. It is an `InvalidInputException` naming the coefficient and
+  suggesting `<=`.
+- **A REAL decision** is knowable from the declared type, and stage 02 rejects it
+  during binding (`ValidateDecideNoStrictComparisonOnReal`), where the variable and
+  the clause can be named. Reaching this point with one is an invariant violation,
+  so it throws `InternalException`. The check stays rather than being deleted: if a
+  future rewrite types an auxiliary REAL inside a strict constraint, this fails
+  loudly instead of silently stepping a continuous bound.
+
+A strict `<` / `>` over a REAL variable is also deliberately not absorbed into
+column bounds upstream (stage 05), for the same reason the step is unsafe.
 
 ---
 
