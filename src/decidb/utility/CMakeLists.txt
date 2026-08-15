@@ -7,6 +7,7 @@ add_library_unity(
   decide_router.cpp
   diagnostic_solves.cpp
   debug.cpp
+  ilp_linearization.cpp
   ilp_model_builder.cpp
   ilp_solver.cpp
   decide_cast_policy.cpp)

@@ -70,23 +70,14 @@ and proceeds to the elastic engine, which reports a least-change loosen.
 
 ### Implied bounds from constraint data
 
-`DecidePropagateImpliedBounds()` runs after coefficient evaluation and derives a
-second, data-driven source of column bounds. For a constraint
-`Sum_t a_t x_t (<=|=) K` where every variable is non-negative and every
-coefficient is non-negative, each instance satisfies `x <= K / a` — the other
-terms only help — so the shared upper bound is `max_r K_r / a_r`. This turns
-declared-unbounded variables into bounded ones, which is what makes a finite and
-tight Big-M possible. Only provably-implied bounds are applied, so the feasible
-region and the optimum are unchanged.
+Once coefficients are numbers, a second, data-driven source of column bounds
+becomes available. Stage 08 invokes it — `DecidePropagateImpliedBounds()` — but
+does not own it: the pass is pure over `SolverInput` and lives at stage 06. See
+[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
 
-`a_r` is the variable's **combined** coefficient at that row. A variable can hold
-several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
-over the same decision), and all of them name the same solver column, so the pass
-walks distinct variables and sums every term naming each one — `10/5 = 2`, not
-`10/3`. The addition belongs here rather than in canonicalization because
-coefficients are evaluated numbers by this point; at layer 4 they are still
-unevaluated expressions over data columns, and combining them there would mean
-opening terms algebraically, which that layer does not do.
+The call is ordered here, immediately after the absorbed bounds are resolved and
+before any Big-M is computed, because every downstream constant depends on the
+tightened box.
 
 The pass is a single sweep, not a fixpoint: a bound derived for one variable is
 not fed back to tighten others in the same pass. It skips constraints it cannot
@@ -375,14 +366,8 @@ rewrite classifies the bound first and only a finite one asks for an `M`:
   `inf - round(inf)` is NaN, and a comparison against NaN is false whichever way it
   is written, so an inline copy of the test silently let an infinite bound through to
   the Big-M.
-- **MIN / MAX** — `ClassifyMinMaxBound` reads the direction the infinity points. A
-  hard MAX is "some active row has LHS >= K", so `K = -inf` holds for every
-  assignment and the group is dropped, while `K = +inf` is out of every row's reach
-  and the group is re-emitted as a plain per-row constraint carrying that bound —
-  an ordinary infeasibility naming the user's clause, not a refusal. MIN is the
-  mirror image. The verdict is per group because `ReduceAggregateRhsPerGroup` has
-  already collapsed a row-varying bound to the tightest one, which is also what
-  settles a group whose rows mix finite and infinite bounds.
+- **MIN / MAX** — classified at stage 06, which also emits the rows. See
+  [`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
 - **ABS** — the infinity is in the expression *inside* `ABS()`, not in the bound, so
   there is no direction to read and no constant that bounds the range. It is refused,
   naming the column and the row.

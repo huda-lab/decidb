@@ -2,12 +2,15 @@
 
 Translates the evaluated, solver-neutral `SolverInput` into a `SolverModel`: flat
 variable arrays, constraints in COO, and an optional Q matrix. It owns the
-variable layout, coefficient accumulation, bounds and indexing. It does no
+variable layout, coefficient accumulation, bounds and indexing, and it owns the
+**linearization** of the formulations stage 05 chose — the rows that encode a
+tagged construct and the Big-M constants that scale them. It does no
 SQL-expression canonicalization and knows nothing about any backend.
 
 **Key source files**
 
 - `src/decidb/utility/ilp_model_builder.cpp` — `SolverModel::Build()`
+- `src/decidb/utility/ilp_linearization.cpp` — Big-M constants, hard MIN/MAX rows
 - `src/include/duckdb/decidb/ilp_model.hpp` — `VarIndexer`, `SolverModel`, provenance
 - `src/include/duckdb/decidb/solver_input.hpp` — the input contract
 
@@ -259,11 +262,86 @@ the column, rather than at the solver where it cannot.
 
 ---
 
-## 9. Source map
+## 9. Linearization
+
+`src/decidb/utility/ilp_linearization.cpp` holds the half of a formulation that
+only becomes writable once coefficients are numbers. Stage 05 decides *which*
+encoding a construct gets and records it as a tag on the constraint; this unit
+turns the tag into rows. Everything in it is a pure function of `SolverInput`
+data — evaluated coefficients, variable bounds, row and group ids. No expression
+tree, no executor, no data scan.
+
+### Implied bounds
+
+`DecidePropagateImpliedBounds()` derives a second, data-driven source of column
+bounds. For a constraint `Sum_t a_t x_t (<=|=) K` where every variable is
+non-negative and every coefficient is non-negative, each instance satisfies
+`x <= K / a` — the other terms only help — so the shared upper bound is
+`max_r K_r / a_r`. This turns declared-unbounded variables into bounded ones,
+which is what makes a finite and tight Big-M possible. Only provably-implied
+bounds are applied, so the feasible region and the optimum are unchanged.
+
+`a_r` is the variable's **combined** coefficient at that row. A variable can hold
+several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
+over the same decision), and all of them name the same solver column, so the pass
+walks distinct variables and sums every term naming each one — `10/5 = 2`, not
+`10/3`. The addition belongs here rather than in canonicalization because
+coefficients are evaluated numbers by this point; at stage 04 they are still
+unevaluated expressions over data columns, and combining them there would mean
+opening terms algebraically, which that stage does not do.
+
+The pass is a single sweep, not a fixpoint: a bound derived for one variable is
+not fed back to tighten others in the same pass. That is sound and only leaves
+tightness on the table for chained implications.
+
+### Big-M constants
+
+`DecideTightPerRowBigM()` returns the maximum over active rows of the row's
+effective bound magnitude plus its worst-case term contribution, plus a 1-unit
+margin covering the integer-step band of the `<>` rewrite. When every
+contributing variable is bounded this is exact and typically far below the
+`DECIDE_BIGM_FALLBACK` of 1e6, which is kept only for genuinely unbounded
+variables. `DecideRowTermRange()` is the shared per-row worst case, also used by
+the ABS-maximize and aggregate `<>` paths that still emit from stage 08.
+
+A non-finite effective bound is refused here, in SQL terms, rather than reaching
+the model validator as an internal error. Callers that can read an infinity by
+direction classify it first, so what still arrives is a bound with no reading at
+all — NaN — and the auto-`M` `norm(e, 0)` links, whose `M` bounds an expression
+rather than answering a comparison.
+
+### Hard MIN/MAX rows
+
+`LinearizeMinMaxIndicators()` encodes every constraint stage 05 tagged with
+`minmax_indicator_idx`, matching constraints to indicators by tag rather than
+position. Untagged constraints pass through unchanged.
+
+| Direction | Per-row rows | Selector row |
+|---|---|---|
+| `MAX(expr) >= K` | `expr_r - M*y_r >= K - M` | `SUM(y) >= 1` |
+| `MIN(expr) <= K` | `expr_r + M*y_r <= K + M` | `SUM(y) >= 1` |
+
+`ClassifyMinMaxBound()` reads an infinite bound by the direction it points before
+any `M` is asked for. A hard MAX is "some active row has LHS >= K", so `K = -inf`
+holds for every assignment and the group is dropped, while `K = +inf` is out of
+every row's reach and the group is re-emitted as a plain per-row constraint
+carrying that bound — an ordinary infeasibility naming the user's clause, not a
+refusal. MIN is the mirror image. The verdict is per group because
+`ReduceAggregateRhsPerGroup` has already collapsed a row-varying bound to the
+tightest one, which is also what settles a group whose rows mix finite and
+infinite bounds.
+
+Emitted rows carry `ConstraintKind::USER_MECHANISM`: they are rigid mechanism
+rows, not user parameters, so diagnosis does not offer to loosen them.
+
+---
+
+## 10. Source map
 
 | Concern | Location |
 |---|---|
 | `SolverModel::Build`, all constraint paths, Q construction | `src/decidb/utility/ilp_model_builder.cpp` |
+| Implied bounds, Big-M constants, hard MIN/MAX rows | `src/decidb/utility/ilp_linearization.cpp` |
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/ilp_model.hpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver_input.hpp` |
 | Golden model corpus (the characterization oracle) | `test/decide/golden/` |
