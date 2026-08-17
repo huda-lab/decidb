@@ -479,18 +479,22 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         return LhsIntegrality::INTEGER;
     };
 
-    // The one refusal both strict paths share. `op` is the operator as written and
-    // `relaxed` the operator to suggest.
+    // The one refusal both strict paths share, and it is no longer a user-facing one:
+    // the whole integer-step gate is now stated on declared types at bind time, by
+    // `ValidateDecideNoIntegerStepComparisonOnReal` for the decision and
+    // `ValidateDecideIntegralComparisonOperands` for every other operand. Reaching here
+    // means a strict comparison passed both and still evaluated to a non-integral LHS,
+    // which is an invariant violation rather than a query error.
+    //
+    // Kept rather than deleted so a future rewrite that introduces a REAL auxiliary or a
+    // fractional coefficient inside a strict constraint fails loudly, instead of silently
+    // stepping a bound that is not on the lattice.
     auto RejectStrictOnNonIntegerLhs = [](LhsIntegrality integrality, const char *op, const char *relaxed) {
-        if (integrality == LhsIntegrality::REAL_VARIABLE) {
-            throw InternalException(
-                "Strict inequality '%s' over a REAL decision reached the model builder; "
-                "the bind-time guard should have rejected it", op);
-        }
-        throw InvalidInputException(
-            "Strict inequality '%s' is not supported here: a coefficient in the "
-            "left-hand side is not a whole number, so there is no next value to stop "
-            "at. Use '%s' instead.", op, relaxed);
+        throw InternalException(
+            "Strict inequality '%s' with a non-integer-valued left-hand side (%s) reached "
+            "the model builder; the bind-time type gate should have rejected it", op,
+            integrality == LhsIntegrality::REAL_VARIABLE ? "REAL variable"
+                                                         : "fractional coefficient");
     };
 
     // Helper: apply comparison sense to a constraint.

@@ -2202,6 +2202,26 @@ void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
 	decide.absorbed_lower_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_LOWER_UNSET);
 	decide.absorbed_upper_bounds.assign(num_decide_vars, 1e30);
 
+	// Seed a BOOLEAN's intrinsic ceiling here rather than leaving every variable at
+	// 1e30 and repairing it at model-build time. The box travels to stage 06 as
+	// `SolverInput::upper_bounds`, and every Big-M derivation reads it through
+	// `DecideRowTermRange`, which treats `>= 1e20` as unbounded: a declared BOOL with no
+	// written upper bound therefore looked unbounded to all of them and collapsed to the
+	// fallback constant. `SUM(x) <> 2` over four BOOLs took M = 1000000 where the same
+	// query spelled `x(INT) ... x <= 1` took 7.
+	//
+	// The ceiling is a property of the declared type, known here, and it is rigid: the
+	// elastic engine resets BOOLEAN columns only within [0,1], so no diagnosis opens it.
+	// That also lets the `<>` range collapse see a BOOL's upper side, which it could not
+	// before. Absorption only ever narrows (`std::min`), and a user restatement like
+	// `x <= 1` is already treated as a harmless no-op against the intrinsic box, so
+	// seeding it changes nothing about how a written bound is recorded.
+	for (idx_t i = 0; i < num_decide_vars; i++) {
+		if (i < decide.is_boolean_var.size() && decide.is_boolean_var[i]) {
+			decide.absorbed_upper_bounds[i] = 1.0;
+		}
+	}
+
 	if (decide.decide_constraints) {
 		AbsorbBoundsInExpression(*decide.decide_constraints, decide);
 	}

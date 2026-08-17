@@ -12,6 +12,9 @@
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/table_binding.hpp"
@@ -19,6 +22,7 @@
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include <unordered_set>
+#include <cmath>
 
 #include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -466,13 +470,53 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 	});
 }
 
+//! Does this node reduce whatever is under it to an integer, whatever that operand's
+//! declared type is? Only `norm(e, 0, M)` does: the L0 "norm" counts how many entries
+//! are nonzero, so its value is a count and lands on the integer lattice even for a
+//! REAL `e`. That is the definition of L0, not a property of how the count is later
+//! linearized, so the integer-step rewrites are exact over it.
+//!
+//! The other orders are not counts and do not qualify: `norm(e, 1)` sums magnitudes,
+//! `norm(e, 2)` is a Euclidean length, `norm(e, 'inf')` is a maximum — each is as
+//! continuous as `e` is.
+static bool IsIntegerValuedReducer(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<const FunctionExpression>();
+	if (func.is_operator || !StringUtil::CIEquals(func.function_name, "norm")) {
+		return false;
+	}
+	// Shape is validated properly when the marker is bound; here an unparseable order
+	// simply is not the L0 case, and the real diagnosis follows from the binder.
+	if (func.children.size() < 2 || func.children[1]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+		return false;
+	}
+	auto &order_value = func.children[1]->Cast<const ConstantExpression>().value;
+	if (!order_value.type().IsNumeric()) {
+		return false; // 'inf'
+	}
+	try {
+		return order_value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() == 0.0;
+	} catch (...) {
+		return false;
+	}
+}
+
 //! Name of the first REAL-declared decision variable referenced by `expr`, as the
 //! user spelled it, or empty if there is none. Walks scalar-subquery bodies for the
 //! same reason ValidateDecideNoExplicitDecisionCasts does: a correlated decision
 //! reference can sit inside one, and EnumerateChildren does not enter a QueryNode.
+//!
+//! Stops at an integer-valued reducer: what a comparison compares is the reducer's
+//! value, so a REAL decision counted by `norm(..., 0, M)` is not the compared
+//! quantity and must not be reported as one.
 static string FindRealDecideVariable(const ParsedExpression &expr,
                                      const case_insensitive_map_t<idx_t> &variables,
                                      const vector<LogicalType> &variable_types) {
+	if (IsIntegerValuedReducer(expr)) {
+		return "";
+	}
 	if (IsVariableExpression(expr, variables)) {
 		const auto &colref = expr.Cast<const ColumnRefExpression>();
 		string key = colref.IsQualified()
@@ -509,9 +553,9 @@ static string FindRealDecideVariable(const ParsedExpression &expr,
 	return found;
 }
 
-void ValidateDecideNoStrictComparisonOnReal(const ParsedExpression &expr,
-                                            const case_insensitive_map_t<idx_t> &variables,
-                                            const vector<LogicalType> &variable_types) {
+void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
+                                                 const case_insensitive_map_t<idx_t> &variables,
+                                                 const vector<LogicalType> &variable_types) {
 	// Only comparisons in constraint position are checked — the ones that become
 	// model rows and would therefore be encoded by stepping the bound. A comparison
 	// nested inside an operand is a boolean value, not a constraint: in the misparse
@@ -523,7 +567,7 @@ void ValidateDecideNoStrictComparisonOnReal(const ParsedExpression &expr,
 	case ExpressionClass::CONJUNCTION: {
 		auto &conj = expr.Cast<const ConjunctionExpression>();
 		for (const auto &child : conj.children) {
-			ValidateDecideNoStrictComparisonOnReal(*child, variables, variable_types);
+			ValidateDecideNoIntegerStepComparisonOnReal(*child, variables, variable_types);
 		}
 		return;
 	}
@@ -532,13 +576,16 @@ void ValidateDecideNoStrictComparisonOnReal(const ParsedExpression &expr,
 		if (func.is_operator && !func.children.empty() &&
 		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG)) {
 			// children[0] is the constraint; the rest are the condition / PER columns.
-			ValidateDecideNoStrictComparisonOnReal(*func.children[0], variables, variable_types);
+			ValidateDecideNoIntegerStepComparisonOnReal(*func.children[0], variables, variable_types);
 		}
 		return;
 	}
 	case ExpressionClass::COMPARISON: {
 		auto type = expr.GetExpressionType();
-		if (type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN) {
+		bool is_strict =
+		    type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
+		bool is_not_equal = type == ExpressionType::COMPARE_NOTEQUAL;
+		if (is_strict || is_not_equal) {
 			auto &comp = expr.Cast<const ComparisonExpression>();
 			// Both sides, because canonicalization has not run yet: the user may have
 			// written `5 > x` as readily as `x < 5`, and reading a side is not moving one.
@@ -546,18 +593,329 @@ void ValidateDecideNoStrictComparisonOnReal(const ParsedExpression &expr,
 			if (real_var.empty()) {
 				real_var = FindRealDecideVariable(*comp.right, variables, variable_types);
 			}
-			if (!real_var.empty()) {
-				bool is_less = type == ExpressionType::COMPARE_LESSTHAN;
+			if (real_var.empty()) {
+				return;
+			}
+			if (is_not_equal) {
+				// No repair by stepping exists here, unlike the strict case: excluding a
+				// single point from a continuous range removes nothing a solver can act
+				// on. So the advice is to change the declared type or to name the range
+				// the user actually wants excluded.
+				//
+				// Spelled by hand rather than through comp.ToString(), which renders
+				// COMPARE_NOTEQUAL as `!=`. The clause is quoted back to the user, so it
+				// has to read the way they wrote it.
+				string clause = "(" + comp.left->ToString() + " <> " + comp.right->ToString() + ")";
 				throw BinderException(
 				    comp,
-				    "Strict inequality '%s' is not supported over the REAL decision '%s': '%s'. "
-				    "A REAL decision takes any value up to the bound, so there is no next value "
-				    "to stop at. Use '%s' instead, and move the bound by one step if the compared "
-				    "quantity is a count or other whole number.",
-				    is_less ? "<" : ">", real_var, comp.ToString(), is_less ? "<=" : ">=");
+				    "Inequality '<>' is not supported over the REAL decision '%s': '%s'. "
+				    "A REAL decision can take values arbitrarily close to the compared value "
+				    "on either side, so excluding that single point rules out nothing. "
+				    "Declare '%s' as INT if the quantity is a whole number, or use '<=' / '>=' "
+				    "to exclude the range you actually mean.",
+				    real_var, clause, real_var);
 			}
+			bool is_less = type == ExpressionType::COMPARE_LESSTHAN;
+			throw BinderException(
+			    comp,
+			    "Strict inequality '%s' is not supported over the REAL decision '%s': '%s'. "
+			    "A REAL decision takes any value up to the bound, so there is no next value "
+			    "to stop at. Use '%s' instead, and move the bound by one step if the compared "
+			    "quantity is a count or other whole number.",
+			    is_less ? "<" : ">", real_var, comp.ToString(), is_less ? "<=" : ">=");
 		}
 		return;
+	}
+	default:
+		return;
+	}
+}
+
+//===--------------------------------------------------------------------===//
+// Integrality of a compared side, from declared types
+//===--------------------------------------------------------------------===//
+
+//! Does this side reference a decision variable? Only such a side is a *compared
+//! quantity*; a side made of constants and data columns is the bound `K`.
+//!
+//! `K` is deliberately exempt from the integrality refusal, because a fractional bound is
+//! not an error: no whole number equals 2.5, so `SUM(x) <> 2.5` is a tautology and the
+//! rewrite drops it, and an infinite bound reads the same way. Refusing here would turn
+//! two well-defined outcomes into errors. This mirrors the value-based guards this
+//! validator replaced, which read `variable_indices` and `row_coefficients` and never
+//! looked at `rhs_values`.
+static bool SideReferencesDecision(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = expr.Cast<const BoundColumnRefExpression>();
+		if (colref.binding.table_index == decide_index) {
+			return true;
+		}
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = SideReferencesDecision(child, decide_index);
+		}
+	});
+	return found;
+}
+
+//! Does this type guarantee whole-numbered values?
+//!
+//! `DECIMAL` carries its scale in the type, so `DECIMAL(15, 0)` qualifies and
+//! `DECIMAL(15, 2)` does not — the latter regardless of what its rows actually hold.
+//! No floating type qualifies: `DOUBLE` can hold `3.0`, but nothing in the type says it
+//! must, and a rule that depended on the stored values would make a query's validity
+//! change when a row is inserted.
+static bool DecideTypeIsWholeNumbered(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
+		return true;
+	case LogicalTypeId::DECIMAL:
+		return DecimalType::GetScale(type) == 0;
+	default:
+		return false;
+	}
+}
+
+//! Is this bound node the inert `norm(e, 0, M)` marker? The L0 "norm" counts nonzeros,
+//! so its value is a count whatever `e` is typed as. `NORM_MARKER_TAG_PREFIX` is followed
+//! by the order, so an L0 marker's tag begins `__decide_norm_0`.
+static bool IsBoundL0NormMarker(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return false;
+	}
+	string payload;
+	if (!ExtractDecideTagPayload(expr.alias, NORM_MARKER_TAG_PREFIX, payload)) {
+		return false;
+	}
+	return StringUtil::StartsWith(payload, "0");
+}
+
+//! Is this bound node an AVG aggregate?
+static bool IsBoundAvgAggregate(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return false;
+	}
+	auto &agg = expr.Cast<const BoundAggregateExpression>();
+	return StringUtil::CIEquals(agg.function.name, "avg");
+}
+
+//! Read a constant exponent, seeing through the casts the binder inserts. `POWER(x, 2)`
+//! binds as `power(CAST(x AS DOUBLE), CAST(2 AS DOUBLE))`, so the literal is never a bare
+//! `BoundConstantExpression` by the time it reaches here.
+static bool TryGetConstantExponent(const Expression &expr, double &out_value) {
+	const Expression *cur = &expr;
+	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		cur = cur->Cast<const BoundCastExpression>().child.get();
+	}
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+		return false;
+	}
+	try {
+		out_value = cur->Cast<const BoundConstantExpression>()
+		                .value.DefaultCastAs(LogicalType::DOUBLE)
+		                .GetValue<double>();
+	} catch (...) {
+		return false;
+	}
+	return true;
+}
+
+//! Is `expr` provably whole-numbered from declared types alone?
+//!
+//! `allow_avg_hoist` is set only for `<>`, whose rewrite multiplies both sides by the
+//! group size and so compares `SUM(e)` against `K*n` — integral whenever `e` is. A
+//! strict comparison has no such hoist and keeps AVG's fractional 1/n coefficients.
+static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoist,
+                                      idx_t decide_index) {
+	if (IsBoundL0NormMarker(expr)) {
+		return true;
+	}
+	if (allow_avg_hoist && IsBoundAvgAggregate(expr)) {
+		auto &agg = expr.Cast<const BoundAggregateExpression>();
+		return agg.children.size() == 1 &&
+		       DecideSideIsWholeNumbered(*agg.children[0], false, decide_index);
+	}
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_CAST: {
+		// A cast to a whole-numbered type makes the value one; a widening cast of an
+		// already-whole operand (the binder inserts many, e.g. INTEGER -> DECIMAL(18,0))
+		// keeps it one. Either direction suffices.
+		auto &cast = expr.Cast<const BoundCastExpression>();
+		return DecideTypeIsWholeNumbered(cast.return_type) ||
+		       DecideSideIsWholeNumbered(*cast.child, allow_avg_hoist, decide_index);
+	}
+	case ExpressionClass::BOUND_AGGREGATE: {
+		// SUM / MIN / MAX of whole numbers are whole. AVG is handled above; anything
+		// else falls through to its declared return type.
+		auto &agg = expr.Cast<const BoundAggregateExpression>();
+		const auto &name = agg.function.name;
+		if ((StringUtil::CIEquals(name, "sum") || StringUtil::CIEquals(name, "min") ||
+		     StringUtil::CIEquals(name, "max")) &&
+		    agg.children.size() == 1) {
+			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index);
+		}
+		return DecideTypeIsWholeNumbered(expr.return_type);
+	}
+	case ExpressionClass::BOUND_FUNCTION: {
+		// Sums, differences and products of whole numbers are whole. Division is not,
+		// and neither is anything else, so both fall through to the return type.
+		auto &func = expr.Cast<const BoundFunctionExpression>();
+		const auto &name = func.function.name;
+		if (name == "+" || name == "-") {
+			// An addend that references no decision is part of the bound, not of the
+			// compared quantity: `x + 1000003.50 < K` is exactly `x < K - 1000003.50`,
+			// and stepping that is still exact because `x` is still on the lattice. A
+			// fractional offset moves the bound; it does not move the lattice. (The
+			// value-based guard this replaces skipped constant terms for the same
+			// reason — it only ever read coefficients carrying a variable index.)
+			for (const auto &child : func.children) {
+				if (!SideReferencesDecision(*child, decide_index)) {
+					continue;
+				}
+				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		if (name == "*") {
+			// Every factor matters here, decision-bearing or not: a fractional
+			// multiplier rescales the decision off the lattice (`0.5 * x`).
+			for (const auto &child : func.children) {
+				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		// A whole number raised to a whole, non-negative power is whole, so `POWER(x, 2)`
+		// stays on the lattice even though the function's return type is DOUBLE. The
+		// declared return type is the wrong thing to read here for the same reason it is
+		// wrong for an L0 count. A fractional or negative exponent is not a polynomial
+		// degree at all and `ValidatePowerExponent` rejects it, so it need not be
+		// answered here.
+		if (name == "pow" || name == "power" || name == "**" || name == "^") {
+			double exp_val;
+			if (func.children.size() == 2 && TryGetConstantExponent(*func.children[1], exp_val) &&
+			    exp_val >= 0.0 && exp_val == std::floor(exp_val)) {
+				return DecideSideIsWholeNumbered(*func.children[0], allow_avg_hoist, decide_index);
+			}
+			return false;
+		}
+		return DecideTypeIsWholeNumbered(expr.return_type);
+	}
+	default:
+		return DecideTypeIsWholeNumbered(expr.return_type);
+	}
+}
+
+//! The operand a refusal should talk about.
+struct FractionalOperand {
+	string name;
+	LogicalType type;
+	//! A column can be cast to a whole-numbered type, and the message says so. An
+	//! intrinsically fractional expression (`AVG(x)`, a division) cannot — casting it
+	//! would truncate the value rather than state an assumption about it — so that
+	//! message offers the non-strict operator instead.
+	bool is_castable_column = false;
+};
+
+//! First operand that is not whole-numbered, for the message. Descends the same way the
+//! test above does, so what it reports is what was refused.
+static bool FindFractionalOperand(const Expression &expr, bool allow_avg_hoist,
+                                  idx_t decide_index, FractionalOperand &out) {
+	if (DecideSideIsWholeNumbered(expr, allow_avg_hoist, decide_index)) {
+		return false;
+	}
+	// Prefer a named leaf over the composite node above it: `l_quantity` is actionable,
+	// `sum((x * l_quantity))` is not.
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = FindFractionalOperand(child, allow_avg_hoist, decide_index, out);
+		}
+	});
+	if (found) {
+		return true;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		out.name = expr.Cast<const BoundColumnRefExpression>().GetName();
+		out.type = expr.return_type;
+		out.is_castable_column = true;
+		return true;
+	}
+	// No fractional leaf underneath: the node itself is what produces fractions.
+	out.name = expr.GetName();
+	out.type = expr.return_type;
+	out.is_castable_column = false;
+	return true;
+}
+
+void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index) {
+	// Constraint position only, and by the same reasoning as the parsed-tree validator:
+	// a comparison nested inside an operand is a boolean value, not a model row.
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_CONJUNCTION: {
+		auto &conj = expr.Cast<const BoundConjunctionExpression>();
+		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.alias)) {
+			if (!conj.children.empty()) {
+				ValidateDecideIntegralComparisonOperands(*conj.children[0], decide_index);
+			}
+			return;
+		}
+		for (const auto &child : conj.children) {
+			ValidateDecideIntegralComparisonOperands(*child, decide_index);
+		}
+		return;
+	}
+	case ExpressionClass::BOUND_COMPARISON: {
+		auto type = expr.GetExpressionType();
+		bool is_strict =
+		    type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
+		bool is_not_equal = type == ExpressionType::COMPARE_NOTEQUAL;
+		if (!is_strict && !is_not_equal) {
+			return;
+		}
+		auto &comp = expr.Cast<const BoundComparisonExpression>();
+		// Only a side that carries decisions is a compared quantity; the other is the
+		// bound, and a fractional bound is a tautology rather than an error.
+		bool left_is_compared = SideReferencesDecision(*comp.left, decide_index);
+		bool right_is_compared = SideReferencesDecision(*comp.right, decide_index);
+		FractionalOperand bad;
+		if (!(left_is_compared && FindFractionalOperand(*comp.left, is_not_equal, decide_index, bad)) &&
+		    !(right_is_compared && FindFractionalOperand(*comp.right, is_not_equal, decide_index, bad))) {
+			return;
+		}
+		string op = is_not_equal ? "<>" : (type == ExpressionType::COMPARE_LESSTHAN ? "<" : ">");
+		string alternative = is_not_equal ? "'<=' or '>='"
+		                                  : (type == ExpressionType::COMPARE_LESSTHAN ? "'<='" : "'>='");
+		string why = is_not_equal
+		                 ? "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on "
+		                   "whole numbers"
+		                 : "stepping the bound is exact only on whole numbers";
+		if (bad.is_castable_column) {
+			throw BinderException(
+			    "Comparison '%s' is not supported here: column '%s' has type %s, which allows "
+			    "fractional values, and %s. If '%s' holds whole numbers, cast it "
+			    "(%s::BIGINT); otherwise compare with %s.",
+			    op, bad.name, bad.type.ToString(), why, bad.name, bad.name, alternative);
+		}
+		throw BinderException(
+		    "Comparison '%s' is not supported here: '%s' has type %s and can take fractional "
+		    "values, and %s. Compare with %s instead.",
+		    op, bad.name, bad.type.ToString(), why, alternative);
 	}
 	default:
 		return;

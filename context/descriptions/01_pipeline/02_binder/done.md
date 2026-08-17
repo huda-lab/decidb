@@ -174,35 +174,97 @@ subqueries are rejected, as is any subquery referencing a decision variable
 `plan_select_node.cpp`, at the only point where it is still visible — see
 [`../03_logical_plan/done.md`](../03_logical_plan/done.md).
 
-### Strict `<` / `>` over a REAL decision
+### `<`, `>` and `<>` over a REAL decision
 
-DeciDB encodes a strict inequality by stepping the bound: `< K` becomes `<= K-1`.
-That is exact only when the compared side lands on integers. A REAL decision takes
-any value up to the bound, so the step would cut feasible points — `SUM(x) = 4.7`
-satisfies `< 5` but not `<= 4`.
+All three are encoded by stepping the bound one integer unit: `< K` becomes `<= K-1`,
+and `<> K` becomes the disjunction `<= K-1 OR >= K+1`. Both are exact only when the
+compared side lands on integers.
+
+For `<` the step cuts feasible points: `SUM(x) = 4.7` satisfies `< 5` but not `<= 4`.
+For `<>` the problem is worse than inexact — `{v : v != K}` over the reals is an **open**
+set, and every MILP feasible region is a finite union of closed polyhedra, so `<>` on a
+continuous quantity has no correct encoding at all. Excluding a single point from a
+continuous range rules out nothing a solver can act on.
 
 The declared type settles that without reading a row, so
-`ValidateDecideNoStrictComparisonOnReal` rejects it here, naming the variable and
-quoting the clause. It runs on the parsed tree beside the other DECIDE validators,
-and it checks **comparisons in constraint position only** — descending through
-conjunctions and through the constraint child of a `WHEN` / `PER` wrapper, the same
-way `DecideConstraintsBinder` dispatches. A comparison nested inside an operand is a
+`ValidateDecideNoIntegerStepComparisonOnReal` rejects all three here, naming the
+variable and quoting the clause. It runs on the parsed tree beside the other DECIDE
+validators, and it checks **comparisons in constraint position only** — descending
+through conjunctions and through the constraint child of a `WHEN` / `PER` wrapper, the
+same way `DecideConstraintsBinder` dispatches. A comparison nested inside an operand is a
 boolean value, not a model row: in the misparse `(SUM(x) WHEN w > 1) + 3 <= 10` the
 `> 1` is added to `3`, and the resulting type error is the better diagnosis.
 
 Both sides are read, because canonicalization has not run yet and `5 > SUM(x)` is as
 likely a spelling as `SUM(x) < 5`. Reading a side is not moving one.
 
-The refusal is stated on the declared type, not on what the term becomes. An L0 count
-(`norm(e, 0, M)`) reaches the solver as a sum of 0/1 indicators, so the integer step
-would in fact be exact there even for a REAL decision — that shape is refused anyway,
-so what DECIDE accepts does not depend on which linearization a term happens to
-receive. `<= K-1` expresses the same cap.
+The advice differs by operator because the repair does. `<` has an exact restatement
+(`<= K-1`), so the message offers it. `<>` has none, so the message says to declare the
+decision `INT` if the quantity is a whole number, or to name the range actually meant.
+The `<>` clause is spelled by hand rather than through `ToString()`, which renders
+`COMPARE_NOTEQUAL` as `!=` — a clause quoted back to the user has to read the way they
+wrote it.
 
-This is the structural half of a refusal that also has a value half. A fractional
-coefficient produced by a data column (`SUM(0.5 * x) < 5` on an INTEGER `x`) is
-knowable only after the scan and is refused by the model builder — see
-[`../08_execution/done.md`](../08_execution/done.md).
+**The rule is stated on the type of the compared quantity, not on every type beneath
+it.** `norm(e, 0, M)` counts nonzeros, so its value lands on the integer lattice however
+`e` is declared, and the integer step is exact over it. `IsIntegerValuedReducer` stops the
+search there, so `norm(x, 0, M) < 3` and `norm(x, 0, M) <> 3` are both **accepted** over a
+REAL `x`. Only p=0 qualifies: `norm(e, 1)` sums magnitudes, `norm(e, 2)` is a length and
+`norm(e, 'inf')` a maximum, each as continuous as `e`.
+
+> Reversed 2026-08-17. The rule first shipped stated on the declared type of `e`, so that
+> what DECIDE accepts would not depend on which linearization a term receives. That
+> principle stands — L0 integrality simply is not a linearization choice, it is the
+> definition of the reducer, so the earlier rule was type-checking the wrong quantity.
+> Settled alongside the `<>` split so both operators answer alike; before it, `<` refused
+> `norm(x, 0, M)` over a REAL decision and `<>` accepted it.
+
+### The rest of the compared expression
+
+`ValidateDecideIntegralComparisonOperands` completes the same refusal for every operand
+that is not a decision: data columns, literals, and the reducers over them. It runs on the
+**bound** tree, immediately after `DecideConstraintsBinder`, because a parsed tree carries
+no types yet.
+
+**It is a type judgement, not a value judgement.** `l_quantity` is `DECIMAL(15,2)` in
+TPC-H and every row of it holds a whole number, so `SUM(x * l_quantity) < 100` would in
+fact step exactly — and it is refused anyway. The alternative, reading the stored values,
+makes a query's *validity* depend on the table's contents: the same query is legal today
+and illegal tomorrow because someone inserted `0.05`. Whether a query is well-formed
+should follow from the query and the schema.
+
+The message therefore names the column, its type, and the cast that fixes it — the cast
+is the user stating the assumption the rewrite depends on:
+
+> Comparison '<' is not supported here: column 'l_quantity' has type DECIMAL(15,2), which
+> allows fractional values, and stepping the bound is exact only on whole numbers. If
+> 'l_quantity' holds whole numbers, cast it (l_quantity::BIGINT); otherwise compare with
+> '<='.
+
+`DECIMAL(p, 0)` carries its scale in the type and needs no cast. The rule is "scale > 0,
+or a floating type", not "any DECIMAL".
+
+Four things are deliberately **not** refused:
+
+- **The bound `K`.** Only a side referencing a decision is a compared quantity; the other
+  side is the bound. A fractional `K` is not an error but a *tautology* — no whole number
+  equals 2.5 — so `SUM(x) <> 2.5` is dropped, and an infinite `K` reads the same way.
+  Refusing here would turn two well-defined outcomes into errors.
+- **A decision-free addend.** `x + 1000003.50 < K` is exactly `x < K - 1000003.50`; a
+  fractional offset moves the bound, it does not move the lattice. A *multiplier* is
+  different — `0.5 * x` rescales the decision off the lattice — so every factor of a
+  product is checked whether or not it carries a decision.
+- **`POWER(e, n)` with a whole, non-negative constant `n`**, which returns `DOUBLE` but
+  stays on the lattice when `e` does. Its exponent is read through the binder's inserted
+  casts.
+- **`AVG(e) <> K`**, whose denominator is hoisted to the right-hand side as
+  `SUM(e) <> K*n`, leaving an integral left side. The hoist is specific to `<>`;
+  `AVG(e) < K` keeps its fractional `1/n` coefficients and is refused.
+
+> Moved here 2026-08-17, from an `InvalidInputException` in the model builder that read
+> evaluated coefficient *values*. The two halves of the gate now answer to one rule, in
+> one layer, before any data is read, and the model builder's remaining checks are
+> `InternalException` invariants.
 
 ### `PER`
 

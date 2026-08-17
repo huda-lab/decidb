@@ -350,6 +350,24 @@ struct SolverInput {
     vector<double> lower_bounds;
     vector<double> upper_bounds;
 
+    //! The subset of the column box that no diagnosis will ever open: a variable's
+    //! intrinsic domain (BOOLEAN 0/1, default non-negativity) and nothing else.
+    //!
+    //! `lower_bounds` / `upper_bounds` above accumulate three different things — the
+    //! intrinsic domain, user bounds absorbed into the box by stage 05, and implied
+    //! tightenings derived by `DecidePropagateImpliedBounds`. The last two are backed by
+    //! rows the elastic engine may loosen, and it reverts them for exactly that reason
+    //! (see the `user_absorbed_bounds` re-emission in `PhysicalDecide::Finalize`), so a
+    //! rewrite that bakes one into a constraint's *structure* cannot be reverted with it
+    //! and would misstate the query under repair.
+    //!
+    //! A rewrite that changes what a constraint means depending on a bound must
+    //! therefore read these, not the box above. A Big-M constant may read either: it
+    //! only has to dominate, and a loosened bound makes it conservative rather than
+    //! wrong. Size = num_decide_vars.
+    vector<double> rigid_lower_bounds;
+    vector<double> rigid_upper_bounds;
+
     // Constraints
     vector<EvaluatedConstraint> constraints;
     vector<ConstraintSourceInfo> constraint_sources;

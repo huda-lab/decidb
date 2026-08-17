@@ -9,6 +9,32 @@ Resolved entries are removed; if the fix taught a generalizable lesson, record i
 ---
 
 
+## A BOOL decision's `[0, 1]` domain never reaches `SolverInput`, so every Big-M over one falls back to `1e6`
+
+**Location**: `src/optimizer/decide/decide_optimizer.cpp:2203` initialises `absorbed_upper_bounds` to `1e30` for every variable; only a *user-written* bound narrows it. The BOOLEAN `1.0` ceiling is applied much later, at `src/decidb/utility/ilp_model_builder.cpp:199-207`, and merged at `:221`. `SolverInput::upper_bounds` is copied from the former (`physical_decide.cpp:2625`), so it never carries the ceiling.
+
+Every Big-M derivation reads `input.upper_bounds` through `DecideRowTermRange` (`ilp_linearization.cpp:19`), which treats `ub >= 1e20` as unbounded and makes the caller fall back to `DECIDE_BIGM_FALLBACK`. A `DECIDE x(BOOL)` with no written upper bound therefore looks unbounded to every one of them.
+
+Measured 2026-08-17 on two spellings of the *same* feasible set, four rows each:
+
+| Query | Big-M emitted |
+|---|---|
+| `DECIDE x(BOOL) ... SUM(x) <> 2` | `1000000` |
+| `DECIDE x(INT) ... x <= 1 AND SUM(x) <> 2` | `7` |
+
+**Why it matters**, in two ways:
+
+- **Numerics.** A `1e6` coefficient beside `1.0`s widens the matrix coefficient range by six orders of magnitude, which is bad for the simplex and can weaken presolve on unrelated rows. It does *not* weaken the `<>` relaxation specifically — the convex hull of `{0,1,3,4}` is `[0,4]` whether M is 7 or 1e6, so no encoding can exclude the hole — but ABS and hard MIN/MAX share `DecideRowTermRange` and their relaxations are not hull-limited in the same way, so they may lose real strength.
+- **Missed range collapses.** The `<>` collapse reads `rigid_upper_bounds`, which inherits the same gap, so the upper side of a BOOL's intrinsic box is invisible. `SUM(x) <> 9` over four BOOL decisions is unreachable and should be dropped outright; it emits the two-row disjunction instead (verified 2026-08-17). Only the `ALWAYS_TRUE` and `LOWER_ONLY` verdicts are affected — the common `<> 0` case rests on the lower bound and still collapses.
+
+**Fix direction**: write the type's intrinsic domain into `absorbed_upper_bounds` when it is initialised, rather than defaulting every variable to `1e30` and repairing BOOLEAN at model-build time. The ceiling is a property of the declared type, known at stage 05, and it is genuinely rigid — `PhysicalDecide::Finalize` already resets BOOLEAN columns only within `[0,1]` during diagnosis (`physical_decide.cpp:4476-4484`), so nothing downstream opens it. Check the merge at `ilp_model_builder.cpp:221` stays correct once the value arrives pre-narrowed, and check no `>= 1e20` unboundedness test elsewhere was relying on the old default.
+
+**Verification**: `baseline.dump` will change (Big-M constants shrink), so `baseline.dump.results` must be byte-identical before recapture — the models move but no optimum may.
+
+**Discovered**: 2026-08-17, while explaining why the `<>` disjunction's Big-M was `1e6` in the range-collapse work. Unrelated to that change: the M derivation was untouched by it.
+
+---
+
 ## Hard-direction MIN/MAX has only a one-hot Big-M encoding, whose relaxation weakens with row count
 
 **Location**: `src/execution/operator/decide/physical_decide.cpp:5394-5432` (flat hard MIN/MAX objective); the same encoding appears for composed terms via `EmitComposedHardMinMaxIndicators` and for nested-PER inner/outer levels.
@@ -57,9 +83,9 @@ fix itself.
 
 ## Theme: work that sits in the physical layer without needing a row
 
-Seven entries came from one audit (2026-08-15) and share a root cause; three remain below, plus the `<>` remainder of a fourth. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
+Seven entries came from one audit (2026-08-15) and share a root cause; three remain below. They are listed here so the shared reasoning is not re-derived each time; each entry stands alone and can be picked up independently.
 
-`physical_decide.cpp` is 4,843 lines against 2,218 + 1,614 for layer 05, 1,402 + 1,012 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
+`physical_decide.cpp` is 4,865 lines against 2,218 + 1,713 for layer 05, 1,402 + 1,254 for layer 06 and 985 for layer 04. The audit sorted every operation in it by one test — *does it need a row?* Six are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest are filed below.
 
 **Why they ended up there.** Coefficients are expressions over user data, so they can only become numbers once the relational input has run. That put coefficient evaluation at layer 08, correctly. Everything else that touches those same expression trees then followed it down, whether or not it needed the data. The code recorded this: `ApplyScaleToExtracted` rebuilt a scaled coefficient by reusing the original node's `FunctionData` because, in its own comment, that was how it got rebuilt "without a binder here" — layer 08 reconstructing binder output because it sat downstream of the binder. The flattening entry that fixed this shipped 2026-08-15.
 
@@ -70,7 +96,7 @@ Seven entries came from one audit (2026-08-15) and share a root cause; three rem
 | Degree and linearity are analyzed twice, in two layers | 02 |
 | Each linearized formulation is split between the layer that chooses it and the layer that encodes it | 06 |
 | Three renderers answer one question about showing users their own expressions | shared |
-| ~~Structural and value validation sit in the same guards~~ — shipped 2026-08-15; only the `<>` refusal remains | 02, partly |
+| ~~Structural and value validation sit in the same guards~~ — fully shipped; strict `<`/`>` 2026-08-15, `<>` 2026-08-17 | 02, partly |
 
 Destinations are candidates, not decisions; each entry names the questions its chunk has to answer first. The table order implies no batch order. The one dependency that spanned entries — flattening gating like-term collection — is discharged: both shipped to layer 05 on 2026-08-15 and are documented in [`../../01_pipeline/05_optimizer/done.md`](../../01_pipeline/05_optimizer/done.md) §1a. The remaining entries are independent of everything, including each other.
 
@@ -126,23 +152,3 @@ Layer 8 strips the binder's implicit casts before rendering a diagnosis label; l
 
 ---
 
-## The `<>` refusal still tests structure and value in one predicate
-
-**Location**: `NELhsIsIntegerValued` (`src/decidb/utility/ilp_linearization.cpp:439`, thrown at `:477`).
-
-The strict-`<` / `>` version of this conjunction was split on 2026-08-15: the REAL-variable half now rejects at bind time (`ValidateDecideNoStrictComparisonOnReal`, stage 02) and the fractional-coefficient half stays in the model builder. See [`../../01_pipeline/02_binder/done.md`](../../01_pipeline/02_binder/done.md) §4 and [`../../01_pipeline/06_model_formulation/done.md`](../../01_pipeline/06_model_formulation/done.md) §5.
-
-`<>` was deliberately left out of that chunk, so it still rejects on "a REAL variable **or** a non-integer coefficient" at model-build time — the same single predicate doing two jobs, in a different construct. A `<>` over a REAL decision is refused only after a full scan, in the vocabulary of the linearization pass rather than the user's clause.
-
-**Fix direction**: the same split, and it should be smaller than the strict one was, because the bind-time machinery now exists. Extend `ValidateDecideNoStrictComparisonOnReal` to `COMPARE_NOTEQUAL` (or generalize its name), leave the coefficient half where it is, and make the REAL branch of `NELhsIsIntegerValued` an `InternalException` for the same reason the strict one is.
-
-Two things to settle first, neither of which the strict chunk answered:
-
-- `<>` has a **silent-drop** case the strict path does not: `NEIsIntegerValuedRhs` treats an integer-valued LHS with a fractional or infinite `K` as a tautology and drops the row. A bind-time refusal on the LHS must not change which queries reach that drop.
-- The strict chunk chose to refuse on the **declared type** rather than on what the term becomes, so `norm(e, 0, M) < K` on a REAL decision is refused even though its L0 count is integral. Whether `<>` follows the same rule or is more permissive should be a deliberate choice, not an accident of implementation.
-
-**Test surface**: `_NE_REAL_MSG` in `test/decide/tests/test_cons_comparison.py` (one assertion, `test_real_sum_not_equal_rejected`).
-
-**Discovered**: 2026-08-15, physical-layer audit; scoped out of the strict-inequality chunk the same day.
-
----

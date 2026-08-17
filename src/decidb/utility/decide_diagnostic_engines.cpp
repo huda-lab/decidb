@@ -793,6 +793,24 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 				}
 			}
 		}
+		// A `<>` whose range collapsed to a plain inequality carries the same
+		// provenance but holds no indicator term to read an M from, so derive one from
+		// the row itself: enough to dominate the row's reachable span plus its bound is
+		// enough to make it vacuous, which is all the removal dial needs. Without this
+		// the group would get a coefficient of 0 and w=1 would neutralize nothing —
+		// a removal offered in the diagnosis but inert in the model.
+		if (!(m2 > 0.0)) {
+			for (idx_t r : grp) {
+				const auto &row = elastic.constraints[r];
+				double span = std::fabs(row.rhs) + 1.0;
+				for (idx_t k = 0; k < row.indices.size(); k++) {
+					idx_t col = static_cast<idx_t>(row.indices[k]);
+					span += std::fabs(row.coefficients[k]) *
+					        std::max(std::fabs(elastic.col_lower[col]), std::fabs(elastic.col_upper[col]));
+				}
+				m2 = std::max(m2, span);
+			}
+		}
 		// One binary removal indicator w ∈ {0,1}.
 		idx_t w_col = elastic.num_vars;
 		elastic.col_lower.push_back(0.0);

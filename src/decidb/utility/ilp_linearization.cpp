@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 
 namespace duckdb {
@@ -435,9 +436,22 @@ void LinearizeMinMaxIndicators(SolverInput &input) {
 //! The ±1 band is only semantically exact when the LHS is integer-valued. For a REAL
 //! variable or a non-integer coefficient the band `(K-1, K+1)` wrongly excludes
 //! feasible continuous points. Mirrors the strict-inequality guard in
-//! `ilp_model_builder.cpp::IsEvalConstraintLhsIntegerValued`.
-static bool NELhsIsIntegerValued(const EvaluatedConstraint &ec,
-                                 const vector<LogicalType> &variable_types) {
+//! `ilp_model_builder.cpp::IsEvalConstraintLhsIntegerValued`, and splits its result the
+//! same way: only one of the two failures is still the user's to fix here.
+//!
+//! A REAL decision is knowable from the declared type and is rejected at bind time by
+//! `ValidateDecideNoIntegerStepComparisonOnReal`, which names the variable and quotes
+//! the clause. Seeing one arrive here means a `<>` reached the model builder without
+//! passing that gate — an invariant violation, not a query error. The branch is kept
+//! rather than deleted so that a future rewrite introducing a REAL auxiliary inside a
+//! `<>` fails loudly instead of silently cutting the band.
+//!
+//! A fractional coefficient comes from evaluating a data column and is knowable only
+//! now, so it stays a user-facing refusal.
+enum class NELhsIntegrality : uint8_t { INTEGER, REAL_VARIABLE, FRACTIONAL_COEFFICIENT };
+
+static NELhsIntegrality NELhsIsIntegerValued(const EvaluatedConstraint &ec,
+                                             const vector<LogicalType> &variable_types) {
     for (idx_t i = 0; i < ec.variable_indices.size(); i++) {
         idx_t vi = ec.variable_indices[i];
         if (vi == DConstants::INVALID_INDEX) {
@@ -445,13 +459,13 @@ static bool NELhsIsIntegerValued(const EvaluatedConstraint &ec,
         }
         const auto &t = variable_types[vi];
         if (t == LogicalType::DOUBLE || t == LogicalType::FLOAT) {
-            return false;
+            return NELhsIntegrality::REAL_VARIABLE;
         }
         if (!ec.row_coefficients[i].AllIntegral()) {
-            return false;
+            return NELhsIntegrality::FRACTIONAL_COEFFICIENT;
         }
     }
-    return true;
+    return NELhsIntegrality::INTEGER;
 }
 
 //! Companion check on the RHS. With integer-valued LHS and a non-integer K,
@@ -465,6 +479,138 @@ static bool NEIsIntegerValuedRhs(double k) {
     return std::isfinite(k) && std::abs(k - std::round(k)) < 1e-9;
 }
 
+//! What a row's reachable range says about the point `<>` excludes.
+//!
+//! `LHS <> K` is a disjunction only when `K` sits strictly inside the range the LHS can
+//! actually reach. When the range lies wholly on one side of `K`, one branch is dead and
+//! the surviving branch is a plain inequality — no indicator, no Big-M, and an LP
+//! relaxation that is tight instead of empty. The common `SUM(x) <> 0` over nonnegative
+//! decisions is exactly this case: it is `SUM(x) >= 1`.
+enum class NECollapse : uint8_t {
+    DISJUNCTION, //!< K is interior: both branches live, keep the Big-M pair
+    ALWAYS_TRUE, //!< K is unreachable: the row excludes nothing, drop it
+    LOWER_ONLY,  //!< the range never exceeds K: `<> K` is exactly `<= K-1`
+    UPPER_ONLY   //!< the range never falls below K: `<> K` is exactly `>= K+1`
+};
+
+//! Signed reachable interval of the variable part of `ec`'s LHS on `row`, as opposed to
+//! `DecideRowTermRange`, which returns an unsigned magnitude because a Big-M only has to
+//! dominate one. A collapse needs to know which side of `K` the range lies on, so the
+//! coefficient sign has to be respected rather than taken through `abs`.
+//!
+//! An unbounded side yields an infinite endpoint rather than failing outright: the two
+//! collapses are one-sided, and `SUM(x) <> 0` over decisions that are merely
+//! non-negative — the case worth serving — has a finite floor and no ceiling at all.
+//! Comparisons against an infinite endpoint simply never fire, so the classifier needs
+//! no separate unbounded branch.
+//!
+//! `lower_bounds` / `upper_bounds` must be the rigid box: see
+//! `SolverInput::rigid_lower_bounds`.
+static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
+                                 const vector<double> &lower_bounds,
+                                 const vector<double> &upper_bounds, double &out_lo,
+                                 double &out_hi) {
+    constexpr double INF = std::numeric_limits<double>::infinity();
+    double lo = 0.0;
+    double hi = 0.0;
+    bool lo_unbounded = false;
+    bool hi_unbounded = false;
+    for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+        idx_t v = ec.variable_indices[t];
+        if (v == DConstants::INVALID_INDEX) {
+            continue; // constant term: accounted for by DecideRowEffectiveBound
+        }
+        double coef = ec.row_coefficients[t].Get(row);
+        if (std::abs(coef) < 1e-15) {
+            continue;
+        }
+        // An auxiliary introduced after the rigid box was captured has no rigid entry;
+        // treat it as unbounded, which declines the collapse rather than guessing.
+        if (v >= lower_bounds.size() || v >= upper_bounds.size()) {
+            lo_unbounded = true;
+            hi_unbounded = true;
+            continue;
+        }
+        double lb = lower_bounds[v];
+        double ub = upper_bounds[v];
+        bool lb_unbounded = lb <= -1e20;
+        bool ub_unbounded = ub >= 1e20;
+        // The low end of a positive term comes from the variable's low end, and from its
+        // high end when the coefficient flips the sense.
+        bool lo_from_ub = coef < 0.0;
+        if (lo_from_ub ? ub_unbounded : lb_unbounded) {
+            lo_unbounded = true;
+        } else {
+            lo += coef * (lo_from_ub ? ub : lb);
+        }
+        if (lo_from_ub ? lb_unbounded : ub_unbounded) {
+            hi_unbounded = true;
+        } else {
+            hi += coef * (lo_from_ub ? lb : ub);
+        }
+    }
+    out_lo = lo_unbounded ? -INF : lo;
+    out_hi = hi_unbounded ? INF : hi;
+}
+
+//! Classify one row of a `<>` constraint. Only called once both integrality guards have
+//! passed, so the LHS and `K` are both on the integer lattice and a half-unit tolerance
+//! cleanly separates "can reach K" from "cannot".
+static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row,
+                                const vector<double> &lower_bounds,
+                                const vector<double> &upper_bounds) {
+    double lo;
+    double hi;
+    DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, lo, hi);
+    double k = DecideRowEffectiveBound(ec, row);
+    if (!std::isfinite(k)) {
+        return NECollapse::DISJUNCTION;
+    }
+    if (hi < k - 0.5 || lo > k + 0.5) {
+        return NECollapse::ALWAYS_TRUE;
+    }
+    if (lo > k - 0.5) {
+        return NECollapse::UPPER_ONLY; // lo == K on the lattice: LHS >= K
+    }
+    if (hi < k + 0.5) {
+        return NECollapse::LOWER_ONLY; // hi == K on the lattice: LHS <= K
+    }
+    return NECollapse::DISJUNCTION;
+}
+
+//! The collapse verdict for a whole constraint, or DISJUNCTION if its active rows do not
+//! agree on one.
+//!
+//! Per-row `<>` shares one EvaluatedConstraint across every row, so a per-row verdict
+//! would mean splitting it into up to three constraints carrying complementary row masks.
+//! Rows disagree only when their bounds or their RHS vary across rows, which is not the
+//! shape the collapse exists to serve — a uniform `x <> 0` or `SUM(x) <> 0` yields one
+//! verdict for every row. So a mixed constraint keeps the Big-M pair, unsplit.
+static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_rows,
+                                       const vector<double> &lower_bounds,
+                                       const vector<double> &upper_bounds) {
+    // A bilinear or quadratic LHS is not captured by variable_indices alone, so its
+    // reachable range is not the linear one computed above.
+    if (!ec.bilinear_terms.empty() || !ec.quadratic_groups.empty()) {
+        return NECollapse::DISJUNCTION;
+    }
+    bool seen = false;
+    NECollapse verdict = NECollapse::DISJUNCTION;
+    for (idx_t r = 0; r < num_rows; r++) {
+        if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        NECollapse row_verdict = ClassifyNERow(ec, r, lower_bounds, upper_bounds);
+        if (!seen) {
+            verdict = row_verdict;
+            seen = true;
+        } else if (row_verdict != verdict) {
+            return NECollapse::DISJUNCTION;
+        }
+    }
+    return seen ? verdict : NECollapse::DISJUNCTION;
+}
+
 void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate) {
     const idx_t num_rows = input.num_rows;
 
@@ -474,12 +620,13 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
             new_constraints.push_back(std::move(ec));
             continue;
         }
-        if (!NELhsIsIntegerValued(ec, input.variable_types)) {
-            throw InvalidInputException(
-                "Inequality '<>' is not supported when the left-hand side "
-                "involves a REAL variable or a non-integer coefficient. "
-                "The integer-step rewrite (x <> K → x <= K-1 OR x >= K+1) "
-                "would cut continuous feasible points in the band (K-1, K+1).");
+        if (NELhsIsIntegerValued(ec, input.variable_types) != NELhsIntegrality::INTEGER) {
+            throw InternalException(
+                "DECIDE: a '<>' whose left-hand side is not integer-valued reached the "
+                "model builder. Both halves of that refusal are stated on declared types "
+                "at bind time — ValidateDecideNoIntegerStepComparisonOnReal for the "
+                "decision, ValidateDecideIntegralComparisonOperands for every other "
+                "operand — so arriving here is an invariant violation, not a query error.");
         }
         if (ec.lhs_is_aggregate) {
             // Aggregate NE: defer to after var_indexer is built. Expanded with a
@@ -525,6 +672,50 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
             }
         }
 
+        auto BuildShiftedRhs = [&](double shift) {
+            if (ec.rhs_values.IsUniform()) {
+                return CoefficientColumn::MakeScalar(ec.rhs_values.UniformValue() + shift, num_rows);
+            }
+            auto col = CoefficientColumn::MakeDense(num_rows, 0.0);
+            for (idx_t r = 0; r < num_rows; r++) {
+                col.Set(r, ec.rhs_values.Get(r) + shift);
+            }
+            return col;
+        };
+
+        // Range collapse, before any Big-M is computed. When the LHS cannot reach the
+        // far side of K, one disjunct is dead and the constraint is a plain inequality.
+        NECollapse collapse = ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds,
+                                                   input.rigid_upper_bounds);
+        if (collapse == NECollapse::ALWAYS_TRUE) {
+            continue; // excludes nothing reachable — drop, like the tautology case
+        }
+        if (collapse != NECollapse::DISJUNCTION) {
+            bool lower = collapse == NECollapse::LOWER_ONLY;
+            EvaluatedConstraint ec_collapsed;
+            ec_collapsed.variable_indices = ec.variable_indices;
+            ec_collapsed.row_coefficients = ec.row_coefficients;
+            ec_collapsed.rhs_values = BuildShiftedRhs(lower ? -1.0 : 1.0);
+            ec_collapsed.comparison_type = lower ? ExpressionType::COMPARE_LESSTHANOREQUALTO
+                                                 : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+            ec_collapsed.lhs_is_aggregate = false; // per-row
+            ec_collapsed.row_group_ids = ec.row_group_ids;
+            ec_collapsed.num_groups = ec.num_groups;
+            ec_collapsed.group_labels = ec.group_labels;
+            ec_collapsed.qualifier = ec.qualifier;
+            ec_collapsed.source_clause_id = ec.source_clause_id;
+            ec_collapsed.repair_group_id = ec.repair_group_id;
+            ec_collapsed.kind = ConstraintKind::USER_MECHANISM;
+            // Keep the `<>` provenance even though the indicator no longer appears in
+            // the row: diagnosis must still offer this clause as a remove-only `<>`
+            // rather than as a bound the user can nudge, whichever encoding it received.
+            // The removal engine falls back to a range-derived M when it finds no
+            // indicator coefficient to read one from.
+            ec_collapsed.ne_indicator_idx = ec.ne_indicator_idx;
+            new_constraints.push_back(std::move(ec_collapsed));
+            continue;
+        }
+
         // Tight data-driven per-row Big-M for the inline NE expansion. Computed
         // after the tautology filter: a row this rewrite never emits must not be
         // asked for an M, and an infinite bound is exactly such a row
@@ -553,17 +744,6 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
             indicator_coeffs = CoefficientColumn::MakeSparseMasked(
                 num_rows, std::move(active_indices), -M);
         }
-
-        auto BuildShiftedRhs = [&](double shift) {
-            if (ec.rhs_values.IsUniform()) {
-                return CoefficientColumn::MakeScalar(ec.rhs_values.UniformValue() + shift, num_rows);
-            }
-            auto col = CoefficientColumn::MakeDense(num_rows, 0.0);
-            for (idx_t r = 0; r < num_rows; r++) {
-                col.Set(r, ec.rhs_values.Get(r) + shift);
-            }
-            return col;
-        };
 
         // Constraint 1: x - M*z <= K - 1
         EvaluatedConstraint ec1;
@@ -703,22 +883,61 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
                 continue;
             }
 
+            // Range collapse, per group. Same reasoning as the per-row path, over the
+            // group's summed interval: each row of a group contributes its own solver
+            // column, so the group's reachable range is the sum of its rows' ranges.
+            // Unlike the per-row path a mixed verdict costs nothing here, because groups
+            // are already emitted independently — each gets the encoding its own range
+            // earns.
+            NECollapse collapse = NECollapse::DISJUNCTION;
+            if (ec.bilinear_terms.empty() && ec.quadratic_groups.empty()) {
+                double grp_lo = 0.0;
+                double grp_hi = 0.0;
+                for (idx_t k = g_begin; k < g_end; k++) {
+                    double row_lo;
+                    double row_hi;
+                    DecideRowSignedRange(ec, flat_rows[k], input.rigid_lower_bounds,
+                                         input.rigid_upper_bounds, row_lo, row_hi);
+                    grp_lo += row_lo; // -inf is absorbing, and only ever accumulates here
+                    grp_hi += row_hi;
+                }
+                if (grp_hi < rhs - 0.5 || grp_lo > rhs + 0.5) {
+                    collapse = NECollapse::ALWAYS_TRUE;
+                } else if (grp_lo > rhs - 0.5) {
+                    collapse = NECollapse::UPPER_ONLY;
+                } else if (grp_hi < rhs + 0.5) {
+                    collapse = NECollapse::LOWER_ONLY;
+                }
+            }
+            if (collapse == NECollapse::ALWAYS_TRUE) {
+                continue; // this group's aggregate cannot reach K — it excludes nothing
+            }
+
             // Tight per-group Big-M: the aggregate LHS ranges over the SUM of this
             // group's rows, so M must cover the summed magnitude. A single per-row
             // bound is far too small at scale and would silently cap the aggregate.
-            bool grp_unbounded = false;
-            double grp_range = 0.0;
-            for (idx_t k = g_begin; k < g_end; k++) {
-                grp_range += DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
-                                                flat_rows[k], input.lower_bounds,
-                                                input.upper_bounds, grp_unbounded);
-            }
-            double M = grp_range + std::abs(rhs) + 1.0;
-            if (grp_unbounded) {
-                M = std::max(M, DECIDE_BIGM_FALLBACK);
+            // Only the disjunctive encoding needs one.
+            double M = 0.0;
+            if (collapse == NECollapse::DISJUNCTION) {
+                bool grp_unbounded = false;
+                double grp_range = 0.0;
+                for (idx_t k = g_begin; k < g_end; k++) {
+                    grp_range += DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
+                                                    flat_rows[k], input.lower_bounds,
+                                                    input.upper_bounds, grp_unbounded);
+                }
+                M = grp_range + std::abs(rhs) + 1.0;
+                if (grp_unbounded) {
+                    M = std::max(M, DECIDE_BIGM_FALLBACK);
+                }
             }
 
-            // Allocate one global binary z for this group
+            // Allocate one global binary z for this group. A collapsed group still gets
+            // one, unreferenced by any row: it is what carries the clause's label and
+            // groups its rows for the remove-only `<>` repair, so allocating it keeps
+            // diagnosis identical whichever encoding the group received. The per-row
+            // path is in the same position — its indicator is allocated at stage 05,
+            // before any range is knowable.
             idx_t z_idx = var_indexer.global_block_start + input.num_global_vars;
             input.num_global_vars++;
             input.global_variable_types.push_back(LogicalType::BOOLEAN);
@@ -749,6 +968,22 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
             vector<int> common_indices;
             vector<double> common_coefs;
             accum.Flush(common_indices, common_coefs);
+
+            // Collapsed: one plain inequality, no indicator term and no Big-M.
+            if (collapse != NECollapse::DISJUNCTION) {
+                bool lower = collapse == NECollapse::LOWER_ONLY;
+                SolverInput::RawConstraint rc;
+                rc.sense = lower ? '<' : '>';
+                rc.rhs = lower ? rhs - 1.0 : rhs + 1.0;
+                rc.indices = std::move(common_indices);
+                rc.coefficients = std::move(common_coefs);
+                rc.kind = ConstraintKind::USER_MECHANISM;
+                rc.source_clause_id = ec.source_clause_id;
+                rc.repair_group_id = ec.repair_group_id;
+                rc.indicator_col = z_idx;
+                input.global_constraints.push_back(std::move(rc));
+                continue;
+            }
 
             // ec1: SUM(coeffs) - M*z <= K - 1
             SolverInput::RawConstraint rc1;

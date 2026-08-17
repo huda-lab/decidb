@@ -555,3 +555,33 @@ MAXIMIZE SUM(x);
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT SUM((price - 25) * ABS(x - 2)) <= 5 AND x <= 9
 MAXIMIZE SUM(x);
+
+-- The `<>` range collapse. `LHS <> K` is a disjunction only when K sits strictly
+-- inside the range the LHS can reach; when it does not, one branch is dead and
+-- the survivor is a plain inequality with no indicator and no Big-M. Query 31
+-- above is the interior-K case that must keep the two-row encoding, so these two
+-- pin the other direction. Only the rigid box (a variable's intrinsic domain)
+-- may license the collapse — a bound the user wrote is loosenable under
+-- infeasibility diagnosis, and query 84 pins that it does not license one.
+
+-- 82 aggregate `<> 0` over BOOL decisions: SUM(x) cannot go below 0, so this is
+-- exactly SUM(x) >= 1 — the "pick at least one" shape.
+SELECT id, x FROM items DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 MINIMIZE SUM(x);
+
+-- 83 per-row `<> 0` over BOOL decisions: one tight `x >= 1` per row.
+SELECT id, x FROM items DECIDE x(BOOL) SUCH THAT x <> 0 MINIMIZE SUM(x);
+
+-- 84 the same feasible set as 82, but with the floor written out. `x >= 0` is
+-- re-emitted as a loosenable row during diagnosis, so it may not be baked into
+-- the constraint's shape: this must keep the two-row disjunction.
+SELECT id, x FROM items DECIDE x(INT)
+SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <> 0
+MINIMIZE SUM(x);
+
+-- 85 interior-K `<>` over BOOL decisions. Query 82 collapses and so emits no
+-- Big-M at all; this one keeps the disjunction, which is what makes the constant
+-- visible. A BOOLEAN's [0,1] ceiling is seeded into the absorbed box at stage 05,
+-- so the tight per-group M here is single-digit. It read 1000000 (the fallback)
+-- while the ceiling only reached the model builder, since every Big-M derivation
+-- reads the box and treats >= 1e20 as unbounded.
+SELECT id, x FROM items DECIDE x(BOOL) SUCH THAT SUM(x) <> 2 MINIMIZE SUM(x);

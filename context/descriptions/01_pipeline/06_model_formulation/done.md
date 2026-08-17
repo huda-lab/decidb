@@ -195,21 +195,24 @@ backend does the same for its COO arrays.
 | `COMPARE_EQUAL` | `'='` | direct |
 
 `'>'` and `'<'` mean `>=` and `<=` — standard ILP convention. Strict inequalities
-are converted by adjusting the RHS, which is exact for integer variables. It is
-*not* exact for continuous ones, so `IsEvalConstraintLhsIntegerValued` gates the
-rewrite and reports the two ways an LHS can fail it differently, because only one
-of them is still the user's to fix here:
+are converted by adjusting the RHS, which is exact for integer variables and not for
+continuous ones, so `IsEvalConstraintLhsIntegerValued` gates the rewrite.
 
-- **A fractional coefficient** (`SUM(0.5 * x) < 5` on an INTEGER `x`, or any data
-  column that evaluates to a non-integer) is knowable only now, once coefficients
-  have been evaluated. It is an `InvalidInputException` naming the coefficient and
-  suggesting `<=`.
-- **A REAL decision** is knowable from the declared type, and stage 02 rejects it
-  during binding (`ValidateDecideNoStrictComparisonOnReal`), where the variable and
-  the clause can be named. Reaching this point with one is an invariant violation,
-  so it throws `InternalException`. The check stays rather than being deleted: if a
-  future rewrite types an auxiliary REAL inside a strict constraint, this fails
-  loudly instead of silently stepping a continuous bound.
+**That gate raises no user-facing error.** The whole integer-step refusal is stated on
+declared types at stage 02, by `ValidateDecideNoIntegerStepComparisonOnReal` for the
+decision and `ValidateDecideIntegralComparisonOperands` for every other operand. Either
+failure reaching here — a REAL variable or a fractional coefficient — is an invariant
+violation and throws `InternalException`.
+
+The check stays rather than being deleted: if a future rewrite types an auxiliary REAL,
+or produces a fractional coefficient, inside a strict constraint, this fails loudly
+instead of silently stepping a bound that is not on the lattice.
+
+> Moved 2026-08-17. The fractional-coefficient half used to be an `InvalidInputException`
+> raised here, because a data column's values are knowable only once evaluated. It was
+> moved to a *type* judgement at bind time: reading values made a query's **validity**
+> depend on the table's contents, so inserting one fractional row could make a working
+> query illegal. See `02_binder/done.md` §4 for the rule and what it costs.
 
 A strict `<` / `>` over a REAL variable is also deliberately not absorbed into
 column bounds upstream (stage 05), for the same reason the step is unsafe.
@@ -357,9 +360,13 @@ group them and offer removal rather than loosening half a disjunction.
 
 Two guards run before any `M` is asked for, and the order matters:
 
-- **`NELhsIsIntegerValued`** refuses a REAL variable or a non-integer coefficient
-  outright. The ±1 band is only exact on the integer lattice; on a continuous
-  variable it would silently cut the feasible points in `(K-1, K+1)`.
+- **`NELhsIsIntegerValued`** is an invariant check, not a user-facing refusal. The ±1 band
+  is only exact on the integer lattice; on a continuous quantity it would silently cut the
+  feasible points in `(K-1, K+1)`. Both ways an LHS can fail — a REAL decision, a
+  fractional coefficient — are refused on declared types at stage 02, so either arriving
+  here raises an `InternalException`. The check is kept rather than deleted so a future
+  rewrite introducing a REAL auxiliary or a fractional coefficient inside a `<>` fails
+  loudly instead of silently cutting the band.
 - **`NEIsIntegerValuedRhs`** *drops* a comparison whose bound no integer can equal,
   because every assignment already satisfies it. Emitting the pair anyway would
   wrongly exclude `floor(K)` and `ceil(K)`. An infinite `K` is the same case for the
@@ -369,6 +376,57 @@ Two guards run before any `M` is asked for, and the order matters:
 
 A per-row spelling with a row-varying bound masks only its non-integer rows, via
 `row_group_ids`, instead of dropping the whole constraint.
+
+#### The range collapse
+
+`LHS <> K` is a disjunction only when `K` sits strictly **inside** the range the LHS can
+actually reach. When the reachable range lies wholly on one side of `K`, one branch is
+dead and the survivor is a plain inequality — no indicator term, no Big-M, and an LP
+relaxation that is tight instead of empty. `ClassifyNEConstraint` reads the four cases off
+the signed interval:
+
+| Range vs `K` | Emitted |
+|---|---|
+| `K` interior | the two-row Big-M disjunction |
+| range never falls below `K` | `LHS >= K+1`, one row |
+| range never exceeds `K` | `LHS <= K-1`, one row |
+| `K` unreachable | nothing — the row excludes nothing |
+
+This matters because the Big-M pair's relaxation carries no information at all: setting
+`z = 0.5` slackens both rows by `M/2`, so the LP admits `LHS = K` — the very value being
+forbidden — and the disjunction only starts to bind under branching. The common
+`SUM(x) <> 0` over decisions that cannot go negative is exactly the collapsible case, and
+it becomes `SUM(x) >= 1`.
+
+`DecideRowSignedRange` computes the interval, respecting coefficient signs where
+`DecideRowTermRange` takes magnitudes — a Big-M only has to dominate a range, but a
+collapse has to know which side of `K` it lies on. An unbounded side yields an infinite
+endpoint rather than declining outright, because both collapses are one-sided: a decision
+that is merely non-negative has a finite floor and no ceiling, and that floor alone
+licenses `>= K+1`.
+
+**The collapse may only read the rigid box** (`SolverInput::rigid_lower_bounds`), meaning a
+variable's intrinsic domain — BOOLEAN 0/1, default non-negativity — and nothing else. The
+column box also accumulates user bounds absorbed by stage 05 and implied tightenings from
+`DecidePropagateImpliedBounds`, and both are backed by rows the elastic engine *reverts*
+during infeasibility diagnosis so the loosenable row is the sole enforcer. A Big-M constant
+may read the full box, since a loosened bound only makes it conservative; a rewrite that
+changes what a constraint *means* may not, because it cannot be reverted along with the
+bound it consumed. So `x <= 5 AND SUM(x) <> 0` collapses on the intrinsic floor, while
+`x >= 0 AND x <= 5 AND SUM(x) <> 0` — the same feasible set — keeps the disjunction.
+
+Per-row and aggregate spellings differ in granularity. Groups are already emitted
+independently, so each gets the encoding its own range earns. A per-row constraint shares
+one `EvaluatedConstraint` across every row, so a mixed verdict would mean splitting it into
+up to three constraints with complementary row masks; instead the verdict must be unanimous
+across active rows, and a mixed one keeps the Big-M pair unsplit.
+
+A collapsed row keeps its `ne_indicator_idx` even though the indicator no longer appears in
+it, and a collapsed aggregate group still allocates its `z`. That is what carries the
+clause's label and groups its rows for the remove-only `<>` repair, so diagnosis reads the
+same whichever encoding a clause received. The removal engine falls back to a range-derived
+`M₂` when it finds no indicator coefficient to read one from — without that fallback the
+group would get a coefficient of 0 and the removal would be offered but inert.
 
 **Aggregate spellings cannot expand in place.** They need one *global* binary per
 group, and the group's `M` must cover the summed range over its rows — a single

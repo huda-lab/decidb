@@ -2642,6 +2642,28 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         decide_var_names.push_back(v->alias);
     }
 
+    // The rigid box, captured before any propagation runs and with every user-absorbed
+    // direction re-opened. What is left is the intrinsic domain alone — the only part of
+    // the column box that survives infeasibility diagnosis unchanged, and therefore the
+    // only part a structural rewrite may rely on. The re-opening mirrors the
+    // `user_absorbed_bounds` re-emission below, which relaxes the same directions for the
+    // same reason.
+    solver_input.rigid_lower_bounds = solver_input.lower_bounds;
+    solver_input.rigid_upper_bounds = solver_input.upper_bounds;
+    for (const auto &b : gstate.user_absorbed_bounds) {
+        idx_t v = b.decide_var_idx;
+        if (v >= solver_input.rigid_lower_bounds.size()) {
+            continue;
+        }
+        bool bound_is_bool = v < is_boolean_var.size() && is_boolean_var[v];
+        if (b.sense == '<' || b.sense == '=') {
+            solver_input.rigid_upper_bounds[v] = bound_is_bool ? 1.0 : NumericLimits<double>::Maximum();
+        }
+        if (b.sense == '>' || b.sense == '=') {
+            solver_input.rigid_lower_bounds[v] = bound_is_bool ? 0.0 : -NumericLimits<double>::Maximum();
+        }
+    }
+
     // Data-driven implied-bound propagation: derive finite upper bounds for
     // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
     // knapsack/budget pattern), so the downstream Big-M can be finite and tight.

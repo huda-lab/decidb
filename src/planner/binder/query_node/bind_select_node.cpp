@@ -677,12 +677,13 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
             // DECIDE variable, before anything downstream has to interpret them.
             ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);
-            // A strict `<` / `>` over a REAL decision has no exact encoding, and the
-            // declared type says so without reading a row. Rejecting here names the
-            // variable and quotes the clause; the model builder keeps only the value
-            // half of the refusal (a data column yielding a fractional coefficient).
-            ValidateDecideNoStrictComparisonOnReal(*statement.decide_constraints, decide_variable_names,
-                                                   var_types);
+            // A `<`, `>` or `<>` over a REAL decision has no exact encoding — all three
+            // are encoded by stepping the bound one integer unit — and the declared type
+            // says so without reading a row. Rejecting here names the variable and quotes
+            // the clause; the model builder keeps only the value half of the refusal (a
+            // data column yielding a fractional coefficient).
+            ValidateDecideNoIntegerStepComparisonOnReal(*statement.decide_constraints, decide_variable_names,
+                                                        var_types);
             // Source-only casts and scalar subqueries lose their written spelling
             // during binding/flattening. Give those atoms stable fragment ids now;
             // the DECIDE binder carries the tags onto the bound nodes.
@@ -715,6 +716,12 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
             result->decide_constraints = decide_constraints_binder.Bind(constraints);
             if (result->decide_constraints) {
+                // The other half of the integer-step gate. The parsed-tree validator above
+                // read the decision's declared type off the DECIDE clause; every other
+                // operand's type is only known now that binding has resolved it. Together
+                // they are the whole refusal, so the model builder no longer raises one.
+                ValidateDecideIntegralComparisonOperands(*result->decide_constraints,
+                                                         result->decide_index);
                 result->decide_constraint_sources = InitializeConstraintSourceInfo(
                     *result->decide_constraints, decide_source_fragments, entity_scopes);
                 result->decide_source_fragments = decide_source_fragments;

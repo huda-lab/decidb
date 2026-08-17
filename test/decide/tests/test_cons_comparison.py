@@ -32,16 +32,18 @@ _STRICT_GT_REAL_MSG = re.compile(
     r"Strict inequality '>' is not supported over the REAL decision"
 )
 _STRICT_LT_COEFF_MSG = re.compile(
-    r"Strict inequality '<' is not supported here: a coefficient in the "
-    r"left-hand side is not a whole number"
+    r"Comparison '<' is not supported here: .*can take fractional values"
 )
 _STRICT_QUADRATIC_MSG = re.compile(
     r"Strict inequality \('<' / '>'\) is not supported on constraints with "
     r"quadratic or bilinear terms"
 )
 _NE_REAL_MSG = re.compile(
-    r"Inequality '<>' is not supported when the left-hand side "
-    r"involves a REAL variable or a non-integer coefficient"
+    r"Inequality '<>' is not supported over the REAL decision"
+)
+_NE_FRACTIONAL_COEFF_MSG = re.compile(
+    r"Inequality '<>' is not supported when a column scaling the "
+    r"left-hand side holds a non-integer value"
 )
 
 
@@ -108,12 +110,18 @@ def test_sum_equality_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_sum_strict_less_than(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(x * qty) < 100 — strict less-than on aggregate."""
+    """SUM(x * qty) < 100 — strict less-than on aggregate.
+
+    `l_quantity` is `DECIMAL(15,2)`, so the cast is required: the integer-step gate is
+    stated on declared types, and a type that admits fractions is refused whatever its
+    rows happen to hold. The cast is how the query states that these are whole numbers.
+    See test_strict_rejected_on_fractional_column_type for the uncast spelling.
+    """
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) < 100
+        SUCH THAT SUM(x * l_quantity::BIGINT) < 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -633,13 +641,19 @@ def test_real_strict_rejection_names_variable_and_clause(decidb_cli):
 @pytest.mark.cons_comparison
 @pytest.mark.var_real
 @pytest.mark.cons_aggregate
-def test_real_strict_rejected_even_when_l0_count_is_integral(decidb_cli):
-    """A REAL decision under norm(..., 0, M) is refused too — deliberately.
+def test_real_strict_accepted_when_l0_count_is_integral(decidb_cli):
+    """A REAL decision under norm(..., 0, M) is ACCEPTED: the count is what is compared.
 
-    The L0 term itself reaches the solver as a sum of 0/1 indicators, so the
-    integer step would in fact be exact here. The refusal is stated on the
-    declared type instead, so that what DECIDE accepts does not depend on which
-    linearization a term happens to receive. `<= K-1` expresses the same cap.
+    The refusal is stated on the type of the *compared quantity*, not on every type
+    appearing beneath it. `norm(e, 0, M)` counts nonzeros, so its value lands on the
+    integer lattice however `e` is declared — that is the definition of L0, not an
+    artifact of the 0/1-indicator linearization it receives. The integer step is
+    therefore exact, and refusing here would reject a query with a correct encoding.
+
+    Reversed 2026-08-17. The earlier rule refused this, stating the check on the
+    declared type of `e` so that acceptance would not depend on a linearization
+    choice. That principle stands; L0 integrality just is not a linearization choice.
+    Settled together with the `<>` split so both operators answer alike.
     """
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
@@ -649,22 +663,54 @@ def test_real_strict_rejected_even_when_l0_count_is_integral(decidb_cli):
             AND norm(new_qty - l_quantity, 0, 1000) < 3
         MAXIMIZE SUM(new_qty)
     """
+    strict_rows, _ = decidb_cli.execute(sql)
+    assert strict_rows, "norm(..., 0, M) < 3 over a REAL decision should solve"
+
+    # `< 3` and `<= 2` are the same cap on an integer count, so they must agree.
+    stepped_rows, _ = decidb_cli.execute(sql.replace("< 3", "<= 2"))
+    assert stepped_rows, "norm(..., 0, M) <= 2 should solve"
+    assert len(strict_rows) == len(stepped_rows)
+
+    # `<>` follows the same rule — it is the same integer-step argument.
+    ne_rows, _ = decidb_cli.execute(sql.replace("< 3", "<> 3"))
+    assert ne_rows, "norm(..., 0, M) <> 3 over a REAL decision should solve"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+def test_real_strict_rejected_when_term_stays_continuous(decidb_cli):
+    """The L0 exemption is narrow: only p=0 is a count.
+
+    `norm(e, 1)` sums magnitudes and is as continuous as `e`, so a REAL decision
+    under one is still refused. This pins that IsIntegerValuedReducer did not open
+    the gate for every reducer.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, new_qty
+        FROM lineitem WHERE l_orderkey < 10
+        DECIDE new_qty(REAL)
+        SUCH THAT new_qty >= 0 AND new_qty <= 100
+            AND norm(new_qty - l_quantity, 1) < 3
+        MAXIMIZE SUM(new_qty)
+    """
     with pytest.raises(DecidBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
 
-    # The suggested spelling is accepted and caps the count at 2.
-    rows, _ = decidb_cli.execute(sql.replace("< 3", "<= 2"))
-    assert rows, "norm(..., 0, M) <= 2 should solve"
-
 
 @pytest.mark.cons_comparison
 @pytest.mark.var_integer
 @pytest.mark.cons_aggregate
 def test_integer_fractional_coeff_strict_rejected(decidb_cli):
-    """SUM(0.5 * x) < K on INTEGER x — coefficient makes LHS half-integer; reject."""
+    """SUM(0.5 * x) < K on INTEGER x — the multiplier makes the LHS half-integer; reject.
+
+    Refused at bind time on the literal's declared type, `DECIMAL(2,1)`. A multiplier is
+    unlike an additive offset: it rescales the decision off the integer lattice, so every
+    factor is checked whether or not it carries a decision.
+    """
     sql = """
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 10
@@ -678,6 +724,58 @@ def test_integer_fractional_coeff_strict_rejected(decidb_cli):
     assert _STRICT_LT_COEFF_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+def test_strict_rejected_on_fractional_column_type(decidb_cli):
+    """A DECIMAL column with a nonzero scale is refused even when its rows are whole.
+
+    `l_quantity` is `DECIMAL(15,2)` and every row of it holds a whole number, so the
+    integer step would in fact be exact today. It is refused anyway, deliberately: a
+    value-based rule would make this query's *validity* depend on the table's contents,
+    so inserting one fractional row would break a query that worked yesterday. The
+    declared type is the contract.
+
+    The message must name the column, its type, and the cast that fixes it — the cast is
+    the user stating the assumption the rewrite needs.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x * l_quantity) < 100
+        MAXIMIZE SUM(x)
+    """
+    with pytest.raises(DecidBCliError) as exc_info:
+        decidb_cli.execute(sql)
+    message = exc_info.value.message
+    assert "l_quantity" in message, f"Message must name the column: {message}"
+    assert "DECIMAL(15,2)" in message, f"Message must name the type: {message}"
+    assert "l_quantity::BIGINT" in message, f"Message must name the cast: {message}"
+
+    # The cast the message suggests is accepted.
+    rows, _ = decidb_cli.execute(sql.replace("l_quantity)", "l_quantity::BIGINT)"))
+    assert rows, "the suggested cast should solve"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+def test_decimal_scale_zero_needs_no_cast(decidb_cli):
+    """`DECIMAL(p, 0)` carries its scale in the type, so it is provably whole.
+
+    The counterpart to the test above: the rule is "scale > 0, or a floating type",
+    not "any DECIMAL".
+    """
+    rows, _ = decidb_cli.execute("""
+        SELECT id, x FROM (
+            VALUES (1, 2::DECIMAL(15,0)), (2, 3::DECIMAL(15,0))
+        ) t(id, w)
+        DECIDE x(INT) SUCH THAT x <= 4 AND SUM(x * w) < 10 MAXIMIZE SUM(x)
+    """)
+    assert rows, "a scale-0 DECIMAL coefficient should need no cast"
 
 
 @pytest.mark.cons_comparison
@@ -1041,7 +1139,12 @@ def test_real_sum_not_equal_rejected(decidb_cli):
 
     The NE Big-M rewrite expands `SUM(x) <> K` into `SUM(x) <= K-1 OR SUM(x) >= K+1`,
     which wrongly excludes feasible continuous points in the band (K-1, K+1) when
-    the LHS is REAL-valued. Mirrors the 2026-04-17 strict-inequality guard.
+    the LHS is REAL-valued. `{v : v != K}` over the reals is an open set, so unlike
+    the strict case there is no exact encoding to fall back to at all.
+
+    Refused at BIND time, so the message can name the variable and quote the clause
+    as written; the model builder keeps only the fractional-coefficient half (see
+    test_ne_fractional_coeff_rejected).
     """
     sql = """
         SELECT l_orderkey, l_linenumber, x
@@ -1052,8 +1155,13 @@ def test_real_sum_not_equal_rejected(decidb_cli):
     """
     with pytest.raises(DecidBCliError) as exc_info:
         decidb_cli.execute(sql)
-    assert _NE_REAL_MSG.search(exc_info.value.message), (
-        f"Unexpected error: {exc_info.value.message}"
+    message = exc_info.value.message
+    assert _NE_REAL_MSG.search(message), f"Unexpected error: {message}"
+    # The point of rejecting at bind time: the refusal names the decision and echoes
+    # the clause with the spelling the user typed, not the internal `!=`.
+    assert "'x'" in message, f"Message does not name the decision: {message}"
+    assert "<>" in message and "!=" not in message, (
+        f"Message should quote the clause as written: {message}"
     )
 
 
