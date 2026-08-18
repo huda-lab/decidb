@@ -22,6 +22,9 @@
 #pragma once
 
 #include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/planner/decide/decide_prepared_model.hpp"
+
+#include <unordered_map>
 
 namespace duckdb {
 
@@ -114,5 +117,207 @@ void LinearizeBilinear(SolverInput &input, const vector<string> &var_names);
 //! bounds: unlike the indicator sites there is no fallback constant, so a
 //! contributing variable with no finite bound is named and refused.
 void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names);
+
+//! The reachable range of a family of row expressions, and the coefficient spread a
+//! Big-M row needs — one object, because they come from the same walk over the data.
+//!
+//! Every continuous auxiliary stage 05 introduces stands for an extremum over such a
+//! family, so its bounds are always derivable at the moment it is created. Returning
+//! the range rather than a bare Big-M constant is what stops those endpoints from
+//! being computed and then discarded, which used to leave every continuous auxiliary
+//! declared `[-1e30, 1e30]` and the root LP with no box to work in.
+//!
+//! `lo`/`hi` INCLUDE constant terms: an auxiliary is pinned against the whole
+//! expression, constant and all, so its box has to contain them. `spread` EXCLUDES
+//! them, because a constant cancels in the `(aux - expr)` difference a Big-M row
+//! slackens. Keeping the two separate is what lets bounds tighten without perturbing
+//! any Big-M value the linearizer already emits.
+//!
+//! Both endpoints seed at 0. That only ever widens the box — it never cuts off a
+//! reachable value — and it keeps the box consistent with the sites that pin an
+//! empty auxiliary to exactly 0.
+struct AuxRange {
+    double lo = 0.0;
+    double hi = 0.0;
+    double spread = 0.0;
+    //! Some contributing decision variable has an infinite bound, so `lo`/`hi` are not
+    //! a valid box and any auxiliary over this family must stay free.
+    bool unbounded = false;
+
+    //! The Big-M constant for this family, with the fallback floor an unbounded
+    //! contributor forces.
+    double BigM() const {
+        return unbounded ? MaxOf(spread, DECIDE_BIGM_FALLBACK) : spread;
+    }
+
+    //! Widen to also cover `other` — an extremum taken over several families.
+    void Cover(const AuxRange &other) {
+        lo = MinOf(lo, other.lo);
+        hi = MaxOf(hi, other.hi);
+        spread = MaxOf(spread, other.spread);
+        unbounded = unbounded || other.unbounded;
+    }
+
+    //! Extend by one more row expression bracketed by [`row_lo`, `row_hi`], whose
+    //! variable-only part (constants excluded) is bracketed by [`var_lo`, `var_hi`].
+    void CoverRow(double row_lo, double row_hi, double var_lo, double var_hi) {
+        lo = MinOf(lo, row_lo);
+        hi = MaxOf(hi, row_hi);
+        var_low = MinOf(var_low, var_lo);
+        var_high = MaxOf(var_high, var_hi);
+        spread = var_high - var_low;
+    }
+
+    //! Scale the whole family by `factor` (the inner-AVG `1/n_g`, always positive).
+    AuxRange Scaled(double factor) const {
+        AuxRange out = *this;
+        out.lo = lo * factor;
+        out.hi = hi * factor;
+        out.spread = spread * factor;
+        out.var_low = var_low * factor;
+        out.var_high = var_high * factor;
+        return out;
+    }
+
+private:
+    //! Running variable-only extremes behind `spread`. Held separately so `spread`
+    //! stays exactly the value the pre-existing Big-M walk produced.
+    double var_low = 0.0;
+    double var_high = 0.0;
+
+    static double MinOf(double a, double b) { return a < b ? a : b; }
+    static double MaxOf(double a, double b) { return a > b ? a : b; }
+};
+
+//! Accumulator for a MIN/MAX linking row (`z - expr op bound`).
+//!
+//! DecideTerm arrays are indexed by term, not by variable, so the same solver column
+//! reaches one row more than once in two situations: `(c + 1) * x` distributes
+//! into `c*x + 1*x`, and an entity-scoped or scalar variable resolves to a
+//! single column across every row it spans. A repeated column index is rejected
+//! outright by both Gurobi and HiGHS, so coefficients are summed per column here
+//! rather than pushed per term. Constant terms carry no column at all
+//! (`variable_index == INVALID_INDEX`) and collect into `constant`, which the
+//! caller folds into the bound: `z <= expr + k` is `z - expr <= k`.
+//!
+//! Columns keep first-appearance order — emitting straight from the hash map
+//! would hand the solver a different matrix ordering run to run.
+struct MinMaxLinkRow {
+    vector<int> indices;
+    vector<double> coefficients;
+    double constant = 0.0;
+    std::unordered_map<int, idx_t> column_slot;
+
+    void AddColumn(int column, double coefficient) {
+        auto entry = column_slot.find(column);
+        if (entry == column_slot.end()) {
+            column_slot.emplace(column, indices.size());
+            indices.push_back(column);
+            coefficients.push_back(coefficient);
+        } else {
+            coefficients[entry->second] += coefficient;
+        }
+    }
+
+    //! True when no column survives accumulation — either nothing was added, or
+    //! every column's terms cancelled (`c*x - c*x`). Such a row constrains the
+    //! auxiliary against `constant` alone.
+    bool HasNoColumns() const {
+        for (auto coefficient : coefficients) {
+            if (std::abs(coefficient) >= 1e-15) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void AppendTo(SolverInput::RawConstraint &rc) const {
+        for (idx_t i = 0; i < indices.size(); i++) {
+            if (std::abs(coefficients[i]) < 1e-15) {
+                continue;
+            }
+            rc.indices.push_back(indices[i]);
+            rc.coefficients.push_back(coefficients[i]);
+        }
+    }
+};
+
+//! How stage 05 classified the objective's MIN/MAX shape, as `LinearizeMinMaxObjective`
+//! needs it. `flat_*` describes an unqualified `MIN(expr)` / `MAX(expr)` objective;
+//! `per_*` describes the two-level `OUTER(INNER(expr)) PER key` spelling, whose group
+//! ids arrive on `SolverInput::objective_row_group_ids`. An objective is *easy* when the
+//! optimization direction already drives the auxiliary to the extreme (MINIMIZE+MAX,
+//! MAXIMIZE+MIN) and one envelope row per row suffices; the hard direction additionally
+//! needs the per-row indicator layer. `when_mask` is the evaluated `WHEN` filter and is
+//! read only when `has_when`.
+struct MinMaxObjectiveSpec {
+    ObjectiveAggregateType flat_agg = ObjectiveAggregateType::NONE;
+    bool flat_is_easy = false;
+    ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
+    ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
+    bool per_inner_is_easy = false;
+    bool per_outer_is_easy = false;
+    //! Inner reducer was AVG, rewritten to SUM with a per-group 1/n_g scale.
+    bool per_inner_was_avg = false;
+    bool has_when = false;
+    vector<bool> when_mask;
+};
+
+//! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxIndicators`, which
+//! encodes a MIN/MAX *constraint*. The per-row objective is replaced by a global
+//! auxiliary (`z` flat, `z_g` per group plus an outer `w` for the nested `PER` spelling),
+//! pinned by envelope rows against the evaluated objective coefficients; the hard
+//! direction adds one indicator binary per active row and a `SUM(y) >= 1` pin.
+//!
+//! Runs after the flat column space exists, so it emits into `input.global_constraints`
+//! and appends its auxiliaries to the global block. Untouched when the objective carries
+//! no MIN/MAX aggregate: `input.objective_coefficients` is then left as it arrived.
+void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
+                              const MinMaxObjectiveSpec &spec);
+
+//! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
+//! or the objective spelling — with everything data-dependent already evaluated by the
+//! physical layer. `inner_terms` is non-owning: the flattened terms live on the logical
+//! operator's `ComposedMinMaxTerm`, prepared at stage 05, and `per_term_coefs[t][row]`
+//! is that term's evaluated coefficient. `z_idx` is filled in by the linearizer.
+struct ComposedMinMaxTermData {
+    //! MIN/MAX reducer (gets a global auxiliary) vs SUM/AVG (folds into the outer row).
+    bool is_minmax = false;
+    //! Lowercase reducer name: "min", "max", "sum" or "avg".
+    string agg_name;
+    //! Sign this term carries in the additive composition.
+    int sign = 1;
+    //! Factor the canonicalizer peeled off this reducer, already evaluated. It stays
+    //! outside the aggregate all the way to here, which is what makes its sign
+    //! irrelevant to correctness.
+    double scale = 1.0;
+    //! True when the optimization/comparison direction already drives the auxiliary to
+    //! the extremum, so the one-sided envelope pin suffices and no indicators are needed.
+    bool is_easy = true;
+    //! Rows this term reduces over: the term's `WHEN` mask, folded with the relation
+    //! qualifier's de-duplication mask. Sized `SolverInput::num_rows`.
+    vector<bool> filter_mask;
+    //! Non-owning; the flattened inner terms live on the logical operator.
+    const vector<DecideTerm> *inner_terms = nullptr;
+    //! Evaluated per-row coefficient of each inner term, already scaled by its sign.
+    vector<vector<double>> per_term_coefs;
+    //! Flat column of this term's global auxiliary; assigned by the linearizer.
+    idx_t z_idx = DConstants::INVALID_INDEX;
+    //! User source text (`MAX(x)`) naming this term's global auxiliary in diagnostics.
+    string label;
+};
+
+//! Encode one composed MIN/MAX *constraint*: a global auxiliary and its pinning rows per
+//! MIN/MAX term, then one outer row summing the auxiliaries and the SUM/AVG terms against
+//! `rhs_val`. `terms` is mutated in place — each MIN/MAX term's `z_idx` is filled in.
+void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
+                                       vector<ComposedMinMaxTermData> &terms, double rhs_val,
+                                       ExpressionType outer_cmp, idx_t source_clause_id);
+
+//! Encode a composed MIN/MAX *objective*: the same auxiliary layer, but the composition is
+//! written into the objective — a coefficient on each auxiliary's column, and per-row
+//! coefficients for the SUM/AVG terms. Replaces `input.objective_coefficients`.
+void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
+                                      vector<ComposedMinMaxTermData> &terms);
 
 } // namespace duckdb

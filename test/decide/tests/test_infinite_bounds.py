@@ -40,7 +40,22 @@ it follows the same rule; the direction still decides the outcome, now per group
   - test_data_reducer_ignores_an_infinity_it_never_reads: masked rows are not judged
   - test_data_reducer_unreachable_bound_is_infeasible: the solver gives the verdict
   - test_nan_from_reducer_arithmetic_is_still_rejected: inf + -inf is still not a bound
+
+The two backends do not agree on an unreachable bound, and cannot. Gurobi loads the row
+and reports the infeasibility, which is the answer this module is built around. HiGHS
+spells a one-sided row bound by pairing the user's bound with its own ±1e30 infinity
+sentinel, so `Ax >= +inf` becomes `lower = +inf, upper = 1e30` — an inverted pair it
+rejects at model load. DeciDB refuses it in SQL terms rather than letting that surface as
+an internal error that invalidates the connection. Only the unreachable direction differs;
+a vacuous infinity pairs cleanly with the sentinel and solves on both.
+
+  - test_highs_refuses_an_unreachable_bound_in_sql_terms: named clause, live connection
+  - test_highs_still_solves_a_vacuous_infinity: the vacuous direction is unaffected
 """
+
+import csv
+import io
+import re
 
 import pytest
 
@@ -119,7 +134,7 @@ def test_infinite_bound_wrong_direction_is_infeasible(decidb_cli):
             DECIDE x(INT)
             SUCH THAT x <= 6 AND {bound}
             MAXIMIZE SUM(x)
-        """, match=r"infeasible")
+        """, match=r"infeasible.*sets a bound no value can reach")
 
 
 @pytest.mark.cons_perrow
@@ -221,7 +236,7 @@ def test_unreachable_minmax_bound_is_infeasible(decidb_cli):
             DECIDE x(INT)
             SUCH THAT x >= 0 AND x <= 6 AND {constraint}
             MAXIMIZE SUM(x)
-        """, match=r"infeasible")
+        """, match=r"infeasible.*sets a bound no value can reach")
 
 
 @pytest.mark.cons_perrow
@@ -434,7 +449,7 @@ def test_data_reducer_unreachable_bound_is_infeasible(decidb_cli):
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g
         MAXIMIZE SUM(x)
-    """, match=r"infeasible")
+    """, match=r"infeasible.*`MIN\(x\) <= -inf PER g`")
 
 
 @pytest.mark.min_max
@@ -461,3 +476,77 @@ def test_nan_from_reducer_arithmetic_is_still_rejected(decidb_cli):
         SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) + MIN(cap) PER g
         MAXIMIZE SUM(x)
     """, match=r"NaN")
+
+
+@pytest.mark.cons_perrow
+@pytest.mark.min_max
+@pytest.mark.edge_case
+@pytest.mark.error
+@pytest.mark.parametrize("constraint,clause", [
+    ("x >= 1e1000::DOUBLE", "x >= inf"),
+    ("SUM(x) >= 1e1000::DOUBLE", "SUM(x) >= inf"),
+    ("SUM(x) <= -1e1000::DOUBLE", "SUM(x) <= -inf"),
+    ("SUM(x) = 1e1000::DOUBLE", "SUM(x) = inf"),
+    ("MIN(x) <= -1e1000::DOUBLE", "MIN(x) <= -inf"),
+    ("MAX(x) >= 1e1000::DOUBLE", "MAX(x) >= inf"),
+])
+def test_highs_refuses_an_unreachable_bound_in_sql_terms(
+    decidb_cli_highs, constraint, clause
+):
+    """HiGHS cannot load the row, and says so as a SQL error naming the clause.
+
+    The row it cannot load is exactly the unreachable one: HiGHS pairs a one-sided
+    bound with its own 1e30 infinity sentinel, so `Ax >= +inf` arrives as
+    `lower = +inf, upper = 1e30` and is rejected as an inverted pair. Left to the
+    backend that surfaced as `INTERNAL Error: Failed to pass model to HiGHS`, which
+    invalidated the connection and forced a restart — a solver-internals error for a
+    question the user asked in SQL. It is now caught before the model is passed.
+    """
+    decidb_cli_highs.assert_error(f"""
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 6 AND {constraint}
+        MAXIMIZE SUM(x)
+    """, match=rf"`{re.escape(clause)}` sets a bound no value can reach")
+
+
+@pytest.mark.cons_perrow
+@pytest.mark.edge_case
+@pytest.mark.error
+def test_highs_refusal_leaves_the_connection_usable(decidb_cli_highs):
+    """The refusal is an ordinary SQL error, not a fatal one.
+
+    This is the half that mattered: the old internal error left the database needing a
+    restart, so one infinite bound cost the user every later statement in the session.
+    """
+    result = decidb_cli_highs.execute_script(
+        ".mode csv\n"
+        "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) "
+        "SUCH THAT x >= 0 AND x <= 6 AND SUM(x) >= 1e1000::DOUBLE MAXIMIZE SUM(x);\n"
+        "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) "
+        "SUCH THAT x >= 0 AND x <= 6 MAXIMIZE SUM(x);\n"
+    )
+    assert "INTERNAL Error" not in result.stderr, result.stderr
+    assert "restarted" not in result.stderr, result.stderr
+    # The second DECIDE ran on the same connection and solved.
+    rows = list(csv.DictReader(io.StringIO(result.stdout)))
+    assert [r["x"] for r in rows] == ["6", "6"], result.stdout
+
+
+@pytest.mark.cons_perrow
+@pytest.mark.edge_case
+def test_highs_still_solves_a_vacuous_infinity(decidb_cli_highs):
+    """`x <= +inf` points the other way and must keep solving under HiGHS.
+
+    The guard keys on the direction the infinity points, not on the infinity, so the
+    vacuous spelling never reaches it — the same rule the rewrite applies upstream. A
+    guard that refused every infinite bound would break a query that constrains nothing.
+    """
+    rows, cols = decidb_cli_highs.execute("""
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 1e1000::DOUBLE AND SUM(x) <= 7
+        MAXIMIZE SUM(x)
+    """)
+    xi = cols.index("x")
+    assert sum(int(r[xi]) for r in rows) == 7

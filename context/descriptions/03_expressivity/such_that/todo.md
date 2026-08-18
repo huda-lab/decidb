@@ -9,9 +9,9 @@ objective forms `MAXIMIZE + MAX` / `MINIMIZE + MIN`) is now implemented for both
 constraints and objectives. See `done.md` → "Composed MIN/MAX (both directions)".
 The base one-sided envelope pin (already emitted for both directions) is
 augmented, for a hard term, with a per-row binary `y_i`, `SUM(y_i) >= 1`, and a
-Big-M link (`EmitComposedHardMinMaxIndicators` in `physical_decide.cpp`); the M
+Big-M link (`EmitComposedHardMinMaxIndicators` in `ilp_linearization.cpp`); the M
 is the signed spread of the inner expression, shared with the flat hard-MIN/MAX
-`compute_big_m`. A latent bug in the same landing — `ExtractCoefficientWithoutVariable`
+objective's. A latent bug in the same landing — `ExtractCoefficientWithoutVariable`
 dropped a nested scalar factor like the `2` in `(2*x)*v` (which reaches the
 composed path un-normalized), silently wrong for both easy and hard composed
 scalar terms — was fixed as part of it.

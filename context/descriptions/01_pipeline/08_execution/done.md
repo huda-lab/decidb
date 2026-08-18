@@ -340,8 +340,15 @@ and stage 07 ([`../07_solver/done.md`](../07_solver/done.md)). The hand-off happ
 early: `solver_input.constraints` is populated as soon as bounds are resolved, and
 the linearization passes then work on it in place. Still emitted here: the
 data-driven Big-M refill for auto-`M` links (it needs `decide_variables` to find the
-`__l0auto_ind_` names), composed MIN/MAX row emission, and the nested-`PER`
-two-level formulation.
+`__l0auto_ind_` names).
+
+The MIN/MAX objective (flat and nested-`PER`) and the composed MIN/MAX clauses are
+emitted by stage 06, not here. What stays is the evaluation they need — a composed
+term's per-row coefficients, the query-wide factor on a reducer, its `WHEN` mask,
+the constant RHS — which is ordinary PHASE 2 work that happens to run late because
+the terms arrive on the logical operator rather than in `solver_input`. The
+evaluated terms travel to stage 06 as `ComposedMinMaxTermData`; the objective's
+shape travels as `MinMaxObjectiveSpec`.
 
 A slow-solve checkpoint report runs when a solve exceeds its budget; see
 [`../../07_query_diagnostics/slow/done.md`](../../07_query_diagnostics/slow/done.md).

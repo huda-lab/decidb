@@ -94,7 +94,7 @@ Eleven queries run at all default database sizes. The set is designed to cover t
 **Scale tiers.** Every query runs at the largest size that completes in reasonable time, established by measurement (2026-07-26) rather than assumption. Three things bound a query's size:
 
 1. **Table cardinality.** Only `lineitem` is pinned to 500K/1M. Queries over `orders` (Q2, Q6, Q7) top out at 127.5K/255K and those over `partsupp` (Q11) at 68K/136K. These are at full table scale — they are not row-limited, they are on smaller tables.
-2. **Solver cost that grows superlinearly with rows.** Q3 (L0 covering MILP), Q5 (QCQP barrier), and Q9 (hard-MAX Big-M indicators, which couple globally) hit a wall well below 500K and stay row-limited via `${..._ROW_LIMIT}`.
+2. **Solver cost that grows superlinearly with rows.** Q3 (L0 covering MILP) and Q5 (QCQP barrier) hit a wall well below 500K and stay row-limited via `${..._ROW_LIMIT}`. Q9 was in this group until its MIN/MAX auxiliary was given a derived box (2026-08-18); it is now near-linear and its limit is held at the old value only until the tier is re-chosen.
 3. **Nothing** — Q1, Q4, Q8, Q10 run the full 500K/1M `lineitem`.
 
 Measured ceilings (largest size completing under 60s, medium DB):
@@ -109,11 +109,11 @@ Measured ceilings (largest size completing under 60s, medium DB):
 | Q11 | 68K / 136K | — | full `partsupp` |
 | Q3 | 60K / 120K | 13.3s / 26.4s | L0 MILP — 250K exceeds 60s |
 | Q5 | 50K / 100K | 3.7s / 9.2s | QCQP barrier — 125K exceeds 60s |
-| Q9 | 7.5K / 15K | 5.3s / 29.8s | hard-MAX Big-M — 30K exceeds 60s |
+| Q9 | 7.5K / 15K | 0.2s / 0.3s | limit not yet re-tiered — 120K solves in 2.8s |
 
 A full run (3 iterations × 2 sizes) takes roughly 17 minutes at these settings. Q10, Q6, and Q4 account for most of it. When iterating on a single optimization, prefer `--sizes medium --queries <subset>`.
 
-**Raising a limit requires re-measuring.** Q7 sat at 1024 rows for a long time on the assumption that Gurobi `NonConvex=2` explodes with row count; it does not — the non-convex structure there is per-row independent and 127.5K rows solves in 3.3s. Conversely Q9 goes from 1.7s at 5K to over 60s at 30K. The per-query `-- NOTE:` headers record each measured curve; treat them as data, not as guesses.
+**Raising a limit requires re-measuring.** Q7 sat at 1024 rows for a long time on the assumption that Gurobi `NonConvex=2` explodes with row count; it does not — the non-convex structure there is per-row independent and 127.5K rows solves in 3.3s. Q9 is the same story with a sharper ending: its 1.7s-at-5K to over-60s-at-30K curve was read as inherent to the hard-MAX formulation, and was in fact a free MIN/MAX auxiliary starving the root simplex of a box. Boxed, Q9 measures 15K 0.24s, 30K 0.45s, 60K 0.95s, 120K 2.8s (2026-08-18, solver time). A superlinear curve is evidence to explain, not a property to design around. The per-query `-- NOTE:` headers record each measured curve; treat them as data, not as guesses.
 
 | Query | File | Features Exercised |
 |-------|------|--------------------|

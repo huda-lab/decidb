@@ -430,6 +430,18 @@ const char *SenseStr(char sense) {
 	return sense == '<' ? "<=" : (sense == '>' ? ">=" : "=");
 }
 
+//! The clause as the user wrote it: `lhs sense rhs`, with the WHEN/PER qualifier
+//! appended (Facet C) so it stays recognizable. For a strict `<` / `>` the δ offset was
+//! baked into `rhs` at build time, so quote the user's typed literal (`typed_k`) and
+//! render `<` / `>` rather than the model's `<=` / `>=` (I2.d).
+string MakeClauseLabel(const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
+	bool strict = prov.strict && sense != '=';
+	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
+	double base_rhs = strict ? prov.typed_k : rhs;
+	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
+	return lhs + " " + sense_str + " " + FormatNum(base_rhs) + suffix;
+}
+
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻). For a strict `<` /
 //! `>` the δ offset was baked into `rhs` at build time, so re-quote the suggestion
@@ -447,11 +459,57 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
 	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = lhs + " " + sense_str + " " + FormatNum(base_rhs) + suffix;
+	e.label = MakeClauseLabel(prov, lhs, rhs, sense);
 	e.suggestion = lhs + " " + sense_str + " " + FormatNum(new_rhs) + suffix;
 	e.amount = FormatNum(std::fabs(amount));
 	e.group = prov.group_label;
 	return e;
+}
+
+//! Name every user clause whose bound is out of reach, before any solve. A clause fans
+//! into one row per relation row, all rendering the same text, so entries are
+//! de-duplicated on (label, group) — the user wrote one clause and reads one finding.
+//!
+//! The gate is "does this row trace back to a clause the user wrote", not "is it
+//! elastically editable". They are different questions, and a hard MIN/MAX clause is
+//! stamped USER_MECHANISM wholesale (it *will* fan into Big-M rows), so a relaxability
+//! gate would miss `MIN(x) <= -inf` — the shape the report opened with. Only STRUCTURAL
+//! rows are excluded, as internal definitions with no user text to quote.
+//!
+//! A USER_MECHANISM row is safe to read here because its bound is derived as `K ± M`
+//! with both terms finite by construction: ClassifyMinMaxBound sends a group to the
+//! Big-M rewrite only when `K` is finite, and DecideTightPerRowBigM refuses a non-finite
+//! `M`. So an infinite bound on a mechanism row is never a helper's own bound — it is a
+//! user bound re-emitted per row, which is exactly what we want to name.
+vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
+                                                    const vector<ColumnProvenance> &columns) {
+	vector<UnreachableClause> found;
+	std::set<std::pair<string, string>> seen;
+	auto record = [&](const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
+		auto display_provenance = SourceAwareProvenance(model, prov);
+		UnreachableClause c;
+		c.label = MakeClauseLabel(display_provenance, lhs, rhs, sense);
+		c.group = display_provenance.group_label;
+		if (!seen.insert({c.label, c.group}).second) {
+			return;
+		}
+		found.push_back(std::move(c));
+	};
+	for (const auto &row : model.constraints) {
+		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
+		    !IsUnreachableBound(row.sense, row.rhs)) {
+			continue;
+		}
+		record(row.provenance, SourceAwareLhs(model, row, columns), row.rhs, row.sense);
+	}
+	for (const auto &row : model.quadratic_constraints) {
+		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
+		    !IsUnreachableBound(row.sense, row.rhs)) {
+			continue;
+		}
+		record(row.provenance, SourceAwareQuadraticLhs(model, row, columns), row.rhs, row.sense);
+	}
+	return found;
 }
 
 //! Build a query-mode virtual-offset LOOSEN edit for a data-backed RHS clause
@@ -1249,6 +1307,24 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		return DecideDiagnostic();
 	}
 
+	// Label the model's columns once: the unreachable-bound scan below and the elastic
+	// readback further down both name clauses over the same user-facing column names.
+	vector<ColumnProvenance> columns =
+	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
+	                          input.global_variable_labels);
+
+	// A bound no assignment can reach (`x >= inf`) is infeasible on its own, and the
+	// elastic engine structurally cannot say so: `wire()` puts the slack on the LHS
+	// (`Ax − s ≤ b`), so `b` is never touched and no finite `s` repairs the row. Left to
+	// the solve it either saturates the slack at the 1e30 sentinel and hands back the
+	// user's own text as the "fix", or returns elastic-infeasible and names nothing.
+	// Recognize it here instead, before the elastic model exists — the finding is the
+	// clause, and there is no edit to offer.
+	auto unreachable = CollectUnreachableClauses(input.model, columns);
+	if (!unreachable.empty()) {
+		return BuildUnreachableBoundDiagnostic(unreachable);
+	}
+
 	ElasticModel elastic =
 	    BuildElasticModel(input.model, input.params.removal_bigm, input.params.slack_scope);
 	const vector<BlockSlackRef> &slacks = elastic.slacks;
@@ -1302,9 +1378,6 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	// Read the final lexicographic pass's repair support. Label clauses over user-facing
 	// column names (global_variable_labels names aggregate `<>` indicators so a dropped
 	// one is named).
-	vector<ColumnProvenance> columns =
-	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
-	                          input.global_variable_labels);
 	vector<ClauseEdit> edits = ReadElasticEdits(slacks, elastic.removals, stage1.solution,
 	                                            input.model, columns, /*snap=*/false,
 	                                            input.params.slack_scope);

@@ -212,6 +212,54 @@ placeholder** and supplies the coefficients from
 `composed_minmax_objective_terms` instead — which is why a decision-free objective
 is legal and returned unchanged by the canonicalizer.
 
+### Auxiliary boxes — `AuxRange`
+
+Every auxiliary column DeciDB introduces is created in `ilp_linearization.cpp`, through
+one of two helpers: `AddGlobalContinuousAux` or `AddGlobalBinaryAux`. Nothing else in
+the codebase touches `SolverInput::num_global_vars`.
+
+A continuous auxiliary always stands for the extremum of a known family of row
+expressions, so its box is derivable at the moment it is created — and the same walk
+over the data that produces the Big-M constant produces it. `AuxRange` is that walk's
+return value: `lo`/`hi` bracket the expression (constants included, since the auxiliary
+is pinned against the whole thing), while `spread` excludes constants because they
+cancel in the `(aux - expr)` difference a Big-M row slackens. `BigM()` is derived from
+the range, not the other way round, which is what keeps the endpoints from being
+computed and discarded.
+
+`AddGlobalContinuousAux` takes an `AuxRange` and cannot be called without one. Infinite
+bounds are reachable only via `AuxRange::unbounded` — set when a contributing decision
+variable has no finite bound, the same condition that already sent Big-M to its
+`DECIDE_BIGM_FALLBACK` floor. `SolverModel::Build` asserts that pairing, so a new
+creation site that skips the derivation fails loudly in a debug build instead of
+quietly costing a benchmark.
+
+The five continuous auxiliaries and the family each is boxed by:
+
+| Auxiliary | Reduces over | Box |
+| --- | --- | --- |
+| flat `z` | the objective's rows | per-row family |
+| `z_g` (inner `PER` MIN/MAX) | rows of its group | per-row family |
+| `w` (outer over `z_g`) | the `z_g` values | per-row family |
+| `w` (outer over group sums) | per-group sums | **group-sum family** |
+| `z_k` (composed term) | rows the term's filter admits | that term's own family |
+
+The group-sum `w` is the one that does *not* share the per-row family: a group sum
+leaves any single row's range as soon as the group holds more than one row. It is
+derived from the actual per-group sums under the same inner-AVG scale the pinning rows
+use — correct, and tighter than widening the per-row range by the row count.
+
+> Fixed 2026-08-18. All five sites had been declaring their auxiliary
+> `[-1e30, 1e30]`, the endpoints computed for Big-M and then dropped. Not a wrong
+> answer — a performance cliff: a free continuous column leaves the root simplex with
+> no box, so it walks to the answer one pivot at a time and the walk lengthens with row
+> count. Q9 (`MAXIMIZE MAX`) at 15K rows spent 27,293 root simplex iterations over
+> 28.75s; boxed, the same model takes 61 iterations and 0.02s, at identical node count
+> (1), gap (0.000%) and optimum. The golden dump moved by exactly seven `col` lines with
+> no row changed, and every one of the corpus's 87 models was re-solved to confirm an
+> unchanged status and optimal value. Three corpus results shifted to a different
+> optimal assignment at the same objective value.
+
 ### `<>` — `RewriteNotEqual`
 
 Each `COMPARE_NOTEQUAL` gets a Boolean indicator recorded in

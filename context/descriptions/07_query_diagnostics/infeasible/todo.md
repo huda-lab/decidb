@@ -41,6 +41,30 @@ tasks remain here; this file only tracks deferred follow-ups.
   useful finite witness, name which repair unlocks the unbounded direction, or report multiple
   equivalent repairs.
 
+- **A per-row clause's diagnosis does not name which PER group failed (deferred, 2026-08-18).**
+  An unreachable bound reduced per group names the clause with its qualifier but not the
+  group carrying the failure:
+
+  ```sql
+  WITH data AS (SELECT 0 AS g, -1e1000::DOUBLE AS cap UNION ALL SELECT 0, -1e1000::DOUBLE
+                UNION ALL SELECT 1, 3.0 UNION ALL SELECT 1, 1.0)
+  SELECT g, x FROM data
+  DECIDE x(INT) SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g MAXIMIZE SUM(x)
+  ```
+
+  reports `clause  MIN(x) <= -inf PER g  unreachable_bound  true`. Group `0` carries the
+  infinity; group `1`'s bound is finite and fine, and with many groups the user cannot tell
+  which to look at. The cause is not in the diagnosis layer —
+  `CollectUnreachableClauses` reads `group_label` and emits the `group` EAV row whenever it
+  is set, the same as `MakeLoosenEdit`. `ConstraintProvenance::group_label` is stamped only
+  on the *aggregate* emission path (`ilp_model_builder.cpp:861`, `:1177`), and the hard
+  MIN/MAX `NO_SOLUTION` re-emission sets `lhs_is_aggregate = false`, so it goes down the
+  per-row branch, which never stamps a label. The limitation is that branch's, not this
+  constraint's, so a fix would change the subject text of other per-row grouped diagnoses
+  too — check `_apply_reported_fix` and the golden dump before committing to it. Deferred
+  as cosmetic: the finding is correct and the qualifier keeps the clause recognizable, only
+  the instance is underspecified.
+
 ---
 
 ## Suggested batches

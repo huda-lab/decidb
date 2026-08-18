@@ -1836,3 +1836,118 @@ class TestDegenerateCoefficientFreeRow:
             f"the second conflict was not reported: {subjects}"
         )
         _apply_reported_fix(cli, sql, rows, {"SUM(0 * x) <= -1": "SUM(0*x) <= -1"})
+
+
+@pytest.mark.query_diagnostics
+class TestUnreachableBound:
+    """A bound no assignment can reach is named, and no edit is offered for it.
+
+    `x >= inf` is infeasible on its own — no other clause is implicated, and no
+    finite loosening closes the gap. The elastic engine cannot express that: it
+    wires slack into the left side (`Ax - s <= b`), so `b` is never touched. Left
+    to the solve it either saturated the slack at the internal 1e30 sentinel and
+    handed back the user's own text as the "fix", or returned elastic-infeasible
+    and named nothing at all. The verdict is now reached before the elastic model
+    exists, so every shape names its clause and reports `unreachable_bound`
+    instead of a suggested change.
+
+    The cases that need an infinite bound to survive into the model run on Gurobi
+    only: HiGHS pairs a one-sided row bound with its own 1e30 infinity sentinel, so an
+    unreachable bound arrives as an inverted `lower > upper` pair it rejects at model
+    load. It never reaches a solve, so there is nothing to diagnose; DeciDB refuses the
+    query with a named SQL error instead, covered in `test_infinite_bounds.py`. The two
+    regression cases below that do not need an infinite bound in the model cover both
+    backends.
+    """
+
+    _ROWS = "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
+    _INF_BACKENDS = ["decidb_cli_gurobi"]
+
+    @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
+    @pytest.mark.parametrize("clause,subject", [
+        # A bare per-row bound: the shape that used to quote 1e+30 back as the amount.
+        ("x >= 1e1000::DOUBLE", "x >= inf"),
+        # An aggregate bound: the shape that used to name nothing at all.
+        ("SUM(x) >= 1e1000::DOUBLE", "SUM(x) >= inf"),
+        # Hard MIN/MAX, both directions. These rows are stamped USER_MECHANISM (the
+        # clause fans into Big-M rows), so they are found by tracing the row to a user
+        # clause rather than by asking whether it is elastically editable.
+        ("MIN(x) <= -1e1000::DOUBLE", "MIN(x) <= -inf"),
+        ("MAX(x) >= 1e1000::DOUBLE", "MAX(x) >= inf"),
+    ])
+    def test_unreachable_bound_names_its_clause_and_offers_no_edit(
+        self, request, cli_fixture, clause, subject
+    ):
+        cli = request.getfixturevalue(cli_fixture)
+        sql = self._ROWS + f"DECIDE x(INT) SUCH THAT x >= 0 AND x <= 6 AND {clause} MAXIMIZE SUM(x)"
+        result = _diagnose(cli, sql)
+
+        assert "infeasible" in result.stderr.lower()
+        # The clause is named in the summary the user sees first, not only in the relation.
+        assert f"`{subject}`" in result.stderr, result.stderr
+
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+        assert _attrs(rows, "clause", subject) == {"unreachable_bound": "true"}
+        # No edit is offered: there is no finite bound to suggest, and the old behavior
+        # (suggesting the user's own text back) is what made this misleading.
+        assert not [r for r in rows if r["attribute"] in
+                    ("edit_kind", "suggested_change", "amount")], rows
+        # The generic "a fixed part of the query" fallback is wrong here — the conflict
+        # is in a SUCH THAT clause — and must no longer be reached.
+        assert not [r for r in rows if r["attribute"] == "elastic_infeasible"], rows
+
+    @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
+    def test_one_clause_over_many_rows_is_reported_once(self, request, cli_fixture):
+        """The clause fans into one model row per relation row, all rendering the same
+        text. The user wrote one clause and must read one finding."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = self._ROWS + "DECIDE x(INT) SUCH THAT x <= 6 AND x >= 1e1000::DOUBLE MAXIMIZE SUM(x)"
+        rows = _rows(_diagnose(cli, sql))
+        assert [r["attribute"] for r in rows].count("unreachable_bound") == 1
+
+    @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
+    def test_every_unreachable_clause_is_named(self, request, cli_fixture):
+        """Two out-of-reach bounds are two independent findings; reporting only the
+        first would send the user back for a second failure after fixing it."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = self._ROWS + (
+            "DECIDE x(INT) SUCH THAT x <= 6 AND x >= 1e1000::DOUBLE "
+            "AND SUM(x) >= 1e1000::DOUBLE MAXIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        named = {r["subject"] for r in rows if r["attribute"] == "unreachable_bound"}
+        assert named == {"x >= inf", "SUM(x) >= inf"}
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_vacuous_infinity_is_not_a_finding(self, request, cli_fixture):
+        """`x <= +inf` points the other way: it constrains nothing and can never be why
+        a solve failed. The scan must not confuse "infinite" with "out of reach", or an
+        unrelated conflict would be reported against a clause that admits everything."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = self._ROWS + (
+            "DECIDE x(INT) SUCH THAT x <= 1e1000::DOUBLE AND x >= 0 "
+            "AND SUM(x) >= 100 AND SUM(x) <= 5 MAXIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert not [r for r in rows if r["attribute"] == "unreachable_bound"], rows
+        # The real conflict is still diagnosed as an ordinary loosen edit.
+        assert [r for r in rows if r["attribute"] == "edit_kind"], rows
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_finite_unreachable_bound_still_gets_an_edit(self, request, cli_fixture):
+        """Guard on the short-circuit's scope: only an infinite bound skips the elastic
+        solve. A bound that is merely far out of reach is still repairable by loosening,
+        and must keep its suggested change."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = self._ROWS + (
+            "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 6 AND SUM(x) >= 1000000000 "
+            "MAXIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert not [r for r in rows if r["attribute"] == "unreachable_bound"], rows
+        # Which clause the engine picks to loosen is its own policy; what matters here
+        # is that a repairable conflict still produces a repair.
+        edits = _clause_edits(rows)
+        assert edits and all(e["edit_kind"] == "loosen" for e in edits), rows
+        assert all(e.get("suggested_change") for e in edits), rows

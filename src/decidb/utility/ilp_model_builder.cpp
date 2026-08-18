@@ -253,10 +253,19 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
-    // Append global auxiliary variables after row+entity blocks
+    // Append global auxiliary variables after row+entity blocks.
+    //
+    // Stage 05 derives every auxiliary's box from the expression it stands for, so an
+    // infinite bound here means one of two things: the expression genuinely reaches an
+    // unbounded decision variable (flagged, and legitimate), or a creation site skipped
+    // the derivation. The second is a silent performance cliff rather than a wrong
+    // answer — a free continuous column leaves the root simplex without a box and it
+    // crawls — so it is asserted rather than left to a benchmark to notice.
     for (idx_t g = 0; g < input.num_global_vars; g++) {
         idx_t var_idx = indexer.global_block_start + g;
         auto gtype = input.global_variable_types[g];
+        D_ASSERT(g >= input.global_bounds_unbounded.size() || input.global_bounds_unbounded[g] ||
+                 (input.global_lower_bounds[g] > -1e20 && input.global_upper_bounds[g] < 1e20));
         model.col_lower[var_idx] = input.global_lower_bounds[g];
         model.col_upper[var_idx] = input.global_upper_bounds[g];
         model.is_integer[var_idx] = !(gtype == LogicalType::DOUBLE || gtype == LogicalType::FLOAT);

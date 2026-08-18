@@ -12,6 +12,7 @@
 #pragma once
 
 #include "duckdb/common/exception.hpp"
+#include <cmath>
 #include "duckdb/decidb/solver_input.hpp"
 
 namespace duckdb {
@@ -208,6 +209,24 @@ struct ModelConstraint {
     double rhs;                //!< Right-hand side value
     ConstraintProvenance provenance; //!< Row → clause origin (F2)
 };
+
+//! Can any assignment meet this row's bound? A finite left-hand side never reaches
+//! `Ax >= +inf`, `Ax <= -inf`, or `Ax = ±inf`, so a row spelled that way is infeasible
+//! on its own — no other row is implicated and no finite loosening closes the gap. The
+//! mirrored spellings (`Ax <= +inf`, `Ax >= -inf`) are the vacuous ones: they constrain
+//! nothing and are never the reason a solve failed.
+//!
+//! Two layers ask this question and must agree. Infeasible diagnosis uses it to name the
+//! clause before it builds an elastic program that structurally cannot repair such a row,
+//! and the HiGHS backend uses it to refuse the model with a legible error: HiGHS pairs a
+//! one-sided row bound with its own ±1e30 sentinel, so an unreachable bound becomes an
+//! inverted `lower > upper` pair that `passModel` rejects.
+inline bool IsUnreachableBound(char sense, double rhs) {
+	if (!std::isinf(rhs)) {
+		return false;
+	}
+	return sense == '=' || ((rhs > 0.0) == (sense == '>'));
+}
 
 //! Solver-agnostic optimization model, ready for any backend to consume.
 //! Supports linear objectives (LP/MILP) and convex quadratic objectives (QP/MIQP).

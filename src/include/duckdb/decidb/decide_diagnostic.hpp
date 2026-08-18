@@ -186,6 +186,22 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 //! not a minimal edit list.
 DecideDiagnostic BuildElasticInfeasibleDiagnostic();
 
+//! One user clause whose bound no assignment can reach (`x >= inf`). A pre-solve
+//! finding, so there is no slack to read and no edit to suggest — only the clause to
+//! name. `group` carries the printable PER key when the clause is grouped.
+struct UnreachableClause {
+	string label; //!< the constraint as the user wrote it
+	string group; //!< printable PER key of this clause's group (empty if ungrouped)
+};
+
+//! Build the diagnosis for a bound that is out of reach for every assignment
+//! (`x >= inf`, `SUM(x) >= inf`, `MIN(x) <= -inf`). Distinct from the elastic edit
+//! list: the row is infeasible on its own, no other constraint is implicated, and no
+//! finite loosening reaches it — so the diagnosis names the clause and stops rather
+//! than quoting the user's own text back as a suggested change.
+//! Precondition: `clauses` non-empty.
+DecideDiagnostic BuildUnreachableBoundDiagnostic(const vector<UnreachableClause> &clauses);
+
 //! User-facing reason for an unbounded solve whose diagnosis could not produce a
 //! named runaway variable. The physical operator computes the booleans from the
 //! retained solve state; this helper keeps the precedence unit-testable:

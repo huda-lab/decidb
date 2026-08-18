@@ -12,6 +12,29 @@ namespace duckdb {
 
 namespace {
 
+//! Render an unreachable row as the user wrote it (`SUM(x) >= inf PER g`) from the
+//! provenance the model already carries, so the refusal below reads in SQL terms rather
+//! than as a matrix row. Empty when the row has no source clause to quote; the caller
+//! then falls back to a clause-free message. The bound is always ±inf here — that is what
+//! makes the row unreachable — so there is no number to format, and the strict-`<` δ
+//! offset that `ConstraintProvenance::typed_k` exists for cannot apply.
+string DescribeUnreachableRow(const SolverModel &model, const ModelConstraint &constr) {
+    auto source_id = constr.provenance.source_clause_id;
+    if (source_id == DConstants::INVALID_INDEX || source_id >= model.constraint_sources.size()) {
+        return string();
+    }
+    const auto &source = model.constraint_sources[source_id];
+    if (source.canonical_lhs.empty()) {
+        return string();
+    }
+    const char *sense = constr.sense == '<' ? "<=" : (constr.sense == '>' ? ">=" : "=");
+    string label = source.canonical_lhs + " " + sense + " " + (constr.rhs > 0.0 ? "inf" : "-inf");
+    if (!source.qualifier.empty()) {
+        label += " " + source.qualifier;
+    }
+    return label;
+}
+
 //! Resumable HiGHS handle. Load() builds the model into the `highs` object once
 //! (a member, so it survives across Continue()); RunAndReadback() sets the per-chunk
 //! time_limit and (re-)runs. HiGHS resumes its MIP search on a repeat run() after a
@@ -80,6 +103,30 @@ void HighsSession::Load(const SolverModel &model) {
     a_vals.reserve(total_nnz);
     row_lower.reserve(model.constraints.size());
     row_upper.reserve(model.constraints.size());
+
+    // A bound no assignment can reach (`SUM(x) >= inf`) cannot be handed to HiGHS at all.
+    // HiGHS spells a one-sided row bound by pairing the user's bound with its own ±1e30
+    // infinity sentinel, so `Ax >= +inf` becomes `lower = +inf, upper = 1e30` — an
+    // inverted pair that `passModel` rejects outright, taking the connection down with an
+    // internal error. Refuse it here in SQL terms instead. Only the unreachable direction
+    // is affected: `Ax <= +inf` is vacuous, pairs cleanly with the sentinel, and solves.
+    for (auto &constr : model.constraints) {
+        if (!IsUnreachableBound(constr.sense, constr.rhs)) {
+            continue;
+        }
+        string clause = DescribeUnreachableRow(model, constr);
+        if (clause.empty()) {
+            throw InvalidInputException(
+                "A constraint in this query sets a bound no value can reach (an infinite "
+                "limit), and HiGHS cannot load it. Replace the infinite bound with a finite "
+                "value, or install Gurobi, which reports this as an infeasible query.");
+        }
+        throw InvalidInputException(
+            "Constraint `%s` sets a bound no value can reach, and HiGHS cannot load it. "
+            "Replace the infinite bound with a finite value, or install Gurobi, which "
+            "reports this as an infeasible query.",
+            clause);
+    }
 
     idx_t constraint_idx = 0;
     for (auto &constr : model.constraints) {

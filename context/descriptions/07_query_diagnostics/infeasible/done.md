@@ -53,6 +53,62 @@ home). The retained model is freed when `Finalize` returns.
 built by a shared `build_var_labels` lambda in `Finalize`, used by both the UNBOUNDED and
 INFEASIBLE arms (previously inline in the unbounded arm only).
 
+## Pre-solve verdict: a bound no assignment can reach
+
+`DiagnoseInfeasible` answers one question before it builds the elastic program: does any
+row demand `Ax >= +inf`, `Ax <= -inf`, or `Ax = ±inf`? A finite left-hand side never
+reaches such a bound, so the row is infeasible on its own — no other clause is implicated
+and no finite loosening closes the gap. `CollectUnreachableClauses` names every such
+clause and `BuildUnreachableBoundDiagnostic` reports them; the elastic model is never
+built.
+
+**Why it cannot be left to the elastic solve.** The elastic transform wires slack into the
+*left* side (`wire()`: `Ax − s ≤ b`, `Ax + s ≥ b`), so `b` is never touched. With `b = ±inf`
+there is no finite `s` that repairs the row, and the slack column is capped at the `1e30`
+sentinel. The solver then does one of two things, neither of them true: it saturates the
+slack at `1e30` and reports it as a repair — rendering the offset back as `inf`, so the
+"suggested change" is the text the user already wrote and the "amount" is an internal
+sentinel — or it finds the elastic program infeasible and falls to
+`BuildElasticInfeasibleDiagnostic`, which names no clause and blames "a fixed part of the
+query" when the conflict is in a `SUCH THAT` clause. The verdict is structural, so it is
+taken structurally.
+
+**Direction decides.** Only the out-of-reach spellings are findings. `Ax <= +inf` and
+`Ax >= -inf` are vacuous — they constrain nothing and can never be why a solve failed — so
+`IsUnreachableBound` classifies by the direction the infinity points, the same rule
+`ClassifyMinMaxBound` applies upstream.
+
+**Which rows are read.** The gate is *does this row trace back to a clause the user wrote*,
+not *is it elastically editable*. They are different questions: a hard MIN/MAX clause is
+stamped `USER_MECHANISM` wholesale at `decide_linear_form.cpp` (it *will* fan into Big-M
+rows), so a relaxability gate would miss `MIN(x) <= -inf` entirely. Only `STRUCTURAL` rows
+are excluded, as internal definitions with no user text to quote. Reading a
+`USER_MECHANISM` row is safe because a helper's bound is derived as `K ± M` with both terms
+finite by construction — `ClassifyMinMaxBound` sends a group to the Big-M rewrite only when
+`K` is finite, and `DecideTightPerRowBigM` refuses a non-finite `M` — so an infinite bound
+on a mechanism row is always a user bound re-emitted per row.
+
+**Backends do not agree here, and cannot.** Gurobi loads an unreachable row and reports the
+infeasibility, which is what the diagnosis above then explains. HiGHS spells a one-sided row
+bound by pairing the user's bound with its own ±1e30 infinity sentinel, so `Ax >= +inf`
+arrives as `lower = +inf, upper = 1e30` — an inverted pair `passModel` rejects, which
+surfaced as `INTERNAL Error: Failed to pass model to HiGHS` and invalidated the connection.
+`HighsSession::Load` now refuses the model first, using the same `IsUnreachableBound`
+predicate (promoted to `ilp_model.hpp` so the two layers cannot drift), and names the clause
+from `constraint_sources` in the same spelling the diagnosis uses. The error is an ordinary
+`InvalidInputException`, so the session survives it. Only the unreachable direction differs
+between backends: a vacuous infinity pairs cleanly with the sentinel and solves on both.
+
+**Output shape.** One `subject_kind='clause'` row per clause with
+`attribute='unreachable_bound'`, `value='true'`, plus the `group` row when the clause
+carries a PER key. No `edit_kind`, `suggested_change`, or `amount`: there is no finite bound
+to suggest, and offering one is what made the old behavior misleading. A clause fans into
+one model row per relation row, all rendering the same text, so findings are de-duplicated
+on `(label, group)` — the user wrote one clause and reads one finding. Clause text comes
+from the same `MakeClauseLabel` the elastic edits use (factored out of `MakeLoosenEdit`), so
+a pre-solve finding and a post-solve edit name a clause identically, PER/WHEN qualifier
+included.
+
 ## Elastic engine: stage-1 core (simple shapes) + elastic-infeasible signal
 
 I1 fills the seam: on an infeasible solve under `auto`, `DiagnoseInfeasible` builds and
@@ -764,6 +820,21 @@ the data-RHS query case asserts `edit_source='virtual_offset'`, the expanded cas
 `edit_source='expanded_row'`.
 
 ## Tests
+
+`TestUnreachableBound` in `test/decide/tests/test_query_diagnostics_relation.py` covers the
+pre-solve verdict: the bare, aggregate, and hard MIN/MAX spellings each name their clause and
+emit `unreachable_bound` with no edit rows; one clause over three relation rows reports once;
+two out-of-reach bounds are two findings; a vacuous `x <= +inf` is not a finding and the real
+conflict beside it still gets an ordinary loosen edit; and a merely far-out-of-reach finite
+bound still goes through the elastic solve. The infinite-bound cases run on Gurobi only,
+because HiGHS refuses the model before a solve can produce anything to diagnose; its side of
+that split is covered in `test_infinite_bounds.py`
+(`test_highs_refuses_an_unreachable_bound_in_sql_terms`, which asserts the named clause,
+`test_highs_refusal_leaves_the_connection_usable`, which asserts the session survives what
+used to be a fatal internal error, and `test_highs_still_solves_a_vacuous_infinity`, which
+pins that the guard keys on direction rather than on the infinity). The semantics side is in
+`test/decide/tests/test_infinite_bounds.py`, whose unreachable cases now assert the named
+verdict rather than just the word "infeasible".
 
 `test/common/test_decidb_diagnostic_engines.cpp` — SECTIONs drive `DiagnoseInfeasible`
 against the bundled HiGHS backend on one-variable models: a relaxable cap conflicting with

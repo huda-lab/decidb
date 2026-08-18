@@ -685,6 +685,39 @@ able to grow forever, `achievable_objective` reports `unbounded` instead of a nu
 and if working out the diagnosis itself runs out of time, the error says so in one
 line rather than guessing.
 
+### I7 — a bound nothing can reach
+
+Every diagnosis above ends in an edit, because every conflict above can be loosened
+into feasibility. Some cannot. A bound of `inf` is not a large number, it is a target
+no value reaches, so there is no smaller number to suggest and no amount to quote.
+DeciDB says that instead of inventing an edit:
+
+```sql
+SELECT id, x
+FROM (VALUES (1), (2), (3)) t(id)
+DECIDE x(INT)
+SUCH THAT x >= 0 AND x <= 6 AND SUM(x) >= 1e1000::DOUBLE
+MAXIMIZE SUM(x);
+```
+
+```
+Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; clause `SUM(x) >= inf` sets a bound no value can reach.
+Details: SELECT * FROM decide_diagnostics();
+```
+
+```
+┌──────────────┬────────────┬──────────────┬───────────────┬───────────────────┬───────┐
+│ diagnosis_id │   state    │ subject_kind │    subject    │     attribute     │ value │
+├──────────────┼────────────┼──────────────┼───────────────┼───────────────────┼───────┤
+│ 1            │ infeasible │ clause       │ SUM(x) >= inf │ unreachable_bound │ true  │
+└──────────────┴────────────┴──────────────┴───────────────┴───────────────────┴───────┘
+```
+
+`unreachable_bound` appears instead of `edit_kind` / `suggested_change` / `amount`, and
+it is the one infeasible shape with no edit rows at all. The fix is yours to choose:
+write a finite bound, or drop the clause. The direction matters — `SUM(x) <= inf` points
+the other way, constrains nothing, and is never reported.
+
 ---
 
 ## When the solver can't tell (rare)

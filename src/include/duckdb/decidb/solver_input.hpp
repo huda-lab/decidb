@@ -417,6 +417,12 @@ struct SolverInput {
     vector<double> global_lower_bounds;
     vector<double> global_upper_bounds;
     vector<double> global_obj_coeffs;  // Objective coefficients for global vars
+    //! Parallel to `global_variable_types`. True where an auxiliary was deliberately
+    //! left free because the expression it stands for reaches a decision variable with
+    //! no finite bound, so no box exists to give it. Every other auxiliary must carry a
+    //! derived box — `SolverModel::Build` asserts exactly that, which is what keeps a
+    //! free continuous column from creeping back in as the accidental default.
+    vector<bool> global_bounds_unbounded;
     //! Parallel to `global_variable_types`. Clause text for a `<>` indicator
     //! global (e.g. "(SUM(x) <> 5)"), so the infeasible removal dial can name a
     //! dropped aggregate `<>`; empty for every other global aux (MIN/MAX,

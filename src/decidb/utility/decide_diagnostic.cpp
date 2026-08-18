@@ -559,6 +559,44 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
 	return diag;
 }
 
+DecideDiagnostic BuildUnreachableBoundDiagnostic(const vector<UnreachableClause> &clauses) {
+	D_ASSERT(!clauses.empty());
+	DecideDiagnostic diag;
+	diag.valid = true;
+	diag.state = "infeasible";
+
+	vector<string> phrases;
+	for (const auto &c : clauses) {
+		phrases.push_back("clause `" + c.label + "`");
+	}
+	diag.summary = "the constraints cannot all be satisfied at once; " +
+	               JoinDiagnosticPhrases(phrases) +
+	               (phrases.size() == 1 ? " sets" : " set") +
+	               " a bound no value can reach.";
+
+	for (const auto &c : clauses) {
+		string subject = c.group.empty() ? c.label : c.label + " [group: " + c.group + "]";
+		DiagnosticRow row;
+		row.subject_kind = "clause";
+		row.subject = subject;
+		row.attribute = "unreachable_bound";
+		row.value = "true";
+		diag.rows.push_back(std::move(row));
+
+		// Facet A: keep two folded clauses of the same shape distinguishable in the
+		// relation, the same way a LOOSEN edit does.
+		if (!c.group.empty()) {
+			DiagnosticRow group_row;
+			group_row.subject_kind = "clause";
+			group_row.subject = subject;
+			group_row.attribute = "group";
+			group_row.value = c.group;
+			diag.rows.push_back(std::move(group_row));
+		}
+	}
+	return diag;
+}
+
 DecideDiagnostic BuildElasticInfeasibleDiagnostic() {
 	DecideDiagnostic diag;
 	diag.valid = true;

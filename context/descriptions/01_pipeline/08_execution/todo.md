@@ -6,15 +6,15 @@
 
 **Pointers**: `src/execution/operator/decide/physical_decide.cpp`.
 
-Two of the original four concerns are gone. Term extraction moved to layer 05
-(`decide_linear_form.cpp`, 2026-08-15) and the data-free emitters moved to layer 06
-(`ilp_linearization.cpp`, same day), taking the file from 7,344 to 4,843 lines.
+Three of the original four concerns are gone. Term extraction moved to layer 05
+(`decide_linear_form.cpp`, 2026-08-15), the data-free emitters moved to layer 06
+(`ilp_linearization.cpp`, same day), and the last emitters — the flat and
+nested-`PER` MIN/MAX objective, plus the composed MIN/MAX constraint and objective
+— followed on 2026-08-18, taking the file from 7,344 to 3,813 lines. Only the
+evaluation those composed clauses need stayed behind.
 
-What remains is `Finalize`, still the bulk of the file: three phases plus the
-nested-`PER` two-level emission, the ABS `MAXIMIZE` upper-bound derivation and the
-auto-`M` refill. The nested-`PER` emitter has its own entry in
-[`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md);
-it is an emitter fused with a late evaluation pass, so it is not a move.
+What remains is `Finalize`, still the bulk of the file: three phases plus the ABS
+`MAXIMIZE` upper-bound derivation and the auto-`M` refill.
 
 **Decision needed before starting**: whether the remaining split is by phase or by
 mechanism. Everything left reads `DecideGlobalSinkState`, so the split has to

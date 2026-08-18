@@ -354,6 +354,47 @@ linearizes. A literal bound gives every group the same verdict.
 Emitted rows carry `ConstraintKind::USER_MECHANISM`: they are rigid mechanism
 rows, not user parameters, so diagnosis does not offer to loosen them.
 
+### MIN/MAX objectives
+
+`LinearizeMinMaxObjective()` is the objective-side counterpart. A MIN/MAX
+objective cannot be a coefficient vector, so it becomes a global auxiliary the
+rows pin: `z` for the flat `MAXIMIZE MAX(expr)` spelling, and for the nested
+`OUTER(INNER(expr)) PER key` spelling a `z_g` per group plus an outer `w` over
+them. The objective is then just that auxiliary.
+
+Each level is *easy* or *hard*. Easy (`MINIMIZE`+`MAX`, `MAXIMIZE`+`MIN`) means
+the optimization direction already drives the auxiliary onto the extremum, so one
+envelope row per active row is enough — no binaries. Hard (`MAXIMIZE`+`MAX`,
+`MINIMIZE`+`MIN`) pushes the auxiliary the other way, so the envelope alone would
+let it float; those levels add one indicator binary per active row, a Big-M link
+on the opposite side, and `SUM(y) >= 1` to make one row bind. `M` is the global
+spread of the objective expression over the rows (`max_r exprmax - min_r exprmin`),
+which dominates `|z - expr_r|` at every row.
+
+Rows are skipped where every coefficient is zero, which keeps a binary and a row
+off each vacuous row; a `PER` group left with no active row has its `z_g` pinned to
+0 by its bounds instead, since the vacuous rows it used to emit were what held it
+there. The shape flags (`flat_agg`, `per_inner_agg`, easy/hard per level, the
+inner-AVG rewrite) arrive from stage 05 as `MinMaxObjectiveSpec`; the `WHEN` mask
+and the coefficients arrive evaluated.
+
+### Composed MIN/MAX
+
+A composed clause mixes reducers additively — `SUM(a) + 2*MAX(b) <= K`, or the same
+in an objective. `LinearizeComposedMinMaxConstraint()` and
+`LinearizeComposedMinMaxObjective()` give every MIN/MAX term its own global `z_k`
+with the same envelope + indicator layer as above, then compose: the constraint
+sums the `z_k`s and the SUM/AVG terms into one outer row against the constant RHS,
+the objective writes the same composition into `global_obj_coeffs` and
+`objective_coefficients`. Each `z_k` is labelled with the user's source text
+(`MAX(x)`) through the global-label channel, so diagnosis names the clause rather
+than an internal column.
+
+Terms arrive as `ComposedMinMaxTermData`: everything data-dependent — per-row
+coefficients, the query-wide factor the canonicalizer peeled off the reducer, the
+row mask the reducer runs over — is already evaluated by stage 08, and an empty row
+set is refused there before these functions see it.
+
 ### `<>` disjunctions
 
 `LinearizeNotEqual()` encodes `x <> K` as the disjunctive pair
@@ -479,7 +520,8 @@ names that and the row, not the linearization.
 | Concern | Location |
 |---|---|
 | `SolverModel::Build`, all constraint paths, Q construction | `src/decidb/utility/ilp_model_builder.cpp` |
-| Implied bounds, Big-M constants, MIN/MAX, `<>`, McCormick, ABS rows | `src/decidb/utility/ilp_linearization.cpp` |
+| Implied bounds, Big-M constants, MIN/MAX (constraint, objective, composed), `<>`, McCormick, ABS rows | `src/decidb/utility/ilp_linearization.cpp` |
+| `MinMaxObjectiveSpec`, `ComposedMinMaxTermData` — what stage 08 hands over | `src/include/duckdb/decidb/ilp_linearization.hpp` |
 | `BilinearLinkSpec`, `AbsMaximizeLinkSpec` — the formulation tags | `src/include/duckdb/decidb/solver_input.hpp` |
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/ilp_model.hpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver_input.hpp` |

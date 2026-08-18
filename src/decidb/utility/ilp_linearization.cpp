@@ -8,6 +8,58 @@
 
 namespace duckdb {
 
+// --- Global auxiliary creation ---------------------------------------------
+// Every auxiliary column DeciDB introduces is created here. Both helpers exist so
+// that a continuous auxiliary cannot be declared without stating the range of the
+// expression it stands for: infinite bounds are reachable only through
+// `AuxRange::unbounded`, i.e. only when some contributing decision variable is
+// genuinely unbounded and no box exists to give. A continuous auxiliary left free
+// when its range was in fact derivable costs the root LP dearly — the simplex has
+// no box to start from and crawls toward the answer one pivot at a time.
+
+//! Append one continuous auxiliary column bounded by the family it reduces over.
+//! Returns its flat column index.
+static idx_t AddGlobalContinuousAux(SolverInput &input, const VarIndexer &indexer,
+                                    const AuxRange &range, double obj_coeff) {
+    idx_t aux_idx = indexer.global_block_start + input.num_global_vars;
+    input.num_global_vars += 1;
+    input.global_variable_types.push_back(LogicalType::DOUBLE);
+    if (range.unbounded) {
+        input.global_lower_bounds.push_back(-1e30);
+        input.global_upper_bounds.push_back(1e30);
+    } else {
+        input.global_lower_bounds.push_back(range.lo);
+        input.global_upper_bounds.push_back(range.hi);
+    }
+    input.global_bounds_unbounded.push_back(range.unbounded);
+    input.global_obj_coeffs.push_back(obj_coeff);
+    return aux_idx;
+}
+
+//! Append one binary auxiliary column. Its [0,1] box comes from the domain, so it
+//! needs no range.
+static idx_t AddGlobalBinaryAux(SolverInput &input, const VarIndexer &indexer,
+                                double obj_coeff) {
+    idx_t aux_idx = indexer.global_block_start + input.num_global_vars;
+    input.num_global_vars += 1;
+    input.global_variable_types.push_back(LogicalType::BOOLEAN);
+    input.global_lower_bounds.push_back(0.0);
+    input.global_upper_bounds.push_back(1.0);
+    input.global_bounds_unbounded.push_back(false);
+    input.global_obj_coeffs.push_back(obj_coeff);
+    return aux_idx;
+}
+
+//! Pin an already-created auxiliary to exactly `value`. Used where a reducer turns
+//! out to range over nothing at all, so the auxiliary has no pinning rows and would
+//! otherwise float on whatever box it was given.
+static void PinGlobalAux(SolverInput &input, const VarIndexer &indexer, idx_t aux_idx,
+                         double value) {
+    idx_t local = aux_idx - indexer.global_block_start;
+    input.global_lower_bounds[local] = value;
+    input.global_upper_bounds[local] = value;
+}
+
 // --- Data-driven Big-M support ---------------------------------------------
 // A Big-M linearization toggles a constraint on/off via a binary indicator. The
 // constant M must be at least the reachable magnitude of the constraint's
@@ -938,12 +990,7 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
             // diagnosis identical whichever encoding the group received. The per-row
             // path is in the same position — its indicator is allocated at stage 05,
             // before any range is knowable.
-            idx_t z_idx = var_indexer.global_block_start + input.num_global_vars;
-            input.num_global_vars++;
-            input.global_variable_types.push_back(LogicalType::BOOLEAN);
-            input.global_lower_bounds.push_back(0.0);
-            input.global_upper_bounds.push_back(1.0);
-            input.global_obj_coeffs.push_back(0.0);
+            idx_t z_idx = AddGlobalBinaryAux(input, var_indexer, 0.0);
             input.global_variable_labels.push_back(ne_label);
 
             // Accumulate LHS coefficients for active rows in this group.
@@ -1241,6 +1288,874 @@ void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
         ec_ub2.qualifier = c2.qualifier;
         ec_ub2.kind = ConstraintKind::STRUCTURAL;
         input.constraints.push_back(std::move(ec_ub2));
+    }
+}
+
+
+// --- MIN/MAX objective ------------------------------------------------------
+// The objective counterpart of the MIN/MAX constraint encoding above. Both build
+// the same envelope + indicator shape; they differ in what the auxiliary is pinned
+// against (a user bound there, the objective expression here) and in where the rows
+// land (`input.constraints` there, `input.global_constraints` here, because the
+// auxiliaries live in the flat global block).
+
+void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
+                              const MinMaxObjectiveSpec &spec) {
+    idx_t num_rows = input.num_rows;
+
+    // Save objective data (needed for constraint generation in the PER MIN/MAX
+    // and flat aggregate paths). Defer the deep copy of objective_coefficients
+    // — which is a vector<vector<double>> sized num_terms * num_rows — until
+    // we know we'll take one of those paths.
+    auto saved_obj_var_indices = input.objective_variable_indices;
+    bool need_saved_obj =
+        !saved_obj_var_indices.empty() &&
+        ((spec.per_inner_agg != ObjectiveAggregateType::NONE && input.objective_num_groups > 0) ||
+         spec.flat_agg != ObjectiveAggregateType::NONE);
+    vector<CoefficientColumn> saved_obj_coefficients;
+    if (need_saved_obj) {
+        saved_obj_coefficients = input.objective_coefficients;
+    }
+
+    // One row of the saved objective expression, bracketed against every contributing
+    // variable's box. `lo`/`hi` include constant terms — an auxiliary is pinned against
+    // the whole expression — while `var_lo`/`var_hi` exclude them, because a constant
+    // cancels in the (aux - expr) difference a Big-M row slackens.
+    struct SavedRowRange {
+        double lo = 0.0;
+        double hi = 0.0;
+        double var_lo = 0.0;
+        double var_hi = 0.0;
+        bool unbounded = false;
+    };
+    auto saved_row_range = [&](idx_t r) -> SavedRowRange {
+        SavedRowRange out;
+        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+            double c = saved_obj_coefficients[t].Get(r);
+            if (std::abs(c) < 1e-15) {
+                continue;
+            }
+            idx_t v = saved_obj_var_indices[t];
+            if (v == DConstants::INVALID_INDEX) {
+                out.lo += c;
+                out.hi += c;
+                continue;
+            }
+            double lb = input.lower_bounds[v];
+            double ub = input.upper_bounds[v];
+            if (ub >= 1e20 || lb <= -1e20) {
+                out.unbounded = true;
+                continue;
+            }
+            double term_lo = (c > 0.0) ? c * lb : c * ub;
+            double term_hi = (c > 0.0) ? c * ub : c * lb;
+            out.var_lo += term_lo;
+            out.var_hi += term_hi;
+            out.lo += term_lo;
+            out.hi += term_hi;
+        }
+        return out;
+    };
+
+    // The family every per-row MIN/MAX auxiliary (z, z_g) reduces over: one entry per
+    // row of the saved objective expression. Its `spread` is the Big-M these sites use.
+    // Unlike the per-row constraint sites (where M bounds an expression against a fixed
+    // RHS), an objective auxiliary is linked via (aux - expr) +/- M*y (>=|<=) +/- M, so
+    // the deactivated branch must stay slack across the GLOBAL spread
+    //   max_r exprmax_r  -  min_r exprmin_r
+    // taking the SIGN of every coefficient against the variable's [lb, ub]. That is the
+    // tight, data-driven value (a per-row range can under-estimate it when coefficient
+    // signs differ across rows). Computed once and reused; the 1e6 floor applies only
+    // when a contributing variable is unbounded.
+    bool row_family_cached = false;
+    AuxRange row_family_range;
+    auto row_family = [&]() -> const AuxRange & {
+        if (!row_family_cached) {
+            for (idx_t r = 0; r < num_rows; r++) {
+                auto rr = saved_row_range(r);
+                row_family_range.CoverRow(rr.lo, rr.hi, rr.var_lo, rr.var_hi);
+                if (rr.unbounded) {
+                    row_family_range.unbounded = true;
+                }
+            }
+            row_family_cached = true;
+        }
+        return row_family_range;
+    };
+    auto compute_big_m = [&]() -> double {
+        return row_family().BigM();
+    };
+
+
+    // Accumulate one row of the saved objective expression into `link`, negated:
+    // the linking row is `z - expr op bound`, so the expression's coefficients
+    // enter with the opposite sign and its constant part lands on the bound.
+    // `scale` carries the inner-AVG 1/n_g factor at the PER sites; 1.0 elsewhere.
+    auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row, double scale) {
+        for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+            double coeff = saved_obj_coefficients[t].Get(row) * scale;
+            if (std::abs(coeff) < 1e-15) {
+                continue;
+            }
+            idx_t v = saved_obj_var_indices[t];
+            if (v == DConstants::INVALID_INDEX) {
+                link.constant += coeff;
+            } else {
+                link.AddColumn((int)indexer.Get(v, row), -coeff);
+            }
+        }
+    };
+
+    if (spec.per_inner_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty() &&
+        input.objective_num_groups > 0) {
+        // ================================================================
+        // PATH B: PER objective with nested OUTER(INNER(expr)) aggregate
+        // ================================================================
+        idx_t K = input.objective_num_groups;
+        auto &row_groups = input.objective_row_group_ids;
+
+        // Build group→rows CSR index once, reuse across phases.
+        BuildGroupCSR(row_groups, K,
+                      input.objective_group_offsets,
+                      input.objective_group_row_ids);
+        auto &obj_offsets = input.objective_group_offsets;
+        auto &obj_flat_rows = input.objective_group_row_ids;
+        auto group_size = [&](idx_t g) {
+            return obj_offsets[g + 1] - obj_offsets[g];
+        };
+
+        // Clear per-row objective (auxiliaries become the objective)
+        input.objective_coefficients.clear();
+        input.objective_variable_indices.clear();
+
+        // Phase A: Inner aggregate — produces K per-group values
+        // These are either group sums (no aux) or z_g auxiliaries (inner MIN/MAX)
+        bool inner_is_minmax = (spec.per_inner_agg == ObjectiveAggregateType::MIN_AGG || spec.per_inner_agg == ObjectiveAggregateType::MAX_AGG);
+        bool inner_is_min = (spec.per_inner_agg == ObjectiveAggregateType::MIN_AGG);
+
+        // group_value_indices[g] = solver variable index for group g's value
+        // For inner SUM: not used (group sums go directly to outer as coefficients)
+        // For inner MIN/MAX: index of z_g global variable
+        vector<idx_t> group_value_indices(K);
+
+        if (inner_is_minmax) {
+            // Inner MIN/MAX: create z_g auxiliary per group
+            bool inner_easy = spec.per_inner_is_easy;
+            double M = compute_big_m();
+
+            // Each z_g is an extremum over rows of its group, so every one of them is
+            // boxed by the same per-row family.
+            idx_t z_base = indexer.global_block_start + input.num_global_vars;
+            for (idx_t g = 0; g < K; g++) {
+                group_value_indices[g] =
+                    AddGlobalContinuousAux(input, indexer, row_family(), 0.0); // obj set by outer phase
+            }
+
+            // Build a per-group active-rows CSR: drop rows whose every term coefficient
+            // is zero. Mirrors PATH A's active_rows pre-filter (lines below). Without it
+            // the easy path emits vacuous z_g op 0 rows and the hard path allocates an
+            // indicator binary plus a Big-M row for each, then references them in the
+            // sum_y >= 1 constraint — all wasted on rows that contribute nothing.
+            vector<idx_t> active_offsets(K + 1, 0);
+            vector<idx_t> active_flat_rows;
+            active_flat_rows.reserve(obj_flat_rows.size());
+            for (idx_t g = 0; g < K; g++) {
+                active_offsets[g] = active_flat_rows.size();
+                for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                    idx_t row = obj_flat_rows[k];
+                    bool has_nonzero = false;
+                    for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                        if (std::abs(saved_obj_coefficients[t][row]) >= 1e-15) {
+                            has_nonzero = true;
+                            break;
+                        }
+                    }
+                    if (has_nonzero) active_flat_rows.push_back(row);
+                }
+            }
+            active_offsets[K] = active_flat_rows.size();
+
+            // For groups with no active rows, the original code emitted vacuous
+            // z_g op 0 rows that — combined with the outer optimization direction —
+            // implicitly pinned z_g at 0. Skipping those rows lets z_g float free,
+            // so we instead pin z_g's bounds directly. Captured as a lambda so both
+            // easy and hard branches use identical pinning logic.
+            auto PinZGroupToZero = [&](idx_t g) {
+                PinGlobalAux(input, indexer, group_value_indices[g], 0.0);
+            };
+
+            if (inner_easy) {
+                // Easy: z_g >= expr_r (for MAX) or z_g <= expr_r (for MIN)
+                char sense_char = inner_is_min ? '<' : '>';
+                for (idx_t g = 0; g < K; g++) {
+                    if (active_offsets[g] == active_offsets[g + 1]) {
+                        PinZGroupToZero(g);
+                        continue;
+                    }
+                    for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
+                        idx_t row = active_flat_rows[k];
+                        MinMaxLinkRow link;
+                        AddObjectiveRowTerms(link, row, 1.0);
+                        SolverInput::RawConstraint rc;
+                        rc.sense = sense_char;
+                        rc.rhs = link.constant;
+                        rc.indices.push_back((int)group_value_indices[g]);
+                        rc.coefficients.push_back(1.0);
+                        link.AppendTo(rc);
+                        input.global_constraints.push_back(std::move(rc));
+                    }
+                }
+            } else {
+                // Hard: per-row indicators per group, allocated only for active rows.
+                idx_t first_y = z_base + K;
+                idx_t num_active = active_flat_rows.size();
+                for (idx_t r = 0; r < num_active; r++) {
+                    AddGlobalBinaryAux(input, indexer, 0.0);
+                }
+
+                for (idx_t g = 0; g < K; g++) {
+                    if (active_offsets[g] == active_offsets[g + 1]) {
+                        PinZGroupToZero(g);
+                        continue;
+                    }
+                    for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
+                        idx_t row = active_flat_rows[k];
+                        idx_t active_idx = k; // position in active_flat_rows
+                        MinMaxLinkRow link;
+                        AddObjectiveRowTerms(link, row, 1.0);
+                        SolverInput::RawConstraint rc;
+                        rc.indices.push_back((int)group_value_indices[g]);
+                        rc.coefficients.push_back(1.0);
+                        link.AppendTo(rc);
+                        idx_t y_idx = first_y + active_idx;
+                        if (inner_is_min) {
+                            // MINIMIZE MIN inner: z_g - expr_r - M*y_r >= -M
+                            rc.indices.push_back((int)y_idx);
+                            rc.coefficients.push_back(-M);
+                            rc.sense = '>';
+                            rc.rhs = -M + link.constant;
+                        } else {
+                            // MAXIMIZE MAX inner: z_g - expr_r + M*y_r <= M
+                            rc.indices.push_back((int)y_idx);
+                            rc.coefficients.push_back(M);
+                            rc.sense = '<';
+                            rc.rhs = M + link.constant;
+                        }
+                        input.global_constraints.push_back(std::move(rc));
+                    }
+                    // SUM(y) >= 1 per group
+                    SolverInput::RawConstraint sum_y;
+                    for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
+                        sum_y.indices.push_back((int)(first_y + k));
+                        sum_y.coefficients.push_back(1.0);
+                    }
+                    sum_y.sense = '>';
+                    sum_y.rhs = 1.0;
+                    input.global_constraints.push_back(std::move(sum_y));
+                }
+            }
+        }
+
+        // Phase B: Outer aggregate — combines K group values into scalar objective
+        bool outer_is_sum = (spec.per_outer_agg == ObjectiveAggregateType::SUM);
+        bool outer_is_minmax = (spec.per_outer_agg == ObjectiveAggregateType::MIN_AGG || spec.per_outer_agg == ObjectiveAggregateType::MAX_AGG);
+        bool outer_is_min = (spec.per_outer_agg == ObjectiveAggregateType::MIN_AGG);
+
+        if (inner_is_minmax && outer_is_sum) {
+            // Outer SUM: objective = sum of z_g's
+            for (idx_t g = 0; g < K; g++) {
+                input.global_obj_coeffs[group_value_indices[g] - indexer.global_block_start] = 1.0;
+            }
+        } else if (inner_is_minmax && outer_is_minmax) {
+            // Outer MIN/MAX over z_g's: create global w auxiliary
+            bool outer_easy = spec.per_outer_is_easy;
+
+            // w is an extremum over the z_g's, and every z_g is boxed by the per-row
+            // family, so w inherits that same box.
+            idx_t w_idx = AddGlobalContinuousAux(input, indexer, row_family(), 1.0); // objective = w
+
+            if (outer_easy) {
+                // w >= z_g (for outer MAX) or w <= z_g (for outer MIN)
+                char sense_char = outer_is_min ? '<' : '>';
+                for (idx_t g = 0; g < K; g++) {
+                    SolverInput::RawConstraint rc;
+                    rc.sense = sense_char;
+                    rc.rhs = 0.0;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    rc.indices.push_back((int)group_value_indices[g]);
+                    rc.coefficients.push_back(-1.0);
+                    input.global_constraints.push_back(std::move(rc));
+                }
+            } else {
+                // Hard outer: indicators over K groups
+                idx_t first_u = w_idx + 1;
+                for (idx_t g = 0; g < K; g++) {
+                    AddGlobalBinaryAux(input, indexer, 0.0);
+                }
+                // Outer Big-M: compute_big_m() returns the global spread of the
+                // objective expression (max_r exprmax - min_r exprmin), which bounds
+                // the spread of (w - z_g) since each z_g lies within that range.
+                double M_outer = compute_big_m();
+                for (idx_t g = 0; g < K; g++) {
+                    SolverInput::RawConstraint rc;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    rc.indices.push_back((int)group_value_indices[g]);
+                    rc.coefficients.push_back(-1.0);
+                    idx_t u_idx = first_u + g;
+                    if (outer_is_min) {
+                        // MINIMIZE MIN outer: w - z_g - M*u_g >= -M
+                        rc.indices.push_back((int)u_idx);
+                        rc.coefficients.push_back(-M_outer);
+                        rc.sense = '>';
+                        rc.rhs = -M_outer;
+                    } else {
+                        // MAXIMIZE MAX outer: w - z_g + M*u_g <= M
+                        rc.indices.push_back((int)u_idx);
+                        rc.coefficients.push_back(M_outer);
+                        rc.sense = '<';
+                        rc.rhs = M_outer;
+                    }
+                    input.global_constraints.push_back(std::move(rc));
+                }
+                SolverInput::RawConstraint sum_u;
+                for (idx_t g = 0; g < K; g++) {
+                    sum_u.indices.push_back((int)(first_u + g));
+                    sum_u.coefficients.push_back(1.0);
+                }
+                sum_u.sense = '>';
+                sum_u.rhs = 1.0;
+                input.global_constraints.push_back(std::move(sum_u));
+            }
+        } else if (!inner_is_minmax && outer_is_sum) {
+            if (spec.per_inner_was_avg) {
+                // Inner AVG + Outer SUM: scale each row's coefficient by 1/n_g
+                // SUM over groups of AVG(expr) = Σ_g (Σ_{r∈g} c_r * x_r) / n_g
+                for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                    auto &col = saved_obj_coefficients[t].MutableDense();
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        if (row_groups[row] != DConstants::INVALID_INDEX) {
+                            idx_t g = row_groups[row];
+                            col[row] /= static_cast<double>(group_size(g));
+                        }
+                    }
+                }
+            }
+            // Restore (possibly scaled) objective coefficients
+            input.objective_coefficients = std::move(saved_obj_coefficients);
+            input.objective_variable_indices = std::move(saved_obj_var_indices);
+        } else if (!inner_is_minmax && outer_is_minmax) {
+            // Inner SUM + Outer MIN/MAX: compute per-group sums, then optimize over them
+            // Create w auxiliary for outer MIN/MAX over group sums
+            bool outer_easy = spec.per_outer_is_easy;
+
+            // This w reduces over group SUMS, not over rows, so it does NOT share the
+            // per-row family's box: a group sum leaves any single row's range as soon
+            // as the group holds more than one row. Derive the box from the actual
+            // per-group sums — each group's rows added up under the same inner-AVG
+            // scale the pinning rows below use — which is both correct and tighter than
+            // widening the per-row family by num_rows.
+            AuxRange group_sum_family;
+            for (idx_t g = 0; g < K; g++) {
+                double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
+                double g_lo = 0.0, g_hi = 0.0, g_var_lo = 0.0, g_var_hi = 0.0;
+                bool g_unbounded = false;
+                for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                    auto rr = saved_row_range(obj_flat_rows[k]);
+                    g_lo += rr.lo * scale;
+                    g_hi += rr.hi * scale;
+                    g_var_lo += rr.var_lo * scale;
+                    g_var_hi += rr.var_hi * scale;
+                    g_unbounded = g_unbounded || rr.unbounded;
+                }
+                group_sum_family.CoverRow(g_lo, g_hi, g_var_lo, g_var_hi);
+                if (g_unbounded) {
+                    group_sum_family.unbounded = true;
+                }
+            }
+            idx_t w_idx = AddGlobalContinuousAux(input, indexer, group_sum_family, 1.0); // objective = w
+
+            // For each group g: w >= (or <=) sum_g(coeffs * x)
+            // sum_g = Σ_{r ∈ group_g} Σ_t coeff_t_r * x_{r,var_t}
+            if (outer_easy) {
+                char sense_char = outer_is_min ? '<' : '>';
+                bool any_group_emitted = false;
+                for (idx_t g = 0; g < K; g++) {
+                    double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
+                    MinMaxLinkRow link;
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                        AddObjectiveRowTerms(link, obj_flat_rows[k], scale);
+                    }
+                    // Skip vacuous w op 0 rows: outer MIN/MAX of group sums settles
+                    // dominated zero-sum groups via the optimization direction itself.
+                    // A group left holding only a constant still bounds w, so it stays.
+                    if (link.HasNoColumns() && std::abs(link.constant) < 1e-15) continue;
+                    SolverInput::RawConstraint rc;
+                    rc.sense = sense_char;
+                    rc.rhs = link.constant;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    link.AppendTo(rc);
+                    input.global_constraints.push_back(std::move(rc));
+                    any_group_emitted = true;
+                }
+                if (!any_group_emitted) {
+                    // Every group is identically zero — pin w to 0 so outer
+                    // optimization doesn't push the otherwise-unconstrained w to ±∞.
+                    PinGlobalAux(input, indexer, w_idx, 0.0);
+                }
+            } else {
+                // Hard outer: indicators over K groups
+                // Outer Big-M over group SUMS: a group sum spans at most num_rows
+                // times the per-row spread, so the global spread (compute_big_m())
+                // scaled by num_rows bounds the spread of (w - group_sum).
+                double M_outer = compute_big_m() * num_rows;
+                idx_t first_u = w_idx + 1;
+                for (idx_t g = 0; g < K; g++) {
+                    AddGlobalBinaryAux(input, indexer, 0.0);
+                }
+                for (idx_t g = 0; g < K; g++) {
+                    double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
+                    MinMaxLinkRow link;
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                        AddObjectiveRowTerms(link, obj_flat_rows[k], scale);
+                    }
+                    SolverInput::RawConstraint rc;
+                    rc.indices.push_back((int)w_idx);
+                    rc.coefficients.push_back(1.0);
+                    link.AppendTo(rc);
+                    idx_t u_idx = first_u + g;
+                    if (outer_is_min) {
+                        rc.indices.push_back((int)u_idx);
+                        rc.coefficients.push_back(-M_outer);
+                        rc.sense = '>';
+                        rc.rhs = -M_outer + link.constant;
+                    } else {
+                        rc.indices.push_back((int)u_idx);
+                        rc.coefficients.push_back(M_outer);
+                        rc.sense = '<';
+                        rc.rhs = M_outer + link.constant;
+                    }
+                    input.global_constraints.push_back(std::move(rc));
+                }
+                SolverInput::RawConstraint sum_u;
+                for (idx_t g = 0; g < K; g++) {
+                    sum_u.indices.push_back((int)(first_u + g));
+                    sum_u.coefficients.push_back(1.0);
+                }
+                sum_u.sense = '>';
+                sum_u.rhs = 1.0;
+                input.global_constraints.push_back(std::move(sum_u));
+            }
+        }
+    } else if (spec.flat_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty()) {
+        // ================================================================
+        // PATH A: Non-PER flat MIN/MAX objective (existing behavior)
+        // ================================================================
+        bool is_min_agg = (spec.flat_agg == ObjectiveAggregateType::MIN_AGG);
+        bool is_easy = spec.flat_is_easy;
+
+        // Compute active rows: pass WHEN, and have at least one nonzero coefficient.
+        // - Easy path: skipping inactive rows just avoids vacuous linking constraints
+        //   (the existing code already skipped zero coefficients individually, but still
+        //   emitted an empty linking row).
+        // - Hard path: this also reduces the number of indicator binaries and the size
+        //   of the SUM(y) >= 1 constraint sent to the solver.
+        vector<idx_t> active_rows;
+        active_rows.reserve(num_rows);
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (spec.has_when && !spec.when_mask[row]) continue;
+            bool has_nonzero = false;
+            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
+                if (std::abs(saved_obj_coefficients[t].Get(row)) >= 1e-15) {
+                    has_nonzero = true;
+                    break;
+                }
+            }
+            if (has_nonzero) {
+                active_rows.push_back(row);
+            }
+        }
+        if (active_rows.empty()) {
+            throw InvalidInputException(
+                "MIN/MAX objective has no active rows after WHEN filtering and zero-coefficient "
+                "elimination. The auxiliary variable would have no pinning constraints, "
+                "making the optimization unbounded or vacuous.");
+        }
+
+        // z is the extremum over the objective's rows, so the per-row family boxes it.
+        idx_t z_idx = AddGlobalContinuousAux(input, indexer, row_family(), 1.0); // objective = z
+
+        // Clear per-row objective (z is the sole objective term now)
+        input.objective_coefficients.clear();
+        input.objective_variable_indices.clear();
+
+        if (is_easy) {
+            char sense_char = is_min_agg ? '<' : '>';
+            for (idx_t row : active_rows) {
+                MinMaxLinkRow link;
+                AddObjectiveRowTerms(link, row, 1.0);
+                SolverInput::RawConstraint rc;
+                rc.sense = sense_char;
+                rc.rhs = link.constant;
+                rc.indices.push_back((int)z_idx);
+                rc.coefficients.push_back(1.0);
+                link.AppendTo(rc);
+                input.global_constraints.push_back(std::move(rc));
+            }
+        } else {
+            double M = compute_big_m();
+
+            // Allocate one indicator binary per ACTIVE row (not per total row).
+            idx_t first_y_idx = z_idx + 1;
+            idx_t num_active = active_rows.size();
+            for (idx_t r = 0; r < num_active; r++) {
+                AddGlobalBinaryAux(input, indexer, 0.0);
+            }
+
+            for (idx_t a = 0; a < active_rows.size(); a++) {
+                idx_t row = active_rows[a];
+                MinMaxLinkRow link;
+                AddObjectiveRowTerms(link, row, 1.0);
+                SolverInput::RawConstraint rc;
+                rc.indices.push_back((int)z_idx);
+                rc.coefficients.push_back(1.0);
+                link.AppendTo(rc);
+                idx_t y_idx = first_y_idx + a;
+                if (is_min_agg) {
+                    rc.indices.push_back((int)y_idx);
+                    rc.coefficients.push_back(-M);
+                    rc.sense = '>';
+                    rc.rhs = -M + link.constant;
+                } else {
+                    rc.indices.push_back((int)y_idx);
+                    rc.coefficients.push_back(M);
+                    rc.sense = '<';
+                    rc.rhs = M + link.constant;
+                }
+                input.global_constraints.push_back(std::move(rc));
+            }
+
+            SolverInput::RawConstraint sum_y;
+            for (idx_t a = 0; a < active_rows.size(); a++) {
+                sum_y.indices.push_back((int)(first_y_idx + a));
+                sum_y.coefficients.push_back(1.0);
+            }
+            sum_y.sense = '>';
+            sum_y.rhs = 1.0;
+            input.global_constraints.push_back(std::move(sum_y));
+        }
+    }
+}
+
+// --- Composed (additive) MIN/MAX --------------------------------------------
+// A composed clause mixes reducers additively (`SUM(a) + MAX(b) <= K`). Each
+// MIN/MAX term becomes a global auxiliary z_k pinned per row; SUM/AVG terms fold
+// straight into the outer row (constraint) or into the objective coefficients.
+// The two entry points below share that auxiliary layer and differ only in what
+// they do with the terms afterwards.
+
+//! Accumulate one row of a composed term's inner expression into `link`, negated:
+//! the pinning row is `z - expr op bound`, so the expression's coefficients enter
+//! with the opposite sign and its constant part lands on the bound.
+static void AddComposedRowTerms(const VarIndexer &indexer, MinMaxLinkRow &link,
+                                const vector<DecideTerm> &inner_terms,
+                                const vector<vector<double>> &per_term_coefs, idx_t row) {
+    for (idx_t it = 0; it < inner_terms.size(); it++) {
+        double coeff = per_term_coefs[it][row];
+        idx_t v = inner_terms[it].variable_index;
+        if (v == DConstants::INVALID_INDEX) {
+            link.constant += coeff;
+        } else {
+            link.AddColumn((int)indexer.Get(v, row), -coeff);
+        }
+    }
+}
+
+//! Shared hard-direction indicator layer for one composed MIN/MAX term whose
+//! global auxiliary is `z_idx`. The caller emits the base one-sided envelope pin
+//! (z >= inner for MAX / z <= inner for MIN) for BOTH directions; that alone
+//! suffices for the easy direction (the outer pressure drives z to the extreme).
+//! The hard direction adds, per active row, a binary y_i, a SUM(y_i) >= 1 pin,
+//! and a Big-M link on the *opposite* envelope side so z is pinned to the actual
+//! MIN/MAX rather than floating:
+//!   MAX: z <= inner_i + M(1 - y_i)  ->  z - sum(c*var) + M*y_i <= M + const
+//!   MIN: z >= inner_i - M(1 - y_i)  ->  z - sum(c*var) - M*y_i >= -M + const
+//! M is the signed spread of `inner` over the term's active rows (identical
+//! formula to the flat MIN/MAX objective's: global_max - global_min), which always
+//! dominates |z - inner_i|; constant inner terms cancel in the spread. This mirrors
+//! the flat (non-composed) hard MIN/MAX emission so both share one M model.
+//! The family a composed MIN/MAX term reduces over: one entry per row the term's
+//! filter admits. Feeds both the term's auxiliary box and the hard direction's Big-M,
+//! so the two can never disagree about the term's reach.
+//!
+//! A term admitting no rows yields the seeded [0,0], which pins its auxiliary at 0 —
+//! the same settlement the PER sites give a group with no active rows, and better than
+//! letting an auxiliary with no pinning rows float on the outer pressure.
+static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideTerm> &inner_terms,
+                                  const vector<vector<double>> &per_term_coefs,
+                                  const vector<bool> &filter_mask) {
+    AuxRange range;
+    for (idx_t row = 0; row < input.num_rows; row++) {
+        if (!filter_mask[row]) {
+            continue;
+        }
+        double row_lo = 0.0, row_hi = 0.0, var_lo = 0.0, var_hi = 0.0;
+        for (idx_t it = 0; it < inner_terms.size(); it++) {
+            double c = per_term_coefs[it][row];
+            if (std::abs(c) < 1e-15) {
+                continue;
+            }
+            idx_t v = inner_terms[it].variable_index;
+            if (v == DConstants::INVALID_INDEX) {
+                // A constant reaches the auxiliary's box (it is pinned against the whole
+                // expression) but cancels in the spread a Big-M row slackens.
+                row_lo += c;
+                row_hi += c;
+                continue;
+            }
+            double lb = input.lower_bounds[v];
+            double ub = input.upper_bounds[v];
+            if (ub >= 1e20 || lb <= -1e20) {
+                range.unbounded = true;
+                continue;
+            }
+            double term_lo = (c > 0.0) ? c * lb : c * ub;
+            double term_hi = (c > 0.0) ? c * ub : c * lb;
+            var_lo += term_lo;
+            var_hi += term_hi;
+            row_lo += term_lo;
+            row_hi += term_hi;
+        }
+        range.CoverRow(row_lo, row_hi, var_lo, var_hi);
+    }
+    return range;
+}
+
+static void EmitComposedHardMinMaxIndicators(SolverInput &input, const VarIndexer &indexer,
+                                             idx_t z_idx, bool is_max,
+                                             const vector<DecideTerm> &inner_terms,
+                                             const vector<vector<double>> &per_term_coefs,
+                                             const vector<bool> &filter_mask,
+                                             const string &label) {
+    idx_t num_rows = input.num_rows;
+    double M = ComposedTermRange(input, inner_terms, per_term_coefs, filter_mask).BigM();
+
+    SolverInput::RawConstraint sum_y;
+    for (idx_t row = 0; row < num_rows; row++) {
+        if (!filter_mask[row]) continue;
+        idx_t y_idx = AddGlobalBinaryAux(input, indexer, 0.0);
+        input.global_variable_labels.resize(y_idx - indexer.global_block_start);
+        input.global_variable_labels.push_back(label);
+
+        sum_y.indices.push_back((int)y_idx);
+        sum_y.coefficients.push_back(1.0);
+
+        MinMaxLinkRow row_terms;
+        AddComposedRowTerms(indexer, row_terms, inner_terms, per_term_coefs, row);
+        SolverInput::RawConstraint link;
+        link.indices.push_back((int)z_idx);
+        link.coefficients.push_back(1.0);
+        row_terms.AppendTo(link);
+        if (is_max) {
+            link.indices.push_back((int)y_idx);
+            link.coefficients.push_back(M);
+            link.sense = '<';
+            link.rhs = M + row_terms.constant;
+        } else {
+            link.indices.push_back((int)y_idx);
+            link.coefficients.push_back(-M);
+            link.sense = '>';
+            link.rhs = -M + row_terms.constant;
+        }
+        link.kind = ConstraintKind::USER_PARAMETER;
+        input.global_constraints.push_back(std::move(link));
+    }
+    sum_y.sense = '>';
+    sum_y.rhs = 1.0;
+    sum_y.kind = ConstraintKind::USER_PARAMETER;
+    input.global_constraints.push_back(std::move(sum_y));
+}
+
+//! The auxiliary layer both composed paths share: one global z_k per MIN/MAX term,
+//! its base one-sided envelope pin per active row, and — for the hard direction —
+//! the indicator layer that pins z_k to the actual extremum. Fills in `z_idx` on
+//! every MIN/MAX term, which the caller then references from the outer row or the
+//! objective.
+static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &indexer,
+                                          vector<ComposedMinMaxTermData> &terms) {
+    idx_t num_rows = input.num_rows;
+
+    // Allocate global z_k for each MIN/MAX term. Both directions supported:
+    // hard terms get the indicator layer emitted after the base envelope pin.
+    for (auto &ta : terms) {
+        if (!ta.is_minmax) continue;
+        ta.z_idx = AddGlobalContinuousAux(
+            input, indexer,
+            ComposedTermRange(input, (*ta.inner_terms), ta.per_term_coefs, ta.filter_mask), 0.0);
+        // Name the z through the global label channel (as the aggregate-`<>` site
+        // does) so a diagnosis renders `MAX(x)`, never an internal column name.
+        // Pad first: earlier allocation sites may not have pushed labels.
+        input.global_variable_labels.resize(ta.z_idx - indexer.global_block_start);
+        input.global_variable_labels.push_back(ta.label);
+    }
+
+    // Emit the base one-sided envelope pin for each MIN/MAX term (both
+    // directions): MAX → z_k >= inner_expr per row (z_k >= max), MIN →
+    // z_k <= inner_expr per row (z_k <= min). For the easy direction the
+    // outer pressure drives z_k to the extreme; the hard direction adds an
+    // indicator layer below to pin z_k to the actual MIN/MAX.
+    for (auto &ta : terms) {
+        if (!ta.is_minmax) continue;
+        bool is_max = (ta.agg_name == "max");
+        char sense = is_max ? '>' : '<';
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (!ta.filter_mask[row]) continue;
+            MinMaxLinkRow link;
+            AddComposedRowTerms(indexer, link, (*ta.inner_terms), ta.per_term_coefs, row);
+            SolverInput::RawConstraint rc;
+            rc.indices.push_back((int)ta.z_idx);
+            rc.coefficients.push_back(1.0);
+            link.AppendTo(rc);
+            rc.sense = sense;
+            rc.rhs = link.constant;
+            input.global_constraints.push_back(std::move(rc));
+        }
+    }
+
+    // Hard-direction terms: add the indicator layer so z_k is pinned to the
+    // actual MIN/MAX (the outer pressure pushes z_k the "wrong" way, so the
+    // base envelope pin alone would let it float).
+    for (auto &ta : terms) {
+        if (!ta.is_minmax || ta.is_easy) continue;
+        EmitComposedHardMinMaxIndicators(input, indexer, ta.z_idx, ta.agg_name == "max",
+                                         (*ta.inner_terms), ta.per_term_coefs,
+                                         ta.filter_mask, ta.label);
+    }
+}
+
+//! Number of rows an AVG term divides by: its filtered row count. Zero means the
+//! term is empty and contributes nothing (the caller skips it).
+static idx_t ComposedAvgDivisor(const ComposedMinMaxTermData &ta, idx_t num_rows) {
+    idx_t cnt = 0;
+    for (idx_t r = 0; r < num_rows; r++) {
+        if (ta.filter_mask[r]) cnt++;
+    }
+    return cnt;
+}
+
+void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
+                                       vector<ComposedMinMaxTermData> &terms, double rhs_val,
+                                       ExpressionType outer_cmp, idx_t source_clause_id) {
+    idx_t num_rows = input.num_rows;
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms);
+
+    // Build the outer composed RawConstraint
+    std::unordered_map<int, double> outer_accum;
+    double outer_rhs = rhs_val;
+    for (auto &ta : terms) {
+        if (ta.is_minmax) {
+            outer_accum[(int)ta.z_idx] += (double)ta.sign * ta.scale;
+            continue;
+        }
+        // SUM/AVG term. For AVG, divide by filtered row count.
+        double avg_divisor = 1.0;
+        if (ta.agg_name == "avg") {
+            idx_t cnt = ComposedAvgDivisor(ta, num_rows);
+            if (cnt == 0) {
+                // Empty aggregate — contributes 0; skip.
+                continue;
+            }
+            avg_divisor = static_cast<double>(cnt);
+        }
+        for (idx_t it = 0; it < (*ta.inner_terms).size(); it++) {
+            auto &inner_t = (*ta.inner_terms)[it];
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (!ta.filter_mask[row]) continue;
+                double coef = ta.per_term_coefs[it][row] * (double)ta.sign * ta.scale / avg_divisor;
+                if (inner_t.variable_index == DConstants::INVALID_INDEX) {
+                    outer_rhs -= coef;
+                } else {
+                    int abs_idx = (int)indexer.Get(inner_t.variable_index, row);
+                    outer_accum[abs_idx] += coef;
+                }
+            }
+        }
+    }
+
+    SolverInput::RawConstraint outer;
+    for (auto &p : outer_accum) {
+        if (p.second != 0.0) {
+            outer.indices.push_back(p.first);
+            outer.coefficients.push_back(p.second);
+        }
+    }
+    switch (outer_cmp) {
+    case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+    case ExpressionType::COMPARE_LESSTHAN:
+        outer.sense = '<';
+        outer.rhs = outer_rhs;
+        break;
+    case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+    case ExpressionType::COMPARE_GREATERTHAN:
+        outer.sense = '>';
+        outer.rhs = outer_rhs;
+        break;
+    default:
+        throw InternalException("Composed MIN/MAX: unexpected comparison type.");
+    }
+    outer.kind = ConstraintKind::USER_PARAMETER;
+    outer.shape = ElasticShape::SHARED_SCALAR;
+    outer.source_clause_id = source_clause_id;
+    outer.repair_group_id = input.constraints.size() + input.global_constraints.size();
+    input.global_constraints.push_back(std::move(outer));
+}
+
+void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
+                                      vector<ComposedMinMaxTermData> &terms) {
+    idx_t num_rows = input.num_rows;
+
+    // Clear any existing objective terms — the placeholder constant produced
+    // none, but be defensive in case other paths populated them.
+    input.objective_coefficients.clear();
+    input.objective_variable_indices.clear();
+
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms);
+
+    // Populate objective coefficients. For MIN/MAX terms, the obj coef on z_k
+    // is ta.sign (i.e., sign×1.0); set via global_obj_coeffs. For SUM/AVG
+    // terms, accumulate per-row linear coefficients into objective_coefficients
+    // keyed by decide variable.
+    // Accumulator: decide_var_index -> per-row coefficient vector.
+    std::unordered_map<idx_t, vector<double>> obj_coef_accum;
+    for (auto &ta : terms) {
+        if (ta.is_minmax) {
+            // The z_k's obj coef is ta.sign (the MIN/MAX term's sign in the additive sum).
+            idx_t gslot = ta.z_idx - indexer.global_block_start;
+            input.global_obj_coeffs[gslot] = (double)ta.sign * ta.scale;
+            continue;
+        }
+        double avg_divisor = 1.0;
+        if (ta.agg_name == "avg") {
+            idx_t cnt = ComposedAvgDivisor(ta, num_rows);
+            if (cnt == 0) continue;
+            avg_divisor = (double)cnt;
+        }
+        for (idx_t it = 0; it < (*ta.inner_terms).size(); it++) {
+            auto &inner_t = (*ta.inner_terms)[it];
+            if (inner_t.variable_index == DConstants::INVALID_INDEX) continue;
+            auto &dst = obj_coef_accum[inner_t.variable_index];
+            if (dst.empty()) dst.assign(num_rows, 0.0);
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (!ta.filter_mask[row]) continue;
+                dst[row] += ta.per_term_coefs[it][row] * (double)ta.sign * ta.scale / avg_divisor;
+            }
+        }
+    }
+    for (auto &p : obj_coef_accum) {
+        input.objective_variable_indices.push_back(p.first);
+        input.objective_coefficients.push_back(CoefficientColumn::FromVector(std::move(p.second)));
     }
 }
 
