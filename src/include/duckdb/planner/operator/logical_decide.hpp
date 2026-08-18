@@ -15,9 +15,6 @@
 
 namespace duckdb {
 
-//! Render WHEN/PER wrappers as DECIDE postfix syntax for logical and physical EXPLAIN.
-void CollectDecideExpressionStrings(const Expression &expr, vector<string> &out);
-
 //! Tracks entity-scope metadata for decision variables scoped to a base table.
 //! When a variable is declared as "T.x IS BOOLEAN", it has one value per unique
 //! row in table T, not per join result row.
@@ -60,6 +57,12 @@ public:
 
     //! Stable source display registry, indexed by source_clause_id.
     vector<ConstraintSourceInfo> constraint_sources;
+
+    //! The user's written spelling of every cast and scalar subquery in the DECIDE
+    //! clause, indexed by source fragment id. Binding rewrites both beyond recognition,
+    //! so RenderDecideSource replays them from here whenever a plan or a diagnosis
+    //! shows the user their own clause.
+    vector<string> source_fragments;
 
     // The optimization sense (MINIMIZE or MAXIMIZE)
     DecideSense decide_sense;

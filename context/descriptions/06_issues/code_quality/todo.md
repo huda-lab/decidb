@@ -27,11 +27,11 @@ The Big-M constant is not the weakness — `compute_big_m()` (line 4925) returns
 
 ## Theme: work that sits in the physical layer without needing a row
 
-Two entries below came from one audit (2026-08-15) that sorted every operation in `physical_decide.cpp` by one test — *does it need a row?* Six operations are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest were filed; all but these two have shipped.
+The entry below came from one audit (2026-08-15) that sorted every operation in `physical_decide.cpp` by one test — *does it need a row?* Six operations are genuine execution and are staying: the scan and materialization, chunk rebinding, PHASE 2 coefficient evaluation, `WHEN`/`PER` group ids, PHASE 1.5 entity mappings, and readback. The rest were filed; all but this one have shipped.
 
 **Why they ended up there.** Coefficients are expressions over user data, so they can only become numbers once the relational input has run. That put coefficient evaluation at layer 08, correctly. Everything else touching those same expression trees then followed it down, whether or not it needed the data.
 
-The two remaining entries are independent of everything, including each other. Candidate destinations are layer 06 (nested-`PER` emitter) and shared (renderers); each entry names the questions its chunk has to answer first.
+One entry remains: the nested-`PER` emitter, whose destination is layer 06. It names the questions it has to answer first.
 
 **Verifying a chunk.** A structural refactor that changes no semantics must leave the golden dump byte-identical, so `./test/decide/golden/capture.sh` and a clean `diff` against `test/decide/golden/baseline.dump` is the primary signal, alongside `make decide-test`. A chunk that legitimately changes the model (a tightened bound, a different encoding) must show `baseline.dump.results` unchanged before the baseline is recaptured.
 
@@ -52,18 +52,3 @@ Every other linearization emitter now lives at layer 6 in `src/decidb/utility/il
 **Discovered**: 2026-08-15, physical-layer audit.
 
 ---
-
-## Three renderers answer one question about showing users their own expressions
-
-**Location**: `src/execution/operator/decide/physical_decide.cpp:540` (`RenderWhenPredicate`), `:564` (`RenderDiagnosticRhsLabel`), `:1340` (`ParamsToString`), and `src/planner/operator/logical_decide.cpp:87` (`RenderDecideExpressionName`).
-
-Layer 8 strips the binder's implicit casts before rendering a diagnosis label; layer 3 renders the bound tree raw for `EXPLAIN`. The user-visible symptom is filed as a bug — see [`../bugs/todo.md`](../bugs/todo.md), "`EXPLAIN` renders binder-inserted casts over the user's own terms" — and is not restated here.
-
-**Why it matters as code quality**: the bug is one symptom of the duplication, not the whole of it. Any future surface that needs to echo a constraint back to the user is a fourth implementation, and they will keep diverging in exactly the ways the cast handling already has.
-
-**Fix direction**: the obstacle is stated in the bug entry — layer 3 renders a bound tree while layer 8 rebuilds from evaluated ILP provenance, so consolidation means agreeing on one input first. That decision belongs to whoever picks up the bug; this entry exists so the consolidation is not lost once the `EXPLAIN` symptom is fixed.
-
-**Discovered**: 2026-08-15, physical-layer audit.
-
----
-

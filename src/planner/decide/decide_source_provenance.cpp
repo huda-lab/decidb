@@ -304,4 +304,42 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 	                       });
 }
 
+string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
+                          const vector<EntityScopeInfo> &entity_scopes) {
+	return RenderSource(expr, fragments, entity_scopes);
+}
+
+void CollectDecideExpressionStrings(const Expression &expr, const vector<string> &fragments,
+                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		// PER wrapper: child[0] is the constraint, children[1..N] are the PER key columns.
+		if (IsPerConstraintTag(conj.GetAlias()) && conj.children.size() >= 2) {
+			string suffix = " " + PerQualifier(conj, fragments, entity_scopes);
+			vector<string> inner;
+			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner);
+			for (auto &s : inner) {
+				out.push_back(s + suffix);
+			}
+			return;
+		}
+		// WHEN wrapper: child[0] is the constraint, child[1] is the condition.
+		if (HasDecideTag(conj.GetAlias(), WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
+			string suffix = " WHEN " + RenderSource(*conj.children[1], fragments, entity_scopes);
+			vector<string> inner;
+			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner);
+			for (auto &s : inner) {
+				out.push_back(s + suffix);
+			}
+			return;
+		}
+		// A plain AND is the constraint list itself, so each child is its own clause.
+		for (auto &child : conj.children) {
+			CollectDecideExpressionStrings(*child, fragments, entity_scopes, out);
+		}
+		return;
+	}
+	out.push_back(RenderSource(expr, fragments, entity_scopes));
+}
+
 } // namespace duckdb

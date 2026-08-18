@@ -266,15 +266,27 @@ Every coefficient and RHS value is checked after evaluation:
 
 Both apply to constraint and objective coefficients alike.
 
-**Infinity is admitted for one value only: the row's `rhs`.** An infinite bound is
-not an error there — it is the absence of a constraint (`<= +inf`) or one nothing
-satisfies (`>= +inf`) — and the model validator has always accepted a non-finite
-`rhs` while rejecting NaN. A constant bound was never checked at all, so the per-row
-expression path was the only one refusing what the rest of the pipeline handled;
-canonicalization rebuilds `x + v <= K` as `x <= K - v`, which put the *same* bound
-on the strict path purely because of how it was written. It is now uniform: an
-infinite bound behaves the same in every spelling, and the solver decides what it
-means. `inf - inf` is still NaN, and still refused.
+**Infinity is admitted on one path only: the values that become a row's `rhs`.** An
+infinite bound is not an error there — it is the absence of a constraint (`<= +inf`)
+or one nothing satisfies (`>= +inf`) — and the model validator has always accepted a
+non-finite `rhs` while rejecting NaN. A constant bound was never checked at all, so
+the per-row expression path was the only one refusing what the rest of the pipeline
+handled; canonicalization rebuilds `x + v <= K` as `x <= K - v`, which put the *same*
+bound on the strict path purely because of how it was written.
+
+Two values sit on that path, and both now follow the rule. The row's own bound is
+one. The other is the input of a **bound-side reducer**: `MIN(x) <= MAX(cap) PER g`
+folds a column to one value per group, and `EvaluateRhsReducerPerGroup` extracted
+that column strictly, so a single infinite row in `cap` refused the query outright —
+before grouping, before folding, before anything knew which group the row belonged
+to, and before the reducer's own `WHEN` or relation-qualified dedup had masked the
+rows that contribute to nothing. The literal spelling of the same bound was accepted
+and classified per group, so the outcome depended on how the bound was written.
+
+It is now uniform: an infinite bound behaves the same in every spelling, and the
+solver decides what it means. `inf - inf` is still NaN, and still refused — a
+reducer's infinities reach the per-row extraction that reads the folded bound back,
+where the NaN guard is unchanged, so admitting them upstream costs nothing.
 
 **A non-finite bound is not absorbed into the column box.** `AbsorbVariableBounds`
 (stage 05) folds a bare `x OP const` into `lower_bounds` / `upper_bounds`, each

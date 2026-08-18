@@ -176,9 +176,17 @@ classDiagram
 
 ### `src/planner/operator/logical_decide.cpp` — stage 03
 - **`AddConstraint()` / `SetObjective()`** — the only post-planning entry points.
-- **`CollectDecideExpressionStrings()`** — the EXPLAIN walker, shared with the
-  physical operator.
 - **`Serialize()` / `Deserialize()`** — hand-maintained.
+
+### `src/planner/decide/decide_source_provenance.cpp` — stage 03
+- **`TagDecideSourceFragments()`** — records each cast/subquery's written spelling
+  before binding obscures it.
+- **`RenderDecideSource()`** — the one user-facing expression renderer, used by
+  both EXPLAIN paths and by the diagnosis labels.
+- **`CollectDecideExpressionStrings()`** — the EXPLAIN walker, shared by the
+  logical and physical operators.
+- **`InitializeConstraintSourceInfo()` / `FinalizeConstraintSourceInfo()`** — the
+  per-clause display registry, indexed by `source_clause_id`.
 
 ### `src/optimizer/decide/decide_optimizer.cpp` — stage 05
 - **`OptimizeDecide()`** — the eight-pass sequence.

@@ -41,6 +41,11 @@ public:
     //! Stable source display registry copied from LogicalDecide.
     vector<ConstraintSourceInfo> constraint_sources;
 
+    //! The user's written spelling of every cast and scalar subquery in the DECIDE
+    //! clause, copied from LogicalDecide. RenderDecideSource replays it so EXPLAIN
+    //! and the diagnosis labels quote the clause the user typed.
+    vector<string> source_fragments;
+
     // The optimization sense (MINIMIZE or MAXIMIZE)
     DecideSense decide_sense;
 

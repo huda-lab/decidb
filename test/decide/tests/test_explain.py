@@ -67,8 +67,8 @@ def _shows(out: str, *fragments: str) -> bool:
     line breaks fall.
 
     Fragments match in order with gaps allowed, which is what lets a test name
-    the user's own terms (``sum(``, ``l_quantity``, ``<=``, ``100``) without
-    pinning the implicit casts the binder renders between them.
+    the user's own terms (``SUM(``, ``l_quantity``, ``<=``, ``100``) without
+    pinning whatever the renderer puts between them.
 
     Ordering also does real work on ``EXPLAIN ANALYZE``, whose output *echoes
     the submitted SQL* above the plan: a bare ``"PER" in out`` there is
@@ -97,8 +97,8 @@ def test_explain_basic_knapsack(decidb_cli):
     out = _explain(decidb_cli, sql)
     assert "DECIDE" in out, f"DECIDE node missing from EXPLAIN:\n{out}"
     assert _shows(out, "Variables:", "x"), _plan_text(out)
-    assert _shows(out, "Objective:", "MAXIMIZE", "sum(", "l_extendedprice"), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(", "l_quantity", "<=", "100"), _plan_text(out)
+    assert _shows(out, "Objective:", "MAXIMIZE", "SUM(", "l_extendedprice"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
 
 
 @pytest.mark.explain
@@ -112,7 +112,7 @@ def test_explain_minimize(decidb_cli):
         MINIMIZE SUM(x * l_quantity)
     """
     out = _explain(decidb_cli, sql)
-    assert _shows(out, "Objective:", "MINIMIZE", "sum(", "l_quantity"), _plan_text(out)
+    assert _shows(out, "Objective:", "MINIMIZE", "SUM(", "l_quantity"), _plan_text(out)
     assert _shows(out, "Constraints:", "l_extendedprice", ">=", "5000"), _plan_text(out)
 
 
@@ -130,7 +130,7 @@ def test_explain_integer_variable(decidb_cli):
     assert "DECIDE" in out
     assert _shows(out, "Variables:", "x"), _plan_text(out)
     # Both constraints render: the per-row bound and the aggregate.
-    assert _shows(out, "Constraints:", "(x", "<=", "10"), _plan_text(out)
+    assert _shows(out, "Constraints:", "x", "<=", "10"), _plan_text(out)
     assert _shows(out, "Constraints:", "ps_supplycost", "<=", "5000"), _plan_text(out)
 
 
@@ -153,7 +153,7 @@ def test_explain_multi_variable(decidb_cli):
     # All three constraints render, each carrying its own variable and bound.
     assert _shows(out, "Constraints:", "l_quantity", "<=", "50"), _plan_text(out)
     assert _shows(out, "Constraints:", "(y", "<=", "3"), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(y)", "<=", "10"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(y)", "<=", "10"), _plan_text(out)
 
 
 # ===================================================================
@@ -215,7 +215,7 @@ def test_explain_when_mixed_constraints(decidb_cli):
     assert _shows(
         out, "Constraints:", "l_quantity", "<=", "50", "WHEN", "l_returnflag", "'R'"
     ), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(x)", "<=", "20"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
 
 
 # ===================================================================
@@ -234,7 +234,7 @@ def test_explain_per_basic(decidb_cli):
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Constraints:", "sum(x)", "<=", "5", "PER", "s_nationkey"
+        out, "Constraints:", "SUM(x)", "<=", "5", "PER", "s_nationkey"
     ), f"PER suffix missing or incomplete in EXPLAIN:\n{_plan_text(out)}"
 
 
@@ -297,11 +297,10 @@ def test_explain_constraints_render_sql_not_internal_tags(decidb_cli):
         f"internal tag leaked into EXPLAIN: "
         f"{INTERNAL_TAG_RE.search(text).group(0)!r}\n{text}"
     )
-    # Both constraints must be recognizable. Matched loosely on purpose: the
-    # binder's implicit casts are part of this rendering (`sum((CAST(x AS
-    # DECIMAL(18,0)) * l_quantity))`), and their spelling is not what this
-    # test pins — only that the user's own terms are what reaches the page.
-    assert re.search(r"sum\(.*l_quantity.*\)\s*<=", text), text
+    # Both constraints must be recognizable. Matched loosely on purpose: this
+    # test pins only that the user's own terms reach the page, not the exact
+    # spelling around them — `test_explain_renders_user_casts_only` owns that.
+    assert re.search(r"SUM\(.*l_quantity.*\)\s*<=", text), text
     assert "x" in text
 
 
@@ -328,6 +327,38 @@ def test_explain_per_key_renders_column_name_not_binding(decidb_cli):
 
 
 @pytest.mark.explain
+def test_explain_renders_user_casts_only(decidb_cli):
+    """EXPLAIN shows the casts the user typed, and none the binder inserted.
+
+    Binding rewrites `SUM(x * l_quantity) <= 100` into a tree full of casts that
+    reconcile INTEGER, DECIMAL and HUGEINT, and printing that tree told the user
+    their query said something they cannot edit. A cast in a DECIDE clause is
+    legal SQL only over data (`decide_binder.cpp` rejects one over a decision),
+    so the two halves of this test are the whole rule: authorship decides.
+    """
+    without_cast = _plan_text(_explain(decidb_cli, """
+        SELECT l_orderkey, l_linenumber, x
+        FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        MAXIMIZE SUM(x * l_extendedprice)
+    """))
+    assert "SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'" in without_cast, without_cast
+    assert "CAST" not in without_cast, f"binder cast reached EXPLAIN:\n{without_cast}"
+
+    with_cast = _plan_text(_explain(decidb_cli, """
+        SELECT l_orderkey, l_linenumber, x
+        FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x * CAST(l_quantity AS INTEGER)) <= 100
+        MAXIMIZE SUM(x * l_extendedprice)
+    """))
+    assert "SUM(x * CAST(l_quantity AS INTEGER)) <= 100" in with_cast, (
+        f"the user's own cast was dropped from EXPLAIN:\n{with_cast}"
+    )
+
+
+@pytest.mark.explain
 def test_explain_json_constraints_render_sql_not_internal_tags(decidb_cli):
     """The JSON renderer reads the same walker, so it leaked the same tags."""
     sql = """
@@ -343,8 +374,8 @@ def test_explain_json_constraints_render_sql_not_internal_tags(decidb_cli):
         f"internal tag leaked into JSON EXPLAIN: "
         f"{INTERNAL_TAG_RE.search(out).group(0)!r}\n{out}"
     )
-    assert re.search(r"sum\(.*l_quantity.*\)\s*<=", out), out
-    assert "WHEN (l_returnflag" in out, out
+    assert re.search(r"SUM\(.*l_quantity.*\)\s*<=", out), out
+    assert "WHEN l_returnflag" in out, out
 
 
 # ===================================================================
@@ -369,7 +400,7 @@ def test_explain_when_and_per(decidb_cli):
     assert _shows(
         out, "Constraints:", "l_quantity", "<=", "50", "PER", "l_returnflag"
     ), f"PER missing from the constraint row:\n{_plan_text(out)}"
-    assert _shows(out, "Constraints:", "sum(x)", "<=", "30"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(x)", "<=", "30"), _plan_text(out)
     # The objective carries the only WHEN here; it must render as a postfix
     # suffix on the Objective row. Before the objective/constraint rendering was
     # unified, an objective WHEN leaked out as "(... AND ...)" and no WHEN
@@ -405,7 +436,7 @@ def test_explain_objective_when_postfix(decidb_cli):
     assert _shows(
         out, "Objective:", "MAXIMIZE", "l_extendedprice", "WHEN", "l_returnflag", "'R'"
     ), f"objective WHEN missing from EXPLAIN:\n{_plan_text(out)}"
-    assert _shows(out, "Constraints:", "sum(x)", "<=", "20"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
     assert " AND " not in out, (
         "objective WHEN leaked as a conjunction '(... AND ...)' instead of a "
         f"postfix ' WHEN ' suffix:\n{out}"
@@ -429,8 +460,8 @@ def test_explain_json_structure(decidb_cli):
     out = _explain_json(decidb_cli, sql)
     assert '"DECIDE"' in out or '"name": "DECIDE"' in out or "DECIDE" in out
     assert _shows(out, '"Variables"', '"x"'), out
-    assert _shows(out, '"Objective"', "MAXIMIZE", "sum(", "l_extendedprice"), out
-    assert _shows(out, '"Constraints"', "sum(", "l_quantity", "<=", "100"), out
+    assert _shows(out, '"Objective"', "MAXIMIZE", "SUM(", "l_extendedprice"), out
+    assert _shows(out, '"Constraints"', "SUM(", "l_quantity", "<=", "100"), out
 
 
 @pytest.mark.explain
@@ -463,7 +494,7 @@ def test_explain_json_per(decidb_cli):
     """
     out = _explain_json(decidb_cli, sql)
     assert _shows(
-        out, '"Constraints"', "sum(x)", "<=", "5", "PER", "s_nationkey"
+        out, '"Constraints"', "SUM(x)", "<=", "5", "PER", "s_nationkey"
     ), out
 
 
@@ -478,7 +509,7 @@ def test_explain_json_logical_plan(decidb_cli):
     """
     out = _explain_json(decidb_cli, sql, logical=True)
     assert "DECIDE" in out
-    assert _shows(out, '"Constraints"', "sum(", "l_quantity", "<=", "100"), out
+    assert _shows(out, '"Constraints"', "SUM(", "l_quantity", "<=", "100"), out
 
 
 # ===================================================================
@@ -497,7 +528,7 @@ def test_explain_analyze_basic(decidb_cli):
     """
     out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out, f"DECIDE missing from EXPLAIN ANALYZE:\n{out}"
-    assert _shows(out, "Constraints:", "sum(", "l_quantity", "<=", "100"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
 
 
 @pytest.mark.explain
@@ -534,7 +565,7 @@ def test_explain_analyze_per(decidb_cli):
     out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out
     assert _shows(
-        out, "Constraints:", "sum(x)", "<=", "5", "PER", "s_nationkey"
+        out, "Constraints:", "SUM(x)", "<=", "5", "PER", "s_nationkey"
     ), _plan_text(out)
 
 
@@ -555,7 +586,7 @@ def test_explain_analyze_multiple_constraints(decidb_cli):
     assert _shows(
         out, "Constraints:", "l_quantity", "<=", "50", "WHEN", "l_returnflag", "'R'"
     ), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(x)", "<=", "20"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
 
 
 # ===================================================================
@@ -576,8 +607,8 @@ def test_explain_logical_plan(decidb_cli):
     out = _explain(decidb_cli, sql)
     assert "DECIDE" in out
     assert _shows(out, "Variables:", "x"), _plan_text(out)
-    assert _shows(out, "Objective:", "MAXIMIZE", "sum(", "l_extendedprice"), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(", "l_quantity", "<=", "100"), _plan_text(out)
+    assert _shows(out, "Objective:", "MAXIMIZE", "SUM(", "l_extendedprice"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
 
 
 @pytest.mark.explain
@@ -612,5 +643,5 @@ def test_explain_logical_per(decidb_cli):
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Constraints:", "sum(x)", "<=", "5", "PER", "s_nationkey"
+        out, "Constraints:", "SUM(x)", "<=", "5", "PER", "s_nationkey"
     ), _plan_text(out)

@@ -54,9 +54,11 @@ identity, or a rendering model that tolerates one-to-many and one-to-none.
 `source_clause_id` now exists and is stable through physical extraction,
 `SolverInput`, `SolverModel` and elastic diagnostics — it was added for
 diagnostics after this was filed, and is very likely the identity this needs. It
-reaches the renderer as a tag on the expression's alias, which the leaf now strips
-(`RenderDecideExpressionName`); reading it back as an identity rather than
-discarding it is what this item needs.
+reaches the renderer as a tag on the expression's alias, which `RenderDecideSource`
+ignores rather than prints; reading it back as an identity rather than discarding
+it is what this item needs. `LogicalDecide::constraint_sources` is already indexed
+by it and already holds a rendered `canonical_lhs` / `canonical_rhs` / `qualifier`
+per user clause, so the layer-2 line may need no new rendering at all.
 
 **Scope notes**
 

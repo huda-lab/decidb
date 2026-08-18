@@ -180,6 +180,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         decide_op->entity_scopes = std::move(statement.entity_scopes);
         decide_op->variable_scopes = std::move(statement.variable_scopes);
         decide_op->constraint_sources = std::move(statement.decide_constraint_sources);
+        decide_op->source_fragments = std::move(statement.decide_source_fragments);
         decide_op->entity_key_expressions = std::move(statement.entity_key_expressions);
         // ne_indicator_indices, ABS aux vars, and MIN/MAX indicator links +
         // objective types are created by DecideOptimizer (runs after plan creation)

@@ -33,6 +33,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -165,8 +166,9 @@ static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
 //! Throws InvalidInputException on NULL or non-finite values, citing `err_context`.
 //! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
 //!
-//! `allow_infinite` relaxes the check to NaN-only, and is used exclusively for the
-//! value that becomes a model row's `rhs`. An infinite bound is not an error there:
+//! `allow_infinite` relaxes the check to NaN-only, and is used exclusively for values
+//! on the path to a model row's `rhs` — the row's own bound, and the reducer input
+//! that a per-group bound is folded from. An infinite bound is not an error there:
 //! it is the absence of a constraint (`<= +inf`) or a constraint nothing satisfies
 //! (`>= +inf`), both of which the solver contract already expresses — the model
 //! validator accepts a non-finite rhs and rejects only NaN, and the constant and
@@ -517,39 +519,6 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
 }
 
 
-//! User-facing rendering of a WHEN predicate for diagnosis labels: unwrap the implicit
-//! CASTs the binder inserts around literals (so `grp = 'a'` reads cleanly instead of
-//! `(grp = CAST('a' AS VARCHAR))`) and drop the redundant outer parens GetName() adds.
-//! Handles comparisons and AND/OR conjunctions; anything else falls back to the unwrapped
-//! expression's ToString.
-static string RenderWhenPredicate(const Expression &expr) {
-	const Expression *cur = StripCastsForIdentity(expr);
-	if (cur->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		auto &comp = cur->Cast<BoundComparisonExpression>();
-		return RenderWhenPredicate(*comp.left) + " " + ExpressionTypeToOperator(comp.type) + " " +
-		       RenderWhenPredicate(*comp.right);
-	}
-	if (cur->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = cur->Cast<BoundConjunctionExpression>();
-		string op = conj.type == ExpressionType::CONJUNCTION_AND ? " AND " : " OR ";
-		string s;
-		for (auto &child : conj.children) {
-			if (!s.empty()) {
-				s += op;
-			}
-			s += RenderWhenPredicate(*child);
-		}
-		return s;
-	}
-	return cur->ToString();
-}
-
-//! User-facing rendering of a data-backed RHS for diagnosis labels: unwrap top-level
-//! implicit casts from binding so `x >= lo` does not report `x >= CAST(lo AS DOUBLE)`.
-static string RenderDiagnosticRhsLabel(const Expression &expr) {
-	return StripCastsForIdentity(expr)->ToString();
-}
-
 //! True when a bound contains a flattened scalar-subquery value. Its bound alias is
 //! internal planning metadata (`SUBQUERY` plus a DECIDE tag), not SQL the user can edit.
 //! Mixed data/subquery bounds therefore use the evaluated numeric fallback instead of
@@ -744,7 +713,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		// rather than the raw internal tag or a generic conjunction form.
 		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*decide_objective, objective_strs);
+		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs);
 		for (idx_t i = 0; i < objective_strs.size(); i++) {
 			if (i > 0) {
 				obj_info += "\n";
@@ -758,7 +727,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 
 	if (decide_constraints) {
 		vector<string> constraint_strs;
-		CollectDecideExpressionStrings(*decide_constraints, constraint_strs);
+		CollectDecideExpressionStrings(*decide_constraints, source_fragments, entity_scopes, constraint_strs);
 		string constraints_info;
 		for (idx_t i = 0; i < constraint_strs.size(); i++) {
 			if (i > 0) {
@@ -1495,8 +1464,20 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             while (gstate.data.Scan(scan, in_chunk)) {
                 out_chunk.Reset();
                 arg_executor.Execute(in_chunk, out_chunk);
+                // A reducer's input feeds a bound, so it follows the same rule as
+                // every other RHS: ±inf is a value, not an error. A group whose
+                // MAX(cap) folds to +inf is a group with no upper bound, and one
+                // whose bound points out of reach is an infeasibility the solver
+                // reports naming the clause — neither is ours to refuse here.
+                // Reading it as an error also made the outcome depend on spelling:
+                // `MIN(x) <= 1e1000::DOUBLE PER g` was accepted and classified per
+                // group while `MIN(x) <= MAX(cap) PER g` was rejected wholesale.
+                // NaN stays refused, here and in the per-row extraction that reads
+                // this value back, so `MAX(cap) - MIN(cap)` over infinities is
+                // still caught.
                 ExtractDoubleColumn(out_chunk.data[0], in_chunk.size(), 1.0, values,
-                                    "constraint right-hand side aggregate");
+                                    "constraint right-hand side aggregate",
+                                    /*allow_infinite=*/true);
             }
         }
 
@@ -1712,14 +1693,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // group", the same convention `row_group_ids` uses.
         vector<idx_t> rhs_row_group_ids;
 
-        // Facet C: render the WHEN/PER qualifier for the clause label, reusing the same
-        // expression GetName() the EXPLAIN/ParamsToString path uses. Order mirrors the
-        // postfix syntax (`... WHEN <cond> PER <cols>`). Stamped onto provenance at the
-        // aggregate emission sites; the diagnosis appends it to the reconstructed label.
+        // Facet C: render the WHEN/PER qualifier for the clause label through
+        // RenderDecideSource, the same renderer EXPLAIN uses, so a clause reads
+        // identically wherever it is quoted back. Order mirrors the postfix syntax
+        // (`... WHEN <cond> PER <cols>`). Stamped onto provenance at the aggregate
+        // emission sites; the diagnosis appends it to the reconstructed label.
         {
             string &q = eval_const.qualifier;
             if (has_when) {
-                q = "WHEN " + RenderWhenPredicate(*constraint->when_condition);
+                q = "WHEN " + RenderDecideSource(*constraint->when_condition, source_fragments, entity_scopes);
             }
             if (has_per) {
                 if (!q.empty()) {
@@ -1734,7 +1716,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     if (i > 0) {
                         q += ", ";
                     }
-                    q += constraint->per_columns[i]->GetName();
+                    q += RenderDecideSource(*constraint->per_columns[i], source_fragments, entity_scopes);
                 }
                 if (parenthesize) {
                     q += ")";
@@ -1874,7 +1856,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             // genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
             if (!eval_const.rhs_is_shared_scalar &&
                 !ContainsScalarSubqueryProvenance(*constraint->rhs_expr)) {
-                eval_const.rhs_label = RenderDiagnosticRhsLabel(*constraint->rhs_expr);
+                eval_const.rhs_label = RenderDecideSource(*constraint->rhs_expr, source_fragments, entity_scopes);
             }
             eval_const.rhs_values.Reserve(num_rows);
 
@@ -1976,7 +1958,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // tightest bound is what pins it.
         if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
             string rhs_text = eval_const.rhs_label.empty()
-                                  ? RenderDiagnosticRhsLabel(*constraint->rhs_expr)
+                                  ? RenderDecideSource(*constraint->rhs_expr, source_fragments, entity_scopes)
                                   : eval_const.rhs_label;
             // A decorrelated scalar subquery flattens to a column literally named
             // SUBQUERY. Quoting that back at the user names nothing they wrote, so

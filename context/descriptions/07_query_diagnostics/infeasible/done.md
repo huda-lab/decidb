@@ -406,10 +406,11 @@ all carried on `ConstraintProvenance` (no change to PER solve logic):
   drives the single-row / WHEN `SUM(...)` wrapper in `FormatLhs` (see I2.d SUM above).
 - **`qualifier`** — the `PER grp` / `PER (region, year)` / `WHEN <pred>` text, computed once per clause at the
   WHEN/PER eval site (`physical_decide.cpp`) and appended to the reconstructed label by
-  `MakeLoosenEdit`. PER keys reuse the expression `GetName()` the EXPLAIN path uses; a WHEN
-  predicate is rendered by `RenderWhenPredicate`, which unwraps the binder's implicit literal
-  CASTs and drops redundant outer parens (`grp = 'a'`, not `(grp = CAST('a' AS VARCHAR))`) and
-  handles comparisons + AND/OR.
+  `MakeLoosenEdit`. Both the PER keys and the WHEN predicate render through
+  `RenderDecideSource`, the same renderer EXPLAIN uses, so a clause reads identically wherever
+  it is quoted back: the binder's implicit CASTs are dropped (`grp = 'a'`, not
+  `(grp = CAST('a' AS VARCHAR))`) while a cast the user typed is replayed from its source
+  fragment.
 
 The objective PER path passes a throwaway labels vector (objective groups are not diagnosed by
 clause key). **Composite PER keys** (`PER (region, year)`) are handled by the join and reachable

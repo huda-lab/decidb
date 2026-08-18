@@ -3,6 +3,7 @@
 
 #include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -76,73 +77,6 @@ void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> 
 	canonicalizer.VerifyCanonicalObjective(*decide_objective);
 }
 
-//! Name an expression for EXPLAIN without leaking the pipeline metadata DECIDE stamps into
-//! its alias. `GetName()` returns the alias whenever one is set, so a constraint tagged with
-//! its source clause renders as `__source_clause_0__` rather than as the SQL the user wrote.
-//!
-//! The stripped alias wins when anything survives: for a PER key or any other column
-//! reference the alias IS the name, and `ToString()` falls back to a binding index (`#[3.1]`)
-//! once it is gone. Only an alias that was nothing but tags falls through to the expression
-//! itself, which is what a comparison or an aggregate wants anyway.
-static string RenderDecideExpressionName(const Expression &expr) {
-	const auto &alias = expr.GetAlias();
-	if (alias.empty()) {
-		return expr.GetName();
-	}
-	auto stripped = StripDecideTags(alias);
-	if (!stripped.empty()) {
-		return stripped;
-	}
-	return expr.ToString();
-}
-
-void CollectDecideExpressionStrings(const Expression &expr, vector<string> &out) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
-			// PER wrapper: child[0] is the constraint, children[1..N] are PER columns
-			string per_suffix = " PER ";
-			bool parenthesize = conj.children.size() > 2;
-			if (parenthesize) {
-				per_suffix += "(";
-			}
-			for (idx_t i = 1; i < conj.children.size(); i++) {
-				if (i > 1) {
-					per_suffix += ", ";
-				}
-				per_suffix += RenderDecideExpressionName(*conj.children[i]);
-			}
-			if (parenthesize) {
-				per_suffix += ")";
-			}
-			// Recurse into child[0]; append PER suffix to each leaf
-			vector<string> inner;
-			CollectDecideExpressionStrings(*conj.children[0], inner);
-			for (auto &s : inner) {
-				out.push_back(s + per_suffix);
-			}
-			return;
-		}
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
-			// WHEN wrapper: child[0] is the constraint, child[1] is the condition
-			string when_suffix = " WHEN " + RenderDecideExpressionName(*conj.children[1]);
-			vector<string> inner;
-			CollectDecideExpressionStrings(*conj.children[0], inner);
-			for (auto &s : inner) {
-				out.push_back(s + when_suffix);
-			}
-			return;
-		}
-		// Regular AND conjunction: recurse on each child
-		for (auto &child : conj.children) {
-			CollectDecideExpressionStrings(*child, out);
-		}
-		return;
-	}
-	// Leaf node (comparison or other): render the full expression, not its tag
-	out.push_back(RenderDecideExpressionName(expr));
-}
-
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 
@@ -163,7 +97,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	if (decide_objective) {
 		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*decide_objective, objective_strs);
+		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs);
 		for (idx_t i = 0; i < objective_strs.size(); i++) {
 			if (i > 0) {
 				obj_info += "\n";
@@ -178,7 +112,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	// Constraints: walk the AND-tree and collect individual constraints
 	if (decide_constraints) {
 		vector<string> constraint_strs;
-		CollectDecideExpressionStrings(*decide_constraints, constraint_strs);
+		CollectDecideExpressionStrings(*decide_constraints, source_fragments, entity_scopes, constraint_strs);
 		string constraints_info;
 		for (idx_t i = 0; i < constraint_strs.size(); i++) {
 			if (i > 0) {
@@ -199,7 +133,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 // only definition. entity_scopes (vector<EntityScopeInfo>) and
 // variable_scopes (vector<DecideVarScopeInfo>) are structs the generator's
 // direct member-mapping can't express, so they're flattened into parallel
-// primitive vectors on the wire; ids 200-237 (below) are the single
+// primitive vectors on the wire; ids 200-238 (below) are the single
 // authoritative registry of this operator's serialized fields.
 void LogicalDecide::Serialize(Serializer &serializer) const {
 	LogicalOperator::Serialize(serializer);
@@ -297,6 +231,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<string>>(235, "constraint_source_rhs", source_rhs);
 	serializer.WritePropertyWithDefault<vector<string>>(236, "constraint_source_qualifiers", source_qualifiers);
 	serializer.WritePropertyWithDefault<vector<uint8_t>>(237, "constraint_source_rhs_kinds", source_rhs_kinds);
+	serializer.WritePropertyWithDefault<vector<string>>(238, "source_fragments", source_fragments);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -429,6 +364,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 			result->constraint_sources.push_back(std::move(info));
 		}
 	}
+	deserializer.ReadPropertyWithDefault<vector<string>>(238, "source_fragments", result->source_fragments);
 	return std::move(result);
 }
 

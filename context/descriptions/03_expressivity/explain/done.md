@@ -26,41 +26,41 @@ The DECIDE node prints three sections:
 │        Variables: x       │
 │                           │
 │         Objective:        │
-│   MAXIMIZE sum((x * v))   │
+│      MAXIMIZE SUM(x * v)  │
 │                           │
 │        Constraints:       │
-│ (sum((x * w)) <= CAST(6 AS│
-│          HUGEINT))        │
+│      SUM(x * w) <= 6      │
 │                           │
 │          ~3 Rows          │
 └─────────────┬─────────────┘
 ```
 
-The `CAST` is a cast the binder inserted while reconciling types, not something
-the user wrote; rendering it is a live issue filed in
-[`../../06_issues/bugs/todo.md`](../../06_issues/bugs/todo.md). The line should
-read `(sum((x * w)) <= 6)`.
+Each line is the clause the user typed. That is not what the bound tree says —
+`Expression::ToString()` would print `(sum((CAST(x AS DECIMAL(13,0)) * w)) <=
+CAST(6 AS HUGEINT))`, spelling out casts the binder inserted while reconciling
+types and arithmetic as `"-"("*"(a, b), c)`. Section 2 covers the renderer that
+answers this properly.
 
 ---
 
-## 2. One renderer for both rows
+## 2. One renderer, four surfaces
 
 DuckDB binds several `SUCH THAT` constraints into a single
 `BoundConjunctionExpression`. Printing that root as one string would produce an
 unreadable line, so `CollectDecideExpressionStrings`
-(`src/planner/operator/logical_decide.cpp:79`) walks it:
+(`src/planner/decide/decide_source_provenance.cpp`) walks it:
 
 | Node | Handling |
 |---|---|
 | `PER` wrapper (`IsPerConstraintTag`, ≥2 children) | Build the suffix from `children[1..N]` — ` PER col`, or ` PER (col1, col2)` when there is more than one — recurse into child 0, append to every leaf |
 | `WHEN` wrapper (`WHEN_CONSTRAINT_TAG`, 2 children) | Suffix ` WHEN <condition>` from child 1, recurse into child 0, append to every leaf |
 | Plain `AND` | Recurse into each child |
-| Leaf | `RenderDecideExpressionName` |
+| Leaf | `RenderDecideSource` |
 
 Producing, for example:
 
 ```
-(sum(x * weight) <= 50.0) WHEN (returnflag = 'R') PER department
+SUM(x * weight) <= 50.0 WHEN returnflag = 'R' PER department
 ```
 
 **The Objective row goes through the same walker**, not a direct `GetName()`. A
@@ -72,24 +72,39 @@ postfix suffixes identically and keeps the two rows symmetric. Calling
 whenever one is set. That divergence was a real bug once; the shared walker is
 what fixed it.
 
-**Every rendered node is stripped of its DECIDE tags first.** The pipeline stores
-metadata — the source clause, the `WHEN`/`PER` role, reducer scope — in an
-expression's alias, and `GetName()` returns the alias whenever one is set, so
-rendering a tagged node naively prints `__source_clause_0__` where its SQL should
-be. `RenderDecideExpressionName` applies `StripDecideTags`
-(`duckdb/common/enums/decide.hpp`), which peels the appended `__`-delimited runs
-off the end of the alias.
+### Leaves render by authorship, not by type
 
-What survives the strip wins, and that ordering is load-bearing: a `PER` key is a
-column reference whose alias *is* its name, and `BoundColumnRefExpression::ToString()`
-falls back to a binding index (`#[3.1]`) once the alias is gone — so ` PER grp`
-would degrade to ` PER #[3.1]`. Only an alias that was nothing but tags falls
-through to the expression itself, which is what a comparison or an aggregate wants.
+`RenderDecideSource` is the project's single user-facing expression renderer,
+documented in `decide_source_provenance.hpp` and described in
+[`../../01_pipeline/03_logical_plan/done.md`](../../01_pipeline/03_logical_plan/done.md).
+It replaces `ToString()` because the bound tree is not the query: it carries
+casts the user cannot edit, prints functions in call form, and stores pipeline
+metadata (source clause, `WHEN`/`PER` role, reducer scope) in expression aliases
+that `GetName()` would print verbatim as `__source_clause_0__`.
 
-**There is no physical-layer duplicate.** `PhysicalDecide::ParamsToString`
-(`physical_decide.cpp:1350, 1364`) calls the same `CollectDecideExpressionStrings`
-declared in `logical_decide.hpp`. The default `physical_only` EXPLAIN therefore
-renders through exactly the same code as the logical plan.
+The rule that separates a cast the user typed from one the binder added is
+**authorship, not type**. `TagDecideSourceFragments` records the written spelling
+of every cast and scalar subquery before binding can obscure it, so a tagged node
+replays its own SQL and an untagged one is dropped. `SUM(x * CAST(q AS INTEGER))`
+therefore keeps its cast — that is legal SQL, since the binder rejects a cast only
+over a *decision* — while the reconciliation casts around `x` and `q` do not
+appear at all.
+
+A `PER` key still prints its column name rather than a binding index (`#[3.1]`):
+it is a column reference whose alias *is* its name, and `RenderDecideSource`
+falls through to `ToString()` for a plain column ref, which prefers that alias.
+
+**Four surfaces, one implementation.** The logical node, the physical node
+(`PhysicalDecide::ParamsToString`), the `WHEN`/`PER` qualifier on an infeasibility
+diagnosis, and its right-hand-side label all call `RenderDecideSource`, so a
+clause reads identically wherever it is quoted back. Each caller supplies the
+`source_fragments` and `entity_scopes` copied down from `LogicalDecide`.
+
+**EXPLAIN describes the model that was built, not only what the user wrote.** The
+tree it walks is post-optimizer, so the rows linearization emitted (`NORM`
+indicators, ABS auxiliaries, `<>` links) appear alongside the user's clauses,
+carrying their internal variable names. Those names are real model columns; the
+renderer makes them legible without pretending they are SQL.
 
 ---
 
@@ -128,7 +143,9 @@ and the `N Rows` in `EXPLAIN ANALYZE` match the scan's cardinality.
 
 | Concern | Location |
 |---|---|
-| `GetName()` / `ParamsToString()`, the shared walker | `src/planner/operator/logical_decide.cpp` |
-| Walker declaration | `src/include/duckdb/planner/operator/logical_decide.hpp:18` |
-| Physical node rendering (calls the same walker) | `src/execution/operator/decide/physical_decide.cpp:1327-1378` |
-| Tests | `test/decide/tests/test_explain.py` — 22 cases over TPC-H, including `test_explain_objective_when_postfix` |
+| `GetName()` / `ParamsToString()` on the logical node | `src/planner/operator/logical_decide.cpp` |
+| The shared walker and `RenderDecideSource` | `src/planner/decide/decide_source_provenance.cpp` |
+| Their declarations | `src/include/duckdb/planner/decide/decide_source_provenance.hpp` |
+| Physical node rendering (calls the same walker) | `src/execution/operator/decide/physical_decide.cpp:728-772` |
+| Source fragments carried to both nodes | `LogicalDecide::source_fragments`, `PhysicalDecide::source_fragments` |
+| Tests | `test/decide/tests/test_explain.py` — 27 cases over TPC-H, including `test_explain_renders_user_casts_only` and `test_explain_objective_when_postfix` |

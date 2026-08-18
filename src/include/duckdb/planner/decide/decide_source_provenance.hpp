@@ -31,4 +31,26 @@ void FinalizeConstraintSourceInfo(const Expression &constraints,
                                   const vector<string> &fragments,
                                   const vector<EntityScopeInfo> &entity_scopes);
 
+//! Render one bound expression as the user wrote it.
+//!
+//! This is the single user-facing renderer: `Expression::ToString()` prints the tree
+//! as BOUND, so it shows the casts DuckDB inserted while reconciling types and spells
+//! arithmetic as `"-"("*"(a, b), c)`. Authorship is what separates a cast the user
+//! typed from one the binder added, and `TagDecideSourceFragments` recorded exactly
+//! that before binding could obscure it -- so a tagged cast or subquery replays its
+//! written spelling out of `fragments` and an untagged one is dropped.
+//!
+//! Every surface that echoes a DECIDE clause back to a user goes through here:
+//! EXPLAIN on both plans, and the clause labels an infeasibility diagnosis prints.
+string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
+                          const vector<EntityScopeInfo> &entity_scopes);
+
+//! Split a DECIDE constraint or objective tree into one rendered string per clause,
+//! turning the WHEN and PER wrappers the binder stamps back into the postfix syntax
+//! the user wrote. Leaves are rendered by RenderDecideSource. Used by the logical and
+//! physical EXPLAIN paths, which see the tree AFTER the optimizer, so the output
+//! includes the rows linearization emitted as well as the ones the user wrote.
+void CollectDecideExpressionStrings(const Expression &expr, const vector<string> &fragments,
+                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out);
+
 } // namespace duckdb

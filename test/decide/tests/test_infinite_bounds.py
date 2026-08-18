@@ -28,6 +28,18 @@ Covers:
   - test_unreachable_minmax_bound_is_infeasible: ``MAX(x) >= +inf`` has no solution
   - test_nan_bound_is_still_rejected: inf - inf is not a bound
   - test_infinite_value_inside_abs_is_named: the Big-M refusal names ABS, not M
+
+A bound can also be reduced from a column instead of typed, and that path kept the
+strict guard for longer: one infinite row in ``cap`` refused ``MIN(x) <= MAX(cap)``
+outright, while the same bound written as a literal was accepted and classified.
+The reducer's input is on the way to a model row's ``rhs`` like any other bound, so
+it follows the same rule; the direction still decides the outcome, now per group.
+
+  - test_data_reducer_bound_agrees_with_the_literal_spelling: the bug
+  - test_data_reducer_bound_is_classified_per_group: mixed +inf/finite groups
+  - test_data_reducer_ignores_an_infinity_it_never_reads: masked rows are not judged
+  - test_data_reducer_unreachable_bound_is_infeasible: the solver gives the verdict
+  - test_nan_from_reducer_arithmetic_is_still_rejected: inf + -inf is still not a bound
 """
 
 import pytest
@@ -253,3 +265,199 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
         SUCH THAT x <= 5
         MAXIMIZE SUM(ABS(x - big))
     """, match=r"ABS\(\).*Infinity")
+
+
+# ---------------------------------------------------------------------------
+# The bound built from data, rather than typed as a literal
+# ---------------------------------------------------------------------------
+#
+# Everything above writes the infinity as a literal the user typed. A bound can
+# also be *reduced from a column* — ``MIN(x) <= MAX(cap) PER g`` — and that path
+# read its input through the strict finiteness guard, so one infinite row in
+# ``cap`` refused the whole query. The two spellings describe the same bound, so
+# they get the same answer: the reducer's input is on the way to a model row's
+# ``rhs``, and ±inf is a value there. What the infinity *means* is still decided
+# downstream, per group, by the direction it points.
+
+_MIXED = """
+    WITH data AS (
+        SELECT 0 AS g, 1e1000::DOUBLE AS cap UNION ALL
+        SELECT 0, 2.0 UNION ALL
+        SELECT 1, 3.0 UNION ALL
+        SELECT 1, 1.0
+    )
+    SELECT g, x FROM data
+    DECIDE x(INT)
+    SUCH THAT x >= 0 AND x <= 6{extra}
+    MAXIMIZE SUM(x)
+"""
+
+
+def _by_group(rows, cols):
+    """``{g: sorted([x, ...])}``. Row order out of a CTE is not stable."""
+    gi, xi = cols.index("g"), cols.index("x")
+    out: dict[int, list[int]] = {}
+    for r in rows:
+        out.setdefault(int(r[gi]), []).append(int(r[xi]))
+    return {g: sorted(v) for g, v in out.items()}
+
+
+@pytest.mark.min_max
+@pytest.mark.per_clause
+@pytest.mark.edge_case
+def test_data_reducer_bound_agrees_with_the_literal_spelling(decidb_cli):
+    """``MAX(cap)`` folding to +inf is the same bound as a typed ``1e1000``.
+
+    This is the bug at its smallest: the reducer's input was extracted under the
+    strict guard, so the query died at the first infinite row — before grouping,
+    before folding, before anything knew which group that row belonged to. The
+    literal spelling was accepted and classified. Both are run over the same data
+    so a divergence can only come from the spelling.
+    """
+    data = """
+        WITH data AS (
+            SELECT 0 AS g, 1e1000::DOUBLE AS cap UNION ALL
+            SELECT 0, 1e1000::DOUBLE UNION ALL
+            SELECT 1, 1e1000::DOUBLE UNION ALL
+            SELECT 1, 1e1000::DOUBLE
+        )
+        SELECT g, x FROM data
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= {bound} PER g
+        MAXIMIZE SUM(x)
+    """
+    reduced = _by_group(*decidb_cli.execute(data.format(bound="MAX(cap)")))
+    literal = _by_group(*decidb_cli.execute(data.format(bound="1e1000::DOUBLE")))
+    assert reduced == literal, \
+        f"data reducer and literal disagree: {reduced} vs {literal}"
+    # Both vacuous, so nothing but `x <= 6` is left holding x down.
+    assert reduced == {0: [6, 6], 1: [6, 6]}
+
+
+@pytest.mark.min_max
+@pytest.mark.per_clause
+@pytest.mark.edge_case
+@pytest.mark.correctness
+def test_data_reducer_bound_is_classified_per_group(decidb_cli, oracle_solver):
+    """One group's bound folds to +inf, the other's to a finite 3.0.
+
+    The per-group verdict was previously unreachable from SQL: a uniform literal
+    gave every group the same kind, and the mixed case needed a data reducer,
+    which was refused. So the group that reduces to +inf must drop while the
+    group beside it still linearizes — the halves are checked independently and
+    then the whole model is pinned against the oracle, which encodes the
+    surviving group's "some row is at or below the bound" with native indicator
+    constraints rather than a Big-M of our own.
+    """
+    mixed = _by_group(*decidb_cli.execute(
+        _MIXED.format(extra=" AND MIN(x) <= MAX(cap) PER g")))
+    unconstrained = _by_group(*decidb_cli.execute(_MIXED.format(extra="")))
+
+    # g=0 reduces to MAX(inf, 2.0) = +inf: vacuous, so it matches the model with
+    # the constraint absent. g=1 reduces to MAX(3.0, 1.0) = 3.0 and still binds.
+    assert mixed[0] == unconstrained[0] == [6, 6], \
+        f"the vacuous group was constrained anyway: {mixed[0]}"
+    assert mixed[1] == [3, 6], \
+        f"the finite group's disjunction did not bind: {mixed[1]}"
+
+    oracle_solver.create_model("data_reducer_mixed_groups")
+    obj = {}
+    for i in range(4):
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0, ub=6.0)
+        obj[f"x_{i}"] = 1.0
+    # Only g=1 (rows 2 and 3) carries a bound: at least one of them is <= 3.
+    ys = []
+    for i in (2, 3):
+        y = f"y_{i}"
+        oracle_solver.add_variable(y, VarType.BINARY)
+        oracle_solver.add_indicator_constraint(
+            y, 1, {f"x_{i}": 1.0}, "<=", 3.0, name=f"binds_{i}")
+        ys.append(y)
+    oracle_solver.add_constraint({y: 1.0 for y in ys}, ">=", 1.0, name="some_row")
+    oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+    total = sum(sum(v) for v in mixed.values())
+    assert abs(total - result.objective_value) < 1e-6, \
+        f"Objective mismatch: DecidB={total}, Oracle={result.objective_value}"
+
+
+@pytest.mark.min_max
+@pytest.mark.per_clause
+@pytest.mark.when_constraint
+@pytest.mark.edge_case
+def test_data_reducer_ignores_an_infinity_it_never_reads(decidb_cli):
+    """A row the reducer's own ``WHEN`` excludes cannot poison the bound.
+
+    The guard ran during extraction, ahead of the ``WHEN`` mask and the
+    relation-qualified dedup, so it judged rows that go on to contribute to
+    nothing. Here the only infinite ``cap`` sits in a ``WHEN``-false row: the
+    bound for g=0 is ``MAX(2.0) = 2.0``, and the excluded row is not part of the
+    ``MIN(x)`` disjunction either, so it floats to 6.
+    """
+    rows, cols = decidb_cli.execute("""
+        WITH data AS (
+            SELECT 0 AS g, 1e1000::DOUBLE AS cap, false AS ok UNION ALL
+            SELECT 0, 2.0, true UNION ALL
+            SELECT 1, 3.0, true UNION ALL
+            SELECT 1, 1.0, true
+        )
+        SELECT g, x FROM data
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) WHEN ok PER g
+        MAXIMIZE SUM(x)
+    """)
+    assert _by_group(rows, cols) == {0: [2, 6], 1: [3, 6]}
+
+
+@pytest.mark.min_max
+@pytest.mark.per_clause
+@pytest.mark.error_infeasible
+@pytest.mark.error
+def test_data_reducer_unreachable_bound_is_infeasible(decidb_cli):
+    """A reduced bound pointing out of reach is the solver's verdict to give.
+
+    ``MIN(x) <= -inf`` holds for no assignment, and the answer is an
+    infeasibility naming the query rather than an extraction guard refusing the
+    data. Admitting the infinity is what lets it get that far: the constraint is
+    emitted per row carrying the unreachable bound, exactly as the literal
+    spelling already was.
+    """
+    decidb_cli.assert_error("""
+        WITH data AS (
+            SELECT 0 AS g, -1e1000::DOUBLE AS cap UNION ALL
+            SELECT 0, -1e1000::DOUBLE UNION ALL
+            SELECT 1, 3.0 UNION ALL
+            SELECT 1, 1.0
+        )
+        SELECT g, x FROM data
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g
+        MAXIMIZE SUM(x)
+    """, match=r"infeasible")
+
+
+@pytest.mark.min_max
+@pytest.mark.per_clause
+@pytest.mark.edge_case
+@pytest.mark.error
+def test_nan_from_reducer_arithmetic_is_still_rejected(decidb_cli):
+    """Relaxing the reducer's guard must not let NaN through with the infinities.
+
+    ``MAX(cap) + MIN(cap)`` over a group holding both signs is ``inf + -inf``.
+    The reducer now hands both values on, and the per-row extraction that reads
+    the combined bound back is where the NaN is caught — so the relaxation costs
+    nothing here.
+    """
+    decidb_cli.assert_error("""
+        WITH data AS (
+            SELECT 0 AS g, 1e1000::DOUBLE AS cap UNION ALL
+            SELECT 0, -1e1000::DOUBLE UNION ALL
+            SELECT 1, 3.0 UNION ALL
+            SELECT 1, 1.0
+        )
+        SELECT g, x FROM data
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) + MIN(cap) PER g
+        MAXIMIZE SUM(x)
+    """, match=r"NaN")

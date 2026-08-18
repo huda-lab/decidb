@@ -165,6 +165,22 @@ output, using `CollectDecideExpressionStrings` to render `WHEN` and `PER` wrappe
 back into DECIDE postfix syntax — it recurses into child 0 and appends
 ` WHEN <cond>` / ` PER <cols>` to each leaf, parenthesizing a multi-column `PER`.
 
+Both the walker and the leaf renderer `RenderDecideSource` live in
+`src/planner/decide/decide_source_provenance.cpp`, beside the source-fragment
+tagging they depend on, because every surface that echoes a DECIDE clause back to
+a user needs them: the logical node, the physical node, and the labels an
+infeasibility diagnosis prints. `Expression::ToString()` cannot serve any of them —
+it prints the tree as bound, so it shows the casts the binder inserted while
+reconciling types and spells arithmetic in call form. `RenderDecideSource` decides
+what to show by **authorship**: `TagDecideSourceFragments` recorded the written
+spelling of every cast and scalar subquery before binding could obscure it, so a
+tagged node replays its own SQL out of `source_fragments` and an untagged cast is
+dropped as reconciliation noise.
+
+`source_fragments` therefore rides on `LogicalDecide` (serialized as field 238)
+and is copied to `PhysicalDecide`, alongside the `constraint_sources` registry
+that shares the same renderer.
+
 See [`../../03_expressivity/explain/done.md`](../../03_expressivity/explain/done.md)
 for the output itself.
 

@@ -346,7 +346,10 @@ carrying that bound — an ordinary infeasibility naming the user's clause, not 
 refusal. MIN is the mirror image. The verdict is per group because
 `ReduceAggregateRhsPerGroup` has already collapsed a row-varying bound to the
 tightest one, which is also what settles a group whose rows mix finite and
-infinite bounds.
+infinite bounds. A bound-side reducer is what reaches the mixed case from SQL —
+`MIN(x) <= MAX(cap) PER g` where `cap` holds an infinity in one group and finite
+values in another — so one group drops while the group beside it still
+linearizes. A literal bound gives every group the same verdict.
 
 Emitted rows carry `ConstraintKind::USER_MECHANISM`: they are rigid mechanism
 rows, not user parameters, so diagnosis does not offer to loosen them.
