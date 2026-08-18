@@ -18,6 +18,7 @@ Architecture
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -232,6 +233,78 @@ def _worker_id(config) -> str | None:
     return workerinput["workerid"] if workerinput else None
 
 
+# ---------------------------------------------------------------------------
+# Skip audit: every skip must be declared up front
+# ---------------------------------------------------------------------------
+#
+# A skip that nobody declared makes the suite tally useless as a before/after
+# signal, which is what every structural refactor verifies against: a run that
+# reports one fewer pass and one more skip looks the same at a glance as a run
+# that lost a test.  Each pattern below is a skip we accept, with the reason it
+# is allowed to vary between runs.  Anything else fails the run.
+#
+# Note what is *not* here: a skip taken because DecidB refused a query.  That
+# is a property of the run, not of the host, and it hides expressivity
+# regressions — see test_per_objective.py, which pins its backend instead.
+
+_DECLARED_SKIPS = (
+    (r"Gurobi not available", "host has no usable Gurobi/gurobipy"),
+    (r"decidb\.db not found", "TPC-H database not built"),
+    (r"decidb executable not found", "binary not built"),
+    (r"No ILP solver available and no oracle cache", "host has no solver and no cached oracle"),
+    (r"Gurobi returned SUBOPTIMAL", "declared solver nondeterminism on non-convex QCQP"),
+)
+
+
+def _skip_reason(report) -> str:
+    """The reason text of a skipped report, without pytest's own prefix."""
+    longrepr = getattr(report, "longrepr", None)
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        text = str(longrepr[2])
+    else:
+        text = str(longrepr)
+    return text[len("Skipped: "):] if text.startswith("Skipped: ") else text
+
+
+def _audit_skips(session) -> bool:
+    """Print the skip audit; return False if any skip was undeclared.
+
+    Runs controller-side, so xdist workers' reports are already merged in.
+    """
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        return True
+
+    passed = len(reporter.stats.get("passed", []))
+    skipped = reporter.stats.get("skipped", [])
+    declared, undeclared = [], []
+    for report in skipped:
+        reason = _skip_reason(report)
+        why = next(
+            (w for pattern, w in _DECLARED_SKIPS if re.search(pattern, reason)), None
+        )
+        (declared if why else undeclared).append(
+            (getattr(report, "nodeid", "?"), reason, why)
+        )
+
+    print(
+        f"\n  DECIDE skip audit: {passed} passed + {len(skipped)} skipped "
+        f"= {passed + len(skipped)} outcomes "
+        f"(compare this total across runs, not the pass count)"
+    )
+    for nodeid, _reason, why in declared:
+        print(f"    declared skip: {nodeid} — {why}")
+    for nodeid, reason, _why in undeclared:
+        print(f"    UNDECLARED SKIP: {nodeid} — {reason}")
+    if undeclared:
+        print(
+            "  A skip nobody declared makes the tally unusable as a refactor\n"
+            "  signal. Either fix what caused it, or add it to _DECLARED_SKIPS\n"
+            "  in conftest.py with the reason it may vary between runs.\n"
+        )
+    return not undeclared
+
+
 def pytest_testnodedown(node, error):
     """Collect an xdist worker's report as it shuts down (controller-side).
 
@@ -296,3 +369,6 @@ def pytest_sessionfinish(session, exitstatus):
         print_perf_table(tracker)
         if path:
             print(f"  Performance data saved to: {path}\n")
+
+    if not _audit_skips(session) and exitstatus == 0:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED

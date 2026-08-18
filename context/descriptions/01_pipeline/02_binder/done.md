@@ -79,34 +79,70 @@ the backend a contradictory pair.
 
 ## 2. Degree, not occurrence count
 
-`DecideDegreeInternal` (`decide_binder.cpp:102-161`) computes the polynomial
-degree of an expression in the decision variables:
+Degree is one concept with one owner, and this stage is it.
+`DecideExpressionDegree` (`decide_degree.cpp`) is the only implementation in
+DeciDB. It reads the **bound** tree and returns a `DecideDegree`: the polynomial
+degree in decision variables, plus — at degree 2 — which of the two supported
+shapes produced it.
 
 ```
-variable                     -> 1
+decision column              -> 1
+data column / constant       -> 0
 cast                         -> degree(child)
+reducer (SUM/AVG/MIN/MAX)    -> degree(argument)   (combines rows, does not
+                                                    multiply them)
+ABS(e)                       -> degree(e)          (linearized at stage 05;
+                                                    changes magnitude, not degree)
 + / -                        -> max over children
 *                            -> sum over children
-/ (binary)                   -> degree(numerator)   (a decision-bearing divisor
-                                                     is rejected separately)
-POWER(base, n) / base ** n   -> degree(base) * n    (constant non-negative
-                                                     integer n only)
-anything else                -> occurrence count (never underestimates)
+/ (binary)                   -> degree(numerator)  (a decision-bearing divisor
+                                                    is unclassifiable)
+POWER(base, n) / base ** n   -> degree(base) * n   (constant non-negative
+                                                    integer n only)
+anything else over a decision -> unclassifiable (refused)
 ```
 
-This matters because `(x + y) * z` has **three** occurrences but degree **2** — it
-expands to `x*z + y*z`. Counting occurrences rejected it as degree > 2 in
-`SUCH THAT` while accepting it in `MAXIMIZE`, because the objective path used to
-be pre-expanded by a separate normalizer. Degree ≤ 2 is the gate; degree 2 is
-routed to the quadratic / bilinear paths downstream.
+Degree is not an occurrence count: `(x + y) * z` has **three** occurrences but
+degree **2**, because it expands to `x*z + y*z`. Degree ≤ 2 is the gate. At
+degree 2, `is_quadratic_form` separates the two formulations — true when the
+degree came from squaring (`x*x`, `POWER(x, 2)`, `POWER(x+y, 2)`), which feeds a
+Q matrix, and false when two *different* decisions were multiplied (`x*y`),
+which feeds McCormick envelopes.
 
-The `POWER` case is what keeps `SUM(POWER(x,2) * y)` — genuinely degree 3 — from
-passing the gate. While `POWER` fell through to occurrence counting it reported
-degree 1, and the shape was refused much later by physical extraction, in
-extractor vocabulary rather than as a `Binder Error`. A fractional, negative or
-non-constant exponent is not a polynomial degree at all; `ValidatePowerExponent`
-rejects those, so they keep the occurrence-count fallback rather than being
-given a number here.
+`ValidateDecideConstraintDegree` and `ValidateDecideObjectiveDegree` run in
+`bind_select_node.cpp` immediately after the constraint and objective binders,
+and they are **total**: the constraint validator descends conjunctions and
+`WHEN` / `PER` wrappers to every comparison that becomes a model row, and checks
+both sides. That totality is the point. The rule previously lived inside
+`ValidateSumArgumentInternal`, whose name scoped it to reducer arguments, so
+nothing ever applied it to a bare per-row constraint — `SUM(POWER(x*y,2)) <= 10`
+was a `Binder Error` while the identical `POWER(x*y,2) <= 5` bound cleanly and
+was refused at plan time by term extraction, in extractor vocabulary and with no
+source location. Which layer refused depended on how the user spelled it.
+
+**Why the judgement stays here rather than moving to stage 05**, which is the
+only stage that can see the tree after the nine rewrites have run: validity must
+follow from the query and the schema, exactly as the integrality gate does
+(§4) — whether `POWER(x*y,2) <= 5` is a legal DECIDE query cannot depend on what
+`RewriteInDomain` did to it. And only a bind-time refusal can point at the term:
+a `BinderException` raised here carries a caret to the offending product, which
+a plan-time `InvalidInputException` has no way to do.
+
+Stage 05 consumes the same function to assert that its own rewrites preserved
+what was admitted — it never decides. See
+[`../05_optimizer/done.md`](../05_optimizer/done.md) §1a.
+
+### Bound nodes carry a source location
+
+The DECIDE binders dispatch through `BindExpression`, which bypasses the
+propagation `ExpressionBinder::Bind` does at its own entry point, so the bound
+tree used to reach the post-binding validators with no location at all.
+`DecideBinder::PreserveQueryLocation` now stamps it in each `BindExpression`
+override — filling only an empty location, so an inner node keeps its own span
+rather than being widened to its parent's. The degree gate needs this to point a
+caret, and the integrality gate's two refusals (§4) gained one as a side effect;
+they had been passing no node to `BinderException` because there was nothing
+useful to pass.
 
 ---
 
@@ -313,7 +349,8 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Concern | Location |
 |---|---|
 | Declarations, scopes, types, aux pruning | `src/planner/binder/query_node/bind_select_node.cpp` |
-| Shared DECIDE expression rules, degree, reducers | `src/planner/expression_binder/decide_binder.cpp` |
+| Shared DECIDE expression rules, reducers | `src/planner/expression_binder/decide_binder.cpp` |
+| Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide_degree.cpp` |
 | `SUCH THAT` binding and `PER` gate | `src/planner/expression_binder/decide_constraints_binder.cpp` |
 | Objective binding | `src/planner/expression_binder/decide_objective_binder.cpp` |
 | Entity scope struct | `src/include/duckdb/planner/operator/logical_decide.hpp` |

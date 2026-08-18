@@ -24,6 +24,8 @@ public:
 
 protected:
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
+    //! The dispatch itself; `BindExpression` wraps it to stamp the source location.
+    BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
 
 private:
     DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) override;

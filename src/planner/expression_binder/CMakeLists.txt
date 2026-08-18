@@ -9,6 +9,7 @@ add_library_unity(
   constant_binder.cpp
   decide_binder.cpp
   decide_constraints_binder.cpp
+  decide_degree.cpp
   decide_objective_binder.cpp
   group_binder.cpp
   having_binder.cpp

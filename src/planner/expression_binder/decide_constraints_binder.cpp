@@ -426,11 +426,12 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
 }
 
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+    auto location = expr_ptr->GetQueryLocation();
     auto result = BindExpressionInternal(expr_ptr, depth, root_expression);
     if (!result.HasError() && result.expression) {
         PreserveDecideSourceFragment(*expr_ptr, *result.expression);
     }
-    return result;
+    return PreserveQueryLocation(location, std::move(result));
 }
 
 BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,

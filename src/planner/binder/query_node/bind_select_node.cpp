@@ -34,6 +34,7 @@
 #include "duckdb/planner/expression_binder/select_binder.hpp"
 #include "duckdb/planner/expression_binder/where_binder.hpp"
 #include "duckdb/planner/expression_binder/decide_binder.hpp"
+#include "duckdb/planner/expression_binder/decide_degree.hpp"
 #include "duckdb/planner/expression_binder/decide_constraints_binder.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
@@ -722,6 +723,11 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 // they are the whole refusal, so the model builder no longer raises one.
                 ValidateDecideIntegralComparisonOperands(*result->decide_constraints,
                                                          result->decide_index);
+                // Degree has one owner, and this is it. Running on the bound tree makes the
+                // rule total: a reducer argument and a bare per-row constraint are judged
+                // the same way, which the parsed-tree gate could not do because it was only
+                // ever called for SUM/AVG/MIN/MAX arguments.
+                ValidateDecideConstraintDegree(*result->decide_constraints, result->decide_index);
                 result->decide_constraint_sources = InitializeConstraintSourceInfo(
                     *result->decide_constraints, decide_source_fragments, entity_scopes);
                 result->decide_source_fragments = decide_source_fragments;
@@ -733,6 +739,9 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
             decide_objective_binder.decide_sense = statement.decide_sense;
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
             result->decide_objective = decide_objective_binder.Bind(objective);
+            if (result->decide_objective) {
+                ValidateDecideObjectiveDegree(*result->decide_objective, result->decide_index);
+            }
         }
         result->decide_sense = statement.decide_sense;
         // Update types in bind context to reflect the determined types from DECIDE clause

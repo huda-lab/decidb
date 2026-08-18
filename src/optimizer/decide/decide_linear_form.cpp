@@ -14,6 +14,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression_binder/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 
@@ -286,66 +287,23 @@ private:
 		return found;
 	}
 
-	bool IsLinearInDecideVars(const Expression &expr) const {
-		// Column refs and constants: a decide-var col-ref contributes degree 1;
-		// non-decide col-refs and constants contribute degree 0. Both are linear.
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-		    expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT ||
-		    expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
-			return true;
+	//! Assert that the inner expression of a squared or self-product term is degree <= 1.
+	//!
+	//! This layer does not decide degree — layer 2 does, on the bound tree, before any
+	//! rewrite runs, which is why the refusal a user sees names the term they wrote and
+	//! points a caret at it. What remains here is the other half of that contract: the
+	//! rewrites in this layer synthesize their own expressions (the IN expansion, ABS
+	//! linearization, the norm lowering), and nothing at layer 2 can vouch for those. So
+	//! this asserts, using layer 2's definition, that what reaches term extraction is
+	//! still what layer 2 admitted.
+	void AssertSquaredInnerIsLinear(const Expression &inner, const char *shape) const {
+		if (!DecideExpressionDegree(inner, decide_index).IsLinear()) {
+			throw InternalException(
+			    "DECIDE %s reached term extraction with a non-linear inner expression. Layer 2 "
+			    "refuses total degree > 2 at bind time, so this tree was produced by a rewrite "
+			    "in this layer rather than written by a user.",
+			    shape);
 		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-			return IsLinearInDecideVars(*expr.Cast<BoundCastExpression>().child);
-		}
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			auto &func = expr.Cast<BoundFunctionExpression>();
-			string fname = StringUtil::Lower(func.function.name);
-
-			// Additive operators preserve linearity iff every child is linear.
-			if (fname == "+" || fname == "-") {
-				for (auto &child : func.children) {
-					if (!IsLinearInDecideVars(*child)) {
-						return false;
-					}
-				}
-				return true;
-			}
-
-			// Multiplication is linear iff at most one factor contains a decide
-			// variable and every factor is itself linear. Two var-carrying factors
-			// (e.g. x * y, x * POWER(y,2)) push the product to degree >= 2.
-			if (fname == "*") {
-				idx_t factors_with_vars = 0;
-				for (auto &child : func.children) {
-					if (!IsLinearInDecideVars(*child)) {
-						return false;
-					}
-					if (FindDecideVariable(*child) != DConstants::INVALID_INDEX) {
-						factors_with_vars++;
-					}
-				}
-				return factors_with_vars <= 1;
-			}
-
-			// Division is linear iff the divisor is decide-var-free and the
-			// numerator is linear. `x / 2` is a coefficient scale (linear);
-			// `x / y` is non-linear (already rejected upstream by the bind-time
-			// validator, but we guard here anyway for defence-in-depth).
-			if (fname == "/" && func.children.size() == 2) {
-				if (FindDecideVariable(*func.children[1]) != DConstants::INVALID_INDEX) {
-					return false;
-				}
-				return IsLinearInDecideVars(*func.children[0]);
-			}
-
-			// Any other function (POWER, SIN, ABS, ...) is linear only when none
-			// of its arguments reference a decide variable (it is a pure data
-			// expression evaluated at runtime into a coefficient).
-			return FindDecideVariable(expr) == DConstants::INVALID_INDEX;
-		}
-
-		// Unknown expression classes: linear only if they contain no decide var.
-		return FindDecideVariable(expr) == DConstants::INVALID_INDEX;
 	}
 
 	bool TryGetBareDecideFactor(const Expression &expr, idx_t &var_idx) const {
@@ -385,9 +343,16 @@ private:
 		}
 
 		if (result.decide_factors.size() > 2) {
-			throw InvalidInputException(
-			    "DECIDE expression contains a product of decision variables with total degree > 2. "
-			    "Only linear products and bilinear products of two different DECIDE variables are supported.");
+			// Degree, so layer 2's judgement, and it already refused this at bind time with
+			// a located message. Reaching it here means a rewrite in this layer built the
+			// product. (The two refusals below are different: they are formulation limits
+			// of this layer over shapes layer 2 legitimately admits, so they stay
+			// user-facing.)
+			throw InternalException(
+			    "DECIDE product reached term extraction with %llu decision factors. Layer 2 "
+			    "refuses total degree > 2 at bind time, so this tree was produced by a rewrite "
+			    "in this layer rather than written by a user.",
+			    static_cast<uint64_t>(result.decide_factors.size()));
 		}
 		if (result.decide_factors.size() == 2 && result.decide_factors[0] == result.decide_factors[1]) {
 			throw InvalidInputException(
@@ -591,17 +556,7 @@ private:
 				if (exponent == 2.0) {
 					const Expression *inner = UnwrapDecideCasts(*func.children[0], decide_index);
 					if (FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
-						// Shape matches POWER(expr, 2); reject expr that is itself
-						// degree > 1 in decide vars (e.g. POWER(POWER(x,2), 2) =
-						// x^4, POWER(x*y, 2) = x^2 y^2) rather than silently
-						// emitting an x^2-shaped Q term.
-						if (!IsLinearInDecideVars(*inner)) {
-							throw InvalidInputException(
-							    "DECIDE objective/constraint contains a non-linear expression "
-							    "inside POWER(..., 2) (total degree > 2 in decision variables). "
-							    "Only POWER(linear_expr, 2) is supported; rewrite the expression "
-							    "or combine it into a single quadratic group.");
-						}
+						AssertSquaredInnerIsLinear(*inner, "POWER(..., 2)");
 						return {inner, 1.0};
 					}
 				}
@@ -613,16 +568,7 @@ private:
 		    Expression::Equals(*func.children[0], *func.children[1]) &&
 		    FindDecideVariable(*func.children[0]) != DConstants::INVALID_INDEX) {
 			const Expression *inner = UnwrapDecideCasts(*func.children[0], decide_index);
-			// Identical-child self-product matches `(expr)*(expr)`; the inner
-			// must be linear in decide vars or the product is degree > 2 (e.g.
-			// POWER(x,2) * POWER(x,2) = x^4, (x*y) * (x*y) = x^2 y^2).
-			if (!IsLinearInDecideVars(*inner)) {
-				throw InvalidInputException(
-				    "DECIDE objective/constraint contains a self-product of a non-linear "
-				    "expression (e.g. POWER(x, 2) * POWER(x, 2) or (x*y) * (x*y)), total "
-				    "degree > 2 in decision variables. Only (linear_expr) * (linear_expr) "
-				    "is supported as a quadratic pattern.");
-			}
+			AssertSquaredInnerIsLinear(*inner, "self-product (expr) * (expr)");
 			return {inner, 1.0};
 		}
 
@@ -1125,12 +1071,7 @@ private:
 						if (exponent == 2.0) {
 							const Expression *inner = UnwrapDecideCasts(*qf.children[0], decide_index);
 							if (FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
-								if (!IsLinearInDecideVars(*inner)) {
-									throw InvalidInputException(
-									    "DECIDE constraint contains a non-linear expression "
-									    "inside POWER(..., 2) (total degree > 2 in decision "
-									    "variables). Only POWER(linear_expr, 2) is supported.");
-								}
+								AssertSquaredInnerIsLinear(*inner, "POWER(..., 2)");
 								return inner;
 							}
 						}
@@ -1141,13 +1082,7 @@ private:
 				    Expression::Equals(*qf.children[0], *qf.children[1]) &&
 				    FindDecideVariable(*qf.children[0]) != DConstants::INVALID_INDEX) {
 					const Expression *inner = UnwrapDecideCasts(*qf.children[0], decide_index);
-					if (!IsLinearInDecideVars(*inner)) {
-						throw InvalidInputException(
-						    "DECIDE constraint contains a self-product of a non-linear "
-						    "expression (e.g. POWER(x, 2) * POWER(x, 2)), total degree > 2 "
-						    "in decision variables. Only (linear_expr) * (linear_expr) is "
-						    "supported as a quadratic pattern.");
-					}
+					AssertSquaredInnerIsLinear(*inner, "self-product (expr) * (expr)");
 					return inner;
 				}
 				return nullptr;

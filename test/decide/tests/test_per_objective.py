@@ -1176,14 +1176,21 @@ def _power_group_obj(rs, cs, reducer):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_maximize_sum_max_power_per(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli_gurobi, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp — hard inner MAX,
     quadratic per-row expression. Budget couples x's so at most some rows
     can reach the bound extremes; the group MAX must pick among affordable
-    pushes. Non-convex (MAX of convex, then MAXIMIZE): Gurobi only — fall
-    through to the documented HiGHS rejection if DecidB is configured for
-    HiGHS.
+    pushes.
+
+    Non-convex (MAX of convex, then MAXIMIZE), so it is Gurobi-only and runs
+    on ``decidb_cli_gurobi``: the backend is pinned, and the skip is decided
+    up front by the fixture from the *environment* rather than by catching a
+    rejection from DecidB. Catching the rejection made this test report green
+    whether the shape was accepted or newly refused, which is exactly the
+    expressivity regression it exists to catch. The HiGHS side of the same
+    shape — the documented non-convex rejection message — is pinned in
+    ``test_bilinear.py``.
     """
     sql = f"""
         WITH data AS ({_POWER_DATA_SQL})
@@ -1193,12 +1200,7 @@ def test_maximize_sum_max_power_per(
         MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp
     """
     t0 = time.perf_counter()
-    try:
-        rows, cols = decidb_cli.execute(sql)
-    except Exception as e:
-        if "require Gurobi" in str(e) or "Non-convex" in str(e):
-            pytest.skip(f"DecidB rejected non-convex shape: {e}")
-        raise
+    rows, cols = decidb_cli_gurobi.execute(sql)
     decidb_time = time.perf_counter() - t0
 
     data = _power_data(duckdb_conn)
@@ -1255,7 +1257,7 @@ def test_maximize_sum_max_power_per(
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_minimize_sum_min_power_per(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+    decidb_cli_gurobi, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp — hard inner MIN,
     quadratic per-row expression. INTEGER x with non-integer targets forces
@@ -1263,6 +1265,10 @@ def test_minimize_sum_min_power_per(
     each row's best-achievable POWER differs, meaning the indicator has to
     pick the *specific* minimum row in each group — a bug that selects the
     wrong row, or emits a linear auxiliary, would change the objective.
+
+    Gurobi-only (MIQP), so it runs on ``decidb_cli_gurobi`` for the reason
+    given on ``test_maximize_sum_max_power_per``: the skip belongs to the
+    environment, not to what DecidB decided this run.
     """
     data_sql = """
         SELECT 1 AS id, 'A' AS grp, 3.3 AS target UNION ALL
@@ -1279,12 +1285,7 @@ def test_minimize_sum_min_power_per(
         MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp
     """
     t0 = time.perf_counter()
-    try:
-        rows, cols = decidb_cli.execute(sql)
-    except Exception as e:
-        if "require Gurobi" in str(e) or "Non-convex" in str(e):
-            pytest.skip(f"DecidB rejected non-convex shape: {e}")
-        raise
+    rows, cols = decidb_cli_gurobi.execute(sql)
     decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(

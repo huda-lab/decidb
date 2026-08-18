@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression_binder/decide_binder.hpp"
+#include "duckdb/planner/expression_binder/decide_degree.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -94,77 +95,7 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 	return CountDecideVariableOccurrencesInternal(expr, variables) > 0;
 }
 
-//! Polynomial degree of `expr` in DECIDE variables. Degree is NOT the number of
-//! variable occurrences: an additive node contributes the MAX of its terms'
-//! degrees, not their sum, because `(x + y) * z` expands to `x*z + y*z` and is
-//! therefore degree 2 -- three occurrences, but a legal bilinear term.
-//!
-//! Occurrence counting stood in for this while the symbolic layer pre-expanded
-//! products over sums, which hid the difference. Shapes other than the additive /
-//! multiplicative / division spine fall back to the occurrence count, which never
-//! underestimates for them and preserves the previous behavior exactly.
 static bool IsPowerFunction(const FunctionExpression &func);
-
-static idx_t DecideDegreeInternal(const ParsedExpression &expr,
-                                  const case_insensitive_map_t<idx_t> &variables) {
-	if (IsVariableExpression(expr, variables)) {
-		return 1;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::CAST) {
-		return DecideDegreeInternal(*expr.Cast<const CastExpression>().child, variables);
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &func = expr.Cast<const FunctionExpression>();
-		// POWER(base, n) / base ** n multiplies the base's degree by a constant,
-		// non-negative integer exponent. Without this the occurrence-count fallback
-		// reports POWER(x, 2) as degree 1, so SUM(POWER(x, 2) * y) -- genuinely
-		// degree 3 -- passes the gate and is rejected much later by physical
-		// extraction, with wording that names a pass which no longer exists.
-		// A fractional, negative or non-constant exponent is not a polynomial
-		// degree at all; ValidatePowerExponent rejects those, so they keep the
-		// fallback rather than being given a number here.
-		if (IsPowerFunction(func) && func.children.size() == 2 &&
-		    func.children[1]->GetExpressionClass() == ExpressionClass::CONSTANT) {
-			auto &exp_const = func.children[1]->Cast<const ConstantExpression>();
-			double exp_val;
-			try {
-				exp_val = exp_const.value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-			} catch (...) {
-				exp_val = -1.0;
-			}
-			if (exp_val >= 0.0 && exp_val == static_cast<double>(static_cast<int64_t>(exp_val))) {
-				return DecideDegreeInternal(*func.children[0], variables) *
-				       static_cast<idx_t>(exp_val);
-			}
-		}
-		if (func.is_operator) {
-			auto name_lower = StringUtil::Lower(func.function_name);
-			if (name_lower == "+" || name_lower == "-") {
-				idx_t degree = 0;
-				for (auto &child : func.children) {
-					auto child_degree = DecideDegreeInternal(*child, variables);
-					if (child_degree > degree) {
-						degree = child_degree;
-					}
-				}
-				return degree;
-			}
-			if (name_lower == "*") {
-				idx_t degree = 0;
-				for (auto &child : func.children) {
-					degree += DecideDegreeInternal(*child, variables);
-				}
-				return degree;
-			}
-			if (name_lower == "/" && func.children.size() == 2) {
-				// A decision-bearing divisor is rejected separately, so the
-				// divisor is data and contributes no degree.
-				return DecideDegreeInternal(*func.children[0], variables);
-			}
-		}
-	}
-	return CountDecideVariableOccurrencesInternal(expr, variables);
-}
 
 void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
                                            const case_insensitive_map_t<idx_t> &variables) {
@@ -711,27 +642,6 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 	return StringUtil::CIEquals(agg.function.name, "avg");
 }
 
-//! Read a constant exponent, seeing through the casts the binder inserts. `POWER(x, 2)`
-//! binds as `power(CAST(x AS DOUBLE), CAST(2 AS DOUBLE))`, so the literal is never a bare
-//! `BoundConstantExpression` by the time it reaches here.
-static bool TryGetConstantExponent(const Expression &expr, double &out_value) {
-	const Expression *cur = &expr;
-	while (cur->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		cur = cur->Cast<const BoundCastExpression>().child.get();
-	}
-	if (cur->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
-		return false;
-	}
-	try {
-		out_value = cur->Cast<const BoundConstantExpression>()
-		                .value.DefaultCastAs(LogicalType::DOUBLE)
-		                .GetValue<double>();
-	} catch (...) {
-		return false;
-	}
-	return true;
-}
-
 //! Is `expr` provably whole-numbered from declared types alone?
 //!
 //! `allow_avg_hoist` is set only for `<>`, whose rewrite multiplies both sides by the
@@ -808,7 +718,7 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		// answered here.
 		if (name == "pow" || name == "power" || name == "**" || name == "^") {
 			double exp_val;
-			if (func.children.size() == 2 && TryGetConstantExponent(*func.children[1], exp_val) &&
+			if (func.children.size() == 2 && TryGetDecideConstantExponent(*func.children[1], exp_val) &&
 			    exp_val >= 0.0 && exp_val == std::floor(exp_val)) {
 				return DecideSideIsWholeNumbered(*func.children[0], allow_avg_hoist, decide_index);
 			}
@@ -905,14 +815,19 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 		                 ? "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on "
 		                   "whole numbers"
 		                 : "stepping the bound is exact only on whole numbers";
+		// Pass the comparison so the message carries a caret. The bound tree only started
+		// carrying source locations when DecideBinder::BindExpression began stamping them;
+		// before that these two throws named no node because there was nothing to name.
 		if (bad.is_castable_column) {
 			throw BinderException(
+			    comp,
 			    "Comparison '%s' is not supported here: column '%s' has type %s, which allows "
 			    "fractional values, and %s. If '%s' holds whole numbers, cast it "
 			    "(%s::BIGINT); otherwise compare with %s.",
 			    op, bad.name, bad.type.ToString(), why, bad.name, bad.name, alternative);
 		}
 		throw BinderException(
+		    comp,
 		    "Comparison '%s' is not supported here: '%s' has type %s and can take fractional "
 		    "values, and %s. Compare with %s instead.",
 		    op, bad.name, bad.type.ToString(), why, alternative);
@@ -920,25 +835,6 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 	default:
 		return;
 	}
-}
-
-//! Collect the set of DECIDE variable indices referenced by an expression.
-static void CollectDecideVariableIndices(const ParsedExpression &expr,
-                                         const case_insensitive_map_t<idx_t> &variables,
-                                         unordered_set<idx_t> &out) {
-	if (IsVariableExpression(expr, variables)) {
-		const auto &colref = expr.Cast<const ColumnRefExpression>();
-		string key = colref.IsQualified()
-		    ? (colref.GetTableName() + "." + colref.GetColumnName())
-		    : colref.GetColumnName();
-		auto it = variables.find(key);
-		if (it != variables.end()) {
-			out.insert(it->second);
-		}
-	}
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
-		CollectDecideVariableIndices(child, variables, out);
-	});
 }
 
 // Forward declaration — needed because ValidateQuadraticPower calls ValidateSumArgumentInternal.
@@ -1097,53 +993,12 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 					return false;
 				}
 			}
-			if (func_name_lower == "*") {
-				idx_t decide_count = DecideDegreeInternal(expr, variables);
-				if (decide_count > 2) {
-					error_msg = "Triple or higher-order products of DECIDE variables are not supported "
-					            "(total degree > 2)";
-					return false;
-				}
-				if (decide_count > 1) {
-					if (func.children.size() == 2) {
-						// Classify: quadratic (same vars in both factors) vs bilinear (disjoint vars)
-						unordered_set<idx_t> vars_left, vars_right;
-						CollectDecideVariableIndices(*func.children[0], variables, vars_left);
-						CollectDecideVariableIndices(*func.children[1], variables, vars_right);
-						bool has_common_var = false;
-						for (auto idx : vars_left) {
-							if (vars_right.count(idx)) {
-								has_common_var = true;
-								break;
-							}
-						}
-						if (has_common_var) {
-							// Quadratic: same DECIDE variable appears in both factors
-							// (e.g., x*x, (a+x)*x) — only allowed in objectives
-							if (!allow_quadratic) {
-								error_msg = "SUM expression must remain linear in DECIDE variables — "
-								            "quadratic terms (same variable in both factors) are only allowed in objectives, not constraints";
-								return false;
-							}
-							has_decide_variable = true;
-							return true;
-						} else {
-							// Bilinear: different DECIDE variables in each factor
-							// (e.g., x*y) — allowed in constraints with bilinear support
-							if (!allow_bilinear && !allow_quadratic) {
-								error_msg = "SUM expression must remain linear in DECIDE variables — "
-								            "products of different DECIDE variables are only allowed in objectives and bilinear constraints";
-								return false;
-							}
-							has_decide_variable = true;
-							return true;
-						}
-					}
-					error_msg = "SUM expression must remain linear in DECIDE variables — "
-					            "products of different DECIDE variables are only allowed in objectives and bilinear constraints";
-					return false;
-				}
-			}
+			// Degree is deliberately not judged here. It is one concept with one owner —
+			// `ValidateDecideConstraintDegree` / `ValidateDecideObjectiveDegree`, which run on
+			// the bound tree once binding is complete — so that a per-row constraint and a
+			// reducer argument are held to the same rule. This branch used to re-derive it,
+			// and because its name scoped it to SUM arguments nothing called it for
+			// `POWER(x*y, 2) <= 5`, which then reached term extraction at layer 5.
 			return true;
 		}
 		// An operator the model doesn't understand (`%`, bitwise ops, …) is still
@@ -1210,6 +1065,15 @@ DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_in
     : ExpressionBinder(binder, context), variables(variables), scalar_variables(scalar_variables),
       qualifier_context(qualifier_context) {
     is_top_expression = true;
+}
+
+BindResult DecideBinder::PreserveQueryLocation(optional_idx location, BindResult result) {
+	// Only fill an empty location: a nested bind that already recorded a more precise
+	// node should keep it rather than be widened to its parent's span.
+	if (!result.HasError() && result.expression && !result.expression->GetQueryLocation().IsValid()) {
+		result.expression->SetQueryLocation(location);
+	}
+	return result;
 }
 
 bool DecideBinder::IsScalarDecideVariable(const ParsedExpression &expr) const {
@@ -1542,6 +1406,14 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 }
 
 BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+    // Read the location before dispatching: BindFunction rewrites `expr_ptr` in place
+    // for the norm marker, so the node it names afterwards is not the one the user wrote.
+    auto location = expr_ptr->GetQueryLocation();
+    return PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression));
+}
+
+BindResult DecideBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
+                                                bool root_expression) {
     if (depth > 0) {
         return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
     }

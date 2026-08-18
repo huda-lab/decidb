@@ -148,6 +148,21 @@ public:
                  optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
 
 protected:
+    //! Carry the parsed node's source location onto the bound node it produced.
+    //!
+    //! `ExpressionBinder::Bind` does this at its own entry point, but the DECIDE
+    //! binders dispatch through `BindExpression`, which bypasses it. The bound tree
+    //! therefore reached the post-binding validators with no location, and every
+    //! refusal raised on it — the integrality gate, and now the degree gate — printed
+    //! without the `LINE`/caret that makes a long SUCH THAT clause navigable.
+    //! Applied in each `BindExpression` override, which is where the recursion enters
+    //! a node, so inner nodes keep their own location rather than the root's.
+    //!
+    //! Takes the location by value rather than the parsed node: binding the `norm`
+    //! marker replaces `expr_ptr` in place, so by the time the result comes back the
+    //! node the caller held is no longer the one the user wrote.
+    static BindResult PreserveQueryLocation(optional_idx location, BindResult result);
+
     //! True when `expr` is a bare reference to a query-wide (`scalar`) decision.
     //! A scalar has one solver column, so it needs no reducer to collapse it —
     //! and conversely may not appear inside one.
@@ -164,6 +179,9 @@ protected:
     BindResult BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
+    //! The dispatch itself. `BindExpression` wraps it so every bound node this binder
+    //! produces carries a source location, whatever path the dispatch takes.
+    BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
     virtual DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) {
         throw duckdb::NotImplementedException("GetExpressionType is not implemented for this binder.");
     }

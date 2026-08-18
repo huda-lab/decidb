@@ -257,6 +257,26 @@ Lower bounds start at `ABSORBED_LOWER_UNSET` (-1e30) rather than 0, so an explic
 negative bound is honored instead of clamped up. Stage 08 resolves anything still at
 the sentinel to the default 0 floor.
 
+**Upper bounds start at the declared type's ceiling**, not uniformly at 1e30: a
+BOOLEAN variable is seeded to `1.0`. The box is what stage 06 receives as
+`SolverInput::upper_bounds`, and every Big-M derivation reads it through
+`DecideRowTermRange`, which treats `>= 1e20` as unbounded. Seeding only the sentinel
+left a declared `BOOL` looking unbounded to all of them, so they fell back to
+`DECIDE_BIGM_FALLBACK` — `SUM(x) <> 2` over four BOOL decisions took `M = 1000000`
+where the identical feasible set spelled `x(INT) ... x <= 1` took `7`. The ceiling was
+reaching only the model builder, which applies it far downstream when sizing columns.
+
+Seeding it here is safe because absorption only ever narrows (`min`), and because a
+user restatement like `x <= 1` on a BOOL was already treated as a no-op against the
+intrinsic box. It also lets the `<>` range collapse see a BOOL's upper side, which it
+could not before: `SUM(x) <> 9` over four BOOL decisions is unreachable and now drops
+to nothing instead of emitting a disjunction against a bound no assignment can meet.
+
+> Fixed 2026-08-17. The golden dump moved (Big-M constants shrank) with
+> `baseline.dump.results` byte-identical — the models changed, no optimum did.
+> Corpus query 85 pins the tight constant, since queries 82–84 either collapse or use
+> INT decisions and so never exposed it.
+
 Each absorbed bound is also recorded as a `UserBoundSpec` so infeasible diagnosis can
 re-emit it as a loosenable row — absorbed bounds carry no row provenance otherwise. A
 variable's *intrinsic* domain is excluded: a BOOLEAN's `[0,1]` box is never
@@ -336,6 +356,24 @@ stage 07.
 
 ## 5. What this stage does not do
 
+- Judge the polynomial degree of an expression — stage 02, which owns the one
+  definition (`DecideExpressionDegree`) and refuses degree > 2 on the bound tree
+  before any pass here runs. This stage *calls* that definition, never a copy of
+  it, and only to assert: `AssertSquaredInnerIsLinear` throws `InternalException`
+  when the inner expression of a `POWER(..., 2)` or a self-product is not linear,
+  and `ClassifyNormalizedProduct` does the same for a product with more than two
+  decision factors. Both were `InvalidInputException` and reachable by a user —
+  that was the leak, since a per-row constraint bypassed stage 02's gate
+  entirely. They are kept because the passes here synthesize their own
+  expressions (the `IN` expansion, ABS linearization, `norm` lowering) that stage
+  02 never saw, so nothing upstream can vouch for them; an assertion is the only
+  thing that can. See [`../02_binder/done.md`](../02_binder/done.md) §2.
+
+  Two refusals in `ClassifyNormalizedProduct` stay user-facing and are *not*
+  degree: a product factor that is not a bare decision (`ABS(x) * y`) and a
+  same-variable product outside the recognised quadratic patterns (`x * (2*x)`).
+  Both are degree 2, which stage 02 legitimately admits — they are formulation
+  limits of this stage, which is exactly what this stage may decide.
 - Decide which side of a comparison a term sits on — stage 04. Every pass here was
   audited against that: ABS and bilinear replace decision-bearing atoms with
   decision auxiliaries; MIN/MAX and AVG keep decision terms on the left; `<>`

@@ -428,15 +428,19 @@ class TestBinderErrors:
             """, match=r"POWER exponent.*must be a constant integer")
 
     def test_power_wrapping_bilinear_rejected(self, decidb_cli):
-        """POWER(x * y, 2) — base is bilinear, so total degree is 4. The
-        existing quadratic validator catches it; this test pins that it does
-        not slip past the new pre-pass."""
+        """POWER(x * y, 2) — base is bilinear, so total degree is 4.
+
+        The refusal is still the binder's; only its wording moved. It used to come from
+        the SUM-argument gate, which reported the base as "products of different DECIDE
+        variables ... only allowed in objectives and bilinear constraints" — misleading
+        here, because bilinear *is* allowed in an objective and the real fault is that
+        squaring it reaches degree 4. The degree owner says so directly."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(REAL), y(REAL)
                 SUCH THAT x <= 5 AND y <= 5
                 MINIMIZE SUM(POWER(x * y, 2)) LIMIT 1
-            """, match=r"products of different DECIDE variables|linear in DECIDE variables")
+            """, match=r"higher-order products.*total degree > 2")
 
     @pytest.mark.parametrize("expr", [
         "POWER(x, 2) * y",
@@ -464,6 +468,56 @@ class TestBinderErrors:
                 SUCH THAT x <= 5 AND y <= 5
                 MINIMIZE SUM(POWER(x, 2) * y) LIMIT 1
             """, match=r"Binder Error:.*higher-order products.*total degree > 2")
+
+    @pytest.mark.parametrize("constraint", [
+        "POWER(x * y, 2) <= 5",
+        "(x * y) * (x * y) <= 5",
+        "POWER(POWER(x, 2), 2) <= 5",
+        "x * y * x <= 5",
+    ])
+    def test_degree_refused_on_a_per_row_constraint(self, decidb_cli, constraint):
+        """A per-row constraint is held to the same degree rule as a reducer argument.
+
+        These four used to bind cleanly and be refused at plan time by term extraction,
+        because the binder's degree gate was reachable only from ValidateSumArgument and
+        so ran for `SUM(...)` arguments alone. Degree is one judgement with one owner, so
+        the spelling must not decide which layer refuses."""
+        decidb_cli.assert_error(f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(INT), y(INT)
+                SUCH THAT {constraint} AND SUM(x) >= 1
+                MAXIMIZE SUM(x) LIMIT 1
+            """, match=r"Binder Error:.*higher-order products.*total degree > 2")
+
+    def test_degree_refusal_points_at_the_offending_term(self, decidb_cli):
+        """The refusal carries a source location.
+
+        This is the whole reason the judgement stays at bind time rather than moving to
+        the layer that can see the post-rewrite tree: a bound-tree refusal can only point
+        a caret if the binder stamped the node, and a plan-time one cannot point at all."""
+        decidb_cli.assert_error("""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(INT), y(INT)
+                SUCH THAT x * y * x <= 5 AND SUM(x) >= 1
+                MAXIMIZE SUM(x) LIMIT 1
+            """, match=r"LINE \d+:")
+
+    @pytest.mark.parametrize("constraint", [
+        "x * y <= 5",       # bilinear: two different decisions
+        "POWER(x, 2) <= 5", # quadratic by squaring
+        "x * x <= 5",       # quadratic by self-product
+    ])
+    def test_supported_degrees_still_accepted_per_row(self, decidb_cli, constraint):
+        """The other side of the gate: moving degree to one owner must not narrow what
+        DECIDE accepts. Degree 2 is legal in a per-row constraint in all three spellings,
+        and each takes a different route through the walk."""
+        rows, _ = decidb_cli.execute(f"""
+                SELECT l_quantity FROM lineitem
+                DECIDE x(INT), y(INT)
+                SUCH THAT {constraint} AND x <= 3 AND y <= 3
+                MAXIMIZE SUM(x) LIMIT 1
+            """)
+        assert rows
 
     def test_power_squared_scaled_by_constant_still_accepted(self, decidb_cli):
         """Guard the other side of the degree change: a constant factor adds no

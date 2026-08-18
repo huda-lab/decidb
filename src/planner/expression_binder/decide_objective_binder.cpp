@@ -15,6 +15,12 @@ DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &cont
 }
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
+	auto location = expr_ptr->GetQueryLocation();
+	return PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression));
+}
+
+BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
+                                                         bool root_expression) {
 	if (binding_when_condition) {
 		return ExpressionBinder::BindExpression(expr_ptr, depth);
 	}

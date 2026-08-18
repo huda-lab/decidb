@@ -171,7 +171,9 @@ gurobipy check (see §3.6) to cross-verify on the oracle side.
 |---------|-------|---------|
 | `decidb_db_path` | session | Path to `decidb.db` (TPC-H SF-0.01); skip if missing |
 | `decidb_exe_path` | session | Path to `build/release/decidb`; skip if missing |
-| `decidb_cli` | session | `DecidBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)` |
+| `decidb_cli` | session | `DecidBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)`. DeciDB picks its own backend (Gurobi when available) |
+| `decidb_cli_gurobi` | session | Same wrapper with `DECIDB_FORCE_SOLVER=gurobi`; skips up front if Gurobi is unavailable on the host |
+| `decidb_cli_highs` | session | Same wrapper with `DECIDB_FORCE_SOLVER=highs`, for verifying HiGHS-specific error paths on a host where Gurobi is also linked |
 | `_oracle_db_path` | session | Path to `_tpch_oracle.duckdb`; auto-generated on first run via `CALL dbgen(sf=0.01)` against a vanilla duckdb connection |
 | `duckdb_conn` | function | Per-test read-only vanilla `duckdb` connection to `_tpch_oracle.duckdb` (no `decidb` Python package involved) |
 | `oracle_solver` | function | `CachedOracleSolver` wrapping a `GurobiSolver`; per-test so the cache can disambiguate multiple models per test |
@@ -268,6 +270,37 @@ Each correctness test calls `perf_tracker.record(...)` with:
 
 On session teardown, the tracker saves a timestamped JSON file to `results/`
 and prints a CLI summary table.
+
+### 3.9 Skip audit (`conftest.py`)
+
+Every skip must be declared in advance, in `_DECLARED_SKIPS`, with the reason it
+is allowed to vary between runs. On session teardown the controller prints:
+
+```
+  DECIDE skip audit: 1213 passed + 0 skipped = 1213 outcomes
+  (compare this total across runs, not the pass count)
+```
+
+and fails the run — exit code 1, in serial and under xdist alike — if any skip's
+reason matches no declared pattern.
+
+**Why the total, not the pass count.** A structural refactor verifies against the
+suite tally, and a run that reports one fewer pass and one more skip looks, at a
+glance, exactly like a run that lost a test. The audit prints the sum, which is
+stable, and names each skip that made it move.
+
+**What is declared, and what is not.** Environment skips are declared: no usable
+Gurobi, no `decidb.db`, no binary, no solver and no oracle cache. One behavioral
+skip is declared — `test_quadratic_constraints.py`'s `_expect_gurobi`, where
+Gurobi returns SUBOPTIMAL on a non-convex QCQP after three retries. That is real
+solver nondeterminism and the audit reports it by name each time it fires.
+
+A skip taken because *DeciDB* refused the query is not declarable. It is a
+property of the run rather than of the host, and it makes a test report green
+whether the shape is still accepted or was newly refused — an expressivity
+regression hiding as a skip. A test whose shape needs a particular backend pins
+that backend with `decidb_cli_gurobi` / `decidb_cli_highs` instead, so the skip
+decision is made up front, from the environment.
 
 ---
 
