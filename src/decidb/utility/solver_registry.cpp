@@ -19,8 +19,9 @@ namespace {
 //! backend is in play — capability questions go through SolverCapabilities, and
 //! session behavior through SolverSession's virtuals.
 const SolverBackendInfo REGISTERED_BACKENDS[] = {
-    {"gurobi", GurobiSolver::IsAvailable, GurobiSolver::Capabilities, GurobiSolver::CreateSession},
-    {"highs", DeterministicNaive::IsAvailable, DeterministicNaive::Capabilities,
+    {"gurobi", "Gurobi", GurobiSolver::IsAvailable, GurobiSolver::Capabilities,
+     GurobiSolver::CreateSession},
+    {"highs", "HiGHS", DeterministicNaive::IsAvailable, DeterministicNaive::Capabilities,
      DeterministicNaive::CreateSession},
 };
 
@@ -29,6 +30,11 @@ const SolverBackendInfo REGISTERED_BACKENDS[] = {
 const char *SolverBackend::Name() const {
 	D_ASSERT(info);
 	return info->name;
+}
+
+const char *SolverBackend::DisplayName() const {
+	D_ASSERT(info);
+	return info->display_name;
 }
 
 bool SolverBackend::IsAvailable() const {
@@ -66,6 +72,16 @@ SolverBackend SolverRegistry::Find(const string &name) {
 		}
 	}
 	return SolverBackend();
+}
+
+vector<string> SolverRegistry::BackendsSupporting(const SolverModelClass &needed) {
+	vector<string> names;
+	for (auto &backend : Backends()) {
+		if (SupportsModelClass(needed, backend.Capabilities())) {
+			names.emplace_back(backend.DisplayName());
+		}
+	}
+	return names;
 }
 
 } // namespace duckdb

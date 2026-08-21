@@ -62,4 +62,47 @@ struct SolverCapabilities {
 	bool miqp = false;
 };
 
+//! The demand side of the model-class flags above: what a particular DECIDE query
+//! needs from whichever solver runs it. Derived twice, deliberately:
+//!
+//!   - at PLAN time from the prepared model, by stage 05, which is what produces the
+//!     user-facing refusal early enough that no row is ever read;
+//!   - from the BUILT model, by stage 06, which `SolveModel` checks against the
+//!     chosen backend as an internal invariant.
+//!
+//! The first is a prediction and the second is the fact. The first must never
+//! under-report the second — if it did, a model would reach a backend that cannot
+//! load it — so the plan-time derivation errs toward demanding more, and the
+//! invariant check exists to catch the day it stops.
+struct SolverModelClass {
+	bool quadratic_constraints = false;
+	bool nonconvex_quadratic = false;
+	bool miqp = false;
+};
+
+//! Which demand a capability table fails to meet. NONE means the backend can take
+//! the model. The order below is the reporting order, so one query always names the
+//! same reason rather than a different one per run.
+enum class SolverModelClassGap { NONE, QUADRATIC_CONSTRAINTS, NONCONVEX_QUADRATIC, MIQP };
+
+inline SolverModelClassGap FindModelClassGap(const SolverModelClass &needed,
+                                             const SolverCapabilities &capabilities) {
+	if (needed.quadratic_constraints && !capabilities.quadratic_constraints) {
+		return SolverModelClassGap::QUADRATIC_CONSTRAINTS;
+	}
+	if (needed.nonconvex_quadratic && !capabilities.nonconvex_quadratic) {
+		return SolverModelClassGap::NONCONVEX_QUADRATIC;
+	}
+	if (needed.miqp && !capabilities.miqp) {
+		return SolverModelClassGap::MIQP;
+	}
+	return SolverModelClassGap::NONE;
+}
+
+//! Does a capability table cover this demand? Reads at call sites where only the
+//! yes/no matters.
+inline bool SupportsModelClass(const SolverModelClass &needed, const SolverCapabilities &capabilities) {
+	return FindModelClassGap(needed, capabilities) == SolverModelClassGap::NONE;
+}
+
 } // namespace duckdb

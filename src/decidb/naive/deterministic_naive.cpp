@@ -221,33 +221,12 @@ void HighsSession::Load(const SolverModel &model) {
     // 3b. Add quadratic objective (Hessian) if present
     //===--------------------------------------------------------------------===//
 
-    // HiGHS does not support quadratic constraints
-    if (!model.quadratic_constraints.empty()) {
-        throw InvalidInputException(
-            "Quadratic/bilinear constraints require Gurobi. "
-            "HiGHS does not support quadratic constraints (QCQP). "
-            "Either install Gurobi, or linearize the constraints.");
-    }
-
+    // The three model classes HiGHS cannot load — quadratic constraints, a non-convex
+    // objective, and MIQP — are all declared false in its SolverCapabilities and
+    // refused at plan time (stage 05's RequireDecideSolverSupport), before this query
+    // reads a row. `SolveModel` re-checks the built model against the same table
+    // before loading it, so no such model reaches this function.
     if (model.has_quadratic_obj && !model.q_vals.empty()) {
-        // HiGHS does not support non-convex QP
-        if (model.nonconvex_quadratic) {
-            throw InvalidInputException(
-                "Non-convex quadratic objectives require Gurobi. "
-                "HiGHS only supports convex quadratic programs "
-                "(MINIMIZE with positive-semidefinite Q, or MAXIMIZE with negative-semidefinite Q). "
-                "Either install Gurobi, or reformulate the objective.");
-        }
-        // HiGHS does not support MIQP — reject if any variable is integer
-        for (idx_t i = 0; i < total_vars; i++) {
-            if (model.is_integer[i]) {
-                throw InvalidInputException(
-                    "Quadratic objectives with integer/boolean variables (MIQP) require Gurobi. "
-                    "HiGHS only supports continuous quadratic programs (QP). "
-                    "Either install Gurobi, or change all DECIDE variables to IS REAL.");
-            }
-        }
-
         // Convert COO lower-triangle Q to CSC format for HiGHS passHessian.
         // HiGHS expects the lower triangle in column-major compressed sparse column format.
         idx_t num_nz = model.q_vals.size();

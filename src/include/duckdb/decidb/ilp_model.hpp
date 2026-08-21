@@ -12,8 +12,10 @@
 #pragma once
 
 #include "duckdb/common/exception.hpp"
-#include <cmath>
+#include "duckdb/decidb/solver_capabilities.hpp"
 #include "duckdb/decidb/solver_input.hpp"
+
+#include <cmath>
 
 namespace duckdb {
 
@@ -216,11 +218,15 @@ struct ModelConstraint {
 //! mirrored spellings (`Ax <= +inf`, `Ax >= -inf`) are the vacuous ones: they constrain
 //! nothing and are never the reason a solve failed.
 //!
-//! Two layers ask this question and must agree. Infeasible diagnosis uses it to name the
-//! clause before it builds an elastic program that structurally cannot repair such a row,
-//! and the HiGHS backend uses it to refuse the model with a legible error: HiGHS pairs a
-//! one-sided row bound with its own ±1e30 sentinel, so an unreachable bound becomes an
-//! inverted `lower > upper` pair that `passModel` rejects.
+//! This is a rule about the MODEL, not about any backend: a row spelled this way is not
+//! a hard problem to solve, it is a row with no solution, and no solver is expected to
+//! make sense of it. Two layers ask the question and must agree. Infeasible diagnosis
+//! uses it to name the clause before it builds an elastic program that structurally
+//! cannot repair such a row, and a backend uses it to refuse the model in SQL terms
+//! rather than pass it down. HiGHS shows why the refusal has to come first: it spells a
+//! one-sided row bound by pairing the user's bound with its own ±1e30 sentinel, so an
+//! unreachable bound arrives as an inverted `lower > upper` pair that `passModel`
+//! rejects with an internal error.
 inline bool IsUnreachableBound(char sense, double rhs) {
 	if (!std::isinf(rhs)) {
 		return false;
@@ -294,6 +300,10 @@ struct SolverModel {
     //! `indexer` must already be constructed for `input` (typically built once in
     //! PhysicalDecide::Finalize() and threaded through).
     static SolverModel Build(SolverInput &input, const VarIndexer &indexer);
+
+    //! What this model, as actually built, demands of a solver. The FACT that the
+    //! plan-time prediction (stage 05) is checked against — see SolverModelClass.
+    SolverModelClass ModelClass() const;
 };
 
 //! What a flat solver column represents to the user (F6 variable provenance —

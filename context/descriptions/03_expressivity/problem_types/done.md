@@ -91,7 +91,7 @@ MAXIMIZE SUM(POWER(x - 5, 2))
 
 Mix of `REAL` + `INT`/`BOOL` variables, with a quadratic objective and linear constraints. Arises when combining selection (BOOL) with least-squares fitting (REAL).
 
-**Gurobi only** — HiGHS rejects MIQP with an error directing the user to either install Gurobi or use `REAL` variables.
+**Gurobi only** — HiGHS declares `miqp` unsupported, so the query is refused at plan time with a message naming Gurobi and offering `x(REAL)` as the alternative.
 
 ```sql
 SELECT * FROM measurements
@@ -176,7 +176,7 @@ Supported by both Gurobi and HiGHS.
 
 Quadratic terms (`POWER(linear_expr, 2)`) are supported in `SUCH THAT` constraints, enabling QCQP. The constraint takes the form `SUM(POWER(expr, 2)) <= K` or per-row `POWER(expr, 2) <= K`.
 
-**Gurobi only** — HiGHS does not support quadratic constraints and rejects with a clear error.
+**Gurobi only** — HiGHS declares `quadratic_constraints` unsupported, so the query is refused at plan time.
 
 ```sql
 -- Aggregate quadratic constraint: total squared deviation budget
@@ -223,18 +223,22 @@ The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and
 
 ## Solver Support Matrix
 
+This table is the `SolverCapabilities` model-class flags, read as a matrix. "Refused
+at plan time" means the query is rejected before it reads a row, with a message naming
+Gurobi as the solver to install — see `01_pipeline/05_optimizer/done.md` §0.
+
 | Problem Class | Gurobi | HiGHS |
 |---|---|---|
 | LP | Yes | Yes |
 | ILP | Yes | Yes |
 | MILP | Yes | Yes |
 | QP (convex) | Yes | Yes |
-| QP (non-convex) | Yes (NonConvex=2) | **No** (error) |
-| MIQP | Yes | **No** (error) |
+| QP (non-convex) | Yes (NonConvex=2) | **No** — refused at plan time |
+| MIQP | Yes | **No** — refused at plan time |
 | Bilinear (Bool × anything) | Yes (McCormick → MILP) | Yes (McCormick → MILP) |
-| Bilinear (non-convex) | Yes (Q matrix, NonConvex=2) | **No** (error) |
-| Bilinear constraints | Yes (`GRBaddqconstr`) | **No** (error) |
-| QCQP (quadratic constraints) | Yes (`GRBaddqconstr`) | **No** (error) |
+| Bilinear (non-convex) | Yes (Q matrix, NonConvex=2) | **No** — refused at plan time |
+| Bilinear constraints | Yes (`GRBaddqconstr`) | **No** — refused at plan time |
+| QCQP (quadratic constraints) | Yes (`GRBaddqconstr`) | **No** — refused at plan time |
 | Feasibility | Yes | Yes |
 
 ---
@@ -246,7 +250,7 @@ The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and
 Constraints are primarily linear. Products of two decision variables (`x * y`) and quadratic terms (`POWER(expr, 2)`) are also supported:
 
 - **Boolean × anything**: Exactly linearized via McCormick envelopes (both solvers). The bilinear product is replaced with auxiliary variables and linear constraints at optimizer time, so the feasible region remains a convex polytope.
-- **General non-convex bilinear** (`Real×Real`, `Int×Int`, `Int×Real`): Gurobi only, via `GRBaddqconstr`. HiGHS rejects with a clear error.
+- **General non-convex bilinear** (`Real×Real`, `Int×Int`, `Int×Real`): Gurobi only, via `GRBaddqconstr`. On HiGHS the query is refused at plan time.
 - **Quadratic constraints** (`POWER(expr, 2)` in SUCH THAT): Gurobi only, via `GRBaddqconstr`. Each `POWER(inner_expr, 2)` is expanded into Q = sign * A^T A (outer product of inner expression coefficients). Multiple quadratic groups per constraint are accumulated. Constant terms from the inner expression are moved to the RHS. Composes with WHEN, PER, and linear terms in the same constraint.
 
 ### Quadratic Objectives — Convexity and Sign
@@ -272,7 +276,7 @@ The following are rejected:
 Products of two different DECIDE variables in objectives:
 
 - **Boolean × anything** (`SUM(b * x)`): McCormick linearization produces an equivalent MILP. Both solvers. Requires a finite upper bound on the non-Boolean variable (explicit or inferred via implied-bound propagation). Bool×Bool uses simpler AND-linearization (no Big-M).
-- **General non-convex** (`SUM(x * y)` where neither is Boolean): Off-diagonal Q matrix entries (always indefinite). Gurobi only (NonConvex=2). HiGHS rejects.
+- **General non-convex** (`SUM(x * y)` where neither is Boolean): Off-diagonal Q matrix entries (always indefinite). Gurobi only (NonConvex=2). On HiGHS the query is refused at plan time.
 - **Mixed objectives**: Linear + bilinear (`SUM(cost + b*x)`), bilinear + quadratic (`SUM(POWER(x-t,2) + b*x)`), and data coefficients (`SUM(profit * b * x)`) are all supported.
 
 **Syntax forms** (all equivalent for positive quadratic):
@@ -350,7 +354,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 
 - **Gurobi QP**: `src/decidb/gurobi/gurobi_solver.cpp` — calls `GRBaddqpterms` for Q matrix; sets `NonConvex=2` when `nonconvex_quadratic` is true
 
-- **HiGHS QP**: `src/decidb/naive/deterministic_naive.cpp` — calls `passHessian` with COO->CSC conversion; rejects non-convex QP and MIQP with errors
+- **HiGHS QP**: `src/decidb/naive/deterministic_naive.cpp` — calls `passHessian` with COO->CSC conversion. It contains no model-class check: non-convex QP, MIQP and quadratic constraints are all declared unsupported in its capability table and refused at plan time (`src/optimizer/decide/decide_solver_gate.cpp`)
 
 - **Solver dispatch**: `src/decidb/utility/ilp_solver.cpp`
   - `SolverModel::Build()` constructs the formulation; `SolveModel()` dispatches to Gurobi (if available) or HiGHS

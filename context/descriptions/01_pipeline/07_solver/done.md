@@ -162,26 +162,31 @@ order:
    conflicting-column-bounds check still exits this way, and only with diagnosis
    off. Because no model comes back, the operator must treat an unretained model
    (`num_vars == 0`) as "no diagnosis available" rather than walk it.
-2. `DumpSolverModel(model)` — a no-op unless `DECIDB_DUMP_MODEL` is set. Emitted
+2. Check `model.ModelClass()` against `backend.Capabilities()`. Stage 05 already
+   refused this query if the backend could not take it; this re-reads the class off
+   the model *as built* and asserts the two agree. Layer 8 does not repair, it
+   checks — a mismatch is an `InternalException`, never a user error.
+3. `DumpSolverModel(model)` — a no-op unless `DECIDB_DUMP_MODEL` is set. Emitted
    on the freshly built model so diagnostic re-solves never pollute the dump. This
    is the golden corpus's characterization oracle.
-3. Record `model_constraint_rows` before anything moves the model.
-4. `model.build_proven_infeasible`: a constraint reduced to a coefficient-free row
+4. Record `model_constraint_rows` before anything moves the model.
+5. `model.build_proven_infeasible`: a constraint reduced to a coefficient-free row
    against a bound it cannot meet (`SUM(0 * x) <= -1`, `x - x <= -1`). `Build`
    keeps that row — with its source provenance — instead of throwing, so the model
    survives for the elastic engine to name and relax the clause. No backend is
    asked to load a row with no coefficients: this short-circuits to `INFEASIBLE`,
    retaining the model. Unconditional, unlike the box below; with diagnosis off the
    retained model is simply discarded.
-5. Under `tolerate_infeasible_bounds` (diagnosis mode), `Build` keeps an inverted
-   column box rather than throwing, so the model survives for the elastic engine.
-   That box *is* infeasible and some backends reject it at load — HiGHS errors
-   hard and poisons the session — so this short-circuits to `INFEASIBLE`,
-   retaining the model, without ever handing the inverted box to a solver.
-6. Solve on a live session.
-7. `DisambiguateInfOrUnbd`.
-8. `AttachUnboundedRayIfRequested`.
-9. Hand back the session, then the model, to whoever asked.
+6. Under `tolerate_infeasible_bounds` (diagnosis mode), `Build` keeps an inverted
+   column box rather than throwing, so the model survives for the elastic engine. An
+   inverted box is not a hard model, it is an empty one — the answer is already known,
+   and no solver contract says a backend must accept it — so this short-circuits to
+   `INFEASIBLE`, retaining the model, without handing the box to any backend. (HiGHS
+   is the concrete case: it errors hard on load and poisons the session.)
+7. Solve on a live session.
+8. `DisambiguateInfOrUnbd`.
+9. `AttachUnboundedRayIfRequested`.
+10. Hand back the session, then the model, to whoever asked.
 
 ### Disambiguating INF_OR_UNBD
 
@@ -260,11 +265,14 @@ Logging is off (`log_to_console = false`). The session sets `time_limit` per chu
 rather than once at load, which is what makes `Continue()` work: HiGHS resumes its
 MIP search on a repeat `run()`.
 
-**MIQP limitation**: HiGHS does not support mixed-integer quadratic programs. If
-any variable is integer or boolean and the objective is quadratic, an
-`InvalidInputException` directs the user to install Gurobi or use `REAL`
-variables. HiGHS also has no thread-safe terminate, so it never sets
-`user_interrupted`.
+**Model classes it cannot load** — quadratic constraints, a non-convex objective,
+and MIQP — are declared `false` in its capability table and refused at **plan time**
+(`RequireDecideSolverSupport`, stage 05), before the query reads a row. They used to
+throw here, at model load, after a full scan and build; the backend now contains no
+model-class check at all. `SolveModel` re-derives the class from the built model and
+asserts the backend covers it, so nothing unsupported can reach `passModel`.
+
+HiGHS has no thread-safe terminate, so it never sets `user_interrupted`.
 
 ---
 

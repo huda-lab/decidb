@@ -207,6 +207,28 @@ static void StampAggregateProvenance(ConstraintProvenance &provenance, const Eva
     provenance.qualifier = eval_const.qualifier;
 }
 
+//! The model class this built model demands, read straight off the facts the build
+//! settled. Its counterpart is the plan-time prediction in stage 05
+//! (DeriveDecideModelClass); SolveModel checks the two agree before handing the model
+//! to a backend.
+SolverModelClass SolverModel::ModelClass() const {
+    SolverModelClass needed;
+    needed.quadratic_constraints = !quadratic_constraints.empty();
+    if (has_quadratic_obj) {
+        needed.nonconvex_quadratic = nonconvex_quadratic;
+        // MIQP is a quadratic objective over ANY integral column, auxiliaries
+        // included — a Big-M indicator makes the program mixed-integer just as a
+        // user's `x(INT)` does.
+        for (idx_t col = 0; col < num_vars && col < is_integer.size(); col++) {
+            if (is_integer[col]) {
+                needed.miqp = true;
+                break;
+            }
+        }
+    }
+    return needed;
+}
+
 SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     SolverModel model;
     model.constraint_sources = std::move(input.constraint_sources);

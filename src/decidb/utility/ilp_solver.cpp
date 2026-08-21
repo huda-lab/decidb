@@ -287,6 +287,19 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
 	}
+	// The model class was decided at plan time, on the prepared form, and the query
+	// was refused there if the chosen backend could not take it (stage 05's
+	// RequireDecideSolverSupport). This re-reads it off the model as actually built
+	// and asserts the two agree: layer 8 does not repair, it checks. A failure here is
+	// a prediction that came up short, not a user error — hence InternalException.
+	{
+		SolverModelClassGap gap = FindModelClassGap(model.ModelClass(), backend.Capabilities());
+		if (gap != SolverModelClassGap::NONE) {
+			throw InternalException("DECIDE built a model %s cannot load; the plan-time model-class "
+			                        "check did not predict it",
+			                        backend.Name());
+		}
+	}
 	// Characterization oracle (no-op unless DECIDB_DUMP_MODEL is set). Emitted here,
 	// on the freshly built model, so diagnostic re-solves (probe / ray / elastic
 	// models built later) never pollute the dump.
@@ -314,9 +327,11 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	}
 	// Under diagnosis (tolerate_infeasible_bounds), Build keeps an inverted column box
 	// (col_lower > col_upper) instead of throwing, so the model can be retained for the
-	// elastic engine. But the box IS infeasible, and some backends reject it at load
-	// (HiGHS errors hard, poisoning the session). Short-circuit to INFEASIBLE here —
-	// retaining the model — without ever handing the inverted box to the solver.
+	// elastic engine. But an inverted box is not a hard model, it is an EMPTY one: the
+	// answer is already known, and asking a solver to confirm it is asking it to load a
+	// model no solver contract says it must accept. Short-circuit to INFEASIBLE here —
+	// retaining the model — without handing the inverted box to any backend. (HiGHS is
+	// the concrete case: it errors hard on load and poisons the session.)
 	if (input.tolerate_infeasible_bounds) {
 		for (idx_t col = 0; col < model.num_vars; col++) {
 			if (model.col_lower[col] > model.col_upper[col]) {

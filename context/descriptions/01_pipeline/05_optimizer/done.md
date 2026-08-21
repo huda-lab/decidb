@@ -45,6 +45,38 @@ instead, so the operator always runs against exactly one backend.
 See [`../07_solver/done.md`](../07_solver/done.md) §2 for what selection reads, and
 `SolverCapabilities` for what a pass may ask about the backend.
 
+### The model-class gate
+
+`RequireDecideSolverSupport` (`decide_solver_gate.cpp`) runs once the prepared linear
+form exists — right after `BuildDecidePreparedModel`, the first point at which every
+constraint's shape and the objective are settled. It compares what the query demands
+against what the chosen backend declares.
+
+A **construct** capability is an optimization: a lowering always exists, so a `false`
+flag just means this stage lowers as it always has. A **model class** is a gate:
+nothing lowers a quadratic constraint or a non-convex objective into linear rows, so
+the only honest answer is refusal.
+
+The refusal is here rather than at bind time, and rather than at model load, for two
+different reasons:
+
+- **Not bind time.** The same SQL is legal on every machine. What differs is whether
+  this machine has a solver that can run it — so this is a planning failure, not a
+  semantic one, and the message blames the host and names the solver to install.
+- **Not model load.** The old refusals lived in the HiGHS backend and fired after a
+  full scan and a full model build. Nothing about the three classes needs a single
+  row: `quadratic_constraints` is tree shape, `miqp` is declared integrality, and
+  `nonconvex_quadratic` is the sign of `quadratic_sign` against the sense — a
+  plan-time constant, since this stage already refuses a scale factor it cannot fold.
+
+`DeriveDecideModelClass` is a *prediction* of what `SolverModel::ModelClass()` will
+report once the rows are in, and it must never predict less. Where it cannot be exact
+it over-reports: `MayHaveIntegralColumn` treats any construct that still owes work at
+execution as producing an auxiliary column, rather than enumerating which auxiliaries
+are binary — a list that would rot silently. `SolveModel` re-derives the class from
+the built model and asserts the backend covers it, so a prediction that ever comes up
+short fails loudly instead of handing a backend a model it cannot load.
+
 ---
 
 ## 1. Pass order
@@ -463,6 +495,7 @@ stage 07.
 |---|---|
 | The rewrites | `src/optimizer/decide/decide_optimizer.cpp` |
 | Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |
+| Backend selection and the model-class gate | `src/optimizer/decide/decide_solver_gate.cpp` |
 | Pass inventory and helper contracts | `src/include/duckdb/optimizer/decide_optimizer.hpp` |
 | The prepared form's structures | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
 | Where flattening is triggered | `src/execution/physical_plan/plan_decide.cpp` |

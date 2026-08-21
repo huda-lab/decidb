@@ -6,6 +6,7 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/optimizer/decide_linear_form.hpp"
+#include "duckdb/optimizer/decide_solver_gate.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -16,6 +17,14 @@ namespace duckdb {
 
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
     D_ASSERT(op.children.size() == 1);
+    // The backend was chosen before stage 05 rewrote anything, so the rewrites and the
+    // solve agree on what is lowered and what is left native. If the DECIDE optimizer
+    // never ran (`SET disabled_optimizers='decide_optimizer'`), nothing chose one;
+    // resolve it here so the operator still runs against exactly one backend for the
+    // whole query.
+    if (!op.solver_backend.IsValid()) {
+        op.solver_backend = SelectSolverBackend();
+    }
     // Both clauses are verified after ALL optimizer rewriting and before any logical
     // expression is moved into the physical operator. The objective is checked here
     // for the same reason the constraints are: every rewrite that touches it now
@@ -38,6 +47,12 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // expressions after the DECIDE optimizer runs -- copies taken earlier would keep
     // bindings that no longer name the right input columns.
     BuildDecidePreparedModel(context, op);
+    // With the shape of every constraint and the objective settled, check the model
+    // class this query needs against the backend chosen for it. A model class is a
+    // gate, not an optimization -- nothing lowers a quadratic constraint into linear
+    // rows -- so an unsupported one is refused here, before the query reads a row,
+    // and the message blames the host rather than the query.
+    RequireDecideSolverSupport(op);
     // Capture child column bindings BEFORE CreatePlan: several logical operators
     // (notably LogicalProjection) move their `expressions` vector into the physical
     // op during CreatePlan, which leaves GetColumnBindings() returning an empty
@@ -71,14 +86,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         op.types, op.estimated_cardinality, std::move(child_plan),
         op.decide_index, std::move(op.decide_variables),
         std::move(op.decide_constraints), op.decide_sense, std::move(op.decide_objective));
-    // The backend was chosen before stage 05 rewrote anything, so the rewrites and
-    // the solve agree on what is lowered and what is left native. If the DECIDE
-    // optimizer never ran (`SET disabled_optimizers='decide_optimizer'`), nothing
-    // chose one; resolve it here so the operator still runs against exactly one
-    // backend for the whole query.
-    if (!op.solver_backend.IsValid()) {
-        op.solver_backend = SelectSolverBackend();
-    }
     decide_op->solver_backend = op.solver_backend;
     decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
     decide_op->is_boolean_var = op.is_boolean_var;

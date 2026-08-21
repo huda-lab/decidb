@@ -71,6 +71,14 @@ class DecidBCli:
         self.db = db_path
         self.env = env
 
+    def with_env(self, extra: dict[str, str]) -> "DecidBCli":
+        """A copy of this wrapper with ``extra`` overlaid on its env.
+
+        Lets a test add a one-off variable (e.g. ``DECIDB_DUMP_MODEL``) to a
+        session-scoped fixture without mutating the fixture other tests share.
+        """
+        return DecidBCli(self.exe, self.db, env={**(self.env or {}), **extra})
+
     def _subprocess_env(self, *, status_markers: bool = False) -> dict[str, str] | None:
         # `status_markers` asks DeciDB for machine-readable terminal lines. Only
         # ``execute`` sets it: that method classifies stderr itself and strips the

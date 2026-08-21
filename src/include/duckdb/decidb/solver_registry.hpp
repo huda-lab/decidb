@@ -23,6 +23,10 @@ class SolverSession;
 struct SolverBackendInfo {
 	//! Stable lowercase identifier, and the DECIDB_FORCE_SOLVER spelling.
 	const char *name;
+	//! How the backend is spelled in text a user reads ("Gurobi"). Kept in the table
+	//! so a refusal can name the solver that would run the query without any code
+	//! outside this file hard-coding a backend.
+	const char *display_name;
 	//! Runtime probe: is the library loadable and the license valid on THIS host?
 	//! A backend that is always present answers true unconditionally.
 	bool (*is_available)();
@@ -53,9 +57,11 @@ public:
 		return info != nullptr;
 	}
 
-	//! The registered identifier ("gurobi", "highs"). Diagnostics and error text
-	//! use it; nothing branches on it.
+	//! The registered identifier ("gurobi", "highs"). Test overrides and internal
+	//! messages use it; nothing branches on it.
 	const char *Name() const;
+	//! The user-facing spelling ("Gurobi", "HiGHS").
+	const char *DisplayName() const;
 	//! Is this backend usable on this host right now?
 	bool IsAvailable() const;
 	//! What upstream stages may assume. See SolverCapabilities.
@@ -84,6 +90,11 @@ struct SolverRegistry {
 	//! Look one up by name, case-insensitively. Returns an invalid handle when no
 	//! backend answers to that name.
 	static SolverBackend Find(const string &name);
+	//! The display names of every registered backend that could take a model of this
+	//! class, in preference order — regardless of whether it is installed here. This
+	//! is what a plan-time refusal names as the thing to install, so the sentence
+	//! stays correct as backends are added or their capabilities grow.
+	static vector<string> BackendsSupporting(const SolverModelClass &needed);
 };
 
 } // namespace duckdb

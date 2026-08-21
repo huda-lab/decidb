@@ -123,7 +123,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 
 6. **Solvers**:
    - Gurobi: `GRBaddqpterms` for Q matrix (existing), `GRBaddqconstr` for quadratic constraints (new)
-   - HiGHS: rejects non-convex Q and quadratic constraints with clear errors
+   - HiGHS: declares neither, so a query needing either is refused at plan time
 
 ### Key Data Structures
 
@@ -159,8 +159,14 @@ Inside `FindAndReplaceBilinear` (`src/optimizer/decide/decide_optimizer.cpp:1766
 
 - `"Triple or higher-order products of DECIDE variables are not supported (total degree > 2)"` — three or more vars in a single product (binder-level)
 - `"Bilinear term requires a finite upper bound on variable 'x'"` — McCormick needs `x <= K`
-- `"Non-convex quadratic objectives require Gurobi"` — Real*Real or Int*Int bilinear on HiGHS
-- `"Quadratic/bilinear constraints require Gurobi"` — non-Boolean bilinear in constraints on HiGHS
+- `"the objective multiplies two decision variables, which needs Gurobi — not available
+  on this machine"` — Real*Real or Int*Int bilinear in the objective on HiGHS
+- `"a SUCH THAT clause squares or multiplies decision variables, which needs Gurobi — not
+  available on this machine"` — non-Boolean bilinear in a constraint on HiGHS
+
+Both are **plan-time** refusals (`RequireDecideSolverSupport`), raised before the query
+reads a row. They name what the query does and which solver to install; they never blame
+the query, because the same SQL runs fine on a host that has Gurobi.
 - `"DECIDE expression contains a product of decision variables with total degree > 2 ..."` — execution-time degree guard in `ClassifyNormalizedProduct` (degree > 2 decide factors in any `*` tree)
 - `"DECIDE expression contains a same-variable product that is not in a supported quadratic form ..."` — `ClassifyNormalizedProduct` detects `x * x` (same variable appearing twice in a flat `*` tree); use `POWER(x, 2)` or `(x)*(x)` for quadratic
 

@@ -18,7 +18,9 @@ Covers:
   - Error rejection cases
 """
 
+import os
 import re
+import tempfile
 import time
 
 import pytest
@@ -1854,12 +1856,18 @@ def test_qp_entity_scoped_objective(
 @pytest.mark.correctness
 @pytest.mark.quadratic
 class TestHighsRejection:
-    """Error-path tests that pin the solver to HiGHS via ``decidb_cli_highs``.
+    """Model-class refusals when the solver is pinned to HiGHS.
 
-    On Gurobi-linked hosts the unforced suite would take the Gurobi path
-    (and succeed on non-convex / MIQP shapes). The ``decidb_cli_highs``
-    fixture sets ``DECIDB_FORCE_SOLVER=highs`` so these shapes reach the
-    rejection message in ``src/decidb/naive/deterministic_naive.cpp``.
+    Three model classes have no lowering into plain linear rows -- quadratic
+    constraints, a non-convex objective, and MIQP -- so a backend that cannot
+    take one has no answer but refusal. HiGHS declares all three unsupported,
+    and the refusal happens at PLAN time (``RequireDecideSolverSupport``,
+    ``src/optimizer/decide/decide_solver_gate.cpp``), before the query reads a
+    row. Each message names what the query does in SQL terms, blames the host
+    rather than the query, and names the solver to install.
+
+    On Gurobi-linked hosts the unforced suite would take the Gurobi path and
+    succeed on all three; ``decidb_cli_highs`` sets ``DECIDB_FORCE_SOLVER=highs``.
     """
 
     def test_highs_nonconvex_qp_rejected(self, decidb_cli_highs):
@@ -1871,7 +1879,9 @@ class TestHighsRejection:
             SUCH THAT x >= 0 AND x <= 10
             MAXIMIZE SUM(POWER(x, 2))
         """
-        decidb_cli_highs.assert_error(sql, match=r"[Nn]on-convex.*Gurobi")
+        decidb_cli_highs.assert_error(
+            sql, match=r"MAXIMIZEs squared decision terms.*Gurobi",
+        )
 
     def test_highs_miqp_rejected(self, decidb_cli_highs):
         """MINIMIZE SUM(POWER(x, 2)) with x(INT) triggers MIQP, HiGHS-rejected."""
@@ -1886,5 +1896,41 @@ class TestHighsRejection:
             MINIMIZE SUM(POWER(x - target, 2))
         """
         decidb_cli_highs.assert_error(
-            sql, match=r"MIQP|integer.*quadratic.*Gurobi",
+            sql, match=r"squares decision variables that are not continuous.*Gurobi",
         )
+
+    def test_highs_quadratic_constraint_rejected(self, decidb_cli_highs):
+        """A squared term in SUCH THAT is a quadratic constraint (QCQP), HiGHS-rejected."""
+        sql = """
+            WITH data AS (SELECT 1 AS id UNION ALL SELECT 2)
+            SELECT id, x FROM data
+            DECIDE x(REAL)
+            SUCH THAT POWER(x, 2) <= 4
+            MAXIMIZE SUM(x)
+        """
+        decidb_cli_highs.assert_error(
+            sql, match=r"SUCH THAT clause squares or multiplies decision variables.*Gurobi",
+        )
+
+    def test_highs_refusal_happens_before_any_row_is_read(self, decidb_cli_highs):
+        """The gate is at plan time, so a refused query never builds a model.
+
+        Proven by the model dump: ``DECIDB_DUMP_MODEL`` writes one block per
+        model actually built, and a plan-time refusal writes none. This is what
+        separates the gate from the old model-load rejection, which refused only
+        after a full scan and build.
+        """
+        sql = """
+            WITH data AS (SELECT 1 AS id UNION ALL SELECT 2)
+            SELECT id, x FROM data
+            DECIDE x(REAL)
+            SUCH THAT POWER(x, 2) <= 4
+            MAXIMIZE SUM(x)
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            dump_path = os.path.join(tmp, "model.dump")
+            cli = decidb_cli_highs.with_env({"DECIDB_DUMP_MODEL": dump_path})
+            cli.assert_error(sql, match=r"SUCH THAT clause squares")
+            assert not os.path.exists(dump_path), (
+                "a plan-time refusal must not build a model, but a dump was written"
+            )
