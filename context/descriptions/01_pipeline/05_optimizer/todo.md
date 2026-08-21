@@ -52,3 +52,63 @@ data for one.
 below the threshold it introduces.
 
 **Done file**: `done.md` §2 (MIN/MAX) and `../07_solver/done.md` §2 (backend).
+
+---
+
+## Native MIN/MAX: what the spike found
+
+**Status**: investigation complete, no code shipped. The throwaway branch that
+produced this is deleted; this section is its entire deliverable, and the native
+MIN/MAX work (batch C in the top-level queue) starts from it.
+
+**The question**: if the backend can express MIN/MAX natively, stage 05 should not
+rewrite it. Does anything *downstream* of stage 05 require the rewrite to have
+happened — box sizing, the model builder, provenance — or only the emitters?
+
+**Method**: suppress the rewrite for `MAX(e) <= C` (and then `MAX(e) >= C`) behind a
+hardcoded flag in `RewriteMinMaxInConstraint`, let the aggregate reach execution
+untouched, and follow what breaks.
+
+**Answer: only the emitters.** But four things have to move with it.
+
+1. **The first blocker is stage 05 itself, not stage 08.**
+   `DecideLinearFormBuilder::ExtractAggregateConstraintTerms`
+   (`decide_linear_form.cpp:1002`) throws an `InternalException` on any aggregate
+   that is not SUM. The prepared linear form has **no vocabulary for a reducer
+   kind**: `DecideConstraint` carries `lhs_is_aggregate` (a bool) and
+   `minmax_indicator_idx`, and every consumer reads an aggregate LHS as a sum. So
+   "leave the tree alone" is not a viable record of a native construct. The reducer
+   kind has to become a field on `DecideConstraint`, the way `abs_y_idx` already
+   records a tagged ABS.
+
+2. **Nothing downstream demands the indicator variables.** Past the flattener the
+   constraint flows through `AnalyzeConstraint` → `EvaluatedConstraint` →
+   `SolverModel::Build` as an ordinary aggregate row: no assert, no crash.
+   `LinearizeMinMaxIndicators` is already guarded by `!minmax_indicator_links.empty()`
+   (`physical_decide.cpp:2698`), so with no indicators it simply does not run. This is
+   what makes the gate design viable at all.
+
+3. **`AbsorbVariableBounds` is not a constraint on the design.** It sizes the box
+   over `decide_variables` after every other pass, and suppressing a rewrite creates
+   *fewer* auxiliaries, never a later one. Its "must run last" rule is untouched.
+
+4. **`DecidePropagateImpliedBounds` is the one real hazard.**
+   `ilp_linearization.cpp:189` skips any constraint carrying `minmax_indicator_idx` /
+   `ne_indicator_idx` / `abs_y_idx`, because such a row is not the plain sum it looks
+   like. A natively-emitted MIN/MAX row carries none of those, so it would be read as
+   an ordinary aggregate and could produce a wrong implied bound. That skip must
+   extend to the reducer kind from (1). This is the finding most likely to be missed,
+   because it fails **silently** rather than loudly.
+
+5. **The empty-WHEN rejection rides on the rewrite.** `was_minmax_easy`
+   (`decide_linear_form.cpp:1272`, consumed at `physical_decide.cpp:1928`, `:1945`,
+   `:2126`) exists only because the easy rewrite strips the aggregate. A native
+   MIN/MAX keeps its aggregate, so `lhs_is_aggregate` covers those three sites — but
+   the flag must stay for the lowered path, which still needs it.
+
+6. **Diagnosis over a native row has nothing to slacken.** The row is stamped with
+   ordinary aggregate provenance, and a construct that stays native has no matrix row
+   for the elastic engine to relax. Confirms the already-parked item rather than
+   adding a new one.
+
+**Done file**: `done.md` §2 (MIN/MAX), once the work lands.
