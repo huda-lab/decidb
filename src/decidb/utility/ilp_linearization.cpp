@@ -115,10 +115,85 @@ static double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row) 
     return rhs - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row);
 }
 
+//! Refuse a Big-M linearization that has no finite M, naming a column to bound.
+//!
+//! A Big-M constant must dominate the reachable magnitude of the row's left-hand
+//! side. When a contributing decision variable has no finite bound, no constant does
+//! — so there is no M, only a guess. DeciDB refuses rather than guessing: a guessed M
+//! that the true range exceeds does not fail, it silently cuts the feasible region
+//! and returns a confidently wrong answer.
+//!
+//! `LinearizeAbsMaximize` has always refused in exactly this situation. This is the
+//! same refusal, in the same words, for the constructs that used to take a 1e6 floor
+//! instead — and it applies on every backend, so one query never answers correctly on
+//! one solver and wrongly on another.
+[[noreturn]] static void ThrowUnboundedBigM(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
+                                            const vector<double> &upper_bounds,
+                                            const vector<string> &var_names, const char *construct) {
+    // Name a column the user can actually bound: the first contributing decision
+    // variable whose box is open. The indicator this rewrite created is skipped — it
+    // is ours, not theirs, and it is binary anyway.
+    idx_t bad = DConstants::INVALID_INDEX;
+    for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+        idx_t v = ec.variable_indices[t];
+        if (v == DConstants::INVALID_INDEX || v == ec.minmax_indicator_idx || v == ec.ne_indicator_idx ||
+            v == ec.abs_y_idx) {
+            continue;
+        }
+        if (v < upper_bounds.size() && v < lower_bounds.size() &&
+            (upper_bounds[v] >= 1e20 || lower_bounds[v] <= -1e20)) {
+            bad = v;
+            break;
+        }
+    }
+    if (bad == DConstants::INVALID_INDEX || bad >= var_names.size() || var_names[bad].empty()) {
+        throw InvalidInputException("Rewriting %s requires a finite bound on every decision variable it "
+                                    "reads, and one of them is unbounded. Add an upper and a lower bound "
+                                    "to the variables in that clause.",
+                                    construct);
+    }
+    const string &name = var_names[bad];
+    throw InvalidInputException("Rewriting %s requires a finite bound on '%s'. Add constraints "
+                                "'%s >= <lower>' and '%s <= <upper>'.",
+                                construct, name, name, name);
+}
+
+//! The auxiliary-family twin of ThrowUnboundedBigM: a MIN/MAX auxiliary is linked to
+//! its expression by `(aux - expr) +/- M*y`, so M has to stay slack across the whole
+//! family's spread. An unbounded contributor leaves no such M, and the same rule
+//! applies — refuse rather than guess.
+[[noreturn]] static void ThrowUnboundedAuxBigM(const AuxRange &range, const vector<string> &var_names,
+                                               const char *construct) {
+    idx_t bad = range.unbounded_var;
+    if (bad == DConstants::INVALID_INDEX || bad >= var_names.size() || var_names[bad].empty()) {
+        throw InvalidInputException("Rewriting %s requires a finite bound on every decision variable it "
+                                    "reads, and one of them is unbounded. Add an upper and a lower bound "
+                                    "to the variables in that clause.",
+                                    construct);
+    }
+    const string &name = var_names[bad];
+    throw InvalidInputException("Rewriting %s requires a finite bound on '%s'. Add constraints "
+                                "'%s >= <lower>' and '%s <= <upper>'.",
+                                construct, name, name, name);
+}
+
+//! Which construct asked for this Big-M, for the refusal above. Read off the
+//! indicator the rewrite attached, so the message names what the user wrote.
+static const char *DescribeBigMConstruct(const EvaluatedConstraint &ec) {
+    if (ec.ne_indicator_idx != DConstants::INVALID_INDEX) {
+        return "<>";
+    }
+    if (ec.abs_y_idx != DConstants::INVALID_INDEX) {
+        return "ABS";
+    }
+    return "MIN/MAX";
+}
+
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
                              const vector<double> &lower_bounds,
                              const vector<double> &upper_bounds,
-                             idx_t num_rows) {
+                             idx_t num_rows,
+                             const vector<string> &var_names) {
     bool has_unbounded = false;
     double M = 0.0;
     for (idx_t r = 0; r < num_rows; r++) {
@@ -148,7 +223,7 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
     }
     M += 1.0;
     if (has_unbounded) {
-        M = std::max(M, DECIDE_BIGM_FALLBACK);
+        ThrowUnboundedBigM(ec, lower_bounds, upper_bounds, var_names, DescribeBigMConstruct(ec));
     }
     return M;
 }
@@ -310,7 +385,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
     }
 }
 
-void LinearizeMinMaxIndicators(SolverInput &input) {
+void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_names) {
     const auto &lower_bounds = input.lower_bounds;
     const auto &upper_bounds = input.upper_bounds;
     const idx_t num_rows = input.num_rows;
@@ -400,7 +475,7 @@ void LinearizeMinMaxIndicators(SolverInput &input) {
         // (var_idx == INVALID_INDEX) — they have no associated variable
         // bound; their contribution will be folded into the RHS by the
         // per-row constraint emitter.
-        double M = DecideTightPerRowBigM(ec, lower_bounds, upper_bounds, num_rows);
+        double M = DecideTightPerRowBigM(ec, lower_bounds, upper_bounds, num_rows, var_names);
 
         auto BuildShiftedRhs = [&](double shift) {
             if (ec.rhs_values.IsUniform()) {
@@ -635,7 +710,8 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
     return seen ? verdict : NECollapse::DISJUNCTION;
 }
 
-void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate) {
+void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate,
+                       const vector<string> &var_names) {
     const idx_t num_rows = input.num_rows;
 
     vector<EvaluatedConstraint> new_constraints;
@@ -745,7 +821,7 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
         // asked for an M, and an infinite bound is exactly such a row
         // (`LHS <> Infinity` always holds), so it is dropped above rather than
         // refused by the Big-M guard.
-        double M = DecideTightPerRowBigM(ec, input.lower_bounds, input.upper_bounds, num_rows);
+        double M = DecideTightPerRowBigM(ec, input.lower_bounds, input.upper_bounds, num_rows, var_names);
         idx_t indicator_var_idx = ec.ne_indicator_idx;
 
         // Build the indicator coefficient column. With no WHEN/PER filter every row
@@ -811,7 +887,8 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
 
 void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                      vector<EvaluatedConstraint> &deferred_aggregate,
-                                     const vector<pair<idx_t, string>> &aux_var_expressions) {
+                                     const vector<pair<idx_t, string>> &aux_var_expressions,
+                                     const vector<string> &var_names) {
     if (deferred_aggregate.empty()) {
         return;
     }
@@ -952,7 +1029,7 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
                 }
                 M = grp_range + std::abs(rhs) + 1.0;
                 if (grp_unbounded) {
-                    M = std::max(M, DECIDE_BIGM_FALLBACK);
+                    ThrowUnboundedBigM(ec, input.lower_bounds, input.upper_bounds, var_names, "<>");
                 }
             }
 
@@ -1217,6 +1294,17 @@ void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
                 name, name, name);
         }
         double two_M = 2.0 * M;
+        // The rows emitted below pin `aux = |inner|`, and M is the largest |inner|
+        // any row can reach. So M is a valid upper bound on the auxiliary's column,
+        // and the only one anything derives: the pair `aux >= inner`, `aux >= -inner`
+        // bounds the auxiliary from BELOW only, which is why it otherwise sits at
+        // +infinity. Narrow the box here, where the value is known, so a later
+        // linearization over this auxiliary (an outer MIN/MAX, a `<>`) gets a tight
+        // Big-M instead of an unbounded column it has to refuse. Never widens: an
+        // implied bound already tighter than M stands.
+        if (M < input.upper_bounds[link.aux_idx]) {
+            input.upper_bounds[link.aux_idx] = M;
+        }
 
         auto ShiftRhs = [&](const CoefficientColumn &src, double delta) {
             if (src.IsUniform()) {
@@ -1272,7 +1360,7 @@ void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
 // auxiliaries live in the flat global block).
 
 void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                              const MinMaxObjectiveSpec &spec) {
+                              const MinMaxObjectiveSpec &spec, const vector<string> &var_names) {
     idx_t num_rows = input.num_rows;
 
     // Save objective data (needed for constraint generation in the PER MIN/MAX
@@ -1299,6 +1387,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         double var_lo = 0.0;
         double var_hi = 0.0;
         bool unbounded = false;
+        idx_t unbounded_var = DConstants::INVALID_INDEX;
     };
     auto saved_row_range = [&](idx_t r) -> SavedRowRange {
         SavedRowRange out;
@@ -1316,7 +1405,10 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             double lb = input.lower_bounds[v];
             double ub = input.upper_bounds[v];
             if (ub >= 1e20 || lb <= -1e20) {
-                out.unbounded = true;
+                if (!out.unbounded) {
+                    out.unbounded = true;
+                    out.unbounded_var = v;
+                }
                 continue;
             }
             double term_lo = (c > 0.0) ? c * lb : c * ub;
@@ -1337,8 +1429,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     //   max_r exprmax_r  -  min_r exprmin_r
     // taking the SIGN of every coefficient against the variable's [lb, ub]. That is the
     // tight, data-driven value (a per-row range can under-estimate it when coefficient
-    // signs differ across rows). Computed once and reused; the 1e6 floor applies only
-    // when a contributing variable is unbounded.
+    // signs differ across rows). Computed once and reused; an unbounded contributor has
+    // no such value at all, and the query is refused rather than given a constant.
     bool row_family_cached = false;
     AuxRange row_family_range;
     auto row_family = [&]() -> const AuxRange & {
@@ -1347,7 +1439,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 auto rr = saved_row_range(r);
                 row_family_range.CoverRow(rr.lo, rr.hi, rr.var_lo, rr.var_hi);
                 if (rr.unbounded) {
-                    row_family_range.unbounded = true;
+                    row_family_range.MarkUnbounded(rr.unbounded_var);
                 }
             }
             row_family_cached = true;
@@ -1355,6 +1447,9 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         return row_family_range;
     };
     auto compute_big_m = [&]() -> double {
+        if (row_family().unbounded) {
+            ThrowUnboundedAuxBigM(row_family(), var_names, "MIN/MAX");
+        }
         return row_family().BigM();
     };
 
@@ -1633,17 +1728,21 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
                 double g_lo = 0.0, g_hi = 0.0, g_var_lo = 0.0, g_var_hi = 0.0;
                 bool g_unbounded = false;
+                idx_t g_unbounded_var = DConstants::INVALID_INDEX;
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     auto rr = saved_row_range(obj_flat_rows[k]);
                     g_lo += rr.lo * scale;
                     g_hi += rr.hi * scale;
                     g_var_lo += rr.var_lo * scale;
                     g_var_hi += rr.var_hi * scale;
-                    g_unbounded = g_unbounded || rr.unbounded;
+                    if (rr.unbounded && !g_unbounded) {
+                        g_unbounded = true;
+                        g_unbounded_var = rr.unbounded_var;
+                    }
                 }
                 group_sum_family.CoverRow(g_lo, g_hi, g_var_lo, g_var_hi);
                 if (g_unbounded) {
-                    group_sum_family.unbounded = true;
+                    group_sum_family.MarkUnbounded(g_unbounded_var);
                 }
             }
             idx_t w_idx = AddGlobalContinuousAux(input, indexer, group_sum_family, 1.0); // objective = w
@@ -1890,7 +1989,7 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
             double lb = input.lower_bounds[v];
             double ub = input.upper_bounds[v];
             if (ub >= 1e20 || lb <= -1e20) {
-                range.unbounded = true;
+                range.MarkUnbounded(v);
                 continue;
             }
             double term_lo = (c > 0.0) ? c * lb : c * ub;
@@ -1910,9 +2009,13 @@ static void EmitComposedHardMinMaxIndicators(SolverInput &input, const VarIndexe
                                              const vector<DecideTerm> &inner_terms,
                                              const vector<vector<double>> &per_term_coefs,
                                              const vector<bool> &filter_mask,
-                                             const string &label) {
+                                             const string &label, const vector<string> &var_names) {
     idx_t num_rows = input.num_rows;
-    double M = ComposedTermRange(input, inner_terms, per_term_coefs, filter_mask).BigM();
+    AuxRange range = ComposedTermRange(input, inner_terms, per_term_coefs, filter_mask);
+    if (range.unbounded) {
+        ThrowUnboundedAuxBigM(range, var_names, "MIN/MAX");
+    }
+    double M = range.BigM();
 
     SolverInput::RawConstraint sum_y;
     for (idx_t row = 0; row < num_rows; row++) {
@@ -1956,7 +2059,8 @@ static void EmitComposedHardMinMaxIndicators(SolverInput &input, const VarIndexe
 //! every MIN/MAX term, which the caller then references from the outer row or the
 //! objective.
 static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &indexer,
-                                          vector<ComposedMinMaxTermData> &terms) {
+                                          vector<ComposedMinMaxTermData> &terms,
+                                          const vector<string> &var_names) {
     idx_t num_rows = input.num_rows;
 
     // Allocate global z_k for each MIN/MAX term. Both directions supported:
@@ -2003,7 +2107,7 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
         if (!ta.is_minmax || ta.is_easy) continue;
         EmitComposedHardMinMaxIndicators(input, indexer, ta.z_idx, ta.agg_name == "max",
                                          (*ta.inner_terms), ta.per_term_coefs,
-                                         ta.filter_mask, ta.label);
+                                         ta.filter_mask, ta.label, var_names);
     }
 }
 
@@ -2019,9 +2123,10 @@ static idx_t ComposedAvgDivisor(const ComposedMinMaxTermData &ta, idx_t num_rows
 
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
-                                       ExpressionType outer_cmp, idx_t source_clause_id) {
+                                       ExpressionType outer_cmp, idx_t source_clause_id,
+                                       const vector<string> &var_names) {
     idx_t num_rows = input.num_rows;
-    EmitComposedMinMaxAuxiliaries(input, indexer, terms);
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms, var_names);
 
     // Build the outer composed RawConstraint
     std::unordered_map<int, double> outer_accum;
@@ -2085,7 +2190,8 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
 }
 
 void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                                      vector<ComposedMinMaxTermData> &terms) {
+                                      vector<ComposedMinMaxTermData> &terms,
+                                      const vector<string> &var_names) {
     idx_t num_rows = input.num_rows;
 
     // Clear any existing objective terms — the placeholder constant produced
@@ -2093,7 +2199,7 @@ void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &inde
     input.objective_coefficients.clear();
     input.objective_variable_indices.clear();
 
-    EmitComposedMinMaxAuxiliaries(input, indexer, terms);
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms, var_names);
 
     // Populate objective coefficients. For MIN/MAX terms, the obj coef on z_k
     // is ta.sign (i.e., sign×1.0); set via global_obj_coeffs. For SUM/AVG

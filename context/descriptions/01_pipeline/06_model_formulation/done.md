@@ -339,11 +339,31 @@ tightness on the table for chained implications.
 
 `DecideTightPerRowBigM()` returns the maximum over active rows of the row's
 effective bound magnitude plus its worst-case term contribution, plus a 1-unit
-margin covering the integer-step band of the `<>` rewrite. When every
-contributing variable is bounded this is exact and typically far below the
-`DECIDE_BIGM_FALLBACK` of 1e6, which is kept only for genuinely unbounded
-variables. `DecideRowTermRange()` is the shared per-row worst case, also used by
-the ABS-maximize and aggregate `<>` paths that still emit from stage 08.
+margin covering the integer-step band of the `<>` rewrite. `DecideRowTermRange()`
+is the shared per-row worst case, also used by the ABS-maximize and aggregate `<>`
+paths that still emit from stage 08. `AuxRange::BigM()` is the auxiliary-family
+twin, for the MIN/MAX auxiliaries that are pinned against a whole expression rather
+than compared to a fixed bound.
+
+**There is no fixed Big-M.** When a contributing variable has no finite bound, no
+constant dominates its range, and the query is **refused** — naming a column to
+bound and the edit that bounds it. It is not given a large constant instead. That is
+the one failure mode worth designing against: a guessed `M` the true range exceeds
+does not error, it silently cuts the feasible region and returns a confidently wrong
+optimum. `<>` and MIN/MAX used to take a `max(M, 1e6)` floor here while the ABS path
+already refused; they now agree, and the 1e6 constant is gone from the tree.
+
+The refusal applies on **both** backends. Leaving one on the floor would mean the
+same query answers correctly on Gurobi and wrongly on HiGHS, with no story for the
+divergence — and a query's legality is not a property of the machine it runs on.
+
+It fires only when the bound is genuinely unknowable. A box from implied-bound
+propagation counts, and so does an ABS auxiliary's box: `LinearizeAbsMaximize`
+narrows the auxiliary's column to the range it pins it to, so an outer MIN/MAX over
+`ABS(...)` sees a finite column. **That is why ABS is linearized first** — every
+linearizer after it derives its `M` from column boxes, so an auxiliary they read must
+already be boxed. Run them in the other order and `MAX(ABS(x - 5)) >= 3` over a
+bounded `x` is refused for a bound that was there to be computed.
 
 A non-finite effective bound is refused here, in SQL terms, rather than reaching
 the model validator as an internal error. Callers that can read an infinity by
@@ -531,11 +551,19 @@ objective pushes `aux` down. Under MAXIMIZE they do not — `aux` is free to run
 above `|inner|` — so `LinearizeAbsMaximize()` pairs the tagged rows and derives the
 matching Big-M upper bounds that close it.
 
-This site is **strict about bounds**: unlike the indicator paths there is no
-fallback constant, so a contributing variable with no finite bound is named and
-refused rather than given `DECIDE_BIGM_FALLBACK`. An infinity in the bound carries
-the constant part of the expression the user wrote inside `ABS()`, so the refusal
-names that and the row, not the linearization.
+This site was **strict about bounds** before any other was: a contributing variable
+with no finite bound is named and refused. The indicator paths used to take a fixed
+constant here instead; they now make the same refusal, and this is the wording they
+follow. An infinity in the bound carries the constant part of the expression the user
+wrote inside `ABS()`, so that refusal names the expression and the row, not the
+linearization.
+
+It also **narrows the auxiliary's column box** to the `M` it derives. The rows it
+emits pin `aux = |inner|`, so `M` is a valid upper bound — and the only one anything
+derives, since `aux >= inner` / `aux >= -inner` bound the auxiliary from below only.
+That box is why this runs before every other linearizer: they all derive their own
+`M` from column boxes, and without it an outer MIN/MAX over `ABS(...)` sees an
+unbounded column and refuses a query whose bound was computable.
 
 ---
 

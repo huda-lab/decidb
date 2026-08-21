@@ -2687,16 +2687,25 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
                 // coefficient is positive.
                 ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
                 double M = DecideTightPerRowBigM(ec, solver_input.lower_bounds,
-                                                 solver_input.upper_bounds, num_rows);
+                                                 solver_input.upper_bounds, num_rows,
+                                                 decide_var_names);
                 ec.row_coefficients[z_term].AssignScalar(num_rows, M);
             }
         }
     }
 
+    // ABS FIRST, and the order is load-bearing. Pinning an ABS auxiliary to |inner|
+    // also tells us its range, and LinearizeAbsMaximize narrows the auxiliary's column
+    // box to it. Every linearizer below derives its Big-M from column boxes, so an ABS
+    // auxiliary they read must already be boxed: run them first and an outer MIN/MAX
+    // or `<>` over ABS(...) sees an unbounded column and refuses a query whose bound
+    // was there to be computed.
+    LinearizeAbsMaximize(solver_input, decide_var_names);
+
     // Encode every hard MIN/MAX constraint stage 05 tagged with an indicator into
     // its Big-M rows. Pure over the evaluated model, so it lives at stage 06.
     if (!minmax_indicator_links.empty()) {
-        LinearizeMinMaxIndicators(solver_input);
+        LinearizeMinMaxIndicators(solver_input, decide_var_names);
     }
 
     // Encode `<>` as its disjunctive Big-M pair. Per-row spellings expand in
@@ -2704,14 +2713,11 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // until the VarIndexer exists.
     vector<EvaluatedConstraint> deferred_ne_aggregate;
     if (!ne_indicator_indices.empty()) {
-        LinearizeNotEqual(solver_input, deferred_ne_aggregate);
+        LinearizeNotEqual(solver_input, deferred_ne_aggregate, decide_var_names);
     }
 
     // Emit the McCormick envelope for every bilinear w = b * x auxiliary.
     LinearizeBilinear(solver_input, decide_var_names);
-
-    // Pin each MAXIMIZE+ABS auxiliary to |inner| with its Big-M upper bounds.
-    LinearizeAbsMaximize(solver_input, decide_var_names);
 
     // Objective (linear part)
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
@@ -2893,7 +2899,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // Finish the aggregate `<>` spellings deferred above, now that flat columns
     // exist. Emits into solver_input.global_constraints at stage 06.
     ExpandDeferredAggregateNotEqual(solver_input, var_indexer, deferred_ne_aggregate,
-                                    aux_var_expressions);
+                                    aux_var_expressions, decide_var_names);
 
     // Encode a MIN/MAX objective (flat `MIN(expr)`/`MAX(expr)` or the nested
     // `OUTER(INNER(expr)) PER key` spelling) into global auxiliaries and their
@@ -2909,7 +2915,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     minmax_objective_spec.per_inner_was_avg = per_inner_was_avg;
     minmax_objective_spec.has_when = objective_has_when;
     minmax_objective_spec.when_mask = objective_when_mask;
-    LinearizeMinMaxObjective(solver_input, var_indexer, minmax_objective_spec);
+    LinearizeMinMaxObjective(solver_input, var_indexer, minmax_objective_spec, decide_var_names);
 
     // ================================================================
     // Composed MIN/MAX: additive clauses mixing SUM/AVG/MIN/MAX, in a constraint
@@ -3098,12 +3104,12 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
 
             auto evaluated = EvaluateComposedTerms(spec.terms, "constraint");
             LinearizeComposedMinMaxConstraint(solver_input, var_indexer, evaluated, rhs_val,
-                                              spec.outer_cmp, spec.source_clause_id);
+                                              spec.outer_cmp, spec.source_clause_id, decide_var_names);
         }
 
         if (!composed_minmax_objective_terms.empty()) {
             auto evaluated = EvaluateComposedTerms(composed_minmax_objective_terms, "objective");
-            LinearizeComposedMinMaxObjective(solver_input, var_indexer, evaluated);
+            LinearizeComposedMinMaxObjective(solver_input, var_indexer, evaluated, decide_var_names);
         }
     }
 

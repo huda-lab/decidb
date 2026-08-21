@@ -286,10 +286,11 @@ computed and discarded.
 
 `AddGlobalContinuousAux` takes an `AuxRange` and cannot be called without one. Infinite
 bounds are reachable only via `AuxRange::unbounded` — set when a contributing decision
-variable has no finite bound, the same condition that already sent Big-M to its
-`DECIDE_BIGM_FALLBACK` floor. `SolverModel::Build` asserts that pairing, so a new
+variable has no finite bound. `SolverModel::Build` asserts that pairing, so a new
 creation site that skips the derivation fails loudly in a debug build instead of
-quietly costing a benchmark.
+quietly costing a benchmark. A free auxiliary *box* is sound; the same condition on the
+Big-M side is not, and there it refuses the query rather than substituting a constant
+(`../06_model_formulation/done.md` §9).
 
 The five continuous auxiliaries and the family each is boxed by:
 
@@ -366,10 +367,13 @@ the sentinel to the default 0 floor.
 BOOLEAN variable is seeded to `1.0`. The box is what stage 06 receives as
 `SolverInput::upper_bounds`, and every Big-M derivation reads it through
 `DecideRowTermRange`, which treats `>= 1e20` as unbounded. Seeding only the sentinel
-left a declared `BOOL` looking unbounded to all of them, so they fell back to
-`DECIDE_BIGM_FALLBACK` — `SUM(x) <> 2` over four BOOL decisions took `M = 1000000`
-where the identical feasible set spelled `x(INT) ... x <= 1` took `7`. The ceiling was
-reaching only the model builder, which applies it far downstream when sizing columns.
+left a declared `BOOL` looking unbounded to all of them, so they fell back to the fixed
+1e6 Big-M that existed at the time — `SUM(x) <> 2` over four BOOL decisions took
+`M = 1000000` where the identical feasible set spelled `x(INT) ... x <= 1` took `7`.
+The ceiling was reaching only the model builder, which applies it far downstream when
+sizing columns. (That fallback is gone now: an unbounded contributor is refused. So the
+same gap today would not cost a loose `M`, it would refuse the query outright — the
+seeding matters more, not less.)
 
 Seeding it here is safe because absorption only ever narrows (`min`), and because a
 user restatement like `x <= 1` on a BOOL was already treated as a no-op against the

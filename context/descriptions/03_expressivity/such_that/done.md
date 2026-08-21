@@ -10,6 +10,13 @@ The `SUCH THAT` clause specifies the **constraints** of a COP query. The solver 
 
 **Strict `<` / `>` require an integer-valued LHS.** Internally `LHS < K` is rewritten to `LHS <= ceil(K) - 1`, which is only equivalent to the strict inequality when the LHS can take integer values — i.e., every referenced DECIDE variable is `INT` or `BOOL` and every coefficient is integral. Bilinear products `b * n` between a Boolean and an Integer (or Integer × Integer) count as integer-valued: the McCormick auxiliary for `b * n` is declared `INTEGER` in `decide_optimizer.cpp:RewriteBilinear`, preserving integer-valuedness through linearization. If any term makes the LHS continuous (a `REAL` variable, a fractional coefficient, or a bilinear product involving a `REAL` factor), DeciDB raises `InvalidInputException` at model-build time; use `<=` / `>=` instead. Enforced in `src/decidb/utility/ilp_model_builder.cpp` (`IsEvalConstraintLhsIntegerValued` + `ApplyComparisonSense`, plus the parallel check in `BuildQuadraticConstraint`).
 
+**`<>` requires every contributing variable to be bounded.** The disjunction below is
+encoded with a Big-M, and no finite constant dominates an unbounded range, so `x <> 5`
+with an unbounded `x` is refused — naming `x` and the bounds to add — rather than
+encoded against a large constant that could silently exclude part of the feasible
+region. A bound DeciDB derives (implied-bound propagation, a declared `BOOL`'s `[0,1]`)
+counts. The rule and the message are the same on both backends.
+
 **`<>` (not-equal) also requires an integer-valued LHS.** `LHS <> K` is rewritten into the Big-M disjunction `LHS <= K-1  OR  LHS >= K+1`, which only spans the full feasible region when `LHS` can take integer values. On a REAL variable or with a non-integer coefficient the band `(K-1, K+1)` is continuous and wrongly excluded. DeciDB raises `InvalidInputException` in the same cases as strict `<` / `>`; use a reformulation such as adding an ε-band with `<=` / `>=` if the application can tolerate a small gap. Enforced at the NE expansion site in `src/execution/operator/decide/physical_decide.cpp` (covers both per-row and deferred aggregate NE paths).
 
 **`<>` with a non-integer RHS is silently dropped (tautology).** With integer-valued LHS, `LHS <> K` for a non-integer `K` is satisfied by every integer LHS. The ±1 Big-M rewrite would wrongly exclude `floor(K)` and `ceil(K)`, so DeciDB drops such constraints rather than emitting an unsound rewrite. Three flavors:

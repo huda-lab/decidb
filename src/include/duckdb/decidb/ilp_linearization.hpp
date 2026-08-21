@@ -28,15 +28,13 @@
 
 namespace duckdb {
 
-//! Legacy fixed Big-M, retained only as a non-strict fallback for genuinely
-//! unbounded variables (no query is rejected; behavior matches the prior code).
-static constexpr double DECIDE_BIGM_FALLBACK = 1e6;
-
 //! Worst-case absolute contribution of row `r`'s decision variables:
 //! sum over terms of |coef[t][r]| * max(|lb|,|ub|). Constant terms
 //! (var == INVALID_INDEX, folded into the RHS by callers) are skipped. If any
-//! contributing variable lacks a finite bound, `has_unbounded` is set and that
-//! term is omitted so the caller can apply a conservative fallback.
+//! contributing variable lacks a finite bound, `has_unbounded` is set and that term
+//! is omitted — the caller must then REFUSE, not substitute a constant. There is no
+//! fixed Big-M anywhere in DeciDB: a constant the true range exceeds does not fail,
+//! it silently cuts the feasible region and returns a confidently wrong answer.
 double DecideRowTermRange(const vector<idx_t> &variable_indices,
                           const vector<CoefficientColumn> &row_coefficients,
                           idx_t row, const vector<double> &lower_bounds,
@@ -47,12 +45,18 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
 //! Tight scalar Big-M for a per-row indicator constraint: the maximum over
 //! active rows of |rhs[r]| + (worst-case row contribution), plus a 1-unit margin
 //! that covers the integer-step band of the `<>` rewrite (harmless slack for the
-//! MIN/MAX rewrites). When every contributing variable is bounded this is exact
-//! and typically far below 1e6; otherwise we keep the 1e6 floor.
+//! MIN/MAX rewrites).
+//!
+//! **Throws** when a contributing variable has no finite bound. No constant dominates
+//! an unbounded range, so there is no M to compute — only a guess, and a guess the
+//! true range exceeds silently cuts the feasible region rather than failing. The
+//! refusal names a column to bound, and it is the same refusal `LinearizeAbsMaximize`
+//! has always made. `var_names` supplies that name.
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
                              const vector<double> &lower_bounds,
                              const vector<double> &upper_bounds,
-                             idx_t num_rows);
+                             idx_t num_rows,
+                             const vector<string> &var_names);
 
 //! Data-driven implied-bound propagation. For a non-negative `<=`/`=` constraint
 //! Sum_t a_t x_t (<=|=) K with a_t >= 0 and x_t >= 0, each variable instance
@@ -80,7 +84,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
 //! `input.constraints` is replaced in place by the encoded list. A group whose bound
 //! is unreachable in its own direction is emitted as a plain per-row constraint
 //! instead, and a group whose bound every assignment satisfies is dropped.
-void LinearizeMinMaxIndicators(SolverInput &input);
+void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_names);
 
 //! Encode every constraint stage 05 tagged with a `<>` indicator as the disjunctive
 //! Big-M pair `x - M*z <= K-1` / `x - M*z >= K+1-M`.
@@ -94,7 +98,8 @@ void LinearizeMinMaxIndicators(SolverInput &input);
 //! Refuses a left-hand side that is not integer-valued — the ±1 band is only exact
 //! on the integer lattice — and silently drops a comparison whose bound no integer
 //! can equal, since every assignment already satisfies it.
-void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate);
+void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate,
+                       const vector<string> &var_names);
 
 //! Finish the aggregate `<>` spellings `LinearizeNotEqual` deferred, one global
 //! binary per non-empty group, emitting into `input.global_constraints` in flat
@@ -102,7 +107,8 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
 //! for the indicator, so a dropped aggregate `<>` can be named in a repair.
 void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                      vector<EvaluatedConstraint> &deferred_aggregate,
-                                     const vector<pair<idx_t, string>> &aux_var_expressions);
+                                     const vector<pair<idx_t, string>> &aux_var_expressions,
+                                     const vector<string> &var_names);
 
 //! Emit the McCormick envelope for every `w = b * x` link. For `x >= 0` the lower
 //! corner is implied by `w`'s own non-negative bound and the upper corner collapses
@@ -143,11 +149,25 @@ struct AuxRange {
     //! Some contributing decision variable has an infinite bound, so `lo`/`hi` are not
     //! a valid box and any auxiliary over this family must stay free.
     bool unbounded = false;
+    //! The first such variable, kept so a refusal can name a column the user can bound
+    //! rather than say only that something was unbounded. Meaningful iff `unbounded`.
+    idx_t unbounded_var = DConstants::INVALID_INDEX;
 
-    //! The Big-M constant for this family, with the fallback floor an unbounded
-    //! contributor forces.
+    //! The Big-M constant for this family. Defined ONLY when `!unbounded`: no constant
+    //! dominates an unbounded range, so a caller must check `unbounded` and refuse
+    //! before asking. There is no fallback value to return — that is the point.
     double BigM() const {
-        return unbounded ? MaxOf(spread, DECIDE_BIGM_FALLBACK) : spread;
+        D_ASSERT(!unbounded);
+        return spread;
+    }
+
+    //! Record an unbounded contributor. Keeps the FIRST one seen, so the message a
+    //! query produces does not depend on row order.
+    void MarkUnbounded(idx_t var) {
+        if (!unbounded) {
+            unbounded = true;
+            unbounded_var = var;
+        }
     }
 
     //! Widen to also cover `other` — an extremum taken over several families.
@@ -262,7 +282,7 @@ struct MinMaxObjectiveSpec {
 //! and appends its auxiliaries to the global block. Untouched when the objective carries
 //! no MIN/MAX aggregate: `input.objective_coefficients` is then left as it arrived.
 void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                              const MinMaxObjectiveSpec &spec);
+                              const MinMaxObjectiveSpec &spec, const vector<string> &var_names);
 
 //! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
 //! or the objective spelling — with everything data-dependent already evaluated by the
@@ -301,12 +321,14 @@ struct ComposedMinMaxTermData {
 //! `rhs_val`. `terms` is mutated in place — each MIN/MAX term's `z_idx` is filled in.
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
-                                       ExpressionType outer_cmp, idx_t source_clause_id);
+                                       ExpressionType outer_cmp, idx_t source_clause_id,
+                                       const vector<string> &var_names);
 
 //! Encode a composed MIN/MAX *objective*: the same auxiliary layer, but the composition is
 //! written into the objective — a coefficient on each auxiliary's column, and per-row
 //! coefficients for the SUM/AVG terms. Replaces `input.objective_coefficients`.
 void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                                      vector<ComposedMinMaxTermData> &terms);
+                                      vector<ComposedMinMaxTermData> &terms,
+                                      const vector<string> &var_names);
 
 } // namespace duckdb

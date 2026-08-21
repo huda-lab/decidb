@@ -122,6 +122,18 @@ When the aggregate must be tight (equality or the "wrong" direction), a global a
 - `MIN(expr) <= K` → global variable `z <= K`, per-row: `z <= expr`, plus Big-M indicators
 - Equality cases (`MAX(expr) = K`, `MIN(expr) = K`) → both directions constrained
 
+**A hard case needs every contributing variable bounded.** The Big-M constant has to
+dominate the expression's reachable range, and nothing finite dominates an unbounded
+one — so `MAX(x) >= 5` with an unbounded `x` is **refused**, naming `x` and the bounds
+to add, rather than encoded against a large constant. A constant the true range
+exceeds would not fail; it would silently cut the feasible region and return a wrong
+optimum. The same rule and the same message on both backends.
+
+A bound DeciDB can derive counts as a bound: `SUCH THAT SUM(x) <= 10 AND MAX(x) >= 5`
+answers, because implied-bound propagation reads `x <= 10` off the first clause. So
+does `MAX(ABS(x - 5)) >= 3` over a bounded `x` — the ABS auxiliary's own box is
+derived from `x`'s. Easy cases never ask for a Big-M and are unaffected.
+
 #### Objective Cases
 
 - **Easy objectives**: `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` — a single global auxiliary variable `z` with per-row linking constraints (`z >= expr_i` for MAX, `z <= expr_i` for MIN). The objective optimizes `z` directly.

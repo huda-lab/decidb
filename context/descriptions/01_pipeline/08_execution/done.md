@@ -329,6 +329,13 @@ The one Big-M still derived here is the auto-`M` refill for `norm(e, 0)` links,
 whose `M` bounds an expression rather than answering a comparison, so there is no
 bound to classify. It calls `DecideTightPerRowBigM` across the stage boundary.
 
+A *variable* with no finite bound is the separate case, and the answer there is also
+refusal rather than a constant — there is no fixed Big-M anywhere in DeciDB. The
+order in which this stage calls the linearizers is load-bearing for it: ABS runs
+first, because pinning an ABS auxiliary is also what determines its column box, and
+every linearizer after it derives its `M` from column boxes. See
+[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
+
 ### Output
 
 A `SolverInput` carrying `num_rows`, `num_decide_vars`, `variable_types`
