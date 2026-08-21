@@ -248,7 +248,8 @@ def test_bool_domain_reaches_the_bigm_derivation(decidb_cli, tmp_path):
         f"BOOL and INT spellings of one feasible set disagree on M:\n"
         f"BOOL:\n{as_bool}\nINT:\n{as_int}"
     )
-    # And it is a tight constant, not the DECIDE_BIGM_FALLBACK.
+    # And it is a tight constant. (There is no fixed Big-M in DeciDB any more:
+    # an underivable range is refused, not given a constant. See test_unbounded_bigm.)
     assert bigm(as_bool) < 1000.0, f"M looks like the fallback constant:\n{as_bool}"
 
 

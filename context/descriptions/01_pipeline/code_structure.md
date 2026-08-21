@@ -200,12 +200,29 @@ classDiagram
 
 ### `src/decidb/utility/ilp_model_builder.cpp` — stage 06
 - **`SolverModel::Build(SolverInput &, const VarIndexer &)`** — three linear
-  constraint paths plus the quadratic builder. Takes `SolverInput` by non-const
-  reference so raw global constraints can be moved.
+  constraint paths plus the quadratic builder, then the two native lists
+  (general and indicator constraints) carried across in flat columns. Takes
+  `SolverInput` by non-const reference so raw global constraints can be moved.
+- **`SolverModel::ModelClass()`** — what the built model demands of a solver; the
+  fact stage 05's plan-time prediction is checked against.
 - **`SparseCoeffAccumulator`** — reusable scratch, dense or sorted-pairs.
 
 ### `src/decidb/utility/ilp_solver.cpp` — stage 07
-- **`SelectSolverBackend()` / `SolveModel()` / `CreateSolverSession()`**.
+- **`SelectSolverBackend()` / `SolveModel()`**. `SolveModel` takes the backend chosen
+  at plan time rather than resolving one, and asserts the built model is within that
+  backend's declared capabilities before loading it.
+
+### `src/decidb/utility/solver_registry.cpp` — stage 07
+- **`REGISTERED_BACKENDS`** — the one table naming every backend: identifier, display
+  name, availability probe, capabilities, session factory. Adding a backend is adding a
+  row; nothing else in the tree branches on which one is in play.
+- **`SolverBackend`** — the handle the pipeline passes around, and
+  **`SolverRegistry::Find` / `Backends` / `BackendsSupporting`**.
+
+### `src/optimizer/decide/decide_solver_gate.cpp` — stage 05
+- **`DeriveDecideModelClass()` / `RequireDecideSolverSupport()`** — the plan-time
+  model-class gate. Refuses, before a row is read, a query whose model class the chosen
+  backend cannot take.
 
 ---
 
