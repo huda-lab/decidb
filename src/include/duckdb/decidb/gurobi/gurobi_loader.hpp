@@ -101,6 +101,10 @@ struct GurobiAPI {
 	                       const int *vars, double constant);
 	int (*addgenconstrMax)(void *model, const char *name, int resvar, int nvars,
 	                       const int *vars, double constant);
+	//! `binvar == binval` implies the linear row. Gurobi 7.0+.
+	int (*addgenconstrIndicator)(void *model, const char *name, int binvar, int binval,
+	                             int nvars, const int *ind, const double *val, char sense,
+	                             double rhs);
 
 	// Solve and query
 	int (*optimize)(void *model);

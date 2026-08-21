@@ -889,7 +889,8 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
 }
 
 void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate,
-                       const vector<string> &var_names) {
+                       const vector<string> &var_names, bool native_not_equal,
+                       vector<EvaluatedConstraint> &deferred_native) {
     const idx_t num_rows = input.num_rows;
 
     vector<EvaluatedConstraint> new_constraints;
@@ -994,13 +995,26 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
             continue;
         }
 
+        idx_t indicator_var_idx = ec.ne_indicator_idx;
+
+        if (native_not_equal) {
+            // Native: state the disjunction as two implications instead of encoding it.
+            // `z == 0  =>  LHS <= K - 1` and `z == 1  =>  LHS >= K + 1`. No constant has
+            // to dominate the row, so no contributing variable needs a finite bound —
+            // the same payoff ABS and MIN/MAX get from their general constraints.
+            //
+            // Deferred like every other native emission: an indicator constraint names
+            // flat columns, which exist only once the VarIndexer does.
+            deferred_native.push_back(std::move(ec));
+            continue;
+        }
+
         // Tight data-driven per-row Big-M for the inline NE expansion. Computed
         // after the tautology filter: a row this rewrite never emits must not be
         // asked for an M, and an infinite bound is exactly such a row
         // (`LHS <> Infinity` always holds), so it is dropped above rather than
         // refused by the Big-M guard.
         double M = DecideTightPerRowBigM(ec, input.lower_bounds, input.upper_bounds, num_rows, var_names);
-        idx_t indicator_var_idx = ec.ne_indicator_idx;
 
         // Build the indicator coefficient column. With no WHEN/PER filter every row
         // gets -M (broadcast scalar). Otherwise only the active rows hold -M and the
@@ -1063,10 +1077,70 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
     input.constraints = std::move(new_constraints);
 }
 
+void ExpandNativeNotEqual(SolverInput &input, const VarIndexer &indexer,
+                          vector<EvaluatedConstraint> &deferred_native) {
+    if (deferred_native.empty()) {
+        return;
+    }
+    const idx_t num_rows = input.num_rows;
+
+    for (auto &ec : deferred_native) {
+        idx_t z_var = ec.ne_indicator_idx;
+        for (idx_t r = 0; r < num_rows; r++) {
+            if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+                continue; // masked out by WHEN/PER, or a non-integer bound on this row
+            }
+            // `z` is row-scoped: each row's disjunction gets its own binary, exactly as
+            // the Big-M encoding does.
+            int z_col = static_cast<int>(indexer.Get(z_var, r));
+            double k = ec.rhs_values.Get(r);
+
+            vector<int> indices;
+            vector<double> coefficients;
+            double constant = 0.0;
+            for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+                idx_t v = ec.variable_indices[t];
+                double coef = ec.row_coefficients[t].Get(r);
+                if (v == DConstants::INVALID_INDEX) {
+                    constant += coef; // constant LHS part folds into the bound
+                    continue;
+                }
+                if (coef == 0.0) {
+                    continue;
+                }
+                indices.push_back(static_cast<int>(indexer.Get(v, r)));
+                coefficients.push_back(coef);
+            }
+
+            // Both halves carry the clause's provenance and its indicator column, so
+            // the infeasible removal dial groups them into one droppable `<>` — the
+            // same grouping the Big-M rows get, and the reason this construct is
+            // expressed as indicator constraints rather than general ones.
+            auto emit = [&](int binval, char sense, double rhs) {
+                SolverInput::IndicatorConstraintSpec ic;
+                ic.binary_column = z_col;
+                ic.binary_value = binval;
+                ic.indices = indices;
+                ic.coefficients = coefficients;
+                ic.sense = sense;
+                ic.rhs = rhs;
+                ic.kind = ConstraintKind::USER_MECHANISM;
+                ic.source_clause_id = ec.source_clause_id;
+                ic.repair_group_id = ec.repair_group_id;
+                ic.indicator_col = static_cast<idx_t>(z_col);
+                input.indicator_constraints.push_back(std::move(ic));
+            };
+            emit(0, '<', k - 1.0 - constant); // z = 0  =>  LHS <= K - 1
+            emit(1, '>', k + 1.0 - constant); // z = 1  =>  LHS >= K + 1
+        }
+    }
+    deferred_native.clear();
+}
+
 void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                      vector<EvaluatedConstraint> &deferred_aggregate,
                                      const vector<pair<idx_t, string>> &aux_var_expressions,
-                                     const vector<string> &var_names) {
+                                     const vector<string> &var_names, bool native_not_equal) {
     if (deferred_aggregate.empty()) {
         return;
     }
@@ -1197,7 +1271,7 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
             // bound is far too small at scale and would silently cap the aggregate.
             // Only the disjunctive encoding needs one.
             double M = 0.0;
-            if (collapse == NECollapse::DISJUNCTION) {
+            if (collapse == NECollapse::DISJUNCTION && !native_not_equal) {
                 bool grp_unbounded = false;
                 double grp_range = 0.0;
                 for (idx_t k = g_begin; k < g_end; k++) {
@@ -1256,6 +1330,29 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
                 rc.repair_group_id = ec.repair_group_id;
                 rc.indicator_col = z_idx;
                 input.global_constraints.push_back(std::move(rc));
+                continue;
+            }
+
+            if (native_not_equal) {
+                // Native: the two halves as implications on this group's binary, so the
+                // group's summed Big-M — which is what forces a bound on every
+                // contributing variable — is not needed at all.
+                auto emit = [&](int binval, char sense, double bound) {
+                    SolverInput::IndicatorConstraintSpec ic;
+                    ic.binary_column = static_cast<int>(z_idx);
+                    ic.binary_value = binval;
+                    ic.indices = common_indices;
+                    ic.coefficients = common_coefs;
+                    ic.sense = sense;
+                    ic.rhs = bound;
+                    ic.kind = ConstraintKind::USER_MECHANISM;
+                    ic.source_clause_id = ec.source_clause_id;
+                    ic.repair_group_id = ec.repair_group_id;
+                    ic.indicator_col = z_idx;
+                    input.indicator_constraints.push_back(std::move(ic));
+                };
+                emit(0, '<', rhs - 1.0);
+                emit(1, '>', rhs + 1.0);
                 continue;
             }
 

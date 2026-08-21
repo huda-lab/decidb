@@ -278,6 +278,20 @@ struct SolverModel {
     };
     vector<GeneralConstraint> general_constraints;
 
+    //! `binary_column == binary_value` implies this row. Carries a full row, unlike a
+    //! general constraint, so infeasible diagnosis can still reach it — the removal
+    //! dial groups these by provenance exactly as it groups matrix rows.
+    struct IndicatorConstraint {
+        int binary_column = -1;
+        int binary_value = 1;
+        vector<int> indices;
+        vector<double> coefficients;
+        char sense = '<';
+        double rhs = 0.0;
+        ConstraintProvenance provenance;
+    };
+    vector<IndicatorConstraint> indicator_constraints;
+
     //! Constraints (linear)
     vector<ModelConstraint> constraints;
     //! Stable source display registry, indexed by source_clause_id.

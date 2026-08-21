@@ -608,12 +608,29 @@ holds one or the other, never both. The two exact rows stage 05 already wrote
 (`aux >= inner`, `aux >= -inner`) do stay: they are implied by `aux = |t|`, they need
 no Big-M, and they carry the clause provenance the elastic engine reads.
 
+### Indicator constraints — a row, conditioned
+
+`SolverModel::indicator_constraints` is the second native list, and it exists because
+`<>` needs something general constraints cannot give: a **row**.
+
+A `<>` clause has no row of its own. The two Big-M disjunction rows *are* the clause,
+both `USER_MECHANISM`, and dropping them is the only repair infeasible diagnosis can
+offer for it. Expressed as a general constraint the clause would vanish from the matrix
+entirely and become undiagnosable. An indicator constraint — `binary == value` implies
+this row — keeps the row, so the removal dial wires its `w` into the implied row exactly
+as it does into a matrix row, and the diagnosis is unchanged. That is why the two lists
+are separate rather than one list with a kind: the difference is not vocabulary, it is
+whether a row exists.
+
+`z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1` say what the Big-M pair said, with no
+constant to dominate the row — so no contributing variable needs a finite bound.
+
 Two consequences follow from a construct having no rows. `DumpSolverModel` renders
 general constraints explicitly, or the corpus diff would read a native construct as
 rows quietly disappearing. And `BuildUnboundedRayFallbackModel` **declines** a model
-that has any, exactly as it declines a quadratic one: the ray model rebuilds the
-matrix row by row, so a non-row cannot come along, and dropping it would relax the
-model past what a ray argument permits.
+that has any — or any indicator constraint — exactly as it declines a quadratic one: the
+ray model rebuilds the matrix row by row, so a conditional row cannot come along either,
+and dropping one would relax the model past what a ray argument permits.
 
 ---
 

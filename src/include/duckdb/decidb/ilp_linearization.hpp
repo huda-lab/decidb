@@ -117,7 +117,20 @@ void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer
 //! on the integer lattice — and silently drops a comparison whose bound no integer
 //! can equal, since every assignment already satisfies it.
 void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate,
-                       const vector<string> &var_names);
+                       const vector<string> &var_names, bool native_not_equal,
+                       vector<EvaluatedConstraint> &deferred_native);
+
+//! The native arm of the `<>` gate: each row's disjunction as two implications,
+//! `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1`, instead of a Big-M pair. No
+//! constant to dominate the row, so no contributing variable needs a finite bound.
+//!
+//! Deferred like every native emission — an indicator constraint names flat columns.
+//! Both halves keep the clause's `indicator_col`, so the infeasible removal dial still
+//! groups them into one droppable `<>`; that is why `<>` is expressed as indicator
+//! constraints rather than as a general constraint, which carries no row for diagnosis
+//! to reach.
+void ExpandNativeNotEqual(SolverInput &input, const VarIndexer &indexer,
+                          vector<EvaluatedConstraint> &deferred_native);
 
 //! Finish the aggregate `<>` spellings `LinearizeNotEqual` deferred, one global
 //! binary per non-empty group, emitting into `input.global_constraints` in flat
@@ -126,7 +139,7 @@ void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred
 void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                      vector<EvaluatedConstraint> &deferred_aggregate,
                                      const vector<pair<idx_t, string>> &aux_var_expressions,
-                                     const vector<string> &var_names);
+                                     const vector<string> &var_names, bool native_not_equal);
 
 //! Emit the McCormick envelope for every `w = b * x` link. For `x >= 0` the lower
 //! corner is implied by `w`'s own non-negative bound and the upper corner collapses

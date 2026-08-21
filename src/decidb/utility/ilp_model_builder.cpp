@@ -1241,6 +1241,22 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // provenance fields into the record every row carries. Empty unless the backend
     // declared the construct, in which case the lowered rows are in `constraints`
     // above instead — never both.
+    model.indicator_constraints.reserve(input.indicator_constraints.size());
+    for (auto &spec : input.indicator_constraints) {
+        SolverModel::IndicatorConstraint ic;
+        ic.binary_column = spec.binary_column;
+        ic.binary_value = spec.binary_value;
+        ic.indices = std::move(spec.indices);
+        ic.coefficients = std::move(spec.coefficients);
+        ic.sense = spec.sense;
+        ic.rhs = spec.rhs;
+        ic.provenance.kind = spec.kind;
+        ic.provenance.source_clause_id = spec.source_clause_id;
+        ic.provenance.repair_group_id = spec.repair_group_id;
+        ic.provenance.indicator_col = spec.indicator_col;
+        model.indicator_constraints.push_back(std::move(ic));
+    }
+
     model.general_constraints.reserve(input.general_constraints.size());
     for (auto &spec : input.general_constraints) {
         SolverModel::GeneralConstraint gc;

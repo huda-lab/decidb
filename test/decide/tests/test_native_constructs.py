@@ -24,7 +24,18 @@ Covers:
   - test_native_replaces_rows_with_a_general_constraint: the model really changed
   - test_native_abs_needs_no_bound: the payoff — refused when lowered, answered native
   - test_native_minmax_needs_no_bound: the same payoff on MIN/MAX
+  - test_not_equal_native_and_lowered_agree: the A/B, over the `<>` shapes
+  - test_native_not_equal_needs_no_bound: the same payoff on `<>`
+  - test_native_not_equal_is_still_diagnosable: the dial reaches an implied row
   - test_highs_never_takes_the_native_path: capability is per backend, not global
+
+`<>` is stated with **indicator constraints** rather than a general constraint, and
+that is a diagnosis decision, not a Gurobi-vocabulary one. A `<>` clause has no row of
+its own: the two Big-M disjunction rows *are* the clause, and dropping them is the only
+repair infeasible diagnosis can offer for it. A general constraint carries no row, so
+going that way would have made every `<>` undiagnosable. An indicator constraint carries
+one — so the removal dial wires its binary into the implied row exactly as it does into
+a matrix row, and the diagnosis is unchanged.
 """
 
 import os
@@ -247,3 +258,76 @@ def test_native_minmax_needs_no_bound(decidb_cli_gurobi):
     with pytest.raises(DecidBCliError) as excinfo:
         _solve_grouped(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "off"})
     assert "finite bound on 'x'" in excinfo.value.message, excinfo.value.message
+
+
+# `<>` shapes that reach the gate. A clause whose range collapses to a plain inequality
+# never had a disjunction to state, so it takes neither arm — `test_ne_range_collapse`
+# covers that boundary.
+_NOT_EQUAL_SHAPES = [
+    ("per-row", "SUCH THAT x <= 9 AND x <> 5 MAXIMIZE SUM(x * c)", _sum_xc),
+    ("per-row under WHEN",
+     "SUCH THAT x <= 9 AND x <> 5 WHEN g = 'a' MAXIMIZE SUM(x * c)", _sum_xc),
+    ("aggregate", "SUCH THAT x <= 9 AND SUM(x) <> 36 MAXIMIZE SUM(x * c)", _sum_xc),
+    ("aggregate PER",
+     "SUCH THAT x <= 9 AND SUM(x) <> 18 PER g MAXIMIZE SUM(x * c)", _sum_xc),
+    ("both spellings at once",
+     "SUCH THAT x <= 9 AND x <> 5 AND SUM(x) <> 36 MAXIMIZE SUM(x * c)", _sum_xc),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.cons_comparison
+@pytest.mark.parametrize("name,clause,objective", _NOT_EQUAL_SHAPES,
+                         ids=[s[0] for s in _NOT_EQUAL_SHAPES])
+def test_not_equal_native_and_lowered_agree(decidb_cli_gurobi, name, clause, objective):
+    """`z==0 => LHS <= K-1` / `z==1 => LHS >= K+1` must mean the Big-M pair."""
+    native = objective(_solve_grouped(decidb_cli_gurobi, clause))
+    lowered = objective(_solve_grouped(decidb_cli_gurobi, clause,
+                                       {"DECIDB_NATIVE_CONSTRUCTS": "off"}))
+    assert abs(native - lowered) <= 1e-6, f"{name}: native {native} != lowered {lowered}"
+
+
+@pytest.mark.correctness
+@pytest.mark.cons_comparison
+def test_native_not_equal_needs_no_bound(decidb_cli_gurobi):
+    """The `<>` payoff. An implication needs no constant, so it needs no bound.
+
+    `x` has no upper bound, so the Big-M pair has no M and the lowering path refuses.
+    """
+    clause = "SUCH THAT x <> 5 MINIMIZE SUM(x * c)"
+    assert _sum_xc(_solve_grouped(decidb_cli_gurobi, clause)) == 0.0
+
+    with pytest.raises(DecidBCliError) as excinfo:
+        _solve_grouped(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "off"})
+    assert "finite bound on 'x'" in excinfo.value.message, excinfo.value.message
+
+
+@pytest.mark.correctness
+@pytest.mark.cons_comparison
+@pytest.mark.query_diagnostics
+def test_native_not_equal_is_still_diagnosable(decidb_cli_gurobi):
+    """The reason `<>` uses indicator constraints and not a general constraint.
+
+    A `<>` clause has no row of its own — the disjunction *is* the clause — so the only
+    repair diagnosis can offer is dropping it, and dropping needs a row to neutralize.
+    An indicator constraint has one. This query is infeasible with three remove-only
+    `<>` clauses, one of them a live disjunction (`<> 1` sits strictly inside the
+    reachable range), so the removal dial must be operating on an implied row; the
+    diagnosis has to match the Big-M encoding's exactly.
+    """
+    script = (
+        ".mode csv\n"
+        "PRAGMA diagnose_decide='auto';\n"
+        "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(BOOL) "
+        "SUCH THAT SUM(x) <> 0 AND SUM(x) <> 2 AND SUM(x) <> 1 MINIMIZE SUM(x);\n"
+        "SELECT subject, attribute, value FROM decide_diagnostics();\n"
+    )
+
+    def diagnosis(cli):
+        proc = cli.execute_script(script)
+        return proc.stdout + proc.stderr
+
+    native = diagnosis(decidb_cli_gurobi)
+    lowered = diagnosis(decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}))
+    assert "drop" in native, f"a native `<>` must stay droppable:\n{native}"
+    assert native == lowered, f"native diagnosis differs:\n{native}\n---\n{lowered}"

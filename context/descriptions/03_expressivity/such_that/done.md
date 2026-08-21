@@ -10,7 +10,14 @@ The `SUCH THAT` clause specifies the **constraints** of a COP query. The solver 
 
 **Strict `<` / `>` require an integer-valued LHS.** Internally `LHS < K` is rewritten to `LHS <= ceil(K) - 1`, which is only equivalent to the strict inequality when the LHS can take integer values — i.e., every referenced DECIDE variable is `INT` or `BOOL` and every coefficient is integral. Bilinear products `b * n` between a Boolean and an Integer (or Integer × Integer) count as integer-valued: the McCormick auxiliary for `b * n` is declared `INTEGER` in `decide_optimizer.cpp:RewriteBilinear`, preserving integer-valuedness through linearization. If any term makes the LHS continuous (a `REAL` variable, a fractional coefficient, or a bilinear product involving a `REAL` factor), DeciDB raises `InvalidInputException` at model-build time; use `<=` / `>=` instead. Enforced in `src/decidb/utility/ilp_model_builder.cpp` (`IsEvalConstraintLhsIntegerValued` + `ApplyComparisonSense`, plus the parallel check in `BuildQuadraticConstraint`).
 
-**`<>` requires every contributing variable to be bounded.** The disjunction below is
+**On a backend with indicator constraints, `<>` is stated rather than encoded.** Gurobi
+takes `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1` directly, so there is no Big-M
+and no bound requirement — `x <> 5` answers there with an unbounded `x`. Both spellings
+(per-row and aggregate) take that path, the diagnosis is unchanged (the clause is still
+droppable, because an indicator constraint still carries a row), and both paths reach
+the same optimum wherever both can run.
+
+**Lowered, `<>` requires every contributing variable to be bounded.** The disjunction below is
 encoded with a Big-M, and no finite constant dominates an unbounded range, so `x <> 5`
 with an unbounded `x` is refused — naming `x` and the bounds to add — rather than
 encoded against a large constant that could silently exclude part of the feasible

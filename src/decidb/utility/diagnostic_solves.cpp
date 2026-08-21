@@ -27,7 +27,7 @@ bool BuildUnboundedRayFallbackModel(const SolverModel &model, SolverModel &ray_m
 	// argument allows, and the direction found might not be a real escape. Decline
 	// instead, and let the diagnosis say it could not identify one.
 	if (model.has_quadratic_obj || !model.quadratic_constraints.empty() ||
-	    !model.general_constraints.empty()) {
+	    !model.general_constraints.empty() || !model.indicator_constraints.empty()) {
 		ray_model = SolverModel();
 		return false;
 	}

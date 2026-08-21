@@ -340,8 +340,8 @@ every linearizer after it derives its `M` from column boxes. See
 
 This stage owns the **only** decision about whether a construct is lowered at all. It
 reads `solver_backend.Capabilities()` — the backend chosen at plan time, carried down
-on the operator — and routes each construct to one of two arms. Two constructs are
-gated today, ABS and MIN/MAX:
+on the operator — and routes each construct to one of two arms. Three constructs are
+gated today: ABS, MIN/MAX and `<>`:
 
 ```cpp
 const bool native_abs = solver_backend.Capabilities().abs;
@@ -373,6 +373,14 @@ direction, not by an encoding.
 Only the *hard* directions route through the gate. `MAX(e) <= K`, `MIN(e) >= K`,
 `MINIMIZE MAX`, `MAXIMIZE MIN` are exact with a one-sided envelope plus outer pressure:
 no Big-M, so nothing to replace.
+
+`<>` is gated on both its spellings — the per-row expansion and the deferred aggregate
+one — and both defer to the post-`VarIndexer` phase for the same reason. It is stated
+with **indicator constraints**, not a general constraint, because a `<>` clause has no
+row of its own and diagnosis can only drop what it can reach; see
+[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9a. A clause whose
+range collapses to a plain inequality never had a disjunction to state and takes neither
+arm.
 
 The native columns are **boxed**, not free, wherever a range is derivable — the same
 `AuxRange` walk that produces the Big-M constant. A free continuous column is a

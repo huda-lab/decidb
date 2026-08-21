@@ -242,6 +242,13 @@ too-open one; slow is a runtime event masking the other states.
 - **Solver-agnostic** — everything works on Gurobi and HiGHS. We build the
   elastic model in our own model builder so both backends solve it natively;
   Gurobi `feasRelax` is an *accelerator*, never a dependency.
+- **A native construct must still be reachable** — when a backend expresses a construct
+  itself, the rows it would have produced are gone, and so is anything diagnosis could
+  slacken. That is why `<>` is stated with *indicator constraints* rather than a general
+  constraint: an indicator constraint still carries a row, so the remove-only dial wires
+  its binary into the implied row exactly as into a matrix row and the diagnosis is
+  unchanged. ABS and MIN/MAX lose only structural rows — the user's own clause row
+  survives either way — so the choice only bites where the clause *is* its encoding.
 - **Diagnosed on the solver that failed** — every re-solve (the elastic model, the
   `INF_OR_UNBD` probe, the unbounded-ray fallback) runs on the backend the *primary*
   solve ran on, read off `PhysicalDecide::solver_backend`. That choice was made once,

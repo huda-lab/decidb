@@ -15,11 +15,23 @@ The soundness boundary has its own tests at the bottom. The collapse may only re
 *rigid* box — a variable's intrinsic domain — because a bound the user wrote is re-emitted
 as a loosenable row during infeasibility diagnosis, and a collapse that baked one in could
 not be reverted with it.
+
+**Pinned to the lowering path.** "The two-row disjunction" and "a Big-M coefficient
+appears" are claims about that encoding. A backend with indicator constraints states the
+same disjunction as two implications and no Big-M at all, so reading it off whatever the
+host supports would test the host. What survives both encodings — the collapse still
+firing, and a collapsed clause still being one plain row — is asserted on the native path
+in `test_collapse_still_fires_natively`.
 """
 
 import re
 
 import pytest
+
+
+def _lowering(cli):
+    """The Big-M encoding, whatever the host's solver can state natively."""
+    return cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
 
 
 def _rows(dump: str) -> list[str]:
@@ -48,7 +60,7 @@ def test_aggregate_ne_zero_collapses_to_a_single_tight_row(decidb_cli, tmp_path)
     A BOOL decision's intrinsic [0, 1] domain is rigid, so the aggregate cannot reach
     below 0 and the `<= -1` branch of the disjunction is dead.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 MINIMIZE SUM(x)
@@ -65,7 +77,7 @@ def test_aggregate_ne_zero_collapses_to_a_single_tight_row(decidb_cli, tmp_path)
 @pytest.mark.correctness
 def test_per_row_ne_zero_collapses(decidb_cli, tmp_path):
     """The per-row path collapses too: `x <> 0` on a BOOL decision is `x >= 1`."""
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3)) t(id)
             DECIDE x(BOOL) SUCH THAT x <> 0 MINIMIZE SUM(x)
@@ -86,7 +98,7 @@ def test_intrinsic_nonnegativity_is_enough_to_collapse(decidb_cli, tmp_path):
     The query bounds only the upper side, so nothing the user wrote is doing the work
     here — the collapse rests on the intrinsic domain alone.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(INT) SUCH THAT x <= 5 AND SUM(x) <> 0 MINIMIZE SUM(x)
@@ -106,7 +118,7 @@ def test_interior_k_keeps_the_disjunction(decidb_cli, tmp_path):
     This is the direction that would silently break if the classifier were too eager:
     collapsing an interior K would cut a whole half of the feasible set.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 2 MINIMIZE SUM(x)
@@ -130,7 +142,7 @@ def test_user_written_bound_does_not_license_a_collapse(decidb_cli, tmp_path):
     So this must keep the disjunction. If a future change makes absorbed user bounds
     rigid under diagnosis, this test should be revisited rather than deleted.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <> 0 MINIMIZE SUM(x)
@@ -219,13 +231,13 @@ def test_bool_domain_reaches_the_bigm_derivation(decidb_cli, tmp_path):
         assert magnitudes, f"expected a Big-M coefficient:\n{dump}"
         return max(magnitudes)
 
-    as_bool = decidb_cli.dump_model(
+    as_bool = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 2 MINIMIZE SUM(x)
         """,
         tmp_path / "bool_bigm.dump")
-    as_int = decidb_cli.dump_model(
+    as_int = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(INT) SUCH THAT x <= 1 AND SUM(x) <> 2 MINIMIZE SUM(x)
@@ -250,10 +262,33 @@ def test_bool_ceiling_licenses_an_unreachable_drop(decidb_cli, tmp_path):
     should vanish entirely. While the ceiling was invisible this emitted the two-row
     disjunction against an unreachable bound.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         """
             SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
             DECIDE x(BOOL) SUCH THAT SUM(x) <> 9 MINIMIZE SUM(x)
         """,
         tmp_path / "bool_unreachable.dump")
     assert _rows(dump) == [], f"an unreachable `<>` should emit no rows:\n{dump}"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.correctness
+def test_collapse_still_fires_natively(decidb_cli, tmp_path):
+    """The collapse is a fact about the LHS's reachable range, not about the encoding.
+
+    It runs before either arm of the gate, so a backend with indicator constraints must
+    still see `SUM(x) <> 0` over BOOL decisions become the single plain row `>= 1` —
+    with no implication emitted, because there is no disjunction left to state.
+    """
+    dump = decidb_cli.dump_model(
+        """
+            SELECT id, x FROM (VALUES (1), (2), (3), (4)) t(id)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 MINIMIZE SUM(x)
+        """,
+        tmp_path / "agg_ne_zero_native.dump")
+
+    rows = _rows(dump)
+    assert len(rows) == 1, f"expected one collapsed row, got {len(rows)}:\n{dump}"
+    assert "sense=> rhs=1" in rows[0], f"expected `>= 1`, got: {rows[0]}"
+    assert "num_indconstrs: 0" in dump, \
+        f"a collapsed clause has no disjunction to state as implications:\n{dump}"

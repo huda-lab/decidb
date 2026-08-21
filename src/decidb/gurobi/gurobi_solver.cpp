@@ -91,6 +91,7 @@ const SolverCapabilities &GurobiSolver::Capabilities() {
             auto &api = GurobiLoader::API();
             caps.abs = api.addgenconstrAbs != nullptr;
             caps.min_max = api.addgenconstrMin != nullptr && api.addgenconstrMax != nullptr;
+            caps.not_equal = api.addgenconstrIndicator != nullptr;
         }
         return caps;
     }();
@@ -278,6 +279,19 @@ void GurobiSession::Load(const SolverModel &ilp) {
         }
         if (error) {
             throw InvalidInputException("Failed to add general constraint to Gurobi: %s",
+                                        api.geterrormsg(guard.env));
+        }
+    }
+
+    // 3b''. Indicator constraints — a row conditioned on a binary, rather than the
+    // Big-M that would otherwise stand in for the implication.
+    for (auto &ic : ilp.indicator_constraints) {
+        D_ASSERT(api.addgenconstrIndicator);
+        error = api.addgenconstrIndicator(guard.model, nullptr, ic.binary_column, ic.binary_value,
+                                          (int)ic.indices.size(), ic.indices.data(),
+                                          ic.coefficients.data(), ic.sense, ic.rhs);
+        if (error) {
+            throw InvalidInputException("Failed to add indicator constraint to Gurobi: %s",
                                         api.geterrormsg(guard.env));
         }
     }

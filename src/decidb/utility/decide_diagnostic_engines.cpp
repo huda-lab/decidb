@@ -836,11 +836,45 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	// Σw before any data/editable tier, so dropping is a last resort without a fixed
 	// cross-tier weight. M₂ defaults to the clause's own disjunction Big-M (|row coeff
 	// on indicator_col|, provably enough to neutralize either side), overridable.
+	//
+	// A `<>` the backend expressed natively has no Big-M rows at all — it is two
+	// indicator constraints instead. Those still carry a ROW (that is why `<>` is
+	// expressed as indicator constraints and not as a general constraint, which
+	// carries none), so the same dial reaches them: `w` wired into an implied row makes
+	// that row vacuous whenever the implication fires, which is exactly what dropping
+	// the clause means. Indicator rows are addressed by `constraints.size() + i` so one
+	// group can hold both encodings without the loop below caring which it has.
+	// The two encodings store the same four things in different structs, so the dial
+	// addresses a row through this view rather than knowing which list it came from.
+	struct RemovableRow {
+		vector<int> *indices;
+		vector<double> *coefficients;
+		char sense;
+		double rhs;
+		const vector<double> *col_lower;
+		const vector<double> *col_upper;
+	};
+	auto row_at = [&elastic](idx_t r) -> RemovableRow {
+		if (r < elastic.constraints.size()) {
+			auto &row = elastic.constraints[r];
+			return {&row.indices, &row.coefficients, row.sense, row.rhs, &elastic.col_lower,
+			        &elastic.col_upper};
+		}
+		auto &row = elastic.indicator_constraints[r - elastic.constraints.size()];
+		return {&row.indices, &row.coefficients, row.sense, row.rhs, &elastic.col_lower,
+		        &elastic.col_upper};
+	};
 	std::map<idx_t, vector<idx_t>> rem_groups;
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
 		idx_t ind = elastic.constraints[r].provenance.indicator_col;
 		if (ind != DConstants::INVALID_INDEX) {
 			rem_groups[ind].push_back(r);
+		}
+	}
+	for (idx_t i = 0; i < elastic.indicator_constraints.size(); i++) {
+		idx_t ind = elastic.indicator_constraints[i].provenance.indicator_col;
+		if (ind != DConstants::INVALID_INDEX) {
+			rem_groups[ind].push_back(elastic.constraints.size() + i);
 		}
 	}
 	for (auto &kv : rem_groups) {
@@ -850,10 +884,10 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		double m2 = removal_bigm;
 		if (!(m2 > 0.0)) {
 			for (idx_t r : grp) {
-				const auto &row = elastic.constraints[r];
-				for (idx_t k = 0; k < row.indices.size(); k++) {
-					if (static_cast<idx_t>(row.indices[k]) == indicator_col) {
-						m2 = std::max(m2, std::fabs(row.coefficients[k]));
+				auto row = row_at(r);
+				for (idx_t k = 0; k < row.indices->size(); k++) {
+					if (static_cast<idx_t>((*row.indices)[k]) == indicator_col) {
+						m2 = std::max(m2, std::fabs((*row.coefficients)[k]));
 					}
 				}
 			}
@@ -866,12 +900,12 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		// a removal offered in the diagnosis but inert in the model.
 		if (!(m2 > 0.0)) {
 			for (idx_t r : grp) {
-				const auto &row = elastic.constraints[r];
+				auto row = row_at(r);
 				double span = std::fabs(row.rhs) + 1.0;
-				for (idx_t k = 0; k < row.indices.size(); k++) {
-					idx_t col = static_cast<idx_t>(row.indices[k]);
-					span += std::fabs(row.coefficients[k]) *
-					        std::max(std::fabs(elastic.col_lower[col]), std::fabs(elastic.col_upper[col]));
+				for (idx_t k = 0; k < row.indices->size(); k++) {
+					idx_t col = static_cast<idx_t>((*row.indices)[k]);
+					span += std::fabs((*row.coefficients)[k]) *
+					        std::max(std::fabs((*row.col_lower)[col]), std::fabs((*row.col_upper)[col]));
 				}
 				m2 = std::max(m2, span);
 			}
@@ -886,9 +920,9 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		elastic.num_vars++;
 		// Wire ±M₂·w into each disjunction row (same sign convention as a slack).
 		for (idx_t r : grp) {
-			auto &row = elastic.constraints[r];
-			row.indices.push_back(static_cast<int>(w_col));
-			row.coefficients.push_back(row.sense == '>' ? m2 : -m2);
+			auto row = row_at(r);
+			row.indices->push_back(static_cast<int>(w_col));
+			row.coefficients->push_back(row.sense == '>' ? m2 : -m2);
 		}
 		out.removals.push_back({grp, w_col, indicator_col});
 	}

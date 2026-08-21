@@ -239,6 +239,8 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	    reinterpret_cast<decltype(api.addgenconstrMin)>(GetSym(handle, "GRBaddgenconstrMin"));
 	api.addgenconstrMax =
 	    reinterpret_cast<decltype(api.addgenconstrMax)>(GetSym(handle, "GRBaddgenconstrMax"));
+	api.addgenconstrIndicator = reinterpret_cast<decltype(api.addgenconstrIndicator)>(
+	    GetSym(handle, "GRBaddgenconstrIndicator"));
 
 	// Optional: GRBterminate (mid-solve interrupt). Present in all modern Gurobi, but
 	// loaded best-effort so a missing symbol never breaks solving — the mid-chunk Ctrl-C

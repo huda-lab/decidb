@@ -129,6 +129,7 @@ void DumpSolverModel(const SolverModel &model) {
 	out += "num_rows: " + std::to_string(model.constraints.size()) + "\n";
 	out += "num_qrows: " + std::to_string(model.quadratic_constraints.size()) + "\n";
 	out += "num_genconstrs: " + std::to_string(model.general_constraints.size()) + "\n";
+	out += "num_indconstrs: " + std::to_string(model.indicator_constraints.size()) + "\n";
 
 	for (idx_t col = 0; col < model.num_vars; col++) {
 		out += "col " + std::to_string(col) + ": lb=";
@@ -199,6 +200,16 @@ void DumpSolverModel(const SolverModel &model) {
 		for (idx_t a = 0; a < gc.argument_columns.size(); a++) {
 			out += (a ? "," : "") + std::to_string(gc.argument_columns[a]);
 		}
+		out += "\n";
+	}
+
+	for (idx_t i = 0; i < model.indicator_constraints.size(); i++) {
+		auto &ic = model.indicator_constraints[i];
+		out += "ind " + std::to_string(i) + ": bin=" + std::to_string(ic.binary_column) + "==" +
+		       std::to_string(ic.binary_value) + " sense=" + std::string(1, ic.sense) + " rhs=";
+		AppendDouble(out, ic.rhs);
+		out += " |";
+		AppendSparseRow(out, ic.indices, ic.coefficients);
 		out += "\n";
 	}
 
@@ -321,6 +332,10 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 		// a backend that did not declare it means the gate routed to the wrong adapter —
 		// and the adapter would have no way to express it.
 		auto &caps = backend.Capabilities();
+		if (!model.indicator_constraints.empty() && !caps.not_equal) {
+			throw InternalException("DECIDE left a construct native for %s, which does not declare it",
+			                        backend.Name());
+		}
 		for (auto &gc : model.general_constraints) {
 			bool declared = gc.kind == GeneralConstraintKind::ABS
 			                    ? caps.abs
@@ -340,7 +355,8 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	// per-row spec becomes a row per data row, one PER spec a row per group. Captured here,
 	// before any `std::move(model)` below.
 	idx_t built_constraint_rows = model.constraints.size() + model.quadratic_constraints.size() +
-	                              model.general_constraints.size();
+	                              model.general_constraints.size() +
+	                              model.indicator_constraints.size();
 	// Build proved a constraint unsatisfiable while assembling the model: a row whose
 	// left-hand side reduced to no terms at all, against a bound it cannot meet
 	// (`SUM(0 * x) <= -1`, `x - x <= -1`). The row was kept so diagnosis can name and

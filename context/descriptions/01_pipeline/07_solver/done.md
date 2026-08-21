@@ -101,6 +101,7 @@ Construct flags declared today:
 |---|---|---|
 | `abs` | Gurobi | `GRBaddgenconstrAbs` |
 | `min_max` | Gurobi | `GRBaddgenconstrMin` + `GRBaddgenconstrMax` |
+| `not_equal` | Gurobi | `GRBaddgenconstrIndicator` |
 
 The rest stay false until the loader binds their symbols and stage 08 knows how to emit
 them: a capability may not be declared ahead of the code that honors it.

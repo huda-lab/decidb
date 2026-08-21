@@ -2700,6 +2700,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // both arms below only translate.
     const bool native_abs = solver_backend.Capabilities().abs;
     const bool native_min_max = solver_backend.Capabilities().min_max;
+    const bool native_not_equal = solver_backend.Capabilities().not_equal;
 
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from
@@ -2729,8 +2730,10 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // place; aggregate ones need a global binary per group and so are deferred
     // until the VarIndexer exists.
     vector<EvaluatedConstraint> deferred_ne_aggregate;
+    vector<EvaluatedConstraint> deferred_ne_native;
     if (!ne_indicator_indices.empty()) {
-        LinearizeNotEqual(solver_input, deferred_ne_aggregate, decide_var_names);
+        LinearizeNotEqual(solver_input, deferred_ne_aggregate, decide_var_names, native_not_equal,
+                          deferred_ne_native);
     }
 
     // Emit the McCormick envelope for every bilinear w = b * x auxiliary.
@@ -2916,7 +2919,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // Finish the aggregate `<>` spellings deferred above, now that flat columns
     // exist. Emits into solver_input.global_constraints at stage 06.
     ExpandDeferredAggregateNotEqual(solver_input, var_indexer, deferred_ne_aggregate,
-                                    aux_var_expressions, decide_var_names);
+                                    aux_var_expressions, decide_var_names, native_not_equal);
 
     // The native arm of the ABS gate. Deferred to here, not skipped: a general
     // constraint names flat columns, which only exist once the VarIndexer does — the
@@ -2925,6 +2928,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
         EmitNativeAbs(solver_input, var_indexer);
     }
     ExpandNativeMinMaxConstraints(solver_input, var_indexer, deferred_native_minmax);
+    ExpandNativeNotEqual(solver_input, var_indexer, deferred_ne_native);
 
     // Encode a MIN/MAX objective (flat `MIN(expr)`/`MAX(expr)` or the nested
     // `OUTER(INNER(expr)) PER key` spelling) into global auxiliaries and their
@@ -3319,7 +3323,8 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         // internal auxiliaries escaped.
         bool has_nonlinear_terms = retained_model.has_quadratic_obj ||
                                    !retained_model.quadratic_constraints.empty() ||
-                                   !retained_model.general_constraints.empty();
+                                   !retained_model.general_constraints.empty() ||
+                                   !retained_model.indicator_constraints.empty();
         string reason = BuildUnboundedDiagnosisUnavailableReason(
             solve_result.diagnostic_timed_out, solve_result.ray.empty(), has_nonlinear_terms);
         // This failure produced no diagnosis of its own; clear any stash left by an

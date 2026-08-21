@@ -487,6 +487,31 @@ struct SolverInput {
     };
     vector<RawConstraint> global_constraints;
 
+    //! `binary_column == binary_value` implies this row. A *conditional row*, which is
+    //! why it is its own list rather than a `GeneralConstraintSpec` kind: the kinds
+    //! there relate columns to columns and carry no row at all.
+    //!
+    //! This is what a `<>` becomes on a backend that has indicator constraints — the
+    //! two halves of `LHS <= K-1 OR LHS >= K+1` stated as implications instead of
+    //! encoded with a Big-M. Unlike the general constraints, an indicator constraint
+    //! DOES carry a row, so infeasible diagnosis can still reach it: the removal dial
+    //! walks these alongside the matrix rows.
+    struct IndicatorConstraintSpec {
+        int binary_column = -1;
+        int binary_value = 1;
+        vector<int> indices;
+        vector<double> coefficients;
+        char sense = '<'; //!< '<' (<=), '>' (>=), '=' (==)
+        double rhs = 0.0;
+        ConstraintKind kind = ConstraintKind::STRUCTURAL;
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
+        idx_t repair_group_id = DConstants::INVALID_INDEX;
+        //! The clause's own binary, mirroring ConstraintProvenance::indicator_col, so
+        //! the removal dial groups the two halves of one `<>` together.
+        idx_t indicator_col = DConstants::INVALID_INDEX;
+    };
+    vector<IndicatorConstraintSpec> indicator_constraints;
+
     //! Constructs left native for the backend, in flat columns. Emitted at stage 08
     //! once the VarIndexer exists — like `global_constraints`, and for the same reason.
     //! Empty whenever the chosen backend declared the construct unsupported, in which
