@@ -18,6 +18,14 @@ only when the bound is genuinely unknowable: a box derived by implied-bound
 propagation counts, and so does one derived for an ABS auxiliary, which is why
 ``MAX(ABS(x - 5)) >= 3`` over a bounded ``x`` still answers.
 
+**It is a property of the LOWERING path, not of the query.** A backend that expresses
+the construct natively needs no Big-M and therefore no bound, so it answers — see
+``test_native_constructs``. The invariant these tests defend is not "every backend
+refuses"; it is "no backend answers *wrongly*". Where both must lower, both refuse, and
+identically. That is why the cases below pin ``DECIDB_NATIVE_CONSTRUCTS=off``: the
+claim is about the encoding, and running them on whatever the host happens to support
+would test the host instead.
+
 Covers:
   - test_hard_minmax_over_unbounded_variable_is_refused: the MIN/MAX path
   - test_not_equal_over_unbounded_variable_is_refused: per-row and aggregate ``<>``
@@ -43,9 +51,10 @@ _ROWS = "(VALUES (1),(2),(3)) t(id)"
 @pytest.mark.cons_aggregate
 @pytest.mark.error
 def test_hard_minmax_over_unbounded_variable_is_refused(decidb_cli):
-    """``MAX(x) >= 5`` needs an indicator, and an indicator needs a finite M."""
+    """``MAX(x) >= 5`` lowered needs an indicator, and an indicator needs a finite M."""
+    lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
     with pytest.raises(DecidBCliError) as excinfo:
-        decidb_cli.execute(f"""
+        lowering.execute(f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(REAL)
             SUCH THAT MAX(x) >= 5
@@ -66,8 +75,9 @@ def test_not_equal_over_unbounded_variable_is_refused(decidb_cli, constraint):
     Per-row expands in place; the aggregate form is deferred until the flat columns
     exist. They took the same 1e6 floor and now take the same refusal.
     """
+    lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
     with pytest.raises(DecidBCliError) as excinfo:
-        decidb_cli.execute(f"""
+        lowering.execute(f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(INT)
             SUCH THAT {constraint}
@@ -86,8 +96,9 @@ def test_composed_minmax_over_unbounded_variable_is_refused(decidb_cli):
     propagation from supplying an upper bound and lets this reach the auxiliary
     Big-M at all.
     """
+    lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
     with pytest.raises(DecidBCliError) as excinfo:
-        decidb_cli.execute(f"""
+        lowering.execute(f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(REAL)
             SUCH THAT x >= -100 AND SUM(x) + MAX(x) >= -10
@@ -99,11 +110,15 @@ def test_composed_minmax_over_unbounded_variable_is_refused(decidb_cli):
 @pytest.mark.min_max
 @pytest.mark.error
 def test_refusal_is_identical_on_both_backends(decidb_cli_highs, decidb_cli_gurobi):
-    """The divergence this closes: one query, one answer, whichever solver is used.
+    """The divergence this closes: where both backends lower, both give one answer.
 
-    Leaving HiGHS on the 1e6 floor would mean this query errors on Gurobi and
-    returns a quietly wrong optimum on HiGHS. A query's legality is not a property
-    of the machine it happens to run on.
+    Leaving HiGHS on the 1e6 floor would mean this query errors on Gurobi and returns
+    a quietly wrong optimum on HiGHS — one right answer and one wrong one, with no
+    story for the difference. Both now refuse, in the same words.
+
+    Pinned to the lowering path on purpose. A backend that expresses MIN/MAX natively
+    answers this query correctly, so the two backends *do* differ once native paths
+    exist — but nobody gets a wrong answer, which is the invariant that matters.
     """
     sql = f"""
         SELECT id, x FROM {_ROWS}
@@ -111,10 +126,11 @@ def test_refusal_is_identical_on_both_backends(decidb_cli_highs, decidb_cli_guro
         SUCH THAT MAX(x) >= 5
         MINIMIZE SUM(x)
     """
+    lowering = {"DECIDB_NATIVE_CONSTRUCTS": "off"}
     with pytest.raises(DecidBCliError) as highs_error:
-        decidb_cli_highs.execute(sql)
+        decidb_cli_highs.with_env(lowering).execute(sql)
     with pytest.raises(DecidBCliError) as gurobi_error:
-        decidb_cli_gurobi.execute(sql)
+        decidb_cli_gurobi.with_env(lowering).execute(sql)
     assert highs_error.value.message == gurobi_error.value.message
 
 
@@ -129,7 +145,8 @@ def test_derived_bound_still_answers(decidb_cli):
     derived from x's — without that, the outer Big-M would see an unbounded column
     and refuse a query whose bound was there to be computed.
     """
-    rows, cols = decidb_cli.execute(f"""
+    lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
+    rows, cols = lowering.execute(f"""
         SELECT id, x FROM {_ROWS}
         DECIDE x(REAL)
         SUCH THAT SUM(x) <= 10 AND MAX(x) >= 5
@@ -139,7 +156,7 @@ def test_derived_bound_still_answers(decidb_cli):
     xs = [float(r[ci["x"]]) for r in rows]
     assert abs(max(xs) - 5.0) <= 1e-4, f"expected max(x)=5, got {xs}"
 
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = lowering.execute(f"""
         SELECT id, x FROM {_ROWS}
         DECIDE x(REAL)
         SUCH THAT x >= 4 AND x <= 20 AND MAX(ABS(x - 5)) >= 3

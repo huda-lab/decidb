@@ -192,7 +192,9 @@ void DumpSolverModel(const SolverModel &model) {
 	for (idx_t g = 0; g < model.general_constraints.size(); g++) {
 		auto &gc = model.general_constraints[g];
 		out += "gen " + std::to_string(g) + ": kind=" +
-		       std::string(gc.kind == GeneralConstraintKind::ABS ? "abs" : "?") +
+		       std::string(gc.kind == GeneralConstraintKind::ABS   ? "abs"
+		                   : gc.kind == GeneralConstraintKind::MIN ? "min"
+		                                                           : "max") +
 		       " res=" + std::to_string(gc.result_column) + " args=";
 		for (idx_t a = 0; a < gc.argument_columns.size(); a++) {
 			out += (a ? "," : "") + std::to_string(gc.argument_columns[a]);
@@ -320,7 +322,10 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 		// and the adapter would have no way to express it.
 		auto &caps = backend.Capabilities();
 		for (auto &gc : model.general_constraints) {
-			if (gc.kind == GeneralConstraintKind::ABS && !caps.abs) {
+			bool declared = gc.kind == GeneralConstraintKind::ABS
+			                    ? caps.abs
+			                    : caps.min_max; // MIN and MAX share one flag and one symbol pair
+			if (!declared) {
 				throw InternalException("DECIDE left a construct native for %s, which does not declare it",
 				                        backend.Name());
 			}

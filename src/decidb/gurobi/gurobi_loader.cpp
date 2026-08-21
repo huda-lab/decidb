@@ -235,6 +235,10 @@ static bool ResolveSymbols(void *handle, GurobiAPI &api) {
 	// lowers ABS into its Big-M envelope exactly as it always has.
 	api.addgenconstrAbs =
 	    reinterpret_cast<decltype(api.addgenconstrAbs)>(GetSym(handle, "GRBaddgenconstrAbs"));
+	api.addgenconstrMin =
+	    reinterpret_cast<decltype(api.addgenconstrMin)>(GetSym(handle, "GRBaddgenconstrMin"));
+	api.addgenconstrMax =
+	    reinterpret_cast<decltype(api.addgenconstrMax)>(GetSym(handle, "GRBaddgenconstrMax"));
 
 	// Optional: GRBterminate (mid-solve interrupt). Present in all modern Gurobi, but
 	// loaded best-effort so a missing symbol never breaks solving — the mid-chunk Ctrl-C

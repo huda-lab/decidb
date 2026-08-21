@@ -360,7 +360,9 @@ struct AbsMaximizeLinkSpec {
 //! An adapter never receives a kind its backend did not declare in SolverCapabilities,
 //! so it may treat an unknown kind as an internal error.
 enum class GeneralConstraintKind : uint8_t {
-    ABS //!< result = |argument|
+    ABS, //!< result = |argument|
+    MIN, //!< result = min(arguments)
+    MAX  //!< result = max(arguments)
 };
 
 struct GeneralConstraintSpec {

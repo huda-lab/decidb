@@ -57,9 +57,22 @@ below the threshold it introduces.
 
 ## Native MIN/MAX: what the spike found
 
-**Status**: investigation complete, no code shipped. The throwaway branch that
-produced this is deleted; this section is its entire deliverable, and the native
-MIN/MAX work (batch C in the top-level queue) starts from it.
+**Status**: SUPERSEDED — native MIN/MAX shipped, and the answer below is why it took
+the shape it did. Kept because the negative result is the useful part.
+
+**What actually happened.** The spike asked whether stage 05 could be told *not* to
+rewrite. Finding (1) said no: the prepared linear form has no vocabulary for a reducer
+kind, so a surviving `MAX` aggregate is read as a sum by everything downstream. The
+implementation therefore took the other route — stage 05 keeps rewriting and tagging
+exactly as before, and the *gate* lives at stage 08, choosing between the Big-M rows
+and a general constraint from the same tag. Findings (4) and (5) evaporate under that
+design: the tag is still set, so `DecidePropagateImpliedBounds` still skips the row,
+and `was_minmax_easy` still means what it meant. Finding (2) is what made the design
+work at all.
+
+The one thing the constraint side does need is to **lift the tagged row out of the
+model** before the expansion, because until an arm rewrites it the row reads as
+`SUM(inner)` while the clause means `MAX(inner)`.
 
 **The question**: if the backend can express MIN/MAX natively, stage 05 should not
 rewrite it. Does anything *downstream* of stage 05 require the rewrite to have

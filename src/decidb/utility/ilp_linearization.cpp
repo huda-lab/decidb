@@ -115,6 +115,14 @@ static double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row) 
     return rhs - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row);
 }
 
+//! Signed bracket of one row's variable terms, defined below — forward-declared so the
+//! native MIN/MAX emitter above it can box its auxiliary columns by the same walk the
+//! Big-M paths use.
+static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
+                                 const vector<double> &lower_bounds,
+                                 const vector<double> &upper_bounds, double &out_lo,
+                                 double &out_hi);
+
 //! Refuse a Big-M linearization that has no finite M, naming a column to bound.
 //!
 //! A Big-M constant must dominate the reachable magnitude of the row's left-hand
@@ -385,22 +393,18 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
     }
 }
 
-void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_names) {
-    const auto &lower_bounds = input.lower_bounds;
-    const auto &upper_bounds = input.upper_bounds;
-    const idx_t num_rows = input.num_rows;
+namespace {
 
-    vector<EvaluatedConstraint> new_constraints;
-    for (auto &ec : input.constraints) {
-        // Skip constraints without a minmax indicator tag
-        if (ec.minmax_indicator_idx == DConstants::INVALID_INDEX) {
-            new_constraints.push_back(std::move(ec));
-            continue;
-        }
-
-        idx_t indicator_idx = ec.minmax_indicator_idx;
-        bool is_max_agg = (ec.minmax_agg_type == "max");
-
+//! Settle every group's bound before either arm encodes anything, and mask off the
+//! groups neither has work for. A bound that is out of reach or beyond reach is
+//! answered by the direction it points, not by any encoding, so this is shared: the
+//! Big-M rows and the native general constraint make exactly the same decisions here.
+//!
+//! Mutates `ec` (masking excluded groups out of `row_group_ids`) and appends the
+//! plain per-row constraint an unsatisfiable group becomes. Returns false when no
+//! group is left to encode.
+bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_agg,
+                          vector<EvaluatedConstraint> &new_constraints) {
         // Classify each group's bound before asking for a Big-M over it. The RHS
         // reaching here already holds one value per group: ReduceAggregateRhsPerGroup
         // collapsed a row-varying bound to the tightest one (MAX for `>=`, MIN for
@@ -466,9 +470,183 @@ void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_nam
                     }
                 }
                 if (!any_linearize) {
-                    continue; // no group left to rewrite
+                    return false; // no group left to encode
                 }
             }
+        }
+    return true;
+}
+
+} // namespace
+
+void ExtractNativeMinMaxConstraints(SolverInput &input, vector<EvaluatedConstraint> &deferred) {
+    const idx_t num_rows = input.num_rows;
+    vector<EvaluatedConstraint> kept;
+    for (auto &ec : input.constraints) {
+        if (ec.minmax_indicator_idx == DConstants::INVALID_INDEX) {
+            kept.push_back(std::move(ec));
+            continue;
+        }
+        // Same bound classification the lowering arm makes, for the same reason: a
+        // vacuous or unreachable bound is settled by direction, not by an encoding.
+        // Anything it emits (the unsatisfiable group's plain row) stays an ordinary
+        // constraint and rejoins the model here.
+        bool is_max_agg = (ec.minmax_agg_type == "max");
+        if (!ClassifyMinMaxGroups(ec, num_rows, is_max_agg, kept)) {
+            continue;
+        }
+        // The tagged row is a lie until one arm rewrites it: its LHS reads as
+        // `SUM(inner)` while the clause means `MAX(inner)`. Lift it out of the model
+        // now, so nothing between here and the expansion can mistake it for a sum, and
+        // finish it once the VarIndexer exists — the same shape as the deferred
+        // aggregate `<>`.
+        deferred.push_back(std::move(ec));
+    }
+    input.constraints = std::move(kept);
+}
+
+void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
+                                   vector<EvaluatedConstraint> &deferred) {
+    if (deferred.empty()) {
+        return;
+    }
+    const idx_t num_rows = input.num_rows;
+
+    for (auto &ec : deferred) {
+        bool is_max_agg = (ec.minmax_agg_type == "max");
+        bool has_groups = !ec.row_group_ids.empty();
+        idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
+
+        // One extremum column per group, pinned by a general constraint to the MAX (or
+        // MIN) of that group's row columns. No Big-M and no indicators: `z = MAX(t..)`
+        // is stated, so no constant has to dominate anything and no contributing
+        // variable needs a finite bound.
+        vector<vector<int>> group_args(group_count);
+        vector<AuxRange> group_range(group_count);
+        for (idx_t r = 0; r < num_rows; r++) {
+            idx_t g = has_groups ? ec.row_group_ids[r] : 0;
+            if (g == DConstants::INVALID_INDEX || g >= group_count) {
+                continue;
+            }
+            // A column pinned to this row's inner expression. The general constraint
+            // relates variables, so the linear half is a row either way. Boxed by that
+            // expression's own range wherever one exists — a free continuous column is
+            // a measured performance cliff — and free only where none does, which is
+            // the case this arm exists to answer at all.
+            AuxRange row_range;
+            {
+                double row_lo = 0.0, row_hi = 0.0;
+                DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, row_lo, row_hi);
+                double constant = DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, r);
+                if (std::isinf(row_lo) || std::isinf(row_hi)) {
+                    row_range.MarkUnbounded(DConstants::INVALID_INDEX);
+                } else {
+                    // `t` carries the constant part too, so shift the variable-only
+                    // bracket by it before using it as the box.
+                    row_range.CoverRow(row_lo + constant, row_hi + constant, row_lo, row_hi);
+                }
+            }
+            idx_t t_idx = AddGlobalContinuousAux(input, indexer, row_range, 0.0);
+            input.global_variable_labels.resize(t_idx - indexer.global_block_start);
+            input.global_variable_labels.push_back(string());
+
+            SolverInput::RawConstraint pin;
+            pin.indices.push_back(static_cast<int>(t_idx));
+            pin.coefficients.push_back(1.0);
+            for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+                idx_t v = ec.variable_indices[t];
+                if (v == DConstants::INVALID_INDEX) {
+                    continue;
+                }
+                double coef = ec.row_coefficients[t].Get(r);
+                if (coef == 0.0) {
+                    continue;
+                }
+                // `t - inner = 0`. A constant term of `inner` folds into the bound.
+                pin.indices.push_back(static_cast<int>(indexer.Get(v, r)));
+                pin.coefficients.push_back(-coef);
+            }
+            pin.sense = '=';
+            pin.rhs = DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, r);
+            pin.kind = ConstraintKind::STRUCTURAL;
+            pin.source_clause_id = ec.source_clause_id;
+            pin.repair_group_id = ec.repair_group_id;
+            input.global_constraints.push_back(std::move(pin));
+
+            group_args[g].push_back(static_cast<int>(t_idx));
+            group_range[g].Cover(row_range);
+        }
+
+        for (idx_t g = 0; g < group_count; g++) {
+            if (group_args[g].empty()) {
+                continue; // masked-out group: nothing to take an extremum over
+            }
+            // The extremum of a family lies inside the family's own bracket, so the
+            // union of the member ranges boxes it.
+            idx_t z_idx = AddGlobalContinuousAux(input, indexer, group_range[g], 0.0);
+            input.global_variable_labels.resize(z_idx - indexer.global_block_start);
+            input.global_variable_labels.push_back(string());
+
+            GeneralConstraintSpec gc;
+            gc.kind = is_max_agg ? GeneralConstraintKind::MAX : GeneralConstraintKind::MIN;
+            gc.result_column = static_cast<int>(z_idx);
+            gc.argument_columns = group_args[g];
+            gc.source_clause_id = ec.source_clause_id;
+            gc.repair_group_id = ec.repair_group_id;
+            input.general_constraints.push_back(std::move(gc));
+
+            // The user's clause, now over the extremum itself: `z <op> K`. This is the
+            // row the elastic engine sees, and it is the one the user actually wrote —
+            // an improvement on the lowered form, where the bound was spread across a
+            // per-row Big-M family.
+            idx_t bound_row = DConstants::INVALID_INDEX;
+            for (idx_t r = 0; r < num_rows; r++) {
+                idx_t rg = has_groups ? ec.row_group_ids[r] : 0;
+                if (rg == g) {
+                    bound_row = r;
+                    break;
+                }
+            }
+            D_ASSERT(bound_row != DConstants::INVALID_INDEX);
+
+            SolverInput::RawConstraint outer;
+            outer.indices.push_back(static_cast<int>(z_idx));
+            outer.coefficients.push_back(1.0);
+            outer.sense = is_max_agg ? '>' : '<';
+            // The raw bound, not the effective one: each `t` above already carries its
+            // row's constant LHS part, because a per-row constant can differ inside a
+            // group and the extremum is taken over the whole expression, constant
+            // included. (The lowering arm nets the constant out instead, since it
+            // compares row by row.) Group-constant by construction —
+            // ReduceAggregateRhsPerGroup collapsed a row-varying bound already.
+            outer.rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue()
+                                                  : ec.rhs_values.Get(bound_row);
+            outer.kind = ConstraintKind::USER_PARAMETER;
+            outer.source_clause_id = ec.source_clause_id;
+            outer.repair_group_id = ec.repair_group_id;
+            input.global_constraints.push_back(std::move(outer));
+        }
+    }
+    deferred.clear();
+}
+
+void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_names) {
+    const auto &lower_bounds = input.lower_bounds;
+    const auto &upper_bounds = input.upper_bounds;
+    const idx_t num_rows = input.num_rows;
+
+    vector<EvaluatedConstraint> new_constraints;
+    for (auto &ec : input.constraints) {
+        // Skip constraints without a minmax indicator tag
+        if (ec.minmax_indicator_idx == DConstants::INVALID_INDEX) {
+            new_constraints.push_back(std::move(ec));
+            continue;
+        }
+
+        idx_t indicator_idx = ec.minmax_indicator_idx;
+        bool is_max_agg = (ec.minmax_agg_type == "max");
+        if (!ClassifyMinMaxGroups(ec, num_rows, is_max_agg, new_constraints)) {
+            continue;
         }
 
         // Compute Big-M from variable bounds. Skip constant LHS terms
@@ -1422,12 +1600,17 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             if (!c1.row_group_ids.empty() && c1.row_group_ids[r] == DConstants::INVALID_INDEX) {
                 continue; // row excluded by WHEN/PER: no ABS to express here
             }
-            // A free column: `t = inner` is an equality, so it needs no box, and NOT
-            // boxing it is what lets a native ABS answer a query whose contributors are
-            // unbounded — the case the lowering path has to refuse.
-            AuxRange free_range;
-            free_range.unbounded = true;
-            idx_t t_idx = AddGlobalContinuousAux(input, indexer, free_range, 0.0);
+            // `t = inner`, boxed by the range DeriveAbsAuxiliaryBounds already found:
+            // |inner| <= abs_range, so inner lies in [-abs_range, +abs_range]. Free only
+            // when that range is underivable — which is precisely the query the native
+            // path exists to answer, and the only case that earns a free column.
+            AuxRange inner_range;
+            if (link.range_unbounded) {
+                inner_range.MarkUnbounded(DConstants::INVALID_INDEX);
+            } else {
+                inner_range.CoverRow(-link.abs_range, link.abs_range, -link.abs_range, link.abs_range);
+            }
+            idx_t t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
             input.global_variable_labels.resize(t_idx - indexer.global_block_start);
             input.global_variable_labels.push_back(string());
 
@@ -1473,7 +1656,8 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
 // auxiliaries live in the flat global block).
 
 void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                              const MinMaxObjectiveSpec &spec, const vector<string> &var_names) {
+                              const MinMaxObjectiveSpec &spec, const vector<string> &var_names,
+                              bool native_min_max) {
     idx_t num_rows = input.num_rows;
 
     // Save objective data (needed for constraint generation in the PER MIN/MAX
@@ -1564,6 +1748,59 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             ThrowUnboundedAuxBigM(row_family(), var_names, "MIN/MAX");
         }
         return row_family().BigM();
+    };
+
+    //! This row's own expression range, as an AuxRange — tighter than the family's,
+    //! and the box a `t` column pinned to that row deserves.
+    auto row_range_for = [&](idx_t row) -> AuxRange {
+        AuxRange range;
+        auto rr = saved_row_range(row);
+        range.CoverRow(rr.lo, rr.hi, rr.var_lo, rr.var_hi);
+        if (rr.unbounded) {
+            range.MarkUnbounded(rr.unbounded_var);
+        }
+        return range;
+    };
+
+    // --- The native arm's two primitives -------------------------------------
+    // Every hard site below has the same shape: an auxiliary that must equal the
+    // extremum of a family of linear expressions. Lowered, that is one Big-M row per
+    // member plus a `SUM(y) >= 1`. Natively it is one free column per member, pinned
+    // to that member's expression, and one general constraint over them — no constant
+    // to dominate anything, and so no requirement that any contributing variable be
+    // bounded.
+
+    //! Pin a fresh free column to the expression `link` describes and return it.
+    //! `link` is built as the `(aux - expr)` half of a linking row, so its stored
+    //! coefficients are already negated and `link.constant` holds the constant part:
+    //! `t + link_terms = link.constant` is exactly `t = expr`.
+    auto pin_native_column = [&](const MinMaxLinkRow &link, const AuxRange &range) -> int {
+        // Boxed, not free. `t` stands for a known expression, so its range is the same
+        // one the Big-M walk produces — and a free continuous column is a measured
+        // performance cliff (the root simplex has no box to start from). It falls back
+        // to free only when the range is genuinely underivable, which is exactly the
+        // case the native path exists to answer at all.
+        idx_t t_idx = AddGlobalContinuousAux(input, indexer, range, 0.0);
+        input.global_variable_labels.resize(t_idx - indexer.global_block_start);
+        input.global_variable_labels.push_back(string());
+        SolverInput::RawConstraint pin;
+        pin.indices.push_back((int)t_idx);
+        pin.coefficients.push_back(1.0);
+        link.AppendTo(pin);
+        pin.sense = '=';
+        pin.rhs = link.constant;
+        pin.kind = ConstraintKind::STRUCTURAL;
+        input.global_constraints.push_back(std::move(pin));
+        return (int)t_idx;
+    };
+
+    //! `result = MIN/MAX(args)`, stated for the backend rather than encoded.
+    auto emit_native_extremum = [&](idx_t result_col, vector<int> args, bool is_min) {
+        GeneralConstraintSpec gc;
+        gc.kind = is_min ? GeneralConstraintKind::MIN : GeneralConstraintKind::MAX;
+        gc.result_column = (int)result_col;
+        gc.argument_columns = std::move(args);
+        input.general_constraints.push_back(std::move(gc));
     };
 
 
@@ -1685,6 +1922,22 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                         input.global_constraints.push_back(std::move(rc));
                     }
                 }
+            } else if (native_min_max) {
+                // Native inner: z_g = MIN/MAX over this group's row expressions.
+                for (idx_t g = 0; g < K; g++) {
+                    if (active_offsets[g] == active_offsets[g + 1]) {
+                        PinZGroupToZero(g);
+                        continue;
+                    }
+                    vector<int> args;
+                    args.reserve(active_offsets[g + 1] - active_offsets[g]);
+                    for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
+                        MinMaxLinkRow link;
+                        AddObjectiveRowTerms(link, active_flat_rows[k], 1.0);
+                        args.push_back(pin_native_column(link, row_range_for(active_flat_rows[k])));
+                    }
+                    emit_native_extremum(group_value_indices[g], std::move(args), inner_is_min);
+                }
             } else {
                 // Hard: per-row indicators per group, allocated only for active rows.
                 idx_t first_y = z_base + K;
@@ -1767,6 +2020,16 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     rc.coefficients.push_back(-1.0);
                     input.global_constraints.push_back(std::move(rc));
                 }
+            } else if (native_min_max) {
+                // Native outer: w = MIN/MAX(z_g). The group values are already columns,
+                // so this needs no pinning rows at all — the general constraint is the
+                // whole formulation.
+                vector<int> args;
+                args.reserve(K);
+                for (idx_t g = 0; g < K; g++) {
+                    args.push_back((int)group_value_indices[g]);
+                }
+                emit_native_extremum(w_idx, std::move(args), outer_is_min);
             } else {
                 // Hard outer: indicators over K groups
                 idx_t first_u = w_idx + 1;
@@ -1889,6 +2152,49 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     // optimization doesn't push the otherwise-unconstrained w to ±∞.
                     PinGlobalAux(input, indexer, w_idx, 0.0);
                 }
+            } else if (native_min_max) {
+                // Native outer over group SUMS: one free column per group, pinned to
+                // that group's sum, then w = MIN/MAX over them. The easy arm above
+                // skips a group that is identically zero because the optimization
+                // direction settles it; here every group is a real member of the
+                // extremum, so an all-zero group participates as the constant 0 it is.
+                //
+                // Every `t_g` is boxed by the family range over group sums — looser than
+                // a per-group box, but sound (it covers every group) and finite whenever
+                // any of them is.
+                AuxRange group_sum_range;
+                for (idx_t g = 0; g < K; g++) {
+                    double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
+                    double g_lo = 0.0, g_hi = 0.0, g_var_lo = 0.0, g_var_hi = 0.0;
+                    bool g_unbounded = false;
+                    idx_t g_unbounded_var = DConstants::INVALID_INDEX;
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                        auto rr = saved_row_range(obj_flat_rows[k]);
+                        g_lo += rr.lo * scale;
+                        g_hi += rr.hi * scale;
+                        g_var_lo += rr.var_lo * scale;
+                        g_var_hi += rr.var_hi * scale;
+                        if (rr.unbounded && !g_unbounded) {
+                            g_unbounded = true;
+                            g_unbounded_var = rr.unbounded_var;
+                        }
+                    }
+                    group_sum_range.CoverRow(g_lo, g_hi, g_var_lo, g_var_hi);
+                    if (g_unbounded) {
+                        group_sum_range.MarkUnbounded(g_unbounded_var);
+                    }
+                }
+                vector<int> args;
+                args.reserve(K);
+                for (idx_t g = 0; g < K; g++) {
+                    double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
+                    MinMaxLinkRow link;
+                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
+                        AddObjectiveRowTerms(link, obj_flat_rows[k], scale);
+                    }
+                    args.push_back(pin_native_column(link, group_sum_range));
+                }
+                emit_native_extremum(w_idx, std::move(args), outer_is_min);
             } else {
                 // Hard outer: indicators over K groups
                 // Outer Big-M over group SUMS: a group sum spans at most num_rows
@@ -1988,6 +2294,16 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 link.AppendTo(rc);
                 input.global_constraints.push_back(std::move(rc));
             }
+        } else if (native_min_max) {
+            // Native flat: z = MIN/MAX over the objective's active row expressions.
+            vector<int> args;
+            args.reserve(active_rows.size());
+            for (idx_t row : active_rows) {
+                MinMaxLinkRow link;
+                AddObjectiveRowTerms(link, row, 1.0);
+                args.push_back(pin_native_column(link, row_range_for(row)));
+            }
+            emit_native_extremum(z_idx, std::move(args), is_min_agg);
         } else {
             double M = compute_big_m();
 
@@ -2122,8 +2438,51 @@ static void EmitComposedHardMinMaxIndicators(SolverInput &input, const VarIndexe
                                              const vector<DecideTerm> &inner_terms,
                                              const vector<vector<double>> &per_term_coefs,
                                              const vector<bool> &filter_mask,
-                                             const string &label, const vector<string> &var_names) {
+                                             const string &label, const vector<string> &var_names,
+                                             bool native_min_max) {
     idx_t num_rows = input.num_rows;
+
+    if (native_min_max) {
+        // Native: z = MIN/MAX over this term's active row expressions. One column per
+        // row pinned to that row's expression, then one general constraint — no Big-M,
+        // so no contributing variable has to be bounded. The columns are still BOXED by
+        // the term's derived range wherever one exists: a free continuous column is a
+        // measured performance cliff, and only a genuinely underivable range earns one.
+        AuxRange term_range = ComposedTermRange(input, inner_terms, per_term_coefs, filter_mask);
+        vector<int> args;
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (!filter_mask[row]) continue;
+            MinMaxLinkRow row_terms;
+            AddComposedRowTerms(indexer, row_terms, inner_terms, per_term_coefs, row);
+
+            idx_t t_idx = AddGlobalContinuousAux(input, indexer, term_range, 0.0);
+            input.global_variable_labels.resize(t_idx - indexer.global_block_start);
+            input.global_variable_labels.push_back(label);
+
+            // `row_terms` is the `(z - expr)` half of a linking row, so its stored
+            // coefficients are negated: `t + row_terms = row_terms.constant` is `t = expr`.
+            SolverInput::RawConstraint pin;
+            pin.indices.push_back((int)t_idx);
+            pin.coefficients.push_back(1.0);
+            row_terms.AppendTo(pin);
+            pin.sense = '=';
+            pin.rhs = row_terms.constant;
+            pin.kind = ConstraintKind::STRUCTURAL;
+            input.global_constraints.push_back(std::move(pin));
+
+            args.push_back((int)t_idx);
+        }
+        if (args.empty()) {
+            return; // no active row: the caller already pinned z
+        }
+        GeneralConstraintSpec gc;
+        gc.kind = is_max ? GeneralConstraintKind::MAX : GeneralConstraintKind::MIN;
+        gc.result_column = (int)z_idx;
+        gc.argument_columns = std::move(args);
+        input.general_constraints.push_back(std::move(gc));
+        return;
+    }
+
     AuxRange range = ComposedTermRange(input, inner_terms, per_term_coefs, filter_mask);
     if (range.unbounded) {
         ThrowUnboundedAuxBigM(range, var_names, "MIN/MAX");
@@ -2173,7 +2532,7 @@ static void EmitComposedHardMinMaxIndicators(SolverInput &input, const VarIndexe
 //! objective.
 static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &indexer,
                                           vector<ComposedMinMaxTermData> &terms,
-                                          const vector<string> &var_names) {
+                                          const vector<string> &var_names, bool native_min_max) {
     idx_t num_rows = input.num_rows;
 
     // Allocate global z_k for each MIN/MAX term. Both directions supported:
@@ -2220,7 +2579,7 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
         if (!ta.is_minmax || ta.is_easy) continue;
         EmitComposedHardMinMaxIndicators(input, indexer, ta.z_idx, ta.agg_name == "max",
                                          (*ta.inner_terms), ta.per_term_coefs,
-                                         ta.filter_mask, ta.label, var_names);
+                                         ta.filter_mask, ta.label, var_names, native_min_max);
     }
 }
 
@@ -2237,9 +2596,9 @@ static idx_t ComposedAvgDivisor(const ComposedMinMaxTermData &ta, idx_t num_rows
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
                                        ExpressionType outer_cmp, idx_t source_clause_id,
-                                       const vector<string> &var_names) {
+                                       const vector<string> &var_names, bool native_min_max) {
     idx_t num_rows = input.num_rows;
-    EmitComposedMinMaxAuxiliaries(input, indexer, terms, var_names);
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms, var_names, native_min_max);
 
     // Build the outer composed RawConstraint
     std::unordered_map<int, double> outer_accum;
@@ -2304,7 +2663,7 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
 
 void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                                       vector<ComposedMinMaxTermData> &terms,
-                                      const vector<string> &var_names) {
+                                      const vector<string> &var_names, bool native_min_max) {
     idx_t num_rows = input.num_rows;
 
     // Clear any existing objective terms — the placeholder constant produced
@@ -2312,7 +2671,7 @@ void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &inde
     input.objective_coefficients.clear();
     input.objective_variable_indices.clear();
 
-    EmitComposedMinMaxAuxiliaries(input, indexer, terms, var_names);
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms, var_names, native_min_max);
 
     // Populate objective coefficients. For MIN/MAX terms, the obj coef on z_k
     // is ta.sign (i.e., sign×1.0); set via global_obj_coeffs. For SUM/AVG

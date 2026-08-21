@@ -13,6 +13,13 @@ The box comes from `AuxRange`, which the same walk produces alongside the Big-M 
 so the two can never disagree about what the expression reaches. These tests assert on the
 model dump because results cannot see any of it: the optimum is identical either way.
 
+**Pinned to the lowering path.** Each case below asserts an exact auxiliary *count*, which
+is a fact about the Big-M formulation — a backend that expresses MIN/MAX natively builds a
+different, equally valid set of columns. `DECIDB_NATIVE_CONSTRUCTS=off` keeps the count
+meaningful; the invariant that survives both paths ("no auxiliary is left free where a range
+is derivable") is asserted without a count in
+`test_native_auxiliaries_are_boxed_too`.
+
 Covers one query per auxiliary-creation site:
   - test_flat_minmax_objective_auxiliary_is_boxed: flat `z`, both directions
   - test_per_inner_minmax_auxiliaries_are_boxed: per-group `z_g`
@@ -20,11 +27,21 @@ Covers one query per auxiliary-creation site:
   - test_per_outer_minmax_over_group_sums_is_boxed: `w` over group sums
   - test_composed_minmax_term_auxiliaries_are_boxed: composed `z_k` per term
   - test_unbounded_variable_leaves_its_auxiliary_free: the one legitimate exception
+  - test_native_auxiliaries_are_boxed_too: the invariant, on the native formulation
 """
 
 import re
 
 import pytest
+
+
+def _lowering(cli):
+    """The Big-M formulation, whatever the host's solver can express natively.
+
+    Every count below is a property of that formulation. Reading it off whichever
+    formulation the host happens to pick would test the host instead.
+    """
+    return cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
 
 
 def _continuous_columns(dump: str) -> list[tuple[int, float, float]]:
@@ -72,7 +89,7 @@ def test_flat_minmax_objective_auxiliary_is_boxed(decidb_cli, tmp_path, sense, e
     easy one because its auxiliary is created by the same call and would regress silently
     (the one-sided pin plus outer pressure still lands on the right answer).
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4 {extra}
@@ -92,7 +109,7 @@ def test_per_inner_minmax_auxiliaries_are_boxed(decidb_cli, tmp_path):
     Every `z_g` shares the per-row family's box: a group's extremum cannot leave the range
     any single row can reach, whichever rows the group holds.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
@@ -109,7 +126,7 @@ def test_per_inner_minmax_auxiliaries_are_boxed(decidb_cli, tmp_path):
 @pytest.mark.correctness
 def test_per_outer_minmax_over_group_values_is_boxed(decidb_cli, tmp_path):
     """`w` reducing over the `z_g`s inherits their box, since each one lives inside it."""
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
@@ -133,7 +150,7 @@ def test_per_outer_minmax_over_group_sums_is_boxed(decidb_cli, tmp_path):
     range (20) by the row count (3) would also be correct but nearly twice as loose at 60,
     and the looseness grows with the relation — which is the whole reason to derive it.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
@@ -152,7 +169,7 @@ def test_composed_minmax_term_auxiliaries_are_boxed(decidb_cli, tmp_path):
     `MAX(x)` and `MIN(y)` sit in one constraint over different variables with different
     caps, so their auxiliaries must be boxed independently — [0,4] and [0,6] here.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x, y FROM {_ROWS}
             DECIDE x(INT), y(INT)
@@ -174,7 +191,7 @@ def test_unbounded_variable_leaves_its_auxiliary_free(decidb_cli, tmp_path):
     auxiliary must stay free rather than be given a box that cuts off the optimum. The
     guard for this is the same one the Big-M walk already used to fall back to its floor.
     """
-    dump = decidb_cli.dump_model(
+    dump = _lowering(decidb_cli).dump_model(
         f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(REAL) SUCH THAT SUM(x) >= 2
@@ -188,3 +205,27 @@ def test_unbounded_variable_leaves_its_auxiliary_free(decidb_cli, tmp_path):
     _, lb, ub = cols[-1]
     assert lb <= -1e20 and ub >= 1e20, \
         f"auxiliary over an unbounded variable was given a box [{lb}, {ub}]:\n{dump}"
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+def test_native_auxiliaries_are_boxed_too(decidb_cli, tmp_path):
+    """A native formulation builds different columns — but no freer ones.
+
+    The cliff this module is about is a property of a free continuous column, not of
+    the Big-M encoding, so it applies just as much to the columns a general constraint
+    needs. Asserted without a count: how many columns the native shape uses is its own
+    business, and pinning a number here would just re-test the formulation.
+    """
+    dump = decidb_cli.dump_model(
+        f"""
+            SELECT id, x FROM {_ROWS}
+            DECIDE x(INT) SUCH THAT x <= 4 AND SUM(x) <= 6
+            MAXIMIZE MAX(x * c)
+        """,
+        tmp_path / "native.dump")
+    cols = _continuous_columns(dump)
+    assert cols, f"no auxiliary columns at all:\n{dump}"
+    for idx, lb, ub in cols:
+        assert lb > -1e20 and ub < 1e20, \
+            f"auxiliary col {idx} left free at [{lb}, {ub}]:\n{dump}"

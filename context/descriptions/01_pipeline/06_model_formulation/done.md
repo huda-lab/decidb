@@ -593,9 +593,15 @@ an unknown one as an internal error. `SolveModel` asserts that contract before h
 the model over.
 
 The linear half of a native construct is therefore an ordinary row emitted alongside
-it: for ABS, `t = inner`, with `t` free. Leaving `t` unboxed is deliberate — the
-equality pins it, and a free column is what lets a native ABS answer a query whose
-contributors are unbounded.
+it: `t = inner` for ABS, and one such row per member for a MIN/MAX family, plus the
+extremum column the general constraint pins.
+
+Those columns are **boxed by the same `AuxRange` walk the Big-M constant comes from**,
+never left free as a matter of course. A free continuous column is a measured
+performance cliff (see stage 05's auxiliary-box section), and it is not a consequence
+of going native. A column is free only where no range is derivable at all — which is
+exactly the query the native path exists to answer, since a general constraint needs no
+bound where a Big-M would.
 
 The lowered rows the construct would have produced are **not** also emitted; a model
 holds one or the other, never both. The two exact rows stage 05 already wrote

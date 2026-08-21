@@ -90,6 +90,7 @@ const SolverCapabilities &GurobiSolver::Capabilities() {
         if (NativeConstructsEnabled()) {
             auto &api = GurobiLoader::API();
             caps.abs = api.addgenconstrAbs != nullptr;
+            caps.min_max = api.addgenconstrMin != nullptr && api.addgenconstrMax != nullptr;
         }
         return caps;
     }();
@@ -254,6 +255,22 @@ void GurobiSession::Load(const SolverModel &ilp) {
             D_ASSERT(api.addgenconstrAbs && gc.argument_columns.size() == 1);
             error = api.addgenconstrAbs(guard.model, nullptr, gc.result_column,
                                         gc.argument_columns[0]);
+            break;
+        }
+        case GeneralConstraintKind::MIN: {
+            D_ASSERT(api.addgenconstrMin && !gc.argument_columns.empty());
+            // The trailing constant is a neutral element, not a participant: +inf can
+            // never be the minimum of the listed columns.
+            error = api.addgenconstrMin(guard.model, nullptr, gc.result_column,
+                                        (int)gc.argument_columns.size(),
+                                        gc.argument_columns.data(), GRB_INFINITY_VALUE);
+            break;
+        }
+        case GeneralConstraintKind::MAX: {
+            D_ASSERT(api.addgenconstrMax && !gc.argument_columns.empty());
+            error = api.addgenconstrMax(guard.model, nullptr, gc.result_column,
+                                        (int)gc.argument_columns.size(),
+                                        gc.argument_columns.data(), -GRB_INFINITY_VALUE);
             break;
         }
         default:

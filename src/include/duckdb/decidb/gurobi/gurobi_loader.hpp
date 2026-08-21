@@ -45,6 +45,11 @@ static constexpr int GRB_SUBOPTIMAL = 13;
 static constexpr int GRB_INPROGRESS = 14;
 static constexpr int GRB_USER_OBJ_LIMIT = 15;
 
+// Gurobi's infinity sentinel (gurobi_c.h GRB_INFINITY). Passed as the neutral
+// constant of a min/max general constraint so the extremum is taken over the listed
+// variables alone: +inf never wins a min, -inf never wins a max.
+static constexpr double GRB_INFINITY_VALUE = 1e100;
+
 // Attribute name strings
 static constexpr const char *GRB_INT_ATTR_MODELSENSE = "ModelSense";
 static constexpr const char *GRB_INT_ATTR_STATUS = "Status";
@@ -89,6 +94,13 @@ struct GurobiAPI {
 	// which is why nothing here may be called without checking the pointer.
 	//! resvar = |argvar|. Gurobi 8.0+.
 	int (*addgenconstrAbs)(void *model, const char *name, int resvar, int argvar);
+	//! resvar = min(vars..., constant) / max(vars..., constant). Gurobi 8.0+. DeciDB
+	//! passes GRB_INFINITY / -GRB_INFINITY as the constant so the extremum is taken
+	//! over the listed variables alone.
+	int (*addgenconstrMin)(void *model, const char *name, int resvar, int nvars,
+	                       const int *vars, double constant);
+	int (*addgenconstrMax)(void *model, const char *name, int resvar, int nvars,
+	                       const int *vars, double constant);
 
 	// Solve and query
 	int (*optimize)(void *model);

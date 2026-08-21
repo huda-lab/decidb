@@ -86,6 +86,24 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
 //! instead, and a group whose bound every assignment satisfies is dropped.
 void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_names);
 
+//! The native arm of the MIN/MAX gate, in two halves for the same reason the
+//! aggregate `<>` is: a general constraint names flat columns, which exist only once
+//! the VarIndexer does.
+//!
+//! Extract lifts every tagged MIN/MAX constraint out of `input.constraints` — it has
+//! to, because until an arm rewrites it the row reads as `SUM(inner) <op> K` while the
+//! clause means `MAX(inner) <op> K`, and anything walking the model in between would
+//! believe the row. Both arms run the same bound classification first.
+void ExtractNativeMinMaxConstraints(SolverInput &input, vector<EvaluatedConstraint> &deferred);
+
+//! Expand finishes them: a free column per active row pinned to that row's inner
+//! expression, one extremum column per group pinned by a `MIN`/`MAX` general
+//! constraint, and the user's own bound as a single row over that extremum. No Big-M,
+//! no indicators, and therefore no requirement that any contributing variable be
+//! bounded.
+void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
+                                   vector<EvaluatedConstraint> &deferred);
+
 //! Encode every constraint stage 05 tagged with a `<>` indicator as the disjunctive
 //! Big-M pair `x - M*z <= K-1` / `x - M*z >= K+1-M`.
 //!
@@ -303,7 +321,8 @@ struct MinMaxObjectiveSpec {
 //! and appends its auxiliaries to the global block. Untouched when the objective carries
 //! no MIN/MAX aggregate: `input.objective_coefficients` is then left as it arrived.
 void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
-                              const MinMaxObjectiveSpec &spec, const vector<string> &var_names);
+                              const MinMaxObjectiveSpec &spec, const vector<string> &var_names,
+                              bool native_min_max);
 
 //! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
 //! or the objective spelling — with everything data-dependent already evaluated by the
@@ -343,13 +362,13 @@ struct ComposedMinMaxTermData {
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
                                        ExpressionType outer_cmp, idx_t source_clause_id,
-                                       const vector<string> &var_names);
+                                       const vector<string> &var_names, bool native_min_max);
 
 //! Encode a composed MIN/MAX *objective*: the same auxiliary layer, but the composition is
 //! written into the objective — a coefficient on each auxiliary's column, and per-row
 //! coefficients for the SUM/AVG terms. Replaces `input.objective_coefficients`.
 void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                                       vector<ComposedMinMaxTermData> &terms,
-                                      const vector<string> &var_names);
+                                      const vector<string> &var_names, bool native_min_max);
 
 } // namespace duckdb

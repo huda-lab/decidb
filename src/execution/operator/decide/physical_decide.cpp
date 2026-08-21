@@ -2699,6 +2699,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // what is refused, not only what is fast. The routing decision is made here, once;
     // both arms below only translate.
     const bool native_abs = solver_backend.Capabilities().abs;
+    const bool native_min_max = solver_backend.Capabilities().min_max;
 
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from
@@ -2711,10 +2712,17 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
         LinearizeAbsMaximize(solver_input);
     }
 
-    // Encode every hard MIN/MAX constraint stage 05 tagged with an indicator into
-    // its Big-M rows. Pure over the evaluated model, so it lives at stage 06.
+    // Encode every hard MIN/MAX constraint stage 05 tagged with an indicator. Native
+    // states `z = MAX(t..)` directly and needs no Big-M, so it also needs no bound on
+    // the contributing variables; the lowering arm's indicator family does. Both read
+    // the same tag and make the same bound classification first.
+    vector<EvaluatedConstraint> deferred_native_minmax;
     if (!minmax_indicator_links.empty()) {
-        LinearizeMinMaxIndicators(solver_input, decide_var_names);
+        if (native_min_max) {
+            ExtractNativeMinMaxConstraints(solver_input, deferred_native_minmax);
+        } else {
+            LinearizeMinMaxIndicators(solver_input, decide_var_names);
+        }
     }
 
     // Encode `<>` as its disjunctive Big-M pair. Per-row spellings expand in
@@ -2916,6 +2924,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     if (native_abs) {
         EmitNativeAbs(solver_input, var_indexer);
     }
+    ExpandNativeMinMaxConstraints(solver_input, var_indexer, deferred_native_minmax);
 
     // Encode a MIN/MAX objective (flat `MIN(expr)`/`MAX(expr)` or the nested
     // `OUTER(INNER(expr)) PER key` spelling) into global auxiliaries and their
@@ -2931,7 +2940,8 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     minmax_objective_spec.per_inner_was_avg = per_inner_was_avg;
     minmax_objective_spec.has_when = objective_has_when;
     minmax_objective_spec.when_mask = objective_when_mask;
-    LinearizeMinMaxObjective(solver_input, var_indexer, minmax_objective_spec, decide_var_names);
+    LinearizeMinMaxObjective(solver_input, var_indexer, minmax_objective_spec, decide_var_names,
+                             native_min_max);
 
     // ================================================================
     // Composed MIN/MAX: additive clauses mixing SUM/AVG/MIN/MAX, in a constraint
@@ -3120,12 +3130,14 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
 
             auto evaluated = EvaluateComposedTerms(spec.terms, "constraint");
             LinearizeComposedMinMaxConstraint(solver_input, var_indexer, evaluated, rhs_val,
-                                              spec.outer_cmp, spec.source_clause_id, decide_var_names);
+                                              spec.outer_cmp, spec.source_clause_id, decide_var_names,
+                                              native_min_max);
         }
 
         if (!composed_minmax_objective_terms.empty()) {
             auto evaluated = EvaluateComposedTerms(composed_minmax_objective_terms, "objective");
-            LinearizeComposedMinMaxObjective(solver_input, var_indexer, evaluated, decide_var_names);
+            LinearizeComposedMinMaxObjective(solver_input, var_indexer, evaluated, decide_var_names,
+                                             native_min_max);
         }
     }
 

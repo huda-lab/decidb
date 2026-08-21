@@ -340,8 +340,8 @@ every linearizer after it derives its `M` from column boxes. See
 
 This stage owns the **only** decision about whether a construct is lowered at all. It
 reads `solver_backend.Capabilities()` — the backend chosen at plan time, carried down
-on the operator — and routes each construct to one of two arms. Today one construct is
-gated:
+on the operator — and routes each construct to one of two arms. Two constructs are
+gated today, ABS and MIN/MAX:
 
 ```cpp
 const bool native_abs = solver_backend.Capabilities().abs;
@@ -360,6 +360,24 @@ the two comparable, and `DECIDB_NATIVE_CONSTRUCTS=off` A/B-tests them on one mac
 The native arm runs later than the lowering one because a general constraint names
 flat columns, which exist only once the `VarIndexer` does — the same reason the
 aggregate `<>` expansion waits.
+
+MIN/MAX is gated the same way, in four places, because it has four hard forms — a
+constraint, a flat objective, a PER-nested objective, and a composed term. The
+constraint side has one extra requirement: its tagged row reads as `SUM(inner) <op> K`
+while the clause means `MAX(inner) <op> K`, so the native arm must **lift it out of the
+model** (`ExtractNativeMinMaxConstraints`) rather than leave it for later. Nothing
+between the gate and the expansion may see a row it would misread. Both arms run the
+same bound classification first — vacuous and unreachable bounds are settled by
+direction, not by an encoding.
+
+Only the *hard* directions route through the gate. `MAX(e) <= K`, `MIN(e) >= K`,
+`MINIMIZE MAX`, `MAXIMIZE MIN` are exact with a one-sided envelope plus outer pressure:
+no Big-M, so nothing to replace.
+
+The native columns are **boxed**, not free, wherever a range is derivable — the same
+`AuxRange` walk that produces the Big-M constant. A free continuous column is a
+measured performance cliff, and it is earned only by the one case that has no range at
+all, which is precisely the query the native path exists to answer.
 
 ### Output
 

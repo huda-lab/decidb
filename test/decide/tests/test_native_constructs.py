@@ -20,8 +20,10 @@ it is the payoff.
 
 Covers:
   - test_native_and_lowered_agree: the A/B, over the ABS-maximize shapes
+  - test_minmax_native_and_lowered_agree: the A/B, over the MIN/MAX shapes
   - test_native_replaces_rows_with_a_general_constraint: the model really changed
   - test_native_abs_needs_no_bound: the payoff — refused when lowered, answered native
+  - test_native_minmax_needs_no_bound: the same payoff on MIN/MAX
   - test_highs_never_takes_the_native_path: capability is per backend, not global
 """
 
@@ -143,3 +145,105 @@ def test_highs_never_takes_the_native_path(decidb_cli_highs):
         with open(path) as f:
             dump = f.read()
     assert "num_genconstrs: 0" in dump, dump
+
+
+# The MIN/MAX shapes that route through the gate. Easy directions (`MAX(e) <= K`,
+# `MIN(e) >= K`, `MINIMIZE MAX`, `MAXIMIZE MIN`) never needed a Big-M — the one-sided
+# envelope plus outer pressure is exact — so they never reach it and A/B-ing them
+# would exercise no new code. These are the hard ones: constraint, objective,
+# PER-nested, and composed.
+#
+# Each entry carries the objective as a function of the returned rows, because that is
+# what "the same optimum" means. Comparing the ASSIGNMENT would be wrong: an optimum can
+# be attained by more than one assignment, and two formulations have no obligation to
+# break a tie the same way — as `composed objective` here actually does.
+_GROUPED = "(VALUES (1,'a',3),(2,'a',5),(3,'b',2),(4,'b',7)) t(id, g, c)"
+
+
+def _sum_x(rows):
+    return sum(x for _g, _c, x in rows)
+
+
+def _sum_xc(rows):
+    return sum(c * x for _g, c, x in rows)
+
+
+def _max_xc(rows):
+    return max(c * x for _g, c, x in rows)
+
+
+def _min_xc(rows):
+    return min(c * x for _g, c, x in rows)
+
+
+def _max_group_sum_xc(rows):
+    per_group = {}
+    for g, c, x in rows:
+        per_group[g] = per_group.get(g, 0.0) + c * x
+    return max(per_group.values())
+
+
+_MINMAX_SHAPES = [
+    ("hard constraint MAX >=",
+     "SUCH THAT x <= 9 AND MAX(x * c) >= 20 MINIMIZE SUM(x)", _sum_x),
+    ("hard constraint MIN <=",
+     "SUCH THAT x <= 9 AND MIN(x * c) <= 3 MAXIMIZE SUM(x)", _sum_x),
+    ("hard constraint equality",
+     "SUCH THAT x <= 9 AND MAX(x) = 5 MINIMIZE SUM(x * c)", _sum_xc),
+    ("hard constraint PER",
+     "SUCH THAT x <= 9 AND MAX(x) >= 5 PER g MINIMIZE SUM(x * c)", _sum_xc),
+    ("hard objective MAXIMIZE MAX",
+     "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE MAX(x * c)", _max_xc),
+    ("hard objective MINIMIZE MIN",
+     "SUCH THAT x >= 1 AND x <= 4 AND SUM(x) >= 3 MINIMIZE MIN(x * c)", _min_xc),
+    ("hard PER-nested objective",
+     "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE MAX(MAX(x * c)) PER g", _max_xc),
+    ("hard PER outer over group sums",
+     "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE MAX(SUM(x * c)) PER g", _max_group_sum_xc),
+    ("composed constraint",
+     "SUCH THAT x <= 9 AND SUM(x) + MAX(x * c) >= 20 MINIMIZE SUM(x)", _sum_x),
+    ("composed objective",
+     "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE SUM(x) + MAX(x * c)",
+     lambda rows: _sum_x(rows) + _max_xc(rows)),
+]
+
+
+def _solve_grouped(cli, clause, extra_env=None):
+    """`(g, c, x)` per row, which is everything the objective functions above need."""
+    sql = f"SELECT id, g, c, x FROM {_GROUPED} DECIDE x(INT) {clause}"
+    if extra_env:
+        cli = cli.with_env(extra_env)
+    rows, cols = cli.execute(sql)
+    ci = {c: i for i, c in enumerate(cols)}
+    return [(r[ci["g"]], float(r[ci["c"]]), float(r[ci["x"]])) for r in rows]
+
+
+@pytest.mark.correctness
+@pytest.mark.min_max
+@pytest.mark.parametrize("name,clause,objective", _MINMAX_SHAPES,
+                         ids=[s[0] for s in _MINMAX_SHAPES])
+def test_minmax_native_and_lowered_agree(decidb_cli_gurobi, name, clause, objective):
+    """`z = MAX(t..)` and the indicator family must reach the same optimum.
+
+    MIN/MAX is the messiest construct — a constraint form, an objective form, a
+    PER-nested form and a composed form, each with its own hard branch — so the A/B
+    runs over all of them rather than a representative.
+    """
+    native = objective(_solve_grouped(decidb_cli_gurobi, clause))
+    lowered = objective(_solve_grouped(decidb_cli_gurobi, clause,
+                                       {"DECIDB_NATIVE_CONSTRUCTS": "off"}))
+    assert abs(native - lowered) <= 1e-6, f"{name}: native {native} != lowered {lowered}"
+
+
+@pytest.mark.correctness
+@pytest.mark.min_max
+def test_native_minmax_needs_no_bound(decidb_cli_gurobi):
+    """The MIN/MAX payoff, matching the ABS one: no Big-M means no bound needed."""
+    clause = "SUCH THAT MAX(x) >= 5 MINIMIZE SUM(x * c)"
+    rows = _solve_grouped(decidb_cli_gurobi, clause)
+    # The cheapest way to reach MAX(x) = 5 is to put it on the smallest coefficient.
+    assert _sum_xc(rows) == 10.0, rows
+
+    with pytest.raises(DecidBCliError) as excinfo:
+        _solve_grouped(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "off"})
+    assert "finite bound on 'x'" in excinfo.value.message, excinfo.value.message

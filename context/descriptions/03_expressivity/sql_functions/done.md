@@ -122,7 +122,15 @@ When the aggregate must be tight (equality or the "wrong" direction), a global a
 - `MIN(expr) <= K` → global variable `z <= K`, per-row: `z <= expr`, plus Big-M indicators
 - Equality cases (`MAX(expr) = K`, `MIN(expr) = K`) → both directions constrained
 
-**A hard case needs every contributing variable bounded.** The Big-M constant has to
+**On a backend that expresses MIN/MAX natively, the hard cases are not encoded at
+all.** Gurobi states `z = MAX(t..)` as a general constraint, so there is no Big-M, no
+indicator binaries, and no requirement that any contributing variable be bounded —
+`SUCH THAT MAX(x) >= 5` answers there with an unbounded `x`. All four hard forms
+(constraint, flat objective, PER-nested objective, composed term) take that path. The
+choice is made once, at execution, from the backend's capability table, and both paths
+reach the same optimum wherever both can run.
+
+**Lowered, a hard case needs every contributing variable bounded.** The Big-M constant has to
 dominate the expression's reachable range, and nothing finite dominates an unbounded
 one — so `MAX(x) >= 5` with an unbounded `x` is **refused**, naming `x` and the bounds
 to add, rather than encoded against a large constant. A constant the true range
