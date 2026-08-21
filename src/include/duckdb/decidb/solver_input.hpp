@@ -338,6 +338,44 @@ struct BilinearLinkSpec {
 struct AbsMaximizeLinkSpec {
     idx_t aux_idx; //!< ABS auxiliary variable
     idx_t y_idx;   //!< binary sign indicator
+    //! The largest |inner| any row can reach, filled in by DeriveAbsAuxiliaryBounds.
+    //! It is both the Big-M the lowering path needs and the auxiliary's upper box, so
+    //! it is derived once, before any other linearizer reads that box.
+    double abs_range = 0.0;
+    //! True when no finite `abs_range` exists because a contributing variable is
+    //! unbounded. The lowering path cannot proceed (it is refused up front); the
+    //! native path does not care, because a general constraint needs no Big-M.
+    bool range_unbounded = false;
+};
+
+//! A construct handed to the backend whole, instead of being lowered into rows.
+//!
+//! Named in flat COLUMNS, not expressions, and that is the design decision: every
+//! backend's general-constraint API relates variables to variables, so a record
+//! carrying an expression would force each adapter to synthesize the same auxiliary
+//! column and equality row. That is routing, and routing belongs in the gate — an
+//! adapter only translates. The linear part of the construct is therefore an ordinary
+//! model row emitted alongside this record.
+//!
+//! An adapter never receives a kind its backend did not declare in SolverCapabilities,
+//! so it may treat an unknown kind as an internal error.
+enum class GeneralConstraintKind : uint8_t {
+    ABS //!< result = |argument|
+};
+
+struct GeneralConstraintSpec {
+    GeneralConstraintKind kind = GeneralConstraintKind::ABS;
+    //! Flat column the construct's value lands in (Gurobi's `resvar`).
+    int result_column = -1;
+    //! Flat columns of the construct's arguments. ABS takes exactly one.
+    vector<int> argument_columns;
+    //! Clause origin, in the same loose fields `RawConstraint` uses — the full
+    //! `ConstraintProvenance` lives in stage 06's header, which includes this one.
+    //! `SolverModel::Build` stamps these into a real provenance record. A native
+    //! construct has no matrix row for the elastic engine to slacken, but it still
+    //! has to be nameable.
+    idx_t source_clause_id = DConstants::INVALID_INDEX;
+    idx_t repair_group_id = DConstants::INVALID_INDEX;
 };
 
 //! Input for the deterministic solver
@@ -446,6 +484,12 @@ struct SolverInput {
         idx_t indicator_col = DConstants::INVALID_INDEX;
     };
     vector<RawConstraint> global_constraints;
+
+    //! Constructs left native for the backend, in flat columns. Emitted at stage 08
+    //! once the VarIndexer exists — like `global_constraints`, and for the same reason.
+    //! Empty whenever the chosen backend declared the construct unsupported, in which
+    //! case the lowering path filled `constraints` instead.
+    vector<GeneralConstraintSpec> general_constraints;
 
     // --- Table-scoped variable support ---
 

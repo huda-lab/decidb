@@ -82,6 +82,13 @@ struct GurobiAPI {
 	int (*addqconstr)(void *model, int numlnz, int *lind, double *lval,
 	                  int numqnz, int *qrow, int *qcol, double *qval,
 	                  char sense, double rhs, const char *name);
+	// General constraints. Optional (loaded best-effort): a capability is partly a
+	// RUNTIME fact, because a loaded library may simply not export the symbol a
+	// native construct needs. GurobiSolver::Capabilities() reports each construct
+	// flag as false when its symbol is NULL, so the lowering path runs instead —
+	// which is why nothing here may be called without checking the pointer.
+	//! resvar = |argvar|. Gurobi 8.0+.
+	int (*addgenconstrAbs)(void *model, const char *name, int resvar, int argvar);
 
 	// Solve and query
 	int (*optimize)(void *model);

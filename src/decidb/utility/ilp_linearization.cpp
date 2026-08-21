@@ -1201,21 +1201,17 @@ void LinearizeBilinear(SolverInput &input, const vector<string> &var_names) {
     }
 }
 
-void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
-    if (input.abs_maximize_links.empty()) {
-        return;
-    }
-    const idx_t num_rows = input.num_rows;
+namespace {
 
-    // For each link, find the two tagged lower-bound EvaluatedConstraints
-    // (C1: aux >= inner tagged ABS_UB_POS, C2: aux >= -inner tagged ABS_UB_NEG) and emit:
-    //   C_ub1: derived from C1, add y with coeff +2M, comparison <=, rhs[r] += 2M
-    //   C_ub2: derived from C2, add y with coeff -2M, comparison <=, rhs unchanged
-    // Together with C1/C2 these force aux = |inner| under MAXIMIZE.
-    struct AbsConstraintPair {
-        idx_t c1 = DConstants::INVALID_INDEX;
-        idx_t c2 = DConstants::INVALID_INDEX;
-    };
+//! Index of the two tagged lower-bound rows an ABS auxiliary was given by stage 05:
+//! C1 (`aux >= inner`, ABS_UB_POS) and C2 (`aux >= -inner`, ABS_UB_NEG). Both phases
+//! below start from this map, keyed by the link's sign indicator.
+struct AbsConstraintPair {
+    idx_t c1 = DConstants::INVALID_INDEX;
+    idx_t c2 = DConstants::INVALID_INDEX;
+};
+
+unordered_map<idx_t, AbsConstraintPair> BuildAbsTagMap(const SolverInput &input) {
     unordered_map<idx_t, AbsConstraintPair> abs_tag_map;
     for (idx_t ci = 0; ci < input.constraints.size(); ci++) {
         auto &ec = input.constraints[ci];
@@ -1228,35 +1224,35 @@ void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
             abs_tag_map[ec.abs_y_idx].c2 = ci;
         }
     }
+    return abs_tag_map;
+}
 
-    // Reserve up-front so the two push_back calls per link cannot reallocate
-    // input.constraints. With capacity guaranteed, references to existing C1/C2 stay
-    // valid across appends and we don't need defensive copies of their fields.
-    input.constraints.reserve(input.constraints.size() + 2 * input.abs_maximize_links.size());
+} // namespace
+
+void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_names,
+                              bool refuse_when_unbounded) {
+    if (input.abs_maximize_links.empty()) {
+        return;
+    }
+    const idx_t num_rows = input.num_rows;
+    auto abs_tag_map = BuildAbsTagMap(input);
 
     for (auto &link : input.abs_maximize_links) {
         auto it = abs_tag_map.find(link.y_idx);
-        D_ASSERT(it != abs_tag_map.end() &&
-                 it->second.c1 != DConstants::INVALID_INDEX &&
+        D_ASSERT(it != abs_tag_map.end() && it->second.c1 != DConstants::INVALID_INDEX &&
                  it->second.c2 != DConstants::INVALID_INDEX);
-
         const auto &c1 = input.constraints[it->second.c1];
-        const auto &c2 = input.constraints[it->second.c2];
 
-        // Compute M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|),
+        // M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|),
         // reusing the shared per-row range helper (skipping the aux term). This
-        // upper-bounds |inner| across all rows and variable values. Unlike the
-        // indicator sites, ABS-maximize is STRICT: if no finite bound can be derived
-        // for a contributing variable, there is no valid M, so we throw rather than
-        // fall back. (Implied-bound propagation may have already supplied a bound,
-        // in which case this succeeds.)
+        // upper-bounds |inner| across all rows and variable values.
         bool abs_unbounded = false;
         double M = 0.0;
         for (idx_t r = 0; r < num_rows; r++) {
             // The link's bound carries the constant part of the expression the user
-            // wrote inside ABS. Infinity there admits no finite M (see
-            // DecideTightPerRowBigM), and the value came from their data, so name
-            // that rather than the linearization.
+            // wrote inside ABS. An infinity there is a data problem, not a bounding
+            // one, and it defeats the native path too — |inf| is still inf — so it is
+            // refused whichever path follows.
             double link_rhs = c1.rhs_values.Get(r);
             if (!std::isfinite(link_rhs)) {
                 throw InvalidInputException(
@@ -1271,7 +1267,15 @@ void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
                                                   abs_unbounded, link.aux_idx);
             M = std::max(M, row_bound);
         }
+
         if (abs_unbounded) {
+            link.range_unbounded = true;
+            if (!refuse_when_unbounded) {
+                // The native path is about to hand Gurobi `aux = |t|`, which needs no
+                // Big-M and therefore no bound. Leave the auxiliary's box open and
+                // carry on: this is exactly the query the capability buys back.
+                continue;
+            }
             // Locate an offending variable to name in the error.
             idx_t bad = DConstants::INVALID_INDEX;
             for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
@@ -1293,18 +1297,55 @@ void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
                 "such as ABS(...) >= K or ABS(...) = K.)",
                 name, name, name);
         }
-        double two_M = 2.0 * M;
-        // The rows emitted below pin `aux = |inner|`, and M is the largest |inner|
-        // any row can reach. So M is a valid upper bound on the auxiliary's column,
-        // and the only one anything derives: the pair `aux >= inner`, `aux >= -inner`
-        // bounds the auxiliary from BELOW only, which is why it otherwise sits at
-        // +infinity. Narrow the box here, where the value is known, so a later
-        // linearization over this auxiliary (an outer MIN/MAX, a `<>`) gets a tight
-        // Big-M instead of an unbounded column it has to refuse. Never widens: an
-        // implied bound already tighter than M stands.
+
+        link.abs_range = M;
+        // The formulation that follows — Big-M rows or a native `aux = |t|` — pins
+        // `aux = |inner|`, and M is the largest |inner| any row can reach. So M is a
+        // valid upper bound on the auxiliary's column, and the only one anything
+        // derives: the pair `aux >= inner`, `aux >= -inner` bounds the auxiliary from
+        // BELOW only, which is why it otherwise sits at +infinity. Narrow the box
+        // here, before any other linearizer reads it, so an outer MIN/MAX or `<>` over
+        // this auxiliary gets a tight Big-M instead of an unbounded column it must
+        // refuse. Never widens: an implied bound already tighter than M stands.
         if (M < input.upper_bounds[link.aux_idx]) {
             input.upper_bounds[link.aux_idx] = M;
         }
+    }
+}
+
+void LinearizeAbsMaximize(SolverInput &input) {
+    if (input.abs_maximize_links.empty()) {
+        return;
+    }
+    const idx_t num_rows = input.num_rows;
+
+    // For each link, find the two tagged lower-bound EvaluatedConstraints
+    // (C1: aux >= inner tagged ABS_UB_POS, C2: aux >= -inner tagged ABS_UB_NEG) and emit:
+    //   C_ub1: derived from C1, add y with coeff +2M, comparison <=, rhs[r] += 2M
+    //   C_ub2: derived from C2, add y with coeff -2M, comparison <=, rhs unchanged
+    // Together with C1/C2 these force aux = |inner| under MAXIMIZE.
+    auto abs_tag_map = BuildAbsTagMap(input);
+
+    // Reserve up-front so the two push_back calls per link cannot reallocate
+    // input.constraints. With capacity guaranteed, references to existing C1/C2 stay
+    // valid across appends and we don't need defensive copies of their fields.
+    input.constraints.reserve(input.constraints.size() + 2 * input.abs_maximize_links.size());
+
+    for (auto &link : input.abs_maximize_links) {
+        auto it = abs_tag_map.find(link.y_idx);
+        D_ASSERT(it != abs_tag_map.end() &&
+                 it->second.c1 != DConstants::INVALID_INDEX &&
+                 it->second.c2 != DConstants::INVALID_INDEX);
+
+        const auto &c1 = input.constraints[it->second.c1];
+        const auto &c2 = input.constraints[it->second.c2];
+
+        // M was derived — and the auxiliary's box narrowed to it — by
+        // DeriveAbsAuxiliaryBounds, which runs before every linearizer because they all
+        // read column boxes. An unbounded range was refused there; reaching here with
+        // one would mean the gate routed a lowering it had already declined.
+        D_ASSERT(!link.range_unbounded);
+        double two_M = 2.0 * link.abs_range;
 
         auto ShiftRhs = [&](const CoefficientColumn &src, double delta) {
             if (src.IsUniform()) {
@@ -1351,6 +1392,78 @@ void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names) {
     }
 }
 
+void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
+    if (input.abs_maximize_links.empty()) {
+        return;
+    }
+    const idx_t num_rows = input.num_rows;
+    auto abs_tag_map = BuildAbsTagMap(input);
+
+    for (auto &link : input.abs_maximize_links) {
+        auto it = abs_tag_map.find(link.y_idx);
+        D_ASSERT(it != abs_tag_map.end() && it->second.c1 != DConstants::INVALID_INDEX);
+        const auto &c1 = input.constraints[it->second.c1];
+
+        // C1 is `aux + sum_t c_t x_t >= k`, the row spelling of `aux >= inner` with
+        // inner's constant part moved to the bound. So the expression inside ABS is
+        //   inner_r = k_r - sum_{t != aux} c_t[r] * x_t
+        // and the argument column below is pinned to exactly that.
+        //
+        // The general constraint relates two VARIABLES, so the linear half has to be a
+        // row either way. That is the whole shape of a native construct here: one free
+        // column `t`, one equality row `t = inner`, and one `aux = |t|` record. It
+        // replaces the two Big-M rows and the binary sign indicator — which is the
+        // point, since those are what needed a finite M.
+        //
+        // C1 and C2 stay. They are exact (`aux >= inner`, `aux >= -inner`), implied by
+        // `aux = |t|`, and they carry the clause provenance the elastic engine reads.
+        // Dropping them would be a separate optimization that costs diagnosis.
+        for (idx_t r = 0; r < num_rows; r++) {
+            if (!c1.row_group_ids.empty() && c1.row_group_ids[r] == DConstants::INVALID_INDEX) {
+                continue; // row excluded by WHEN/PER: no ABS to express here
+            }
+            // A free column: `t = inner` is an equality, so it needs no box, and NOT
+            // boxing it is what lets a native ABS answer a query whose contributors are
+            // unbounded — the case the lowering path has to refuse.
+            AuxRange free_range;
+            free_range.unbounded = true;
+            idx_t t_idx = AddGlobalContinuousAux(input, indexer, free_range, 0.0);
+            input.global_variable_labels.resize(t_idx - indexer.global_block_start);
+            input.global_variable_labels.push_back(string());
+
+            SolverInput::RawConstraint link_row;
+            link_row.indices.push_back(static_cast<int>(t_idx));
+            link_row.coefficients.push_back(1.0);
+            for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
+                idx_t v = c1.variable_indices[t];
+                if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
+                    continue;
+                }
+                double coef = c1.row_coefficients[t].Get(r);
+                if (coef == 0.0) {
+                    continue;
+                }
+                // `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
+                link_row.indices.push_back(static_cast<int>(indexer.Get(v, r)));
+                link_row.coefficients.push_back(coef);
+            }
+            link_row.sense = '=';
+            link_row.rhs = c1.rhs_values.Get(r);
+            link_row.kind = ConstraintKind::STRUCTURAL;
+            link_row.source_clause_id = c1.source_clause_id;
+            link_row.repair_group_id = c1.repair_group_id;
+            input.global_constraints.push_back(std::move(link_row));
+
+            GeneralConstraintSpec gc;
+            gc.kind = GeneralConstraintKind::ABS;
+            gc.result_column = static_cast<int>(indexer.Get(link.aux_idx, r));
+            gc.argument_columns.push_back(static_cast<int>(t_idx));
+            gc.source_clause_id = c1.source_clause_id;
+            gc.repair_group_id = c1.repair_group_id;
+            input.general_constraints.push_back(std::move(gc));
+        }
+    }
+}
 
 // --- MIN/MAX objective ------------------------------------------------------
 // The objective counterpart of the MIN/MAX constraint encoding above. Both build

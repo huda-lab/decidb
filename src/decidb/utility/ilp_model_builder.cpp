@@ -1236,6 +1236,23 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         model.constraints.push_back(std::move(constr));
     }
 
+    // Constructs the chosen backend takes natively. Already in flat columns (stage 08
+    // emits them once the VarIndexer exists), so this only re-homes the loose
+    // provenance fields into the record every row carries. Empty unless the backend
+    // declared the construct, in which case the lowered rows are in `constraints`
+    // above instead — never both.
+    model.general_constraints.reserve(input.general_constraints.size());
+    for (auto &spec : input.general_constraints) {
+        SolverModel::GeneralConstraint gc;
+        gc.kind = spec.kind;
+        gc.result_column = spec.result_column;
+        gc.argument_columns = std::move(spec.argument_columns);
+        gc.provenance.kind = ConstraintKind::STRUCTURAL;
+        gc.provenance.source_clause_id = spec.source_clause_id;
+        gc.provenance.repair_group_id = spec.repair_group_id;
+        model.general_constraints.push_back(std::move(gc));
+    }
+
     //===--------------------------------------------------------------------===//
     // 4. Sanity checks
     //===--------------------------------------------------------------------===//

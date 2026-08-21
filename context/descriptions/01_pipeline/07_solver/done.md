@@ -91,7 +91,18 @@ a **runtime** fact — a dynamically loaded library may not export the symbol a 
 construct needs, so the answer is not known until the library is open.
 
 A flag is only worth a field if it is A/B-verifiable: forcing the construct back down
-its lowering path must reach the same optimum.
+its lowering path must reach the same optimum. `DECIDB_NATIVE_CONSTRUCTS=off` is how
+that is checked — a test-only switch, mirroring `DECIDB_FORCE_SOLVER`, that turns every
+construct capability off so both arms run on one machine.
+
+Construct flags declared today:
+
+| Flag | Backend | Symbol behind it |
+|---|---|---|
+| `abs` | Gurobi | `GRBaddgenconstrAbs` |
+
+The rest stay false until the loader binds their symbols and stage 08 knows how to emit
+them: a capability may not be declared ahead of the code that honors it.
 
 ### Selection
 
@@ -209,7 +220,13 @@ two.
 Declares every model-class capability — `quadratic_constraints`,
 `nonconvex_quadratic`, `miqp` — so no query is refused for the shape of its model.
 Its construct flags are turned on one at a time, each together with the loader symbol
-that backs it, so a flag is never true on a host whose library did not export it.
+that backs it: `caps.abs = api.addgenconstrAbs != nullptr`, so a flag is never true on
+a host whose library did not export it.
+
+**General constraints** (`GRBaddgenconstrAbs` and its siblings) are bound
+`nullptr`-gated, exactly as `terminate` is. They are what makes a construct capability
+worth having: `aux = |t|` stated directly needs no Big-M, so a query whose contributors
+have no finite bound — which the lowering path must refuse — simply answers.
 
 Uses the **C API** (`gurobi_c.h`), not the C++ wrapper, and loads it dynamically
 through `gurobi_loader.cpp` so DeciDB links without a Gurobi installation.

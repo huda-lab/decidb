@@ -2694,13 +2694,22 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
         }
     }
 
-    // ABS FIRST, and the order is load-bearing. Pinning an ABS auxiliary to |inner|
-    // also tells us its range, and LinearizeAbsMaximize narrows the auxiliary's column
-    // box to it. Every linearizer below derives its Big-M from column boxes, so an ABS
-    // auxiliary they read must already be boxed: run them first and an outer MIN/MAX
-    // or `<>` over ABS(...) sees an unbounded column and refuses a query whose bound
-    // was there to be computed.
-    LinearizeAbsMaximize(solver_input, decide_var_names);
+    // THE GATE. Ask the backend chosen at plan time whether it expresses ABS itself.
+    // Native means no Big-M and therefore no bound requirement, so the answer changes
+    // what is refused, not only what is fast. The routing decision is made here, once;
+    // both arms below only translate.
+    const bool native_abs = solver_backend.Capabilities().abs;
+
+    // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
+    // also what boxes its column, and every linearizer below computes its Big-M from
+    // column boxes — run them first and an outer MIN/MAX or `<>` over ABS(...) sees an
+    // unbounded column and refuses a query whose bound was there to be computed. Only
+    // the LOWERING path refuses an underivable range; the native path leaves the
+    // auxiliary open and answers.
+    DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);
+    if (!native_abs) {
+        LinearizeAbsMaximize(solver_input);
+    }
 
     // Encode every hard MIN/MAX constraint stage 05 tagged with an indicator into
     // its Big-M rows. Pure over the evaluated model, so it lives at stage 06.
@@ -2900,6 +2909,13 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // exist. Emits into solver_input.global_constraints at stage 06.
     ExpandDeferredAggregateNotEqual(solver_input, var_indexer, deferred_ne_aggregate,
                                     aux_var_expressions, decide_var_names);
+
+    // The native arm of the ABS gate. Deferred to here, not skipped: a general
+    // constraint names flat columns, which only exist once the VarIndexer does — the
+    // same reason the aggregate `<>` expansion waits.
+    if (native_abs) {
+        EmitNativeAbs(solver_input, var_indexer);
+    }
 
     // Encode a MIN/MAX objective (flat `MIN(expr)`/`MAX(expr)` or the nested
     // `OUTER(INNER(expr)) PER key` spelling) into global auxiliaries and their
@@ -3289,8 +3305,9 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         // when the retained model is actually non-linear; otherwise use a neutral
         // "could not identify" reason. A present ray that named nothing means only
         // internal auxiliaries escaped.
-        bool has_nonlinear_terms =
-            retained_model.has_quadratic_obj || !retained_model.quadratic_constraints.empty();
+        bool has_nonlinear_terms = retained_model.has_quadratic_obj ||
+                                   !retained_model.quadratic_constraints.empty() ||
+                                   !retained_model.general_constraints.empty();
         string reason = BuildUnboundedDiagnosisUnavailableReason(
             solve_result.diagnostic_timed_out, solve_result.ray.empty(), has_nonlinear_terms);
         // This failure produced no diagnosis of its own; clear any stash left by an

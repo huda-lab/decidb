@@ -6,6 +6,8 @@
 #include "duckdb/decidb/diagnostic_constants.hpp"
 
 #include <atomic>
+#include <cstdlib>
+#include <string>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -51,6 +53,20 @@ bool GurobiSolver::IsAvailable() {
     return available;
 }
 
+//! Test-only A/B switch, mirroring DECIDB_FORCE_SOLVER. `DECIDB_NATIVE_CONSTRUCTS=off`
+//! turns every construct capability off, so the same query takes the lowering path and
+//! must reach the same optimum. That equivalence is the standard a construct flag has to
+//! meet before it goes in the table at all — and the only way to test it without a
+//! second machine.
+static bool NativeConstructsEnabled() {
+    const char *setting = std::getenv("DECIDB_NATIVE_CONSTRUCTS");
+    if (!setting) {
+        return true;
+    }
+    return !(std::string(setting) == "off" || std::string(setting) == "OFF" ||
+             std::string(setting) == "0");
+}
+
 const SolverCapabilities &GurobiSolver::Capabilities() {
     // Cached alongside IsAvailable(): both are answers about the library that was
     // loaded into THIS process, and neither can change without a fresh start.
@@ -62,11 +78,19 @@ const SolverCapabilities &GurobiSolver::Capabilities() {
         caps.quadratic_constraints = true;
         caps.nonconvex_quadratic = true;
         caps.miqp = true;
-        // Construct flags stay false: Gurobi's general constraints (genconstrAbs,
-        // genconstrMin/Max, indicator, SOS1) are not bound by the loader yet, and a
-        // capability may not be declared ahead of the code that honors it. They are
-        // turned on one construct at a time, each with the loader symbol that backs
-        // it, so a flag is never true on a host whose library did not export it.
+        // Construct flags. Each is true only when the loaded library actually exported
+        // the symbol behind it — a capability is partly a runtime fact — and each is
+        // A/B-verifiable: DECIDB_NATIVE_CONSTRUCTS=off forces every one back down its
+        // lowering path, which must reach the same optimum. A flag that cannot be
+        // tested that way does not belong in the table.
+        //
+        // The remaining constructs (min_max, not_equal, in_list, bilinear) stay false
+        // until the loader binds their symbols and stage 08 knows how to emit them: a
+        // capability may not be declared ahead of the code that honors it.
+        if (NativeConstructsEnabled()) {
+            auto &api = GurobiLoader::API();
+            caps.abs = api.addgenconstrAbs != nullptr;
+        }
         return caps;
     }();
     return capabilities;
@@ -215,6 +239,28 @@ void GurobiSession::Load(const SolverModel &ilp) {
                                qc.sense, qc.rhs, nullptr);
         if (error) {
             throw InvalidInputException("Failed to add quadratic constraint to Gurobi: %s",
+                                        api.geterrormsg(guard.env));
+        }
+    }
+
+    // 3b'. General constraints — constructs DeciDB left native rather than lowering.
+    // Pure translation: the model only ever holds a kind this backend declared in
+    // GurobiSolver::Capabilities(), and that declaration is itself gated on the loader
+    // having found the symbol. So an unknown kind or a null pointer here is a bug in
+    // the gate, not a user error.
+    for (auto &gc : ilp.general_constraints) {
+        switch (gc.kind) {
+        case GeneralConstraintKind::ABS: {
+            D_ASSERT(api.addgenconstrAbs && gc.argument_columns.size() == 1);
+            error = api.addgenconstrAbs(guard.model, nullptr, gc.result_column,
+                                        gc.argument_columns[0]);
+            break;
+        }
+        default:
+            throw InternalException("Gurobi was handed a general constraint kind it did not declare");
+        }
+        if (error) {
+            throw InvalidInputException("Failed to add general constraint to Gurobi: %s",
                                         api.geterrormsg(guard.env));
         }
     }

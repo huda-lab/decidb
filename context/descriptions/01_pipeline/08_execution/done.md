@@ -336,6 +336,31 @@ first, because pinning an ABS auxiliary is also what determines its column box, 
 every linearizer after it derives its `M` from column boxes. See
 [`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
 
+### The construct gate
+
+This stage owns the **only** decision about whether a construct is lowered at all. It
+reads `solver_backend.Capabilities()` — the backend chosen at plan time, carried down
+on the operator — and routes each construct to one of two arms. Today one construct is
+gated:
+
+```cpp
+const bool native_abs = solver_backend.Capabilities().abs;
+DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, /*refuse_when_unbounded=*/!native_abs);
+if (!native_abs) { LinearizeAbsMaximize(solver_input); }
+...
+if (native_abs) { EmitNativeAbs(solver_input, var_indexer); }   // after the VarIndexer exists
+```
+
+Both arms read the same stage-05 tag (`abs_y_idx`, `abs_is_pos_bound`) — stage 05 tags
+rather than fully lowering, because the Big-M constants are functions of evaluated
+data, and that tag *is* the native-construct record. Neither arm decides anything: all
+routing is the `if` above, and the adapters below only translate. That is what keeps
+the two comparable, and `DECIDB_NATIVE_CONSTRUCTS=off` A/B-tests them on one machine.
+
+The native arm runs later than the lowering one because a general constraint names
+flat columns, which exist only once the `VarIndexer` does — the same reason the
+aggregate `<>` expansion waits.
+
 ### Output
 
 A `SolverInput` carrying `num_rows`, `num_decide_vars`, `variable_types`

@@ -229,6 +229,14 @@ Classification is **per ABS occurrence and by sign**, not by which side of the c
 
 **Path A (lower-envelope only) — when the constraint pushes `d` down.** The effective sign is positive under `<` / `<=`, or negative under `>` / `>=`. Covers `ABS(...) <= K` (LHS), `K >= ABS(...)` (RHS), the aggregate forms `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MIN(ABS) <= K`, `AVG(ABS) <= K`, and the *positively-signed* ABS of a shape like `ABS(a - k) - ABS(b - k) <= 0`. The constraint itself caps `d` from above; the solver picks `d_i = |e_i|` to minimize slack. No extra variables.
 
+**On a backend that expresses ABS natively, Path B is not taken.** Gurobi states
+`aux = |inner|` as a general constraint, which needs no Big-M and therefore no bound
+on the contributing variables — so `SUCH THAT ABS(x - target) >= 2` answers there with
+an unbounded `x`, where the Big-M path has to refuse. The choice is made once, at
+execution, from the backend's capability table; the lowering below is what every other
+backend still gets, and the two reach the same optimum wherever both can run. See
+`01_pipeline/08_execution/done.md`.
+
 **Path B (Big-M sign-indicator) — for hard-direction shapes.** The effective sign runs against the relation, or the relation pins nothing (`=`, `<>`, BETWEEN, IN). Covers `ABS(...) >= K`, `ABS(...) > K`, `ABS(...) = K`, `ABS(...) <> K`, `ABS(...) BETWEEN a AND b`, ABS in equality / not-equal between aggregates, the analogous aggregate forms (`SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`), and any **subtracted** ABS — `ABS(a-k) - ABS(b-k) <= 0` upper-bounds the difference, so the second auxiliary is free to float upward and must be pinned. These shapes do not naturally upper-bound `d`, so a binary sign indicator `y ∈ {0,1}` is allocated per ABS term and two Big-M upper-bound constraints are added (same formulation as the MAXIMIZE-objective path below):
 
 - `d <= expr  + 2M·(1−y)`  (active when `y=1`, selecting the positive branch)

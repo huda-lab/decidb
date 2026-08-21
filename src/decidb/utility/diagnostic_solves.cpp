@@ -20,7 +20,14 @@ SolverModel MakeZeroObjectiveProbeModel(const SolverModel &model) {
 }
 
 bool BuildUnboundedRayFallbackModel(const SolverModel &model, SolverModel &ray_model) {
-	if (model.has_quadratic_obj || !model.quadratic_constraints.empty()) {
+	// The ray model is a homogeneous LP: it rebuilds the matrix row by row, so anything
+	// that is not a row cannot come along. A quadratic term cannot, and neither can a
+	// general constraint (`aux = |t|`) — a backend expressed it natively precisely
+	// because it is not linear. Dropping one would relax the model further than a ray
+	// argument allows, and the direction found might not be a real escape. Decline
+	// instead, and let the diagnosis say it could not identify one.
+	if (model.has_quadratic_obj || !model.quadratic_constraints.empty() ||
+	    !model.general_constraints.empty()) {
 		ray_model = SolverModel();
 		return false;
 	}

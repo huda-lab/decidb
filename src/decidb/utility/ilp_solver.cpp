@@ -128,6 +128,7 @@ void DumpSolverModel(const SolverModel &model) {
 	out += "num_vars: " + std::to_string(model.num_vars) + "\n";
 	out += "num_rows: " + std::to_string(model.constraints.size()) + "\n";
 	out += "num_qrows: " + std::to_string(model.quadratic_constraints.size()) + "\n";
+	out += "num_genconstrs: " + std::to_string(model.general_constraints.size()) + "\n";
 
 	for (idx_t col = 0; col < model.num_vars; col++) {
 		out += "col " + std::to_string(col) + ": lb=";
@@ -181,6 +182,20 @@ void DumpSolverModel(const SolverModel &model) {
 		for (auto &term : q_terms) {
 			out += " " + std::to_string(term.first.first) + "," + std::to_string(term.first.second) + ":";
 			AppendDouble(out, term.second);
+		}
+		out += "\n";
+	}
+
+	// A construct left native has no rows, so without this the dump would report a
+	// model smaller than the one the backend actually solves — and the corpus diff
+	// would read a native ABS as rows quietly disappearing.
+	for (idx_t g = 0; g < model.general_constraints.size(); g++) {
+		auto &gc = model.general_constraints[g];
+		out += "gen " + std::to_string(g) + ": kind=" +
+		       std::string(gc.kind == GeneralConstraintKind::ABS ? "abs" : "?") +
+		       " res=" + std::to_string(gc.result_column) + " args=";
+		for (idx_t a = 0; a < gc.argument_columns.size(); a++) {
+			out += (a ? "," : "") + std::to_string(gc.argument_columns[a]);
 		}
 		out += "\n";
 	}
@@ -299,6 +314,17 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 			                        "check did not predict it",
 			                        backend.Name());
 		}
+		// The construct half of the same contract. A general constraint is only ever
+		// emitted because the gate read this backend's capability table, so one reaching
+		// a backend that did not declare it means the gate routed to the wrong adapter —
+		// and the adapter would have no way to express it.
+		auto &caps = backend.Capabilities();
+		for (auto &gc : model.general_constraints) {
+			if (gc.kind == GeneralConstraintKind::ABS && !caps.abs) {
+				throw InternalException("DECIDE left a construct native for %s, which does not declare it",
+				                        backend.Name());
+			}
+		}
 	}
 	// Characterization oracle (no-op unless DECIDB_DUMP_MODEL is set). Emitted here,
 	// on the freshly built model, so diagnostic re-solves (probe / ray / elastic
@@ -308,7 +334,8 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	// off the built model because the pre-expansion inputs are not a row count at all: one
 	// per-row spec becomes a row per data row, one PER spec a row per group. Captured here,
 	// before any `std::move(model)` below.
-	idx_t built_constraint_rows = model.constraints.size() + model.quadratic_constraints.size();
+	idx_t built_constraint_rows = model.constraints.size() + model.quadratic_constraints.size() +
+	                              model.general_constraints.size();
 	// Build proved a constraint unsatisfiable while assembling the model: a row whose
 	// left-hand side reduced to no terms at all, against a bound it cannot meet
 	// (`SUM(0 * x) <= -1`, `x - x <= -1`). The row was kept so diagnosis can name and

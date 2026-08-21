@@ -265,6 +265,19 @@ struct SolverModel {
     //! Gurobi handles this with NonConvex=2; HiGHS cannot solve it.
     bool nonconvex_quadratic = false;
 
+    //! Constructs the backend takes natively rather than as rows: the result column,
+    //! the argument columns, and the provenance every row carries. Non-empty only when
+    //! the chosen backend declared the construct in its SolverCapabilities, so an
+    //! adapter never sees a kind it did not ask for. Every other backend received the
+    //! lowered rows in `constraints` instead.
+    struct GeneralConstraint {
+        GeneralConstraintKind kind = GeneralConstraintKind::ABS;
+        int result_column = -1;
+        vector<int> argument_columns;
+        ConstraintProvenance provenance;
+    };
+    vector<GeneralConstraint> general_constraints;
+
     //! Constraints (linear)
     vector<ModelConstraint> constraints;
     //! Stable source display registry, indexed by source_clause_id.

@@ -153,13 +153,19 @@ def test_derived_bound_still_answers(decidb_cli):
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_abs_auxiliary_box_is_derived(decidb_cli):
-    """The ABS auxiliary's column must carry a finite upper bound, not 1e30.
+    """On the lowering path, every column must carry a finite box.
 
     Read off the model dump rather than the answer, because a too-wide box does not
     change the optimum here — it changes the Big-M every later rewrite derives from
     it, and (before this) whether the query was refused at all. With ``x in [4, 20]``
-    the auxiliary ranges over ``|x - 5| in [0, 15]``, so its upper bound must be
-    finite and no larger than a small multiple of that.
+    the auxiliary ranges over ``|x - 5| in [0, 15]``, so its upper bound is finite and
+    the outer hard-MAX gets a real Big-M instead of a refusal.
+
+    Pinned to the lowering path (``DECIDB_NATIVE_CONSTRUCTS=off``) deliberately: that
+    is the path where the box is load-bearing. A backend that expresses ABS natively
+    adds a free argument column on purpose — it needs no Big-M, which is exactly the
+    capability's payoff — so "no unbounded column anywhere" is a claim about lowering,
+    not about the model in general. See test_native_abs_needs_no_bound.
     """
     sql = f"""
         SELECT id, x FROM {_ROWS}
@@ -169,11 +175,14 @@ def test_abs_auxiliary_box_is_derived(decidb_cli):
     """
     with tempfile.TemporaryDirectory() as tmp:
         dump_path = os.path.join(tmp, "model.dump")
-        cli = decidb_cli.with_env({"DECIDB_DUMP_MODEL": dump_path})
+        cli = decidb_cli.with_env(
+            {"DECIDB_DUMP_MODEL": dump_path, "DECIDB_NATIVE_CONSTRUCTS": "off"}
+        )
         cli.execute(sql)
         with open(dump_path) as f:
             dump = f.read()
 
+    assert "num_genconstrs: 0" in dump, f"expected the lowering path:\n{dump}"
     uppers = [float(m) for m in re.findall(r"^col \d+: lb=\S+ ub=(\S+)", dump, re.MULTILINE)]
     assert uppers, f"no columns in dump:\n{dump}"
     assert all(ub < 1e20 for ub in uppers), (

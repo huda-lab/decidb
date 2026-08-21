@@ -117,12 +117,33 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
 //! negative value. Requires a finite upper bound on `x` and names it if missing.
 void LinearizeBilinear(SolverInput &input, const vector<string> &var_names);
 
-//! Emit the Big-M upper bounds that pin an ABS auxiliary to `|inner|` under MAXIMIZE.
-//! Stage 05 emitted the two lower bounds and tagged them (`abs_is_pos_bound`); this
-//! pairs them by `abs_y_idx` and derives the matching upper bounds. Strict about
-//! bounds: unlike the indicator sites there is no fallback constant, so a
-//! contributing variable with no finite bound is named and refused.
-void LinearizeAbsMaximize(SolverInput &input, const vector<string> &var_names);
+//! Phase 1 of the ABS auxiliary formulation, and it runs before EVERY other
+//! linearizer. For each `abs_maximize_links` entry it derives the largest |inner| any
+//! row can reach and narrows the auxiliary's column box to it — the only place that
+//! box is ever derived, since `aux >= inner` / `aux >= -inner` bound it from below
+//! only. Every other linearizer computes its Big-M from column boxes, so an auxiliary
+//! they read has to be boxed by the time they run.
+//!
+//! `refuse_when_unbounded` is the gate's answer for this construct. On the lowering
+//! path it is true: no finite Big-M exists over an unbounded contributor, and the
+//! query is refused naming a column to bound. On the native path it is false — a
+//! general constraint needs no Big-M, so the auxiliary is simply left unboxed and the
+//! query answers. That divergence is the capability's whole payoff.
+void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_names,
+                              bool refuse_when_unbounded);
+
+//! Phase 2, LOWERING path: the Big-M sign-indicator rows that pin `aux = |inner|`.
+//! Reads the range DeriveAbsAuxiliaryBounds already derived; never recomputes it.
+void LinearizeAbsMaximize(SolverInput &input);
+
+//! Phase 2, NATIVE path: one free column `t` per active row, an equality row
+//! `t = inner`, and a `GeneralConstraintSpec` saying `aux = |t|`. Emitted in flat
+//! columns, so it runs once the VarIndexer exists — the same phase as
+//! ExpandDeferredAggregateNotEqual, and for the same reason.
+//!
+//! Called only when the chosen backend declared `SolverCapabilities::abs`. The routing
+//! is the gate's; this only translates.
+void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer);
 
 //! The reachable range of a family of row expressions, and the coefficient spread a
 //! Big-M row needs — one object, because they come from the same walk over the data.

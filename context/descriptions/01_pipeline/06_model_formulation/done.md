@@ -558,12 +558,56 @@ follow. An infinity in the bound carries the constant part of the expression the
 wrote inside `ABS()`, so that refusal names the expression and the row, not the
 linearization.
 
-It also **narrows the auxiliary's column box** to the `M` it derives. The rows it
+**Two arms, one tag.** `DeriveAbsAuxiliaryBounds` is phase 1 and runs on both paths;
+phase 2 is either `LinearizeAbsMaximize` (the Big-M rows) or `EmitNativeAbs` (a free
+column `t`, an equality row `t = inner`, and a `GeneralConstraint` saying `aux = |t|`).
+Stage 08 picks the arm from `SolverCapabilities::abs`; both arms read the same stage-05
+tag, which is what makes them comparable. The native arm runs later than the lowering
+one — after the `VarIndexer` exists — because a general constraint names flat columns.
+
+`refuse_when_unbounded` is the one place the arms differ in *outcome*: the lowering
+path has no finite `M` over an unbounded contributor and refuses, while the native path
+leaves the auxiliary unboxed and answers. That divergence is the capability's payoff.
+
+The lowering arm also **narrows the auxiliary's column box** to the `M` it derives. The rows it
 emits pin `aux = |inner|`, so `M` is a valid upper bound — and the only one anything
 derives, since `aux >= inner` / `aux >= -inner` bound the auxiliary from below only.
 That box is why this runs before every other linearizer: they all derive their own
 `M` from column boxes, and without it an outer MIN/MAX over `ABS(...)` sees an
 unbounded column and refuses a query whose bound was computable.
+
+---
+
+## 9a. General constraints — what is NOT a row
+
+`SolverModel::general_constraints` carries the constructs the chosen backend takes
+whole. Each record is a kind, a result column, argument columns, and the same
+`ConstraintProvenance` every row carries.
+
+It names **columns, not expressions**, and that is the design decision. Every backend's
+general-constraint API relates variables to variables, so a record carrying an
+expression would force each adapter to synthesize the same auxiliary column and
+equality row — that is routing, and routing belongs in the gate. An adapter only
+translates, and it never receives a kind its backend did not declare, so it may treat
+an unknown one as an internal error. `SolveModel` asserts that contract before handing
+the model over.
+
+The linear half of a native construct is therefore an ordinary row emitted alongside
+it: for ABS, `t = inner`, with `t` free. Leaving `t` unboxed is deliberate — the
+equality pins it, and a free column is what lets a native ABS answer a query whose
+contributors are unbounded.
+
+The lowered rows the construct would have produced are **not** also emitted; a model
+holds one or the other, never both. The two exact rows stage 05 already wrote
+(`aux >= inner`, `aux >= -inner`) do stay: they are implied by `aux = |t|`, they need
+no Big-M, and they carry the clause provenance the elastic engine reads.
+
+Two consequences follow from a construct having no rows. `DumpSolverModel` renders
+general constraints explicitly, or the corpus diff would read a native construct as
+rows quietly disappearing. And `BuildUnboundedRayFallbackModel` **declines** a model
+that has any, exactly as it declines a quadratic one: the ray model rebuilds the
+matrix row by row, so a non-row cannot come along, and dropping it would relax the
+model past what a ray argument permits.
 
 ---
 
