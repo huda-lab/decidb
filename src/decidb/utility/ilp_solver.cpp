@@ -4,8 +4,7 @@
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/solver_config.hpp"
 #include "duckdb/decidb/solver_session.hpp"
-#include "duckdb/decidb/gurobi/gurobi_solver.hpp"
-#include "duckdb/decidb/naive/deterministic_naive.hpp"
+#include "duckdb/decidb/solver_registry.hpp"
 #include "duckdb/common/exception.hpp"
 
 #include <algorithm>
@@ -204,34 +203,36 @@ void DumpSolverModel(const SolverModel &model) {
 } // namespace
 
 SolverBackend SelectSolverBackend() {
-    // Test-only override: DECIDB_FORCE_SOLVER=highs|gurobi pins the backend.
-    // Used by the DECIDE test suite (see test/decide/conftest.py fixtures
-    // decidb_cli_highs / decidb_cli_gurobi) to exercise both backends on a
-    // single host. Unknown values fall through to default auto-selection.
+    // Test-only override: DECIDB_FORCE_SOLVER=<registered backend name> pins the
+    // backend. Used by the DECIDE test suite (see test/decide/conftest.py fixtures
+    // decidb_cli_highs / decidb_cli_gurobi) to exercise both backends on a single
+    // host. A name no backend answers to falls through to auto-selection.
     if (const char *force = std::getenv("DECIDB_FORCE_SOLVER")) {
-        std::string choice(force);
-        if (choice == "highs" || choice == "HIGHS") {
-            return SolverBackend::HIGHS;
-        }
-        if (choice == "gurobi" || choice == "GUROBI") {
-            if (!GurobiSolver::IsAvailable()) {
-                throw InvalidInputException(
-                    "DECIDB_FORCE_SOLVER=gurobi but Gurobi is not available on this host");
+        SolverBackend forced = SolverRegistry::Find(force);
+        if (forced.IsValid()) {
+            if (!forced.IsAvailable()) {
+                throw InvalidInputException("DECIDB_FORCE_SOLVER=%s but that solver is not available "
+                                            "on this host",
+                                            forced.Name());
             }
-            return SolverBackend::GUROBI;
+            return forced;
         }
     }
 
-    if (GurobiSolver::IsAvailable()) {
-        return SolverBackend::GUROBI;
+    // Registry order IS preference order; the last entry is always available, which
+    // is what makes selection total.
+    for (auto &backend : SolverRegistry::Backends()) {
+        if (backend.IsAvailable()) {
+            return backend;
+        }
     }
-    return SolverBackend::HIGHS;
+    throw InternalException("No DECIDE solver backend is available on this build");
 }
 
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
                                 const SolveModelOptions &options) {
 	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
-	auto session = CreateSolverSession(backend);
+	auto session = backend.CreateSession();
 	if (options.interrupt_poll) {
 		session->SetInterruptPoll(options.interrupt_poll);
 	}
@@ -240,16 +241,6 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
 
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend) {
 	return SolvePreparedModel(model, backend, SolveModelOptions());
-}
-
-unique_ptr<SolverSession> CreateSolverSession(SolverBackend backend) {
-    switch (backend) {
-    case SolverBackend::GUROBI:
-        return GurobiSolver::CreateSession();
-    case SolverBackend::HIGHS:
-        return DeterministicNaive::CreateSession();
-    }
-    throw InternalException("Unknown DECIDE solver backend");
 }
 
 static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBackend backend,
@@ -279,7 +270,7 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
     }
 }
 
-SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
+SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBackend backend,
                         const SolveModelOptions &options, SolverModel *retained_model,
                         unique_ptr<SolverSession> *retained_session) {
 	SolverModel model;
@@ -339,12 +330,11 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 			}
 		}
 	}
-	SolverBackend backend = SelectSolverBackend();
 	// Solve on a live session (the warm-continuation substrate). The first chunk
 	// uses the caller's requested limit, or the shared default when unset (<0).
 	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
 	SolveModelOptions diagnostic_options = MakeDiagnosticSolveOptions(options);
-	auto session = CreateSolverSession(backend);
+	auto session = backend.CreateSession();
 	// Install the interrupt poll before the first solve so a user Ctrl-C cuts the
 	// *initial* solve short (not just continuation chunks). The poll is a session
 	// member, so it carries into every later Continue() when the session is retained.
@@ -368,10 +358,6 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
 	}
 	result.model_constraint_rows = built_constraint_rows;
 	return result;
-}
-
-SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer) {
-	return SolveModel(input, indexer, SolveModelOptions());
 }
 
 void ThrowDecideSolveError(const SolverResult &result) {

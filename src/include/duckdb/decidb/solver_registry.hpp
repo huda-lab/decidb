@@ -1,0 +1,89 @@
+//===----------------------------------------------------------------------===//
+//                         DecidB
+//
+// duckdb/decidb/solver_registry.hpp
+//
+// The set of solver backends DeciDB can run, and the handle the rest of the
+// pipeline passes around to name one of them.
+//
+//===----------------------------------------------------------------------===//
+
+#pragma once
+
+#include "duckdb/common/common.hpp"
+#include "duckdb/decidb/solver_capabilities.hpp"
+
+namespace duckdb {
+
+class SolverSession;
+
+//! Everything DeciDB knows about one backend, as a table row. This is the ONLY
+//! place a backend is named: registering a new one appends an entry here and
+//! changes no `if` and no `switch` anywhere else in the tree.
+struct SolverBackendInfo {
+	//! Stable lowercase identifier, and the DECIDB_FORCE_SOLVER spelling.
+	const char *name;
+	//! Runtime probe: is the library loadable and the license valid on THIS host?
+	//! A backend that is always present answers true unconditionally.
+	bool (*is_available)();
+	//! What upstream stages may assume about this backend. Queried through a
+	//! function rather than stored inline because capability is partly a runtime
+	//! fact — a dynamically loaded library may not export the symbol a native
+	//! construct needs, so the answer is not known until the library is open.
+	const SolverCapabilities &(*capabilities)();
+	//! Fresh session factory. The returned session owns no solver state until Solve().
+	unique_ptr<SolverSession> (*create_session)();
+};
+
+//! Names one registered backend. A value type wrapping a pointer into the
+//! registry's static table, so it copies freely, compares by identity, and can be
+//! carried on a plan node from stage 05 down to stage 08 — which is the point:
+//! the backend is chosen ONCE, before any rewrite, and every later stage reads
+//! that choice rather than asking again.
+//!
+//! A default-constructed handle is invalid ("no backend chosen yet"). Every
+//! accessor requires a valid handle.
+class SolverBackend {
+public:
+	SolverBackend() = default;
+	explicit SolverBackend(const SolverBackendInfo &info_p) : info(&info_p) {
+	}
+
+	bool IsValid() const {
+		return info != nullptr;
+	}
+
+	//! The registered identifier ("gurobi", "highs"). Diagnostics and error text
+	//! use it; nothing branches on it.
+	const char *Name() const;
+	//! Is this backend usable on this host right now?
+	bool IsAvailable() const;
+	//! What upstream stages may assume. See SolverCapabilities.
+	const SolverCapabilities &Capabilities() const;
+	//! Open a fresh session on this backend.
+	unique_ptr<SolverSession> CreateSession() const;
+
+	bool operator==(const SolverBackend &other) const {
+		return info == other.info;
+	}
+	bool operator!=(const SolverBackend &other) const {
+		return info != other.info;
+	}
+
+private:
+	const SolverBackendInfo *info = nullptr;
+};
+
+//! The registry itself: a static, ordered table of every backend linked into this
+//! build. Order IS preference order — SelectSolverBackend takes the first available
+//! entry — so reordering the table is how the default preference changes.
+struct SolverRegistry {
+	//! Every registered backend, in preference order. Availability is NOT filtered:
+	//! the caller decides whether an unavailable backend is an error or a skip.
+	static const vector<SolverBackend> &Backends();
+	//! Look one up by name, case-insensitively. Returns an invalid handle when no
+	//! backend answers to that name.
+	static SolverBackend Find(const string &name);
+};
+
+} // namespace duckdb

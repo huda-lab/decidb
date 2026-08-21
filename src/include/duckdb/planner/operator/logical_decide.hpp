@@ -11,6 +11,7 @@
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
+#include "duckdb/decidb/solver_registry.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
 namespace duckdb {
@@ -238,6 +239,17 @@ public:
     //! the same way it does decide_constraints/decide_objective; plan_decide.cpp reads
     //! the resolved physical index straight off them.
     vector<unique_ptr<Expression>> entity_key_expressions;
+
+    //! The solver this query will run on, chosen ONCE by DecideOptimizer before any
+    //! rewrite pass and carried from here to PhysicalDecide. It is resolved this early
+    //! so a rewrite can ask what the backend supports natively and decline to lower a
+    //! construct the backend expresses better itself; asking again later could answer
+    //! differently and leave the plan and the solve disagreeing about what was lowered.
+    //!
+    //! Deliberately NOT serialized: which solver a host has is a property of the host,
+    //! not of the query, so a plan deserialized elsewhere re-resolves it rather than
+    //! carrying a choice that machine may not be able to honor.
+    SolverBackend solver_backend;
 
     // --- Prepared linear form (built by BuildDecidePreparedModel, stage 05) ---
 

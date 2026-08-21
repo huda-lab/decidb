@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/decide_optimizer.hpp"
 
 #include "duckdb/decidb/decide_cast_policy.hpp"
+#include "duckdb/decidb/ilp_solver.hpp"
 
 #include <cstdlib>
 #include "duckdb/common/enums/decide.hpp"
@@ -58,6 +59,14 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	if (bench) {
 		timer.Start();
 	}
+
+	// Choose the solver BEFORE any rewrite runs. Every pass below decides how to
+	// express a construct, and the right answer depends on what the backend can take
+	// natively — so the backend has to be known first, and it has to be known only
+	// once. From here it rides the plan (LogicalDecide::solver_backend →
+	// PhysicalDecide::solver_backend) all the way to the solve and to any diagnostic
+	// re-solve, so nothing downstream ever asks a second time.
+	decide.solver_backend = SelectSolverBackend();
 
 	RewriteNorm(decide);
 	RewriteInDomain(decide);

@@ -9,6 +9,21 @@
 
 namespace duckdb {
 
+bool DeterministicNaive::IsAvailable() {
+    // HiGHS is vendored and statically linked: it is the backend that makes
+    // selection total, so it can never be missing.
+    return true;
+}
+
+const SolverCapabilities &DeterministicNaive::Capabilities() {
+    // The floor of the registry. Plain linear and convex quadratic OBJECTIVES only:
+    // every model-class flag is false, so a query needing one is refused with a
+    // message about the host. No construct is native, so every construct arrives
+    // fully lowered — which is the path DeciDB has always taken.
+    static const SolverCapabilities capabilities;
+    return capabilities;
+}
+
 namespace {
 
 //! Render an unreachable row as the user wrote it (`SUM(x) >= inf PER g`) from the

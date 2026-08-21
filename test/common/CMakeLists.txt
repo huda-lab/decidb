@@ -9,6 +9,7 @@ add_library_unity(
   test_decidb_diagnostic_solves.cpp
   test_decidb_escape_characterization.cpp
   test_decidb_router.cpp
+  test_decidb_solver_registry.cpp
   test_decidb_variable_provenance.cpp
   test_file_system.cpp
   test_hyperlog.cpp

@@ -51,6 +51,27 @@ bool GurobiSolver::IsAvailable() {
     return available;
 }
 
+const SolverCapabilities &GurobiSolver::Capabilities() {
+    // Cached alongside IsAvailable(): both are answers about the library that was
+    // loaded into THIS process, and neither can change without a fresh start.
+    static const SolverCapabilities capabilities = []() {
+        SolverCapabilities caps;
+        // Model classes Gurobi accepts directly. These are gates: nothing lowers a
+        // non-convex objective into linear rows, so a backend that says false here
+        // makes the query unrunnable rather than slow.
+        caps.quadratic_constraints = true;
+        caps.nonconvex_quadratic = true;
+        caps.miqp = true;
+        // Construct flags stay false: Gurobi's general constraints (genconstrAbs,
+        // genconstrMin/Max, indicator, SOS1) are not bound by the loader yet, and a
+        // capability may not be declared ahead of the code that honors it. They are
+        // turned on one construct at a time, each with the loader symbol that backs
+        // it, so a flag is never true on a host whose library did not export it.
+        return caps;
+    }();
+    return capabilities;
+}
+
 namespace {
 
 //! Resumable Gurobi handle. Load() builds the env+model once (its C resources

@@ -28,7 +28,6 @@
 namespace duckdb {
 
 struct SolverModel;
-enum class SolverBackend;
 
 //! A live solver handle that can be resumed for additional wall-clock. Solve()
 //! loads the model into the backend once and runs the first chunk; Continue()
@@ -57,9 +56,5 @@ public:
 	virtual void SetInterruptPoll(std::function<bool()> poll) {
 	}
 };
-
-//! Create a fresh session for the given backend (mirrors SolvePreparedModel's
-//! backend dispatch). The returned session owns no solver state until Solve().
-unique_ptr<SolverSession> CreateSolverSession(SolverBackend backend);
 
 } // namespace duckdb

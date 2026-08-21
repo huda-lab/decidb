@@ -242,6 +242,12 @@ too-open one; slow is a runtime event masking the other states.
 - **Solver-agnostic** — everything works on Gurobi and HiGHS. We build the
   elastic model in our own model builder so both backends solve it natively;
   Gurobi `feasRelax` is an *accelerator*, never a dependency.
+- **Diagnosed on the solver that failed** — every re-solve (the elastic model, the
+  `INF_OR_UNBD` probe, the unbounded-ray fallback) runs on the backend the *primary*
+  solve ran on, read off `PhysicalDecide::solver_backend`. That choice was made once,
+  at plan time, before any rewrite. Diagnosis never re-selects: a second, independently
+  answered selection would diagnose a failure on a solver that did not produce it, and
+  once selection depends on the model the two answers can genuinely differ.
 - **Differential testing** — every phase tests against `oracle_solver` on
   constructed cases, never hand-computed answers.
 

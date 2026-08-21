@@ -162,6 +162,14 @@ public:
     //! the unbounded diagnosis to label escaping categorical groups (affected_rows).
     vector<string> input_column_names;
 
+    //! The backend this query was planned for, chosen once by the DECIDE optimizer
+    //! (LogicalDecide::solver_backend) and copied here at physical planning. Layer 8
+    //! READS it — the primary solve and every diagnostic re-solve run on this one
+    //! backend — and never re-derives it: the rewrites upstream already committed to
+    //! what this backend takes natively, so a second, differently-answered selection
+    //! would run a model on a solver it was not built for.
+    SolverBackend solver_backend;
+
     // --- Prepared linear form (decided by BuildDecidePreparedModel, stage 05) ---
 
     //! Every constraint and the objective, already flattened into additive terms

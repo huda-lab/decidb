@@ -37,7 +37,7 @@ duckdb::vector<double> SolveFallbackRayWithHighs(const SolverModel &model) {
 	SolverModel ray_model;
 	REQUIRE(BuildUnboundedRayFallbackModel(model, ray_model));
 
-	SolverResult result = SolvePreparedModel(ray_model, SolverBackend::HIGHS);
+	SolverResult result = SolvePreparedModel(ray_model, SolverRegistry::Find("highs"));
 	REQUIRE(result.status == SolverStatus::OPTIMAL);
 	REQUIRE(result.solution.size() == model.num_vars);
 
@@ -168,7 +168,8 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 		SolverInput default_input = MakeUnboundedTwoVariableInput();
 		VarIndexer default_indexer = VarIndexer::BuildRef(default_input);
 
-		SolverResult default_result = SolveModel(default_input, default_indexer);
+		SolverResult default_result =
+		    SolveModel(default_input, default_indexer, SelectSolverBackend(), SolveModelOptions());
 		CHECK(default_result.status == SolverStatus::UNBOUNDED);
 		CHECK(default_result.ray.empty());
 
@@ -177,7 +178,8 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 		SolveModelOptions options;
 		options.extract_unbounded_ray = true;
 
-		SolverResult diagnostic_result = SolveModel(diagnostic_input, diagnostic_indexer, options);
+		SolverResult diagnostic_result =
+		    SolveModel(diagnostic_input, diagnostic_indexer, SelectSolverBackend(), options);
 		CHECK(diagnostic_result.status == SolverStatus::UNBOUNDED);
 		REQUIRE(diagnostic_result.ray.size() == 2);
 		CHECK(std::fabs(diagnostic_result.ray[0] - 1.0) <= RAY_EPSILON);

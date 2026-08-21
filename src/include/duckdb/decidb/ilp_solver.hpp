@@ -13,17 +13,11 @@
 
 #include "duckdb/decidb/solver_input.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/solver_registry.hpp"
 #include "duckdb/decidb/solver_result.hpp"
 #include "duckdb/decidb/solver_session.hpp"
 
 namespace duckdb {
-
-//! Backend chosen for a prepared SolverModel solve. Kept explicit so diagnostic
-//! re-solves can use the same backend as the primary solve.
-enum class SolverBackend {
-	GUROBI,
-	HIGHS
-};
 
 //! Internal solver toggles for diagnostic-only follow-up solves. The default
 //! preserves today's user-facing path: non-optimal solves return a status and
@@ -42,8 +36,15 @@ struct SolveModelOptions {
 	std::function<bool()> interrupt_poll;
 };
 
-//! Resolve the backend DeciDB should use for this solve, honoring the
-//! DECIDB_FORCE_SOLVER test override and otherwise preferring Gurobi.
+//! Resolve the backend DeciDB should use for a DECIDE query, honoring the
+//! DECIDB_FORCE_SOLVER test override and otherwise taking the first available
+//! entry in registry order (SolverRegistry::Backends).
+//!
+//! Called ONCE per query, by the DECIDE optimizer before any rewrite runs, and the
+//! answer rides the plan from there (LogicalDecide::solver_backend →
+//! PhysicalDecide::solver_backend). Nothing downstream may call this again: once a
+//! rewrite has consulted the backend's capabilities, a second call that answered
+//! differently would leave the plan and the solve disagreeing about what was lowered.
 SolverBackend SelectSolverBackend();
 
 //! Solve an already-built SolverModel with the selected backend. Diagnostic
@@ -52,9 +53,8 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend)
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
                                 const SolveModelOptions &options);
 
-//! Builds a SolverModel from the given SolverInput, selects the best available
-//! solver backend (Gurobi if licensed, otherwise HiGHS), solves, and returns a
-//! SolverResult: the terminal status plus, when optimal, the solution vector of
+//! Builds a SolverModel from the given SolverInput, solves it on `backend`, and
+//! returns a SolverResult: the terminal status plus, when optimal, the solution vector of
 //! size (num_rows * num_decide_vars). A non-optimal status is returned, not
 //! thrown — the operator decides whether `diagnose_decide='off'` surfaces the
 //! default error or `auto` routes to a diagnosis terminal.
@@ -66,6 +66,11 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
 //! `indexer` is the VarIndexer constructed once in Finalize() and threaded
 //! through here to avoid duplicate construction inside SolverModel::Build().
 //!
+//! `backend` is the choice made at plan time (SelectSolverBackend, called by the
+//! DECIDE optimizer) and carried down on the operator. It is passed in rather than
+//! resolved here so the backend that runs the solve is provably the same one whose
+//! capabilities the rewrites were selected against.
+//!
 //! `retained_model` (optional): when non-null, the built SolverModel is moved
 //! into it after the solve so a diagnosis engine can transform and re-solve it
 //! (the model is otherwise a local and discarded once the solve returns). Left
@@ -75,9 +80,8 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
 //! the solve is moved into it so the slow-solve continuation loop can Continue()
 //! the warm solver on a time-limit stop. Left untouched when Build() proves
 //! infeasibility before any solver runs.
-SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer,
+SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBackend backend,
                          const SolveModelOptions &options, SolverModel *retained_model = nullptr,
                          unique_ptr<SolverSession> *retained_session = nullptr);
-SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer);
 
 } // namespace duckdb

@@ -5,9 +5,12 @@ normalizes the outcome. It never inspects SQL plans or DECIDE query semantics.
 
 **Key source files**
 
-- `src/decidb/utility/ilp_solver.cpp` — dispatch, disambiguation, ray attachment
+- `src/decidb/utility/ilp_solver.cpp` — selection, `SolveModel`, disambiguation, ray attachment
+- `src/decidb/utility/solver_registry.cpp` — the backend table
 - `src/decidb/gurobi/gurobi_solver.cpp`, `src/decidb/gurobi/gurobi_loader.cpp` — Gurobi (C API)
 - `src/decidb/naive/deterministic_naive.cpp` — HiGHS (C++ API)
+- `src/include/duckdb/decidb/solver_registry.hpp` — the backend handle and the registry
+- `src/include/duckdb/decidb/solver_capabilities.hpp` — what upstream stages may assume
 - `src/include/duckdb/decidb/solver_result.hpp` — the normalized outcome
 - `src/include/duckdb/decidb/solver_session.hpp` — the warm-continuation handle
 - `src/include/duckdb/decidb/solver_config.hpp` — time limits
@@ -51,22 +54,72 @@ throws the `decide_diagnostics()` pointer error instead. See
 
 ---
 
-## 2. Dispatch
+## 2. The registry, and choosing a backend
+
+### The table
+
+`SolverRegistry` (`solver_registry.hpp`) is the one place a backend is named. Each
+entry is a `SolverBackendInfo` row: the identifier, a runtime availability probe, a
+capability accessor, and a session factory. Adding a backend means appending a row —
+it changes **zero** `if` and `switch` statements anywhere else in the tree.
+
+`SolverBackend` is the handle the rest of the pipeline passes around: a value type
+wrapping a pointer into that table, so it copies freely, compares by identity, and
+rides a plan node from stage 05 to stage 08. A default-constructed handle means "no
+backend chosen yet".
+
+Row order **is** preference order. Gurobi first — empirically much faster on DeciDB
+workloads and strictly more capable; HiGHS last, and unconditionally available, which
+is what makes selection total.
+
+### Capabilities
+
+`SolverCapabilities` (`solver_capabilities.hpp`) declares the backend differences an
+**upstream** stage has to branch on. That is the membership rule: a difference only
+the backend itself acts on stays a virtual on `SolverSession` with a safe default —
+`SetInterruptPoll` is the reference case.
+
+The flags split in two, and the split decides what "unsupported" means:
+
+| Kind | Flags | `false` means |
+|---|---|---|
+| Construct | `abs`, `min_max`, `not_equal`, `in_list`, `bilinear` | A lowering always exists, so stage 05 lowers as it always has. An optimization; the lowering path is never deleted. |
+| Model class | `quadratic_constraints`, `nonconvex_quadratic`, `miqp` | No lowering exists. A gate: the answer is refusal, at plan time, blaming the host rather than the query. |
+
+Capability is asked through a function, not read off a constant, because it is partly
+a **runtime** fact — a dynamically loaded library may not export the symbol a native
+construct needs, so the answer is not known until the library is open.
+
+A flag is only worth a field if it is A/B-verifiable: forcing the construct back down
+its lowering path must reach the same optimum.
+
+### Selection
 
 `SelectSolverBackend()`:
 
-1. `DECIDB_FORCE_SOLVER=highs|gurobi` pins the backend. This is a **test-only**
-   override used by `test/decide/conftest.py` (`decidb_cli_highs` /
-   `decidb_cli_gurobi`) to exercise both backends on one host. Forcing `gurobi`
-   where it is unavailable throws; unknown values fall through.
-2. Otherwise, Gurobi if `GurobiSolver::IsAvailable()`, else HiGHS.
+1. `DECIDB_FORCE_SOLVER=<registered name>` pins the backend, matched
+   case-insensitively. This is a **test-only** override used by
+   `test/decide/conftest.py` (`decidb_cli_highs` / `decidb_cli_gurobi`) to exercise
+   both backends on one host. Forcing a backend that is unavailable throws; a name no
+   backend answers to falls through.
+2. Otherwise, the first available entry in registry order.
 
-Selection is **not** cost-based. Gurobi is always preferred — empirically much
-faster on DeciDB workloads — and HiGHS is the always-available fallback.
+Selection is **not** cost-based, and it does not inspect the model.
 
-`GurobiSolver::IsAvailable()` is a one-time lazy check (static local with lambda
-init) that attempts `GRBloadenv()`. Without `DECIDB_HAS_GUROBI` at compile time it
-always returns false.
+It runs **once per query, at plan time** — `DecideOptimizer::OptimizeDecide` calls it
+before any rewrite — and the answer rides the plan on
+`LogicalDecide::solver_backend` → `PhysicalDecide::solver_backend` → `SolveModel` →
+every diagnostic re-solve. Nothing asks a second time. The reason is not tidiness:
+once a rewrite has consulted the backend's capabilities, a second selection that
+answered differently would run a model on a solver it was not built for. See
+[`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
+
+The choice is not serialized with the plan — which solver a host has is a property of
+the host, not of the query.
+
+`GurobiSolver::IsAvailable()` is a one-time lazy check (static local with lambda init)
+that dlopens the library and attempts to start an environment. It is purely a runtime
+probe: there is no compile-time flag, and DeciDB links without a Gurobi installation.
 
 ### Sessions
 
@@ -98,8 +151,10 @@ internal re-solves before the user sees anything.
 
 ## 3. `SolveModel`
 
-`SolveModel(input, indexer, options, retained_model, retained_session)` is the
-facade the operator calls. In order:
+`SolveModel(input, indexer, backend, options, retained_model, retained_session)` is
+the facade the operator calls. `backend` is passed in, not resolved here, so the
+solver that runs the model is provably the one the rewrites were selected against. In
+order:
 
 1. `SolverModel::Build(input, indexer)`. A `DecideInfeasibleModelException` here
    means infeasibility was proven by a throw that abandoned the half-built model —
@@ -146,6 +201,11 @@ two.
 
 ## 4. Gurobi backend
 
+Declares every model-class capability — `quadratic_constraints`,
+`nonconvex_quadratic`, `miqp` — so no query is refused for the shape of its model.
+Its construct flags are turned on one at a time, each together with the loader symbol
+that backs it, so a flag is never true on a host whose library did not export it.
+
 Uses the **C API** (`gurobi_c.h`), not the C++ wrapper, and loads it dynamically
 through `gurobi_loader.cpp` so DeciDB links without a Gurobi installation.
 
@@ -171,6 +231,11 @@ it changes report wording ("you stopped it" vs "hit the time limit"), not routin
 ---
 
 ## 5. HiGHS backend
+
+The floor of the registry: every capability flag is false. No construct is native, so
+everything arrives fully lowered; no model class beyond plain linear and **convex**
+quadratic objectives is accepted, so the three refusals below are gates rather than
+slow paths. It is also unconditionally available, which is what makes selection total.
 
 Uses the **C++ API** (`Highs.h`). The class is named `DeterministicNaive` for
 historical reasons; it is a full MIP solver.
@@ -206,11 +271,17 @@ variables. HiGHS also has no thread-safe terminate, so it never sets
 ## 6. Adding a backend
 
 1. Implement `SolverSession` with `Solve(model, time_limit)` and
-   `Continue(time_limit)`, both returning a normalized `SolverResult`.
-2. Optionally add a static `IsAvailable()` for runtime detection.
-3. Add a `SolverBackend` enum value and a `CreateSolverSession` case.
-4. Map the backend's terminal statuses onto `SolverStatus`. Anything unmapped goes
-   to `OTHER` with `raw_status` set.
+   `Continue(time_limit)`, both returning a normalized `SolverResult`. Map the
+   backend's terminal statuses onto `SolverStatus`; anything unmapped goes to `OTHER`
+   with `raw_status` set. Override a `SolverSession` virtual only for behavior the
+   backend alone acts on.
+2. Add `IsAvailable()`, `Capabilities()`, and `CreateSession()` statics.
+3. Append one `SolverBackendInfo` row to `REGISTERED_BACKENDS` in
+   `solver_registry.cpp`, positioned by preference.
+
+That is the whole list, and step 3 is the only edit outside the new backend's own
+files. If a fourth step ever appears — an `if` on the backend's name, a `switch` on a
+new enum — the difference it is branching on belongs in `SolverCapabilities` instead.
 
 `SolverModel` provides everything needed: variable bounds and types, linear and
 quadratic objective, and constraints in COO. No change to extraction, coefficient
@@ -223,6 +294,8 @@ evaluation, or model building is required.
 | Concern | Location |
 |---|---|
 | Backend selection, `SolveModel`, disambiguation | `src/decidb/utility/ilp_solver.cpp` |
+| Backend table | `src/decidb/utility/solver_registry.cpp`, `src/include/duckdb/decidb/solver_registry.hpp` |
+| Capability declarations | `src/include/duckdb/decidb/solver_capabilities.hpp` |
 | Normalized outcome and default error text | `src/include/duckdb/decidb/solver_result.hpp` |
 | Session contract | `src/include/duckdb/decidb/solver_session.hpp` |
 | Time limits | `src/include/duckdb/decidb/solver_config.hpp` |

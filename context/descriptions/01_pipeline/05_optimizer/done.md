@@ -22,6 +22,31 @@ former.
 
 ---
 
+## 0. The backend is chosen before anything is rewritten
+
+`OptimizeDecide` opens by calling `SelectSolverBackend()` and storing the answer on
+`LogicalDecide::solver_backend`. It happens here, ahead of every pass, because the
+passes below decide **how to express** a construct, and the right answer depends on
+what the backend accepts natively — a solver with a native `ABS` needs no Big-M
+envelope, so lowering it would be work that only loses accuracy.
+
+The choice is made **once** and rides the plan from here: `LogicalDecide` →
+`PhysicalDecide` → the solve → every diagnostic re-solve. Nothing downstream calls
+`SelectSolverBackend()` again. That is not tidiness: once a rewrite has consulted the
+backend's capabilities, a second selection that answered differently would run a model
+on a solver it was not built for.
+
+It is deliberately **not serialized**. Which solver a host has is a fact about the
+host, not about the query, so a plan deserialized elsewhere re-resolves it rather than
+carrying a choice that machine cannot honor. If the DECIDE optimizer is disabled
+outright (`SET disabled_optimizers='decide_optimizer'`), physical planning resolves it
+instead, so the operator always runs against exactly one backend.
+
+See [`../07_solver/done.md`](../07_solver/done.md) §2 for what selection reads, and
+`SolverCapabilities` for what a pass may ask about the backend.
+
+---
+
 ## 1. Pass order
 
 `DecideOptimizer::OptimizeDecide` runs ten passes, and the order is load-bearing:

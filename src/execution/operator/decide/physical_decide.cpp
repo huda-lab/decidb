@@ -3199,7 +3199,8 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
     Profiler solve_wall_timer;
     solve_wall_timer.Start();
     SolverResult solve_result =
-        SolveModel(solver_input, var_indexer, solve_options, diagnosis_armed ? &retained_model : nullptr,
+        SolveModel(solver_input, var_indexer, solver_backend, solve_options,
+                   diagnosis_armed ? &retained_model : nullptr,
                    want_session ? &retained_session : nullptr);
     solve_wall_timer.End();
 
@@ -3313,7 +3314,12 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         build_var_labels(var_labels, var_is_aux);
 
         auto diag_params = GetDecideDiagnosticParams(context);
-        SolverBackend backend = SelectSolverBackend();
+        // The backend the primary solve ran on, chosen at plan time. Asking
+        // SelectSolverBackend() again here would be a second, independent answer —
+        // harmless while selection reads only the environment, but wrong the moment it
+        // depends on the model, because the elastic re-solves would then run on a
+        // different solver than the one that produced the failure being diagnosed.
+        SolverBackend backend = solver_backend;
 
         // Decision 1a: a user constraint like `x <= 10` / `x BETWEEN a AND b` was
         // absorbed into the column-bound arrays, not emitted as a matrix row, so it

@@ -4,6 +4,7 @@
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/optimizer/decide_linear_form.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -70,6 +71,15 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         op.types, op.estimated_cardinality, std::move(child_plan),
         op.decide_index, std::move(op.decide_variables),
         std::move(op.decide_constraints), op.decide_sense, std::move(op.decide_objective));
+    // The backend was chosen before stage 05 rewrote anything, so the rewrites and
+    // the solve agree on what is lowered and what is left native. If the DECIDE
+    // optimizer never ran (`SET disabled_optimizers='decide_optimizer'`), nothing
+    // chose one; resolve it here so the operator still runs against exactly one
+    // backend for the whole query.
+    if (!op.solver_backend.IsValid()) {
+        op.solver_backend = SelectSolverBackend();
+    }
+    decide_op->solver_backend = op.solver_backend;
     decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
     decide_op->is_boolean_var = op.is_boolean_var;
     decide_op->ne_indicator_indices = std::move(op.ne_indicator_indices);
