@@ -6,5 +6,3 @@ Resolved entries are removed; if the fix taught a generalizable lesson, record i
 in `.claude/lessons.md`.
 
 ---
-
-_No open bugs._

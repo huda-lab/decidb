@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/column_binding_replacer.hpp"
 
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
 
 namespace duckdb {
 
@@ -20,6 +21,18 @@ void ColumnBindingReplacer::VisitOperator(LogicalOperator &op) {
 		return;
 	}
 	VisitOperatorChildren(op);
+	if (op.type == LogicalOperatorType::LOGICAL_DECIDE) {
+		// LogicalDecide's expressions (constraints, objective, composed MIN/MAX terms,
+		// entity keys, ...) live outside the base op.expressions that the generic
+		// VisitOperatorExpressions walks -- see LogicalDecide::EnumerateExpressions, the
+		// single authoritative field list this shares with ColumnBindingResolver. Without
+		// this, a rewrite that renumbers child bindings below a DECIDE (e.g.
+		// CompressedMaterialization inserting compress/decompress projections under a
+		// join it wraps) leaves DECIDE's own references stale, since nothing else here
+		// knows to update them.
+		op.Cast<LogicalDecide>().EnumerateExpressions([&](unique_ptr<Expression> *expr) { VisitExpression(expr); });
+		return;
+	}
 	VisitOperatorExpressions(op);
 }
 

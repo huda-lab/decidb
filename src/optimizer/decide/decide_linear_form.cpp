@@ -807,7 +807,7 @@ private:
 	//! Name an expression the way the user wrote it: strip the casts the binder added.
 	static string ScaleUserName(const Expression &expr) {
 		const Expression *cur = StripCastsForIdentity(expr);
-		auto name = cur->GetName();
+		auto name = StripDecideTags(cur->GetName());
 		return name.empty() ? cur->ToString() : name;
 	}
 

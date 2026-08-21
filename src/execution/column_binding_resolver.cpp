@@ -137,63 +137,27 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 	case LogicalOperatorType::LOGICAL_DECIDE: {
 		VisitOperatorChildren(op);
 		auto &decide_op = op.Cast<LogicalDecide>();
-		
-		// Add DECIDE variables to ignored bindings so they are not resolved to physical columns
+
+		// Add DECIDE variables to ignored bindings so they are not resolved to physical
+		// columns: they name the operator's own output, not an input column.
 		for (auto &expr : decide_op.decide_variables) {
 			if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-				auto &colref = expr->Cast<BoundColumnRefExpression>();
-				ignored_bindings.push_back(colref.binding);
+				ignored_bindings.push_back(expr->Cast<BoundColumnRefExpression>().binding);
 			}
-			VisitExpression(&expr);
-		}
-		
-		if (decide_op.decide_constraints) {
-			VisitExpression(&decide_op.decide_constraints);
-		}
-		if (decide_op.decide_objective) {
-			VisitExpression(&decide_op.decide_objective);
 		}
 
-		// The composed MIN/MAX rewrite (DecideOptimizer) lifts sub-expressions out of the
-		// objective and constraint trees into their own vectors and leaves a placeholder
-		// behind, so visiting `decide_objective` / `decide_constraints` no longer reaches
-		// them. They must be resolved here for the same reason everything else is: the
-		// physical operator evaluates them against the materialized child chunk, reading
-		// each reference's index as a *position in that chunk*. An unresolved
-		// BoundColumnRef still carries a logical (table_index, column_index), so the
-		// operator silently reads whichever column now sits at that position — the right
-		// answer only when the two coincide, as they do for a single-table source.
-		for (auto &term : decide_op.composed_minmax_objective_terms) {
-			if (term.inner_expr) {
-				VisitExpression(&term.inner_expr);
-			}
-			if (term.filter) {
-				VisitExpression(&term.filter);
-			}
-			if (term.scale) {
-				VisitExpression(&term.scale);
-			}
-		}
-		for (auto &spec : decide_op.composed_minmax_constraints) {
-			for (auto &term : spec.terms) {
-				if (term.inner_expr) {
-					VisitExpression(&term.inner_expr);
-				}
-				if (term.filter) {
-					VisitExpression(&term.filter);
-				}
-				if (term.scale) {
-					VisitExpression(&term.scale);
-				}
-			}
-			if (spec.rhs_expr) {
-				VisitExpression(&spec.rhs_expr);
-			}
-		}
+		// Every expression LogicalDecide owns (variables, constraints, objective,
+		// composed MIN/MAX terms, entity keys) must be resolved here for the same
+		// reason as any other operator's expressions: the physical operator evaluates
+		// each reference's index as a *position in the materialized child chunk*. An
+		// unresolved BoundColumnRef still carries a logical (table_index, column_index),
+		// so the operator would silently read whichever column now sits at that position.
+		// See LogicalDecide::EnumerateExpressions for the single authoritative field list.
+		decide_op.EnumerateExpressions([&](unique_ptr<Expression> *expr) { VisitExpression(expr); });
 
 		// Clear ignored bindings after visiting expressions
 		ignored_bindings.clear();
-		
+
 		bindings = op.GetColumnBindings();
 		return;
 	}

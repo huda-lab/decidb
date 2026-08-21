@@ -168,6 +168,45 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
     }
 }
 
+//! F2: stamp the row -> clause provenance fields every constraint-builder site sets,
+//! linear or quadratic, aggregate or per-row. `group_key` defaults to INVALID_INDEX for
+//! an ungrouped aggregate row; pass the PER/WHEN group id (and its label) for a grouped
+//! aggregate row, or the row id for a per-row row. Leaves every other ConstraintProvenance
+//! field at its default -- the aggregate-only and linear-aggregate-only fields are each
+//! their own site (see StampAggregateProvenance and the avg/weight/folded-terms block in
+//! the linear aggregate branches), because a per-row or quadratic row does not carry them:
+//! FormatQuadraticLhs never reads avg_scaled/weight_labels/folded_terms, and FormatLhs's
+//! is_aggregate/qualifier wrapping is meaningless off the aggregate branch.
+static void StampConstraintProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const,
+                                      idx_t repair_group_id, idx_t group_key = DConstants::INVALID_INDEX,
+                                      const string &group_label = string()) {
+    provenance.source_clause_id = eval_const.source_clause_id;
+    provenance.repair_group_id = repair_group_id;
+    provenance.kind = eval_const.kind;
+    // A literal RHS is one editable knob shared across every row/group this clause
+    // emits (paper §5); a data-derived RHS repairs as a symbolic offset instead.
+    provenance.shape = eval_const.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR
+                                                        : ElasticShape::PER_ROW_DATA;
+    if (!eval_const.rhs_is_shared_scalar) {
+        provenance.rhs_label = eval_const.rhs_label;
+    }
+    if (group_key != DConstants::INVALID_INDEX) {
+        provenance.group_key = group_key;
+    }
+    if (!group_label.empty()) {
+        provenance.group_label = group_label;
+    }
+}
+
+//! F2, aggregate sites only: reducer-placement metadata for the diagnosis renderer's
+//! SUM(...)-wrapping (Facet B) and WHEN/PER qualifier suffix (Facet C). A per-row
+//! constraint has no reducer and no qualifier text of its own, so this is never called
+//! there.
+static void StampAggregateProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const) {
+    provenance.is_aggregate = eval_const.lhs_is_aggregate;
+    provenance.qualifier = eval_const.qualifier;
+}
+
 SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     SolverModel model;
     model.constraint_sources = std::move(input.constraint_sources);
@@ -749,26 +788,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 rhs -= SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows,
                                                   "fixed aggregate LHS term");
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
-                constr.provenance.source_clause_id = eval_const.source_clause_id;
-                constr.provenance.repair_group_id = repair_group_id; // F2 site 1: aggregate, ungrouped
-                constr.provenance.kind = eval_const.kind;
+                // F2 site 1: aggregate, ungrouped.
+                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id);
+                StampAggregateProvenance(constr.provenance, eval_const);
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
-                constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
-                constr.provenance.qualifier = eval_const.qualifier;
                 StampWeightLabels(constr.provenance);
                 constr.provenance.folded_terms = clause_folded_terms;
-                // Same rule as the per-row path below: a user-written literal is an
-                // editable knob; a bound derived from data is not, and its repair is a
-                // symbolic offset over the column (`SUM(x) >= demand - 50`). Paper §5
-                // makes that distinction explicit — DeciDB prefers relaxing explicit
-                // user bounds over data-derived ones. This used to be hard-coded to
-                // SHARED_SCALAR because an aggregate RHS was required to be a scalar.
-                constr.provenance.shape = eval_const.rhs_is_shared_scalar
-                                              ? ElasticShape::SHARED_SCALAR
-                                              : ElasticShape::PER_ROW_DATA;
-                if (!eval_const.rhs_is_shared_scalar) {
-                    constr.provenance.rhs_label = eval_const.rhs_label;
-                }
                 PushNormalizedConstraint(std::move(constr));
 
             } else {
@@ -863,28 +888,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                        SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end,
                                                                   "fixed aggregate LHS term");
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality);
-                    constr.provenance.source_clause_id = eval_const.source_clause_id;
-                    constr.provenance.repair_group_id = repair_group_id; // F2 site 2: aggregate + PER/WHEN
-                    constr.provenance.group_key = g;
-                    if (g < eval_const.group_labels.size()) {
-                        constr.provenance.group_label = eval_const.group_labels[g];
-                    }
-                    constr.provenance.kind = eval_const.kind;
+                    // F2 site 2: aggregate + PER/WHEN.
+                    string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
+                    StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_label);
+                    StampAggregateProvenance(constr.provenance, eval_const);
                     constr.provenance.avg_scaled = eval_const.avg_scaled;
-                    constr.provenance.is_aggregate = eval_const.lhs_is_aggregate;
-                    constr.provenance.qualifier = eval_const.qualifier;
                     StampWeightLabels(constr.provenance);
                     constr.provenance.folded_terms = clause_folded_terms;
-                    // One bound per group. A literal is still one editable knob shared
-                    // by every group (paper §5: all rows from one clause share a slack);
-                    // a data-derived bound repairs as a symbolic offset instead. See
-                    // site 1.
-                    constr.provenance.shape = eval_const.rhs_is_shared_scalar
-                                                  ? ElasticShape::SHARED_SCALAR
-                                                  : ElasticShape::PER_ROW_DATA;
-                    if (!eval_const.rhs_is_shared_scalar) {
-                        constr.provenance.rhs_label = eval_const.rhs_label;
-                    }
                     PushNormalizedConstraint(std::move(constr));
                 }
             }
@@ -941,22 +951,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
                 double rhs = eval_const.rhs_values[row] - rhs_adjustment;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
-                constr.provenance.source_clause_id = eval_const.source_clause_id;
-                constr.provenance.repair_group_id = repair_group_id; // F2 site 3: per-row
-                constr.provenance.group_key =
-                    has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                constr.provenance.kind = eval_const.kind;
-                // I2.a: a query-wide scalar RHS is one editable knob shared across all
-                // the rows this clause emits → mark them a shared-slack block. A data
-                // RHS (e.g. `x <= col`) stays per-row independent.
-                constr.provenance.shape = eval_const.rhs_is_shared_scalar
-                                              ? ElasticShape::SHARED_SCALAR
-                                              : ElasticShape::PER_ROW_DATA;
-                // Carry the data RHS column name (`x <= cap_col`) so query-mode diagnosis
-                // can render a virtual offset (`x <= cap_col + delta`).
-                if (!eval_const.rhs_is_shared_scalar) {
-                    constr.provenance.rhs_label = eval_const.rhs_label;
-                }
+                // F2 site 3: per-row.
+                idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
+                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key);
                 // I4: per-row `<>` disjunction rows carry their indicator (a
                 // row-scoped aux var) so the elastic engine groups the pair per row
                 // and offers removal.
@@ -1147,17 +1144,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 vector<idx_t> all_rows(num_rows);
                 std::iota(all_rows.begin(), all_rows.end(), 0);
                 auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_integrality);
-                qc.provenance.source_clause_id = eval_const.source_clause_id;
-                qc.provenance.repair_group_id = repair_group_id; // F2 site 5: quadratic aggregate, ungrouped
-                qc.provenance.kind = eval_const.kind;
-                qc.provenance.shape = eval_const.rhs_is_shared_scalar
-                                          ? ElasticShape::SHARED_SCALAR
-                                          : ElasticShape::PER_ROW_DATA;
-                if (!eval_const.rhs_is_shared_scalar) {
-                    qc.provenance.rhs_label = eval_const.rhs_label;
-                }
-                qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
-                qc.provenance.qualifier = eval_const.qualifier;
+                // F2 site 4: quadratic aggregate, ungrouped.
+                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id);
+                StampAggregateProvenance(qc.provenance, eval_const);
                 model.quadratic_constraints.push_back(std::move(qc));
             } else {
                 // PER groups: one QuadraticConstraint per group, reuse CSR
@@ -1179,21 +1168,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                            ? 0.0
                                            : eval_const.rhs_values.Get(flat_rows[g_begin]);
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_integrality);
-                    qc.provenance.source_clause_id = eval_const.source_clause_id;
-                    qc.provenance.repair_group_id = repair_group_id; // F2 site 6: quadratic aggregate + PER
-                    qc.provenance.group_key = g;
-                    if (g < eval_const.group_labels.size()) {
-                        qc.provenance.group_label = eval_const.group_labels[g];
-                    }
-                    qc.provenance.kind = eval_const.kind;
-                    qc.provenance.shape = eval_const.rhs_is_shared_scalar
-                                              ? ElasticShape::SHARED_SCALAR
-                                              : ElasticShape::PER_ROW_DATA;
-                    if (!eval_const.rhs_is_shared_scalar) {
-                        qc.provenance.rhs_label = eval_const.rhs_label;
-                    }
-                    qc.provenance.is_aggregate = eval_const.lhs_is_aggregate;
-                    qc.provenance.qualifier = eval_const.qualifier;
+                    // F2 site 5: quadratic aggregate + PER.
+                    string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
+                    StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, group_label);
+                    StampAggregateProvenance(qc.provenance, eval_const);
                     model.quadratic_constraints.push_back(std::move(qc));
                 }
             }
@@ -1206,17 +1184,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 vector<idx_t> single_row{row};
                 double rhs = eval_const.rhs_values.Get(row);
                 auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_integrality);
-                qc.provenance.source_clause_id = eval_const.source_clause_id;
-                qc.provenance.repair_group_id = repair_group_id; // F2 site 7: quadratic per-row
-                qc.provenance.group_key =
-                    has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                qc.provenance.kind = eval_const.kind;
-                qc.provenance.shape = eval_const.rhs_is_shared_scalar
-                                          ? ElasticShape::SHARED_SCALAR
-                                          : ElasticShape::PER_ROW_DATA;
-                if (!eval_const.rhs_is_shared_scalar) {
-                    qc.provenance.rhs_label = eval_const.rhs_label;
-                }
+                // F2 site 6: quadratic per-row.
+                idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
+                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key);
                 model.quadratic_constraints.push_back(std::move(qc));
             }
         }

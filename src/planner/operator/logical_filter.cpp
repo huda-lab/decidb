@@ -1,8 +1,6 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 LogicalFilter::LogicalFilter(unique_ptr<Expression> expression) : LogicalOperator(LogicalOperatorType::LOGICAL_FILTER) {

@@ -7,8 +7,6 @@
 #include "duckdb/parser/transformer.hpp"
 #include "duckdb/parser/query_node/cte_node.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 void Transformer::TransformModifiers(duckdb_libpgquery::PGSelectStmt &stmt, QueryNode &node) {

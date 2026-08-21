@@ -20,7 +20,6 @@ public:
     DecideConstraintsBinder(Binder &binder, ClientContext &context, const case_insensitive_map_t<idx_t> &variables,
                             const case_insensitive_set_t &scalar_variables = case_insensitive_set_t(),
                             optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
-    bool binding_when_condition = false;
 
 protected:
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;

@@ -386,43 +386,7 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
     // per-row decision beside a data-only reducer) from a homogeneous aggregate row.
     // DecideCanonicalizer validates the completed shape and owns the PER error.
 
-    // Bind the constraint child through normal dispatch (handles WHEN recursively)
-    is_top_expression = true;
-    ErrorData constraint_error;
-    BindChild(func.children[0], depth, constraint_error);
-    if (constraint_error.HasError()) {
-        return BindResult(std::move(constraint_error));
-    }
-
-    // Bind each PER column using the base ExpressionBinder
-    // (reuse binding_when_condition flag to bypass DECIDE-specific dispatch)
-    is_top_expression = false;
-    binding_when_condition = true;
-    for (idx_t i = 1; i < func.children.size(); i++) {
-        ErrorData column_error;
-        try {
-            BindChild(func.children[i], depth, column_error);
-        } catch (...) {
-            binding_when_condition = false;
-            throw;
-        }
-        if (column_error.HasError()) {
-            binding_when_condition = false;
-            return BindResult(std::move(column_error));
-        }
-    }
-    binding_when_condition = false;
-
-    // Construct tagged bound result:
-    // child[0] = bound constraint (possibly WHEN-wrapped)
-    // children[1..N] = bound PER columns (BoundColumnRefExpression)
-    auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-    result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[0])));
-    for (idx_t i = 1; i < func.children.size(); i++) {
-        result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
-    }
-    result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG
-    return BindResult(std::move(result));
+    return BindPerWrapper(func, depth);
 }
 
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
@@ -525,30 +489,11 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     }
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
-		auto fname = StringUtil::Lower(func.function_name);
-		if (fname == "norm") {
-            if (func.children.empty() || !ValidateSumArgument(*func.children.front(), variables, error_msg,
-                                                               /*allow_quadratic=*/true, /*allow_bilinear=*/true)) {
-                error_msg += ", found '" + expr.ToString() + "'";
-                return DecideExpression::INVALID;
-            }
-            return DecideExpression::SUM;
-        }
-		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
-            auto scalar_name = FindScalarDecideVariable(*func.children.front());
-            if (!scalar_name.empty()) {
-                error_msg = StringUtil::Format(
-                    "'%s' is a query-wide decision, so %s(%s) has nothing to aggregate over; "
-                    "use %s on its own",
-                    scalar_name, StringUtil::Upper(fname), scalar_name, scalar_name);
-                return DecideExpression::INVALID;
-            }
-            if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true, /*allow_bilinear=*/true)) {
-                error_msg += ", found '" + expr.ToString() + "'";
-                return DecideExpression::INVALID;
-            }
-            return DecideExpression::SUM;
-		} else if (ContainsDecideAggregate(expr)) {
+		DecideExpression reducer_result;
+		if (ClassifyReducerCall(func, /*allow_bilinear=*/true, reducer_result, error_msg)) {
+			return reducer_result;
+		}
+		if (ContainsDecideAggregate(expr)) {
             return DecideExpression::SUM;
 		} else if (ExpressionContainsDecideVariable(expr, variables)) {
             // Operator/function expressions containing DECIDE variables

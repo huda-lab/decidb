@@ -275,6 +275,21 @@ Provenance is **side-agnostic**: `x <= (SELECT 5)` and `(SELECT 5) >= x` are the
 same shared cap after canonicalization and must produce the same actionable
 diagnosis. Internal names such as `SUBQUERY` never appear in suggested SQL.
 
+Tags live in the same `alias` field a plain user alias would occupy, so any code
+that names an expression for a rejection message must strip them first —
+`GetName()` returns the alias whenever one is set, tag or not.
+`UserFacingName` (this file) and `ScaleUserName`
+(`src/optimizer/decide/decide_linear_form.cpp`) are the two "name it the way the
+user wrote it, for an error message" helpers this boundary and stage 5 rely on;
+both call `StripDecideTags` before falling back to `ToString()`. This matters on
+a re-entry path: a constraint the optimizer rewrote (e.g. an AVG→SUM rewrite
+carrying `AVG_REWRITE_TAG`) returns through `AddConstraint` and is
+re-canonicalized, so a shape-violation error raised on that second pass could
+otherwise quote the internal tag instead of the column the user typed.
+`test/common/test_decidb_canonical_verifier.cpp` pins this by tagging a rejected
+objective term directly and asserting the `BinderException` names the column,
+not the tag.
+
 `FinalizeBoundProvenance` removes any stale root classification, inspects the
 complete rebuilt RHS, and stamps `QUERY_WIDE_BOUND_TAG` only when every component
 is query-wide.
@@ -343,6 +358,19 @@ Verification runs at three points: immediately after user canonicalization, on
 each freshly canonicalized subtree entering `AddConstraint` / `SetObjective`, and
 on the complete tree at `PhysicalPlanGenerator::CreatePlan(LogicalDecide &)` after
 all optimizer rewriting.
+
+`VerifyCanonical` / `VerifyCanonicalObjective` are **debug-only**, the same idiom
+as `LogicalOperator::Verify`: the body — including the re-canonicalize-and-compare
+fixed-point check — is wrapped in `#ifdef DEBUG`, so it compiles to an empty
+function in release. Call sites at all three points above call it unconditionally
+regardless of build type. This exists because the check re-canonicalizes the
+whole tree a second time purely to assert idempotency, which is too expensive to
+pay on every DECIDE query once release is the target; `ValidateCanonicalTree`'s
+user-facing `BinderException`s (shape, NULL bound, PER-on-non-aggregate) are a
+separate function and are **not** gated — those stay in release. Build `debug` or
+`relassert` to exercise the invariant check; `test/common/test_decidb_canonical_verifier.cpp`
+pins both the debug-mode throwing behavior and the release-mode no-op via a
+`REQUIRE_VERIFY_THROWS` macro that switches on `DEBUG`.
 
 ---
 

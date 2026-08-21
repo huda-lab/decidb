@@ -40,7 +40,6 @@
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/decidb/decide_diagnostic.hpp"
 
 namespace duckdb {

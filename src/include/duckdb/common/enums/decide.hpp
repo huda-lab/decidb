@@ -59,9 +59,6 @@ struct DecideVarScopeInfo {
         return DecideVarScopeInfo(DecideVarScope::SCALAR, DConstants::INVALID_INDEX);
     }
 
-    bool IsRow() const {
-        return scope == DecideVarScope::ROW;
-    }
     bool IsEntity() const {
         return scope == DecideVarScope::ENTITY;
     }

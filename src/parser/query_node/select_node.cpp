@@ -4,8 +4,6 @@
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 SelectNode::SelectNode()

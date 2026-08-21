@@ -2,8 +2,6 @@
 
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 ColumnDataCollectionSegment::ColumnDataCollectionSegment(shared_ptr<ColumnDataAllocator> allocator_p,

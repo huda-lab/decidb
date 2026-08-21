@@ -14,7 +14,6 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/ilp_linearization.hpp"
@@ -139,16 +138,15 @@ static unique_ptr<Expression> TransformToChunkExpression(
 	}
 }
 
-//! Per-Finalize cache for TransformToChunkExpression. Keyed on input Expression
-//! pointer identity — addresses are stable for the duration of one Finalize. The cache
-//! owns lifetime; callers that pass the returned reference to ExpressionExecutor
-//! must keep the cache alive until the executor is no longer used.
+//! ChunkExprCache is declared in physical_decide.hpp (Finalize's private phase methods
+//! need it in their signatures). Keyed on input Expression pointer identity — addresses
+//! are stable for the duration of one Finalize. The cache owns lifetime; callers that
+//! pass the returned reference to ExpressionExecutor must keep the cache alive until
+//! the executor is no longer used.
 //!
 //! Only ever holds substitution-free trees. A tree built with `agg_substitutions` is
 //! valid solely against the augmented chunk it was built for, so it is transformed
 //! directly and never cached.
-using ChunkExprCache = std::unordered_map<const Expression*, unique_ptr<Expression>>;
-
 static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
                                                           const Expression &expr,
                                                           ClientContext &context) {
@@ -357,22 +355,14 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs,
 	}
 }
 
-//! Cache for PER group assignments: shares one full-data scan + group-map build
-//! across constraints/objectives that use the same PER expression set.
-//! The cached value is the *unfiltered* row→group mapping (BuildGroupIds run
-//! with row_filter=nullptr); each call site then applies its own WHEN/local
-//! filter and remaps the surviving group IDs to consecutive 0..K' to preserve
-//! today's "encounter-order, no holes" semantics.
+//! PerGroupCacheEntry/PerGroupCache are declared in physical_decide.hpp (Finalize's
+//! private phase methods need PerGroupCache in their signatures). Cache for PER group
+//! assignments: shares one full-data scan + group-map build across constraints/
+//! objectives that use the same PER expression set. The cached value is the
+//! *unfiltered* row→group mapping (BuildGroupIds run with row_filter=nullptr); each
+//! call site then applies its own WHEN/local filter and remaps the surviving group IDs
+//! to consecutive 0..K' to preserve today's "encounter-order, no holes" semantics.
 //! Lifetime: one PerGroupCache per Finalize invocation; cleared at end.
-struct PerGroupCacheEntry {
-	vector<const Expression *> exprs;
-	bool null_excludes;
-	vector<idx_t> unfiltered_row_group_ids;
-	idx_t unfiltered_num_groups;
-	//! Representative key values per unfiltered group ([key_col][gid]); used to label
-	//! each PER group with its printable key for infeasible diagnosis.
-	vector<vector<Value>> unfiltered_rep_keys;
-};
 
 //! Printable key for an (unfiltered) group: the per-key-column representative values
 //! joined with ", " (composite PER key → `EU, 2024`); a NULL value renders "NULL".
@@ -395,8 +385,6 @@ static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, idx_t gid
 	}
 	return s;
 }
-
-using PerGroupCache = std::unordered_map<size_t, vector<PerGroupCacheEntry>>;
 
 //! Hash a PER expression set + null_excludes flag into a size_t for the cache.
 static size_t HashPerKey(const vector<unique_ptr<Expression>> &per_columns, bool null_excludes) {
@@ -665,6 +653,394 @@ static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
 }
 
 //===--------------------------------------------------------------------===//
+// Phase 2 shared evaluation helpers
+//===--------------------------------------------------------------------===//
+
+// TermFilterState is declared in physical_decide.hpp (EvaluateObjective's
+// ObjectiveEvalState return value carries it across Finalize's phase methods).
+
+// Which rows a relation-qualified reducer (`sum(D: ...)`) actually contributes.
+// The join repeats each D tuple once per matching row; §3.2.2 asks for one term per
+// tuple identity, and the binder has already guaranteed that every row sharing an
+// identity carries the same value — so keeping the first row of each identity and
+// dropping the rest yields exactly one contribution per identity, whichever row is
+// kept. De-duplication runs inside the PER partition, after `when` selection and
+// `per` partitioning, which is the construction order the paper pins.
+static vector<bool> BuildQualifierKeepMask(const vector<EntityMapping> &mappings, idx_t scope_idx,
+                                           const vector<idx_t> &row_group_ids, idx_t num_rows) {
+    auto &mapping = mappings[scope_idx];
+    vector<bool> keep(num_rows, false);
+    // Group ids are dense in [0, num_groups) and entity ids in [0, num_entities),
+    // so (group, entity) flattens into one dense index with no hashing.
+    idx_t num_groups = 1;
+    if (!row_group_ids.empty()) {
+        for (idx_t gid : row_group_ids) {
+            if (gid != DConstants::INVALID_INDEX && gid + 1 > num_groups) {
+                num_groups = gid + 1;
+            }
+        }
+    }
+    vector<bool> seen(num_groups * mapping.num_entities, false);
+    for (idx_t row = 0; row < num_rows; row++) {
+        idx_t group = row_group_ids.empty() ? 0 : row_group_ids[row];
+        if (group == DConstants::INVALID_INDEX) {
+            continue; // excluded by WHEN or a NULL PER key — never a surviving identity
+        }
+        idx_t slot = group * mapping.num_entities + mapping.row_to_entity[row];
+        if (!seen[slot]) {
+            seen[slot] = true;
+            keep[row] = true;
+        }
+    }
+    return keep;
+}
+
+// Fold that mask into a term's filter state, so everything downstream — coefficient
+// zeroing, AVG's denominator (which counts surviving rows and therefore becomes the
+// distinct-identity count), the empty-aggregate guard — treats a duplicate row
+// exactly as it treats a WHEN-excluded one.
+static void ApplyQualifierToFilter(const vector<EntityMapping> &mappings, idx_t scope_idx,
+                                   const vector<idx_t> &row_group_ids, idx_t num_rows,
+                                   TermFilterState &state) {
+    auto keep = BuildQualifierKeepMask(mappings, scope_idx, row_group_ids, num_rows);
+    if (!state.has_filter) {
+        state.mask = std::move(keep);
+        state.has_filter = true;
+        return;
+    }
+    for (idx_t row = 0; row < num_rows; row++) {
+        state.mask[row] = state.mask[row] && keep[row];
+    }
+}
+
+// Zero every row the (now possibly de-duplicated) mask drops. The WHEN pass already
+// did this for its own mask; re-applying the combined mask is idempotent.
+static void MaskCoefficientColumn(CoefficientColumn &column, const vector<bool> &mask) {
+    auto &values = column.MutableDense();
+    for (idx_t row = 0; row < values.size(); row++) {
+        if (!mask[row]) {
+            values[row] = 0.0;
+        }
+    }
+}
+
+// Evaluate N boolean filter expressions in a single scan over `data`.
+static vector<vector<bool>> EvaluateBooleanMasks(const vector<const Expression *> &conditions,
+                                                  ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                                  ColumnDataCollection &data, idx_t num_rows) {
+    if (conditions.empty()) return {};
+
+    ExpressionExecutor cond_executor(context);
+    for (auto *cond : conditions) {
+        cond_executor.AddExpression(
+            CachedTransformToChunkExpression(chunk_expr_cache, *cond, context));
+    }
+
+    vector<vector<bool>> masks(conditions.size());
+    for (auto &m : masks) m.reserve(num_rows);
+
+    vector<LogicalType> result_types(conditions.size(), LogicalType::BOOLEAN);
+
+    ColumnDataScanState cond_scan_state;
+    data.InitializeScan(cond_scan_state);
+    DataChunk cond_chunk;
+    cond_chunk.Initialize(context, data.Types());
+
+    while (data.Scan(cond_scan_state, cond_chunk)) {
+        DataChunk cond_result;
+        cond_result.Initialize(context, result_types);
+        cond_executor.Execute(cond_chunk, cond_result);
+
+        for (idx_t col = 0; col < conditions.size(); col++) {
+            auto &vec = cond_result.data[col];
+            for (idx_t row = 0; row < cond_chunk.size(); row++) {
+                Value val = vec.GetValue(row);
+                masks[col].push_back(val.IsNull() ? false : val.GetValue<bool>());
+            }
+        }
+    }
+    return masks;
+}
+
+static vector<bool> EvaluateBooleanMask(const Expression &condition, ChunkExprCache &chunk_expr_cache,
+                                        ClientContext &context, ColumnDataCollection &data, idx_t num_rows) {
+    return EvaluateBooleanMasks({&condition}, chunk_expr_cache, context, data, num_rows)[0];
+}
+
+// Reduce one data-only reducer on the right-hand side to a value per group.
+//
+// Implements the construction order paper §3.2.2 fixes for every reducer:
+//
+//     when selection -> per partitioning -> qualifier de-duplication -> aggregation
+//
+// The first two arrive as `group_ids` (built from the constraint's WHEN and PER,
+// deliberately without the LHS's aggregate-local filters). This adds the reducer's
+// own WHEN, then the relation-qualifier de-duplication, then folds.
+//
+// Unlike the left-hand side, nothing here can be expressed as a coefficient: the
+// LHS reduces by *summing a column*, which is why only SUM and AVG could ever be
+// moved there and MIN/MAX/COUNT were refused. Folding per kind is what removes
+// that asymmetry.
+static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression &agg,
+                                                 const vector<idx_t> &group_ids, idx_t num_groups,
+                                                 const vector<EntityMapping> &entity_mappings,
+                                                 ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                                 ColumnDataCollection &data, idx_t num_rows) {
+    const bool has_groups = !group_ids.empty();
+    const idx_t groups = has_groups ? num_groups : 1;
+    auto group_of = [&](idx_t row) -> idx_t {
+        return has_groups ? group_ids[row] : 0;
+    };
+
+    // Stage 1: the reducer's own WHEN (`SUM(b) WHEN w`), which scopes this reducer
+    // and nothing else.
+    vector<bool> keep;
+    if (agg.filter) {
+        keep = EvaluateBooleanMask(*agg.filter, chunk_expr_cache, context, data, num_rows);
+    }
+    // Stage 2: relation-qualified reducers (`sum(D: cost)`) contribute once per
+    // distinct entity, not once per joined row.
+    idx_t scope_idx = QualifierScopeOf(agg);
+    if (scope_idx != DConstants::INVALID_INDEX) {
+        auto dedup = BuildQualifierKeepMask(entity_mappings, scope_idx, group_ids, num_rows);
+        if (keep.empty()) {
+            keep = std::move(dedup);
+        } else {
+            for (idx_t row = 0; row < num_rows && row < keep.size(); row++) {
+                keep[row] = keep[row] && dedup[row];
+            }
+        }
+    }
+
+    const string name = StringUtil::Lower(agg.function.name);
+    const bool is_count = name == "count" || name == "count_star";
+    const bool is_avg = name == "avg" || HasDecideTag(agg.alias, AVG_REWRITE_TAG);
+    const bool is_min = name == "min";
+    const bool is_max = name == "max";
+    const bool is_sum = name == "sum";
+    if (!is_count && !is_avg && !is_min && !is_max && !is_sum) {
+        throw InvalidInputException(
+            "DECIDE constraint right-hand side: %s is not supported as a bound. "
+            "Use SUM, AVG, MIN, MAX or COUNT, or pre-compute the value in a scalar "
+            "subquery.",
+            agg.function.name);
+    }
+    // A data-only AVG reaches here as a genuine AVG node: DecideOptimizer's
+    // AVG->SUM rewrite deliberately skips decision-free aggregates, because
+    // rebinding one as SUM redeclares it with SUM's integral type while its value
+    // stays fractional — and this is the one place a reducer's value is handed
+    // back to a surrounding expression that was bound against that declared type.
+    // Left as AVG, the round trip is DOUBLE->DOUBLE and the fold below is exact.
+
+    // COUNT(*) has no argument to evaluate; every other kind reduces one column.
+    vector<double> values;
+    if (!agg.children.empty()) {
+        ExpressionExecutor arg_executor(context);
+        const Expression &arg =
+            CachedTransformToChunkExpression(chunk_expr_cache, *agg.children[0], context);
+        arg_executor.AddExpression(arg);
+        values.reserve(num_rows);
+        ColumnDataScanState scan;
+        data.InitializeScan(scan);
+        DataChunk in_chunk;
+        in_chunk.Initialize(context, data.Types());
+        DataChunk out_chunk;
+        out_chunk.Initialize(context, vector<LogicalType>{arg.return_type});
+        while (data.Scan(scan, in_chunk)) {
+            out_chunk.Reset();
+            arg_executor.Execute(in_chunk, out_chunk);
+            // A reducer's input feeds a bound, so it follows the same rule as
+            // every other RHS: ±inf is a value, not an error. A group whose
+            // MAX(cap) folds to +inf is a group with no upper bound, and one
+            // whose bound points out of reach is an infeasibility the solver
+            // reports naming the clause — neither is ours to refuse here.
+            // Reading it as an error also made the outcome depend on spelling:
+            // `MIN(x) <= 1e1000::DOUBLE PER g` was accepted and classified per
+            // group while `MIN(x) <= MAX(cap) PER g` was rejected wholesale.
+            // NaN stays refused, here and in the per-row extraction that reads
+            // this value back, so `MAX(cap) - MIN(cap)` over infinities is
+            // still caught.
+            ExtractDoubleColumn(out_chunk.data[0], in_chunk.size(), 1.0, values,
+                                "constraint right-hand side aggregate",
+                                /*allow_infinite=*/true);
+        }
+    }
+
+    // Stage 3: fold.
+    vector<double> acc(groups, 0.0);
+    vector<idx_t> counts(groups, 0);
+    for (idx_t row = 0; row < num_rows; row++) {
+        idx_t g = group_of(row);
+        if (g == DConstants::INVALID_INDEX || g >= groups) {
+            continue;
+        }
+        if (!keep.empty() && !keep[row]) {
+            continue;
+        }
+        double v = values.empty() ? 0.0 : (row < values.size() ? values[row] : 0.0);
+        if (counts[g] == 0) {
+            acc[g] = is_count ? 1.0 : v;
+        } else if (is_min) {
+            acc[g] = MinValue<double>(acc[g], v);
+        } else if (is_max) {
+            acc[g] = MaxValue<double>(acc[g], v);
+        } else if (is_count) {
+            acc[g] += 1.0;
+        } else {
+            acc[g] += v; // SUM, and AVG's numerator
+        }
+        counts[g]++;
+    }
+    for (idx_t g = 0; g < groups; g++) {
+        // An empty reducer has no value — MIN(∅) and MAX(∅) are not representable
+        // and AVG(∅) is undefined. Same rule the left-hand side already enforces.
+        RejectEmptyAggregate(counts[g], "aggregate", "constraint right-hand side");
+        if (is_avg) {
+            acc[g] /= static_cast<double>(counts[g]);
+        }
+    }
+    return acc;
+}
+
+// Evaluate every bilinear term's coefficient expression (constraint or objective side:
+// the two are the same shape, differing only in which prepared-model term type feeds
+// in and which struct the caller stages results into — both of which are field-
+// identical, so this returns the one shared EvaluatedConstraint::BilinearTerm either
+// way). Batches every term's coefficient expression into a single ExpressionExecutor
+// and scans `data` once, then zeroes rows `filters[i]` excludes and, if given, rows
+// `extra_mask` excludes (the objective side's query-level WHEN; the constraint side
+// has no equivalent second mask here since its WHEN is already folded upstream).
+// AVG scaling is deliberately left to the caller: the constraint side applies it
+// immediately per-constraint, the objective side defers it until its PER-grouping is
+// resolved in Phase 3 — a real difference in control flow, not something to collapse.
+template <class BilinearTermSource>
+static vector<EvaluatedConstraint::BilinearTerm> EvaluateBilinearTerms(
+    const vector<BilinearTermSource> &terms, const vector<TermFilterState> &filters,
+    ChunkExprCache &chunk_expr_cache, ClientContext &context, ColumnDataCollection &data,
+    idx_t num_rows, const char *coefficient_err_label, const vector<bool> *extra_mask = nullptr) {
+    const idx_t num_bl = terms.size();
+    vector<EvaluatedConstraint::BilinearTerm> ebts(num_bl);
+    for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
+        auto &bt = terms[term_idx];
+        ebts[term_idx].var_a = bt.var_a;
+        ebts[term_idx].var_b = bt.var_b;
+    }
+
+    vector<idx_t> bl_route; // result column index → term index
+    vector<LogicalType> bl_types;
+    ExpressionExecutor bl_executor(context);
+    for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
+        auto &bt = terms[term_idx];
+        if (!bt.coefficient) {
+            ebts[term_idx].row_coefficients.AssignScalar(num_rows, static_cast<double>(bt.sign));
+            continue;
+        }
+        const Expression &cached =
+            CachedTransformToChunkExpression(chunk_expr_cache, *bt.coefficient, context);
+        bl_types.push_back(cached.return_type);
+        bl_executor.AddExpression(cached);
+        bl_route.push_back(term_idx);
+        ebts[term_idx].row_coefficients.Reserve(num_rows);
+    }
+
+    if (!bl_route.empty()) {
+        ColumnDataScanState bl_scan;
+        data.InitializeScan(bl_scan);
+        DataChunk bl_chunk;
+        bl_chunk.Initialize(context, data.Types());
+        DataChunk bl_results;
+        bl_results.Initialize(context, bl_types);
+        while (data.Scan(bl_scan, bl_chunk)) {
+            bl_results.Reset();
+            bl_executor.Execute(bl_chunk, bl_results);
+            for (idx_t j = 0; j < bl_route.size(); j++) {
+                idx_t term_idx = bl_route[j];
+                auto &col = ebts[term_idx].row_coefficients.MutableDense();
+                ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(), terms[term_idx].sign, col,
+                                    coefficient_err_label);
+                ebts[term_idx].row_coefficients.SyncSize();
+            }
+        }
+    }
+
+    for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
+        auto &ebt = ebts[term_idx];
+        if (filters[term_idx].has_filter) {
+            auto &mask = filters[term_idx].mask;
+            auto &col = ebt.row_coefficients.MutableDense();
+            for (idx_t row = 0; row < col.size(); row++) {
+                if (!mask[row]) {
+                    col[row] = 0.0;
+                }
+            }
+        }
+        if (extra_mask) {
+            auto &col = ebt.row_coefficients.MutableDense();
+            for (idx_t row = 0; row < col.size(); row++) {
+                if (!(*extra_mask)[row]) {
+                    col[row] = 0.0;
+                }
+            }
+        }
+    }
+    return ebts;
+}
+
+// AVG denominator scaling, shared by the constraint and objective sides and by the
+// linear/bilinear (single-column) and quadratic-inner (sqrt-scaled) cases. `when_mask`
+// is only meaningful in the ungrouped branch — the constraint side never passes one
+// because its WHEN is already folded into `row_group_ids` upstream; the objective side
+// passes its query-level WHEN mask because `row_group_ids` can be empty (PER is
+// optional) while WHEN still needs to gate the denominator.
+static void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask,
+                         bool quadratic_inner, idx_t num_rows, const vector<idx_t> &row_group_ids,
+                         idx_t num_groups, const vector<bool> *when_mask = nullptr) {
+    auto &coefficients = col.MutableDense();
+    if (row_group_ids.empty()) {
+        idx_t denominator = 0;
+        for (idx_t row = 0; row < num_rows; row++) {
+            if (when_mask && !(*when_mask)[row]) {
+                continue;
+            }
+            if (!has_filter || filter_mask[row]) {
+                denominator++;
+            }
+        }
+        if (denominator == 0) {
+            std::fill(coefficients.begin(), coefficients.end(), 0.0);
+            return;
+        }
+        double scale = quadratic_inner ? 1.0 / std::sqrt(static_cast<double>(denominator))
+                                       : 1.0 / static_cast<double>(denominator);
+        for (auto &coefficient : coefficients) {
+            coefficient *= scale;
+        }
+        return;
+    }
+
+    vector<idx_t> group_counts(num_groups, 0);
+    for (idx_t row = 0; row < num_rows; row++) {
+        idx_t gid = row_group_ids[row];
+        if (gid == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        if (!has_filter || filter_mask[row]) {
+            group_counts[gid]++;
+        }
+    }
+    for (idx_t row = 0; row < coefficients.size(); row++) {
+        idx_t gid = row_group_ids[row];
+        if (gid == DConstants::INVALID_INDEX || group_counts[gid] == 0) {
+            coefficients[row] = 0.0;
+            continue;
+        }
+        double scale = quadratic_inner ? 1.0 / std::sqrt(static_cast<double>(group_counts[gid]))
+                                       : 1.0 / static_cast<double>(group_counts[gid]);
+        coefficients[row] *= scale;
+    }
+}
+
+//===--------------------------------------------------------------------===//
 // Constructor
 //===--------------------------------------------------------------------===//
 
@@ -844,13 +1220,10 @@ public:
     bool has_quadratic_objective = false;
     double quadratic_sign = 1.0;
 
-    // Bilinear objective: pairs of different decide variables with data coefficients
-    struct EvaluatedBilinearTerm {
-        idx_t var_a;
-        idx_t var_b;
-        CoefficientColumn row_coefficients;
-    };
-    vector<EvaluatedBilinearTerm> evaluated_bilinear_terms;
+    // Bilinear objective: pairs of different decide variables with data coefficients.
+    // Reuses EvaluatedConstraint::BilinearTerm (solver_input.hpp) rather than declaring
+    // a field-identical duplicate — the two are populated by the same shared evaluator.
+    vector<EvaluatedConstraint::BilinearTerm> evaluated_bilinear_terms;
 
     vector<double> ilp_solution;
     VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
@@ -1200,6 +1573,39 @@ static DecideDiagnostic BuildTimeoutDiagnostic(const SolverResult &result, doubl
     return diag;
 }
 
+//===--------------------------------------------------------------------===//
+// Finalize: PHASE 1.5 — Build Entity Mappings for Table-Scoped Variables
+//===--------------------------------------------------------------------===//
+
+vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
+                                                           idx_t num_rows) const {
+    vector<EntityMapping> entity_mappings;
+    auto data_types = gstate.data.Types();
+    for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
+        auto &scope = entity_scopes[scope_idx];
+        EntityMapping mapping;
+
+        // Build BoundReferenceExpression for each entity-key physical column index
+        // so BuildGroupIds can run them through one ExpressionExecutor.
+        vector<unique_ptr<Expression>> key_exprs_owned;
+        key_exprs_owned.reserve(scope.entity_key_physical_indices.size());
+        vector<const Expression *> key_exprs;
+        key_exprs.reserve(scope.entity_key_physical_indices.size());
+        for (idx_t col_idx = 0; col_idx < scope.entity_key_physical_indices.size(); col_idx++) {
+            idx_t phys_idx = scope.entity_key_physical_indices[col_idx];
+            key_exprs_owned.push_back(make_uniq_base<Expression, BoundReferenceExpression>(
+                data_types[phys_idx], phys_idx));
+            key_exprs.push_back(key_exprs_owned.back().get());
+        }
+
+        BuildGroupIds(key_exprs, context, gstate.data, num_rows,
+                      std::function<bool(idx_t)>{}, /*null_excludes=*/false,
+                      mapping.row_to_entity, mapping.num_entities);
+        entity_mappings.push_back(std::move(mapping));
+    }
+    return entity_mappings;
+}
+
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
     bool bench = std::getenv("DECIDB_BENCH") != nullptr;
@@ -1241,283 +1647,39 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // PHASE 1.5: Build Entity Mappings for Table-Scoped Variables
     //===--------------------------------------------------------------------===//
 
-    vector<EntityMapping> entity_mappings;
-    auto data_types = gstate.data.Types();
-    for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
-        auto &scope = entity_scopes[scope_idx];
-        EntityMapping mapping;
-
-        // Build BoundReferenceExpression for each entity-key physical column index
-        // so BuildGroupIds can run them through one ExpressionExecutor.
-        vector<unique_ptr<Expression>> key_exprs_owned;
-        key_exprs_owned.reserve(scope.entity_key_physical_indices.size());
-        vector<const Expression *> key_exprs;
-        key_exprs.reserve(scope.entity_key_physical_indices.size());
-        for (idx_t col_idx = 0; col_idx < scope.entity_key_physical_indices.size(); col_idx++) {
-            idx_t phys_idx = scope.entity_key_physical_indices[col_idx];
-            key_exprs_owned.push_back(make_uniq_base<Expression, BoundReferenceExpression>(
-                data_types[phys_idx], phys_idx));
-            key_exprs.push_back(key_exprs_owned.back().get());
-        }
-
-        BuildGroupIds(key_exprs, context, gstate.data, num_rows,
-                      std::function<bool(idx_t)>{}, /*null_excludes=*/false,
-                      mapping.row_to_entity, mapping.num_entities);
-        entity_mappings.push_back(std::move(mapping));
-    }
+    vector<EntityMapping> entity_mappings = BuildEntityMappings(context, gstate, num_rows);
 
     //===--------------------------------------------------------------------===//
     // PHASE 2: Evaluate Coefficient Expressions
     //===--------------------------------------------------------------------===//
 
-    //! Per-term filter state for aggregate-local WHEN.
-    struct TermFilterState {
-        vector<bool> mask;
-        bool has_filter = false;
-        bool avg_scale = false;
-    };
-
-    // Which rows a relation-qualified reducer (`sum(D: ...)`) actually contributes.
-    // The join repeats each D tuple once per matching row; §3.2.2 asks for one term per
-    // tuple identity, and the binder has already guaranteed that every row sharing an
-    // identity carries the same value — so keeping the first row of each identity and
-    // dropping the rest yields exactly one contribution per identity, whichever row is
-    // kept. De-duplication runs inside the PER partition, after `when` selection and
-    // `per` partitioning, which is the construction order the paper pins.
-    // `mappings` is passed rather than captured: the local entity_mappings is moved onto
-    // solver_input partway down Finalize, so the constraint side reads the local and the
-    // objective side reads solver_input's copy.
-    auto BuildQualifierKeepMask = [&](const vector<EntityMapping> &mappings, idx_t scope_idx,
-                                      const vector<idx_t> &row_group_ids) {
-        auto &mapping = mappings[scope_idx];
-        vector<bool> keep(num_rows, false);
-        // Group ids are dense in [0, num_groups) and entity ids in [0, num_entities),
-        // so (group, entity) flattens into one dense index with no hashing.
-        idx_t num_groups = 1;
-        if (!row_group_ids.empty()) {
-            for (idx_t gid : row_group_ids) {
-                if (gid != DConstants::INVALID_INDEX && gid + 1 > num_groups) {
-                    num_groups = gid + 1;
-                }
-            }
-        }
-        vector<bool> seen(num_groups * mapping.num_entities, false);
-        for (idx_t row = 0; row < num_rows; row++) {
-            idx_t group = row_group_ids.empty() ? 0 : row_group_ids[row];
-            if (group == DConstants::INVALID_INDEX) {
-                continue; // excluded by WHEN or a NULL PER key — never a surviving identity
-            }
-            idx_t slot = group * mapping.num_entities + mapping.row_to_entity[row];
-            if (!seen[slot]) {
-                seen[slot] = true;
-                keep[row] = true;
-            }
-        }
-        return keep;
-    };
-
-    // Fold that mask into a term's filter state, so everything downstream — coefficient
-    // zeroing, AVG's denominator (which counts surviving rows and therefore becomes the
-    // distinct-identity count), the empty-aggregate guard — treats a duplicate row
-    // exactly as it treats a WHEN-excluded one.
-    auto ApplyQualifierToFilter = [&](const vector<EntityMapping> &mappings, idx_t scope_idx,
-                                      const vector<idx_t> &row_group_ids, TermFilterState &state) {
-        auto keep = BuildQualifierKeepMask(mappings, scope_idx, row_group_ids);
-        if (!state.has_filter) {
-            state.mask = std::move(keep);
-            state.has_filter = true;
-            return;
-        }
-        for (idx_t row = 0; row < num_rows; row++) {
-            state.mask[row] = state.mask[row] && keep[row];
-        }
-    };
-
-    // Zero every row the (now possibly de-duplicated) mask drops. The WHEN pass already
-    // did this for its own mask; re-applying the combined mask is idempotent.
-    auto MaskCoefficientColumn = [&](CoefficientColumn &column, const vector<bool> &mask) {
-        auto &values = column.MutableDense();
-        for (idx_t row = 0; row < values.size(); row++) {
-            if (!mask[row]) {
-                values[row] = 0.0;
-            }
-        }
-    };
-
-    // Evaluate N boolean filter expressions in a single scan over gstate.data.
-    auto EvaluateBooleanMasks = [&](const vector<const Expression*> &conditions) -> vector<vector<bool>> {
-        if (conditions.empty()) return {};
-
-        ExpressionExecutor cond_executor(context);
-        for (auto *cond : conditions) {
-            cond_executor.AddExpression(
-                CachedTransformToChunkExpression(chunk_expr_cache, *cond, context));
-        }
-
-        vector<vector<bool>> masks(conditions.size());
-        for (auto &m : masks) m.reserve(num_rows);
-
-        vector<LogicalType> result_types(conditions.size(), LogicalType::BOOLEAN);
-
-        ColumnDataScanState cond_scan_state;
-        gstate.data.InitializeScan(cond_scan_state);
-        DataChunk cond_chunk;
-        cond_chunk.Initialize(context, gstate.data.Types());
-
-        while (gstate.data.Scan(cond_scan_state, cond_chunk)) {
-            DataChunk cond_result;
-            cond_result.Initialize(context, result_types);
-            cond_executor.Execute(cond_chunk, cond_result);
-
-            for (idx_t col = 0; col < conditions.size(); col++) {
-                auto &vec = cond_result.data[col];
-                for (idx_t row = 0; row < cond_chunk.size(); row++) {
-                    Value val = vec.GetValue(row);
-                    masks[col].push_back(val.IsNull() ? false : val.GetValue<bool>());
-                }
-            }
-        }
-        return masks;
-    };
-
-    auto EvaluateBooleanMask = [&](const Expression &condition) -> vector<bool> {
-        return EvaluateBooleanMasks({&condition})[0];
-    };
-
-    // Reduce one data-only reducer on the right-hand side to a value per group.
-    //
-    // Implements the construction order paper §3.2.2 fixes for every reducer:
-    //
-    //     when selection -> per partitioning -> qualifier de-duplication -> aggregation
-    //
-    // The first two arrive as `group_ids` (built from the constraint's WHEN and PER,
-    // deliberately without the LHS's aggregate-local filters). This adds the reducer's
-    // own WHEN, then the relation-qualifier de-duplication, then folds.
-    //
-    // Unlike the left-hand side, nothing here can be expressed as a coefficient: the
-    // LHS reduces by *summing a column*, which is why only SUM and AVG could ever be
-    // moved there and MIN/MAX/COUNT were refused. Folding per kind is what removes
-    // that asymmetry.
-    auto EvaluateRhsReducerPerGroup = [&](const BoundAggregateExpression &agg,
-                                          const vector<idx_t> &group_ids,
-                                          idx_t num_groups) -> vector<double> {
-        const bool has_groups = !group_ids.empty();
-        const idx_t groups = has_groups ? num_groups : 1;
-        auto group_of = [&](idx_t row) -> idx_t {
-            return has_groups ? group_ids[row] : 0;
-        };
-
-        // Stage 1: the reducer's own WHEN (`SUM(b) WHEN w`), which scopes this reducer
-        // and nothing else.
-        vector<bool> keep;
-        if (agg.filter) {
-            keep = EvaluateBooleanMask(*agg.filter);
-        }
-        // Stage 2: relation-qualified reducers (`sum(D: cost)`) contribute once per
-        // distinct entity, not once per joined row.
-        idx_t scope_idx = QualifierScopeOf(agg);
-        if (scope_idx != DConstants::INVALID_INDEX) {
-            auto dedup = BuildQualifierKeepMask(entity_mappings, scope_idx, group_ids);
-            if (keep.empty()) {
-                keep = std::move(dedup);
-            } else {
-                for (idx_t row = 0; row < num_rows && row < keep.size(); row++) {
-                    keep[row] = keep[row] && dedup[row];
-                }
-            }
-        }
-
-        const string name = StringUtil::Lower(agg.function.name);
-        const bool is_count = name == "count" || name == "count_star";
-        const bool is_avg = name == "avg" || HasDecideTag(agg.alias, AVG_REWRITE_TAG);
-        const bool is_min = name == "min";
-        const bool is_max = name == "max";
-        const bool is_sum = name == "sum";
-        if (!is_count && !is_avg && !is_min && !is_max && !is_sum) {
-            throw InvalidInputException(
-                "DECIDE constraint right-hand side: %s is not supported as a bound. "
-                "Use SUM, AVG, MIN, MAX or COUNT, or pre-compute the value in a scalar "
-                "subquery.",
-                agg.function.name);
-        }
-        // A data-only AVG reaches here as a genuine AVG node: DecideOptimizer's
-        // AVG->SUM rewrite deliberately skips decision-free aggregates, because
-        // rebinding one as SUM redeclares it with SUM's integral type while its value
-        // stays fractional — and this is the one place a reducer's value is handed
-        // back to a surrounding expression that was bound against that declared type.
-        // Left as AVG, the round trip is DOUBLE->DOUBLE and the fold below is exact.
-
-        // COUNT(*) has no argument to evaluate; every other kind reduces one column.
-        vector<double> values;
-        if (!agg.children.empty()) {
-            ExpressionExecutor arg_executor(context);
-            const Expression &arg =
-                CachedTransformToChunkExpression(chunk_expr_cache, *agg.children[0], context);
-            arg_executor.AddExpression(arg);
-            values.reserve(num_rows);
-            ColumnDataScanState scan;
-            gstate.data.InitializeScan(scan);
-            DataChunk in_chunk;
-            in_chunk.Initialize(context, gstate.data.Types());
-            DataChunk out_chunk;
-            out_chunk.Initialize(context, vector<LogicalType>{arg.return_type});
-            while (gstate.data.Scan(scan, in_chunk)) {
-                out_chunk.Reset();
-                arg_executor.Execute(in_chunk, out_chunk);
-                // A reducer's input feeds a bound, so it follows the same rule as
-                // every other RHS: ±inf is a value, not an error. A group whose
-                // MAX(cap) folds to +inf is a group with no upper bound, and one
-                // whose bound points out of reach is an infeasibility the solver
-                // reports naming the clause — neither is ours to refuse here.
-                // Reading it as an error also made the outcome depend on spelling:
-                // `MIN(x) <= 1e1000::DOUBLE PER g` was accepted and classified per
-                // group while `MIN(x) <= MAX(cap) PER g` was rejected wholesale.
-                // NaN stays refused, here and in the per-row extraction that reads
-                // this value back, so `MAX(cap) - MIN(cap)` over infinities is
-                // still caught.
-                ExtractDoubleColumn(out_chunk.data[0], in_chunk.size(), 1.0, values,
-                                    "constraint right-hand side aggregate",
-                                    /*allow_infinite=*/true);
-            }
-        }
-
-        // Stage 3: fold.
-        vector<double> acc(groups, 0.0);
-        vector<idx_t> counts(groups, 0);
-        for (idx_t row = 0; row < num_rows; row++) {
-            idx_t g = group_of(row);
-            if (g == DConstants::INVALID_INDEX || g >= groups) {
-                continue;
-            }
-            if (!keep.empty() && !keep[row]) {
-                continue;
-            }
-            double v = values.empty() ? 0.0 : (row < values.size() ? values[row] : 0.0);
-            if (counts[g] == 0) {
-                acc[g] = is_count ? 1.0 : v;
-            } else if (is_min) {
-                acc[g] = MinValue<double>(acc[g], v);
-            } else if (is_max) {
-                acc[g] = MaxValue<double>(acc[g], v);
-            } else if (is_count) {
-                acc[g] += 1.0;
-            } else {
-                acc[g] += v; // SUM, and AVG's numerator
-            }
-            counts[g]++;
-        }
-        for (idx_t g = 0; g < groups; g++) {
-            // An empty reducer has no value — MIN(∅) and MAX(∅) are not representable
-            // and AVG(∅) is undefined. Same rule the left-hand side already enforces.
-            RejectEmptyAggregate(counts[g], "aggregate", "constraint right-hand side");
-            if (is_avg) {
-                acc[g] /= static_cast<double>(counts[g]);
-            }
-        }
-        return acc;
-    };
-
     // 1. Evaluate constraints
+    EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+
+    // 2. Evaluate objective
+    ObjectiveEvalState obj_state =
+        EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+
+    //===--------------------------------------------------------------------===//
+    // PHASE 3: Build and Solve ILP
+    //===--------------------------------------------------------------------===//
+
+    VarIndexer var_indexer;
+    SolverInput solver_input = BuildSolverInput(context, gstate, num_rows, chunk_expr_cache, per_group_cache,
+                                                std::move(entity_mappings), std::move(obj_state), var_indexer,
+                                                bench, model_timer);
+
+    return FinalizeSolveResult(context, gstate, solver_input, var_indexer, bench, model_timer, solver_timer);
+}
+
+//===--------------------------------------------------------------------===//
+// Finalize: PHASE 2, sub-phase 1 -- Evaluate Constraints
+//===--------------------------------------------------------------------===//
+
+void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate,
+                                         idx_t num_rows, ChunkExprCache &chunk_expr_cache,
+                                         PerGroupCache &per_group_cache,
+                                         const vector<EntityMapping> &entity_mappings) const {
     for (idx_t c = 0; c < gstate.constraints.size(); c++) {
         auto &constraint = gstate.constraints[c];
 
@@ -1601,7 +1763,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 cond_ptrs.reserve(filter_slots.size());
                 for (auto &s : filter_slots) cond_ptrs.push_back(s.cond);
 
-                auto masks = EvaluateBooleanMasks(cond_ptrs);
+                auto masks = EvaluateBooleanMasks(cond_ptrs, chunk_expr_cache, context, gstate.data, num_rows);
 
                 has_local_filters = true;
                 for (idx_t i = 0; i < filter_slots.size(); i++) {
@@ -1727,7 +1889,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         if (has_when || has_per || has_local_filters) {
             vector<bool> when_mask;
             if (has_when) {
-                when_mask = EvaluateBooleanMask(*constraint->when_condition);
+                when_mask = EvaluateBooleanMask(*constraint->when_condition, chunk_expr_cache, context,
+                                                gstate.data, num_rows);
             }
 
             auto row_is_included = [&](idx_t row) {
@@ -1791,18 +1954,21 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
             idx_t scope_idx = constraint->lhs_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, term_filters[term_idx]);
+            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, num_rows,
+                                   term_filters[term_idx]);
             MaskCoefficientColumn(eval_const.row_coefficients[term_idx], term_filters[term_idx].mask);
         }
         for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
             idx_t scope_idx = constraint->bilinear_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, bilinear_filters[term_idx]);
+            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, num_rows,
+                                   bilinear_filters[term_idx]);
         }
         for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
             idx_t scope_idx = constraint->quadratic_groups[group_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, quadratic_filters[group_idx]);
+            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, num_rows,
+                                   quadratic_filters[group_idx]);
         }
 
         // Per-term aggregate-local WHEN: reject any term whose own filter mask
@@ -1875,7 +2041,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             for (idx_t i = 0; i < rhs_reducers.size(); i++) {
                 auto &agg = rhs_reducers[i]->Cast<BoundAggregateExpression>();
                 reducer_values.push_back(EvaluateRhsReducerPerGroup(
-                    agg, rhs_row_group_ids, eval_const.num_groups));
+                    agg, rhs_row_group_ids, eval_const.num_groups, entity_mappings,
+                    chunk_expr_cache, context, gstate.data, num_rows));
                 agg_substitutions.emplace(rhs_reducers[i], data_columns + i);
             }
 
@@ -1973,96 +2140,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         }
 
 
-        auto ScaleAvgRowCoefficients = [&](CoefficientColumn &col, bool has_filter,
-                                           const vector<bool> &filter_mask) {
-            auto &coefficients = col.MutableDense();
-            if (eval_const.row_group_ids.empty()) {
-                idx_t denominator = 0;
-                for (idx_t row = 0; row < num_rows; row++) {
-                    if (!has_filter || filter_mask[row]) {
-                        denominator++;
-                    }
-                }
-                if (denominator == 0) {
-                    std::fill(coefficients.begin(), coefficients.end(), 0.0);
-                    return;
-                }
-                double scale = 1.0 / static_cast<double>(denominator);
-                for (auto &coefficient : coefficients) {
-                    coefficient *= scale;
-                }
-                return;
-            }
-
-            vector<idx_t> group_counts(eval_const.num_groups, 0);
-            for (idx_t row = 0; row < num_rows; row++) {
-                idx_t gid = eval_const.row_group_ids[row];
-                if (gid == DConstants::INVALID_INDEX) {
-                    continue;
-                }
-                if (!has_filter || filter_mask[row]) {
-                    group_counts[gid]++;
-                }
-            }
-            for (idx_t row = 0; row < coefficients.size(); row++) {
-                idx_t gid = eval_const.row_group_ids[row];
-                if (gid == DConstants::INVALID_INDEX || group_counts[gid] == 0) {
-                    coefficients[row] = 0.0;
-                    continue;
-                }
-                coefficients[row] /= static_cast<double>(group_counts[gid]);
-            }
-        };
-
-        auto ScaleAvgQuadraticCoefficients = [&](vector<CoefficientColumn> &row_coefficients, bool has_filter,
-                                                 const vector<bool> &filter_mask) {
-            if (eval_const.row_group_ids.empty()) {
-                idx_t denominator = 0;
-                for (idx_t row = 0; row < num_rows; row++) {
-                    if (!has_filter || filter_mask[row]) {
-                        denominator++;
-                    }
-                }
-                if (denominator == 0) {
-                    for (auto &col : row_coefficients) {
-                        auto &coefficients = col.MutableDense();
-                        std::fill(coefficients.begin(), coefficients.end(), 0.0);
-                    }
-                    return;
-                }
-                double scale = 1.0 / std::sqrt(static_cast<double>(denominator));
-                for (auto &col : row_coefficients) {
-                    auto &coefficients = col.MutableDense();
-                    for (auto &coefficient : coefficients) {
-                        coefficient *= scale;
-                    }
-                }
-                return;
-            }
-
-            vector<idx_t> group_counts(eval_const.num_groups, 0);
-            for (idx_t row = 0; row < num_rows; row++) {
-                idx_t gid = eval_const.row_group_ids[row];
-                if (gid == DConstants::INVALID_INDEX) {
-                    continue;
-                }
-                if (!has_filter || filter_mask[row]) {
-                    group_counts[gid]++;
-                }
-            }
-            for (auto &col : row_coefficients) {
-                auto &coefficients = col.MutableDense();
-                for (idx_t row = 0; row < coefficients.size(); row++) {
-                    idx_t gid = eval_const.row_group_ids[row];
-                    if (gid == DConstants::INVALID_INDEX || group_counts[gid] == 0) {
-                        coefficients[row] = 0.0;
-                        continue;
-                    }
-                    coefficients[row] /= std::sqrt(static_cast<double>(group_counts[gid]));
-                }
-            }
-        };
-
         // AVG(x) <> K special case: dividing LHS coefficients by the AVG denominator
         // produces fractional coefficients, which the NE integer-step guard rejects.
         // For pure linear LHS where every term is AVG-scaled, hoist the denominator to
@@ -2096,8 +2173,9 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                        !constraint->has_quadratic;
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
             if (term_filters[term_idx].avg_scale) {
-                ScaleAvgRowCoefficients(eval_const.row_coefficients[term_idx], term_filters[term_idx].has_filter,
-                                        term_filters[term_idx].mask);
+                ScaleAvgRows(eval_const.row_coefficients[term_idx], term_filters[term_idx].has_filter,
+                            term_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
+                            eval_const.row_group_ids, eval_const.num_groups);
             } else {
                 all_avg = false;
             }
@@ -2105,71 +2183,15 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         eval_const.avg_scaled = all_avg;
 
         // Evaluate bilinear terms in constraint (if any).
-        // Batch terms with coefficient expressions into a single ExpressionExecutor.
         if (constraint->has_bilinear) {
-            const idx_t num_bl = constraint->bilinear_terms.size();
-            vector<EvaluatedConstraint::BilinearTerm> ebts(num_bl);
-            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-                auto &bt = constraint->bilinear_terms[term_idx];
-                ebts[term_idx].var_a = bt.var_a;
-                ebts[term_idx].var_b = bt.var_b;
-            }
-
-            vector<idx_t> bl_route;       // result column index → bilinear_terms index
-            vector<LogicalType> bl_types;
-            ExpressionExecutor bl_executor(context);
-            idx_t bl_added = 0;
-            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-                auto &bt = constraint->bilinear_terms[term_idx];
-                if (!bt.coefficient) {
-                    ebts[term_idx].row_coefficients.AssignScalar(num_rows, static_cast<double>(bt.sign));
-                    continue;
-                }
-                const Expression &cached =
-                    CachedTransformToChunkExpression(chunk_expr_cache, *bt.coefficient, context);
-                bl_types.push_back(cached.return_type);
-                bl_executor.AddExpression(cached);
-                bl_route.push_back(term_idx);
-                ebts[term_idx].row_coefficients.Reserve(num_rows);
-                bl_added++;
-            }
-
-            if (bl_added > 0) {
-                ColumnDataScanState bl_scan;
-                gstate.data.InitializeScan(bl_scan);
-                DataChunk bl_chunk;
-                bl_chunk.Initialize(context, gstate.data.Types());
-                DataChunk bl_results;
-                bl_results.Initialize(context, bl_types);
-                while (gstate.data.Scan(bl_scan, bl_chunk)) {
-                    bl_results.Reset();
-                    bl_executor.Execute(bl_chunk, bl_results);
-                    for (idx_t j = 0; j < bl_route.size(); j++) {
-                        idx_t term_idx = bl_route[j];
-                        auto &col = ebts[term_idx].row_coefficients.MutableDense();
-                        ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(),
-                                            constraint->bilinear_terms[term_idx].sign,
-                                            col,
-                                            "bilinear constraint coefficient");
-                        ebts[term_idx].row_coefficients.SyncSize();
-                    }
-                }
-            }
-
-            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
+            auto ebts = EvaluateBilinearTerms(constraint->bilinear_terms, bilinear_filters, chunk_expr_cache,
+                                              context, gstate.data, num_rows, "bilinear constraint coefficient");
+            for (idx_t term_idx = 0; term_idx < ebts.size(); term_idx++) {
                 auto &ebt = ebts[term_idx];
-                if (bilinear_filters[term_idx].has_filter) {
-                    auto &mask = bilinear_filters[term_idx].mask;
-                    auto &col = ebt.row_coefficients.MutableDense();
-                    for (idx_t row = 0; row < col.size(); row++) {
-                        if (!mask[row]) {
-                            col[row] = 0.0;
-                        }
-                    }
-                }
                 if (bilinear_filters[term_idx].avg_scale) {
-                    ScaleAvgRowCoefficients(ebt.row_coefficients, bilinear_filters[term_idx].has_filter,
-                                            bilinear_filters[term_idx].mask);
+                    ScaleAvgRows(ebt.row_coefficients, bilinear_filters[term_idx].has_filter,
+                                bilinear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
+                                eval_const.row_group_ids, eval_const.num_groups);
                 }
                 eval_const.bilinear_terms.push_back(std::move(ebt));
             }
@@ -2265,8 +2287,11 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                     }
                 }
                 if (quadratic_filters[group_idx].avg_scale) {
-                    ScaleAvgQuadraticCoefficients(eqg.row_coefficients, quadratic_filters[group_idx].has_filter,
-                                                  quadratic_filters[group_idx].mask);
+                    for (auto &qcol : eqg.row_coefficients) {
+                        ScaleAvgRows(qcol, quadratic_filters[group_idx].has_filter,
+                                    quadratic_filters[group_idx].mask, /*quadratic_inner=*/true, num_rows,
+                                    eval_const.row_group_ids, eval_const.num_groups);
+                    }
                 }
                 eval_const.quadratic_groups.push_back(std::move(eqg));
             }
@@ -2274,7 +2299,14 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         gstate.evaluated_constraints.push_back(std::move(eval_const));
     }
+}
 
+PhysicalDecide::ObjectiveEvalState PhysicalDecide::EvaluateObjective(ClientContext &context,
+                                                                     DecideGlobalSinkState &gstate,
+                                                                     idx_t num_rows,
+                                                                     ChunkExprCache &chunk_expr_cache,
+                                                                     PerGroupCache &per_group_cache,
+                                                                     const vector<EntityMapping> &entity_mappings) const {
     // 2. Evaluate objective
     vector<TermFilterState> obj_linear_term_filters;
     vector<TermFilterState> obj_quadratic_term_filters;
@@ -2290,7 +2322,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
         objective_has_when = (gstate.objective->when_condition != nullptr);
         if (objective_has_when) {
-            objective_when_mask = EvaluateBooleanMask(*gstate.objective->when_condition);
+            objective_when_mask = EvaluateBooleanMask(*gstate.objective->when_condition, chunk_expr_cache,
+                                                       context, gstate.data, num_rows);
             if (objective_when_mask.size() != num_rows) {
                 throw InternalException("DECIDE objective WHEN mask size mismatch: expected %llu rows, got %llu",
                                         num_rows, objective_when_mask.size());
@@ -2346,7 +2379,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 vector<const Expression *> cond_ptrs;
                 cond_ptrs.reserve(obj_filter_slots.size());
                 for (auto &s : obj_filter_slots) cond_ptrs.push_back(s.cond);
-                auto masks = EvaluateBooleanMasks(cond_ptrs);
+                auto masks = EvaluateBooleanMasks(cond_ptrs, chunk_expr_cache, context, gstate.data, num_rows);
                 for (idx_t i = 0; i < obj_filter_slots.size(); i++) {
                     if (masks[i].size() != num_rows) {
                         throw InternalException(
@@ -2469,7 +2502,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 vector<const Expression *> cond_ptrs;
                 cond_ptrs.reserve(bil_slots.size());
                 for (auto &s : bil_slots) cond_ptrs.push_back(s.cond);
-                auto masks = EvaluateBooleanMasks(cond_ptrs);
+                auto masks = EvaluateBooleanMasks(cond_ptrs, chunk_expr_cache, context, gstate.data, num_rows);
                 for (idx_t i = 0; i < bil_slots.size(); i++) {
                     idx_t tidx = bil_slots[i].term_idx;
                     if (masks[i].size() != num_rows) {
@@ -2488,84 +2521,39 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         // No extra debug here; solver output will show timings/objective
 
         // Evaluate bilinear term coefficients (non-Boolean pairs left by optimizer).
-        // Batch terms with coefficient expressions into a single ExpressionExecutor.
         if (gstate.objective->has_bilinear) {
-            const idx_t num_bl = gstate.objective->bilinear_terms.size();
-            vector<DecideGlobalSinkState::EvaluatedBilinearTerm> ebts(num_bl);
-            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-                auto &bt = gstate.objective->bilinear_terms[term_idx];
-                ebts[term_idx].var_a = bt.var_a;
-                ebts[term_idx].var_b = bt.var_b;
-            }
-
-            vector<idx_t> bl_route;
-            vector<LogicalType> bl_types;
-            ExpressionExecutor bl_executor(context);
-            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-                auto &bt = gstate.objective->bilinear_terms[term_idx];
-                if (!bt.coefficient) {
-                    ebts[term_idx].row_coefficients.AssignScalar(num_rows, static_cast<double>(bt.sign));
-                    continue;
-                }
-                const Expression &cached =
-                    CachedTransformToChunkExpression(chunk_expr_cache, *bt.coefficient, context);
-                bl_types.push_back(cached.return_type);
-                bl_executor.AddExpression(cached);
-                bl_route.push_back(term_idx);
-                ebts[term_idx].row_coefficients.Reserve(num_rows);
-            }
-
-            if (!bl_route.empty()) {
-                ColumnDataScanState bl_scan;
-                gstate.data.InitializeScan(bl_scan);
-                DataChunk bl_chunk;
-                bl_chunk.Initialize(context, gstate.data.Types());
-                DataChunk bl_results;
-                bl_results.Initialize(context, bl_types);
-                while (gstate.data.Scan(bl_scan, bl_chunk)) {
-                    bl_results.Reset();
-                    bl_executor.Execute(bl_chunk, bl_results);
-                    for (idx_t j = 0; j < bl_route.size(); j++) {
-                        idx_t term_idx = bl_route[j];
-                        auto &col = ebts[term_idx].row_coefficients.MutableDense();
-                        ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(),
-                                            gstate.objective->bilinear_terms[term_idx].sign,
-                                            col,
-                                            "bilinear objective coefficient");
-                        ebts[term_idx].row_coefficients.SyncSize();
-                    }
-                }
-            }
-
-            for (idx_t term_idx = 0; term_idx < num_bl; term_idx++) {
-                auto &ebt = ebts[term_idx];
-                if (obj_bilinear_filters[term_idx].has_filter) {
-                    auto &mask = obj_bilinear_filters[term_idx].mask;
-                    auto &col = ebt.row_coefficients.MutableDense();
-                    for (idx_t row = 0; row < col.size(); row++) {
-                        if (!mask[row]) {
-                            col[row] = 0.0;
-                        }
-                    }
-                }
-                if (objective_has_when) {
-                    auto &col = ebt.row_coefficients.MutableDense();
-                    for (idx_t row = 0; row < col.size(); row++) {
-                        if (!objective_when_mask[row]) {
-                            col[row] = 0.0;
-                        }
-                    }
-                }
-                gstate.evaluated_bilinear_terms.push_back(std::move(ebt));
-            }
+            gstate.evaluated_bilinear_terms = EvaluateBilinearTerms(
+                gstate.objective->bilinear_terms, obj_bilinear_filters, chunk_expr_cache, context, gstate.data,
+                num_rows, "bilinear objective coefficient", objective_has_when ? &objective_when_mask : nullptr);
         }
     }
 
-    //===--------------------------------------------------------------------===//
-    // PHASE 3: Build and Solve ILP
-    //===--------------------------------------------------------------------===//
+    ObjectiveEvalState result;
+    result.linear_filters = std::move(obj_linear_term_filters);
+    result.quadratic_filters = std::move(obj_quadratic_term_filters);
+    result.bilinear_filters = std::move(obj_bilinear_filters);
+    result.when_mask = std::move(objective_when_mask);
+    result.has_when = objective_has_when;
+    return result;
+}
 
-    // Construct SolverInput (num_decide_vars already declared above)
+//===--------------------------------------------------------------------===//
+// Finalize: PHASE 3, model build -- BuildSolverInput
+//===--------------------------------------------------------------------===//
+
+SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGlobalSinkState &gstate,
+                                             idx_t num_rows, ChunkExprCache &chunk_expr_cache,
+                                             PerGroupCache &per_group_cache, vector<EntityMapping> entity_mappings,
+                                             ObjectiveEvalState obj_state, VarIndexer &out_var_indexer,
+                                             bool bench, Profiler &model_timer) const {
+    idx_t num_decide_vars = decide_variables.size();
+    auto &obj_linear_term_filters = obj_state.linear_filters;
+    auto &obj_quadratic_term_filters = obj_state.quadratic_filters;
+    auto &obj_bilinear_filters = obj_state.bilinear_filters;
+    auto &objective_when_mask = obj_state.when_mask;
+    bool objective_has_when = obj_state.has_when;
+
+    // Construct SolverInput
     SolverInput solver_input;
     solver_input.num_rows = num_rows;
     solver_input.num_decide_vars = num_decide_vars;
@@ -2805,53 +2793,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                                  solver_input.objective_num_groups, obj_group_labels);
     }
 
-    auto ScaleObjectiveAvgRows = [&](CoefficientColumn &col, bool has_filter, const vector<bool> &filter_mask,
-                                     bool quadratic_inner) {
-        auto &coefficients = col.MutableDense();
-        if (solver_input.objective_row_group_ids.empty()) {
-            idx_t denominator = 0;
-            for (idx_t row = 0; row < num_rows; row++) {
-                if (objective_has_when && !objective_when_mask[row]) {
-                    continue;
-                }
-                if (!has_filter || filter_mask[row]) {
-                    denominator++;
-                }
-            }
-            if (denominator == 0) {
-                std::fill(coefficients.begin(), coefficients.end(), 0.0);
-                return;
-            }
-            double scale = quadratic_inner ? 1.0 / std::sqrt(static_cast<double>(denominator))
-                                           : 1.0 / static_cast<double>(denominator);
-            for (auto &coefficient : coefficients) {
-                coefficient *= scale;
-            }
-            return;
-        }
-
-        vector<idx_t> group_counts(solver_input.objective_num_groups, 0);
-        for (idx_t row = 0; row < num_rows; row++) {
-            idx_t gid = solver_input.objective_row_group_ids[row];
-            if (gid == DConstants::INVALID_INDEX) {
-                continue;
-            }
-            if (!has_filter || filter_mask[row]) {
-                group_counts[gid]++;
-            }
-        }
-        for (idx_t row = 0; row < coefficients.size(); row++) {
-            idx_t gid = solver_input.objective_row_group_ids[row];
-            if (gid == DConstants::INVALID_INDEX || group_counts[gid] == 0) {
-                coefficients[row] = 0.0;
-                continue;
-            }
-            double scale = quadratic_inner ? 1.0 / std::sqrt(static_cast<double>(group_counts[gid]))
-                                           : 1.0 / static_cast<double>(group_counts[gid]);
-            coefficients[row] *= scale;
-        }
-    };
-
     // Relation-qualified reducers in the objective: same de-duplication as on the
     // constraint side, applied once the objective's PER groups are settled and before
     // AVG scaling reads the surviving-row counts.
@@ -2862,7 +2803,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             idx_t scope_idx = gstate.objective->terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
             ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids,
+                                   solver_input.objective_row_group_ids, num_rows,
                                    obj_linear_term_filters[term_idx]);
             MaskCoefficientColumn(solver_input.objective_coefficients[term_idx],
                                   obj_linear_term_filters[term_idx].mask);
@@ -2873,7 +2814,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
             ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids,
+                                   solver_input.objective_row_group_ids, num_rows,
                                    obj_quadratic_term_filters[term_idx]);
             MaskCoefficientColumn(solver_input.quadratic_inner_coefficients[term_idx],
                                   obj_quadratic_term_filters[term_idx].mask);
@@ -2884,7 +2825,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
             ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids,
+                                   solver_input.objective_row_group_ids, num_rows,
                                    obj_bilinear_filters[term_idx]);
             MaskCoefficientColumn(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
                                   obj_bilinear_filters[term_idx].mask);
@@ -2895,26 +2836,32 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
         if (!obj_linear_term_filters[term_idx].avg_scale) {
             continue;
         }
-        ScaleObjectiveAvgRows(solver_input.objective_coefficients[term_idx],
-                              obj_linear_term_filters[term_idx].has_filter,
-                              obj_linear_term_filters[term_idx].mask, false);
+        ScaleAvgRows(solver_input.objective_coefficients[term_idx],
+                    obj_linear_term_filters[term_idx].has_filter,
+                    obj_linear_term_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
+                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
+                    objective_has_when ? &objective_when_mask : nullptr);
     }
     for (idx_t term_idx = 0; term_idx < obj_quadratic_term_filters.size(); term_idx++) {
         if (!obj_quadratic_term_filters[term_idx].avg_scale) {
             continue;
         }
-        ScaleObjectiveAvgRows(solver_input.quadratic_inner_coefficients[term_idx],
-                              obj_quadratic_term_filters[term_idx].has_filter,
-                              obj_quadratic_term_filters[term_idx].mask, true);
+        ScaleAvgRows(solver_input.quadratic_inner_coefficients[term_idx],
+                    obj_quadratic_term_filters[term_idx].has_filter,
+                    obj_quadratic_term_filters[term_idx].mask, /*quadratic_inner=*/true, num_rows,
+                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
+                    objective_has_when ? &objective_when_mask : nullptr);
     }
 
     for (idx_t term_idx = 0; term_idx < obj_bilinear_filters.size(); term_idx++) {
         if (!obj_bilinear_filters[term_idx].avg_scale) {
             continue;
         }
-        ScaleObjectiveAvgRows(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
-                              obj_bilinear_filters[term_idx].has_filter,
-                              obj_bilinear_filters[term_idx].mask, false);
+        ScaleAvgRows(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
+                    obj_bilinear_filters[term_idx].has_filter,
+                    obj_bilinear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
+                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
+                    objective_has_when ? &objective_when_mask : nullptr);
     }
 
     // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
@@ -3072,7 +3019,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
             for (auto &term : terms) {
                 if (term.filter) cond_ptrs.push_back(term.filter.get());
             }
-            auto masks = EvaluateBooleanMasks(cond_ptrs);
+            auto masks = EvaluateBooleanMasks(cond_ptrs, chunk_expr_cache, context, gstate.data, num_rows);
 
             vector<ComposedMinMaxTermData> evaluated;
             idx_t mask_slot = 0;
@@ -3105,7 +3052,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
                 // one code path instead of a special case that has to stay in sync.
                 if (term.qualifier_scope_idx != DConstants::INVALID_INDEX) {
                     auto keep = BuildQualifierKeepMask(solver_input.entity_mappings,
-                                                       term.qualifier_scope_idx, {});
+                                                       term.qualifier_scope_idx, {}, num_rows);
                     for (idx_t row = 0; row < num_rows; row++) {
                         ta.filter_mask[row] = ta.filter_mask[row] && keep[row];
                     }
@@ -3163,6 +3110,20 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // Refresh total_vars: the row/entity blocks were finalized at construction,
     // but global aux vars were appended throughout deferred-NE and MIN/MAX expansion.
     var_indexer.total_vars = var_indexer.global_block_start + solver_input.num_global_vars;
+
+    out_var_indexer = std::move(var_indexer);
+    return solver_input;
+}
+
+//===--------------------------------------------------------------------===//
+// Finalize: PHASE 3, solve + readback -- FinalizeSolveResult
+//===--------------------------------------------------------------------===//
+
+SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
+                                                     SolverInput &solver_input, VarIndexer &var_indexer,
+                                                     bool bench, Profiler &model_timer,
+                                                     Profiler &solver_timer) const {
+    idx_t num_rows = solver_input.num_rows;
 
     // Capture model size before solve (solver may move data)
     size_t bench_total_vars = var_indexer.total_vars;
@@ -3681,10 +3642,12 @@ class DecideGlobalSourceState : public GlobalSourceState {
 public:
     explicit DecideGlobalSourceState(const PhysicalDecide &op, DecideGlobalSinkState &sink) {
         sink.data.InitializeScan(scan_state);
+        sink.data.InitializeScanChunk(scan_chunk);
         current_row_offset = 0;
     }
 
     ColumnDataScanState scan_state;
+    DataChunk scan_chunk; // Sized to the buffered input relation, not the wider output chunk
     idx_t current_row_offset; // Track which row we're at in the solution vector
 
     idx_t MaxThreads() override {
@@ -3702,11 +3665,20 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
     auto &gstate = sink_state->Cast<DecideGlobalSinkState>();
     auto &source_state = input.global_state.Cast<DecideGlobalSourceState>();
 
-    // Scan the original buffered data
-    gstate.data.Scan(source_state.scan_state, chunk);
-    if (chunk.size() == 0) {
+    // Scan the original buffered data into a chunk sized to match the collection;
+    // `chunk` is wider (it has the appended DECIDE variable columns), so scanning
+    // directly into it would violate ColumnDataCollectionSegment::ReadChunk's
+    // column-count assertion.
+    gstate.data.Scan(source_state.scan_state, source_state.scan_chunk);
+    if (source_state.scan_chunk.size() == 0) {
         return SourceResultType::FINISHED;
     }
+
+    // Reference the scanned columns into the leading columns of the wide output chunk.
+    for (idx_t col = 0; col < source_state.scan_chunk.ColumnCount(); col++) {
+        chunk.data[col].Reference(source_state.scan_chunk.data[col]);
+    }
+    chunk.SetCardinality(source_state.scan_chunk.size());
 
     // All DECIDE vars (user + auxiliary) are in the output; projection above prunes aux vars
     idx_t total_decide_vars = decide_variables.size();

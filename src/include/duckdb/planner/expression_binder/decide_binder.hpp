@@ -11,12 +11,12 @@
 #include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp" // Required for NotImplementedException
-#include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 
 namespace duckdb {
 
 class BindContext;
+class FunctionExpression;
 
 //! Find or create the entity scope keyed by `table_name`, returning its index into
 //! `entity_scopes`. Shared by the declaration path (`T.x(INT)`) and the
@@ -44,8 +44,6 @@ struct DecideQualifierContext {
     //! Scope of each declared variable, indexed as the decide columns are.
     const vector<DecideVarScopeInfo> *variable_scopes = nullptr;
 };
-
-bool IsScalarValue(ParsedExpression &expr);
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
@@ -132,14 +130,6 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 //! can be recognised as the bound `K` and skipped.
 void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index);
 
-
-// inline void DebugPrintParsed(const string &tag, const ParsedExpression &expr) {
-// 	deb("[BINDER] ", tag, ": ", expr.ToString());
-// }
-// inline void DebugPrintBound(const string &tag, const Expression &expr) {
-// 	deb("[BINDER] ", tag, ": ", expr.ToString());
-// }
-
 //! The DecideBinder is a base class for binders in DECIDE statements
 class DecideBinder : public ExpressionBinder {
 public:
@@ -186,7 +176,32 @@ protected:
         throw duckdb::NotImplementedException("GetExpressionType is not implemented for this binder.");
     }
 
+    //! Shared `norm`/SUM/AVG/MIN/MAX reducer classification between
+    //! `DecideConstraintsBinder` and `DecideObjectiveBinder`. Returns true when `func`
+    //! is one of these reducer names, with `result`/`error_msg` holding the verdict;
+    //! returns false for any other function name so the caller falls through to its
+    //! own remaining classification (the two binders diverge there — a SUCH THAT
+    //! left-hand side and a MAXIMIZE/MINIMIZE objective accept different shapes).
+    //! `allow_bilinear` stays a parameter rather than a hardcoded default: a bilinear
+    //! reducer argument is accepted in a constraint and rejected in an objective, on
+    //! purpose.
+    bool ClassifyReducerCall(FunctionExpression &func, bool allow_bilinear, DecideExpression &result,
+                             string &error_msg);
+
+    //! Shared PER-wrapper assembly between `DecideConstraintsBinder` and
+    //! `DecideObjectiveBinder`: `func.children[0]` is the inner constraint/objective
+    //! (possibly WHEN-wrapped), bound through the subclass's own dispatch;
+    //! `func.children[1..]` are the PER grouping columns, bound through the base
+    //! `ExpressionBinder` since a PER column is a plain table column, not a DECIDE
+    //! expression. Assembles both into one `BoundConjunctionExpression` tagged with
+    //! `func.function_name`, which `DecideCanonicalizer` reads back as the PER tag.
+    BindResult BindPerWrapper(FunctionExpression &func, idx_t depth);
+
     bool is_top_expression;
+    //! Set while binding a WHEN condition or a PER column: both bypass DECIDE-specific
+    //! dispatch and bind through the base ExpressionBinder instead, since neither may
+    //! reference a DECIDE variable.
+    bool binding_when_condition = false;
     case_insensitive_map_t<idx_t> variables;
     //! Subset of `variables` declared with the `scalar` keyword.
     case_insensitive_set_t scalar_variables;

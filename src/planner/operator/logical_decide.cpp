@@ -1,7 +1,6 @@
 // src/planner/operator/logical_decide.cpp
 #include "duckdb/planner/operator/logical_decide.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -75,6 +74,53 @@ void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> 
 	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes);
 	decide_objective = canonicalizer.CanonicalizeObjective(*objective, objective_constant_offset);
 	canonicalizer.VerifyCanonicalObjective(*decide_objective);
+}
+
+void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback) {
+	for (auto &expr : decide_variables) {
+		callback(&expr);
+	}
+	if (decide_constraints) {
+		callback(&decide_constraints);
+	}
+	if (decide_objective) {
+		callback(&decide_objective);
+	}
+	// The composed MIN/MAX rewrite (DecideOptimizer) lifts sub-expressions out of the
+	// objective/constraint trees into these vectors and leaves a placeholder behind, so
+	// visiting decide_objective/decide_constraints above no longer reaches them.
+	for (auto &term : composed_minmax_objective_terms) {
+		if (term.inner_expr) {
+			callback(&term.inner_expr);
+		}
+		if (term.filter) {
+			callback(&term.filter);
+		}
+		if (term.scale) {
+			callback(&term.scale);
+		}
+	}
+	for (auto &spec : composed_minmax_constraints) {
+		for (auto &term : spec.terms) {
+			if (term.inner_expr) {
+				callback(&term.inner_expr);
+			}
+			if (term.filter) {
+				callback(&term.filter);
+			}
+			if (term.scale) {
+				callback(&term.scale);
+			}
+		}
+		if (spec.rhs_expr) {
+			callback(&spec.rhs_expr);
+		}
+	}
+	for (auto &expr : entity_key_expressions) {
+		if (expr) {
+			callback(&expr);
+		}
+	}
 }
 
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {

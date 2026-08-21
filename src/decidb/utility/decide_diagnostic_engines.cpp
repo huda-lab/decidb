@@ -84,6 +84,52 @@ string FormatTerms(const vector<int> &indices, const vector<double> &coeffs,
 	return out.empty() ? "0" : out;
 }
 
+//! Terms of the same decide variable spread across several solver columns (an
+//! aggregate fan-out, or AVG's pre-scaled per-row copies) collapsed to one entry each,
+//! in first-seen order. `uniform[key]` is false when the stored coefficient differs
+//! across that variable's terms — a data-varying coefficient neither caller can quote
+//! as a single literal.
+struct TermGrouping {
+	vector<idx_t> order; // distinct variable keys, first-seen order
+	std::map<idx_t, double> coeff_of;
+	std::map<idx_t, idx_t> count_of;
+	std::map<idx_t, bool> uniform;
+	std::map<idx_t, string> label_of;
+};
+
+//! `merge_auxiliaries` decides what happens to a column with no decide variable:
+//! `FormatAvgLhs` collapses them all onto one shared key (an AVG lhs has no fan-out to
+//! preserve across them), `FormatSumLhs` gives each its own key so they stay separate
+//! `SUM(...)` terms.
+TermGrouping GroupTermsByVariable(const vector<int> &indices, const vector<double> &coeffs,
+                                  const vector<ColumnProvenance> &cols, bool merge_auxiliaries) {
+	TermGrouping g;
+	for (idx_t i = 0; i < indices.size(); i++) {
+		int col = indices[i];
+		idx_t var_key = (col >= 0 && static_cast<idx_t>(col) < cols.size())
+		                    ? cols[col].decide_var_idx
+		                    : DConstants::INVALID_INDEX;
+		idx_t key = (merge_auxiliaries || var_key != DConstants::INVALID_INDEX)
+		                ? var_key
+		                : DConstants::INVALID_INDEX - 1 - i;
+		double c = coeffs[i];
+		auto it = g.coeff_of.find(key);
+		if (it == g.coeff_of.end()) {
+			g.coeff_of[key] = c;
+			g.count_of[key] = 1;
+			g.uniform[key] = true;
+			g.label_of[key] = ColLabel(cols, col);
+			g.order.push_back(key);
+		} else {
+			if (std::fabs(it->second - c) > 1e-12) {
+				g.uniform[key] = false;
+			}
+			g.count_of[key]++;
+		}
+	}
+	return g;
+}
+
 //! AVG rendering: an AVG→SUM-rewritten row stores coefficients pre-scaled by 1/N_g
 //! (`provenance.avg_scaled`), so a plain reconstruction would read `0.5*x + 0.5*x`.
 //! Recover `AVG(<inner>)` by collapsing the N equal-coefficient terms of each
@@ -93,31 +139,12 @@ string FormatTerms(const vector<int> &indices, const vector<double> &coeffs,
 //! exists to re-quote.
 bool FormatAvgLhs(const vector<int> &indices, const vector<double> &coeffs,
                   const vector<ColumnProvenance> &cols, string &out) {
-	vector<idx_t> order; // distinct variable keys, first-seen order
-	std::map<idx_t, double> coeff_of;
-	std::map<idx_t, idx_t> count_of;
-	std::map<idx_t, bool> uniform;
-	std::map<idx_t, string> label_of;
-	for (idx_t i = 0; i < indices.size(); i++) {
-		int col = indices[i];
-		idx_t key = (col >= 0 && static_cast<idx_t>(col) < cols.size())
-		                ? cols[col].decide_var_idx
-		                : DConstants::INVALID_INDEX;
-		double c = coeffs[i];
-		auto it = coeff_of.find(key);
-		if (it == coeff_of.end()) {
-			coeff_of[key] = c;
-			count_of[key] = 1;
-			uniform[key] = true;
-			label_of[key] = ColLabel(cols, col);
-			order.push_back(key);
-		} else {
-			if (std::fabs(it->second - c) > 1e-12) {
-				uniform[key] = false;
-			}
-			count_of[key]++;
-		}
-	}
+	TermGrouping g = GroupTermsByVariable(indices, coeffs, cols, /*merge_auxiliaries=*/true);
+	const auto &order = g.order;
+	auto &coeff_of = g.coeff_of;
+	auto &count_of = g.count_of;
+	auto &uniform = g.uniform;
+	auto &label_of = g.label_of;
 	vector<int> inner_idx;
 	vector<double> inner_coeff;
 	for (idx_t k = 0; k < order.size(); k++) {
@@ -151,34 +178,14 @@ bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeffs,
                   const vector<ColumnProvenance> &cols,
                   const vector<std::pair<idx_t, string>> &weight_labels, string &out,
                   const char *agg_name = "SUM") {
-	vector<idx_t> order; // distinct variable keys, first-seen order
-	std::map<idx_t, double> coeff_of;
-	std::map<idx_t, idx_t> count_of;
-	std::map<idx_t, bool> uniform;
-	std::map<idx_t, string> label_of;
-	for (idx_t i = 0; i < indices.size(); i++) {
-		int col = indices[i];
-		// A column with no decide variable (an auxiliary column) never merges with another
-		// — give it a unique key so each stays its own term.
-		idx_t key = (col >= 0 && static_cast<idx_t>(col) < cols.size() &&
-		             cols[col].decide_var_idx != DConstants::INVALID_INDEX)
-		                ? cols[col].decide_var_idx
-		                : DConstants::INVALID_INDEX - 1 - i;
-		double c = coeffs[i];
-		auto it = coeff_of.find(key);
-		if (it == coeff_of.end()) {
-			coeff_of[key] = c;
-			count_of[key] = 1;
-			uniform[key] = true;
-			label_of[key] = ColLabel(cols, col);
-			order.push_back(key);
-		} else {
-			if (std::fabs(it->second - c) > 1e-12) {
-				uniform[key] = false;
-			}
-			count_of[key]++;
-		}
-	}
+	// A column with no decide variable (an auxiliary column) never merges with another
+	// — give it a unique key so each stays its own term.
+	TermGrouping g = GroupTermsByVariable(indices, coeffs, cols, /*merge_auxiliaries=*/false);
+	const auto &order = g.order;
+	auto &coeff_of = g.coeff_of;
+	auto &count_of = g.count_of;
+	auto &uniform = g.uniform;
+	auto &label_of = g.label_of;
 	// A data-varying summed variable has no single literal to quote, but if the clause
 	// carried a symbolic coefficient label (`buy → l_extendedprice`) we can still render
 	// it as `SUM(var * label)`. Look up the label per decide variable.

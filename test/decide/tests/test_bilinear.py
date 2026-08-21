@@ -767,6 +767,70 @@ class TestBilinearConstraints:
             comparison_status="optimal",
         )
 
+    def test_bilinear_constraint_and_bilinear_objective_together(
+        self, decidb_cli, oracle_solver, perf_tracker,
+    ):
+        """SUCH THAT SUM(b1 * b2) <= 1, MAXIMIZE SUM(b2 * b3) — a bilinear term in
+        SUCH THAT and a *different* bilinear term in the objective, in one query.
+
+        Regression for the constraint-side and objective-side bilinear coefficient
+        evaluators sharing one code path (`EvaluateBilinearTerms`): pins that both
+        still agree with an independent oracle when exercised together, not just
+        individually.
+        """
+        sql = """
+            WITH data AS (
+                SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3
+            )
+            SELECT id, b1, b2, b3
+            FROM data
+            DECIDE b1(BOOL), b2(BOOL), b3(BOOL)
+            SUCH THAT SUM(b1 * b2) <= 1
+            MAXIMIZE SUM(b2 * b3)
+        """
+        t0 = time.perf_counter()
+        result, cols = decidb_cli.execute(sql)
+        decidb_time = time.perf_counter() - t0
+
+        n = 3
+        t_build = time.perf_counter()
+        oracle_solver.create_model("bilinear_constraint_and_objective_together")
+        b1n = [f"b1_{i}" for i in range(n)]
+        b2n = [f"b2_{i}" for i in range(n)]
+        b3n = [f"b3_{i}" for i in range(n)]
+        z1n = [f"z1_{i}" for i in range(n)]  # b1 * b2, constrained
+        z2n = [f"z2_{i}" for i in range(n)]  # b2 * b3, objective
+        for v in b1n + b2n + b3n:
+            oracle_solver.add_variable(v, VarType.BINARY)
+        for v in z1n + z2n:
+            oracle_solver.add_variable(v, VarType.CONTINUOUS, lb=0.0, ub=1.0)
+        for i in range(n):
+            _mccormick_link(oracle_solver, z1n[i], b1n[i], b2n[i], 1.0, f"mc1_{i}")
+            _mccormick_link(oracle_solver, z2n[i], b2n[i], b3n[i], 1.0, f"mc2_{i}")
+        oracle_solver.add_constraint({z: 1.0 for z in z1n}, "<=", 1.0, name="cap_z1")
+        oracle_solver.set_objective({z: 1.0 for z in z2n}, ObjSense.MAXIMIZE)
+        build_time = time.perf_counter() - t_build
+        res = oracle_solver.solve()
+        assert res.status == SolverStatus.OPTIMAL
+
+        b1_col = cols.index("b1")
+        b2_col = cols.index("b2")
+        b3_col = cols.index("b3")
+        decidb_obj = sum(int(row[b2_col]) * int(row[b3_col]) for row in result)
+        assert abs(decidb_obj - res.objective_value) <= 1e-6, (
+            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        )
+
+        total_product = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
+        assert total_product <= 1, f"Constraint violated: SUM(b1*b2)={total_product}"
+
+        perf_tracker.record(
+            "bilinear_constraint_and_objective_together", decidb_time, build_time,
+            res.solve_time_seconds, n, n * 5, n * 5 + 1,
+            res.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
 
 # ===================================================================
 # Factored products: degree vs. occurrence count

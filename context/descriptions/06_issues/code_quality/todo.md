@@ -6,4 +6,4 @@ Each entry: short title, location (`file:line`), what's wrong, why it matters, a
 
 Resolved entries are removed; if the fix taught a generalizable lesson, record it in `.claude/lessons.md`.
 
----
+Nothing open right now.

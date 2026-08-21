@@ -15,7 +15,6 @@
 #include "parser/parser.hpp"
 #include "postgres_parser.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/decidb/utility/decide_parse_hints.hpp"
 
 namespace duckdb {
@@ -221,9 +220,6 @@ void Parser::ParseQuery(const string &query) {
 				// if it succeeded, we transform the Postgres parse tree into a list of
 				// SQLStatements
 				transformer.TransformParseTree(parser.parse_tree, statements);
-                // for (auto& stm : statements){
-                //     deb(stm->ToString());
-                // }
 				parsing_succeed = true;
 			} else {
 				parser_error = MaybeAppendDecideWhenHint(query, parser.error_message);

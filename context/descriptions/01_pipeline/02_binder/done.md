@@ -187,6 +187,15 @@ The binder asks only whether *either* side bears a decision. It does not flip
 Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
 `BindConjunction`, `BindWhenConstraint`, `BindPerConstraint`.
 
+`GetExpressionType`'s `norm`/`SUM`/`AVG`/`MIN`/`MAX` classification is shared with
+`DecideObjectiveBinder` through `DecideBinder::ClassifyReducerCall` — the base class
+both subclasses already derive from. The one real difference between a constraint and
+an objective reducer stays a parameter rather than getting flattened: constraints pass
+`allow_bilinear=true` to the argument validator, objectives don't, since a bilinear
+term is accepted in a `SUCH THAT` clause and refused in `MAXIMIZE`/`MINIMIZE`. Each
+subclass keeps its own fallthrough for a non-reducer function — the shapes a
+constraint's left-hand side and an objective body accept past that point diverge.
+
 ### What may be a bound
 
 When one side reduces (`SUM`, `AVG`, `MIN`, `MAX`), the other side must reduce to a
@@ -309,6 +318,13 @@ not a decision variable, not a constant. Whether `PER` is *eligible* on this
 constraint is decided after canonicalization, using the canonical aggregate /
 per-row classification, not by a parsed aggregate-shape guess. Combined
 expression-level `WHEN` + `PER` filters first, then groups.
+
+Once that validation passes, both `BindPerConstraint` and the objective's `PER`
+handling assemble their tagged `BoundConjunctionExpression` through the same
+`DecideBinder::BindPerWrapper`: bind child 0 (the wrapped constraint or objective)
+through the subclass's own dispatch, bind the PER columns through the base
+`ExpressionBinder`, tag the result with `func.function_name` for the canonicalizer
+to read back as the PER key.
 
 ---
 

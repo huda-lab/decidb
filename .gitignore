@@ -407,4 +407,6 @@ context/descriptions/todo.md
 .claude/scheduled_tasks.lock
 .agents/*
 .codex/*
-AGENTS.md
+AGENT.md
+
+.pytest_cache/

@@ -1,6 +1,5 @@
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
-#include "duckdb/decidb/solver_config.hpp"
 #include "duckdb/decidb/solver_session.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/gurobi/gurobi_loader.hpp"
@@ -422,12 +421,6 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
 }
 
 } // namespace
-
-SolverResult GurobiSolver::Solve(const SolverModel &ilp) {
-    // Single-shot path: one Solve() on a throwaway session with the default limit.
-    GurobiSession session;
-    return session.Solve(ilp, ResolveDecideTimeLimit());
-}
 
 unique_ptr<SolverSession> GurobiSolver::CreateSession() {
     return make_uniq<GurobiSession>();

@@ -3,8 +3,6 @@
 #include "duckdb/parser/expression/default_expression.hpp"
 #include "duckdb/parser/transformer.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 unique_ptr<ParsedExpression> Transformer::TransformResTarget(duckdb_libpgquery::PGResTarget &root) {

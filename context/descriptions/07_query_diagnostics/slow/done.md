@@ -24,7 +24,7 @@ Both backends now return `SolverStatus::TIME_LIMIT` on a limit-stop and populate
 incumbent fields on `SolverResult`:
 
 - **S0 — HiGHS mapping fixed.** `highs.run()` returns `HighsStatus::kWarning` (not
-  `kOk`) at the limit; `DeterministicNaive::Solve` now throws only on
+  `kOk`) at the limit; `HighsSession::RunAndReadback` throws only on
   `HighsStatus::kError`, letting `kWarning` fall through to the `kTimeLimit →
   TIME_LIMIT` mapping. (Previously the `!= kOk` guard threw an INTERNAL error first —
   bug, since fixed.)
@@ -230,9 +230,10 @@ backend handle once (now a member — Gurobi env+model / the `Highs` object), an
 `Load` + one `RunAndReadback`; `Continue()` = another `RunAndReadback` on the same warm
 handle. `SolveModel` threads the first-chunk limit via `SolveModelOptions.time_limit_seconds`
 and hands the live session back through a `retained_session` out-param (mirroring
-`retained_model`); the operator holds it for the loop. The old static `GurobiSolver::Solve`
-/ `DeterministicNaive::Solve` remain as thin wrappers, so every diagnostic re-solve is
-untouched. Backend sessions: `GurobiSession` (`gurobi_solver.cpp`, sets `TimeLimit` on the
+`retained_model`); the operator holds it for the loop. A session is the *only* way a
+DECIDE query reaches a backend — `GurobiSolver` and `DeterministicNaive` expose
+`CreateSession()` and nothing else, so a diagnostic re-solve and a primary solve take the
+same path. Backend sessions: `GurobiSession` (`gurobi_solver.cpp`, sets `TimeLimit` on the
 live model env via `getenv_model`), `HighsSession` (`deterministic_naive.cpp`).
 
 ## Tests

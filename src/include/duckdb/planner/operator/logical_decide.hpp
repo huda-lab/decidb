@@ -233,9 +233,10 @@ public:
     //! entity-key columns that aren't referenced elsewhere (SELECT/WHERE/
     //! constraints/objective) would be pruned from the table scan, silently
     //! collapsing distinct entities into whatever grouping happens to survive.
-    //! plan_decide.cpp reads refreshed bindings from these expressions (kept in
-    //! sync by the pruner's rebinding pass) and copies them back into
-    //! entity_scopes.entity_key_bindings.
+    //! Reached by EnumerateExpressions below like every other owned expression, so
+    //! the column-binding resolver rewrites these to physical BoundReferenceExpressions
+    //! the same way it does decide_constraints/decide_objective; plan_decide.cpp reads
+    //! the resolved physical index straight off them.
     vector<unique_ptr<Expression>> entity_key_expressions;
 
     // --- Prepared linear form (built by BuildDecidePreparedModel, stage 05) ---
@@ -268,6 +269,16 @@ public:
     //! objective_constant_offset rather than replacing it, so the offset peeled from
     //! what the user wrote survives every later rewrite.
     void SetObjective(ClientContext &context, unique_ptr<Expression> objective);
+
+    //! Calls back with every expression this operator owns: decide_variables,
+    //! decide_constraints, decide_objective, the composed MIN/MAX constraint and
+    //! objective terms, and entity_key_expressions. This is the single place that
+    //! knows LogicalDecide's expression layout -- generic DuckDB passes (the
+    //! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)
+    //! call through it instead of each re-listing these fields by hand, which is how
+    //! a field (entity_key_expressions, composed_minmax_*) previously went missing
+    //! from one visitor while another already had it.
+    void EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback);
 
     // --- Implement virtual functions ---
 

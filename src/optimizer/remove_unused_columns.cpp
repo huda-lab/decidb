@@ -22,8 +22,6 @@
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 void BaseColumnPruner::ReplaceBinding(ColumnBinding current_binding, ColumnBinding new_binding) {
@@ -322,20 +320,11 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
 	}
 	case LogicalOperatorType::LOGICAL_DECIDE: {
         auto &decide = op.Cast<LogicalDecide>();
-        VisitExpression(&decide.decide_constraints);
-        if (decide.decide_objective) {
-            VisitExpression(&decide.decide_objective);
-        }
-        for (auto &var : decide.decide_variables) {
-            VisitExpression(&var);
-        }
-        // Entity-scoped variables: visit the bound column references for each
-        // entity-key column so the column pruner rebinds them alongside other
-        // columns. Without this, entity-key columns would be pruned from the
-        // scan, collapsing distinct entities.
-        for (auto &expr : decide.entity_key_expressions) {
-            VisitExpression(&expr);
-        }
+        // See LogicalDecide::EnumerateExpressions: the single authoritative list of
+        // every expression the operator owns (including entity keys and composed
+        // MIN/MAX terms), shared with ColumnBindingResolver and every generic
+        // LogicalOperatorVisitor pass instead of re-listed by hand here.
+        decide.EnumerateExpressions([&](unique_ptr<Expression> *expr) { VisitExpression(expr); });
         everything_referenced = true;
         break;
 	}

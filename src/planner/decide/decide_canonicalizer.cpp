@@ -280,7 +280,7 @@ static string UserFacingName(const Expression &expr) {
 		}
 		return StringUtil::Upper(agg.function.name) + "(...)";
 	}
-	auto name = cur->GetName();
+	auto name = StripDecideTags(cur->GetName());
 	return name.empty() ? cur->ToString() : name;
 }
 
@@ -912,6 +912,7 @@ void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objecti
 }
 
 void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) const {
+#ifdef DEBUG
 	try {
 		VerifyCanonicalObjectiveBody(objective);
 		if (!ReferencesDecideVar(objective)) {
@@ -936,9 +937,11 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) 
 		throw InternalException("DECIDE canonical objective verification failed for %s: %s",
 		                        objective.ToString(), ex.what());
 	}
+#endif
 }
 
 void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
+#ifdef DEBUG
 	try {
 		VerifyCanonicalTree(constraints);
 		auto fixed_point = CanonicalizeTreeInternal(constraints);
@@ -954,6 +957,7 @@ void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
 		throw InternalException("DECIDE canonical invariant verification failed for %s: %s",
 		                        constraints.ToString(), ex.what());
 	}
+#endif
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expression &constraints) const {

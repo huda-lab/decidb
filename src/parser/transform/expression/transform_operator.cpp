@@ -14,8 +14,6 @@
 #include "duckdb/parser/parser_options.hpp"
 #include "duckdb/parser/transformer.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 unique_ptr<ParsedExpression> Transformer::TransformUnaryOperator(const string &op, unique_ptr<ParsedExpression> child) {

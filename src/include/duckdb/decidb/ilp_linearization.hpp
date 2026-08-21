@@ -168,17 +168,6 @@ struct AuxRange {
         spread = var_high - var_low;
     }
 
-    //! Scale the whole family by `factor` (the inner-AVG `1/n_g`, always positive).
-    AuxRange Scaled(double factor) const {
-        AuxRange out = *this;
-        out.lo = lo * factor;
-        out.hi = hi * factor;
-        out.spread = spread * factor;
-        out.var_low = var_low * factor;
-        out.var_high = var_high * factor;
-        return out;
-    }
-
 private:
     //! Running variable-only extremes behind `spread`. Held separately so `spread`
     //! stays exactly the value the pre-existing Big-M walk produced.

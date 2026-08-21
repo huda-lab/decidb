@@ -413,70 +413,42 @@ void LinearizeMinMaxIndicators(SolverInput &input) {
             return col;
         };
 
-        if (is_max_agg) {
-            // Hard MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M
-            // This is a per-row constraint (not aggregate)
-            EvaluatedConstraint ec_row;
-            ec_row.variable_indices = ec.variable_indices;
-            ec_row.row_coefficients = ec.row_coefficients;
-            // Add indicator variable: -M * y_i (broadcast)
-            ec_row.variable_indices.push_back(indicator_idx);
-            ec_row.row_coefficients.push_back(CoefficientColumn::MakeScalar(-M, num_rows));
-            ec_row.rhs_values = BuildShiftedRhs(-M);
-            ec_row.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-            ec_row.lhs_is_aggregate = false; // per-row!
-            ec_row.row_group_ids = ec.row_group_ids;
-            ec_row.num_groups = ec.num_groups;
-            ec_row.group_labels = ec.group_labels;
-            ec_row.qualifier = ec.qualifier;
-            ec_row.kind = ConstraintKind::USER_MECHANISM;
-            new_constraints.push_back(std::move(ec_row));
+        // Hard MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M.
+        // Hard MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M.
+        // The two directions are mirror images: only the Big-M's sign and the
+        // comparison direction flip.
+        double m_sign = is_max_agg ? -1.0 : 1.0;
+        ExpressionType cmp = is_max_agg ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
+                                         : ExpressionType::COMPARE_LESSTHANOREQUALTO;
 
-            // SUM(y) >= 1 (at least one row must satisfy)
-            EvaluatedConstraint ec_sum;
-            ec_sum.variable_indices = {indicator_idx};
-            ec_sum.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
-            ec_sum.rhs_values.AssignScalar(num_rows, 1.0);
-            ec_sum.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-            ec_sum.lhs_is_aggregate = true;
-            ec_sum.row_group_ids = ec.row_group_ids;
-            ec_sum.num_groups = ec.num_groups;
-            ec_sum.group_labels = ec.group_labels;
-            ec_sum.qualifier = ec.qualifier;
-            ec_sum.kind = ConstraintKind::USER_MECHANISM;
-            new_constraints.push_back(std::move(ec_sum));
-        } else {
-            // MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M
-            EvaluatedConstraint ec_row;
-            ec_row.variable_indices = ec.variable_indices;
-            ec_row.row_coefficients = ec.row_coefficients;
-            // Add indicator variable: +M * y_i (broadcast)
-            ec_row.variable_indices.push_back(indicator_idx);
-            ec_row.row_coefficients.push_back(CoefficientColumn::MakeScalar(M, num_rows));
-            ec_row.rhs_values = BuildShiftedRhs(M);
-            ec_row.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-            ec_row.lhs_is_aggregate = false;
-            ec_row.row_group_ids = ec.row_group_ids;
-            ec_row.num_groups = ec.num_groups;
-            ec_row.group_labels = ec.group_labels;
-            ec_row.qualifier = ec.qualifier;
-            ec_row.kind = ConstraintKind::USER_MECHANISM;
-            new_constraints.push_back(std::move(ec_row));
+        EvaluatedConstraint ec_row;
+        ec_row.variable_indices = ec.variable_indices;
+        ec_row.row_coefficients = ec.row_coefficients;
+        ec_row.variable_indices.push_back(indicator_idx);
+        ec_row.row_coefficients.push_back(CoefficientColumn::MakeScalar(m_sign * M, num_rows));
+        ec_row.rhs_values = BuildShiftedRhs(m_sign * M);
+        ec_row.comparison_type = cmp;
+        ec_row.lhs_is_aggregate = false; // per-row!
+        ec_row.row_group_ids = ec.row_group_ids;
+        ec_row.num_groups = ec.num_groups;
+        ec_row.group_labels = ec.group_labels;
+        ec_row.qualifier = ec.qualifier;
+        ec_row.kind = ConstraintKind::USER_MECHANISM;
+        new_constraints.push_back(std::move(ec_row));
 
-            // SUM(y) >= 1
-            EvaluatedConstraint ec_sum;
-            ec_sum.variable_indices = {indicator_idx};
-            ec_sum.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
-            ec_sum.rhs_values.AssignScalar(num_rows, 1.0);
-            ec_sum.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-            ec_sum.lhs_is_aggregate = true;
-            ec_sum.row_group_ids = ec.row_group_ids;
-            ec_sum.num_groups = ec.num_groups;
-            ec_sum.group_labels = ec.group_labels;
-            ec_sum.qualifier = ec.qualifier;
-            ec_sum.kind = ConstraintKind::USER_MECHANISM;
-            new_constraints.push_back(std::move(ec_sum));
-        }
+        // SUM(y) >= 1 (at least one row must satisfy)
+        EvaluatedConstraint ec_sum;
+        ec_sum.variable_indices = {indicator_idx};
+        ec_sum.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
+        ec_sum.rhs_values.AssignScalar(num_rows, 1.0);
+        ec_sum.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+        ec_sum.lhs_is_aggregate = true;
+        ec_sum.row_group_ids = ec.row_group_ids;
+        ec_sum.num_groups = ec.num_groups;
+        ec_sum.group_labels = ec.group_labels;
+        ec_sum.qualifier = ec.qualifier;
+        ec_sum.kind = ConstraintKind::USER_MECHANISM;
+        new_constraints.push_back(std::move(ec_sum));
     }
     input.constraints = std::move(new_constraints);
 }

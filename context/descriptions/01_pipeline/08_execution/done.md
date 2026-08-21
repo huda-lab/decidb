@@ -10,8 +10,28 @@ flattened into terms.
 depends on the whole dataset, so it must consume its entire input before it can
 produce a row.
 
-**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~4,800 lines)
+**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~3,800 lines)
 **Header**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
+
+`Finalize` itself is a short orchestrator; the phases below are private methods
+on `PhysicalDecide`, in call order:
+
+| Method | Phase |
+|---|---|
+| `BuildEntityMappings` | 1.5 — entity mappings for table-scoped variables |
+| `EvaluateConstraints` | 2, constraints — appends to `gstate.evaluated_constraints` |
+| `EvaluateObjective` | 2, objective — returns an `ObjectiveEvalState` (per-term filters, `WHEN` mask) that Phase 3 still needs |
+| `BuildSolverInput` | 3 — assembles `SolverInput`, runs the linearization passes, builds the `VarIndexer` |
+| `FinalizeSolveResult` | 3 — calls `SolveModel`, routes the terminal (`SOLVED`/`UNBOUNDED`/`INFEASIBLE`/`TIME_LIMIT`), and finishes `gstate` |
+
+Coefficient evaluation that both the constraint and objective paths need is
+factored into shared file-scope helpers rather than duplicated per path:
+`EvaluateBilinearTerms` (bilinear coefficient scan + filter masking, used by
+both `EvaluateConstraints` and `EvaluateObjective`) and `ScaleAvgRows` (the
+AVG-denominator division, used by every AVG-scaled term — linear, bilinear, or
+a quadratic group's inner columns — on both sides). `EvaluatedConstraint::
+BilinearTerm` (`solver_input.hpp`) is the one bilinear-term struct; there is no
+separate objective-side copy.
 
 ---
 
@@ -21,9 +41,9 @@ produce a row.
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the absorbed variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
-| 3 | `Finalize` PHASE 1.5 | Build entity mappings for table-scoped variables |
-| 4 | `Finalize` PHASE 2 | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
-| 5 | `Finalize` PHASE 3 | `SolverModel::Build` (stage 06) → `SolveModel` (stage 07) |
+| 3 | `Finalize` → `BuildEntityMappings` | Build entity mappings for table-scoped variables |
+| 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
+| 5 | `Finalize` → `BuildSolverInput` / `FinalizeSolveResult` | `SolverModel::Build` (stage 06) → `SolveModel` (stage 07) |
 | 6 | `GetData` | Project solution values back onto rows |
 
 The sink state is constructed before the first `Sink` call, so step 1 sees no
@@ -360,6 +380,14 @@ A slow-solve checkpoint report runs when a solve exceeds its budget; see
 `DecideGlobalSourceState` holds a scan over `gstate.data` and a
 `current_row_offset`. `MaxThreads()` returns 1, so the sequential mapping between
 data rows and solution values is exact.
+
+The source state also owns a `scan_chunk`, sized to `gstate.data.Types()` via
+`InitializeScanChunk` — narrower than the operator's output chunk by exactly
+`total_decide_vars`, since DECIDE columns are appended after the buffered input.
+`GetData` scans into `scan_chunk`, then `Vector::Reference`s each scanned column
+into the output chunk's matching leading column (zero-copy). Scanning directly
+into the wider output chunk would violate `ColumnDataCollectionSegment::
+ReadChunk`'s `chunk.ColumnCount() == column_ids.size()` contract.
 
 Each call scans the next chunk, fills the DECIDE columns — the last
 `total_decide_vars` columns of the output — and advances the offset. The mapping

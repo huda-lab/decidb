@@ -95,39 +95,21 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // final pass. Execution evaluates their coefficients; it does not re-derive them.
     decide_op->prepared = std::move(op.prepared);
 
-    // Resolve entity key column bindings to physical data chunk positions.
-    // The child's GetColumnBindings() gives us the mapping from logical
-    // (table_index, col_index) to physical chunk position.
-    // Only include columns that survived DuckDB's column pruning.
+    // Entity key expressions are resolved by the column-binding resolver like every
+    // other expression LogicalDecide owns (LogicalDecide::EnumerateExpressions), so by
+    // this point each one holds a BoundReferenceExpression naming its physical position
+    // in the child data chunk directly -- no separate lookup against child_bindings is
+    // needed.
     if (!op.entity_scopes.empty()) {
-        // Refresh entity_key_bindings from entity_key_expressions: the column
-        // pruner rebinds the expressions alongside other columns, but the stale
-        // bindings on EntityScopeInfo are not updated.
         idx_t expr_cursor = 0;
         for (auto &scope : op.entity_scopes) {
-            for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {
-                if (expr_cursor < op.entity_key_expressions.size()) {
-                    auto &colref = op.entity_key_expressions[expr_cursor]->Cast<BoundColumnRefExpression>();
-                    scope.entity_key_bindings[k] = colref.binding;
-                    expr_cursor++;
-                }
-            }
-        }
-        for (auto &scope : op.entity_scopes) {
             scope.entity_key_physical_indices.clear();
-            vector<LogicalType> surviving_types;
             for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {
-                auto &target = scope.entity_key_bindings[k];
-                for (idx_t pos = 0; pos < child_bindings.size(); pos++) {
-                    if (child_bindings[pos].table_index == target.table_index &&
-                        child_bindings[pos].column_index == target.column_index) {
-                        scope.entity_key_physical_indices.push_back(pos);
-                        surviving_types.push_back(scope.entity_key_column_types[k]);
-                        break;
-                    }
-                }
+                D_ASSERT(expr_cursor < op.entity_key_expressions.size());
+                auto &ref = op.entity_key_expressions[expr_cursor]->Cast<BoundReferenceExpression>();
+                scope.entity_key_physical_indices.push_back(ref.index);
+                expr_cursor++;
             }
-            scope.entity_key_column_types = std::move(surviving_types);
         }
     }
     decide_op->entity_scopes = std::move(op.entity_scopes);
@@ -165,11 +147,14 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     if (decide_op->decide_objective) {
         harvest(*decide_op->decide_objective);
     }
-    for (auto &e : op.entity_key_expressions) {
-        if (e) {
-            harvest(*e);
-        }
-    }
+    // entity_key_expressions are deliberately NOT harvested for names: every entry
+    // carries the synthetic "entity_key_<alias>" placeholder (see
+    // LogicalDecide::entity_key_expressions / bind_select_node.cpp), needed only to
+    // keep the pruner and column-binding resolver treating the column as live, never
+    // meant as a display name. A real name still reaches a given entity-key column
+    // through decide_constraints/decide_objective (if referenced there) or the
+    // back-fill below (if selected in the outer query); columns named only this way
+    // stay unnamed on purpose, same as any other column no clause referenced by name.
     // Back-fill SELECT-only columns from the child projection's user-written names.
     // Only slots the DECIDE-clause harvest left empty are touched, so a name the user
     // referenced in the clause always wins over the raw projection alias.

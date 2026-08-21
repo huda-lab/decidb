@@ -2,12 +2,47 @@
 
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/profiler.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
+#include "duckdb/decidb/ilp_model.hpp"
+#include <unordered_map>
 
 namespace duckdb {
+
+//! Global sink state accumulated by PhysicalDecide::Sink/Combine; defined in
+//! physical_decide.cpp. Finalize's private phase methods take it by reference.
+class DecideGlobalSinkState;
+
+//! Per-Finalize cache of TransformToChunkExpression results, keyed by the original
+//! (unlowered) expression pointer. Outlives every ExpressionExecutor built during
+//! Finalize, so it's safe for executors to retain references into cached entries.
+using ChunkExprCache = std::unordered_map<const Expression *, unique_ptr<Expression>>;
+
+//! One cached PER grouping: the expression set it was built from, plus the resulting
+//! unfiltered row→group assignment. Keyed by a hash of the PER expression set so a
+//! PER spec evaluated once (e.g. by a constraint) is reused by every other call site
+//! that asks for the same expression set (e.g. the objective, or a later constraint).
+struct PerGroupCacheEntry {
+    vector<const Expression *> exprs;
+    bool null_excludes;
+    vector<idx_t> unfiltered_row_group_ids;
+    idx_t unfiltered_num_groups;
+    //! Representative key values per unfiltered group ([key_col][gid]); used to label
+    //! each PER group with its printable key for infeasible diagnosis.
+    vector<vector<Value>> unfiltered_rep_keys;
+};
+using PerGroupCache = std::unordered_map<size_t, vector<PerGroupCacheEntry>>;
+
+//! Per-term filter state for aggregate-local WHEN (constraint terms, bilinear terms,
+//! quadratic groups, and their objective-side equivalents all share this shape).
+struct TermFilterState {
+    vector<bool> mask;
+    bool has_filter = false;
+    bool avg_scale = false;
+};
 
 //===--------------------------------------------------------------------===//
 // PhysicalDecide Operator
@@ -162,6 +197,45 @@ public:
     string GetName() const override;
     InsertionOrderPreservingMap<string> ParamsToString() const override;
 
+private:
+    //! PHASE 1.5: one row→entity mapping per table-scoped entity scope.
+    vector<EntityMapping> BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
+                                              idx_t num_rows) const;
+
+    //! PHASE 2, sub-phase 1: evaluate every constraint's coefficients and append the
+    //! result to gstate.evaluated_constraints.
+    void EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                             ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                             const vector<EntityMapping> &entity_mappings) const;
+
+    //! Per-term filter state the objective evaluation produces and Phase 3 (qualifier
+    //! de-dup, AVG scaling, MIN/MAX objective linearization) still needs.
+    struct ObjectiveEvalState {
+        vector<TermFilterState> linear_filters, quadratic_filters, bilinear_filters;
+        vector<bool> when_mask;
+        bool has_when = false;
+    };
+
+    //! PHASE 2, sub-phase 2: evaluate the objective's coefficients onto gstate's
+    //! objective-evaluation fields.
+    ObjectiveEvalState EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                         ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                                         const vector<EntityMapping> &entity_mappings) const;
+
+    //! PHASE 3, model build: SolverInput assembly, auto-M, linearization passes,
+    //! objective transfer, objective PER-grouping + AVG scaling, VarIndexer::Build,
+    //! MIN/MAX objective linearization, and the composed-MIN/MAX block. Everything up
+    //! to (not including) the SolveModel call.
+    SolverInput BuildSolverInput(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                 ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                                 vector<EntityMapping> entity_mappings, ObjectiveEvalState obj_state,
+                                 VarIndexer &out_var_indexer, bool bench, Profiler &model_timer) const;
+
+    //! PHASE 3, solve + readback: build_var_labels, the RouteSolveResult switch and its
+    //! four terminal cases, and the shared success epilogue.
+    SinkFinalizeType FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
+                                         SolverInput &solver_input, VarIndexer &var_indexer, bool bench,
+                                         Profiler &model_timer, Profiler &solver_timer) const;
 };
 
 } // namespace duckdb

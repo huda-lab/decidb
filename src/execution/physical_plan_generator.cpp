@@ -11,8 +11,6 @@
 #include "duckdb/planner/operator/list.hpp"
 #include "duckdb/execution/operator/helper/physical_verify_vector.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 PhysicalPlanGenerator::PhysicalPlanGenerator(ClientContext &context) : context(context) {

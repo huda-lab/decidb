@@ -6,7 +6,6 @@ add_library_unity(
   decide_parse_hints.cpp
   decide_router.cpp
   diagnostic_solves.cpp
-  debug.cpp
   ilp_linearization.cpp
   ilp_model_builder.cpp
   ilp_solver.cpp

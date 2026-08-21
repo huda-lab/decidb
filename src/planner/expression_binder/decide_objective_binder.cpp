@@ -60,42 +60,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	            }
 	        }
 
-	        // Bind the inner objective (child[0]) through normal objective binding
-	        is_top_expression = true;
-	        ErrorData obj_error;
-	        BindChild(func.children[0], depth, obj_error);
-	        if (obj_error.HasError()) {
-	            return BindResult(std::move(obj_error));
-	        }
-
-	        // Bind each PER column using base ExpressionBinder
-	        is_top_expression = false;
-	        binding_when_condition = true;
-	        for (idx_t i = 1; i < func.children.size(); i++) {
-	            ErrorData col_error;
-	            try {
-	                BindChild(func.children[i], depth, col_error);
-	            } catch (...) {
-	                binding_when_condition = false;
-	                throw;
-	            }
-	            if (col_error.HasError()) {
-	                binding_when_condition = false;
-	                return BindResult(std::move(col_error));
-	            }
-	        }
-	        binding_when_condition = false;
-
-	        // Construct tagged BoundConjunctionExpression:
-	        // child[0] = bound objective (possibly WHEN-wrapped)
-	        // children[1..N] = bound PER columns
-	        auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	        result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[0])));
-	        for (idx_t i = 1; i < func.children.size(); i++) {
-	            result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
-	        }
-	        result->alias = func.function_name;  // preserves PER_CONSTRAINT_TAG
-	        return BindResult(std::move(result));
+	        return BindPerWrapper(func, depth);
 	    }
 	    // DecidB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition.
 	    // Nested WHEN is the aggregate-local form and binds through
@@ -181,56 +146,36 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
-		if (fname == "norm") {
-            if (func.children.empty() || !ValidateSumArgument(*func.children.front(), variables, error_msg,
-                                                               /*allow_quadratic=*/true)) {
-                error_msg += ", found '" + expr.ToString() + "'";
-                return DecideExpression::INVALID;
-            }
+		DecideExpression reducer_result;
+		if (ClassifyReducerCall(func, /*allow_bilinear=*/false, reducer_result, error_msg)) {
+			return reducer_result;
+		}
+        // Non-aggregate outer function. Only additive/scalar composition of
+        // aggregates (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`,
+        // `SUM(x) / K`) is allowed; wrapping an aggregate in a non-additive
+        // function (e.g. `POWER(AVG(x), 2)`, `SQRT(SUM(x))`, `LOG(...)`) is
+        // not a linearly-composable objective. Supported quadratic shape is
+        // SUM(POWER(_, 2)), not POWER(AGG(_), _).
+        bool is_additive_or_scalar = (fname == "+" || fname == "-" || fname == "*");
+        // Division is scalar only when the divisor does not contain a
+        // decide aggregate (otherwise the result is genuinely non-linear).
+        if (fname == "/" && func.children.size() == 2 &&
+            !ContainsDecideAggregate(*func.children[1])) {
+            is_additive_or_scalar = true;
+        }
+        if (is_additive_or_scalar && ContainsDecideAggregate(expr)) {
             return DecideExpression::SUM;
         }
-		if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
-            auto scalar_name = FindScalarDecideVariable(*func.children.front());
-            if (!scalar_name.empty()) {
-                error_msg = StringUtil::Format(
-                    "'%s' is a query-wide decision, so %s(%s) has nothing to aggregate over; "
-                    "use %s on its own",
-                    scalar_name, StringUtil::Upper(fname), scalar_name, scalar_name);
-                return DecideExpression::INVALID;
-            }
-            if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true)) {
-                error_msg += ", found '" + expr.ToString() + "'";
-                return DecideExpression::INVALID;
-            }
-            return DecideExpression::SUM;
-		} else {
-            // Non-aggregate outer function. Only additive/scalar composition of
-            // aggregates (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`,
-            // `SUM(x) / K`) is allowed; wrapping an aggregate in a non-additive
-            // function (e.g. `POWER(AVG(x), 2)`, `SQRT(SUM(x))`, `LOG(...)`) is
-            // not a linearly-composable objective. Supported quadratic shape is
-            // SUM(POWER(_, 2)), not POWER(AGG(_), _).
-            bool is_additive_or_scalar = (fname == "+" || fname == "-" || fname == "*");
-            // Division is scalar only when the divisor does not contain a
-            // decide aggregate (otherwise the result is genuinely non-linear).
-            if (fname == "/" && func.children.size() == 2 &&
-                !ContainsDecideAggregate(*func.children[1])) {
-                is_additive_or_scalar = true;
-            }
-            if (is_additive_or_scalar && ContainsDecideAggregate(expr)) {
-                return DecideExpression::SUM;
-            }
-            if (ContainsDecideAggregate(expr)) {
-                error_msg = StringUtil::Format(
-                    "[MAXIMIZE|MINIMIZE] does not support wrapping an aggregate in '%s'. "
-                    "The aggregate must be the outermost function. "
-                    "For quadratic objectives use SUM(POWER(expr, 2)), not %s(AGG(expr), ...).",
-                    func.function_name, StringUtil::Upper(func.function_name));
-                return DecideExpression::INVALID;
-            }
-            error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
+        if (ContainsDecideAggregate(expr)) {
+            error_msg = StringUtil::Format(
+                "[MAXIMIZE|MINIMIZE] does not support wrapping an aggregate in '%s'. "
+                "The aggregate must be the outermost function. "
+                "For quadratic objectives use SUM(POWER(expr, 2)), not %s(AGG(expr), ...).",
+                func.function_name, StringUtil::Upper(func.function_name));
             return DecideExpression::INVALID;
         }
+        error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
+        return DecideExpression::INVALID;
     }
     case ExpressionClass::COLUMN_REF: {
         // A query-wide decision is a single solver column, so it is already a

@@ -183,6 +183,11 @@ public:
 	//! non-mutating and throws InternalException: once binding/canonicalization has
 	//! accepted a constraint, a non-canonical tree is an engine bug rather than a
 	//! user-input error.
+	//!
+	//! DEBUG-ONLY, like LogicalOperator::Verify: the body re-canonicalizes the whole
+	//! tree to check idempotency, which is too expensive to pay on every DECIDE query
+	//! in release. Call sites call it unconditionally; in a release build it compiles
+	//! to an empty function. Build `debug` or `relassert` to exercise it.
 	void VerifyCanonical(const Expression &constraints) const;
 
 	//! The objective counterpart of VerifyCanonical. Step 6 shipped the constraint
@@ -190,6 +195,8 @@ public:
 	//! canonical form to check against; CanonicalizeObjective gives them one.
 	//! Non-mutating, and throws InternalException for the same reason: past this
 	//! boundary a non-canonical objective is an engine bug, not user input.
+	//!
+	//! DEBUG-ONLY -- see VerifyCanonical.
 	void VerifyCanonicalObjective(const Expression &objective) const;
 
 private:

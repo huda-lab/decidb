@@ -1,6 +1,5 @@
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
-#include "duckdb/decidb/solver_config.hpp"
 #include "duckdb/decidb/solver_session.hpp"
 #include "duckdb/decidb/diagnostic_constants.hpp"
 #include "duckdb/common/exception.hpp"
@@ -389,12 +388,6 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
 }
 
 } // namespace
-
-SolverResult DeterministicNaive::Solve(const SolverModel &model) {
-    // Single-shot path: one Solve() on a throwaway session with the default limit.
-    HighsSession session;
-    return session.Solve(model, ResolveDecideTimeLimit());
-}
 
 unique_ptr<SolverSession> DeterministicNaive::CreateSession() {
     return make_uniq<HighsSession>();

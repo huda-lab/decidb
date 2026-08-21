@@ -25,33 +25,9 @@
 #include <unordered_set>
 #include <cmath>
 
-#include "duckdb/decidb/utility/debug.hpp"
 #include "duckdb/main/client_context.hpp"
 
 namespace duckdb {
-
-bool IsScalarValue(ParsedExpression &expr) {
-    if (expr.GetExpressionClass() == ExpressionClass::CONSTANT) {
-        auto &constant_expr = expr.Cast<ConstantExpression>();
-        switch (constant_expr.value.type().id()) {
-            case LogicalTypeId::LIST:
-            case LogicalTypeId::STRUCT:
-            case LogicalTypeId::MAP:
-            case LogicalTypeId::ARRAY:
-            case LogicalTypeId::UNION:
-                return false;
-            default:
-                return true;
-        }
-    }
-    if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
-        auto &subquery_expr = expr.Cast<SubqueryExpression>();
-        if (subquery_expr.subquery_type == SubqueryType::SCALAR) {
-            return true;
-        }
-    }
-    return false;
-}
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
 	if (expr.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
@@ -1097,6 +1073,79 @@ string DecideBinder::FindScalarDecideVariable(const ParsedExpression &expr) cons
 		}
 	});
 	return found;
+}
+
+bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, bool allow_bilinear, DecideExpression &result,
+                                       string &error_msg) {
+	auto fname = StringUtil::Lower(func.function_name);
+	if (fname == "norm") {
+		if (func.children.empty() || !ValidateSumArgument(*func.children.front(), variables, error_msg,
+		                                                   /*allow_quadratic=*/true, allow_bilinear)) {
+			error_msg += ", found '" + func.ToString() + "'";
+			result = DecideExpression::INVALID;
+		} else {
+			result = DecideExpression::SUM;
+		}
+		return true;
+	}
+	if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
+		auto scalar_name = FindScalarDecideVariable(*func.children.front());
+		if (!scalar_name.empty()) {
+			error_msg = StringUtil::Format(
+			    "'%s' is a query-wide decision, so %s(%s) has nothing to aggregate over; "
+			    "use %s on its own",
+			    scalar_name, StringUtil::Upper(fname), scalar_name, scalar_name);
+			result = DecideExpression::INVALID;
+		} else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true,
+		                                allow_bilinear)) {
+			error_msg += ", found '" + func.ToString() + "'";
+			result = DecideExpression::INVALID;
+		} else {
+			result = DecideExpression::SUM;
+		}
+		return true;
+	}
+	return false;
+}
+
+BindResult DecideBinder::BindPerWrapper(FunctionExpression &func, idx_t depth) {
+	// Bind the inner constraint/objective (child[0]) through the subclass's own dispatch.
+	is_top_expression = true;
+	ErrorData inner_error;
+	BindChild(func.children[0], depth, inner_error);
+	if (inner_error.HasError()) {
+		return BindResult(std::move(inner_error));
+	}
+
+	// Bind each PER column using the base ExpressionBinder (reuse binding_when_condition
+	// to bypass DECIDE-specific dispatch: a PER column is a plain table column).
+	is_top_expression = false;
+	binding_when_condition = true;
+	for (idx_t i = 1; i < func.children.size(); i++) {
+		ErrorData column_error;
+		try {
+			BindChild(func.children[i], depth, column_error);
+		} catch (...) {
+			binding_when_condition = false;
+			throw;
+		}
+		if (column_error.HasError()) {
+			binding_when_condition = false;
+			return BindResult(std::move(column_error));
+		}
+	}
+	binding_when_condition = false;
+
+	// Construct tagged bound result:
+	// child[0] = bound constraint/objective (possibly WHEN-wrapped)
+	// children[1..N] = bound PER columns (BoundColumnRefExpression)
+	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[0])));
+	for (idx_t i = 1; i < func.children.size(); i++) {
+		result->children.push_back(std::move(BoundExpression::GetExpression(*func.children[i])));
+	}
+	result->alias = func.function_name; // preserves PER_CONSTRAINT_TAG
+	return BindResult(std::move(result));
 }
 
 BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) {

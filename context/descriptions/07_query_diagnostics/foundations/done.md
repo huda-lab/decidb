@@ -170,7 +170,7 @@ ray is reported with an explicit caveat because feasibility was not established
     `mip_gap = nan`, and `col_value` is present but garbage. Read incumbent/objective/gap
     *only* when `SolCount > 0` (Gurobi) / `primal_solution_status == 2` (HiGHS).
   - **HiGHS timeout mapping (fixed, S0).** `highs.run()` returns `HighsStatus::kWarning`
-    (not `kOk`) at the time limit. `DeterministicNaive::Solve` now throws only on
+    (not `kOk`) at the time limit. `HighsSession::RunAndReadback` throws only on
     `HighsStatus::kError`, so `kWarning` falls through to the model-status switch and
     `kTimeLimit` maps to `TIME_LIMIT` (previously the `!= kOk` guard threw an INTERNAL
     error first, crashing the diagnosable timeout). Both
@@ -216,7 +216,14 @@ user-clause level instead of raw rows.
   `input.constraints` so it survives `continue` skips. Evaluated constraints default
   to `USER_PARAMETER` unless the planner/operator stamps a rigid role; raw generated
   constraints default to `STRUCTURAL` unless explicitly marked as user mechanism or
-  user parameter.
+  user parameter. The six evaluated-constraint sites share the field-setting through
+  two free functions, `StampConstraintProvenance` (the fields common to all six:
+  `source_clause_id`, `repair_group_id`, `kind`, `shape`/`rhs_label`, and `group_key`/
+  `group_label` where grouped) and `StampAggregateProvenance` (`is_aggregate` /
+  `qualifier`, the four aggregate sites only) — see
+  `../../01_pipeline/06_model_formulation/done.md` §7 for why `avg_scaled` /
+  `weight_labels` / `folded_terms` stay linear-only rather than becoming a third
+  shared field.
 - **Rigid rewrite rows are stamped at the source.** The optimizer tags structural
   rewrites that re-enter constraint parsing with `STRUCTURAL_CONSTRAINT_TAG`, and
   `PhysicalDecide` stamps generated McCormick / ABS envelope rows as `STRUCTURAL`;

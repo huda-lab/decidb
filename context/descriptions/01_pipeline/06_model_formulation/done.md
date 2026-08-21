@@ -259,6 +259,30 @@ wrote for it. `has_unit` is false when that coefficient is data-varying — ther
 no literal to quote, so rendering falls back to the symbolic name in
 `weight_labels`.
 
+Six emission sites stamp this struct — linear and quadratic, each in ungrouped
+aggregate / grouped aggregate / per-row shape — and two free functions in
+`ilp_model_builder.cpp` own the fields common across that shape matrix rather than
+each site repeating them:
+
+- `StampConstraintProvenance(provenance, eval_const, repair_group_id, group_key,
+  group_label)` sets `source_clause_id`, `repair_group_id`, `kind`, `shape` +
+  `rhs_label`, and — only when the caller passes a real one — `group_key` /
+  `group_label`. All six sites call this.
+- `StampAggregateProvenance(provenance, eval_const)` sets `is_aggregate` and
+  `qualifier`. Only the four aggregate sites (linear and quadratic, ungrouped and
+  grouped) call this; a per-row constraint has no reducer to name.
+
+`avg_scaled`, `weight_labels` and `folded_terms` stay hand-stamped at exactly the
+two **linear**-aggregate sites and are never set on the quadratic ones. That is
+not leftover drift: `FormatQuadraticLhs` (stage 07's diagnosis renderer) never
+reads those three fields — it reconstructs a quadratic row's LHS from
+`linear_coefficients`/`q_coefficients` directly, the same way `FormatLhs` (the
+linear renderer) reads `avg_scaled`/`folded_terms`/`weight_labels`. Stamping them
+on a `QuadraticConstraint` would be dead weight with no reader, not a fix. The
+comment marking these six sites is numbered 1-6 in emission order (was
+non-contiguous 1/2/3/5/6/7 before this consolidation, from a since-removed site
+4).
+
 ---
 
 ## 8. Sanity checks

@@ -9,8 +9,19 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 
 using namespace duckdb;
+
+// VerifyCanonical/VerifyCanonicalObjective are DEBUG-only (see decide_canonicalizer.hpp):
+// in a release build the body compiles away, so a broken tree legitimately does not
+// throw there. Exercise the real invariant check under debug/relassert, and just pin
+// "no crash" everywhere else.
+#ifdef DEBUG
+#define REQUIRE_VERIFY_THROWS(expr) REQUIRE_THROWS_AS(expr, InternalException)
+#else
+#define REQUIRE_VERIFY_THROWS(expr) REQUIRE_NOTHROW(expr)
+#endif
 
 namespace {
 
@@ -54,13 +65,13 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	SECTION("decision reference on the RHS violates C2") {
 		auto invalid = Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
 		                          DecideRef(0), DecideRef(1, "y"));
-		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*invalid), InternalException);
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*invalid));
 	}
 
 	SECTION("decision-free comparison violates C1") {
 		auto invalid = Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
 		                          DoubleConstant(1), DoubleConstant(2));
-		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*invalid), InternalException);
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*invalid));
 	}
 
 	SECTION("WHEN wrapper arity is structural") {
@@ -68,7 +79,7 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		wrapped->SetAlias(WHEN_CONSTRAINT_TAG);
 		wrapped->children.push_back(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
 		                                       DecideRef(0), DoubleConstant(5)));
-		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*wrapped), InternalException);
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*wrapped));
 	}
 
 	SECTION("WHEN wrapper remains structural with composable metadata") {
@@ -89,7 +100,7 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		wrapped->children.push_back(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
 		                                       DecideRef(0), DoubleConstant(5)));
 		wrapped->children.push_back(DataRef());
-		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*wrapped), InternalException);
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*wrapped));
 	}
 
 	SECTION("missing query-wide bound provenance breaks the fixed point") {
@@ -100,7 +111,7 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		auto alias = comparison.right->GetAlias();
 		RemoveDecideTag(alias, QUERY_WIDE_BOUND_TAG);
 		comparison.right->SetAlias(std::move(alias));
-		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*canonical), InternalException);
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*canonical));
 	}
 
 	SECTION("stale query-wide provenance on row data breaks the fixed point") {
@@ -110,11 +121,44 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		auto alias = comparison.right->GetAlias();
 		AddDecideTag(alias, QUERY_WIDE_BOUND_TAG);
 		comparison.right->SetAlias(std::move(alias));
-		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*invalid), InternalException);
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*invalid));
 	}
 
 	SECTION("optimizer Boolean placeholder is an allowed non-comparison leaf") {
 		auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
 		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*placeholder));
+	}
+
+	SECTION("rejected objective term quotes the user's spelling, not an internal tag") {
+		// A decision-free, non-foldable term beside a decision reference is rejected by
+		// CanonicalizeObjective. Give that term a DECIDE tag on its alias (as it would
+		// carry if this objective were an optimizer-rewritten row re-entering
+		// canonicalization through LogicalDecide::SetObjective) and check the error
+		// names the column, never the tag: `StripDecideTags` is the contract every
+		// user-facing name in this pass relies on.
+		auto data_ref = DataRef();
+		string alias = data_ref->GetAlias();
+		AddDecideTag(alias, MakeSourceClauseTag(3));
+		data_ref->SetAlias(std::move(alias));
+
+		ScalarFunction plus_fn("+", {LogicalType::DOUBLE, LogicalType::DOUBLE}, LogicalType::DOUBLE, nullptr);
+		duckdb::vector<duckdb::unique_ptr<Expression>> children;
+		children.push_back(DecideRef(0));
+		children.push_back(std::move(data_ref));
+		auto objective = make_uniq<BoundFunctionExpression>(LogicalType::DOUBLE, std::move(plus_fn),
+		                                                    std::move(children), nullptr, true);
+
+		double offset = 0;
+		bool threw = false;
+		try {
+			canonicalizer.CanonicalizeObjective(*objective, offset);
+		} catch (const BinderException &ex) {
+			threw = true;
+			string message = ex.what();
+			REQUIRE(message.find("'v'") != string::npos);
+			REQUIRE(message.find("source_clause") == string::npos);
+			REQUIRE(message.find("__") == string::npos);
+		}
+		REQUIRE(threw);
 	}
 }

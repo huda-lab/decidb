@@ -5,8 +5,6 @@
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/planner/expression/list.hpp"
 
-#include "duckdb/decidb/utility/debug.hpp"
-
 namespace duckdb {
 
 ExpressionExecutor::ExpressionExecutor(ClientContext &context) : context(&context) {
