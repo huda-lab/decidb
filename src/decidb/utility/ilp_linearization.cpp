@@ -621,6 +621,17 @@ void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer
             outer.rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue()
                                                   : ec.rhs_values.Get(bound_row);
             outer.kind = ConstraintKind::USER_PARAMETER;
+            // The elastic shape, without which this row does not fold. One `PER` clause
+            // emits one of these rows per group, and they are all the same line of SQL:
+            // the user edits a single literal and every group moves with it. Left UNSET
+            // they never fold, so an infeasible `MAX(e) >= K PER g` reported one edit per
+            // group — and only the loosest of them repaired anything. Applying any other
+            // left the query infeasible, which is a worse failure than reporting nothing.
+            // Read from the same flag the linear builder reads, so the native and lowered
+            // arms classify the clause identically; a genuinely per-group bound stays
+            // PER_ROW_DATA and reports a virtual offset, as it does elsewhere.
+            outer.shape = ec.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR
+                                                  : ElasticShape::PER_ROW_DATA;
             outer.source_clause_id = ec.source_clause_id;
             outer.repair_group_id = ec.repair_group_id;
             input.global_constraints.push_back(std::move(outer));

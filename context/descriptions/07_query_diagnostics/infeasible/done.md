@@ -325,6 +325,15 @@ engine actually spent was the bound's. Pinned by `TestNativeConstructDiagnosis` 
 `test/decide/tests/test_query_diagnostics_relation.py`, which applies the reported edit and
 re-runs the query, and compares the native and lowered arms against each other.
 
+**A natively-stated `PER` clause folds like any other.** `ExpandNativeMinMaxConstraints`
+emits one bound row per group, all carrying the user's single literal, and stamps them
+from `EvaluatedConstraint::rhs_is_shared_scalar` — the same flag the linear builder reads,
+so the native and lowered arms classify one clause identically. Left `UNSET` those rows
+never folded, and an infeasible `MAX(e) >= K PER g` reported one edit per group against
+the same clause text with no group label to tell them apart; only the loosest of them
+repaired anything, so the report contained edits that made no progress. A genuinely
+per-group bound still stamps `PER_ROW_DATA` and reports a virtual offset.
+
 **Edit conversion (the D3 helper).** Reading the slack support is centralized in
 `MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (a literal knob) and
 `MakeVirtualOffsetEdit(provenance, lhs, rhs_text, sense, delta)` (a query-mode data offset,

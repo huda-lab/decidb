@@ -2065,3 +2065,36 @@ class TestNativeConstructDiagnosis:
         assert native == lowered, (
             f"the two arms disagree on {construct!r}:\n{native}\n---\n{lowered}"
         )
+
+    @pytest.mark.parametrize("cli_fixture", _NATIVE_BACKENDS)
+    def test_a_per_clause_reports_one_edit_not_one_per_group(self, request, cli_fixture):
+        """One line of SQL is one edit, however many groups it covers.
+
+        A natively-stated `MAX(e) >= K PER g` emits one bound row per group, and those
+        rows are the same user literal — loosening `K` moves every group at once. Left
+        unlabelled they did not fold, so this query reported two edits against the same
+        clause text, `>= 11` and `>= 13`, with nothing to say which group either
+        belonged to. Only the loosest repaired anything: applying `>= 13` left the query
+        infeasible, so the diagnosis handed back an edit that made no progress.
+        """
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT g, x FROM (VALUES (0,1),(0,2),(1,3),(1,4)) t(g,c) "
+            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND MAX(x + c) >= 25 PER g "
+            "MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+
+        edits = _clause_edits(rows)
+        assert len(edits) == 1, f"one clause, one edit:\n{rows}"
+        assert edits[0]["subject"] == "MAX(x + c) >= 25 PER g", rows
+        # A shared literal, not a per-row data offset — the user has a number to retype.
+        assert edits[0]["edit_source"] == "source_literal", rows
+
+        fixed_sql = _apply_reported_fix(cli, sql, rows)
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        repaired = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(
+            sum(float(r["x"]) for r in repaired))
