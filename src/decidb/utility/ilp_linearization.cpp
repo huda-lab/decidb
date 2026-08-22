@@ -18,12 +18,31 @@ namespace duckdb {
 // when its range was in fact derivable costs the root LP dearly — the simplex has
 // no box to start from and crawls toward the answer one pivot at a time.
 
+//! Give the auxiliary at flat index `aux_idx` its diagnosis label, padding the label
+//! channel out to that column first.
+//!
+//! `global_variable_labels` is positional — entry `i` names global column `i` — but it
+//! is written only where a label exists, so it can trail the block and a bare
+//! `push_back` would land the label on whatever column happens to be next. The pad is
+//! what keeps the two aligned. Every creation site used to spell it out itself, which
+//! left a new site one forgotten line away from naming the wrong column; both creation
+//! helpers below call this instead, so a column and its label are set in one step.
+//! Unnamed columns take an empty entry, which is what the readback fills in anyway.
+static void LabelGlobalAux(SolverInput &input, const VarIndexer &indexer, idx_t aux_idx,
+                           const string &label) {
+    input.global_variable_labels.resize(aux_idx - indexer.global_block_start);
+    input.global_variable_labels.push_back(label);
+}
+
 //! Append one continuous auxiliary column bounded by the family it reduces over.
+//! `label` is the clause text a diagnosis should render for it; empty means unnamed.
 //! Returns its flat column index.
 static idx_t AddGlobalContinuousAux(SolverInput &input, const VarIndexer &indexer,
-                                    const AuxRange &range, double obj_coeff) {
+                                    const AuxRange &range, double obj_coeff,
+                                    const string &label = string()) {
     idx_t aux_idx = indexer.global_block_start + input.num_global_vars;
     input.num_global_vars += 1;
+    LabelGlobalAux(input, indexer, aux_idx, label);
     input.global_variable_types.push_back(LogicalType::DOUBLE);
     // Per side. An auxiliary over `x >= 0` with no ceiling is emitted `[0, 1e30]`,
     // not `[-1e30, 1e30]`: the floor was derived, and throwing it away because the
@@ -38,9 +57,10 @@ static idx_t AddGlobalContinuousAux(SolverInput &input, const VarIndexer &indexe
 //! Append one binary auxiliary column. Its [0,1] box comes from the domain, so it
 //! needs no range.
 static idx_t AddGlobalBinaryAux(SolverInput &input, const VarIndexer &indexer,
-                                double obj_coeff) {
+                                double obj_coeff, const string &label = string()) {
     idx_t aux_idx = indexer.global_block_start + input.num_global_vars;
     input.num_global_vars += 1;
+    LabelGlobalAux(input, indexer, aux_idx, label);
     input.global_variable_types.push_back(LogicalType::BOOLEAN);
     input.global_lower_bounds.push_back(0.0);
     input.global_upper_bounds.push_back(1.0);
@@ -134,6 +154,25 @@ static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
 //! same refusal, in the same words, for the constructs that used to take a 1e6 floor
 //! instead — and it applies on every backend, so one query never answers correctly on
 //! one solver and wrongly on another.
+//!
+//! The two callers below differ only in how they locate the column to blame, so the
+//! words the user reads live here, once. `bad` is that column, or INVALID_INDEX when
+//! the open bound could not be attributed to any named column.
+[[noreturn]] static void ThrowUnboundedBigMNaming(idx_t bad, const vector<string> &var_names,
+                                                  const char *construct) {
+    if (bad == DConstants::INVALID_INDEX || bad >= var_names.size() || var_names[bad].empty()) {
+        throw InvalidInputException("Rewriting %s requires a finite bound on every decision variable it "
+                                    "reads, and one of them is unbounded. Add an upper and a lower bound "
+                                    "to the variables in that clause.",
+                                    construct);
+    }
+    const string &name = var_names[bad];
+    throw InvalidInputException("Rewriting %s requires a finite bound on '%s'. Add constraints "
+                                "'%s >= <lower>' and '%s <= <upper>'.",
+                                construct, name, name, name);
+}
+
+//! Locate the blame for a row Big-M: a contributing decision variable with an open box.
 [[noreturn]] static void ThrowUnboundedBigM(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
                                             const vector<double> &upper_bounds,
                                             const vector<string> &var_names, const char *construct) {
@@ -153,16 +192,7 @@ static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
             break;
         }
     }
-    if (bad == DConstants::INVALID_INDEX || bad >= var_names.size() || var_names[bad].empty()) {
-        throw InvalidInputException("Rewriting %s requires a finite bound on every decision variable it "
-                                    "reads, and one of them is unbounded. Add an upper and a lower bound "
-                                    "to the variables in that clause.",
-                                    construct);
-    }
-    const string &name = var_names[bad];
-    throw InvalidInputException("Rewriting %s requires a finite bound on '%s'. Add constraints "
-                                "'%s >= <lower>' and '%s <= <upper>'.",
-                                construct, name, name, name);
+    ThrowUnboundedBigMNaming(bad, var_names, construct);
 }
 
 //! The auxiliary-family twin of ThrowUnboundedBigM: a MIN/MAX auxiliary is linked to
@@ -171,17 +201,8 @@ static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
 //! applies — refuse rather than guess.
 [[noreturn]] static void ThrowUnboundedAuxBigM(const AuxRange &range, const vector<string> &var_names,
                                                const char *construct) {
-    idx_t bad = range.unbounded_var;
-    if (bad == DConstants::INVALID_INDEX || bad >= var_names.size() || var_names[bad].empty()) {
-        throw InvalidInputException("Rewriting %s requires a finite bound on every decision variable it "
-                                    "reads, and one of them is unbounded. Add an upper and a lower bound "
-                                    "to the variables in that clause.",
-                                    construct);
-    }
-    const string &name = var_names[bad];
-    throw InvalidInputException("Rewriting %s requires a finite bound on '%s'. Add constraints "
-                                "'%s >= <lower>' and '%s <= <upper>'.",
-                                construct, name, name, name);
+    // The range already recorded which variable opened it, so there is nothing to search.
+    ThrowUnboundedBigMNaming(range.unbounded_var, var_names, construct);
 }
 
 //! Which construct asked for this Big-M, for the refusal above. Read off the
@@ -228,11 +249,12 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
                                                     r, lower_bounds, upper_bounds, has_unbounded);
         M = std::max(M, range);
     }
-    M += 1.0;
+    // Refuse before finishing the constant: an open contributor means there is no M
+    // to return, so the slack term below would only be computed and thrown away.
     if (has_unbounded) {
         ThrowUnboundedBigM(ec, lower_bounds, upper_bounds, var_names, DescribeBigMConstruct(ec));
     }
-    return M;
+    return M + 1.0;
 }
 
 //! What an infinite bound means for a hard MIN/MAX constraint.
@@ -522,10 +544,17 @@ void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer
         // variable needs a finite bound.
         vector<vector<int>> group_args(group_count);
         vector<AuxRange> group_range(group_count);
+        // The row each group's outer clause reads its bound off, recorded on the walk
+        // that already visits every row. Finding it again per group below would rescan
+        // the whole table once per group.
+        vector<idx_t> group_first_row(group_count, DConstants::INVALID_INDEX);
         for (idx_t r = 0; r < num_rows; r++) {
             idx_t g = has_groups ? ec.row_group_ids[r] : 0;
             if (g == DConstants::INVALID_INDEX || g >= group_count) {
                 continue;
+            }
+            if (group_first_row[g] == DConstants::INVALID_INDEX) {
+                group_first_row[g] = r;
             }
             // A column pinned to this row's inner expression. The general constraint
             // relates variables, so the linear half is a row either way. Boxed by that
@@ -546,8 +575,6 @@ void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer
                                         DConstants::INVALID_INDEX);
             }
             idx_t t_idx = AddGlobalContinuousAux(input, indexer, row_range, 0.0);
-            input.global_variable_labels.resize(t_idx - indexer.global_block_start);
-            input.global_variable_labels.push_back(string());
 
             SolverInput::RawConstraint pin;
             pin.indices.push_back(static_cast<int>(t_idx));
@@ -583,13 +610,11 @@ void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer
             // The extremum of a family lies inside the family's own bracket, so the
             // union of the member ranges boxes it.
             idx_t z_idx = AddGlobalContinuousAux(input, indexer, group_range[g], 0.0);
-            input.global_variable_labels.resize(z_idx - indexer.global_block_start);
-            input.global_variable_labels.push_back(string());
 
             GeneralConstraintSpec gc;
             gc.kind = is_max_agg ? GeneralConstraintKind::MAX : GeneralConstraintKind::MIN;
             gc.result_column = static_cast<int>(z_idx);
-            gc.argument_columns = group_args[g];
+            gc.argument_columns = std::move(group_args[g]);
             gc.source_clause_id = ec.source_clause_id;
             gc.repair_group_id = ec.repair_group_id;
             input.general_constraints.push_back(std::move(gc));
@@ -598,15 +623,7 @@ void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer
             // row the elastic engine sees, and it is the one the user actually wrote —
             // an improvement on the lowered form, where the bound was spread across a
             // per-row Big-M family.
-            idx_t bound_row = DConstants::INVALID_INDEX;
-            for (idx_t r = 0; r < num_rows; r++) {
-                idx_t rg = has_groups ? ec.row_group_ids[r] : 0;
-                if (rg == g) {
-                    bound_row = r;
-                    break;
-                }
-            }
-            D_ASSERT(bound_row != DConstants::INVALID_INDEX);
+            D_ASSERT(group_first_row[g] != DConstants::INVALID_INDEX);
 
             SolverInput::RawConstraint outer;
             outer.indices.push_back(static_cast<int>(z_idx));
@@ -618,8 +635,10 @@ void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer
             // included. (The lowering arm nets the constant out instead, since it
             // compares row by row.) Group-constant by construction —
             // ReduceAggregateRhsPerGroup collapsed a row-varying bound already.
+            // A uniform bound is the same value whichever row is picked, so the
+            // representative row is not even consulted.
             outer.rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue()
-                                                  : ec.rhs_values.Get(bound_row);
+                                                  : ec.rhs_values.Get(group_first_row[g]);
             outer.kind = ConstraintKind::USER_PARAMETER;
             // The elastic shape, without which this row does not fold. One `PER` clause
             // emits one of these rows per group, and they are all the same line of SQL:
@@ -1142,12 +1161,15 @@ void ExpandNativeNotEqual(SolverInput &input, const VarIndexer &indexer,
             // the infeasible removal dial groups them into one droppable `<>` — the
             // same grouping the Big-M rows get, and the reason this construct is
             // expressed as indicator constraints rather than general ones.
-            auto emit = [&](int binval, char sense, double rhs) {
+            // The row's terms are taken by value so the half that no longer needs them
+            // can hand them straight over: only the first half copies.
+            auto emit = [&](vector<int> row_indices, vector<double> row_coefficients, int binval,
+                            char sense, double rhs) {
                 SolverInput::IndicatorConstraintSpec ic;
                 ic.binary_column = z_col;
                 ic.binary_value = binval;
-                ic.indices = indices;
-                ic.coefficients = coefficients;
+                ic.indices = std::move(row_indices);
+                ic.coefficients = std::move(row_coefficients);
                 ic.sense = sense;
                 ic.rhs = rhs;
                 ic.kind = ConstraintKind::USER_MECHANISM;
@@ -1156,8 +1178,10 @@ void ExpandNativeNotEqual(SolverInput &input, const VarIndexer &indexer,
                 ic.indicator_col = static_cast<idx_t>(z_col);
                 input.indicator_constraints.push_back(std::move(ic));
             };
-            emit(0, '<', k - 1.0 - constant); // z = 0  =>  LHS <= K - 1
-            emit(1, '>', k + 1.0 - constant); // z = 1  =>  LHS >= K + 1
+            // z = 0  =>  LHS <= K - 1
+            emit(indices, coefficients, 0, '<', k - 1.0 - constant);
+            // z = 1  =>  LHS >= K + 1. Last use of the row's terms.
+            emit(std::move(indices), std::move(coefficients), 1, '>', k + 1.0 - constant);
         }
     }
     deferred_native.clear();
@@ -1317,8 +1341,7 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
             // diagnosis identical whichever encoding the group received. The per-row
             // path is in the same position — its indicator is allocated at stage 05,
             // before any range is knowable.
-            idx_t z_idx = AddGlobalBinaryAux(input, var_indexer, 0.0);
-            input.global_variable_labels.push_back(ne_label);
+            idx_t z_idx = AddGlobalBinaryAux(input, var_indexer, 0.0, ne_label);
 
             // Accumulate LHS coefficients for active rows in this group.
             for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
@@ -1363,12 +1386,15 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
                 // Native: the two halves as implications on this group's binary, so the
                 // group's summed Big-M — which is what forces a bound on every
                 // contributing variable — is not needed at all.
-                auto emit = [&](int binval, char sense, double bound) {
+                // By value, as in the per-row twin above: only the first half copies
+                // the group's snapshot, the second hands it over.
+                auto emit = [&](vector<int> grp_indices, vector<double> grp_coefs, int binval,
+                                char sense, double bound) {
                     SolverInput::IndicatorConstraintSpec ic;
                     ic.binary_column = static_cast<int>(z_idx);
                     ic.binary_value = binval;
-                    ic.indices = common_indices;
-                    ic.coefficients = common_coefs;
+                    ic.indices = std::move(grp_indices);
+                    ic.coefficients = std::move(grp_coefs);
                     ic.sense = sense;
                     ic.rhs = bound;
                     ic.kind = ConstraintKind::USER_MECHANISM;
@@ -1377,8 +1403,9 @@ void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_i
                     ic.indicator_col = z_idx;
                     input.indicator_constraints.push_back(std::move(ic));
                 };
-                emit(0, '<', rhs - 1.0);
-                emit(1, '>', rhs + 1.0);
+                emit(common_indices, common_coefs, 0, '<', rhs - 1.0);
+                // Last use of the snapshot on this arm.
+                emit(std::move(common_indices), std::move(common_coefs), 1, '>', rhs + 1.0);
                 continue;
             }
 
@@ -1734,8 +1761,6 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
                 inner_range.CoverRow(-link.abs_range, link.abs_range, -link.abs_range, link.abs_range);
             }
             idx_t t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
-            input.global_variable_labels.resize(t_idx - indexer.global_block_start);
-            input.global_variable_labels.push_back(string());
 
             SolverInput::RawConstraint link_row;
             link_row.indices.push_back(static_cast<int>(t_idx));
@@ -1920,8 +1945,6 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         // to free only when the range is genuinely underivable, which is exactly the
         // case the native path exists to answer at all.
         idx_t t_idx = AddGlobalContinuousAux(input, indexer, range, 0.0);
-        input.global_variable_labels.resize(t_idx - indexer.global_block_start);
-        input.global_variable_labels.push_back(string());
         SolverInput::RawConstraint pin;
         pin.indices.push_back((int)t_idx);
         pin.coefficients.push_back(1.0);
@@ -2571,9 +2594,7 @@ static void EmitComposedHardMinMaxIndicators(SolverInput &input, const VarIndexe
             MinMaxLinkRow row_terms;
             AddComposedRowTerms(indexer, row_terms, inner_terms, per_term_coefs, row);
 
-            idx_t t_idx = AddGlobalContinuousAux(input, indexer, term_range, 0.0);
-            input.global_variable_labels.resize(t_idx - indexer.global_block_start);
-            input.global_variable_labels.push_back(label);
+            idx_t t_idx = AddGlobalContinuousAux(input, indexer, term_range, 0.0, label);
 
             // `row_terms` is the `(z - expr)` half of a linking row, so its stored
             // coefficients are negated: `t + row_terms = row_terms.constant` is `t = expr`.
@@ -2608,9 +2629,7 @@ static void EmitComposedHardMinMaxIndicators(SolverInput &input, const VarIndexe
     SolverInput::RawConstraint sum_y;
     for (idx_t row = 0; row < num_rows; row++) {
         if (!filter_mask[row]) continue;
-        idx_t y_idx = AddGlobalBinaryAux(input, indexer, 0.0);
-        input.global_variable_labels.resize(y_idx - indexer.global_block_start);
-        input.global_variable_labels.push_back(label);
+        idx_t y_idx = AddGlobalBinaryAux(input, indexer, 0.0, label);
 
         sum_y.indices.push_back((int)y_idx);
         sum_y.coefficients.push_back(1.0);
@@ -2655,14 +2674,12 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
     // hard terms get the indicator layer emitted after the base envelope pin.
     for (auto &ta : terms) {
         if (!ta.is_minmax) continue;
+        // The label names the z through the global label channel, so a diagnosis
+        // renders `MAX(x)` rather than an internal column name.
         ta.z_idx = AddGlobalContinuousAux(
             input, indexer,
-            ComposedTermRange(input, (*ta.inner_terms), ta.per_term_coefs, ta.filter_mask), 0.0);
-        // Name the z through the global label channel (as the aggregate-`<>` site
-        // does) so a diagnosis renders `MAX(x)`, never an internal column name.
-        // Pad first: earlier allocation sites may not have pushed labels.
-        input.global_variable_labels.resize(ta.z_idx - indexer.global_block_start);
-        input.global_variable_labels.push_back(ta.label);
+            ComposedTermRange(input, (*ta.inner_terms), ta.per_term_coefs, ta.filter_mask), 0.0,
+            ta.label);
     }
 
     // Emit the base one-sided envelope pin for each MIN/MAX term (both

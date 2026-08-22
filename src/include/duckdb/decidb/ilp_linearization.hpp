@@ -253,6 +253,14 @@ struct AuxRange {
         lo = MinOf(lo, other.lo);
         hi = MaxOf(hi, other.hi);
         spread = MaxOf(spread, other.spread);
+        // The blame travels with the openness. Merging the flags without the variable
+        // leaves a range that reports `Unbounded()` but has no column to name, so a
+        // refusal over the merged family degrades to the generic "one of them is
+        // unbounded" message. Same rule as the `Mark*` helpers: keep the FIRST open end
+        // seen, so the message does not depend on the order families were merged in.
+        if (!Unbounded() && other.Unbounded()) {
+            unbounded_var = other.unbounded_var;
+        }
         lo_unbounded = lo_unbounded || other.lo_unbounded;
         hi_unbounded = hi_unbounded || other.hi_unbounded;
     }
