@@ -309,6 +309,22 @@ PER** re-emits as one global cap in both modes — correctly, because the easy r
 cap uniform `x ≤ K` across groups (the optimizer strips the vacuous PER; see "Slack-scope
 policy").
 
+**The grouping id has to be fresh, and is read off the model to make sure of it.**
+`block_key()` groups by `repair_group_id`, so two clauses sharing an id share a slack —
+and a slack spanning two unrelated clauses can be spent on one of them and billed to the
+other. The re-emitted absorbed bounds need ids no row already holds. They are minted from
+`max(repair_group_id over the retained model) + 1` rather than from any count, because no
+count is the id space: a regular constraint takes its index in `solver_input.constraints`
+and a global one takes `constraints.size() + its own index`, so the two ranges sit
+adjacent and starting at `constraints.size()` lands on the first global constraint. That
+overlap is empty whenever the linear specs outnumber the ids in use, which is why it went
+unseen; stating a construct natively drops linear specs without dropping ids, and the
+collision appeared. The symptom was a repair that did not repair — `SUM(y) >= 100`
+loosened to `>= 81.6` on a query where `y <= 2` caps `SUM(y)` at 8 — because the slack the
+engine actually spent was the bound's. Pinned by `TestNativeConstructDiagnosis` in
+`test/decide/tests/test_query_diagnostics_relation.py`, which applies the reported edit and
+re-runs the query, and compares the native and lowered arms against each other.
+
 **Edit conversion (the D3 helper).** Reading the slack support is centralized in
 `MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (a literal knob) and
 `MakeVirtualOffsetEdit(provenance, lhs, rhs_text, sense, delta)` (a query-mode data offset,

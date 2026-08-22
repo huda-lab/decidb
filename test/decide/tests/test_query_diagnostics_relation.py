@@ -1951,3 +1951,117 @@ class TestUnreachableBound:
         edits = _clause_edits(rows)
         assert edits and all(e["edit_kind"] == "loosen" for e in edits), rows
         assert all(e.get("suggested_change") for e in edits), rows
+
+
+@pytest.mark.query_diagnostics
+class TestNativeConstructDiagnosis:
+    """Diagnosis over a construct the backend states itself.
+
+    Gurobi can be told `aux = MAX(t1, t2)` or `aux = |t|` directly, so those clauses
+    reach the model as a general (or, for `<>`, an indicator) constraint instead of
+    Big-M rows. Every one of those queries is diagnosable — the user's own clause
+    still has a row — but until this class none of them was covered, and the gap hid
+    a real defect.
+
+    **The defect.** The elastic engine folds the rows of one clause into a single
+    shared slack, grouping them by `repair_group_id`. Absorbed bounds (`y <= 2`, which
+    is stored as a column box, not a row) are re-emitted as slackable rows at diagnosis
+    time under freshly minted ids, and those ids started at the count of linear
+    constraint specs. But a GLOBAL constraint is numbered `constraints.size() + its own
+    index`, from the same base — so the two ranges overlap. When the count of linear
+    specs happened to exceed the ids actually in use the overlap was empty and nothing
+    showed; stating a construct natively removes linear specs without removing ids, and
+    the first absorbed bound landed on top of the first global constraint.
+
+    The two then shared one slack, which is a slack spanning two unrelated clauses.
+    The engine could satisfy `SUM(y) >= 100` by spending that slack on the bound rows,
+    then report the edit against the aggregate: `loosen SUM(y) >= 100 to >= 81.6`, on a
+    query where `y <= 2` over four rows caps `SUM(y)` at 8. Applying the suggested edit
+    left the query infeasible.
+
+    So these tests are written the way that defect would have been caught: the reported
+    edit is applied and the query re-run, and the two arms are compared against each
+    other. Neither reads a hand-computed number.
+    """
+
+    _ROWS = "SELECT g, x, y FROM (VALUES (0), (0), (1), (1)) t(g) "
+    _NATIVE_BACKENDS = ["decidb_cli_gurobi"]
+
+    # Each shape pairs a construct over `x` with a conflict that has nothing to do with
+    # it: `y <= 2` over four rows caps `SUM(y)` at 8, so `SUM(y) >= 100` cannot hold and
+    # the only repair is loosening the bound. The construct is there to put a general or
+    # indicator constraint in the model — it is satisfiable throughout, and a diagnosis
+    # that implicates it, or that spends the bound's slack and bills the aggregate, is
+    # wrong.
+    _SHAPES = [
+        ("max", "x(REAL), y(REAL)", "MAX(x) >= 5"),
+        ("max_per", "x(REAL), y(REAL)", "MAX(x) >= 5 PER g"),
+        ("min", "x(REAL), y(REAL)", "MIN(x) >= 5"),
+        ("abs", "x(REAL), y(REAL)", "ABS(x - 3) >= 2"),
+        ("not_equal", "x(INT), y(REAL)", "x <> 3"),
+    ]
+
+    @classmethod
+    def _sql(cls, decls, construct, x_bound=""):
+        return (
+            cls._ROWS + f"DECIDE {decls} SUCH THAT y <= 2{x_bound} AND {construct} "
+            "AND SUM(y) >= 100 MINIMIZE SUM(y)"
+        )
+
+    @pytest.mark.parametrize("cli_fixture", _NATIVE_BACKENDS)
+    @pytest.mark.parametrize("name, decls, construct", _SHAPES,
+                             ids=[s[0] for s in _SHAPES])
+    def test_repair_over_a_native_construct_actually_repairs(
+        self, request, cli_fixture, name, decls, construct
+    ):
+        """The whole promise, on the shape that broke it: apply the reported edit and
+        the query must solve. `x` is left unbounded above, which is the class that only
+        reaches a model at all because the construct is stated natively — a Big-M
+        lowering refuses it for want of a finite bound.
+        """
+        cli = request.getfixturevalue(cli_fixture)
+        sql = self._sql(decls, construct)
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+
+        assert {r["state"] for r in rows} == {"infeasible"}, rows
+        # The bound is the only repairable clause; billing the aggregate was the defect.
+        edits = _clause_edits(rows)
+        assert [e["subject"] for e in edits] == ["y <= 2"], rows
+
+        fixed_sql = _apply_reported_fix(cli, sql, rows)
+        # Oracle: the objective the diagnosis promised is the one the repaired query
+        # actually reaches. Re-solved, never computed here.
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        repaired = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(
+            sum(float(r["y"]) for r in repaired))
+
+    @pytest.mark.parametrize("cli_fixture", _NATIVE_BACKENDS)
+    @pytest.mark.parametrize("name, decls, construct", _SHAPES,
+                             ids=[s[0] for s in _SHAPES])
+    def test_native_and_lowered_report_the_same_repair(
+        self, request, cli_fixture, name, decls, construct
+    ):
+        """The A/B. Which arm ran is a fact about the host's solver, so it must not
+        change a word of what the user is told. `x` is bounded here only so the lowered
+        arm has a finite Big-M and both arms exist to compare.
+        """
+        cli = request.getfixturevalue(cli_fixture)
+        sql = self._sql(decls, construct, x_bound=" AND x <= 100")
+        script = (
+            ".mode csv\nPRAGMA diagnose_decide='auto';\n"
+            f"{sql};\nSELECT * FROM decide_diagnostics();\n"
+        )
+
+        def diagnosis(runner):
+            proc = runner.execute_script(script)
+            return proc.stdout + proc.stderr
+
+        native = diagnosis(cli)
+        lowered = diagnosis(cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}))
+        assert "infeasible" in native.lower(), native
+        assert native == lowered, (
+            f"the two arms disagree on {construct!r}:\n{native}\n---\n{lowered}"
+        )

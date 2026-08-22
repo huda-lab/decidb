@@ -3381,7 +3381,24 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         // the retained model), the elastic model is missing a user constraint —
         // flag it so the engine won't claim an elastic-infeasible verdict.
         bool has_unhandled_user_bounds = false;
-        idx_t synthetic_clause_id = solver_input.constraints.size();
+        // The synthetic ids must be FRESH: the elastic engine groups rows into one
+        // shared slack by `repair_group_id`, so an id already in use silently welds an
+        // absorbed bound onto an unrelated clause and reports one edit for both. They
+        // are read off the model rather than derived from a count, because no count is
+        // the id space. A regular constraint takes its index in `solver_input.constraints`
+        // and a GLOBAL one takes `constraints.size() + its own index`, so the two ranges
+        // are adjacent: starting at `constraints.size()` lands on top of the first global
+        // constraint. That collision is invisible whenever the linear specs outnumber the
+        // ids actually in use, and appears as soon as a construct is stated natively —
+        // fewer linear specs, same ids — which is how it was found. Taking the max in use
+        // cannot drift with either allocation rule.
+        idx_t synthetic_clause_id = 0;
+        for (const auto &row : retained_model.constraints) {
+            if (row.provenance.repair_group_id != DConstants::INVALID_INDEX &&
+                row.provenance.repair_group_id + 1 > synthetic_clause_id) {
+                synthetic_clause_id = row.provenance.repair_group_id + 1;
+            }
+        }
         for (const auto &b : gstate.user_absorbed_bounds) {
             idx_t num_instances = var_indexer.NumInstances(b.decide_var_idx);
             idx_t bound_clause_id = synthetic_clause_id++;
