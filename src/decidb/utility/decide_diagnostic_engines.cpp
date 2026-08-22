@@ -441,10 +441,22 @@ const char *SenseStr(char sense) {
 //! appended (Facet C) so it stays recognizable. For a strict `<` / `>` the δ offset was
 //! baked into `rhs` at build time, so quote the user's typed literal (`typed_k`) and
 //! render `<` / `>` rather than the model's `<=` / `>=` (I2.d).
+//! The number to quote for a row whose own RHS is not what the user typed. Two things
+//! can shift it, and they never apply at once: the binder bakes a δ into a strict
+//! `<` / `>` (re-quote `typed_k`), and a lowering adds a mechanism term to build a Big-M
+//! row (subtract it back off). Everything the reader sees goes through here, so a clause
+//! reads the same whichever rewrite the query happened to take.
+double DisplayRhs(const ConstraintProvenance &prov, double rhs, char sense) {
+	if (prov.strict && sense != '=') {
+		return prov.typed_k;
+	}
+	return rhs - prov.rhs_mechanism_offset;
+}
+
 string MakeClauseLabel(const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
-	double base_rhs = strict ? prov.typed_k : rhs;
+	double base_rhs = DisplayRhs(prov, rhs, sense);
 	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
 	return lhs + " " + sense_str + " " + FormatNum(base_rhs) + suffix;
 }
@@ -457,7 +469,7 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
                           char sense, double amount) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
-	double base_rhs = strict ? prov.typed_k : rhs;
+	double base_rhs = DisplayRhs(prov, rhs, sense);
 	// `≥` loosens downward (b − s), `≤` / `=` upward (b + s).
 	double new_rhs = (sense == '>') ? base_rhs - amount : base_rhs + amount;
 	// Facet C: append the WHEN/PER qualifier (`PER grp`) so the clause is recognizable;

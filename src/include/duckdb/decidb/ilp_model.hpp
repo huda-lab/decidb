@@ -158,6 +158,13 @@ struct ConstraintProvenance {
     //! suggestion can be re-quoted against it instead of the δ-adjusted rhs.
     bool strict = false;
     double typed_k = 0.0;
+    //! What a lowering added to the user's literal to build this row's RHS. The reported
+    //! clause and its suggested edit quote `rhs - rhs_mechanism_offset`, so a hard
+    //! `MAX(e) >= K` lowered to `e_i - M*y_i >= K - M` still reads as `MAX(e) >= K` and
+    //! still loosens by the slack the engine actually spent. 0.0 (the ordinary case)
+    //! means the row's RHS is the user's literal already. Distinct from `strict`/`typed_k`,
+    //! which re-quote a δ the *binder* baked in; both are resolved by `DisplayRhs`.
+    double rhs_mechanism_offset = 0.0;
     //! Flat solver column of the `<>` disjunction binary this row belongs to (I4).
     //! Set at the `<>` mechanism sites — per-row (row-scoped indicator column) and
     //! aggregate (global-block z, propagated from SolverInput::RawConstraint) — so it

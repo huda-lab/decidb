@@ -334,6 +334,27 @@ the same clause text with no group label to tell them apart; only the loosest of
 repaired anything, so the report contained edits that made no progress. A genuinely
 per-group bound still stamps `PER_ROW_DATA` and reports a virtual offset.
 
+**A hard MIN/MAX clause is loosenable on both arms.** `MAX(e) >= K` lowers to N rows of
+`e_i - M*y_i >= K - M` plus a rigid `SUM(y) >= 1`. The N rows are the clause: lowering `K`
+moves all of them together, so they are stamped `USER_PARAMETER` and share one slack, and
+the disjunction row stays rigid (slackening it would satisfy the clause with no row at
+all, a repair with no SQL edit behind it). Before this they were rigid too, so the clause
+had no loosenable row and the diagnosis fell back to whatever column bound sat nearby —
+the same SQL repaired differently depending on which solver the host had, and only the
+Gurobi answer named the line the user wrote.
+
+**What the reader is quoted: `DisplayRhs`.** A row's own RHS is often not the number the
+user typed. Three things shift it and they are resolved in one place
+(`DisplayRhs(prov, rhs, sense)`): a strict `<` / `>` carries the binder's δ and re-quotes
+`typed_k`; a lowering adds a mechanism term (the `± M` above); and a constant LHS term
+folds into the RHS at every builder site, since `SUM(x + c) >= K` is emitted as
+`SUM(x) >= K - Sum(c)`. The last was wrong for as long as it existed and independently of
+MIN/MAX: the label renders the LHS the user wrote, constant included, so `SUM(x + c) >= 100`
+was reported as `SUM(x + c) >= 90` — a clause appearing nowhere in the query, whose
+suggested edit could not be pasted back over anything. Both shifts accumulate on
+`ConstraintProvenance::rhs_mechanism_offset`, the lowering's part stamped by the
+linearizer and the folded constant added by the builder site that folded it.
+
 **Edit conversion (the D3 helper).** Reading the slack support is centralized in
 `MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (a literal knob) and
 `MakeVirtualOffsetEdit(provenance, lhs, rhs_text, sense, delta)` (a query-mode data offset,

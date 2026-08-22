@@ -2098,3 +2098,75 @@ class TestNativeConstructDiagnosis:
             cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
         assert float(reported) == pytest.approx(
             sum(float(r["x"]) for r in repaired))
+
+    _MINMAX_SQL = (
+        "SELECT g, x FROM (VALUES (0,1),(0,2),(1,3),(1,4)) t(g,c) "
+        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND MAX(x + c) >= 25 PER g "
+        "MAXIMIZE SUM(x)"
+    )
+
+    def test_hard_minmax_names_the_users_clause_on_every_backend(
+        self, decidb_cli_gurobi, decidb_cli_highs
+    ):
+        """A hard MIN/MAX clause is repaired by loosening the clause, everywhere.
+
+        Gurobi states the MAX itself and keeps a row for it; HiGHS lowers it to a Big-M
+        family. Those are different models, and the diagnosis used to follow: Gurobi
+        loosened `MAX(x + c) >= 25`, HiGHS loosened the unrelated `x <= 9` because the
+        lowered rows were rigid and the column bound was the only knob it had. Both
+        repairs worked, but the same SQL got two different answers depending on which
+        solver the host happened to have, and only one of them named the line the user
+        wrote. The lowered rows now carry the clause too, so all three arms agree.
+        """
+        script = (
+            ".mode csv\nPRAGMA diagnose_decide='auto';\n"
+            f"{self._MINMAX_SQL};\nSELECT * FROM decide_diagnostics();\n"
+        )
+        arms = {
+            "gurobi (native)": decidb_cli_gurobi,
+            "gurobi (lowered)": decidb_cli_gurobi.with_env(
+                {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+            "highs": decidb_cli_highs,
+        }
+        seen = {}
+        for label, runner in arms.items():
+            proc = runner.execute_script(script)
+            seen[label] = proc.stdout + proc.stderr
+            rows = list(csv.DictReader(io.StringIO(proc.stdout)))
+            edits = _clause_edits(rows)
+            assert len(edits) == 1, f"{label}: one clause, one edit:\n{rows}"
+            assert edits[0]["subject"] == "MAX(x + c) >= 25 PER g", f"{label}:\n{rows}"
+            _apply_reported_fix(runner, self._MINMAX_SQL, rows)
+
+        distinct = set(seen.values())
+        assert len(distinct) == 1, (
+            "the arms disagree:\n" + "\n---\n".join(f"{k}:\n{v}" for k, v in seen.items())
+        )
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_constant_on_the_left_is_not_subtracted_from_the_quoted_bound(
+        self, request, cli_fixture
+    ):
+        """The clause is quoted as written, constant and all.
+
+        `SUM(x + c) >= 100` is emitted as `SUM(x) >= 100 - SUM(c)`, because a constant
+        LHS term folds into the RHS. The reported label still renders the LHS the user
+        wrote — `SUM(x + c)` — so quoting the folded bound against it produced
+        `SUM(x + c) >= 90`, a clause that appears nowhere in the query and whose
+        suggested edit could not be pasted back over anything.
+        """
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT g, x FROM (VALUES (0,1),(0,2),(1,3),(1,4)) t(g,c) "
+            "DECIDE x(REAL) SUCH THAT x <= 9 AND SUM(x + c) >= 100 AND SUM(x + c) <= 5 "
+            "MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        subjects = {e["subject"] for e in _clause_edits(rows)}
+        assert subjects == {"SUM(x + c) >= 100", "SUM(x + c) <= 5"}, rows
+        # Every quoted clause is a substring of the query the user ran, which is what
+        # makes the suggestion pasteable.
+        for subject in subjects:
+            assert subject in sql, f"{subject!r} is not in the query:\n{sql}"
+        _apply_reported_fix(cli, sql, rows)

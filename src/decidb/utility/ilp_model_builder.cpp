@@ -177,9 +177,15 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
 //! the linear aggregate branches), because a per-row or quadratic row does not carry them:
 //! FormatQuadraticLhs never reads avg_scaled/weight_labels/folded_terms, and FormatLhs's
 //! is_aggregate/qualifier wrapping is meaningless off the aggregate branch.
+//! `lhs_offset` is the constant part of the LHS that this site folded into the RHS
+//! (`SUM(x + c) >= K` is emitted as `SUM(x) >= K - Sum(c)`). The reconstructed clause
+//! label still renders the LHS the user wrote, constant included, so the RHS it is
+//! quoted against has to be the user's `K` and not the folded one — otherwise the report
+//! names a bound nobody typed. It rides on `rhs_mechanism_offset` alongside whatever a
+//! lowering added, because the reader needs their sum and neither alone.
 static void StampConstraintProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const,
                                       idx_t repair_group_id, idx_t group_key = DConstants::INVALID_INDEX,
-                                      const string &group_label = string()) {
+                                      const string &group_label = string(), double lhs_offset = 0.0) {
     provenance.source_clause_id = eval_const.source_clause_id;
     provenance.repair_group_id = repair_group_id;
     provenance.kind = eval_const.kind;
@@ -190,6 +196,7 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
     if (!eval_const.rhs_is_shared_scalar) {
         provenance.rhs_label = eval_const.rhs_label;
     }
+    provenance.rhs_mechanism_offset = eval_const.rhs_mechanism_offset - lhs_offset;
     if (group_key != DConstants::INVALID_INDEX) {
         provenance.group_key = group_key;
     }
@@ -817,11 +824,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // (ReduceAggregateRhsPerGroup). No per-row check is needed here.
                 D_ASSERT(RhsIsConstantWithinGroups(eval_const));
                 double rhs = eval_const.rhs_values.Get(0);
-                rhs -= SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows,
-                                                  "fixed aggregate LHS term");
+                double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows,
+                                                               "fixed aggregate LHS term");
+                rhs -= lhs_offset;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
                 // F2 site 1: aggregate, ungrouped.
-                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id);
+                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id,
+                                          DConstants::INVALID_INDEX, string(), lhs_offset);
                 StampAggregateProvenance(constr.provenance, eval_const);
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
                 StampWeightLabels(constr.provenance);
@@ -916,13 +925,15 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // value per group it is what lets each group see its own bound.
                     // Row 0 would be wrong twice over: it may belong to another group,
                     // and it may be excluded by WHEN.
-                    double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) -
-                                       SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end,
-                                                                  "fixed aggregate LHS term");
+                    double group_lhs_offset =
+                        SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end,
+                                                   "fixed aggregate LHS term");
+                    double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality);
                     // F2 site 2: aggregate + PER/WHEN.
                     string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
-                    StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_label);
+                    StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_label,
+                                              group_lhs_offset);
                     StampAggregateProvenance(constr.provenance, eval_const);
                     constr.provenance.avg_scaled = eval_const.avg_scaled;
                     StampWeightLabels(constr.provenance);
@@ -985,7 +996,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
                 // F2 site 3: per-row.
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key);
+                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
+                                          string(), rhs_adjustment);
                 // I4: per-row `<>` disjunction rows carry their indicator (a
                 // row-scoped aux var) so the elastic engine groups the pair per row
                 // and offers removal.

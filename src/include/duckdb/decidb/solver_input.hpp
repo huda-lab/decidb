@@ -267,6 +267,13 @@ struct EvaluatedConstraint {
     //! engine collapses those rows to ONE shared slack (ElasticShape::SHARED_SCALAR);
     //! a data-backed RHS stays per-row independent.
     bool rhs_is_shared_scalar = false;
+    //! What a lowering added to the user's literal to build this row's RHS, so the
+    //! diagnosis can subtract it back off and quote the number the user typed. A hard
+    //! `MAX(e) >= K` lowers to N rows of `e_i - M*y_i >= K - M`: the clause is still one
+    //! editable K and the row still repairs by loosening it, but the row's own RHS is
+    //! `K - M` and quoting that would name a bound nobody wrote. 0.0 means the row's RHS
+    //! IS the user's literal, which is the ordinary case.
+    double rhs_mechanism_offset = 0.0;
 
     //! Symbolic name of a data-backed (non-shared-scalar) RHS expression (`x <= cap_col`
     //! → "cap_col"). Lets query-mode infeasible diagnosis render a virtual offset

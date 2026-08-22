@@ -696,7 +696,23 @@ void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_nam
         ec_row.num_groups = ec.num_groups;
         ec_row.group_labels = ec.group_labels;
         ec_row.qualifier = ec.qualifier;
-        ec_row.kind = ConstraintKind::USER_MECHANISM;
+        // These N rows ARE the user's clause, so they carry it. `MAX(e) >= K` lowers to
+        // `e_i - M*y_i >= K - M` per row, and lowering K moves every one of them by the
+        // same amount — one editable literal, one shared slack, one reported edit. Left
+        // rigid, the clause had no loosenable row at all and diagnosis fell back to
+        // whatever column bound happened to be nearby, so the same SQL was repaired
+        // differently depending on which solver the host had. The Big-M lives in
+        // `rhs_mechanism_offset` so the report subtracts it back off and quotes `K`.
+        //
+        // The companion `SUM(y) >= 1` below stays rigid: it is the disjunction itself,
+        // not a number the user wrote, and slackening it would let the clause be
+        // satisfied by no row at all — a "repair" with no SQL edit behind it.
+        ec_row.kind = ConstraintKind::USER_PARAMETER;
+        ec_row.source_clause_id = ec.source_clause_id;
+        ec_row.repair_group_id = ec.repair_group_id;
+        ec_row.rhs_is_shared_scalar = ec.rhs_is_shared_scalar;
+        ec_row.rhs_label = ec.rhs_label;
+        ec_row.rhs_mechanism_offset = m_sign * M;
         new_constraints.push_back(std::move(ec_row));
 
         // SUM(y) >= 1 (at least one row must satisfy)
