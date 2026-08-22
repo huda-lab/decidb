@@ -24,6 +24,7 @@
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
+#include <cmath>
 #include <unordered_map>
 
 namespace duckdb {
@@ -198,28 +199,53 @@ struct AuxRange {
     double lo = 0.0;
     double hi = 0.0;
     double spread = 0.0;
-    //! Some contributing decision variable has an infinite bound, so `lo`/`hi` are not
-    //! a valid box and any auxiliary over this family must stay free.
-    bool unbounded = false;
-    //! The first such variable, kept so a refusal can name a column the user can bound
-    //! rather than say only that something was unbounded. Meaningful iff `unbounded`.
+    //! The two ends are tracked separately because they fail separately. A decision
+    //! variable declared `x >= 0` with no ceiling leaves `hi` underivable and `lo`
+    //! perfectly well known, and a box keeping the closed side is strictly better than
+    //! one discarding both — the root simplex gets half a region to start from instead
+    //! of none. `lo`/`hi` are meaningful iff the matching flag is false.
+    bool lo_unbounded = false;
+    bool hi_unbounded = false;
+    //! The first variable that opened either end, kept so a refusal can name a column
+    //! the user can bound rather than say only that something was unbounded.
+    //! Meaningful iff `Unbounded()`.
     idx_t unbounded_var = DConstants::INVALID_INDEX;
 
-    //! The Big-M constant for this family. Defined ONLY when `!unbounded`: no constant
-    //! dominates an unbounded range, so a caller must check `unbounded` and refuse
-    //! before asking. There is no fallback value to return — that is the point.
+    //! True when EITHER end is open. This is the test for everything that needs both
+    //! ends finite — every Big-M, which has to dominate the whole spread. Boxing a
+    //! column is the one caller entitled to read the per-side flags instead, because a
+    //! half-open box is still a valid box.
+    bool Unbounded() const { return lo_unbounded || hi_unbounded; }
+
+    //! The Big-M constant for this family. Defined ONLY when `!Unbounded()`: no
+    //! constant dominates a range open at either end, so a caller must check
+    //! `Unbounded()` and refuse before asking. There is no fallback value to return —
+    //! that is the point. A half-open range is enough to box a column but not to
+    //! scale a row, which is why boxing reads the per-side flags and this does not.
     double BigM() const {
-        D_ASSERT(!unbounded);
+        D_ASSERT(!Unbounded());
         return spread;
     }
 
     //! Record an unbounded contributor. Keeps the FIRST one seen, so the message a
     //! query produces does not depend on row order.
     void MarkUnbounded(idx_t var) {
-        if (!unbounded) {
-            unbounded = true;
+        MarkLoUnbounded(var);
+        MarkHiUnbounded(var);
+    }
+
+    //! Record that one end alone is underivable, keeping whatever the other end holds.
+    void MarkLoUnbounded(idx_t var) {
+        if (!Unbounded()) {
             unbounded_var = var;
         }
+        lo_unbounded = true;
+    }
+    void MarkHiUnbounded(idx_t var) {
+        if (!Unbounded()) {
+            unbounded_var = var;
+        }
+        hi_unbounded = true;
     }
 
     //! Widen to also cover `other` — an extremum taken over several families.
@@ -227,16 +253,41 @@ struct AuxRange {
         lo = MinOf(lo, other.lo);
         hi = MaxOf(hi, other.hi);
         spread = MaxOf(spread, other.spread);
-        unbounded = unbounded || other.unbounded;
+        lo_unbounded = lo_unbounded || other.lo_unbounded;
+        hi_unbounded = hi_unbounded || other.hi_unbounded;
     }
 
     //! Extend by one more row expression bracketed by [`row_lo`, `row_hi`], whose
     //! variable-only part (constants excluded) is bracketed by [`var_lo`, `var_hi`].
     void CoverRow(double row_lo, double row_hi, double var_lo, double var_hi) {
+        D_ASSERT(!std::isinf(row_lo) && !std::isinf(row_hi));
         lo = MinOf(lo, row_lo);
         hi = MaxOf(hi, row_hi);
         var_low = MinOf(var_low, var_lo);
         var_high = MaxOf(var_high, var_hi);
+        spread = var_high - var_low;
+    }
+
+    //! `CoverRow` for a bracket that may be infinite on either end, as the signed walk
+    //! over a row's terms returns. Each end is folded in or marked open on its own, so
+    //! a row open on one side still contributes its closed side to the box. `var`
+    //! names the variable to blame if a Big-M is later asked for over this family.
+    //!
+    //! `spread` is only ever read through `BigM()`, which refuses unless both ends are
+    //! closed, so a partial `spread` left behind by a one-sided row is unreachable.
+    void CoverRowSided(double row_lo, double row_hi, double var_lo, double var_hi, idx_t var) {
+        if (std::isinf(row_lo)) {
+            MarkLoUnbounded(var);
+        } else {
+            lo = MinOf(lo, row_lo);
+            var_low = MinOf(var_low, var_lo);
+        }
+        if (std::isinf(row_hi)) {
+            MarkHiUnbounded(var);
+        } else {
+            hi = MaxOf(hi, row_hi);
+            var_high = MaxOf(var_high, var_hi);
+        }
         spread = var_high - var_low;
     }
 

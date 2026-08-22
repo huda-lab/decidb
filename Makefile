@@ -1,4 +1,4 @@
-.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test decide-bench decide-bench-setup decide-bench-manual decide-view grammar grammar-build
+.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test decide-golden decide-bench decide-bench-setup decide-bench-manual decide-view grammar grammar-build
 
 all: release
 opt: release
@@ -540,8 +540,16 @@ gather-libs: release
 decide-setup:
 	test/decide/run_tests.sh --setup-only
 
-decide-test:
+# The golden model dump runs first and hard-fails: it is the only check that can
+# see a change which alters the built model while keeping every optimum, which
+# the pytest suite cannot. On a difference, read it, then regenerate with
+# `test/decide/golden/capture.sh --solver <gurobi|highs>` and commit the new
+# baseline with the change that moved it.
+decide-test: decide-golden
 	test/decide/run_tests.sh
+
+decide-golden:
+	test/decide/golden/check.sh
 
 decide-bench-setup:
 	python3 benchmark/decide/generate_databases.py

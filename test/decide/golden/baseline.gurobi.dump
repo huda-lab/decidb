@@ -3,6 +3,8 @@ sense: maximize
 num_vars: 4
 num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=5 int=1 bin=0 obj=1
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -13,6 +15,8 @@ sense: minimize
 num_vars: 4
 num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=2 ub=9 int=1 bin=0 obj=1
 col 1: lb=2 ub=9 int=1 bin=0 obj=1
 col 2: lb=2 ub=9 int=1 bin=0 obj=1
@@ -23,6 +27,8 @@ sense: maximize
 num_vars: 4
 num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=5 int=1 bin=0 obj=1
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -33,6 +39,8 @@ sense: maximize
 num_vars: 4
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=10 int=1 bin=0 obj=1
 col 1: lb=0 ub=10 int=1 bin=0 obj=1
 col 2: lb=0 ub=10 int=1 bin=0 obj=1
@@ -47,6 +55,8 @@ sense: maximize
 num_vars: 8
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=8 int=1 bin=0 obj=1
 col 1: lb=0 ub=8 int=1 bin=0 obj=-1
 col 2: lb=0 ub=8 int=1 bin=0 obj=1
@@ -65,6 +75,8 @@ sense: maximize
 num_vars: 8
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=3 int=1 bin=0 obj=1
 col 1: lb=0 ub=3 int=1 bin=0 obj=0
 col 2: lb=0 ub=3 int=1 bin=0 obj=1
@@ -83,6 +95,8 @@ sense: maximize
 num_vars: 4
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=6 int=1 bin=0 obj=1
 col 1: lb=0 ub=6 int=1 bin=0 obj=1
 col 2: lb=0 ub=6 int=1 bin=0 obj=1
@@ -97,6 +111,8 @@ sense: maximize
 num_vars: 4
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=2 int=1 bin=0 obj=1
 col 1: lb=0 ub=2 int=1 bin=0 obj=1
 col 2: lb=0 ub=2 int=1 bin=0 obj=1
@@ -111,6 +127,8 @@ sense: maximize
 num_vars: 4
 num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=1 ub=4 int=1 bin=0 obj=1
 col 1: lb=1 ub=4 int=1 bin=0 obj=1
 col 2: lb=1 ub=4 int=1 bin=0 obj=1
@@ -121,6 +139,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -132,6 +152,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -143,6 +165,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=6 int=1 bin=0 obj=1
 col 1: lb=0 ub=6 int=1 bin=0 obj=1
 col 2: lb=0 ub=6 int=1 bin=0 obj=1
@@ -154,6 +178,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -165,6 +191,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=5 int=1 bin=0 obj=1
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -176,6 +204,8 @@ sense: maximize
 num_vars: 8
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=0
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -191,6 +221,8 @@ sense: maximize
 num_vars: 8
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=0
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -206,6 +238,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=7 int=1 bin=0 obj=1
 col 1: lb=0 ub=7 int=1 bin=0 obj=1
 col 2: lb=0 ub=7 int=1 bin=0 obj=1
@@ -217,6 +251,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=6 int=1 bin=0 obj=1
 col 1: lb=0 ub=6 int=1 bin=0 obj=1
 col 2: lb=0 ub=6 int=1 bin=0 obj=1
@@ -228,6 +264,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=8 int=1 bin=0 obj=1
 col 1: lb=0 ub=8 int=1 bin=0 obj=1
 col 2: lb=0 ub=8 int=1 bin=0 obj=1
@@ -239,6 +277,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -250,6 +290,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -261,6 +303,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=6 int=1 bin=0 obj=1
 col 1: lb=0 ub=6 int=1 bin=0 obj=1
 col 2: lb=0 ub=6 int=1 bin=0 obj=1
@@ -272,6 +316,8 @@ sense: maximize
 num_vars: 4
 num_rows: 2
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=4 int=1 bin=0 obj=1
 col 1: lb=0 ub=4 int=1 bin=0 obj=1
 col 2: lb=0 ub=4 int=1 bin=0 obj=1
@@ -284,6 +330,8 @@ sense: maximize
 num_vars: 4
 num_rows: 2
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -296,6 +344,8 @@ sense: maximize
 num_vars: 4
 num_rows: 2
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -308,6 +358,8 @@ sense: maximize
 num_vars: 4
 num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=3 int=1 bin=0 obj=1
 col 1: lb=0 ub=3 int=1 bin=0 obj=1
 col 2: lb=0 ub=3 int=1 bin=0 obj=1
@@ -318,6 +370,8 @@ sense: maximize
 num_vars: 4
 num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=3 int=1 bin=0 obj=1
 col 1: lb=0 ub=3 int=1 bin=0 obj=1
 col 2: lb=0 ub=3 int=1 bin=0 obj=1
@@ -325,9 +379,11 @@ col 3: lb=0 ub=3 int=1 bin=0 obj=1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: minimize
-num_vars: 8
+num_vars: 13
 num_rows: 5
 num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=1 int=1 bin=1 obj=0
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -336,17 +392,25 @@ col 4: lb=0 ub=5 int=1 bin=0 obj=1
 col 5: lb=0 ub=1 int=1 bin=1 obj=0
 col 6: lb=0 ub=5 int=1 bin=0 obj=1
 col 7: lb=0 ub=1 int=1 bin=1 obj=0
-row 0: sense=> rhs=-6 nnz=2 | 0:1 1:-9
-row 1: sense=> rhs=-6 nnz=2 | 2:1 3:-9
-row 2: sense=> rhs=-6 nnz=2 | 4:1 5:-9
-row 3: sense=> rhs=-6 nnz=2 | 6:1 7:-9
-row 4: sense=> rhs=1 nnz=4 | 1:1 3:1 5:1 7:1
+col 8: lb=0 ub=5 int=0 bin=0 obj=0
+col 9: lb=0 ub=5 int=0 bin=0 obj=0
+col 10: lb=0 ub=5 int=0 bin=0 obj=0
+col 11: lb=0 ub=5 int=0 bin=0 obj=0
+col 12: lb=0 ub=5 int=0 bin=0 obj=0
+row 0: sense== rhs=0 nnz=2 | 0:-1 8:1
+row 1: sense== rhs=0 nnz=2 | 2:-1 9:1
+row 2: sense== rhs=0 nnz=2 | 4:-1 10:1
+row 3: sense== rhs=0 nnz=2 | 6:-1 11:1
+row 4: sense=> rhs=3 nnz=1 | 12:1
+gen 0: kind=max res=12 args=8,9,10,11
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 4
 num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=2 ub=5 int=1 bin=0 obj=1
 col 1: lb=2 ub=5 int=1 bin=0 obj=1
 col 2: lb=2 ub=5 int=1 bin=0 obj=1
@@ -357,6 +421,8 @@ sense: maximize
 num_vars: 8
 num_rows: 8
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1e+30 int=1 bin=0 obj=1
 col 1: lb=0 ub=1 int=1 bin=0 obj=0
 col 2: lb=0 ub=1e+30 int=1 bin=0 obj=1
@@ -379,6 +445,8 @@ sense: minimize
 num_vars: 8
 num_rows: 8
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=0
 col 1: lb=0 ub=1e+30 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=0
@@ -399,8 +467,10 @@ row 7: sense=> rhs=3 nnz=2 | 6:1 7:1
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 8
-num_rows: 8
+num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 8
 col 0: lb=0 ub=4 int=1 bin=0 obj=1
 col 1: lb=0 ub=1 int=1 bin=1 obj=0
 col 2: lb=0 ub=4 int=1 bin=0 obj=1
@@ -409,20 +479,22 @@ col 4: lb=0 ub=4 int=1 bin=0 obj=1
 col 5: lb=0 ub=1 int=1 bin=1 obj=0
 col 6: lb=0 ub=4 int=1 bin=0 obj=1
 col 7: lb=0 ub=1 int=1 bin=1 obj=0
-row 0: sense=< rhs=1 nnz=2 | 0:1 1:-7
-row 1: sense=< rhs=1 nnz=2 | 2:1 3:-7
-row 2: sense=< rhs=1 nnz=2 | 4:1 5:-7
-row 3: sense=< rhs=1 nnz=2 | 6:1 7:-7
-row 4: sense=> rhs=-4 nnz=2 | 0:1 1:-7
-row 5: sense=> rhs=-4 nnz=2 | 2:1 3:-7
-row 6: sense=> rhs=-4 nnz=2 | 4:1 5:-7
-row 7: sense=> rhs=-4 nnz=2 | 6:1 7:-7
+ind 0: bin=1==0 sense=< rhs=1 | 0:1
+ind 1: bin=1==1 sense=> rhs=3 | 0:1
+ind 2: bin=3==0 sense=< rhs=1 | 2:1
+ind 3: bin=3==1 sense=> rhs=3 | 2:1
+ind 4: bin=5==0 sense=< rhs=1 | 4:1
+ind 5: bin=5==1 sense=> rhs=3 | 4:1
+ind 6: bin=7==0 sense=< rhs=1 | 6:1
+ind 7: bin=7==1 sense=> rhs=3 | 6:1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 16
 num_rows: 8
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1e+30 int=1 bin=0 obj=1
 col 1: lb=0 ub=1 int=1 bin=1 obj=0
 col 2: lb=0 ub=1 int=1 bin=1 obj=0
@@ -453,6 +525,8 @@ sense: minimize
 num_vars: 16
 num_rows: 8
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=-5 ub=1e+30 int=1 bin=0 obj=1
 col 1: lb=0 ub=1 int=1 bin=1 obj=0
 col 2: lb=0 ub=1 int=1 bin=1 obj=0
@@ -483,6 +557,8 @@ sense: maximize
 num_vars: 4
 num_rows: 0
 num_qrows: 1
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=0 bin=0 obj=1
 col 1: lb=0 ub=9 int=0 bin=0 obj=1
 col 2: lb=0 ub=9 int=0 bin=0 obj=1
@@ -494,6 +570,8 @@ sense: minimize
 num_vars: 4
 num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=0 bin=0 obj=-6
 col 1: lb=0 ub=9 int=0 bin=0 obj=-6
 col 2: lb=0 ub=9 int=0 bin=0 obj=-6
@@ -509,6 +587,8 @@ sense: maximize
 num_vars: 16
 num_rows: 25
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=0
 col 1: lb=0 ub=5 int=1 bin=0 obj=0
 col 2: lb=0 ub=1e+30 int=1 bin=0 obj=1
@@ -556,6 +636,8 @@ sense: maximize
 num_vars: 5
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=10 int=1 bin=0 obj=1
 col 1: lb=0 ub=10 int=1 bin=0 obj=1
 col 2: lb=0 ub=10 int=1 bin=0 obj=1
@@ -571,6 +653,8 @@ sense: maximize
 num_vars: 5
 num_rows: 5
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=20 int=1 bin=0 obj=1
 col 1: lb=0 ub=20 int=1 bin=0 obj=1
 col 2: lb=0 ub=20 int=1 bin=0 obj=1
@@ -587,6 +671,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=10
 col 1: lb=0 ub=1 int=1 bin=1 obj=20
 col 2: lb=0 ub=1 int=1 bin=1 obj=30
@@ -598,6 +684,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=10
 col 1: lb=0 ub=1 int=1 bin=1 obj=20
 col 2: lb=0 ub=1 int=1 bin=1 obj=30
@@ -606,25 +694,31 @@ row 0: sense=< rhs=2 nnz=4 | 0:1 1:1 2:1 3:1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
-num_vars: 16
-num_rows: 28
+num_vars: 20
+num_rows: 24
 num_qrows: 0
+num_genconstrs: 4
+num_indconstrs: 0
 col 0: lb=0 ub=20 int=0 bin=0 obj=1
 col 1: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 2: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 2: lb=0 ub=29 int=0 bin=0 obj=0
 col 3: lb=0 ub=1 int=1 bin=1 obj=0
 col 4: lb=0 ub=20 int=0 bin=0 obj=1
 col 5: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 6: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 6: lb=0 ub=29 int=0 bin=0 obj=0
 col 7: lb=0 ub=1 int=1 bin=1 obj=0
 col 8: lb=0 ub=20 int=0 bin=0 obj=1
 col 9: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 10: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 10: lb=0 ub=29 int=0 bin=0 obj=0
 col 11: lb=0 ub=1 int=1 bin=1 obj=0
 col 12: lb=0 ub=20 int=0 bin=0 obj=1
 col 13: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 14: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 14: lb=0 ub=29 int=0 bin=0 obj=0
 col 15: lb=0 ub=1 int=1 bin=1 obj=0
+col 16: lb=-29 ub=29 int=0 bin=0 obj=0
+col 17: lb=-29 ub=29 int=0 bin=0 obj=0
+col 18: lb=-29 ub=29 int=0 bin=0 obj=0
+col 19: lb=-29 ub=29 int=0 bin=0 obj=0
 row 0: sense=< rhs=0 nnz=2 | 1:1 2:-1
 row 1: sense=< rhs=0 nnz=2 | 5:1 6:-1
 row 2: sense=< rhs=0 nnz=2 | 9:1 10:-1
@@ -645,40 +739,46 @@ row 16: sense=> rhs=9 nnz=2 | 0:1 2:1
 row 17: sense=> rhs=9 nnz=2 | 4:1 6:1
 row 18: sense=> rhs=9 nnz=2 | 8:1 10:1
 row 19: sense=> rhs=9 nnz=2 | 12:1 14:1
-row 20: sense=< rhs=49 nnz=3 | 0:-1 2:1 3:58
-row 21: sense=< rhs=49 nnz=3 | 4:-1 6:1 7:58
-row 22: sense=< rhs=49 nnz=3 | 8:-1 10:1 11:58
-row 23: sense=< rhs=49 nnz=3 | 12:-1 14:1 15:58
-row 24: sense=< rhs=9 nnz=3 | 0:1 2:1 3:-58
-row 25: sense=< rhs=9 nnz=3 | 4:1 6:1 7:-58
-row 26: sense=< rhs=9 nnz=3 | 8:1 10:1 11:-58
-row 27: sense=< rhs=9 nnz=3 | 12:1 14:1 15:-58
+row 20: sense== rhs=-9 nnz=2 | 0:-1 16:1
+row 21: sense== rhs=-9 nnz=2 | 4:-1 17:1
+row 22: sense== rhs=-9 nnz=2 | 8:-1 18:1
+row 23: sense== rhs=-9 nnz=2 | 12:-1 19:1
+gen 0: kind=abs res=2 args=16
+gen 1: kind=abs res=6 args=17
+gen 2: kind=abs res=10 args=18
+gen 3: kind=abs res=14 args=19
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
-num_vars: 20
-num_rows: 28
+num_vars: 24
+num_rows: 24
 num_qrows: 0
+num_genconstrs: 4
+num_indconstrs: 0
 col 0: lb=0 ub=20 int=0 bin=0 obj=1
 col 1: lb=0 ub=20 int=0 bin=0 obj=1
 col 2: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 3: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 3: lb=0 ub=29 int=0 bin=0 obj=0
 col 4: lb=0 ub=1 int=1 bin=1 obj=0
 col 5: lb=0 ub=20 int=0 bin=0 obj=1
 col 6: lb=0 ub=20 int=0 bin=0 obj=1
 col 7: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 8: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 8: lb=0 ub=29 int=0 bin=0 obj=0
 col 9: lb=0 ub=1 int=1 bin=1 obj=0
 col 10: lb=0 ub=20 int=0 bin=0 obj=1
 col 11: lb=0 ub=20 int=0 bin=0 obj=1
 col 12: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 13: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 13: lb=0 ub=29 int=0 bin=0 obj=0
 col 14: lb=0 ub=1 int=1 bin=1 obj=0
 col 15: lb=0 ub=20 int=0 bin=0 obj=1
 col 16: lb=0 ub=20 int=0 bin=0 obj=1
 col 17: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 18: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 18: lb=0 ub=29 int=0 bin=0 obj=0
 col 19: lb=0 ub=1 int=1 bin=1 obj=0
+col 20: lb=-29 ub=29 int=0 bin=0 obj=0
+col 21: lb=-29 ub=29 int=0 bin=0 obj=0
+col 22: lb=-29 ub=29 int=0 bin=0 obj=0
+col 23: lb=-29 ub=29 int=0 bin=0 obj=0
 row 0: sense=< rhs=0 nnz=2 | 2:1 3:-1
 row 1: sense=< rhs=0 nnz=2 | 7:1 8:-1
 row 2: sense=< rhs=0 nnz=2 | 12:1 13:-1
@@ -699,20 +799,22 @@ row 16: sense=> rhs=9 nnz=2 | 1:1 3:1
 row 17: sense=> rhs=9 nnz=2 | 6:1 8:1
 row 18: sense=> rhs=9 nnz=2 | 11:1 13:1
 row 19: sense=> rhs=9 nnz=2 | 16:1 18:1
-row 20: sense=< rhs=49 nnz=3 | 1:-1 3:1 4:58
-row 21: sense=< rhs=49 nnz=3 | 6:-1 8:1 9:58
-row 22: sense=< rhs=49 nnz=3 | 11:-1 13:1 14:58
-row 23: sense=< rhs=49 nnz=3 | 16:-1 18:1 19:58
-row 24: sense=< rhs=9 nnz=3 | 1:1 3:1 4:-58
-row 25: sense=< rhs=9 nnz=3 | 6:1 8:1 9:-58
-row 26: sense=< rhs=9 nnz=3 | 11:1 13:1 14:-58
-row 27: sense=< rhs=9 nnz=3 | 16:1 18:1 19:-58
+row 20: sense== rhs=-9 nnz=2 | 1:-1 20:1
+row 21: sense== rhs=-9 nnz=2 | 6:-1 21:1
+row 22: sense== rhs=-9 nnz=2 | 11:-1 22:1
+row 23: sense== rhs=-9 nnz=2 | 16:-1 23:1
+gen 0: kind=abs res=3 args=20
+gen 1: kind=abs res=8 args=21
+gen 2: kind=abs res=13 args=22
+gen 3: kind=abs res=18 args=23
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 8
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=3 int=1 bin=0 obj=0
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -726,8 +828,10 @@ row 0: sense=< rhs=0 nnz=8 | 0:1 1:-1 2:1 3:-1 4:1 5:-1 6:1 7:-1
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 13
-num_rows: 10
+num_rows: 9
 num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=7 int=1 bin=0 obj=0
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -737,51 +841,55 @@ col 5: lb=0 ub=7 int=1 bin=0 obj=0
 col 6: lb=0 ub=5 int=1 bin=0 obj=1
 col 7: lb=0 ub=7 int=1 bin=0 obj=0
 col 8: lb=0 ub=7 int=0 bin=0 obj=0
-col 9: lb=0 ub=1 int=1 bin=1 obj=0
-col 10: lb=0 ub=1 int=1 bin=1 obj=0
-col 11: lb=0 ub=1 int=1 bin=1 obj=0
-col 12: lb=0 ub=1 int=1 bin=1 obj=0
+col 9: lb=0 ub=7 int=0 bin=0 obj=0
+col 10: lb=0 ub=7 int=0 bin=0 obj=0
+col 11: lb=0 ub=7 int=0 bin=0 obj=0
+col 12: lb=0 ub=7 int=0 bin=0 obj=0
 row 0: sense=> rhs=0 nnz=2 | 1:-1 8:1
 row 1: sense=> rhs=0 nnz=2 | 3:-1 8:1
 row 2: sense=> rhs=0 nnz=2 | 5:-1 8:1
 row 3: sense=> rhs=0 nnz=2 | 7:-1 8:1
-row 4: sense=< rhs=7 nnz=3 | 1:-1 8:1 9:7
-row 5: sense=< rhs=7 nnz=3 | 3:-1 8:1 10:7
-row 6: sense=< rhs=7 nnz=3 | 5:-1 8:1 11:7
-row 7: sense=< rhs=7 nnz=3 | 7:-1 8:1 12:7
-row 8: sense=> rhs=1 nnz=4 | 9:1 10:1 11:1 12:1
-row 9: sense=< rhs=0 nnz=5 | 0:1 2:1 4:1 6:1 8:-1
+row 4: sense== rhs=0 nnz=2 | 1:-1 9:1
+row 5: sense== rhs=0 nnz=2 | 3:-1 10:1
+row 6: sense== rhs=0 nnz=2 | 5:-1 11:1
+row 7: sense== rhs=0 nnz=2 | 7:-1 12:1
+row 8: sense=< rhs=0 nnz=5 | 0:1 2:1 4:1 6:1 8:-1
+gen 0: kind=max res=8 args=9,10,11,12
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 9
-num_rows: 10
+num_rows: 9
 num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
 col 3: lb=0 ub=9 int=1 bin=0 obj=1
 col 4: lb=0 ub=9 int=0 bin=0 obj=0
-col 5: lb=0 ub=1 int=1 bin=1 obj=0
-col 6: lb=0 ub=1 int=1 bin=1 obj=0
-col 7: lb=0 ub=1 int=1 bin=1 obj=0
-col 8: lb=0 ub=1 int=1 bin=1 obj=0
+col 5: lb=0 ub=9 int=0 bin=0 obj=0
+col 6: lb=0 ub=9 int=0 bin=0 obj=0
+col 7: lb=0 ub=9 int=0 bin=0 obj=0
+col 8: lb=0 ub=9 int=0 bin=0 obj=0
 row 0: sense=> rhs=0 nnz=2 | 0:-1 4:1
 row 1: sense=> rhs=0 nnz=2 | 1:-1 4:1
 row 2: sense=> rhs=0 nnz=2 | 2:-1 4:1
 row 3: sense=> rhs=0 nnz=2 | 3:-1 4:1
-row 4: sense=< rhs=9 nnz=3 | 0:-1 4:1 5:9
-row 5: sense=< rhs=9 nnz=3 | 1:-1 4:1 6:9
-row 6: sense=< rhs=9 nnz=3 | 2:-1 4:1 7:9
-row 7: sense=< rhs=9 nnz=3 | 3:-1 4:1 8:9
-row 8: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
-row 9: sense=< rhs=-3 nnz=1 | 4:-1
+row 4: sense== rhs=0 nnz=2 | 0:-1 5:1
+row 5: sense== rhs=0 nnz=2 | 1:-1 6:1
+row 6: sense== rhs=0 nnz=2 | 2:-1 7:1
+row 7: sense== rhs=0 nnz=2 | 3:-1 8:1
+row 8: sense=< rhs=-3 nnz=1 | 4:-1
+gen 0: kind=max res=4 args=5,6,7,8
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=4 int=1 bin=0 obj=1
 col 1: lb=0 ub=4 int=1 bin=0 obj=1
 col 2: lb=0 ub=4 int=1 bin=0 obj=1
@@ -793,6 +901,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=4 int=1 bin=0 obj=1
 col 1: lb=0 ub=4 int=1 bin=0 obj=1
 col 2: lb=0 ub=4 int=1 bin=0 obj=1
@@ -804,6 +914,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -815,6 +927,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -826,6 +940,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -837,6 +953,8 @@ sense: maximize
 num_vars: 4
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=5 int=1 bin=0 obj=1
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -851,6 +969,8 @@ sense: maximize
 num_vars: 5
 num_rows: 5
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -867,6 +987,8 @@ sense: maximize
 num_vars: 4
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -879,33 +1001,37 @@ row 3: sense=> rhs=-8 nnz=1 | 3:-2
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 9
-num_rows: 10
+num_rows: 9
 num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
 col 0: lb=0 ub=4 int=1 bin=0 obj=0
 col 1: lb=0 ub=4 int=1 bin=0 obj=0
 col 2: lb=0 ub=4 int=1 bin=0 obj=0
 col 3: lb=0 ub=4 int=1 bin=0 obj=0
 col 4: lb=0 ub=4 int=0 bin=0 obj=-1
-col 5: lb=0 ub=1 int=1 bin=1 obj=0
-col 6: lb=0 ub=1 int=1 bin=1 obj=0
-col 7: lb=0 ub=1 int=1 bin=1 obj=0
-col 8: lb=0 ub=1 int=1 bin=1 obj=0
+col 5: lb=0 ub=4 int=0 bin=0 obj=0
+col 6: lb=0 ub=4 int=0 bin=0 obj=0
+col 7: lb=0 ub=4 int=0 bin=0 obj=0
+col 8: lb=0 ub=4 int=0 bin=0 obj=0
 row 0: sense=< rhs=4 nnz=4 | 0:1 1:1 2:1 3:1
 row 1: sense=> rhs=0 nnz=2 | 0:-1 4:1
 row 2: sense=> rhs=0 nnz=2 | 1:-1 4:1
 row 3: sense=> rhs=0 nnz=2 | 2:-1 4:1
 row 4: sense=> rhs=0 nnz=2 | 3:-1 4:1
-row 5: sense=< rhs=4 nnz=3 | 0:-1 4:1 5:4
-row 6: sense=< rhs=4 nnz=3 | 1:-1 4:1 6:4
-row 7: sense=< rhs=4 nnz=3 | 2:-1 4:1 7:4
-row 8: sense=< rhs=4 nnz=3 | 3:-1 4:1 8:4
-row 9: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
+row 5: sense== rhs=0 nnz=2 | 0:-1 5:1
+row 6: sense== rhs=0 nnz=2 | 1:-1 6:1
+row 7: sense== rhs=0 nnz=2 | 2:-1 7:1
+row 8: sense== rhs=0 nnz=2 | 3:-1 8:1
+gen 0: kind=max res=4 args=5,6,7,8
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=5 int=1 bin=0 obj=1
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -917,6 +1043,8 @@ sense: minimize
 num_vars: 5
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=3 ub=3 int=1 bin=0 obj=0
 col 1: lb=3 ub=3 int=1 bin=0 obj=0
 col 2: lb=3 ub=3 int=1 bin=0 obj=0
@@ -929,6 +1057,8 @@ sense: maximize
 num_vars: 5
 num_rows: 2
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=8 int=1 bin=0 obj=1
 col 1: lb=0 ub=8 int=1 bin=0 obj=1
 col 2: lb=0 ub=8 int=1 bin=0 obj=1
@@ -940,83 +1070,91 @@ row 1: sense=< rhs=8 nnz=3 | 2:1 3:1 4:1
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 9
-num_rows: 10
+num_rows: 9
 num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
 col 3: lb=0 ub=9 int=1 bin=0 obj=1
 col 4: lb=0 ub=9 int=0 bin=0 obj=0
-col 5: lb=0 ub=1 int=1 bin=1 obj=0
-col 6: lb=0 ub=1 int=1 bin=1 obj=0
-col 7: lb=0 ub=1 int=1 bin=1 obj=0
-col 8: lb=0 ub=1 int=1 bin=1 obj=0
+col 5: lb=0 ub=9 int=0 bin=0 obj=0
+col 6: lb=0 ub=9 int=0 bin=0 obj=0
+col 7: lb=0 ub=9 int=0 bin=0 obj=0
+col 8: lb=0 ub=9 int=0 bin=0 obj=0
 row 0: sense=> rhs=0 nnz=2 | 0:-1 4:1
 row 1: sense=> rhs=0 nnz=2 | 1:-1 4:1
 row 2: sense=> rhs=0 nnz=2 | 2:-1 4:1
 row 3: sense=> rhs=0 nnz=2 | 3:-1 4:1
-row 4: sense=< rhs=9 nnz=3 | 0:-1 4:1 5:9
-row 5: sense=< rhs=9 nnz=3 | 1:-1 4:1 6:9
-row 6: sense=< rhs=9 nnz=3 | 2:-1 4:1 7:9
-row 7: sense=< rhs=9 nnz=3 | 3:-1 4:1 8:9
-row 8: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
-row 9: sense=< rhs=400 nnz=1 | 4:200
+row 4: sense== rhs=0 nnz=2 | 0:-1 5:1
+row 5: sense== rhs=0 nnz=2 | 1:-1 6:1
+row 6: sense== rhs=0 nnz=2 | 2:-1 7:1
+row 7: sense== rhs=0 nnz=2 | 3:-1 8:1
+row 8: sense=< rhs=400 nnz=1 | 4:200
+gen 0: kind=max res=4 args=5,6,7,8
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 9
-num_rows: 10
+num_rows: 9
 num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
 col 3: lb=0 ub=9 int=1 bin=0 obj=1
 col 4: lb=0 ub=9 int=0 bin=0 obj=0
-col 5: lb=0 ub=1 int=1 bin=1 obj=0
-col 6: lb=0 ub=1 int=1 bin=1 obj=0
-col 7: lb=0 ub=1 int=1 bin=1 obj=0
-col 8: lb=0 ub=1 int=1 bin=1 obj=0
+col 5: lb=0 ub=9 int=0 bin=0 obj=0
+col 6: lb=0 ub=9 int=0 bin=0 obj=0
+col 7: lb=0 ub=9 int=0 bin=0 obj=0
+col 8: lb=0 ub=9 int=0 bin=0 obj=0
 row 0: sense=> rhs=0 nnz=2 | 0:-1 4:1
 row 1: sense=> rhs=0 nnz=2 | 1:-1 4:1
 row 2: sense=> rhs=0 nnz=2 | 2:-1 4:1
 row 3: sense=> rhs=0 nnz=2 | 3:-1 4:1
-row 4: sense=< rhs=9 nnz=3 | 0:-1 4:1 5:9
-row 5: sense=< rhs=9 nnz=3 | 1:-1 4:1 6:9
-row 6: sense=< rhs=9 nnz=3 | 2:-1 4:1 7:9
-row 7: sense=< rhs=9 nnz=3 | 3:-1 4:1 8:9
-row 8: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
-row 9: sense=< rhs=400 nnz=5 | 0:1 1:1 2:1 3:1 4:200
+row 4: sense== rhs=0 nnz=2 | 0:-1 5:1
+row 5: sense== rhs=0 nnz=2 | 1:-1 6:1
+row 6: sense== rhs=0 nnz=2 | 2:-1 7:1
+row 7: sense== rhs=0 nnz=2 | 3:-1 8:1
+row 8: sense=< rhs=400 nnz=5 | 0:1 1:1 2:1 3:1 4:200
+gen 0: kind=max res=4 args=5,6,7,8
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 9
-num_rows: 10
+num_rows: 9
 num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
 col 0: lb=0 ub=4 int=1 bin=0 obj=0
 col 1: lb=0 ub=4 int=1 bin=0 obj=0
 col 2: lb=0 ub=4 int=1 bin=0 obj=0
 col 3: lb=0 ub=4 int=1 bin=0 obj=0
 col 4: lb=0 ub=4 int=0 bin=0 obj=200
-col 5: lb=0 ub=1 int=1 bin=1 obj=0
-col 6: lb=0 ub=1 int=1 bin=1 obj=0
-col 7: lb=0 ub=1 int=1 bin=1 obj=0
-col 8: lb=0 ub=1 int=1 bin=1 obj=0
+col 5: lb=0 ub=4 int=0 bin=0 obj=0
+col 6: lb=0 ub=4 int=0 bin=0 obj=0
+col 7: lb=0 ub=4 int=0 bin=0 obj=0
+col 8: lb=0 ub=4 int=0 bin=0 obj=0
 row 0: sense=< rhs=4 nnz=4 | 0:1 1:1 2:1 3:1
 row 1: sense=> rhs=0 nnz=2 | 0:-1 4:1
 row 2: sense=> rhs=0 nnz=2 | 1:-1 4:1
 row 3: sense=> rhs=0 nnz=2 | 2:-1 4:1
 row 4: sense=> rhs=0 nnz=2 | 3:-1 4:1
-row 5: sense=< rhs=4 nnz=3 | 0:-1 4:1 5:4
-row 6: sense=< rhs=4 nnz=3 | 1:-1 4:1 6:4
-row 7: sense=< rhs=4 nnz=3 | 2:-1 4:1 7:4
-row 8: sense=< rhs=4 nnz=3 | 3:-1 4:1 8:4
-row 9: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
+row 5: sense== rhs=0 nnz=2 | 0:-1 5:1
+row 6: sense== rhs=0 nnz=2 | 1:-1 6:1
+row 7: sense== rhs=0 nnz=2 | 2:-1 7:1
+row 8: sense== rhs=0 nnz=2 | 3:-1 8:1
+gen 0: kind=max res=4 args=5,6,7,8
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=4 int=1 bin=0 obj=1
 col 1: lb=0 ub=4 int=1 bin=0 obj=1
 col 2: lb=0 ub=4 int=1 bin=0 obj=1
@@ -1028,6 +1166,8 @@ sense: maximize
 num_vars: 4
 num_rows: 2
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=4 int=1 bin=0 obj=1
 col 1: lb=0 ub=4 int=1 bin=0 obj=1
 col 2: lb=0 ub=4 int=1 bin=0 obj=1
@@ -1040,6 +1180,8 @@ sense: maximize
 num_vars: 4
 num_rows: 2
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=2 int=1 bin=0 obj=1
 col 1: lb=0 ub=2 int=1 bin=0 obj=1
 col 2: lb=0 ub=2 int=1 bin=0 obj=1
@@ -1052,6 +1194,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -1063,6 +1207,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -1074,6 +1220,8 @@ sense: maximize
 num_vars: 4
 num_rows: 2
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=90 int=1 bin=0 obj=1
 col 1: lb=0 ub=90 int=1 bin=0 obj=1
 col 2: lb=0 ub=90 int=1 bin=0 obj=1
@@ -1086,6 +1234,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -1097,6 +1247,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -1108,6 +1260,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -1119,6 +1273,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
@@ -1130,6 +1286,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=10
 col 1: lb=0 ub=1 int=1 bin=1 obj=20
 col 2: lb=0 ub=1 int=1 bin=1 obj=30
@@ -1141,6 +1299,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=10
 col 1: lb=0 ub=1 int=1 bin=1 obj=20
 col 2: lb=0 ub=1 int=1 bin=1 obj=30
@@ -1152,6 +1312,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=10
 col 1: lb=0 ub=1 int=1 bin=1 obj=20
 col 2: lb=0 ub=1 int=1 bin=1 obj=30
@@ -1163,6 +1325,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=10
 col 1: lb=0 ub=1 int=1 bin=1 obj=20
 col 2: lb=0 ub=1 int=1 bin=1 obj=30
@@ -1174,6 +1338,8 @@ sense: maximize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=2
 col 1: lb=0 ub=1 int=1 bin=1 obj=3
 col 2: lb=0 ub=1 int=1 bin=1 obj=4
@@ -1185,6 +1351,8 @@ sense: maximize
 num_vars: 5
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=30
 col 1: lb=0 ub=1 int=1 bin=1 obj=60
 col 2: lb=0 ub=1 int=1 bin=1 obj=90
@@ -1197,6 +1365,8 @@ sense: maximize
 num_vars: 5
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=30
 col 1: lb=0 ub=1 int=1 bin=1 obj=60
 col 2: lb=0 ub=1 int=1 bin=1 obj=90
@@ -1209,6 +1379,8 @@ sense: minimize
 num_vars: 5
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=0
 col 1: lb=0 ub=5 int=1 bin=0 obj=0
 col 2: lb=0 ub=5 int=1 bin=0 obj=0
@@ -1221,6 +1393,8 @@ sense: maximize
 num_vars: 8
 num_rows: 2
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=8 int=1 bin=0 obj=10
 col 1: lb=0 ub=3 int=1 bin=0 obj=0
 col 2: lb=0 ub=8 int=1 bin=0 obj=20
@@ -1237,6 +1411,8 @@ sense: minimize
 num_vars: 4
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=5 int=1 bin=0 obj=1
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -1245,9 +1421,11 @@ row 0: sense=< rhs=-6 nnz=4 | 0:-1 1:-1 2:-1 3:-1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
-num_vars: 12
-num_rows: 17
+num_vars: 16
+num_rows: 13
 num_qrows: 0
+num_genconstrs: 4
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=10 int=1 bin=0 obj=0
 col 2: lb=0 ub=1 int=1 bin=1 obj=0
@@ -1260,6 +1438,10 @@ col 8: lb=0 ub=1 int=1 bin=1 obj=0
 col 9: lb=0 ub=9 int=1 bin=0 obj=1
 col 10: lb=0 ub=10 int=1 bin=0 obj=0
 col 11: lb=0 ub=1 int=1 bin=1 obj=0
+col 12: lb=-11 ub=11 int=0 bin=0 obj=0
+col 13: lb=-11 ub=11 int=0 bin=0 obj=0
+col 14: lb=-11 ub=11 int=0 bin=0 obj=0
+col 15: lb=-11 ub=11 int=0 bin=0 obj=0
 row 0: sense=< rhs=20 nnz=4 | 1:2 4:3 7:4 10:5
 row 1: sense=> rhs=-2 nnz=2 | 0:-1 1:1
 row 2: sense=> rhs=-2 nnz=2 | 3:-1 4:1
@@ -1269,32 +1451,38 @@ row 5: sense=> rhs=2 nnz=2 | 0:1 1:1
 row 6: sense=> rhs=2 nnz=2 | 3:1 4:1
 row 7: sense=> rhs=2 nnz=2 | 6:1 7:1
 row 8: sense=> rhs=2 nnz=2 | 9:1 10:1
-row 9: sense=< rhs=20 nnz=3 | 0:-1 1:1 2:22
-row 10: sense=< rhs=20 nnz=3 | 3:-1 4:1 5:22
-row 11: sense=< rhs=20 nnz=3 | 6:-1 7:1 8:22
-row 12: sense=< rhs=20 nnz=3 | 9:-1 10:1 11:22
-row 13: sense=< rhs=2 nnz=3 | 0:1 1:1 2:-22
-row 14: sense=< rhs=2 nnz=3 | 3:1 4:1 5:-22
-row 15: sense=< rhs=2 nnz=3 | 6:1 7:1 8:-22
-row 16: sense=< rhs=2 nnz=3 | 9:1 10:1 11:-22
+row 9: sense== rhs=-2 nnz=2 | 0:-1 12:1
+row 10: sense== rhs=-2 nnz=2 | 3:-1 13:1
+row 11: sense== rhs=-2 nnz=2 | 6:-1 14:1
+row 12: sense== rhs=-2 nnz=2 | 9:-1 15:1
+gen 0: kind=abs res=1 args=12
+gen 1: kind=abs res=4 args=13
+gen 2: kind=abs res=7 args=14
+gen 3: kind=abs res=10 args=15
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize
-num_vars: 12
-num_rows: 17
+num_vars: 16
+num_rows: 13
 num_qrows: 0
+num_genconstrs: 4
+num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
-col 1: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 1: lb=0 ub=11 int=1 bin=0 obj=0
 col 2: lb=0 ub=1 int=1 bin=1 obj=0
 col 3: lb=0 ub=9 int=1 bin=0 obj=1
-col 4: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 4: lb=0 ub=11 int=1 bin=0 obj=0
 col 5: lb=0 ub=1 int=1 bin=1 obj=0
 col 6: lb=0 ub=9 int=1 bin=0 obj=1
-col 7: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 7: lb=0 ub=11 int=1 bin=0 obj=0
 col 8: lb=0 ub=1 int=1 bin=1 obj=0
 col 9: lb=0 ub=9 int=1 bin=0 obj=1
-col 10: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 10: lb=0 ub=11 int=1 bin=0 obj=0
 col 11: lb=0 ub=1 int=1 bin=1 obj=0
+col 12: lb=-11 ub=11 int=0 bin=0 obj=0
+col 13: lb=-11 ub=11 int=0 bin=0 obj=0
+col 14: lb=-11 ub=11 int=0 bin=0 obj=0
+col 15: lb=-11 ub=11 int=0 bin=0 obj=0
 row 0: sense=< rhs=5 nnz=4 | 1:-15 4:-5 7:5 10:15
 row 1: sense=> rhs=-2 nnz=2 | 0:-1 1:1
 row 2: sense=> rhs=-2 nnz=2 | 3:-1 4:1
@@ -1304,20 +1492,22 @@ row 5: sense=> rhs=2 nnz=2 | 0:1 1:1
 row 6: sense=> rhs=2 nnz=2 | 3:1 4:1
 row 7: sense=> rhs=2 nnz=2 | 6:1 7:1
 row 8: sense=> rhs=2 nnz=2 | 9:1 10:1
-row 9: sense=< rhs=20 nnz=3 | 0:-1 1:1 2:22
-row 10: sense=< rhs=20 nnz=3 | 3:-1 4:1 5:22
-row 11: sense=< rhs=20 nnz=3 | 6:-1 7:1 8:22
-row 12: sense=< rhs=20 nnz=3 | 9:-1 10:1 11:22
-row 13: sense=< rhs=2 nnz=3 | 0:1 1:1 2:-22
-row 14: sense=< rhs=2 nnz=3 | 3:1 4:1 5:-22
-row 15: sense=< rhs=2 nnz=3 | 6:1 7:1 8:-22
-row 16: sense=< rhs=2 nnz=3 | 9:1 10:1 11:-22
+row 9: sense== rhs=-2 nnz=2 | 0:-1 12:1
+row 10: sense== rhs=-2 nnz=2 | 3:-1 13:1
+row 11: sense== rhs=-2 nnz=2 | 6:-1 14:1
+row 12: sense== rhs=-2 nnz=2 | 9:-1 15:1
+gen 0: kind=abs res=1 args=12
+gen 1: kind=abs res=4 args=13
+gen 2: kind=abs res=7 args=14
+gen 3: kind=abs res=10 args=15
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 9
 num_rows: 1
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=1
 col 1: lb=0 ub=1 int=1 bin=1 obj=0
 col 2: lb=0 ub=1 int=1 bin=1 obj=1
@@ -1334,6 +1524,8 @@ sense: minimize
 num_vars: 8
 num_rows: 4
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
 col 0: lb=0 ub=1 int=1 bin=1 obj=1
 col 1: lb=0 ub=1 int=1 bin=1 obj=0
 col 2: lb=0 ub=1 int=1 bin=1 obj=1
@@ -1350,8 +1542,10 @@ row 3: sense=> rhs=1 nnz=1 | 6:1
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 9
-num_rows: 2
+num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 2
 col 0: lb=0 ub=5 int=1 bin=0 obj=1
 col 1: lb=0 ub=1 int=1 bin=1 obj=0
 col 2: lb=0 ub=5 int=1 bin=0 obj=1
@@ -1361,14 +1555,16 @@ col 5: lb=0 ub=1 int=1 bin=1 obj=0
 col 6: lb=0 ub=5 int=1 bin=0 obj=1
 col 7: lb=0 ub=1 int=1 bin=1 obj=0
 col 8: lb=0 ub=1 int=1 bin=1 obj=0
-row 0: sense=< rhs=-1 nnz=5 | 0:1 2:1 4:1 6:1 8:-21
-row 1: sense=> rhs=-20 nnz=5 | 0:1 2:1 4:1 6:1 8:-21
+ind 0: bin=8==0 sense=< rhs=-1 | 0:1 2:1 4:1 6:1
+ind 1: bin=8==1 sense=> rhs=1 | 0:1 2:1 4:1 6:1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 9
-num_rows: 2
+num_rows: 0
 num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 2
 col 0: lb=0 ub=1 int=1 bin=1 obj=1
 col 1: lb=0 ub=1 int=1 bin=1 obj=0
 col 2: lb=0 ub=1 int=1 bin=1 obj=1
@@ -1378,6 +1574,78 @@ col 5: lb=0 ub=1 int=1 bin=1 obj=0
 col 6: lb=0 ub=1 int=1 bin=1 obj=1
 col 7: lb=0 ub=1 int=1 bin=1 obj=0
 col 8: lb=0 ub=1 int=1 bin=1 obj=0
-row 0: sense=< rhs=1 nnz=5 | 0:1 2:1 4:1 6:1 8:-7
-row 1: sense=> rhs=-4 nnz=5 | 0:1 2:1 4:1 6:1 8:-7
+ind 0: bin=8==0 sense=< rhs=1 | 0:1 2:1 4:1 6:1
+ind 1: bin=8==1 sense=> rhs=3 | 0:1 2:1 4:1 6:1
+=== END MODEL DUMP ===
+=== DECIDB MODEL DUMP ===
+sense: minimize
+num_vars: 13
+num_rows: 5
+num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
+col 0: lb=0 ub=1e+30 int=1 bin=0 obj=1
+col 1: lb=0 ub=1 int=1 bin=1 obj=0
+col 2: lb=0 ub=1e+30 int=1 bin=0 obj=1
+col 3: lb=0 ub=1 int=1 bin=1 obj=0
+col 4: lb=0 ub=1e+30 int=1 bin=0 obj=1
+col 5: lb=0 ub=1 int=1 bin=1 obj=0
+col 6: lb=0 ub=1e+30 int=1 bin=0 obj=1
+col 7: lb=0 ub=1 int=1 bin=1 obj=0
+col 8: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 9: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 10: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 11: lb=0 ub=1e+30 int=0 bin=0 obj=0
+col 12: lb=0 ub=1e+30 int=0 bin=0 obj=0
+row 0: sense== rhs=0 nnz=2 | 0:-1 8:1
+row 1: sense== rhs=0 nnz=2 | 2:-1 9:1
+row 2: sense== rhs=0 nnz=2 | 4:-1 10:1
+row 3: sense== rhs=0 nnz=2 | 6:-1 11:1
+row 4: sense=> rhs=3 nnz=1 | 12:1
+gen 0: kind=max res=12 args=8,9,10,11
+=== END MODEL DUMP ===
+=== DECIDB MODEL DUMP ===
+sense: minimize
+num_vars: 13
+num_rows: 5
+num_qrows: 0
+num_genconstrs: 1
+num_indconstrs: 0
+col 0: lb=0 ub=1e+30 int=1 bin=0 obj=1
+col 1: lb=0 ub=1 int=1 bin=1 obj=0
+col 2: lb=0 ub=1e+30 int=1 bin=0 obj=1
+col 3: lb=0 ub=1 int=1 bin=1 obj=0
+col 4: lb=0 ub=1e+30 int=1 bin=0 obj=1
+col 5: lb=0 ub=1 int=1 bin=1 obj=0
+col 6: lb=0 ub=1e+30 int=1 bin=0 obj=1
+col 7: lb=0 ub=1 int=1 bin=1 obj=0
+col 8: lb=-1e+30 ub=0 int=0 bin=0 obj=0
+col 9: lb=-1e+30 ub=0 int=0 bin=0 obj=0
+col 10: lb=-1e+30 ub=0 int=0 bin=0 obj=0
+col 11: lb=-1e+30 ub=0 int=0 bin=0 obj=0
+col 12: lb=-1e+30 ub=0 int=0 bin=0 obj=0
+row 0: sense== rhs=0 nnz=2 | 0:1 8:1
+row 1: sense== rhs=0 nnz=2 | 2:1 9:1
+row 2: sense== rhs=0 nnz=2 | 4:1 10:1
+row 3: sense== rhs=0 nnz=2 | 6:1 11:1
+row 4: sense=< rhs=-3 nnz=1 | 12:1
+gen 0: kind=min res=12 args=8,9,10,11
+=== END MODEL DUMP ===
+=== DECIDB MODEL DUMP ===
+sense: minimize
+num_vars: 5
+num_rows: 5
+num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
+col 0: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 1: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 2: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 3: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 4: lb=0 ub=1e+30 int=0 bin=0 obj=1
+row 0: sense=> rhs=2 nnz=4 | 0:1 1:1 2:1 3:1
+row 1: sense=> rhs=0 nnz=2 | 0:-2 4:1
+row 2: sense=> rhs=0 nnz=2 | 1:-3 4:1
+row 3: sense=> rhs=0 nnz=2 | 2:-4 4:1
+row 4: sense=> rhs=0 nnz=2 | 3:-5 4:1
 === END MODEL DUMP ===

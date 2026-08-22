@@ -1,4 +1,3 @@
-
 # DeciDB Development Guide
 
 DeciDB extends DuckDB with a `DECIDE` clause for in-database constrained
@@ -95,3 +94,8 @@ make grammar-build
 Update the relevant documentation in the same session when behavior or
 architecture changes. Keep `todo.md` for remaining work only and `done.md` for
 the current implementation; do not use either as a historical checklist.
+
+## User Interaction rules
+
+- Communicate with the user using simple intutive language. Avoid jargon but if you have to include jargon define it first.
+- Remeber this is a large codebase. The user may have forgotten about some implementations. Use your judgement to provide refreshers when you think its needed.

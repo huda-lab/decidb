@@ -32,6 +32,7 @@ Each subdirectory corresponds to a feature area and contains:
 | `quadratic/` | QP objectives, QCQP constraints | `test_quadratic.py`, `test_quadratic_constraints.py` |
 | `subquery/` | Scalar and correlated subqueries as constraint RHS | `test_cons_subquery.py`, `test_cons_correlated_subquery.py` |
 | `error_handling/` | Parser errors, binder errors, infeasibility, solver-specific errors | `test_error_*.py` |
+| `golden/` | The model-dump characterization oracle: what DeciDB *builds*, per backend | `golden/corpus.sql`, `golden/check.sh` |
 | `edge_cases/` | Boundary conditions, data shapes, scale, JOIN sources, EXPLAIN plan, objective-shape tests | `test_edge_cases.py`, `test_large_scale.py`, `test_sql_*.py`, `test_explain.py`, `test_obj_maximize.py`, `test_obj_minimize.py`, `test_obj_complex_coeffs.py` |
 
 ## How to use

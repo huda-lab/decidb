@@ -152,14 +152,18 @@ def test_power_over_data_exponent_three(decidb_cli, oracle_solver):
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_power_over_decide_variable_still_gated_in_constraint(decidb_cli):
+def test_power_over_decide_variable_still_gated_in_constraint(decidb_cli_gurobi):
     """The loosening is scoped to a data-only base — ``POWER(x, 2)`` is unaffected.
 
     A quadratic constraint term still has to go through the quadratic path, so the
     early-out must not swallow it. Without the ``ExpressionContainsDecideVariable``
     condition this query would take the data route and build a wrong model.
+
+    Gurobi-only, and not by preference: the assertion is on the solved values, which
+    needs a backend that can accept a quadratic constraint at all. HiGHS declares it
+    cannot and the plan-time gate refuses the query before a model exists.
     """
-    rows, cols = decidb_cli.execute(f"""
+    rows, cols = decidb_cli_gurobi.execute(f"""
         SELECT id, x FROM {_TABLE}
         DECIDE x(REAL)
         SUCH THAT SUM(POWER(x - 2, 2)) <= 4 AND x <= 9

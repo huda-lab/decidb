@@ -26,8 +26,10 @@ Covers one query per auxiliary-creation site:
   - test_per_outer_minmax_over_group_values_is_boxed: `w` over the `z_g`s
   - test_per_outer_minmax_over_group_sums_is_boxed: `w` over group sums
   - test_composed_minmax_term_auxiliaries_are_boxed: composed `z_k` per term
-  - test_unbounded_variable_leaves_its_auxiliary_free: the one legitimate exception
+  - test_unbounded_variable_keeps_whichever_end_it_can: per end, including the one
+    legitimate fully-free case
   - test_native_auxiliaries_are_boxed_too: the invariant, on the native formulation
+  - test_half_open_range_keeps_its_closed_side: one open end does not forfeit the other
 """
 
 import re
@@ -184,27 +186,53 @@ def test_composed_minmax_term_auxiliaries_are_boxed(decidb_cli, tmp_path):
 
 @pytest.mark.min_max
 @pytest.mark.correctness
-def test_unbounded_variable_leaves_its_auxiliary_free(decidb_cli, tmp_path):
-    """The one case where a free auxiliary is correct: there is no box to derive.
+@pytest.mark.parametrize("name,rows,sense,expected", [
+    # `x(REAL)` defaults to a floor of 0 and no ceiling. With positive coefficients the
+    # expression inherits that shape exactly, so the floor is derivable and only the
+    # ceiling is not.
+    ("open above only", "(VALUES (1,3),(2,5)) t(id,c)", "MINIMIZE", (0.0, 1e30)),
+    # A negative coefficient swaps which end of `x`'s box feeds which end of the term:
+    # the open ceiling on `x` opens the expression's FLOOR, and 0 becomes its ceiling.
+    # Blaming the side without respecting sign would get this backwards.
+    ("open below only", "(VALUES (1,-3),(2,-5)) t(id,c)", "MAXIMIZE", (-1e30, 0.0)),
+    # Both signs in one family: the extremum ranges over a term open above and a term
+    # open below, so nothing is derivable and the column is free. This is the case the
+    # test was originally written for.
+    ("open at both ends", "(VALUES (1,3),(2,-5)) t(id,c)", "MINIMIZE", (-1e30, 1e30)),
+], ids=lambda v: v if isinstance(v, str) else "")
+def test_unbounded_variable_keeps_whichever_end_it_can(decidb_cli_gurobi, tmp_path, name,
+                                                       rows, sense, expected):
+    """An underivable end costs that end, and no more.
 
-    `x(REAL)` with no upper bound reaches infinity, so `MAX(x * c)` does too and the
-    auxiliary must stay free rather than be given a box that cuts off the optimum. The
-    guard for this is the same one the Big-M walk already used to fall back to its floor.
+    "Unbounded" is a property of one end of a range, not of the range. `x(REAL)` with no
+    ceiling makes `MAX(x * c)` unbounded above, and that end must stay free rather than
+    take a box that could cut off the optimum — but the other end is ordinary arithmetic
+    over the user's own bounds, and discarding it buys nothing. A fully free column is
+    correct only when nothing at all was derivable, which is the third case here.
+
+    Each case optimizes toward the end that exists — pushing toward the open end is a
+    genuinely unbounded query, and testing it would test the refusal rather than the box.
+    That is also why this one runs native: reaching the open-below case at all needs
+    `MAXIMIZE MAX`, the hard direction, and the lowered arm refuses it for want of a
+    finite Big-M before any box is built. The box itself is computed by the same walk on
+    both arms, so the arm decides which shapes are expressible, not what is covered.
+
+    The auxiliary is named by its objective coefficient rather than by position: the hard
+    direction pins an extra column per row, and only the extremum carries the objective.
     """
-    dump = _lowering(decidb_cli).dump_model(
+    dump = decidb_cli_gurobi.dump_model(
         f"""
-            SELECT id, x FROM {_ROWS}
+            SELECT id, x FROM {rows}
             DECIDE x(REAL) SUCH THAT SUM(x) >= 2
-            MINIMIZE MAX(x * c)
+            {sense} MAX(x * c)
         """,
-        tmp_path / "unbounded.dump")
-    # Decision columns are continuous here too, so name the auxiliary by position: it is
-    # appended after the per-row grid.
-    cols = _continuous_columns(dump)
-    assert len(cols) == 3, f"expected two x columns plus one auxiliary:\n{dump}"
-    _, lb, ub = cols[-1]
-    assert lb <= -1e20 and ub >= 1e20, \
-        f"auxiliary over an unbounded variable was given a box [{lb}, {ub}]:\n{dump}"
+        tmp_path / f"unbounded_{name.replace(' ', '_')}.dump")
+    reduced = [(idx, lb, ub) for idx, lb, ub in _continuous_columns(dump)
+               if re.search(rf"^col {idx}: .* obj=1$", dump, re.M)]
+    assert len(reduced) == 1, f"expected exactly one objective auxiliary:\n{dump}"
+    _, lb, ub = reduced[0]
+    assert (lb, ub) == expected, \
+        f"{name}: auxiliary boxed [{lb}, {ub}], expected {expected}:\n{dump}"
 
 
 @pytest.mark.min_max
@@ -229,3 +257,36 @@ def test_native_auxiliaries_are_boxed_too(decidb_cli, tmp_path):
     for idx, lb, ub in cols:
         assert lb > -1e20 and ub < 1e20, \
             f"auxiliary col {idx} left free at [{lb}, {ub}]:\n{dump}"
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+def test_half_open_range_keeps_its_closed_side(decidb_cli_gurobi, tmp_path):
+    """An end that could not be derived does not cost the end that could.
+
+    "Unbounded" is a property of one end, not of a range. `x(INT) SUCH THAT x >= 0`
+    with no ceiling reaches arbitrarily high, so a `MAX(x)` auxiliary genuinely has no
+    upper bound — but its lower bound is 0, and it was computed on the way to finding
+    that out. Discarding it along with the ceiling hands the root simplex a fully free
+    column when half a box was available, which is the cliff this whole module exists
+    to keep out.
+
+    Only the native arm can be asked this. The lowered arm needs a Big-M over the same
+    family, has no finite one here, and refuses the query outright — that refusal is
+    `test_native_constructs.test_native_minmax_needs_no_bound`, and it is why an
+    unbounded MIN/MAX reaches a model at all.
+    """
+    dump = decidb_cli_gurobi.dump_model(
+        f"""
+            SELECT id, x FROM {_ROWS}
+            DECIDE x(INT) SUCH THAT MAX(x) >= 3 AND x >= 0
+            MINIMIZE SUM(x)
+        """,
+        tmp_path / "half_open.dump")
+    aux = _continuous_columns(dump)
+    assert aux, f"no auxiliary columns at all:\n{dump}"
+    for idx, lb, ub in aux:
+        assert lb == 0.0, \
+            f"auxiliary col {idx} threw away its derived floor: [{lb}, {ub}]\n{dump}"
+        assert ub >= 1e20, \
+            f"auxiliary col {idx} was given a ceiling nothing derived: [{lb}, {ub}]\n{dump}"

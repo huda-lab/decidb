@@ -334,7 +334,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DecidBCliError as e:
-            assert re.search(r"Non-convex|require Gurobi", e.message), \
+            assert re.search(r"needs Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
             return
 
@@ -377,7 +377,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DecidBCliError as e:
-            assert re.search(r"Non-convex|require Gurobi", e.message), \
+            assert re.search(r"needs Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
             return
 
@@ -420,7 +420,7 @@ class TestBilinearNonConvexObjectives:
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DecidBCliError as e:
-            assert re.search(r"Non-convex|require Gurobi", e.message), \
+            assert re.search(r"needs Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
             return
 
@@ -1020,7 +1020,7 @@ class TestBilinearErrors:
             pass  # Gurobi handled it
         except DecidBCliError as e:
             # HiGHS: non-convex rejection expected
-            assert re.search(r"Non-convex|require Gurobi", e.message), \
+            assert re.search(r"needs Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
 
 

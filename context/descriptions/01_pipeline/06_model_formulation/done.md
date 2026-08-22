@@ -616,6 +616,14 @@ of going native. A column is free only where no range is derivable at all — wh
 exactly the query the native path exists to answer, since a general constraint needs no
 bound where a Big-M would.
 
+**Each end is decided separately.** `AuxRange` carries `lo_unbounded` and
+`hi_unbounded`, not one flag, because the two ends fail independently: `x >= 0` with no
+ceiling has a derived floor and no derivable roof, and the auxiliary over it is emitted
+`[0, 1e30]`. Only a Big-M needs both ends, since a constant has to dominate the whole
+spread — `BigM()` asserts `!Unbounded()` and every refusal site tests the same. Boxing
+is the one caller entitled to read the ends apart, because half a box is still a box,
+and it is strictly better than none for the root simplex.
+
 The lowered rows the construct would have produced are **not** also emitted; a model
 holds one or the other, never both. The two exact rows stage 05 already wrote
 (`aux >= inner`, `aux >= -inner`) do stay: they are implied by `aux = |t|`, they need

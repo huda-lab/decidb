@@ -11,9 +11,10 @@ namespace duckdb {
 // --- Global auxiliary creation ---------------------------------------------
 // Every auxiliary column DeciDB introduces is created here. Both helpers exist so
 // that a continuous auxiliary cannot be declared without stating the range of the
-// expression it stands for: infinite bounds are reachable only through
-// `AuxRange::unbounded`, i.e. only when some contributing decision variable is
-// genuinely unbounded and no box exists to give. A continuous auxiliary left free
+// expression it stands for: an infinite bound is reachable only through
+// `AuxRange::lo_unbounded` / `hi_unbounded`, i.e. only on an end no contributing
+// decision variable's box could derive. The two are separate because a range open
+// on one side still boxes the other. A continuous auxiliary left free
 // when its range was in fact derivable costs the root LP dearly — the simplex has
 // no box to start from and crawls toward the answer one pivot at a time.
 
@@ -24,14 +25,12 @@ static idx_t AddGlobalContinuousAux(SolverInput &input, const VarIndexer &indexe
     idx_t aux_idx = indexer.global_block_start + input.num_global_vars;
     input.num_global_vars += 1;
     input.global_variable_types.push_back(LogicalType::DOUBLE);
-    if (range.unbounded) {
-        input.global_lower_bounds.push_back(-1e30);
-        input.global_upper_bounds.push_back(1e30);
-    } else {
-        input.global_lower_bounds.push_back(range.lo);
-        input.global_upper_bounds.push_back(range.hi);
-    }
-    input.global_bounds_unbounded.push_back(range.unbounded);
+    // Per side. An auxiliary over `x >= 0` with no ceiling is emitted `[0, 1e30]`,
+    // not `[-1e30, 1e30]`: the floor was derived, and throwing it away because the
+    // ceiling was not is a box given up for nothing.
+    input.global_lower_bounds.push_back(range.lo_unbounded ? -1e30 : range.lo);
+    input.global_upper_bounds.push_back(range.hi_unbounded ? 1e30 : range.hi);
+    input.global_bounds_unbounded.push_back(range.Unbounded());
     input.global_obj_coeffs.push_back(obj_coeff);
     return aux_idx;
 }
@@ -538,13 +537,13 @@ void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer
                 double row_lo = 0.0, row_hi = 0.0;
                 DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, row_lo, row_hi);
                 double constant = DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, r);
-                if (std::isinf(row_lo) || std::isinf(row_hi)) {
-                    row_range.MarkUnbounded(DConstants::INVALID_INDEX);
-                } else {
-                    // `t` carries the constant part too, so shift the variable-only
-                    // bracket by it before using it as the box.
-                    row_range.CoverRow(row_lo + constant, row_hi + constant, row_lo, row_hi);
-                }
+                // Each end on its own. `DecideRowSignedRange` already reports them
+                // independently, and a row open on one side — `x >= 0` with no ceiling
+                // is the common one — still has a derived bound on the other.
+                // `t` carries the constant part too, so shift the variable-only bracket
+                // by it before using it as the box.
+                row_range.CoverRowSided(row_lo + constant, row_hi + constant, row_lo, row_hi,
+                                        DConstants::INVALID_INDEX);
             }
             idx_t t_idx = AddGlobalContinuousAux(input, indexer, row_range, 0.0);
             input.global_variable_labels.resize(t_idx - indexer.global_block_start);
@@ -1775,15 +1774,20 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     // variable's box. `lo`/`hi` include constant terms — an auxiliary is pinned against
     // the whole expression — while `var_lo`/`var_hi` exclude them, because a constant
     // cancels in the (aux - expr) difference a Big-M row slackens.
+    //! An end no contributing variable's box could derive is reported as an infinity
+    //! rather than as a flag beside a partial sum. That is what lets a caller add these
+    //! up: a group sum is open below exactly when some member is, and `-inf + finite`
+    //! already says so. The two ends never mix (`lo` is only ever `-inf`, `hi` only
+    //! ever `+inf`), so no accumulation can reach a NaN.
     struct SavedRowRange {
         double lo = 0.0;
         double hi = 0.0;
         double var_lo = 0.0;
         double var_hi = 0.0;
-        bool unbounded = false;
         idx_t unbounded_var = DConstants::INVALID_INDEX;
     };
     auto saved_row_range = [&](idx_t r) -> SavedRowRange {
+        constexpr double INF = std::numeric_limits<double>::infinity();
         SavedRowRange out;
         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
             double c = saved_obj_coefficients[t].Get(r);
@@ -1798,19 +1802,35 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             }
             double lb = input.lower_bounds[v];
             double ub = input.upper_bounds[v];
-            if (ub >= 1e20 || lb <= -1e20) {
-                if (!out.unbounded) {
-                    out.unbounded = true;
+            // Each end of this term separately, exactly as `DecideRowSignedRange` does
+            // it on the constraint side. A negative coefficient swaps which end of the
+            // variable's box feeds which end of the term, so an open ceiling on `v` can
+            // open the term's FLOOR — sign has to be respected before blaming a side.
+            bool lb_open = lb <= -1e20;
+            bool ub_open = ub >= 1e20;
+            bool lo_from_ub = c < 0.0;
+            if (lo_from_ub ? ub_open : lb_open) {
+                if (out.unbounded_var == DConstants::INVALID_INDEX) {
                     out.unbounded_var = v;
                 }
-                continue;
+                out.var_lo = -INF;
+                out.lo = -INF;
+            } else {
+                double term_lo = lo_from_ub ? c * ub : c * lb;
+                out.var_lo += term_lo;
+                out.lo += term_lo;
             }
-            double term_lo = (c > 0.0) ? c * lb : c * ub;
-            double term_hi = (c > 0.0) ? c * ub : c * lb;
-            out.var_lo += term_lo;
-            out.var_hi += term_hi;
-            out.lo += term_lo;
-            out.hi += term_hi;
+            if (lo_from_ub ? lb_open : ub_open) {
+                if (out.unbounded_var == DConstants::INVALID_INDEX) {
+                    out.unbounded_var = v;
+                }
+                out.var_hi = INF;
+                out.hi = INF;
+            } else {
+                double term_hi = lo_from_ub ? c * lb : c * ub;
+                out.var_hi += term_hi;
+                out.hi += term_hi;
+            }
         }
         return out;
     };
@@ -1831,17 +1851,15 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         if (!row_family_cached) {
             for (idx_t r = 0; r < num_rows; r++) {
                 auto rr = saved_row_range(r);
-                row_family_range.CoverRow(rr.lo, rr.hi, rr.var_lo, rr.var_hi);
-                if (rr.unbounded) {
-                    row_family_range.MarkUnbounded(rr.unbounded_var);
-                }
+                row_family_range.CoverRowSided(rr.lo, rr.hi, rr.var_lo, rr.var_hi,
+                                               rr.unbounded_var);
             }
             row_family_cached = true;
         }
         return row_family_range;
     };
     auto compute_big_m = [&]() -> double {
-        if (row_family().unbounded) {
+        if (row_family().Unbounded()) {
             ThrowUnboundedAuxBigM(row_family(), var_names, "MIN/MAX");
         }
         return row_family().BigM();
@@ -1852,10 +1870,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     auto row_range_for = [&](idx_t row) -> AuxRange {
         AuxRange range;
         auto rr = saved_row_range(row);
-        range.CoverRow(rr.lo, rr.hi, rr.var_lo, rr.var_hi);
-        if (rr.unbounded) {
-            range.MarkUnbounded(rr.unbounded_var);
-        }
+        range.CoverRowSided(rr.lo, rr.hi, rr.var_lo, rr.var_hi, rr.unbounded_var);
         return range;
     };
 
@@ -2196,11 +2211,12 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             // per-group sums — each group's rows added up under the same inner-AVG
             // scale the pinning rows below use — which is both correct and tighter than
             // widening the per-row family by num_rows.
+            // `scale` is positive, so a member's floor stays the sum's floor and an
+            // infinite end carries through the addition on its own.
             AuxRange group_sum_family;
             for (idx_t g = 0; g < K; g++) {
                 double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
                 double g_lo = 0.0, g_hi = 0.0, g_var_lo = 0.0, g_var_hi = 0.0;
-                bool g_unbounded = false;
                 idx_t g_unbounded_var = DConstants::INVALID_INDEX;
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     auto rr = saved_row_range(obj_flat_rows[k]);
@@ -2208,15 +2224,11 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     g_hi += rr.hi * scale;
                     g_var_lo += rr.var_lo * scale;
                     g_var_hi += rr.var_hi * scale;
-                    if (rr.unbounded && !g_unbounded) {
-                        g_unbounded = true;
+                    if (g_unbounded_var == DConstants::INVALID_INDEX) {
                         g_unbounded_var = rr.unbounded_var;
                     }
                 }
-                group_sum_family.CoverRow(g_lo, g_hi, g_var_lo, g_var_hi);
-                if (g_unbounded) {
-                    group_sum_family.MarkUnbounded(g_unbounded_var);
-                }
+                group_sum_family.CoverRowSided(g_lo, g_hi, g_var_lo, g_var_hi, g_unbounded_var);
             }
             idx_t w_idx = AddGlobalContinuousAux(input, indexer, group_sum_family, 1.0); // objective = w
 
@@ -2258,29 +2270,9 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 //
                 // Every `t_g` is boxed by the family range over group sums — looser than
                 // a per-group box, but sound (it covers every group) and finite whenever
-                // any of them is.
-                AuxRange group_sum_range;
-                for (idx_t g = 0; g < K; g++) {
-                    double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
-                    double g_lo = 0.0, g_hi = 0.0, g_var_lo = 0.0, g_var_hi = 0.0;
-                    bool g_unbounded = false;
-                    idx_t g_unbounded_var = DConstants::INVALID_INDEX;
-                    for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
-                        auto rr = saved_row_range(obj_flat_rows[k]);
-                        g_lo += rr.lo * scale;
-                        g_hi += rr.hi * scale;
-                        g_var_lo += rr.var_lo * scale;
-                        g_var_hi += rr.var_hi * scale;
-                        if (rr.unbounded && !g_unbounded) {
-                            g_unbounded = true;
-                            g_unbounded_var = rr.unbounded_var;
-                        }
-                    }
-                    group_sum_range.CoverRow(g_lo, g_hi, g_var_lo, g_var_hi);
-                    if (g_unbounded) {
-                        group_sum_range.MarkUnbounded(g_unbounded_var);
-                    }
-                }
+                // any of them is. That is `group_sum_family`, already computed above for
+                // `w`: the two reduce over the same group sums, so recomputing it here
+                // could only ever produce the same value or drift away from it.
                 vector<int> args;
                 args.reserve(K);
                 for (idx_t g = 0; g < K; g++) {
@@ -2289,7 +2281,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                         AddObjectiveRowTerms(link, obj_flat_rows[k], scale);
                     }
-                    args.push_back(pin_native_column(link, group_sum_range));
+                    args.push_back(pin_native_column(link, group_sum_family));
                 }
                 emit_native_extremum(w_idx, std::move(args), outer_is_min);
             } else {
@@ -2581,7 +2573,7 @@ static void EmitComposedHardMinMaxIndicators(SolverInput &input, const VarIndexe
     }
 
     AuxRange range = ComposedTermRange(input, inner_terms, per_term_coefs, filter_mask);
-    if (range.unbounded) {
+    if (range.Unbounded()) {
         ThrowUnboundedAuxBigM(range, var_names, "MIN/MAX");
     }
     double M = range.BigM();

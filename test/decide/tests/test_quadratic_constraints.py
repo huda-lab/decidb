@@ -1344,9 +1344,14 @@ class TestQuadraticConstraintVarTypes:
 class TestQuadraticConstraintEdgeCases:
 
     def test_infeasible_negative_budget(
-        self, decidb_cli, duckdb_conn, oracle_solver
+        self, decidb_cli_gurobi, duckdb_conn, oracle_solver
     ):
-        """POWER(x, 2) <= -1 is unsatisfiable. Oracle should also report INFEASIBLE."""
+        """POWER(x, 2) <= -1 is unsatisfiable. Oracle should also report INFEASIBLE.
+
+        Gurobi-only: reaching the infeasibility verdict at all needs a backend that can
+        load a quadratic constraint. HiGHS declares it cannot, so the plan-time gate
+        refuses on host grounds and the query never gets far enough to be infeasible.
+        """
         sql = """
             WITH data AS (SELECT 1 AS id)
             SELECT id, x FROM data
@@ -1355,7 +1360,7 @@ class TestQuadraticConstraintEdgeCases:
                 AND POWER(x, 2) <= -1
             MAXIMIZE SUM(x)
         """
-        decidb_cli.assert_error(sql, match=r"(?i)infeasible")
+        decidb_cli_gurobi.assert_error(sql, match=r"(?i)infeasible")
 
         oracle_solver.create_model("qcp_infeasible")
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=10.0)

@@ -687,7 +687,7 @@ class TestQuadraticMaximize:
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DecidBCliError as e:
-            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
+            assert re.search(r"needs Gurobi", e.message)
             return
 
         data = duckdb_conn.execute(
@@ -729,7 +729,7 @@ class TestQuadraticMaximize:
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DecidBCliError as e:
-            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
+            assert re.search(r"needs Gurobi", e.message)
             return
 
         data = duckdb_conn.execute(
@@ -936,7 +936,7 @@ class TestQuadraticMaximize:
             decidb_time = time.perf_counter() - t0
         except DecidBCliError as e:
             assert re.search(
-                r"MIQP.*require Gurobi|integer.*require Gurobi",
+                r"not continuous.*needs Gurobi",
                 e.message, re.IGNORECASE,
             )
             return
@@ -1039,7 +1039,7 @@ class TestQuadraticErrors:
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DecidBCliError as e:
-            assert re.search(r"Non-convex|require Gurobi", e.message)
+            assert re.search(r"needs Gurobi", e.message)
             return
 
         # Oracle: minimize x*y with both in [0,10].
@@ -1082,7 +1082,7 @@ class TestQuadraticErrors:
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
         except DecidBCliError as e:
-            assert re.search(r"Non-convex quadratic objectives require Gurobi", e.message)
+            assert re.search(r"needs Gurobi", e.message)
             return
 
         t_build = time.perf_counter()

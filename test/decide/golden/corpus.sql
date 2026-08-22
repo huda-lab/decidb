@@ -585,3 +585,30 @@ MINIMIZE SUM(x);
 -- while the ceiling only reached the model builder, since every Big-M derivation
 -- reads the box and treats >= 1e20 as unbounded.
 SELECT id, x FROM items DECIDE x(BOOL) SUCH THAT SUM(x) <> 2 MINIMIZE SUM(x);
+
+-- ---------------------------------------------------------------------------
+-- Auxiliary boxes over a range open on one side
+-- ---------------------------------------------------------------------------
+-- Every MIN/MAX query above carries a finite bound, so none of them exercises a
+-- half-open auxiliary box. These do. They answer only where the backend states
+-- MIN/MAX natively -- a Big-M has no finite value over an open end and the
+-- lowered arm refuses -- so on HiGHS they are the refusals, not models.
+
+-- 86 constraint side, open above: `x >= 0` has a derived floor and no ceiling,
+-- so every auxiliary is boxed [0, 1e30] rather than given up as free.
+SELECT id, x FROM items DECIDE x(INT)
+SUCH THAT MAX(x) >= 3 AND x >= 0
+MINIMIZE SUM(x);
+
+-- 87 the mirror, via a negative coefficient: the open ceiling on `x` opens the
+-- expression's FLOOR and 0 becomes its ceiling. Sign has to be respected before
+-- blaming a side, and a box read off the wrong end would cut off the optimum.
+SELECT id, x FROM items DECIDE x(INT)
+SUCH THAT MIN(-1 * x) <= -3 AND x >= 0
+MINIMIZE SUM(x);
+
+-- 88 objective side, which boxes through a different walk than the constraint
+-- side and had the same defect independently.
+SELECT id, x FROM items DECIDE x(INT)
+SUCH THAT x >= 0 AND SUM(x) >= 2
+MINIMIZE MAX(x * weight);

@@ -7,6 +7,8 @@ now succeed and are omitted.
 
 import pytest
 
+from decidb_cli import DecidBCliError
+
 
 @pytest.mark.error_binder
 @pytest.mark.error
@@ -510,13 +512,28 @@ class TestBinderErrors:
     def test_supported_degrees_still_accepted_per_row(self, decidb_cli, constraint):
         """The other side of the gate: moving degree to one owner must not narrow what
         DECIDE accepts. Degree 2 is legal in a per-row constraint in all three spellings,
-        and each takes a different route through the walk."""
-        rows, _ = decidb_cli.execute(f"""
+        and each takes a different route through the walk.
+
+        The claim is the binder's, and the binder is the same on every host, so this
+        does not force a backend. What differs is what happens after binding: a host
+        without Gurobi cannot load a quadratic constraint, and the plan-time gate
+        refuses on those grounds. For this test that refusal counts as acceptance — the
+        binder let the constraint through, which is the whole claim. A binder rejection
+        looks different and is pinned by the sibling test above: it carries a `LINE n:`
+        source position.
+        """
+        sql = f"""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT), y(INT)
                 SUCH THAT {constraint} AND x <= 3 AND y <= 3
                 MAXIMIZE SUM(x) LIMIT 1
-            """)
+            """
+        try:
+            rows, _ = decidb_cli.execute(sql)
+        except DecidBCliError as e:
+            assert "needs Gurobi" in e.message, \
+                f"degree 2 was rejected before reaching a backend: {e.message}"
+            return
         assert rows
 
     def test_power_squared_scaled_by_constant_still_accepted(self, decidb_cli):
