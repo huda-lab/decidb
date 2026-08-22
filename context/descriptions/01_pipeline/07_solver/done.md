@@ -278,15 +278,34 @@ Sense characters convert to HiGHS's range rows:
 The conversion counts non-zeros per row, prefix-sums to row starts, then scatters
 COO entries using a `current_pos` tracker. A quadratic objective goes through
 `passHessian()`, which wants CSC for the lower triangle — same three-step
-conversion by column.
+conversion by column, plus a rescale.
+
+That rescale is the one place HiGHS and Gurobi genuinely disagree. `SolverModel`
+stores Q as the plain coefficient of each monomial, which is what
+`GRBaddqpterms` takes, so the Gurobi adapter passes Q through untouched.
+`passHessian()` instead takes the Q of `(1/2) xᵀQx`, and applies that 1/2 to the
+triangle it is given: `HighsHessian::objectiveValue` sums `0.5·qᵢᵢ·xᵢ²` on the
+diagonal but a full `qᵢⱼ·xᵢxⱼ` off it. The 1/2 is there to undo the
+double-counting of an off-diagonal pair, which sits at both `(i,j)` and `(j,i)`
+of the symmetric matrix; a diagonal entry is never mirrored, so nothing cancels
+its 1/2. **The HiGHS adapter therefore doubles diagonal entries and leaves
+off-diagonal entries alone.** Scaling the whole triangle instead does not merely
+change the objective's units — it inflates cross terms relative to squares and
+turns a PSD Q indefinite. Getting this wrong is silent: the solver returns a
+confident answer to a different problem.
 
 Logging is off (`log_to_console = false`). The session sets `time_limit` per chunk
 rather than once at load, which is what makes `Continue()` work: HiGHS resumes its
 MIP search on a repeat `run()`.
 
-**Model classes it cannot load** — quadratic constraints, a non-convex objective,
-and MIQP — are declared `false` in its capability table and refused at **plan time**
-(`RequireDecideSolverSupport`, stage 05), before the query reads a row. They used to
+**Model classes it cannot take** — quadratic constraints, a non-convex objective,
+MIQP, and a rank-deficient Q — are declared `false` in its capability table and refused
+at **plan time** (`RequireDecideSolverSupport`, stage 05), before the query reads a row.
+The last differs in kind from the other three: HiGHS *loads* a rank-deficient Q happily,
+it just answers it wrong (see stage 05's note on `singular_quadratic`), so the refusal
+is a judgement about answer quality rather than about what the API accepts. In practice
+it means every Q reaching `passHessian` here is diagonal, though the conversion above
+stays written for the general case against the day the flag is lifted. They used to
 throw here, at model load, after a full scan and build; the backend now contains no
 model-class check at all. `SolveModel` re-derives the class from the built model and
 asserts the backend covers it, so nothing unsupported can reach `passModel`.

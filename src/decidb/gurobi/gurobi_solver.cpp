@@ -78,6 +78,10 @@ const SolverCapabilities &GurobiSolver::Capabilities() {
         caps.quadratic_constraints = true;
         caps.nonconvex_quadratic = true;
         caps.miqp = true;
+        // Gurobi's QP solver handles a rank-deficient Q — the flat valley one squared
+        // expression over several decisions produces — and reaches the true optimum on
+        // it. Verified against the sweep behind the HiGHS refusal.
+        caps.singular_quadratic = true;
         // Construct flags. Each is true only when the loaded library actually exported
         // the symbol behind it — a capability is partly a runtime fact — and each is
         // A/B-verifiable: DECIDB_NATIVE_CONSTRUCTS=off forces every one back down its

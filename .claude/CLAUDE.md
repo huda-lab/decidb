@@ -63,8 +63,6 @@ caller that happens to need it first.
 
 - Follow DuckDB patterns before inventing DeciDB-specific ones.
 - Keep the DuckDB core changes small and DeciDB extensions cohesive.
-- Keep solver integration solver-agnostic; both Gurobi and HiGHS must remain
-  valid implementations unless a task explicitly changes that contract.
 - Keep user-facing errors and diagnostics concise, actionable, and expressed
   in SQL terms rather than solver internals.
 - For non-trivial work, first write down the affected layers, their contract,

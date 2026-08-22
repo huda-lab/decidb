@@ -225,6 +225,15 @@ SolverModelClass SolverModel::ModelClass() const {
                 break;
             }
         }
+        // An off-diagonal entry means two decision variables are coupled in the
+        // objective, which makes Q rank-deficient. Read as a fact here; stage 05
+        // predicts the same thing from the unexpanded squared terms.
+        for (idx_t k = 0; k < q_vals.size() && k < q_rows.size() && k < q_cols.size(); k++) {
+            if (q_rows[k] != q_cols[k] && q_vals[k] != 0.0) {
+                needed.singular_quadratic = true;
+                break;
+            }
+        }
     }
     return needed;
 }
@@ -434,9 +443,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         int rj = row_terms[j].flat_idx;
                         int q_row = std::max(ri, rj);
                         int q_col = std::min(ri, rj);
-                        // GRBaddqpterms adds raw x_i*x_j terms (no 1/2 factor).
-                        // Diagonal: coeff_i^2. Off-diagonal: 2*coeff_i*coeff_j
-                        // (symmetry — we store lower triangle only).
+                        // Q holds the plain coefficient of each monomial (ilp_model.hpp),
+                        // so store what expanding the square actually produces:
+                        // diagonal coeff_i^2, off-diagonal 2*coeff_i*coeff_j (the pair
+                        // appears twice in the expansion, and we keep one triangle).
                         double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
                         if (i != j) val *= 2.0;
                         q_map[pack_q_key(q_row, q_col)] += val;
@@ -460,9 +470,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
         }
 
-        // Bilinear objective terms: off-diagonal Q entries for x_a * x_b
-        // GRBaddqpterms adds raw terms (no 1/2 factor).
-        // For SUM(c * x_a * x_b): Q[max(a,b), min(a,b)] += c
+        // Bilinear objective terms: off-diagonal Q entries for x_a * x_b.
+        // For SUM(c * x_a * x_b): Q[max(a,b), min(a,b)] += c -- c is already the plain
+        // monomial coefficient the convention asks for, so it is stored as-is.
         if (has_bilinear) {
             model.has_quadratic_obj = true;
             model.nonconvex_quadratic = true; // Bilinear → always indefinite

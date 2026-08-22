@@ -221,15 +221,22 @@ column bounds upstream (stage 05), for the same reason the step is unsafe.
 
 ## 6. Quadratic objective
 
-When `input.has_quadratic_objective`, Q is built for the standard form
-`minimize (1/2) xᵀQx + cᵀx`.
+When `input.has_quadratic_objective`, Q is built for the form
+`minimize xᵀQx + cᵀx` — **not** the `(1/2) xᵀQx` form that some solvers take. A
+stored value is the plain coefficient of its monomial: `q_vals[k]` multiplies
+`x[q_rows[k]] · x[q_cols[k]]` exactly once, so `3·x²` stores 3 and `4·x·y` stores 4.
+`ilp_model.hpp` states this convention on the struct, and every backend adapter
+converts to its own solver's spelling rather than assuming one (§7 of
+`07_solver/done.md`).
 
 The inner linear expression of `SUM(POWER(expr, 2))` is already evaluated per row
 in `quadratic_inner_coefficients`; for row *r* it is `Σₜ a_{t,r}·x_{varₜ}`. Q is
 the sum of outer products across rows:
 
-1. **Variable terms** — `Q[i,j] += 2·aᵢ·aⱼ`, the factor of 2 on both diagonal and
-   off-diagonal entries following the `(1/2)` convention.
+1. **Variable terms** — `Q[i,i] += aᵢ²` on the diagonal and `Q[i,j] += 2·aᵢ·aⱼ`
+   off it. The factor of 2 is not a convention choice: expanding the square
+   produces the pair `aᵢ·aⱼ·xᵢxⱼ` twice, once each way round, and only one
+   triangle is stored.
 2. **Constant terms** — a constant `c` in the inner expression expands as
    `(expr + c)² = expr² + 2c·expr + c²`, so the cross-terms `2c·aₜ` are added to
    `obj_coeffs`.
@@ -239,6 +246,12 @@ the sum of outer products across rows:
 **Convexity is guaranteed by construction**: `Q = Σ a·aᵀ = AᵀA` is positive
 semidefinite. That is the payoff of enforcing convexity through the syntax rather
 than checking it numerically.
+
+It is also, for a `POWER` group spanning more than one decision variable, *singular*
+— one row of `A` gives a Q of rank one, whose minimizers form a flat valley rather
+than a point. Gurobi handles that; HiGHS currently does not, and returns a
+suboptimal answer or an error on roughly half such models. See the singular-QP
+entry in `06_issues/bugs/todo.md`.
 
 ---
 

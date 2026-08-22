@@ -57,6 +57,14 @@ flag just means this stage lowers as it always has. A **model class** is a gate:
 nothing lowers a quadratic constraint or a non-convex objective into linear rows, so
 the only honest answer is refusal.
 
+Three of the four model classes are about what a backend can *express*. The fourth,
+`singular_quadratic`, is about what it can express *correctly*: HiGHS loads a
+rank-deficient Q without complaint and then answers it wrong — stopping partway along
+the flat valley of optima, or failing outright, on roughly half of them. It is gated
+for the same reason as the others (there is nothing to lower it into) but for a
+different cause, and it should be lifted when HiGHS's QP solver improves rather than
+treated as a permanent property of the backend.
+
 The refusal is here rather than at bind time, and rather than at model load, for two
 different reasons:
 
@@ -64,16 +72,20 @@ different reasons:
   this machine has a solver that can run it — so this is a planning failure, not a
   semantic one, and the message blames the host and names the solver to install.
 - **Not model load.** The old refusals lived in the HiGHS backend and fired after a
-  full scan and a full model build. Nothing about the three classes needs a single
-  row: `quadratic_constraints` is tree shape, `miqp` is declared integrality, and
+  full scan and a full model build. Nothing about the four classes needs a single
+  row: `quadratic_constraints` is tree shape, `miqp` is declared integrality,
   `nonconvex_quadratic` is the sign of `quadratic_sign` against the sense — a
-  plan-time constant, since this stage already refuses a scale factor it cannot fold.
+  plan-time constant, since this stage already refuses a scale factor it cannot fold —
+  and `singular_quadratic` is a count of distinct `variable_index` values across the
+  objective's `squared_terms`, two or more meaning the square couples two decisions.
 
 `DeriveDecideModelClass` is a *prediction* of what `SolverModel::ModelClass()` will
 report once the rows are in, and it must never predict less. Where it cannot be exact
 it over-reports: `MayHaveIntegralColumn` treats any construct that still owes work at
 execution as producing an auxiliary column, rather than enumerating which auxiliaries
-are binary — a list that would rot silently. `SolveModel` re-derives the class from
+are binary — a list that would rot silently. `HasCoupledQuadraticTerms` over-reports
+the same way, counting a bilinear objective as coupled without checking whether the
+built Q ends up with a nonzero off-diagonal. `SolveModel` re-derives the class from
 the built model and asserts the backend covers it, so a prediction that ever comes up
 short fails loudly instead of handing a backend a model it cannot load.
 

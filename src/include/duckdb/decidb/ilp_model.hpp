@@ -253,12 +253,28 @@ struct SolverModel {
     vector<double> obj_coeffs; //!< Coefficient per variable (linear part)
     bool maximize;             //!< True = maximize, false = minimize
 
-    //! Quadratic objective: (1/2) x^T Q x (added to linear part).
-    //! Stored in COO (coordinate) format, lower triangle only.
+    //! Quadratic objective: x^T Q x, added to the linear part. NOT the (1/2) x^T Q x
+    //! form some solvers take -- see the convention note below, which every backend
+    //! adapter must honour rather than assume.
+    //!
+    //! CONVENTION. A stored value is the plain coefficient of its monomial in the
+    //! objective polynomial: q_vals[k] multiplies x[q_rows[k]] * x[q_cols[k]] exactly
+    //! once. So `3*x*x` stores 3 and `4*x*y` stores 4, and the objective is the sum of
+    //! q_vals[k] * x[q_rows[k]] * x[q_cols[k]] over all k. Held in COO (coordinate)
+    //! format -- three parallel arrays, one entry per nonzero -- lower triangle only
+    //! (q_rows[k] >= q_cols[k]), since x*y and y*x are one term.
+    //!
+    //! Backends differ here and MUST convert. Gurobi's GRBaddqpterms takes exactly this
+    //! form, so its adapter passes Q through. HiGHS's passHessian instead takes the Q of
+    //! (1/2) x^T Q x, whose 1/2 cancels the double-counting of an off-diagonal pair but
+    //! has nothing to cancel on the diagonal; its adapter therefore doubles diagonal
+    //! entries and leaves off-diagonal entries alone. Getting that backwards silently
+    //! optimizes a different objective -- it does not fail loudly.
+    //!
     //! Empty when the objective is purely linear (LP/MILP).
-    vector<int> q_rows;        //!< Row indices into Q
+    vector<int> q_rows;        //!< Row indices into Q (>= the paired q_cols entry)
     vector<int> q_cols;        //!< Column indices into Q
-    vector<double> q_vals;     //!< Values in Q
+    vector<double> q_vals;     //!< Coefficient of x[q_rows[k]] * x[q_cols[k]]
     bool has_quadratic_obj = false;
     //! True when the quadratic objective + sense combination is non-convex.
     //! Non-convex when: MAXIMIZE + PSD Q, or MINIMIZE + NSD Q.
@@ -299,6 +315,8 @@ struct SolverModel {
 
     //! Quadratic constraints: sum(linear) + sum(q * x_i * x_j) <sense> rhs
     //! Used for bilinear terms in constraints (QCQP). Gurobi only.
+    //! q_coefficients follows the same convention as the objective's q_vals above:
+    //! the plain coefficient of x[q_rows[k]] * x[q_cols[k]], lower triangle only.
     struct QuadraticConstraint {
         vector<int> linear_indices;
         vector<double> linear_coefficients;

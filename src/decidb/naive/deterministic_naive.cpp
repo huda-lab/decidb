@@ -16,10 +16,16 @@ bool DeterministicNaive::IsAvailable() {
 }
 
 const SolverCapabilities &DeterministicNaive::Capabilities() {
-    // The floor of the registry. Plain linear and convex quadratic OBJECTIVES only:
-    // every model-class flag is false, so a query needing one is refused with a
-    // message about the host. No construct is native, so every construct arrives
-    // fully lowered — which is the path DeciDB has always taken.
+    // The floor of the registry. Plain linear objectives, and convex quadratic
+    // objectives whose Q is diagonal: every model-class flag is false, so a query
+    // needing one is refused with a message about the host. No construct is native, so
+    // every construct arrives fully lowered — which is the path DeciDB has always taken.
+    //
+    // `singular_quadratic` is false for a different reason than the other three. HiGHS
+    // LOADS a rank-deficient Q without complaint; it just answers it wrong, stopping
+    // partway along the flat valley of optima or failing outright, on roughly half of
+    // them. Refusing is the only way to keep a wrong answer from being returned as an
+    // optimal one. Revisit as HiGHS's QP solver improves.
     static const SolverCapabilities capabilities;
     return capabilities;
 }
@@ -221,14 +227,32 @@ void HighsSession::Load(const SolverModel &model) {
     // 3b. Add quadratic objective (Hessian) if present
     //===--------------------------------------------------------------------===//
 
-    // The three model classes HiGHS cannot load — quadratic constraints, a non-convex
-    // objective, and MIQP — are all declared false in its SolverCapabilities and
-    // refused at plan time (stage 05's RequireDecideSolverSupport), before this query
-    // reads a row. `SolveModel` re-checks the built model against the same table
-    // before loading it, so no such model reaches this function.
+    // The model classes HiGHS cannot take — quadratic constraints, a non-convex
+    // objective, MIQP, and a rank-deficient Q — are all declared false in its
+    // SolverCapabilities and refused at plan time (stage 05's RequireDecideSolverSupport),
+    // before this query reads a row. `SolveModel` re-checks the built model against the
+    // same table before loading it, so no such model reaches this function.
+    //
+    // The last of those is why every Q arriving here is diagonal, and why the conversion
+    // below has no off-diagonal case left to exercise in practice. It is still written
+    // for the general matrix: the refusal is a solver-quality judgement that should be
+    // lifted when HiGHS improves, and the conversion must be correct when it is.
     if (model.has_quadratic_obj && !model.q_vals.empty()) {
         // Convert COO lower-triangle Q to CSC format for HiGHS passHessian.
         // HiGHS expects the lower triangle in column-major compressed sparse column format.
+        //
+        // The two solvers spell the same objective differently, and SolverModel commits to
+        // Gurobi's spelling (see ilp_model.hpp): a stored value is the plain coefficient of
+        // its monomial. HiGHS's passHessian instead takes the Q of `(1/2) x^T Q x`, and it
+        // applies that 1/2 to the triangle it is given -- HighsHessian::objectiveValue sums
+        // `0.5*q_ii*x_i^2` over the diagonal but a full `q_ij*x_i*x_j` off it. The 1/2 is
+        // there to undo the double-counting of an off-diagonal pair, which appears at both
+        // (i,j) and (j,i) of the symmetric matrix; a diagonal entry is never mirrored, so
+        // nothing cancels its 1/2. Double the diagonal on the way in and leave the rest.
+        //
+        // Doubling every entry instead would not merely rescale the objective: it inflates
+        // the cross terms relative to the squares, which turns the PSD Q of a multi-variable
+        // POWER group into an indefinite one and puts the model outside what HiGHS solves.
         idx_t num_nz = model.q_vals.size();
 
         // Count entries per column
@@ -252,7 +276,7 @@ void HighsSession::Load(const SolverModel &model) {
             int col = model.q_cols[k];
             HighsInt pos = current_pos[col];
             q_index[pos] = model.q_rows[k];
-            q_value[pos] = model.q_vals[k];
+            q_value[pos] = (model.q_rows[k] == col) ? 2.0 * model.q_vals[k] : model.q_vals[k];
             current_pos[col]++;
         }
 

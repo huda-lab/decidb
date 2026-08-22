@@ -60,6 +60,19 @@ struct SolverCapabilities {
 	bool nonconvex_quadratic = false;
 	//! A quadratic objective together with integer or boolean variables (MIQP).
 	bool miqp = false;
+	//! A convex quadratic objective whose Q is rank-deficient, which is what one
+	//! squared expression spanning two or more decision variables always produces:
+	//! `POWER(p*x + q*y + r, 2)` gives a 2x2 Q of determinant zero. Such a model is
+	//! perfectly well posed — its optimum lies along a flat valley rather than at an
+	//! isolated point — but not every QP solver navigates that valley. HiGHS does not:
+	//! it stops partway down, or errors, on roughly half of them, and a stopped-early
+	//! answer is returned as though optimal. Gurobi solves them.
+	//!
+	//! This is the one model-class flag that is about solver QUALITY rather than
+	//! expressiveness — HiGHS loads these models happily, it just answers them wrong —
+	//! so unlike the three above it should be revisited as HiGHS improves rather than
+	//! treated as a permanent property of the backend.
+	bool singular_quadratic = false;
 };
 
 //! The demand side of the model-class flags above: what a particular DECIDE query
@@ -78,12 +91,13 @@ struct SolverModelClass {
 	bool quadratic_constraints = false;
 	bool nonconvex_quadratic = false;
 	bool miqp = false;
+	bool singular_quadratic = false;
 };
 
 //! Which demand a capability table fails to meet. NONE means the backend can take
 //! the model. The order below is the reporting order, so one query always names the
 //! same reason rather than a different one per run.
-enum class SolverModelClassGap { NONE, QUADRATIC_CONSTRAINTS, NONCONVEX_QUADRATIC, MIQP };
+enum class SolverModelClassGap { NONE, QUADRATIC_CONSTRAINTS, NONCONVEX_QUADRATIC, MIQP, SINGULAR_QUADRATIC };
 
 inline SolverModelClassGap FindModelClassGap(const SolverModelClass &needed,
                                              const SolverCapabilities &capabilities) {
@@ -95,6 +109,12 @@ inline SolverModelClassGap FindModelClassGap(const SolverModelClass &needed,
 	}
 	if (needed.miqp && !capabilities.miqp) {
 		return SolverModelClassGap::MIQP;
+	}
+	// Reported last on purpose. A query can demand this alongside one of the three
+	// above, and when it does the other is both the more fundamental reason and the
+	// more useful thing to tell the user.
+	if (needed.singular_quadratic && !capabilities.singular_quadratic) {
+		return SolverModelClassGap::SINGULAR_QUADRATIC;
 	}
 	return SolverModelClassGap::NONE;
 }

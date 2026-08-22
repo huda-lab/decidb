@@ -1,5 +1,7 @@
 #include "duckdb/optimizer/decide_solver_gate.hpp"
 
+#include <algorithm>
+
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/solver_registry.hpp"
@@ -50,6 +52,39 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	return is_minmax(op.flat_objective_agg) || is_minmax(op.per_inner_agg) || is_minmax(op.per_outer_agg);
 }
 
+//! Does the objective's quadratic part couple two decision variables, making Q
+//! rank-deficient? Squaring a linear form over k >= 2 decisions always does: expanding
+//! `(p*x + q*y + r)^2` fills an off-diagonal Q entry, and the resulting 2x2 block is
+//! singular for any p and q. One decision variable per squared expression keeps Q
+//! diagonal, whatever the row count, which is the ordinary `POWER(x - target, 2)` shape.
+//!
+//! Read off `squared_terms`, the flattened inner expression stage 05 already built, so
+//! this needs no data — which is what lets the refusal land before a row is read.
+//! Constant terms carry INVALID_INDEX and are skipped. A bilinear objective counts too:
+//! a product of two decisions is off-diagonal by construction. That keeps this
+//! prediction at least as demanding as what `SolverModel::ModelClass()` later reads off
+//! the built matrix, which is the direction the contract requires — over-reporting costs
+//! a refused query, under-reporting hands a backend a model it answers wrong.
+bool HasCoupledQuadraticTerms(const DecideObjective &objective) {
+	if (objective.has_bilinear) {
+		return true;
+	}
+	vector<idx_t> seen;
+	for (auto &term : objective.squared_terms) {
+		if (term.variable_index == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		if (std::find(seen.begin(), seen.end(), term.variable_index) != seen.end()) {
+			continue;
+		}
+		seen.push_back(term.variable_index);
+		if (seen.size() >= 2) {
+			return true;
+		}
+	}
+	return false;
+}
+
 //! One line naming what the query does, in the user's own vocabulary, plus the
 //! smallest edit that avoids it. The gap decides the wording, so a query is always
 //! told which of its constructs is the one no solver here can take.
@@ -77,6 +112,13 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 	case SolverModelClassGap::MIQP:
 		return {"the objective squares decision variables that are not continuous",
 		        "declare those variables REAL, as in x(REAL), or use a linear objective"};
+	case SolverModelClassGap::SINGULAR_QUADRATIC:
+		// The remedy deliberately does not offer "square each variable separately":
+		// stage 05 allows only one quadratic group per objective, so
+		// `POWER(x, 2) + POWER(y, 2)` trades this refusal for a different one.
+		return {"the objective squares an expression containing more than one decision variable",
+		        "keep at most one decision variable inside the POWER, as in "
+		        "SUM(POWER(x - target, 2)), or use a linear objective"};
 	default:
 		throw InternalException("DECIDE solver gate asked to describe a satisfied model class");
 	}
@@ -112,6 +154,7 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 			needed.nonconvex_quadratic = (objective->quadratic_sign > 0.0) == is_maximize;
 		}
 		needed.miqp = MayHaveIntegralColumn(op);
+		needed.singular_quadratic = HasCoupledQuadraticTerms(*objective);
 	}
 
 	return needed;

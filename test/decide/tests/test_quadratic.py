@@ -1934,3 +1934,226 @@ class TestHighsRejection:
             assert not os.path.exists(dump_path), (
                 "a plan-time refusal must not build a model, but a dump was written"
             )
+
+    def test_highs_coupled_quadratic_rejected(self, decidb_cli_highs):
+        """Two decision variables inside one POWER group is HiGHS-refused.
+
+        Squaring a linear form over two decisions gives a Q of rank one --
+        ``(x + 2y - 6)^2`` fills an off-diagonal entry and the 2x2 block has zero
+        determinant. The model is convex and perfectly well posed, and HiGHS loads
+        it without complaint; it simply answers it wrong, stopping partway along
+        the flat valley of optima or erroring outright on roughly half of them. On
+        this instance it returned an objective of -4.5 against a true -12.
+
+        So this refusal is unlike the other three in the class: not "HiGHS cannot
+        express this" but "HiGHS answers this wrong, and a wrong answer returned as
+        optimal is worse than no answer". Revisit if its QP solver improves.
+        """
+        sql = """
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, x, y FROM data
+            DECIDE x(REAL), y(REAL)
+            SUCH THAT x >= 0 AND y >= 0 AND x <= 4 AND y <= 4
+            MINIMIZE SUM(POWER(x + 2*y - 6, 2) - 3*x)
+        """
+        decidb_cli_highs.assert_error(
+            sql, match=r"squares an expression containing more than one decision variable.*Gurobi",
+        )
+
+    def test_highs_coupled_quadratic_refused_before_any_row_is_read(
+        self, decidb_cli_highs
+    ):
+        """Like the other three, this gate is at plan time, not model load."""
+        sql = """
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, x, y FROM data
+            DECIDE x(REAL), y(REAL)
+            SUCH THAT x >= 0 AND y >= 0 AND x <= 4 AND y <= 4
+            MINIMIZE SUM(POWER(x + 2*y - 6, 2) - 3*x)
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            dump_path = os.path.join(tmp, "model.dump")
+            cli = decidb_cli_highs.with_env({"DECIDB_DUMP_MODEL": dump_path})
+            cli.assert_error(sql, match=r"squares an expression containing more than one")
+            assert not os.path.exists(dump_path), (
+                "a plan-time refusal must not build a model, but a dump was written"
+            )
+
+    def test_gurobi_solves_what_highs_refuses(
+        self, decidb_cli_gurobi, oracle_solver, perf_tracker
+    ):
+        """The same query the two tests above refuse, solved and oracle-checked.
+
+        This is what makes the refusal a statement about the host rather than about
+        the query: the SQL is legal everywhere, and on a Gurobi-linked machine it
+        returns the true optimum. Without this, a gate that was too broad -- one
+        refusing a class Gurobi also mishandles -- would look identical from the
+        HiGHS side alone.
+        """
+        sql = """
+            WITH data AS (SELECT 1 AS id)
+            SELECT id, ROUND(x, 4) AS x, ROUND(y, 4) AS y
+            FROM data
+            DECIDE x(REAL), y(REAL)
+            SUCH THAT x >= 0 AND y >= 0 AND x <= 4 AND y <= 4
+            MINIMIZE SUM(POWER(x + 2*y - 6, 2) - 3*x)
+        """
+        t0 = time.perf_counter()
+        rows, cols = decidb_cli_gurobi.execute(sql)
+        decidb_time = time.perf_counter() - t0
+
+        t_build = time.perf_counter()
+        oracle_solver.create_model("gurobi_coupled_quadratic")
+        oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=4.0)
+        oracle_solver.add_variable("y", VarType.CONTINUOUS, lb=0.0, ub=4.0)
+        # (x + 2y - 6)^2 - 3x, constant 36 dropped to match DecidB's reported objective.
+        oracle_solver.set_quadratic_objective(
+            {"x": -12.0 - 3.0, "y": -24.0},
+            {("x", "x"): 1.0, ("y", "y"): 4.0, ("x", "y"): 4.0},
+            ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+
+        xi, yi = cols.index("x"), cols.index("y")
+
+        def decidb_obj(rs, cs):
+            total = 0.0
+            for row in rs:
+                x, y = float(row[xi]), float(row[yi])
+                total += x * x + 4.0 * y * y + 4.0 * x * y - 15.0 * x - 24.0 * y
+            return total
+
+        result = _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
+        perf_tracker.record(
+            "gurobi_coupled_quadratic", decidb_time, build_time,
+            result.solve_time_seconds, 1, 2, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+# ---------------------------------------------------------------------------
+# HiGHS-solved QP correctness (require DECIDB_FORCE_SOLVER=highs)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+@pytest.mark.obj_minimize
+class TestHighsQuadratic:
+    """Convex continuous QPs solved on HiGHS, oracle-compared.
+
+    Everything else in this file runs on the unforced fixture, which prefers
+    Gurobi wherever it is linked -- so before these tests nothing in the suite
+    ever solved a quadratic on HiGHS, and a HiGHS-only quadratic defect could
+    not be observed. That gap hid one: SolverModel stores Q as the plain
+    coefficient of each monomial (Gurobi's spelling), while HiGHS's passHessian
+    takes the Q of ``(1/2) x^T Q x``, whose 1/2 lands on the diagonal only.
+    Passing Q through unconverted halved every squared term against a full-
+    strength linear term and returned a confidently wrong answer -- no error,
+    no warning. ``deterministic_naive.cpp`` now doubles the diagonal on load.
+
+    A convex continuous QP with a DIAGONAL Q is the only quadratic that survives
+    the plan-time gate on HiGHS. MIQP, non-convex objectives, quadratic
+    constraints, and a Q coupling two decision variables are all refused in
+    ``TestHighsRejection``; the last of those is why every case here squares an
+    expression holding exactly one decision variable.
+    """
+
+    def test_highs_qp_target_matches_oracle(
+        self, decidb_cli_highs, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """The reported repro: MINIMIZE SUM(POWER(x - target, 2)) on HiGHS.
+
+        Purely diagonal Q. Under the unconverted Hessian this minimized half the
+        square against the whole linear term and landed on 2*target.
+        """
+        data_sql = """
+            SELECT 1 AS id, 3.0 AS target UNION ALL
+            SELECT 2, 7.0
+        """
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x
+            FROM data
+            DECIDE x(REAL)
+            SUCH THAT x >= 0 AND x <= 10
+            MINIMIZE SUM(POWER(x - target, 2))
+        """
+        t0 = time.perf_counter()
+        rows, cols = decidb_cli_highs.execute(sql)
+        decidb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
+
+        t_build = time.perf_counter()
+        oracle_solver.create_model("highs_qp_target")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
+        oracle_solver.set_quadratic_objective(
+            {xnames[i]: -2.0 * data[i][1] for i in range(n)},
+            {(xnames[i], xnames[i]): 1.0 for i in range(n)},
+            ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols, lambda rs, cs: _qp_target_obj(rs, cs),
+        )
+        perf_tracker.record(
+            "highs_qp_target", decidb_time, build_time, result.solve_time_seconds,
+            n, n, 0, result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
+
+    def test_highs_qp_mixed_linear_matches_oracle(
+        self, decidb_cli_highs, duckdb_conn, oracle_solver, perf_tracker
+    ):
+        """A linear term pulling against the square, with the optimum interior.
+
+        The two parts of the objective are scaled independently by the defect, so
+        a query where they actively trade off is the sharpest form of the check:
+        get the diagonal wrong and the linear pull wins ground it should not.
+        """
+        data_sql = """
+            SELECT 1 AS id, 2.0 AS target UNION ALL
+            SELECT 2, 5.0
+        """
+        sql = f"""
+            WITH data AS ({data_sql})
+            SELECT id, target, ROUND(x, 4) AS x
+            FROM data
+            DECIDE x(REAL)
+            SUCH THAT x >= 0 AND x <= 100
+            MINIMIZE SUM(POWER(x - target, 2) - 4 * x)
+        """
+        t0 = time.perf_counter()
+        rows, cols = decidb_cli_highs.execute(sql)
+        decidb_time = time.perf_counter() - t0
+        data = duckdb_conn.execute(
+            f"SELECT CAST(id AS BIGINT), CAST(target AS DOUBLE) FROM ({data_sql})"
+        ).fetchall()
+
+        t_build = time.perf_counter()
+        oracle_solver.create_model("highs_qp_mixed")
+        n = len(data)
+        xnames = [f"x_{i}" for i in range(n)]
+        for xn in xnames:
+            oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=100.0)
+        oracle_solver.set_quadratic_objective(
+            {xnames[i]: -2.0 * data[i][1] - 4.0 for i in range(n)},
+            {(xnames[i], xnames[i]): 1.0 for i in range(n)},
+            ObjSense.MINIMIZE,
+        )
+        build_time = time.perf_counter() - t_build
+        result = _solve_and_compare(
+            oracle_solver, rows, cols,
+            lambda rs, cs: _qp_target_obj(rs, cs, linear_coeff=lambda row: -4.0),
+        )
+        perf_tracker.record(
+            "highs_qp_mixed_linear", decidb_time, build_time,
+            result.solve_time_seconds, n, n, 0,
+            result.objective_value, oracle_solver.solver_name(),
+            comparison_status="optimal",
+        )
