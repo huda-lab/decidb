@@ -589,13 +589,19 @@ leaves unnamed — so a dropped aggregate `<>` would have an empty subject.
 `SolverInput::global_variable_labels` (parallel to `global_variable_types`) carries the user
 source text of a labeled global: the clause text `SUM(x) <> K` for an aggregate-`<>` binary
 (looked up from `aux_var_expressions` at that site), and the aggregate text `MAX(x)` for a
-composed-MIN/MAX z (both the constraint and objective allocation sites in
-`physical_decide.cpp` build it from the term's `agg_name` + `inner_expr->ToString()`, padding
-the label vector to the z's ordinal first since earlier allocation sites may be unlabeled) —
-so the composed outer pin renders `SUM(x) + MAX(x) <= -1`, never an internal `colN`. Other
-global aux (single-term MIN/MAX objective z, McCormick) stay unlabeled. The vector is
-reconciled to the final global-var count with one `resize(num_global_vars)` before
-`SolveModel`. `BuildColumnProvenance` takes it as an optional argument and writes the labels
+composed-MIN/MAX z (both allocation sites build it from the term's `agg_name` +
+`inner_expr->ToString()`) — so the composed outer pin renders `SUM(x) + MAX(x) <= -1`, never
+an internal `colN`. Other global aux (single-term MIN/MAX objective z, McCormick) stay
+unlabeled, which is an empty entry rather than a missing one.
+
+The channel is positional — entry `i` names global column `i` — and it is kept aligned at
+the point of allocation, not at the point of labelling. `AddGlobalContinuousAux` and
+`AddGlobalBinaryAux` (`ilp_linearization.cpp`) are the only two places a global column is
+created, and each takes the label as an optional argument and writes the entry itself. So the
+channel is dense by construction and a new allocation site cannot land its label on the wrong
+column by forgetting to pad first. The `resize(num_global_vars)` still standing before
+`SolveModel` is therefore a no-op kept as a belt-and-braces assertion of that invariant.
+`BuildColumnProvenance` takes the vector as an optional argument and writes the labels
 onto the global-block columns; the infeasible engine forwards it through
 `InfeasibleDiagnosisInput::global_variable_labels`. The DROP edit then reads
 `columns[indicator_col].label` uniformly for both shapes.

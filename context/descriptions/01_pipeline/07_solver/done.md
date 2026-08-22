@@ -149,13 +149,21 @@ reads as undeclared and trips a loud internal error.
 
 Selection is **not** cost-based, and it does not inspect the model.
 
-It runs **once per query, at plan time** — `DecideOptimizer::OptimizeDecide` calls it
-before any rewrite — and the answer rides the plan on
-`LogicalDecide::solver_backend` → `PhysicalDecide::solver_backend` → `SolveModel` →
-every diagnostic re-solve. Nothing asks a second time. The reason is not tidiness:
-once a rewrite has consulted the backend's capabilities, a second selection that
-answered differently would run a model on a solver it was not built for. See
+It runs **once per query, at plan time** — `ChooseDecideSolver`, called first thing
+in `DecideOptimizer::OptimizeDecide` — and the answer rides the plan as a **name**:
+`LogicalDecide::solver_backend_name` → `PhysicalDecide::solver_backend_name` →
+`PhysicalDecide::PlannedSolverBackend()` → `SolveModel` → every diagnostic re-solve.
+Nothing asks a second time. The reason is not tidiness: once a rewrite has consulted
+the backend's capabilities, a second selection that answered differently would run a
+model on a solver it was not built for. See
 [`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
+
+A name and not a handle, because a `SolverBackend` can open a session and the plan
+has no business doing that. `SolverRegistry::Find` turns it back into one at the two
+points that are about to solve — the primary solve and the diagnostic re-solves —
+which is stage 07's side of the boundary. The other thing stage 05 reads off the
+backend, `SolverConstructSupport`, is copied onto the plan by value, so no stage
+below stage 05 needs the backend to know what was lowered.
 
 The choice is not serialized with the plan — which solver a host has is a property of
 the host, not of the query.
@@ -209,8 +217,10 @@ order:
    contract, re-read off the model *as built*. The model class is checked against
    `Capabilities().model_classes` (stage 05 already refused the query if the backend
    could not take it, so this asserts the prediction matched the fact), and every
-   native construct against `Capabilities().constructs`. Layer 8 does not repair, it
-   checks — a mismatch is an `InternalException`, never a user error.
+   native construct against `Capabilities().constructs` — which stage 05 read when it
+   chose the formulation, so a mismatch here means the plan and the solve disagree about
+   which backend is in play. Layer 8 does not repair, it checks — a mismatch is an
+   `InternalException`, never a user error.
 3. `DumpSolverModel(model)` — a no-op unless `DECIDB_DUMP_MODEL` is set. Emitted
    on the freshly built model so diagnostic re-solves never pollute the dump. This
    is the golden corpus's characterization oracle.

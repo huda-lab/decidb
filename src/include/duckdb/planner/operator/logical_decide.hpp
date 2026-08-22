@@ -11,7 +11,7 @@
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
-#include "duckdb/decidb/solver_registry.hpp"
+#include "duckdb/decidb/solver_capabilities.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
 namespace duckdb {
@@ -240,16 +240,30 @@ public:
     //! the resolved physical index straight off them.
     vector<unique_ptr<Expression>> entity_key_expressions;
 
-    //! The solver this query will run on, chosen ONCE by DecideOptimizer before any
-    //! rewrite pass and carried from here to PhysicalDecide. It is resolved this early
-    //! so a rewrite can ask what the backend supports natively and decline to lower a
-    //! construct the backend expresses better itself; asking again later could answer
-    //! differently and leave the plan and the solve disagreeing about what was lowered.
+    //! The registered name ("gurobi", "highs") of the solver this query will run on,
+    //! chosen ONCE by ChooseDecideSolver before any rewrite pass and carried from here
+    //! to PhysicalDecide. A NAME and not a handle: layer 3 describes the query, and a
+    //! live backend handle here would let a logical plan open a solver session, which
+    //! is stage 07's job. Stage 07 turns the name back into a backend when it is
+    //! actually time to solve (SolverRegistry::Find).
     //!
-    //! Deliberately NOT serialized: which solver a host has is a property of the host,
-    //! not of the query, so a plan deserialized elsewhere re-resolves it rather than
-    //! carrying a choice that machine may not be able to honor.
-    SolverBackend solver_backend;
+    //! Empty until a solver is chosen. Deliberately NOT serialized: which solver a host
+    //! has is a property of the host, not of the query, so a plan deserialized elsewhere
+    //! re-resolves it rather than carrying a choice that machine may not be able to honor.
+    string solver_backend_name;
+
+    //! Stage 05's FORMULATION DECISION: which constructs this query leaves for the
+    //! backend to state itself, and which it lowers into plain rows. Decided once, here,
+    //! from the chosen backend's construct table — because choosing a formulation is
+    //! stage 05's job and nothing below it may re-decide. Stage 08 READS these and
+    //! translates; it never asks a backend what it supports.
+    //!
+    //! `SolverConstructSupport` is a table of yes/no per construct, so it is exactly the
+    //! shape of the decision; reusing it keeps the question ("can the backend?") and the
+    //! answer ("then don't lower it") spelled the same way rather than in two parallel
+    //! vocabularies. All-false until a solver is chosen, which is also the value that
+    //! reproduces the pre-capability lowering behaviour.
+    SolverConstructSupport use_native_constructs;
 
     // --- Prepared linear form (built by BuildDecidePreparedModel, stage 05) ---
 

@@ -45,11 +45,13 @@ struct SolveModelOptions {
 //! anything that pins the backend is asking for one specific solver, so silently
 //! running the host default under that name would be a lie.
 //!
-//! Called ONCE per query, by the DECIDE optimizer before any rewrite runs, and the
-//! answer rides the plan from there (LogicalDecide::solver_backend →
-//! PhysicalDecide::solver_backend). Nothing downstream may call this again: once a
-//! rewrite has consulted the backend's capabilities, a second call that answered
-//! differently would leave the plan and the solve disagreeing about what was lowered.
+//! Called ONCE per query, by stage 05's ChooseDecideSolver before any rewrite runs.
+//! The answer rides the plan from there as a NAME (LogicalDecide::solver_backend_name
+//! → PhysicalDecide::solver_backend_name), alongside the formulation it implies
+//! (::use_native_constructs); stage 08 turns the name back into a backend only where a
+//! solve is about to run. Nothing downstream may call this again: once a rewrite has
+//! consulted the backend's capabilities, a second call that answered differently would
+//! leave the plan and the solve disagreeing about what was lowered.
 SolverBackend SelectSolverBackend();
 
 //! Solve an already-built SolverModel with the selected backend. Diagnostic

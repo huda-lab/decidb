@@ -1028,9 +1028,16 @@ private:
 
 		string minmax_payload;
 		if (ExtractDecideTagPayload(agg.alias, MINMAX_INDICATOR_TAG_PREFIX, minmax_payload)) {
+			// "<idx>_<agg>" when a Big-M indicator was allocated, bare "<agg>" when the
+			// backend states MIN/MAX itself and no indicator exists. The aggregate name is
+			// the part that is always there, and it is what marks the row downstream.
 			auto sep = minmax_payload.find('_');
-			constraint.minmax_indicator_idx = std::stoull(minmax_payload.substr(0, sep));
-			constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
+			if (sep == string::npos) {
+				constraint.minmax_agg_type = minmax_payload;
+			} else {
+				constraint.minmax_indicator_idx = std::stoull(minmax_payload.substr(0, sep));
+				constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
+			}
 			constraint.kind = ConstraintKind::USER_MECHANISM;
 		}
 	}
@@ -1253,11 +1260,11 @@ private:
 				constraint->kind = ConstraintKind::STRUCTURAL;
 			}
 			if (ExtractDecideTagPayload(comp.alias, ABS_UB_POS_TAG_PREFIX, payload)) {
-				constraint->abs_y_idx = std::stoull(payload);
+				constraint->abs_aux_idx = std::stoull(payload);
 				constraint->abs_is_pos_bound = true;
 				constraint->kind = ConstraintKind::STRUCTURAL;
 			} else if (ExtractDecideTagPayload(comp.alias, ABS_UB_NEG_TAG_PREFIX, payload)) {
-				constraint->abs_y_idx = std::stoull(payload);
+				constraint->abs_aux_idx = std::stoull(payload);
 				constraint->abs_is_pos_bound = false;
 				constraint->kind = ConstraintKind::STRUCTURAL;
 			}

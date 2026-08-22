@@ -220,20 +220,29 @@ struct EvaluatedConstraint {
     CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
-    idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;  // Indicator var idx for hard MIN/MAX
-    string minmax_agg_type;                    // "min" or "max" (empty if not minmax)
+    //! Big-M indicator for a hard MIN/MAX, and INVALID_INDEX on the native arm, which
+    //! has no disjunction to switch and so allocates none.
+    idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;
+    //! "min" or "max", empty when this row is not a hard MIN/MAX. THIS is the marking
+    //! both arms read: it is set whenever stage 05 tagged the row, whichever formulation
+    //! was chosen for it.
+    string minmax_agg_type;
     idx_t ne_indicator_idx = DConstants::INVALID_INDEX;      // Indicator var idx for not-equal
     //! AVG(x) <> K path: original LHS was AVG; instead of dividing LHS coefficients by the
     //! AVG denominator (which would produce fractional coefficients and trip the NE
     //! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
     //! inside the deferred NE expansion.
     bool ne_avg_rhs_scale = false;
-    //! ABS MAXIMIZE Big-M upper-bound tagging.
-    //! abs_y_idx != INVALID_INDEX marks a lower-bound ABS constraint (aux >= ±inner)
-    //! emitted by RewriteAbs for a MAXIMIZE objective. abs_is_pos_bound distinguishes
-    //! C1 (aux >= inner, true) from C2 (aux >= -inner, false). Used at finalization to
-    //! derive and emit the two upper-bound constraints that pin aux = |inner|.
-    idx_t abs_y_idx = DConstants::INVALID_INDEX;
+    //! ABS envelope tagging. `abs_aux_idx` names the ABS AUXILIARY this row bounds, and
+    //! marks the row as one of the pair RewriteAbs emitted for it: abs_is_pos_bound
+    //! distinguishes C1 (aux >= inner, true) from C2 (aux >= -inner, false). Both arms
+    //! find their rows through it -- the lowering arm to hang the Big-M upper envelope
+    //! off, the native arm to read the inner expression out of.
+    //!
+    //! It keys on the auxiliary and not on the sign indicator because the indicator only
+    //! exists on the lowering arm: a natively-stated ABS needs no binary at all, so the
+    //! only index both arms are guaranteed to have is the auxiliary's.
+    idx_t abs_aux_idx = DConstants::INVALID_INDEX;
     bool abs_is_pos_bound = false;
 
     //! Bilinear terms in this constraint (var_a * var_b with per-row coefficients)
@@ -345,7 +354,9 @@ struct BilinearLinkSpec {
 //! derives the matching Big-M upper bounds that pin it.
 struct AbsMaximizeLinkSpec {
     idx_t aux_idx; //!< ABS auxiliary variable
-    idx_t y_idx;   //!< binary sign indicator
+    //! Binary sign indicator, or INVALID_INDEX when the backend states ABS natively --
+    //! the native arm has no Big-M to switch, so no indicator is allocated for it.
+    idx_t y_idx;
     //! The largest |inner| any row can reach, filled in by DeriveAbsAuxiliaryBounds.
     //! It is both the Big-M the lowering path needs and the auxiliary's upper box, so
     //! it is derived once, before any other linearizer reads that box.

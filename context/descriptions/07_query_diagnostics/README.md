@@ -251,7 +251,8 @@ too-open one; slow is a runtime event masking the other states.
   survives either way — so the choice only bites where the clause *is* its encoding.
 - **Diagnosed on the solver that failed** — every re-solve (the elastic model, the
   `INF_OR_UNBD` probe, the unbounded-ray fallback) runs on the backend the *primary*
-  solve ran on, read off `PhysicalDecide::solver_backend`. That choice was made once,
+  solve ran on, resolved from `PhysicalDecide::solver_backend_name` through
+  `PlannedSolverBackend()`. That choice was made once,
   at plan time, before any rewrite. Diagnosis never re-selects: a second, independently
   answered selection would diagnose a failure on a solver that did not produce it, and
   once selection depends on the model the two answers can genuinely differ.

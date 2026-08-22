@@ -7,6 +7,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/optimizer/decide_solver_gate.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -60,13 +61,13 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 		timer.Start();
 	}
 
-	// Choose the solver BEFORE any rewrite runs. Every pass below decides how to
-	// express a construct, and the right answer depends on what the backend can take
-	// natively — so the backend has to be known first, and it has to be known only
-	// once. From here it rides the plan (LogicalDecide::solver_backend →
-	// PhysicalDecide::solver_backend) all the way to the solve and to any diagnostic
-	// re-solve, so nothing downstream ever asks a second time.
-	decide.solver_backend = SelectSolverBackend();
+	// Choose the solver, and with it the formulation, BEFORE any rewrite runs. Every
+	// pass below decides how to express a construct, and the right answer depends on
+	// what the backend can take natively — so both have to be settled first, and settled
+	// only once. From here they ride the plan (LogicalDecide::solver_backend_name and
+	// ::use_native_constructs → PhysicalDecide) all the way to the solve and to any
+	// diagnostic re-solve, so nothing downstream ever decides a second time.
+	ChooseDecideSolver(decide);
 
 	RewriteNorm(decide);
 	RewriteInDomain(decide);
@@ -1341,30 +1342,47 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxIndicator(LogicalDecide &d
                                                                  const Expression &inner,
                                                                  const Expression *filter,
                                                                  idx_t &out_ind_idx) {
-	// Allocate Boolean indicator decide variable
-	idx_t ind_idx = decide.decide_variables.size();
-	string ind_name = "__minmax_ind_" + to_string(decide.minmax_indicator_links.size()) + "__";
-	auto ind_var = make_uniq<BoundColumnRefExpression>(
-	    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
-	decide.decide_variables.push_back(std::move(ind_var));
-	decide.num_auxiliary_vars++;
-	decide.is_boolean_var.push_back(true);
-	if (!decide.variable_scopes.empty()) {
-		decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+	// The indicator exists to switch this row's Big-M disjunction on and off. A backend
+	// that states `z = MAX(t..)` itself has no disjunction and never reads it, so it is
+	// allocated only on the arm that does. Left in on the native arm it was one free
+	// binary PER DATA ROW -- row-scoped, so it grew with the relation -- appearing in no
+	// row and no general constraint. Solvers presolve such a column away, so it never
+	// changed an answer; it was still built, stored and marshalled for every input row.
+	//
+	// Readable here only because stage 05 now OWNS the formulation decision: the arm is
+	// known at the moment the variable would be allocated.
+	idx_t ind_idx = DConstants::INVALID_INDEX;
+	if (!decide.use_native_constructs.min_max) {
+		ind_idx = decide.decide_variables.size();
+		string ind_name = "__minmax_ind_" + to_string(decide.minmax_indicator_links.size()) + "__";
+		auto ind_var = make_uniq<BoundColumnRefExpression>(
+		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
+		decide.decide_variables.push_back(std::move(ind_var));
+		decide.num_auxiliary_vars++;
+		decide.is_boolean_var.push_back(true);
+		if (!decide.variable_scopes.empty()) {
+			decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+		}
+		// F6: record the user's original MIN/MAX(inner) for diagnosis naming
+		decide.aux_var_expressions.emplace_back(
+		    ind_idx, StringUtil::Upper(agg_name) + "(" + inner.ToString() + ")");
 	}
+	// Recorded on both arms: physical execution reads only whether the list is EMPTY, to
+	// decide whether this query has a hard MIN/MAX at all, and that question has the same
+	// answer either way.
 	decide.minmax_indicator_links.emplace_back(agg_name, ind_idx);
-	// F6: record the user's original MIN/MAX(inner) for diagnosis naming
-	decide.aux_var_expressions.emplace_back(ind_idx,
-	                                        StringUtil::Upper(agg_name) + "(" + inner.ToString() + ")");
 
-	// Build a SUM(inner) aggregate tagged with the indicator index
+	// Build a SUM(inner) aggregate tagged as a hard MIN/MAX. The AGGREGATE is what marks
+	// the row -- the indicator index rides along only when there is one.
 	vector<unique_ptr<Expression>> sum_children;
 	sum_children.push_back(inner.Copy());
 	auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
 	if (filter) {
 		new_sum->Cast<BoundAggregateExpression>().filter = filter->Copy();
 	}
-	new_sum->alias = string(MINMAX_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "_" + agg_name + "__";
+	new_sum->alias = string(MINMAX_INDICATOR_TAG_PREFIX) +
+	                 (ind_idx == DConstants::INVALID_INDEX ? string() : to_string(ind_idx) + "_") +
+	                 agg_name + "__";
 	out_ind_idx = ind_idx;
 	return new_sum;
 }
@@ -1592,22 +1610,36 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		bool needs_bigm = pair.needs_bigm ||
 		                  (pair.in_objective && decide.decide_sense == DecideSense::MAXIMIZE);
 		if (needs_bigm) {
-			// Allocate a boolean sign indicator variable y.
-			idx_t y_idx = decide.decide_variables.size();
-			string y_name = "__abs_y_" + to_string(pi) + "__";
-			auto y_var = make_uniq<BoundColumnRefExpression>(
-			    y_name, LogicalType::BOOLEAN,
-			    ColumnBinding(decide.decide_index, y_idx));
-			decide.decide_variables.push_back(std::move(y_var));
-			decide.num_auxiliary_vars++;
-			decide.is_boolean_var.push_back(true);
-			if (!decide.variable_scopes.empty()) {
-				decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+			// The sign indicator exists to switch the Big-M upper envelope, and the
+			// native arm emits no Big-M: it states `aux = |t|` outright. So allocate y
+			// only on the arm that has a use for it. Left in on the native arm it was one
+			// free binary PER DATA ROW -- row-scoped, so it grew with the relation --
+			// referenced by no row and no general constraint. Solvers presolve such a
+			// column away, so it never changed an answer; it was still built, stored and
+			// marshalled across the solver API for every row of the input.
+			//
+			// This is readable here only because stage 05 now OWNS the formulation
+			// decision: the arm is known at the moment the variable would be allocated.
+			idx_t y_idx = DConstants::INVALID_INDEX;
+			if (!decide.use_native_constructs.abs) {
+				y_idx = decide.decide_variables.size();
+				string y_name = "__abs_y_" + to_string(pi) + "__";
+				auto y_var = make_uniq<BoundColumnRefExpression>(
+				    y_name, LogicalType::BOOLEAN,
+				    ColumnBinding(decide.decide_index, y_idx));
+				decide.decide_variables.push_back(std::move(y_var));
+				decide.num_auxiliary_vars++;
+				decide.is_boolean_var.push_back(true);
+				if (!decide.variable_scopes.empty()) {
+					decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+				}
 			}
 
-			// Tag C1 and C2 so physical_decide.cpp can find them by y_idx at finalization.
-			c1->alias = string(ABS_UB_POS_TAG_PREFIX) + to_string(y_idx) + "__";
-			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(y_idx) + "__";
+			// Tag C1 and C2 so the linearizer can find them at finalization. Keyed by the
+			// AUXILIARY, which both arms have, rather than by y, which only the lowering
+			// arm allocates.
+			c1->alias = string(ABS_UB_POS_TAG_PREFIX) + to_string(pair.aux_idx) + "__";
+			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(pair.aux_idx) + "__";
 
 			decide.abs_maximize_links.push_back({pair.aux_idx, y_idx});
 		} else {

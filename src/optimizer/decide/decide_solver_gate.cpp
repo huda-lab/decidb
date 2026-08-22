@@ -4,6 +4,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/decidb/solver_registry.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
@@ -126,6 +127,20 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 
 } // namespace
 
+void ChooseDecideSolver(LogicalDecide &op) {
+	if (!op.solver_backend_name.empty()) {
+		return;
+	}
+	SolverBackend backend = SelectSolverBackend();
+	op.solver_backend_name = backend.Name();
+	// The formulation decision, made HERE and read everywhere else. `Capabilities()`
+	// answers what the backend CAN state; recording it on the plan turns that into what
+	// this query WILL leave native. The two are the same table, which is why one type
+	// carries both — but the question is asked exactly once, at the only stage entitled
+	// to choose a formulation.
+	op.use_native_constructs = backend.Capabilities().constructs;
+}
+
 SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 	SolverModelClass needed;
 
@@ -162,9 +177,13 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 }
 
 void RequireDecideSolverSupport(const LogicalDecide &op) {
-	D_ASSERT(op.solver_backend.IsValid());
+	// The name was recorded by ChooseDecideSolver; resolving it back to a registry entry
+	// is a table lookup, not a session, so the model-class question can still be asked
+	// here without the plan itself holding a live backend.
+	SolverBackend backend = SolverRegistry::Find(op.solver_backend_name);
+	D_ASSERT(backend.IsValid());
 	SolverModelClass needed = DeriveDecideModelClass(op);
-	SolverModelClassGap gap = FindModelClassGap(needed, op.solver_backend.Capabilities().model_classes);
+	SolverModelClassGap gap = FindModelClassGap(needed, backend.Capabilities().model_classes);
 	if (gap == SolverModelClassGap::NONE) {
 		return;
 	}

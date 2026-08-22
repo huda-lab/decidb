@@ -22,25 +22,44 @@ former.
 
 ---
 
-## 0. The backend is chosen before anything is rewritten
+## 0. The solver — and the formulation — are chosen before anything is rewritten
 
-`OptimizeDecide` opens by calling `SelectSolverBackend()` and storing the answer on
-`LogicalDecide::solver_backend`. It happens here, ahead of every pass, because the
-passes below decide **how to express** a construct, and the right answer depends on
-what the backend accepts natively — a solver with a native `ABS` needs no Big-M
+`OptimizeDecide` opens by calling `ChooseDecideSolver` (`decide_solver_gate.cpp`),
+which settles two things and records both on the plan:
+
+| Recorded | What it is |
+|---|---|
+| `LogicalDecide::solver_backend_name` | *Which* backend, from `SelectSolverBackend()`. A name, not a handle — see [`../03_logical_plan/done.md`](../03_logical_plan/done.md) §4. |
+| `LogicalDecide::use_native_constructs` | *Which constructs stay native*, read once off that backend's `SolverConstructSupport`. |
+
+Both happen here, ahead of every pass, and the second is the reason for the first.
+The passes below decide **how to express** a construct, and the right answer depends
+on what the backend accepts natively — a solver with a native `ABS` needs no Big-M
 envelope, so lowering it would be work that only loses accuracy.
 
-The choice is made **once** and rides the plan from here: `LogicalDecide` →
-`PhysicalDecide` → the solve → every diagnostic re-solve. Nothing downstream calls
-`SelectSolverBackend()` again. That is not tidiness: once a rewrite has consulted the
-backend's capabilities, a second selection that answered differently would run a model
-on a solver it was not built for.
+**Choosing a formulation is this stage's job, and it is settled here rather than
+where the rows are built.** Stage 08 used to make that call itself, reading
+`Capabilities()` at execution time; it now reads `use_native_constructs` and
+translates. The decision is three boolean reads with no dependence on data, so
+nothing was gained by deferring it, and two things were lost: the layer boundary,
+and the ability of a rewrite to *see* the choice. Seeing it matters — a rewrite that
+knows ABS will be stated natively can skip the sign indicator that only a Big-M
+envelope has a use for (§ABS below), which is not expressible while the arm is
+picked two stages later.
 
-It is deliberately **not serialized**. Which solver a host has is a fact about the
-host, not about the query, so a plan deserialized elsewhere re-resolves it rather than
+The choice is made **once** and rides the plan: `LogicalDecide` → `PhysicalDecide` →
+the solve → every diagnostic re-solve. Nothing downstream selects again. That is not
+tidiness: once a rewrite has consulted the backend's capabilities, a second selection
+that answered differently would run a model on a solver it was not built for.
+
+Neither field is **serialized**. Which solver a host has is a fact about the host,
+not about the query, so a plan deserialized elsewhere re-resolves both rather than
 carrying a choice that machine cannot honor. If the DECIDE optimizer is disabled
-outright (`SET disabled_optimizers='decide_optimizer'`), physical planning resolves it
-instead, so the operator always runs against exactly one backend.
+outright (`SET disabled_optimizers='decide_optimizer'`), physical planning calls
+`ChooseDecideSolver` itself — the pass still belongs to this stage, it is merely
+triggered from there — so the operator always runs against exactly one backend and
+one formulation. It is a no-op once a name is recorded, so that fallback can never
+overwrite a choice the rewrites were already selected against.
 
 See [`../07_solver/done.md`](../07_solver/done.md) §2 for what selection reads, and
 `SolverConstructSupport` / `SolverModelClass` for what a pass may ask about the

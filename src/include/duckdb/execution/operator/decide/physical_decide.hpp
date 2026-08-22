@@ -8,6 +8,7 @@
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/solver_registry.hpp"
 #include <unordered_map>
 
 namespace duckdb {
@@ -162,13 +163,21 @@ public:
     //! the unbounded diagnosis to label escaping categorical groups (affected_rows).
     vector<string> input_column_names;
 
-    //! The backend this query was planned for, chosen once by the DECIDE optimizer
-    //! (LogicalDecide::solver_backend) and copied here at physical planning. Layer 8
-    //! READS it — the primary solve and every diagnostic re-solve run on this one
-    //! backend — and never re-derives it: the rewrites upstream already committed to
-    //! what this backend takes natively, so a second, differently-answered selection
-    //! would run a model on a solver it was not built for.
-    SolverBackend solver_backend;
+    //! The registered NAME of the backend this query was planned for, chosen once by
+    //! stage 05 (LogicalDecide::solver_backend_name) and copied here at physical
+    //! planning. Layer 8 READS it — the primary solve and every diagnostic re-solve run
+    //! on this one backend — and never re-derives it: the rewrites upstream already
+    //! committed to what this backend takes natively, so a second, differently-answered
+    //! selection would run a model on a solver it was not built for. It is resolved back
+    //! to a backend only where a solve is about to happen (SolverRegistry::Find).
+    string solver_backend_name;
+
+    //! Stage 05's formulation decision, carried down verbatim: which constructs this
+    //! query hands to the backend to state itself, and which arrive already lowered into
+    //! plain rows. Layer 8 READS this and translates. It must NOT ask a backend what it
+    //! supports — choosing a formulation is stage 05's job, and asking again here is how
+    //! the plan and the solve come to disagree about what was lowered.
+    SolverConstructSupport use_native_constructs;
 
     // --- Prepared linear form (decided by BuildDecidePreparedModel, stage 05) ---
 
@@ -206,6 +215,12 @@ public:
     InsertionOrderPreservingMap<string> ParamsToString() const override;
 
 private:
+    //! The backend named on the plan, resolved to a registry entry. This is the ONLY
+    //! place layer 8 turns `solver_backend_name` back into a backend, and it happens
+    //! where a solve is about to run — the primary one and every diagnostic re-solve.
+    //! Layer 8 never re-selects: it looks up the name stage 05 recorded.
+    SolverBackend PlannedSolverBackend() const;
+
     //! PHASE 1.5: one row→entity mapping per table-scoped entity scope.
     vector<EntityMapping> BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
                                               idx_t num_rows) const;

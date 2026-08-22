@@ -5,8 +5,9 @@ rows because a plain LP/MILP matrix is all a solver was assumed to take. Gurobi 
 *general constraints* — ``aux = |t|`` stated directly — and a solver that takes one
 natively needs no Big-M, so the lowering is work that only loses accuracy.
 
-The choice is made by a **gate** at stage 08, reading the capability table of the
-backend picked at plan time. There are exactly two arms and they are equivalent:
+The choice is made at **stage 05**, from the capability table of the backend picked at
+plan time, and recorded on the plan; stage 08 reads it and routes. There are exactly
+two arms and they are equivalent:
 whichever runs, the optimum is the same. That equivalence is the standard a
 capability flag has to meet before it goes in the table, and
 ``DECIDB_NATIVE_CONSTRUCTS=off`` is how it is checked — it forces every construct
@@ -22,6 +23,7 @@ Covers:
   - test_native_and_lowered_agree: the A/B, over the ABS-maximize shapes
   - test_minmax_native_and_lowered_agree: the A/B, over the MIN/MAX shapes
   - test_native_replaces_rows_with_a_general_constraint: the model really changed
+  - test_native_minmax_allocates_no_indicator: no Big-M means no binary to switch it
   - test_native_abs_needs_no_bound: the payoff — refused when lowered, answered native
   - test_native_minmax_needs_no_bound: the same payoff on MIN/MAX
   - test_not_equal_native_and_lowered_agree: the A/B, over the `<>` shapes
@@ -93,9 +95,17 @@ def test_native_replaces_rows_with_a_general_constraint(decidb_cli_gurobi):
     """Equal answers are not evidence of equal models, so read the model.
 
     Native trades the two Big-M rows and the binary sign indicator for one general
-    constraint plus a free argument column and its equality row. So the native model
-    has *more* columns and *fewer* rows — and the general constraints show up in the
-    dump, which they must, or a native construct would read as rows disappearing.
+    constraint plus an argument column and its equality row. So the native model has
+    *fewer rows*, and the columns trade one-for-one: the binary sign indicator leaves
+    and the continuous argument column takes its place. The general constraints show
+    up in the dump, which they must, or a native construct would read as rows
+    disappearing.
+
+    The column check is by KIND, not by count, and that is the point of it. A count
+    cannot tell "the binary was replaced" from "the binary was left behind and a
+    column was added next to it" — which is what used to happen, one dead binary per
+    data row on the native arm, presolved away by the solver and therefore invisible
+    to every test that reads answers.
     """
     sql = (f"SELECT id, x FROM {_FIXTURE} DECIDE x(REAL) "
            "SUCH THAT x >= 0 AND x <= 10 MAXIMIZE SUM(ABS(x - target))")
@@ -115,10 +125,18 @@ def test_native_replaces_rows_with_a_general_constraint(decidb_cli_gurobi):
         assert match, f"no {name} in dump:\n{dump}"
         return int(match.group(1))
 
+    def binary_columns(dump):
+        return len(re.findall(r"^col \d+: .* bin=1 ", dump, re.MULTILINE))
+
     assert field(lowered, "num_genconstrs") == 0, lowered
     assert field(native, "num_genconstrs") == 3, native
     assert field(native, "num_rows") < field(lowered, "num_rows")
-    assert field(native, "num_vars") > field(lowered, "num_vars")
+    # One binary sign indicator per data row when lowered; none at all when native,
+    # because there is no Big-M for one to switch.
+    assert binary_columns(lowered) == 3, lowered
+    assert binary_columns(native) == 0, native
+    # And nothing left over: the argument column takes the indicator's place.
+    assert field(native, "num_vars") == field(lowered, "num_vars")
     # Every general constraint must name a real result column and one argument.
     for result, args in re.findall(r"^gen \d+: kind=abs res=(\d+) args=(\S+)$", native, re.MULTILINE):
         assert int(result) < field(native, "num_vars")
@@ -244,6 +262,39 @@ def test_minmax_native_and_lowered_agree(decidb_cli_gurobi, name, clause, object
     lowered = objective(_solve_grouped(decidb_cli_gurobi, clause,
                                        {"DECIDB_NATIVE_CONSTRUCTS": "off"}))
     assert abs(native - lowered) <= 1e-6, f"{name}: native {native} != lowered {lowered}"
+
+
+@pytest.mark.min_max
+def test_native_minmax_allocates_no_indicator(decidb_cli_gurobi):
+    """The MIN/MAX twin of the column check above, on its own allocation site.
+
+    The indicator binary exists to switch the Big-M disjunction. `z = MAX(t..)` has no
+    disjunction, so the native arm allocates none — and, like the ABS sign indicator,
+    the indicator is row-scoped, so one left behind is one dead binary per data row.
+    Presolve removes it and every answer stays right, which is exactly why this has to
+    be checked against the model rather than the result.
+    """
+    sql = (f"SELECT id, g, c, x FROM {_GROUPED} DECIDE x(INT) "
+           "SUCH THAT x <= 9 AND MAX(x * c) >= 20 MINIMIZE SUM(x)")
+
+    def dump_of(env):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "model.dump")
+            decidb_cli_gurobi.with_env({**env, "DECIDB_DUMP_MODEL": path}).execute(sql)
+            with open(path) as f:
+                return f.read()
+
+    native = dump_of({})
+    lowered = dump_of({"DECIDB_NATIVE_CONSTRUCTS": "off"})
+
+    def binary_columns(dump):
+        return len(re.findall(r"^col \d+: .* bin=1 ", dump, re.MULTILINE))
+
+    assert "num_genconstrs: 0" in lowered, lowered
+    assert re.search(r"^gen \d+: kind=max ", native, re.MULTILINE), native
+    # One indicator per data row when lowered; none at all when native.
+    assert binary_columns(lowered) == 4, lowered
+    assert binary_columns(native) == 0, native
 
 
 @pytest.mark.correctness

@@ -336,26 +336,41 @@ first, because pinning an ABS auxiliary is also what determines its column box, 
 every linearizer after it derives its `M` from column boxes. See
 [`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
 
-### The construct gate
+### The construct routing — a decision this stage reads, not one it makes
 
-This stage owns the **only** decision about whether a construct is lowered at all. It
-reads `solver_backend.Capabilities()` — the backend chosen at plan time, carried down
-on the operator — and routes each construct to one of two arms. Three constructs are
-gated today: ABS, MIN/MAX and `<>`:
+Whether a construct is lowered is a **formulation** choice, and formulation belongs to
+stage 05. This stage reads the answer off the operator and routes on it. Three
+constructs are routed today: ABS, MIN/MAX and `<>`:
 
 ```cpp
-const bool native_abs = solver_backend.Capabilities().abs;
+const bool native_abs = use_native_constructs.abs;          // decided by stage 05
 DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, /*refuse_when_unbounded=*/!native_abs);
 if (!native_abs) { LinearizeAbsMaximize(solver_input); }
 ...
 if (native_abs) { EmitNativeAbs(solver_input, var_indexer); }   // after the VarIndexer exists
 ```
 
-Both arms read the same stage-05 tag (`abs_y_idx`, `abs_is_pos_bound`) — stage 05 tags
-rather than fully lowering, because the Big-M constants are functions of evaluated
-data, and that tag *is* the native-construct record. Neither arm decides anything: all
-routing is the `if` above, and the adapters below only translate. That is what keeps
-the two comparable, and `DECIDB_NATIVE_CONSTRUCTS=off` A/B-tests them on one machine.
+`use_native_constructs` is a `SolverConstructSupport` copied from
+`LogicalDecide::use_native_constructs`, which stage 05 filled in from the chosen
+backend before it rewrote anything. **This stage must not ask a backend what it
+supports.** The routing has to be the same answer the rewrites upstream were selected
+against, and a second, independently-derived answer is exactly how the plan and the
+solve come to disagree about what was lowered. The decision is data-independent —
+three boolean reads — so there was never anything to gain by deferring it, and
+deferring it kept stage 05 from acting on its own choice: see
+[`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
+
+Both arms read the same stage-05 tag (`abs_aux_idx`, `abs_is_pos_bound`) — stage 05
+tags rather than fully lowering, because the Big-M constants are functions of
+evaluated data, and that tag *is* the native-construct record. Neither arm decides
+anything: all routing is the `if` above, and the adapters below only translate. That
+is what keeps the two comparable, and `DECIDB_NATIVE_CONSTRUCTS=off` A/B-tests them on
+one machine.
+
+The backend itself reaches this stage as a **name**. `PlannedSolverBackend()` resolves
+`solver_backend_name` through the registry at the two points that are about to solve —
+the primary solve and each diagnostic re-solve — so nothing here holds a solver handle
+it is not immediately using, and nothing here re-selects.
 
 The native arm runs later than the lowering one because a general constraint names
 flat columns, which exist only once the `VarIndexer` does — the same reason the
@@ -386,6 +401,12 @@ The native columns are **boxed**, not free, wherever a range is derivable — th
 `AuxRange` walk that produces the Big-M constant. A free continuous column is a
 measured performance cliff, and it is earned only by the one case that has no range at
 all, which is precisely the query the native path exists to answer.
+
+The box is derived **per row**, on both constructs. Each argument column stands for one
+row's inner expression, so one row's reach is what bounds it; and because
+`AuxRange::CoverRowSided` folds the two ends in separately, a row open on one side keeps
+the side it can derive, and a row whose contributors are all bounded gets a real box
+even when another row's are not.
 
 ### Output
 

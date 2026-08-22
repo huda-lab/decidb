@@ -137,10 +137,14 @@ static double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row) 
 //! Signed bracket of one row's variable terms, defined below — forward-declared so the
 //! native MIN/MAX emitter above it can box its auxiliary columns by the same walk the
 //! Big-M paths use.
+//!
+//! `skip_idx` leaves one column out of the walk, the way DecideRowTermRange does: the
+//! ABS envelope rows carry the auxiliary itself as a term, and what has to be bracketed
+//! there is the expression the auxiliary is pinned AGAINST, not the auxiliary.
 static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
                                  const vector<double> &lower_bounds,
                                  const vector<double> &upper_bounds, double &out_lo,
-                                 double &out_hi);
+                                 double &out_hi, idx_t skip_idx = DConstants::INVALID_INDEX);
 
 //! Refuse a Big-M linearization that has no finite M, naming a column to bound.
 //!
@@ -183,7 +187,7 @@ static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
     for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
         idx_t v = ec.variable_indices[t];
         if (v == DConstants::INVALID_INDEX || v == ec.minmax_indicator_idx || v == ec.ne_indicator_idx ||
-            v == ec.abs_y_idx) {
+            v == ec.abs_aux_idx) {
             continue;
         }
         if (v < upper_bounds.size() && v < lower_bounds.size() &&
@@ -211,7 +215,7 @@ static const char *DescribeBigMConstruct(const EvaluatedConstraint &ec) {
     if (ec.ne_indicator_idx != DConstants::INVALID_INDEX) {
         return "<>";
     }
-    if (ec.abs_y_idx != DConstants::INVALID_INDEX) {
+    if (ec.abs_aux_idx != DConstants::INVALID_INDEX) {
         return "ABS";
     }
     return "MIN/MAX";
@@ -290,9 +294,11 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
         if (!ec.bilinear_terms.empty() || ec.has_quadratic) {
             continue;
         }
-        if (ec.minmax_indicator_idx != DConstants::INVALID_INDEX ||
-            ec.ne_indicator_idx != DConstants::INVALID_INDEX ||
-            ec.abs_y_idx != DConstants::INVALID_INDEX) {
+        // A row that means something other than what its terms say: a hard MIN/MAX
+        // (marked by its aggregate name, which both arms carry), a `<>` disjunction, or
+        // an ABS envelope. None of them implies a bound on anything.
+        if (!ec.minmax_agg_type.empty() || ec.ne_indicator_idx != DConstants::INVALID_INDEX ||
+            ec.abs_aux_idx != DConstants::INVALID_INDEX) {
             continue;
         }
         // WHEN-conditional constraints apply to only a subset of rows, but the
@@ -470,7 +476,11 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
                     // and the solver reports it as an infeasibility naming this clause
                     // rather than a rewrite refusing the query.
                     EvaluatedConstraint ec_no_solution = ec;
+                    // Drop the MIN/MAX marking as well as the indicator: what is emitted
+                    // is an ordinary per-row constraint, and nothing downstream should
+                    // read its LHS as an extremum again.
                     ec_no_solution.minmax_indicator_idx = DConstants::INVALID_INDEX;
+                    ec_no_solution.minmax_agg_type.clear();
                     ec_no_solution.lhs_is_aggregate = false;
                     for (idx_t r = 0; r < num_rows; r++) {
                         idx_t g = ec_no_solution.row_group_ids[r];
@@ -504,7 +514,9 @@ void ExtractNativeMinMaxConstraints(SolverInput &input, vector<EvaluatedConstrai
     const idx_t num_rows = input.num_rows;
     vector<EvaluatedConstraint> kept;
     for (auto &ec : input.constraints) {
-        if (ec.minmax_indicator_idx == DConstants::INVALID_INDEX) {
+        // The aggregate name is the marking, not the indicator index: this arm allocates
+        // no indicator, so there is none to test.
+        if (ec.minmax_agg_type.empty()) {
             kept.push_back(std::move(ec));
             continue;
         }
@@ -666,12 +678,17 @@ void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_nam
 
     vector<EvaluatedConstraint> new_constraints;
     for (auto &ec : input.constraints) {
-        // Skip constraints without a minmax indicator tag
-        if (ec.minmax_indicator_idx == DConstants::INVALID_INDEX) {
+        // Skip constraints that are not a hard MIN/MAX. Marked by the aggregate name,
+        // which both arms carry; the indicator index below exists only on this one.
+        if (ec.minmax_agg_type.empty()) {
             new_constraints.push_back(std::move(ec));
             continue;
         }
 
+        // Stage 05 allocates the indicator exactly when it routed this query here.
+        // Reaching this arm without one would mean the plan and the solve disagree about
+        // which formulation was chosen.
+        D_ASSERT(ec.minmax_indicator_idx != DConstants::INVALID_INDEX);
         idx_t indicator_idx = ec.minmax_indicator_idx;
         bool is_max_agg = (ec.minmax_agg_type == "max");
         if (!ClassifyMinMaxGroups(ec, num_rows, is_max_agg, new_constraints)) {
@@ -831,7 +848,7 @@ enum class NECollapse : uint8_t {
 static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
                                  const vector<double> &lower_bounds,
                                  const vector<double> &upper_bounds, double &out_lo,
-                                 double &out_hi) {
+                                 double &out_hi, idx_t skip_idx) {
     constexpr double INF = std::numeric_limits<double>::infinity();
     double lo = 0.0;
     double hi = 0.0;
@@ -839,7 +856,7 @@ static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
     bool hi_unbounded = false;
     for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
         idx_t v = ec.variable_indices[t];
-        if (v == DConstants::INVALID_INDEX) {
+        if (v == DConstants::INVALID_INDEX || v == skip_idx) {
             continue; // constant term: accounted for by DecideRowEffectiveBound
         }
         double coef = ec.row_coefficients[t].Get(row);
@@ -1533,7 +1550,9 @@ namespace {
 
 //! Index of the two tagged lower-bound rows an ABS auxiliary was given by stage 05:
 //! C1 (`aux >= inner`, ABS_UB_POS) and C2 (`aux >= -inner`, ABS_UB_NEG). Both phases
-//! below start from this map, keyed by the link's sign indicator.
+//! below start from this map, keyed by the link's AUXILIARY — the one index both the
+//! lowering and the native arm have, since only the lowering arm allocates a sign
+//! indicator.
 struct AbsConstraintPair {
     idx_t c1 = DConstants::INVALID_INDEX;
     idx_t c2 = DConstants::INVALID_INDEX;
@@ -1543,13 +1562,13 @@ unordered_map<idx_t, AbsConstraintPair> BuildAbsTagMap(const SolverInput &input)
     unordered_map<idx_t, AbsConstraintPair> abs_tag_map;
     for (idx_t ci = 0; ci < input.constraints.size(); ci++) {
         auto &ec = input.constraints[ci];
-        if (ec.abs_y_idx == DConstants::INVALID_INDEX) {
+        if (ec.abs_aux_idx == DConstants::INVALID_INDEX) {
             continue;
         }
         if (ec.abs_is_pos_bound) {
-            abs_tag_map[ec.abs_y_idx].c1 = ci;
+            abs_tag_map[ec.abs_aux_idx].c1 = ci;
         } else {
-            abs_tag_map[ec.abs_y_idx].c2 = ci;
+            abs_tag_map[ec.abs_aux_idx].c2 = ci;
         }
     }
     return abs_tag_map;
@@ -1566,7 +1585,7 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
     auto abs_tag_map = BuildAbsTagMap(input);
 
     for (auto &link : input.abs_maximize_links) {
-        auto it = abs_tag_map.find(link.y_idx);
+        auto it = abs_tag_map.find(link.aux_idx);
         D_ASSERT(it != abs_tag_map.end() && it->second.c1 != DConstants::INVALID_INDEX &&
                  it->second.c2 != DConstants::INVALID_INDEX);
         const auto &c1 = input.constraints[it->second.c1];
@@ -1660,10 +1679,14 @@ void LinearizeAbsMaximize(SolverInput &input) {
     input.constraints.reserve(input.constraints.size() + 2 * input.abs_maximize_links.size());
 
     for (auto &link : input.abs_maximize_links) {
-        auto it = abs_tag_map.find(link.y_idx);
+        auto it = abs_tag_map.find(link.aux_idx);
         D_ASSERT(it != abs_tag_map.end() &&
                  it->second.c1 != DConstants::INVALID_INDEX &&
                  it->second.c2 != DConstants::INVALID_INDEX);
+        // This arm is the only one that switches the envelope with a binary, so it is
+        // the only one stage 05 allocates one for. Reaching here without it would mean
+        // the gate routed a lowering the plan had already decided against.
+        D_ASSERT(link.y_idx != DConstants::INVALID_INDEX);
 
         const auto &c1 = input.constraints[it->second.c1];
         const auto &c2 = input.constraints[it->second.c2];
@@ -1728,7 +1751,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
     auto abs_tag_map = BuildAbsTagMap(input);
 
     for (auto &link : input.abs_maximize_links) {
-        auto it = abs_tag_map.find(link.y_idx);
+        auto it = abs_tag_map.find(link.aux_idx);
         D_ASSERT(it != abs_tag_map.end() && it->second.c1 != DConstants::INVALID_INDEX);
         const auto &c1 = input.constraints[it->second.c1];
 
@@ -1750,16 +1773,32 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             if (!c1.row_group_ids.empty() && c1.row_group_ids[r] == DConstants::INVALID_INDEX) {
                 continue; // row excluded by WHEN/PER: no ABS to express here
             }
-            // `t = inner`, boxed by the range DeriveAbsAuxiliaryBounds already found:
-            // |inner| <= abs_range, so inner lies in [-abs_range, +abs_range]. Free only
-            // when that range is underivable — which is precisely the query the native
-            // path exists to answer, and the only case that earns a free column.
+            // `t = inner`, boxed by THIS ROW's own reach — the same per-row walk native
+            // MIN/MAX boxes its argument columns with, rather than one table-wide
+            // magnitude reused for every row. The wider box is not free: a slack
+            // continuous column costs the root LP relaxation (see the note at the top of
+            // this file), and `abs_range` is the MAXIMUM over rows, so every row but the
+            // extreme one was being given more room than it can reach.
+            //
+            // The bracket is read off C1 exactly as the link row below states it. C1 is
+            // `aux + sum_{v != aux} c_v x_v >= k`, so the column is
+            //   inner_r = k_r - sum_{v != aux} c_v x_v
+            // and negating the variable walk swaps its two ends. Skipping the auxiliary
+            // is what makes this the range of the expression rather than of the row.
+            double vars_lo = 0.0;
+            double vars_hi = 0.0;
+            DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi,
+                                 link.aux_idx);
+            double k = c1.rhs_values.Get(r);
+            // Each end on its own. A row open on one side still contributes its closed
+            // side, and a row whose contributors are all bounded gets a real box even
+            // when some other row's are not — which `abs_range` could not express, being
+            // one number for the whole link. Free only where nothing at all is derivable,
+            // which is precisely the query this arm exists to answer and the only case
+            // that earns a free column. `lo`/`hi` carry the constant, `spread` does not.
             AuxRange inner_range;
-            if (link.range_unbounded) {
-                inner_range.MarkUnbounded(DConstants::INVALID_INDEX);
-            } else {
-                inner_range.CoverRow(-link.abs_range, link.abs_range, -link.abs_range, link.abs_range);
-            }
+            inner_range.CoverRowSided(k - vars_hi, k - vars_lo, -vars_hi, -vars_lo,
+                                      DConstants::INVALID_INDEX);
             idx_t t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
 
             SolverInput::RawConstraint link_row;

@@ -216,8 +216,14 @@ inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
-//! Tag prefix for MIN/MAX hard-case indicator linking (on BoundAggregateExpression.alias)
-//! Format: "__minmax_ind_<indicator_idx>_<min|max>__"
+//! Tag prefix marking a SUM(...) that really means a hard MIN/MAX (on
+//! BoundAggregateExpression.alias).
+//! Format: "__minmax_ind_<indicator_idx>_<min|max>__" on the lowering arm, and
+//!         "__minmax_ind_<min|max>__"                on the native arm.
+//! The aggregate name is always present and is what marks the row; the indicator index
+//! is present only when one was allocated, which is only on the arm that emits a Big-M
+//! disjunction for it to switch. Neither "min" nor "max" contains an underscore, so the
+//! two spellings are told apart by whether the payload has one.
 static constexpr const char *MINMAX_INDICATOR_TAG_PREFIX = "__minmax_ind_";
 
 //! Tag prefix for not-equal indicator linking (on BoundComparisonExpression.alias)
@@ -313,23 +319,28 @@ inline bool IsQueryWideBoundTag(const string &alias) {
 	return HasDecideTag(alias, QUERY_WIDE_BOUND_TAG);
 }
 
-//! Tag prefix for ABS upper-bound constraint linking.
-//! Format: "__abs_ub_pos_<y_idx>__" on C1 (aux >= inner)
-//!         "__abs_ub_neg_<y_idx>__" on C2 (aux >= -inner)
-//! Set on BoundComparisonExpression.alias by RewriteAbs when the aux needs the
-//! Big-M upper envelope: either (a) sense==MAXIMIZE and ABS is in the objective,
-//! or (b) ABS is in a constraint shape that does not naturally upper-bound aux
-//! (e.g. ABS(...) >= K, ABS(...) = K). Both cases need the sign-indicator
-//! binary y to pin aux = |inner| under solver pressure that would otherwise
-//! let aux float free above |inner|.
+//! Tag prefix for ABS envelope constraint linking.
+//! Format: "__abs_ub_pos_<aux_idx>__" on C1 (aux >= inner)
+//!         "__abs_ub_neg_<aux_idx>__" on C2 (aux >= -inner)
+//! Set on BoundComparisonExpression.alias by RewriteAbs when the aux needs its upper
+//! side pinned as well: either (a) sense==MAXIMIZE and ABS is in the objective, or
+//! (b) ABS is in a constraint shape that does not naturally upper-bound aux
+//! (e.g. ABS(...) >= K, ABS(...) = K). Without that, solver pressure lets aux float
+//! free above |inner|.
+//!
+//! The payload is the AUXILIARY's index, because the two arms that pin it need
+//! different things: the lowering arm adds a Big-M envelope switched by a binary sign
+//! indicator, while the native arm states `aux = |t|` and allocates no binary at all.
+//! The auxiliary is the only index both arms are guaranteed to have.
 static constexpr const char *ABS_UB_POS_TAG_PREFIX = "__abs_ub_pos_";
 static constexpr const char *ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_";
 
 //! Tag set on BoundFunctionExpression.alias for ABS occurrences inside a
 //! constraint shape that does not naturally upper-bound the auxiliary
 //! (i.e. hard-direction ABS). Read by FindAndReplaceAbs, propagated to
-//! AbsPairInfo::needs_bigm so RewriteAbs allocates a sign-indicator y and
-//! emits the Big-M upper envelope at execution time. The tag is set by
+//! AbsPairInfo::needs_bigm so RewriteAbs pins the auxiliary's upper side too --
+//! with a sign-indicator y and a Big-M envelope on the lowering arm, or with a
+//! native `aux = |t|` on a backend that states ABS itself. The tag is set by
 //! TagAbsConstraintsForBigM (formerly ValidateAbsConstraintDirection).
 static constexpr const char *ABS_NEEDS_BIGM_TAG = "__abs_needs_bigm__";
 

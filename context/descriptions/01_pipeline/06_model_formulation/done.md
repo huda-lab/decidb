@@ -386,9 +386,18 @@ rather than answering a comparison.
 
 ### Hard MIN/MAX rows
 
-`LinearizeMinMaxIndicators()` encodes every constraint stage 05 tagged with
-`minmax_indicator_idx`, matching constraints to indicators by tag rather than
-position. Untagged constraints pass through unchanged.
+`LinearizeMinMaxIndicators()` encodes every constraint stage 05 marked as a hard
+MIN/MAX, matching constraints to indicators by tag rather than position. Untagged
+constraints pass through unchanged.
+
+The **marking** is `minmax_agg_type` (`"min"` / `"max"`), not `minmax_indicator_idx`,
+and the difference matters: the indicator exists only on this arm. A backend that
+states `z = MAX(t..)` itself has no disjunction for one to switch, so stage 05
+allocates none and `minmax_indicator_idx` stays `INVALID_INDEX` there. The indicator is
+row-scoped, so leaving it in on the native arm cost one dead binary per data row — the
+same waste, and the same fix, as the ABS sign indicator (§ABS). The tag carries the
+index only when there is one: `__minmax_ind_<idx>_<agg>__` when lowered,
+`__minmax_ind_<agg>__` when native.
 
 | Direction | Per-row rows | Selector row |
 |---|---|---|
@@ -558,11 +567,14 @@ upper bound on `x` is refused by name — there is no envelope without it.
 
 ### ABS under MAXIMIZE
 
-Stage 05 emits `aux >= inner` and `aux >= -inner` and tags them via `abs_y_idx` /
+Stage 05 emits `aux >= inner` and `aux >= -inner` and tags them via `abs_aux_idx` /
 `abs_is_pos_bound`. Under MINIMIZE those two alone pin `aux = |inner|`, because the
 objective pushes `aux` down. Under MAXIMIZE they do not — `aux` is free to run
 above `|inner|` — so `LinearizeAbsMaximize()` pairs the tagged rows and derives the
 matching Big-M upper bounds that close it.
+
+The tag keys on the **auxiliary**, not on the sign indicator it used to name, because
+only the lowering arm has a sign indicator: see "one binary, on one arm only" below.
 
 This site was **strict about bounds** before any other was: a contributing variable
 with no finite bound is named and refused. The indicator paths used to take a fixed
@@ -572,15 +584,39 @@ wrote inside `ABS()`, so that refusal names the expression and the row, not the
 linearization.
 
 **Two arms, one tag.** `DeriveAbsAuxiliaryBounds` is phase 1 and runs on both paths;
-phase 2 is either `LinearizeAbsMaximize` (the Big-M rows) or `EmitNativeAbs` (a free
-column `t`, an equality row `t = inner`, and a `GeneralConstraint` saying `aux = |t|`).
-Stage 08 picks the arm from `SolverConstructSupport::abs`; both arms read the same stage-05
-tag, which is what makes them comparable. The native arm runs later than the lowering
-one — after the `VarIndexer` exists — because a general constraint names flat columns.
+phase 2 is either `LinearizeAbsMaximize` (the Big-M rows) or `EmitNativeAbs` (a column
+`t`, an equality row `t = inner`, and a `GeneralConstraint` saying `aux = |t|`).
+Stage 08 routes on the arm **stage 05 chose** (`use_native_constructs.abs`); both arms
+read the same stage-05 tag, which is what makes them comparable. The native arm runs
+later than the lowering one — after the `VarIndexer` exists — because a general
+constraint names flat columns.
 
 `refuse_when_unbounded` is the one place the arms differ in *outcome*: the lowering
 path has no finite `M` over an unbounded contributor and refuses, while the native path
 leaves the auxiliary unboxed and answers. That divergence is the capability's payoff.
+
+**One binary, on one arm only.** The sign indicator `__abs_y_N__` exists to switch the
+Big-M envelope, and the native arm emits no envelope — it states `aux = |t|`. Stage 05
+therefore allocates it only on the lowering arm. It is a **row-scoped** variable, so
+leaving it in on the native arm cost one free binary *per data row*, referenced by no
+row and no general constraint: presolved away by the solver, so never a wrong answer,
+but built, stored and marshalled across the solver API for every row of the input, and
+growing with the relation. Suppressing it is only expressible because stage 05 owns the
+formulation choice — the arm is known at the moment the variable would be allocated.
+`AbsMaximizeLinkSpec::y_idx` is `INVALID_INDEX` on the native arm.
+
+**Each `t` is boxed by its own row.** `EmitNativeAbs` brackets the argument column from
+the row's own C1: `inner_r = k_r - sum_{v != aux} c_v x_v`, walked with
+`DecideRowSignedRange` (skipping the auxiliary) and folded in with
+`AuxRange::CoverRowSided` — the same per-row machinery
+`ExpandNativeMinMaxConstraints` already uses, keeping each end it can derive
+independently. It previously reused `abs_range`, which is the **maximum over rows**, so
+every row but the extreme one was handed more room than it can reach; and because
+`abs_range` is one number per link, a single unbounded row left every row's column
+free. A slack continuous column is a measured cost at the root LP relaxation, which is
+why this is worth doing rather than a tidiness. A column is left free only where
+nothing at all is derivable — which is exactly the query the native arm exists to
+answer.
 
 The lowering arm also **narrows the auxiliary's column box** to the `M` it derives. The rows it
 emits pin `aux = |inner|`, so `M` is a valid upper bound — and the only one anything

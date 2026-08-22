@@ -1062,6 +1062,17 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
     }
 }
 
+SolverBackend PhysicalDecide::PlannedSolverBackend() const {
+	SolverBackend backend = SolverRegistry::Find(solver_backend_name);
+	if (!backend.IsValid()) {
+		// Physical planning always records a name (ChooseDecideSolver runs there when the
+		// DECIDE optimizer did not), so an unresolvable one means the plan and the
+		// registry disagree — an internal defect, never a user error.
+		throw InternalException("DECIDE reached the solver with no backend named on the plan");
+	}
+	return backend;
+}
+
 //===--------------------------------------------------------------------===//
 // EXPLAIN Support
 //===--------------------------------------------------------------------===//
@@ -1692,7 +1703,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         eval_const.minmax_indicator_idx = constraint->minmax_indicator_idx;
         eval_const.minmax_agg_type = constraint->minmax_agg_type;
         eval_const.ne_indicator_idx = constraint->ne_indicator_idx;
-        eval_const.abs_y_idx = constraint->abs_y_idx;
+        eval_const.abs_aux_idx = constraint->abs_aux_idx;
         eval_const.abs_is_pos_bound = constraint->abs_is_pos_bound;
         eval_const.kind = constraint->kind;
 
@@ -2694,14 +2705,15 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
         }
     }
 
-    // THE GATE. Ask the backend chosen at plan time whether it expresses ABS itself.
-    // Native means no Big-M and therefore no bound requirement, so the answer changes
-    // what is refused, not only what is fast. The routing decision is made here, once;
-    // both arms below only translate.
-    const SolverConstructSupport native = solver_backend.Capabilities().constructs;
-    const bool native_abs = native.abs;
-    const bool native_min_max = native.min_max;
-    const bool native_not_equal = native.not_equal;
+    // THE ROUTING, as stage 05 decided it. Whether ABS is stated natively or lowered is
+    // a FORMULATION choice, and formulation belongs to stage 05 — so this reads the
+    // decision off the plan rather than asking a backend. Native means no Big-M and
+    // therefore no bound requirement, so the answer changes what is refused, not only
+    // what is fast; that is exactly why it has to be the same answer the rewrites above
+    // were selected against. Both arms below only translate.
+    const bool native_abs = use_native_constructs.abs;
+    const bool native_min_max = use_native_constructs.min_max;
+    const bool native_not_equal = use_native_constructs.not_equal;
 
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from
@@ -3238,7 +3250,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
     Profiler solve_wall_timer;
     solve_wall_timer.Start();
     SolverResult solve_result =
-        SolveModel(solver_input, var_indexer, solver_backend, solve_options,
+        SolveModel(solver_input, var_indexer, PlannedSolverBackend(), solve_options,
                    diagnosis_armed ? &retained_model : nullptr,
                    want_session ? &retained_session : nullptr);
     solve_wall_timer.End();
@@ -3355,12 +3367,12 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         build_var_labels(var_labels, var_is_aux);
 
         auto diag_params = GetDecideDiagnosticParams(context);
-        // The backend the primary solve ran on, chosen at plan time. Asking
+        // The backend the primary solve ran on, named at plan time. Asking
         // SelectSolverBackend() again here would be a second, independent answer —
         // harmless while selection reads only the environment, but wrong the moment it
         // depends on the model, because the elastic re-solves would then run on a
         // different solver than the one that produced the failure being diagnosed.
-        SolverBackend backend = solver_backend;
+        SolverBackend backend = PlannedSolverBackend();
 
         // Decision 1a: a user constraint like `x <= 10` / `x BETWEEN a AND b` was
         // absorbed into the column-bound arrays, not emitted as a matrix row, so it

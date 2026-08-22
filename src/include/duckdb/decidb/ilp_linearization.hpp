@@ -168,10 +168,16 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
 //! Reads the range DeriveAbsAuxiliaryBounds already derived; never recomputes it.
 void LinearizeAbsMaximize(SolverInput &input);
 
-//! Phase 2, NATIVE path: one free column `t` per active row, an equality row
-//! `t = inner`, and a `GeneralConstraintSpec` saying `aux = |t|`. Emitted in flat
-//! columns, so it runs once the VarIndexer exists — the same phase as
-//! ExpandDeferredAggregateNotEqual, and for the same reason.
+//! Phase 2, NATIVE path: one column `t` per active row, an equality row `t = inner`,
+//! and a `GeneralConstraintSpec` saying `aux = |t|`. Emitted in flat columns, so it runs
+//! once the VarIndexer exists — the same phase as ExpandDeferredAggregateNotEqual, and
+//! for the same reason.
+//!
+//! Each `t` is boxed by ITS OWN row's reach, keeping each end it can derive
+//! independently, exactly as ExpandNativeMinMaxConstraints boxes its argument columns.
+//! A row whose contributors are all bounded gets a real box even when another row's are
+//! not; a column is left free only where nothing is derivable at all, which is the query
+//! this arm exists to answer.
 //!
 //! Called only when the chosen backend declared `SolverConstructSupport::abs`. The routing
 //! is the gate's; this only translates.

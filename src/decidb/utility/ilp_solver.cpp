@@ -327,10 +327,10 @@ static void AssertBackendAcceptsBuiltModel(const SolverModel &model, SolverBacke
 		                        "check did not predict it",
 		                        backend.Name());
 	}
-	// Constructs. A native construct is only ever emitted because the stage-08 gate read
-	// this backend's construct table, so one reaching a backend that did not declare it
-	// means the gate routed to the wrong adapter — and the adapter would have no way to
-	// express it.
+	// Constructs. A native construct is only ever emitted because STAGE 05 read this
+	// backend's construct table and recorded the answer on the plan, so one reaching a
+	// backend that did not declare it means the plan and the solve disagree about which
+	// backend is in play — and the adapter would have no way to express it.
 	auto &constructs = capabilities.constructs;
 	if (!model.indicator_constraints.empty() && !constructs.not_equal) {
 		throw InternalException("DECIDE left a construct native for %s, which does not declare it",

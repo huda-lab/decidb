@@ -17,14 +17,14 @@ namespace duckdb {
 
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
     D_ASSERT(op.children.size() == 1);
-    // The backend was chosen before stage 05 rewrote anything, so the rewrites and the
-    // solve agree on what is lowered and what is left native. If the DECIDE optimizer
-    // never ran (`SET disabled_optimizers='decide_optimizer'`), nothing chose one;
-    // resolve it here so the operator still runs against exactly one backend for the
-    // whole query.
-    if (!op.solver_backend.IsValid()) {
-        op.solver_backend = SelectSolverBackend();
-    }
+    // The backend — and with it stage 05's decision about which constructs stay native —
+    // was settled before any rewrite ran, so the rewrites and the solve agree on what is
+    // lowered. If the DECIDE optimizer never ran (`SET
+    // disabled_optimizers='decide_optimizer'`), nothing settled it; trigger the
+    // stage-05-owned pass here so the operator still runs against exactly one backend
+    // and one formulation for the whole query. It is a no-op when a choice is already on
+    // the plan, so it can never overwrite one the rewrites were selected against.
+    ChooseDecideSolver(op);
     // Both clauses are verified after ALL optimizer rewriting and before any logical
     // expression is moved into the physical operator. The objective is checked here
     // for the same reason the constraints are: every rewrite that touches it now
@@ -86,7 +86,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         op.types, op.estimated_cardinality, std::move(child_plan),
         op.decide_index, std::move(op.decide_variables),
         std::move(op.decide_constraints), op.decide_sense, std::move(op.decide_objective));
-    decide_op->solver_backend = op.solver_backend;
+    decide_op->solver_backend_name = op.solver_backend_name;
+    decide_op->use_native_constructs = op.use_native_constructs;
     decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
     decide_op->is_boolean_var = op.is_boolean_var;
     decide_op->ne_indicator_indices = std::move(op.ne_indicator_indices);
