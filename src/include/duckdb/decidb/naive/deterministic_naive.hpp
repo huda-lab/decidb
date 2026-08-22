@@ -14,8 +14,9 @@ public:
     //! Declared anyway so the registry asks every backend the same question.
     static bool IsAvailable();
 
-    //! What upstream stages may assume about HiGHS. It is the floor of the
-    //! registry: plain linear and convex quadratic objectives, nothing native.
+    //! What HiGHS declares. It is the floor of the registry: plain linear and convex
+    //! quadratic objectives, nothing native. Upstream stages read this through
+    //! SolverBackend::Capabilities(), which applies the DECIDB_NATIVE_CONSTRUCTS mask.
     static const SolverCapabilities &Capabilities();
 
     //! Create a resumable HiGHS session: the one way a DECIDE query reaches

@@ -14,6 +14,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
+#include "duckdb/decidb/solver_capabilities.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/planner/expression.hpp"
 
@@ -364,13 +365,39 @@ struct AbsMaximizeLinkSpec {
 //! adapter only translates. The linear part of the construct is therefore an ordinary
 //! model row emitted alongside this record.
 //!
-//! An adapter never receives a kind its backend did not declare in SolverCapabilities,
-//! so it may treat an unknown kind as an internal error.
+//! An adapter never receives a kind its backend did not declare in
+//! SolverConstructSupport, so it may treat an unknown kind as an internal error.
 enum class GeneralConstraintKind : uint8_t {
     ABS, //!< result = |argument|
     MIN, //!< result = min(arguments)
     MAX  //!< result = max(arguments)
 };
+
+//! Which construct flag a backend must declare before it may be handed a general
+//! constraint of this kind. The ONE place a kind turns into a capability question:
+//! adding a kind adds a row to the table below, not another `?:` at a call site. MIN
+//! and MAX share a row because they share one flag and one Gurobi symbol pair.
+//!
+//! Lives beside the enum rather than beside SolverConstructSupport so a kind added
+//! here without a flag cannot be missed. Such a kind reads as UNDECLARED, which every
+//! caller turns into a loud internal error rather than a silent wrong lowering.
+inline bool DeclaresGeneralConstraint(const SolverConstructSupport &constructs, GeneralConstraintKind kind) {
+    struct KindFlag {
+        GeneralConstraintKind kind;
+        bool SolverConstructSupport::*flag;
+    };
+    static constexpr KindFlag KIND_FLAGS[] = {
+        {GeneralConstraintKind::ABS, &SolverConstructSupport::abs},
+        {GeneralConstraintKind::MIN, &SolverConstructSupport::min_max},
+        {GeneralConstraintKind::MAX, &SolverConstructSupport::min_max},
+    };
+    for (auto &entry : KIND_FLAGS) {
+        if (entry.kind == kind) {
+            return constructs.*entry.flag;
+        }
+    }
+    return false;
+}
 
 struct GeneralConstraintSpec {
     GeneralConstraintKind kind = GeneralConstraintKind::ABS;

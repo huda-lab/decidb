@@ -40,6 +40,11 @@ struct SolveModelOptions {
 //! DECIDB_FORCE_SOLVER test override and otherwise taking the first available
 //! entry in registry order (SolverRegistry::Backends).
 //!
+//! Throws when DECIDB_FORCE_SOLVER names a backend that is unregistered or is not
+//! installed on this host. An unrecognized name is refused rather than ignored:
+//! anything that pins the backend is asking for one specific solver, so silently
+//! running the host default under that name would be a lie.
+//!
 //! Called ONCE per query, by the DECIDE optimizer before any rewrite runs, and the
 //! answer rides the plan from there (LogicalDecide::solver_backend →
 //! PhysicalDecide::solver_backend). Nothing downstream may call this again: once a

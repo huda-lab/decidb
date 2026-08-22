@@ -143,15 +143,16 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 	if (objective && (objective->has_quadratic || objective->has_bilinear)) {
 		// A product of two decisions is indefinite whatever the sense, so a bilinear
 		// objective is unconditionally non-convex. A sum of squares is non-convex only
-		// when its sign fights the sense: MAXIMIZE of a positive Q, MINIMIZE of a
-		// negative one. `quadratic_sign` is a plan-time constant — stage 05 already
-		// refuses a scale factor it cannot fold — so the same test the model builder
-		// runs is available here.
+		// when its sign fights the sense, which is IsNonconvexQuadraticObjective — the
+		// same predicate the model builder later applies to the built Q, so the
+		// prediction and the fact cannot drift. `quadratic_sign` is a plan-time constant
+		// (stage 05 already refuses a scale factor it cannot fold), which is what makes
+		// the test available this early.
 		if (objective->has_bilinear) {
 			needed.nonconvex_quadratic = true;
 		} else {
-			bool is_maximize = op.decide_sense == DecideSense::MAXIMIZE;
-			needed.nonconvex_quadratic = (objective->quadratic_sign > 0.0) == is_maximize;
+			needed.nonconvex_quadratic =
+			    IsNonconvexQuadraticObjective(objective->quadratic_sign, op.decide_sense);
 		}
 		needed.miqp = MayHaveIntegralColumn(op);
 		needed.singular_quadratic = HasCoupledQuadraticTerms(*objective);
@@ -163,7 +164,7 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 void RequireDecideSolverSupport(const LogicalDecide &op) {
 	D_ASSERT(op.solver_backend.IsValid());
 	SolverModelClass needed = DeriveDecideModelClass(op);
-	SolverModelClassGap gap = FindModelClassGap(needed, op.solver_backend.Capabilities());
+	SolverModelClassGap gap = FindModelClassGap(needed, op.solver_backend.Capabilities().model_classes);
 	if (gap == SolverModelClassGap::NONE) {
 		return;
 	}

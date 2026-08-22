@@ -2698,9 +2698,10 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // Native means no Big-M and therefore no bound requirement, so the answer changes
     // what is refused, not only what is fast. The routing decision is made here, once;
     // both arms below only translate.
-    const bool native_abs = solver_backend.Capabilities().abs;
-    const bool native_min_max = solver_backend.Capabilities().min_max;
-    const bool native_not_equal = solver_backend.Capabilities().not_equal;
+    const SolverConstructSupport native = solver_backend.Capabilities().constructs;
+    const bool native_abs = native.abs;
+    const bool native_min_max = native.min_max;
+    const bool native_not_equal = native.not_equal;
 
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from

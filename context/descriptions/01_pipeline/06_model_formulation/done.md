@@ -574,7 +574,7 @@ linearization.
 **Two arms, one tag.** `DeriveAbsAuxiliaryBounds` is phase 1 and runs on both paths;
 phase 2 is either `LinearizeAbsMaximize` (the Big-M rows) or `EmitNativeAbs` (a free
 column `t`, an equality row `t = inner`, and a `GeneralConstraint` saying `aux = |t|`).
-Stage 08 picks the arm from `SolverCapabilities::abs`; both arms read the same stage-05
+Stage 08 picks the arm from `SolverConstructSupport::abs`; both arms read the same stage-05
 tag, which is what makes them comparable. The native arm runs later than the lowering
 one — after the `VarIndexer` exists — because a general constraint names flat columns.
 

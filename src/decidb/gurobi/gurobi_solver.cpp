@@ -53,49 +53,44 @@ bool GurobiSolver::IsAvailable() {
     return available;
 }
 
-//! Test-only A/B switch, mirroring DECIDB_FORCE_SOLVER. `DECIDB_NATIVE_CONSTRUCTS=off`
-//! turns every construct capability off, so the same query takes the lowering path and
-//! must reach the same optimum. That equivalence is the standard a construct flag has to
-//! meet before it goes in the table at all — and the only way to test it without a
-//! second machine.
-static bool NativeConstructsEnabled() {
-    const char *setting = std::getenv("DECIDB_NATIVE_CONSTRUCTS");
-    if (!setting) {
-        return true;
-    }
-    return !(std::string(setting) == "off" || std::string(setting) == "OFF" ||
-             std::string(setting) == "0");
-}
-
 const SolverCapabilities &GurobiSolver::Capabilities() {
     // Cached alongside IsAvailable(): both are answers about the library that was
     // loaded into THIS process, and neither can change without a fresh start.
+    //
+    // This reports what Gurobi CAN do. The test-only DECIDB_NATIVE_CONSTRUCTS switch is
+    // not applied here — SolverBackend::Capabilities() masks constructs centrally, for
+    // every backend, so no backend carries its own copy of the switch.
     static const SolverCapabilities capabilities = []() {
         SolverCapabilities caps;
         // Model classes Gurobi accepts directly. These are gates: nothing lowers a
         // non-convex objective into linear rows, so a backend that says false here
         // makes the query unrunnable rather than slow.
-        caps.quadratic_constraints = true;
-        caps.nonconvex_quadratic = true;
-        caps.miqp = true;
+        caps.model_classes.quadratic_constraints = true;
+        caps.model_classes.nonconvex_quadratic = true;
+        caps.model_classes.miqp = true;
         // Gurobi's QP solver handles a rank-deficient Q — the flat valley one squared
         // expression over several decisions produces — and reaches the true optimum on
         // it. Verified against the sweep behind the HiGHS refusal.
-        caps.singular_quadratic = true;
+        caps.model_classes.singular_quadratic = true;
         // Construct flags. Each is true only when the loaded library actually exported
         // the symbol behind it — a capability is partly a runtime fact — and each is
         // A/B-verifiable: DECIDB_NATIVE_CONSTRUCTS=off forces every one back down its
         // lowering path, which must reach the same optimum. A flag that cannot be
         // tested that way does not belong in the table.
         //
-        // The remaining constructs (min_max, not_equal, in_list, bilinear) stay false
-        // until the loader binds their symbols and stage 08 knows how to emit them: a
-        // capability may not be declared ahead of the code that honors it.
-        if (NativeConstructsEnabled()) {
+        // Load() FIRST, and note this answer is cached for the process: reading the
+        // symbol table before the library is open would report every construct as
+        // unexported, and nothing later could undo that false negative. Load() is itself
+        // call_once, so asking here costs nothing on the paths that already ran it.
+        //
+        // The remaining construct (bilinear) stays false until the loader binds its
+        // symbols and stage 08 knows how to emit it: a capability may not be declared
+        // ahead of the code that honors it.
+        if (GurobiLoader::Load()) {
             auto &api = GurobiLoader::API();
-            caps.abs = api.addgenconstrAbs != nullptr;
-            caps.min_max = api.addgenconstrMin != nullptr && api.addgenconstrMax != nullptr;
-            caps.not_equal = api.addgenconstrIndicator != nullptr;
+            caps.constructs.abs = api.addgenconstrAbs != nullptr;
+            caps.constructs.min_max = api.addgenconstrMin != nullptr && api.addgenconstrMax != nullptr;
+            caps.constructs.not_equal = api.addgenconstrIndicator != nullptr;
         }
         return caps;
     }();
@@ -267,14 +262,14 @@ void GurobiSession::Load(const SolverModel &ilp) {
             // The trailing constant is a neutral element, not a participant: +inf can
             // never be the minimum of the listed columns.
             error = api.addgenconstrMin(guard.model, nullptr, gc.result_column,
-                                        (int)gc.argument_columns.size(),
+                                        static_cast<int>(gc.argument_columns.size()),
                                         gc.argument_columns.data(), GRB_INFINITY_VALUE);
             break;
         }
         case GeneralConstraintKind::MAX: {
             D_ASSERT(api.addgenconstrMax && !gc.argument_columns.empty());
             error = api.addgenconstrMax(guard.model, nullptr, gc.result_column,
-                                        (int)gc.argument_columns.size(),
+                                        static_cast<int>(gc.argument_columns.size()),
                                         gc.argument_columns.data(), -GRB_INFINITY_VALUE);
             break;
         }
@@ -292,7 +287,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
     for (auto &ic : ilp.indicator_constraints) {
         D_ASSERT(api.addgenconstrIndicator);
         error = api.addgenconstrIndicator(guard.model, nullptr, ic.binary_column, ic.binary_value,
-                                          (int)ic.indices.size(), ic.indices.data(),
+                                          static_cast<int>(ic.indices.size()), ic.indices.data(),
                                           ic.coefficients.data(), ic.sense, ic.rhs);
         if (error) {
             throw InvalidInputException("Failed to add indicator constraint to Gurobi: %s",

@@ -30,10 +30,11 @@ struct SolverBackendInfo {
 	//! Runtime probe: is the library loadable and the license valid on THIS host?
 	//! A backend that is always present answers true unconditionally.
 	bool (*is_available)();
-	//! What upstream stages may assume about this backend. Queried through a
-	//! function rather than stored inline because capability is partly a runtime
-	//! fact — a dynamically loaded library may not export the symbol a native
-	//! construct needs, so the answer is not known until the library is open.
+	//! What this backend declares, before the central DECIDB_NATIVE_CONSTRUCTS mask
+	//! is applied (see SolverBackend::Capabilities). Queried through a function rather
+	//! than stored inline because capability is partly a runtime fact — a dynamically
+	//! loaded library may not export the symbol a native construct needs, so the
+	//! answer is not known until the library is open.
 	const SolverCapabilities &(*capabilities)();
 	//! Fresh session factory. The returned session owns no solver state until Solve().
 	unique_ptr<SolverSession> (*create_session)();
@@ -64,8 +65,12 @@ public:
 	const char *DisplayName() const;
 	//! Is this backend usable on this host right now?
 	bool IsAvailable() const;
-	//! What upstream stages may assume. See SolverCapabilities.
-	const SolverCapabilities &Capabilities() const;
+	//! What upstream stages may assume: the backend's own declaration with the
+	//! test-only DECIDB_NATIVE_CONSTRUCTS switch applied. Returned BY VALUE because
+	//! that switch is a property of the contract rather than of any one backend, so
+	//! masking happens here, once, for every registered backend — not copy-pasted into
+	//! each one. Read `.constructs` or `.model_classes`; nothing needs both.
+	SolverCapabilities Capabilities() const;
 	//! Open a fresh session on this backend.
 	unique_ptr<SolverSession> CreateSession() const;
 

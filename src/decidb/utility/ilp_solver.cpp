@@ -6,6 +6,7 @@
 #include "duckdb/decidb/solver_session.hpp"
 #include "duckdb/decidb/solver_registry.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -231,30 +232,42 @@ void DumpSolverModel(const SolverModel &model) {
 } // namespace
 
 SolverBackend SelectSolverBackend() {
-    // Test-only override: DECIDB_FORCE_SOLVER=<registered backend name> pins the
-    // backend. Used by the DECIDE test suite (see test/decide/conftest.py fixtures
-    // decidb_cli_highs / decidb_cli_gurobi) to exercise both backends on a single
-    // host. A name no backend answers to falls through to auto-selection.
-    if (const char *force = std::getenv("DECIDB_FORCE_SOLVER")) {
-        SolverBackend forced = SolverRegistry::Find(force);
-        if (forced.IsValid()) {
-            if (!forced.IsAvailable()) {
-                throw InvalidInputException("DECIDB_FORCE_SOLVER=%s but that solver is not available "
-                                            "on this host",
-                                            forced.Name());
-            }
-            return forced;
-        }
-    }
+	// Test-only override: DECIDB_FORCE_SOLVER=<registered backend name> pins the
+	// backend. Used by the DECIDE test suite (see test/decide/conftest.py fixtures
+	// decidb_cli_highs / decidb_cli_gurobi) to exercise both backends on a single
+	// host.
+	//
+	// A name no backend answers to is REFUSED, not ignored. Anything that sets this
+	// variable is asking for one specific backend, usually to prove something about it;
+	// falling through to auto-selection would run the host default under a name
+	// promising otherwise, and a typo in a fixture would then look like a passing test
+	// of a backend that never ran.
+	if (const char *force = std::getenv("DECIDB_FORCE_SOLVER")) {
+		SolverBackend forced = SolverRegistry::Find(force);
+		if (!forced.IsValid()) {
+			vector<string> names;
+			for (auto &backend : SolverRegistry::Backends()) {
+				names.emplace_back(backend.Name());
+			}
+			throw InvalidInputException("DECIDB_FORCE_SOLVER=%s is not a solver DeciDB knows. Valid names: %s",
+			                            force, StringUtil::Join(names, ", "));
+		}
+		if (!forced.IsAvailable()) {
+			throw InvalidInputException("DECIDB_FORCE_SOLVER=%s but that solver is not available "
+			                            "on this host",
+			                            forced.Name());
+		}
+		return forced;
+	}
 
-    // Registry order IS preference order; the last entry is always available, which
-    // is what makes selection total.
-    for (auto &backend : SolverRegistry::Backends()) {
-        if (backend.IsAvailable()) {
-            return backend;
-        }
-    }
-    throw InternalException("No DECIDE solver backend is available on this build");
+	// Registry order IS preference order; the last entry is always available, which
+	// is what makes selection total.
+	for (auto &backend : SolverRegistry::Backends()) {
+		if (backend.IsAvailable()) {
+			return backend;
+		}
+	}
+	throw InternalException("No DECIDE solver backend is available on this build");
 }
 
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
@@ -298,6 +311,39 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
     }
 }
 
+//! Layer 8 does not repair what an earlier stage decided; it checks it. Both halves of
+//! the capability contract are re-read off the model AS BUILT and compared against the
+//! backend that is about to receive it. Every failure here is an upstream prediction
+//! that came up short rather than a user error, which is why all of them are
+//! InternalException.
+static void AssertBackendAcceptsBuiltModel(const SolverModel &model, SolverBackend backend) {
+	// Model class. Decided at plan time on the prepared form, and the query was already
+	// refused there if the chosen backend could not take it (stage 05's
+	// RequireDecideSolverSupport). This asserts the prediction matched the fact.
+	SolverCapabilities capabilities = backend.Capabilities();
+	SolverModelClassGap gap = FindModelClassGap(model.ModelClass(), capabilities.model_classes);
+	if (gap != SolverModelClassGap::NONE) {
+		throw InternalException("DECIDE built a model %s cannot load; the plan-time model-class "
+		                        "check did not predict it",
+		                        backend.Name());
+	}
+	// Constructs. A native construct is only ever emitted because the stage-08 gate read
+	// this backend's construct table, so one reaching a backend that did not declare it
+	// means the gate routed to the wrong adapter — and the adapter would have no way to
+	// express it.
+	auto &constructs = capabilities.constructs;
+	if (!model.indicator_constraints.empty() && !constructs.not_equal) {
+		throw InternalException("DECIDE left a construct native for %s, which does not declare it",
+		                        backend.Name());
+	}
+	for (auto &gc : model.general_constraints) {
+		if (!DeclaresGeneralConstraint(constructs, gc.kind)) {
+			throw InternalException("DECIDE left a construct native for %s, which does not declare it",
+			                        backend.Name());
+		}
+	}
+}
+
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBackend backend,
                         const SolveModelOptions &options, SolverModel *retained_model,
                         unique_ptr<SolverSession> *retained_session) {
@@ -315,37 +361,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
 	}
-	// The model class was decided at plan time, on the prepared form, and the query
-	// was refused there if the chosen backend could not take it (stage 05's
-	// RequireDecideSolverSupport). This re-reads it off the model as actually built
-	// and asserts the two agree: layer 8 does not repair, it checks. A failure here is
-	// a prediction that came up short, not a user error — hence InternalException.
-	{
-		SolverModelClassGap gap = FindModelClassGap(model.ModelClass(), backend.Capabilities());
-		if (gap != SolverModelClassGap::NONE) {
-			throw InternalException("DECIDE built a model %s cannot load; the plan-time model-class "
-			                        "check did not predict it",
-			                        backend.Name());
-		}
-		// The construct half of the same contract. A general constraint is only ever
-		// emitted because the gate read this backend's capability table, so one reaching
-		// a backend that did not declare it means the gate routed to the wrong adapter —
-		// and the adapter would have no way to express it.
-		auto &caps = backend.Capabilities();
-		if (!model.indicator_constraints.empty() && !caps.not_equal) {
-			throw InternalException("DECIDE left a construct native for %s, which does not declare it",
-			                        backend.Name());
-		}
-		for (auto &gc : model.general_constraints) {
-			bool declared = gc.kind == GeneralConstraintKind::ABS
-			                    ? caps.abs
-			                    : caps.min_max; // MIN and MAX share one flag and one symbol pair
-			if (!declared) {
-				throw InternalException("DECIDE left a construct native for %s, which does not declare it",
-				                        backend.Name());
-			}
-		}
-	}
+	AssertBackendAcceptsBuiltModel(model, backend);
 	// Characterization oracle (no-op unless DECIDB_DUMP_MODEL is set). Emitted here,
 	// on the freshly built model, so diagnostic re-solves (probe / ray / elastic
 	// models built later) never pollute the dump.

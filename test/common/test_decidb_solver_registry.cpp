@@ -1,6 +1,7 @@
 #include "catch.hpp"
 
 #include "duckdb/decidb/ilp_solver.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/solver_registry.hpp"
 
 #include <cstdlib>
@@ -13,6 +14,10 @@ using namespace duckdb;
 // every question, that the invariant making selection total holds (the last entry
 // is always available), and that capability declarations are present rather than
 // left to a default nobody wrote down.
+//
+// Capabilities come back BY VALUE from SolverBackend::Capabilities(), which is where
+// the DECIDB_NATIVE_CONSTRUCTS mask is applied for every backend, so these read the
+// same table the pipeline reads.
 TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 	auto &backends = SolverRegistry::Backends();
 
@@ -56,26 +61,26 @@ TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 		// HiGHS is the floor: plain linear and convex quadratic objectives only.
 		// Every model-class flag false means a query needing one is refused, and
 		// every construct flag false means everything arrives fully lowered.
-		auto &highs_caps = highs.Capabilities();
-		CHECK(!highs_caps.quadratic_constraints);
-		CHECK(!highs_caps.nonconvex_quadratic);
-		CHECK(!highs_caps.miqp);
-		CHECK(!highs_caps.abs);
-		CHECK(!highs_caps.min_max);
-		CHECK(!highs_caps.not_equal);
-		CHECK(!highs_caps.in_list);
-		CHECK(!highs_caps.bilinear);
+		auto highs_caps = highs.Capabilities();
+		CHECK(!highs_caps.model_classes.quadratic_constraints);
+		CHECK(!highs_caps.model_classes.nonconvex_quadratic);
+		CHECK(!highs_caps.model_classes.miqp);
+		CHECK(!highs_caps.model_classes.singular_quadratic);
+		CHECK(!highs_caps.constructs.abs);
+		CHECK(!highs_caps.constructs.min_max);
+		CHECK(!highs_caps.constructs.not_equal);
+		CHECK(!highs_caps.constructs.bilinear);
 
 		// Gurobi takes every model class DeciDB can build. Its construct flags are
 		// declared as they are implemented, each with the loader symbol behind it,
 		// so this only asserts the model-class gates it must always satisfy.
-		auto &gurobi_caps = gurobi.Capabilities();
-		CHECK(gurobi_caps.quadratic_constraints);
-		CHECK(gurobi_caps.nonconvex_quadratic);
-		CHECK(gurobi_caps.miqp);
+		auto gurobi_caps = gurobi.Capabilities();
+		CHECK(gurobi_caps.model_classes.quadratic_constraints);
+		CHECK(gurobi_caps.model_classes.nonconvex_quadratic);
+		CHECK(gurobi_caps.model_classes.miqp);
 	}
 
-	SECTION("selection honors DECIDB_FORCE_SOLVER and falls through on a bad name") {
+	SECTION("selection honors DECIDB_FORCE_SOLVER and refuses a bad name") {
 		// The override is test-only and process-global, so restore it afterwards.
 		const char *saved = std::getenv("DECIDB_FORCE_SOLVER");
 		std::string saved_value = saved ? saved : std::string();
@@ -84,10 +89,11 @@ TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 		setenv("DECIDB_FORCE_SOLVER", "HiGHS", 1);
 		CHECK(SelectSolverBackend() == SolverRegistry::Find("highs"));
 
-		// An unrecognized name is not an error: selection falls through to the
-		// normal preference walk, which always yields an available backend.
+		// An unrecognized name is refused, not ignored. Falling through would run the
+		// host default under a name promising a specific backend, so a typo in a test
+		// fixture would silently exercise the wrong solver.
 		setenv("DECIDB_FORCE_SOLVER", "no-such-solver", 1);
-		CHECK(SelectSolverBackend().IsAvailable());
+		CHECK_THROWS_AS(SelectSolverBackend(), InvalidInputException);
 
 		if (had_value) {
 			setenv("DECIDB_FORCE_SOLVER", saved_value.c_str(), 1);

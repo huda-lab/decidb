@@ -43,7 +43,8 @@ outright (`SET disabled_optimizers='decide_optimizer'`), physical planning resol
 instead, so the operator always runs against exactly one backend.
 
 See [`../07_solver/done.md`](../07_solver/done.md) §2 for what selection reads, and
-`SolverCapabilities` for what a pass may ask about the backend.
+`SolverConstructSupport` / `SolverModelClass` for what a pass may ask about the
+backend.
 
 ### The model-class gate
 

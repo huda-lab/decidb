@@ -16,16 +16,21 @@ bool DeterministicNaive::IsAvailable() {
 }
 
 const SolverCapabilities &DeterministicNaive::Capabilities() {
-    // The floor of the registry. Plain linear objectives, and convex quadratic
-    // objectives whose Q is diagonal: every model-class flag is false, so a query
-    // needing one is refused with a message about the host. No construct is native, so
-    // every construct arrives fully lowered — which is the path DeciDB has always taken.
+    // The floor of the registry, and the reason every field can be left at its default:
+    // HiGHS declares nothing. Plain linear objectives, and convex quadratic objectives
+    // whose Q is diagonal. Every model class is false, so a query needing one is refused
+    // with a message about the host; every construct is false, so each arrives fully
+    // lowered — the path DeciDB has always taken.
     //
     // `singular_quadratic` is false for a different reason than the other three. HiGHS
     // LOADS a rank-deficient Q without complaint; it just answers it wrong, stopping
     // partway along the flat valley of optima or failing outright, on roughly half of
     // them. Refusing is the only way to keep a wrong answer from being returned as an
     // optimal one. Revisit as HiGHS's QP solver improves.
+    //
+    // Nothing here reads DECIDB_NATIVE_CONSTRUCTS: SolverBackend::Capabilities() masks
+    // constructs for every backend, so the switch reaches HiGHS whether or not HiGHS
+    // ever declares one. It is a no-op today precisely because this table is empty.
     static const SolverCapabilities capabilities;
     return capabilities;
 }
@@ -229,7 +234,7 @@ void HighsSession::Load(const SolverModel &model) {
 
     // The model classes HiGHS cannot take — quadratic constraints, a non-convex
     // objective, MIQP, and a rank-deficient Q — are all declared false in its
-    // SolverCapabilities and refused at plan time (stage 05's RequireDecideSolverSupport),
+    // SolverModelClass and refused at plan time (stage 05's RequireDecideSolverSupport),
     // before this query reads a row. `SolveModel` re-checks the built model against the
     // same table before loading it, so no such model reaches this function.
     //

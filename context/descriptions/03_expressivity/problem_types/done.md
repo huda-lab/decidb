@@ -223,7 +223,7 @@ The model builder sets `is_integer`, `is_binary`, `has_quadratic_objective`, and
 
 ## Solver Support Matrix
 
-This table is the `SolverCapabilities` model-class flags, read as a matrix. "Refused
+This table is `SolverModelClass`, read as a matrix. "Refused
 at plan time" means the query is rejected before it reads a row, with a message naming
 Gurobi as the solver to install — see `01_pipeline/05_optimizer/done.md` §0.
 

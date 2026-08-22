@@ -173,7 +173,7 @@ void LinearizeAbsMaximize(SolverInput &input);
 //! columns, so it runs once the VarIndexer exists — the same phase as
 //! ExpandDeferredAggregateNotEqual, and for the same reason.
 //!
-//! Called only when the chosen backend declared `SolverCapabilities::abs`. The routing
+//! Called only when the chosen backend declared `SolverConstructSupport::abs`. The routing
 //! is the gate's; this only translates.
 void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer);
 

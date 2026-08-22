@@ -74,26 +74,41 @@ is what makes selection total.
 
 ### Capabilities
 
-`SolverCapabilities` (`solver_capabilities.hpp`) declares the backend differences an
-**upstream** stage has to branch on. That is the membership rule: a difference only
-the backend itself acts on stays a virtual on `SolverSession` with a safe default —
-`SetInterruptPoll` is the reference case.
+`solver_capabilities.hpp` declares the backend differences an **upstream** stage has to
+branch on. That is the membership rule: a difference only the backend itself acts on
+stays a virtual on `SolverSession` with a safe default — `SetInterruptPoll` is the
+reference case.
 
-The flags split in two, and the split decides what "unsupported" means:
+There are exactly two kinds of difference and they mean opposite things when the answer
+is "no", so they are two **types**, not two halves of one struct:
 
-| Kind | Flags | `false` means |
+| Type | Fields | `false` means |
 |---|---|---|
-| Construct | `abs`, `min_max`, `not_equal`, `in_list`, `bilinear` | A lowering always exists, so stage 05 lowers as it always has. An optimization; the lowering path is never deleted. |
-| Model class | `quadratic_constraints`, `nonconvex_quadratic`, `miqp` | No lowering exists. A gate: the answer is refusal, at plan time, blaming the host rather than the query. |
+| `SolverConstructSupport` | `abs`, `min_max`, `not_equal`, `bilinear` | A lowering always exists, so stage 05 lowers as it always has. An optimization; the lowering path is never deleted. |
+| `SolverModelClass` | `quadratic_constraints`, `nonconvex_quadratic`, `miqp`, `singular_quadratic` | No lowering exists. A gate: the answer is refusal, at plan time, blaming the host rather than the query. |
+
+Splitting them is what lets each predicate take exactly the table it reads.
+`FindModelClassGap(needed, supported)` now takes `SolverModelClass` on **both** sides —
+what a query demands against what a backend accepts — so it is a plain containment test
+with nothing to ignore. `SolverCapabilities` survives only as the pair
+(`.constructs`, `.model_classes`) the registry asks each backend for in one call; no
+call site below it reads both members.
 
 Capability is asked through a function, not read off a constant, because it is partly
 a **runtime** fact — a dynamically loaded library may not export the symbol a native
-construct needs, so the answer is not known until the library is open.
+construct needs, so the answer is not known until the library is open. Gurobi's
+`Capabilities()` therefore calls `GurobiLoader::Load()` **before** reading the symbol
+table: the answer is cached for the process, so reading it while the library is still
+closed would be a permanent false negative.
 
 A flag is only worth a field if it is A/B-verifiable: forcing the construct back down
 its lowering path must reach the same optimum. `DECIDB_NATIVE_CONSTRUCTS=off` is how
 that is checked — a test-only switch, mirroring `DECIDB_FORCE_SOLVER`, that turns every
-construct capability off so both arms run on one machine.
+construct capability off so both arms run on one machine. It is applied **centrally**,
+in `SolverBackend::Capabilities()`, which is why that accessor returns by value: the
+switch is part of the capability contract, so every registered backend inherits it
+instead of copy-pasting it. Model classes are never masked — a gate has no fallback
+path to force a query onto, so masking one would refuse the query rather than slow it.
 
 Construct flags declared today:
 
@@ -103,8 +118,19 @@ Construct flags declared today:
 | `min_max` | Gurobi | `GRBaddgenconstrMin` + `GRBaddgenconstrMax` |
 | `not_equal` | Gurobi | `GRBaddgenconstrIndicator` |
 
-The rest stay false until the loader binds their symbols and stage 08 knows how to emit
-them: a capability may not be declared ahead of the code that honors it.
+`bilinear` stays false until the loader binds its symbols and stage 08 knows how to emit
+it: a capability may not be declared ahead of the code that honors it.
+
+There is deliberately **no** `in_list` field. SOS1 acceleration for `x IN (a, b, c)` was
+measured and declined — the formulation's LP relaxation is already integral, so there is
+nothing to branch on ([`todo.md`](todo.md), "SOS1 for `IN`"). A measured-and-rejected
+capability is not a field: a permanently-false flag nobody reads cannot be told apart
+from one whose implementation is merely still pending.
+
+Which construct flag gates a given `GeneralConstraintKind` is one table,
+`DeclaresGeneralConstraint`, kept beside that enum in `solver_input.hpp` — so adding a
+kind adds a row rather than another `?:` at a call site, and a kind added without a flag
+reads as undeclared and trips a loud internal error.
 
 ### Selection
 
@@ -113,8 +139,12 @@ them: a capability may not be declared ahead of the code that honors it.
 1. `DECIDB_FORCE_SOLVER=<registered name>` pins the backend, matched
    case-insensitively. This is a **test-only** override used by
    `test/decide/conftest.py` (`decidb_cli_highs` / `decidb_cli_gurobi`) to exercise
-   both backends on one host. Forcing a backend that is unavailable throws; a name no
-   backend answers to falls through.
+   both backends on one host. Forcing a backend that is unavailable throws, and so does
+   a name no backend answers to — the error lists the valid names. An unrecognized name
+   is refused rather than ignored: anything that pins the backend is asking for one
+   specific solver, so falling through would run the host default under a name
+   promising otherwise, and a typo in a fixture would look like a passing test of a
+   backend that never ran.
 2. Otherwise, the first available entry in registry order.
 
 Selection is **not** cost-based, and it does not inspect the model.
@@ -175,9 +205,11 @@ order:
    conflicting-column-bounds check still exits this way, and only with diagnosis
    off. Because no model comes back, the operator must treat an unretained model
    (`num_vars == 0`) as "no diagnosis available" rather than walk it.
-2. Check `model.ModelClass()` against `backend.Capabilities()`. Stage 05 already
-   refused this query if the backend could not take it; this re-reads the class off
-   the model *as built* and asserts the two agree. Layer 8 does not repair, it
+2. `AssertBackendAcceptsBuiltModel(model, backend)` — both halves of the capability
+   contract, re-read off the model *as built*. The model class is checked against
+   `Capabilities().model_classes` (stage 05 already refused the query if the backend
+   could not take it, so this asserts the prediction matched the fact), and every
+   native construct against `Capabilities().constructs`. Layer 8 does not repair, it
    checks — a mismatch is an `InternalException`, never a user error.
 3. `DumpSolverModel(model)` — a no-op unless `DECIDB_DUMP_MODEL` is set. Emitted
    on the freshly built model so diagnostic re-solves never pollute the dump. This
@@ -219,11 +251,12 @@ two.
 
 ## 4. Gurobi backend
 
-Declares every model-class capability — `quadratic_constraints`,
-`nonconvex_quadratic`, `miqp` — so no query is refused for the shape of its model.
-Its construct flags are turned on one at a time, each together with the loader symbol
-that backs it: `caps.abs = api.addgenconstrAbs != nullptr`, so a flag is never true on
-a host whose library did not export it.
+Declares every model class — `quadratic_constraints`, `nonconvex_quadratic`, `miqp`,
+`singular_quadratic` — so no query is refused for the shape of its model. Its construct
+flags are turned on one at a time, each together with the loader symbol that backs it:
+`caps.constructs.abs = api.addgenconstrAbs != nullptr`, so a flag is never true on a
+host whose library did not export it. The declaration opens the library first
+(`GurobiLoader::Load()`) and is then cached for the process.
 
 **General constraints** (`GRBaddgenconstrAbs` and its siblings) are bound
 `nullptr`-gated, exactly as `terminate` is. They are what makes a construct capability
@@ -326,8 +359,11 @@ HiGHS has no thread-safe terminate, so it never sets `user_interrupted`.
    `solver_registry.cpp`, positioned by preference.
 
 That is the whole list, and step 3 is the only edit outside the new backend's own
-files. If a fourth step ever appears — an `if` on the backend's name, a `switch` on a
-new enum — the difference it is branching on belongs in `SolverCapabilities` instead.
+files. A backend's `Capabilities()` reports what it *can* do and nothing else — the
+`DECIDB_NATIVE_CONSTRUCTS` switch is applied above it, so a new backend inherits the
+A/B harness for free. If a fourth step ever appears — an `if` on the backend's name, a
+`switch` on a new enum — the difference it is branching on belongs in
+`SolverConstructSupport` or `SolverModelClass` instead.
 
 `SolverModel` provides everything needed: variable bounds and types, linear and
 quadratic objective, and constraints in COO. No change to extraction, coefficient
@@ -341,7 +377,8 @@ evaluation, or model building is required.
 |---|---|
 | Backend selection, `SolveModel`, disambiguation | `src/decidb/utility/ilp_solver.cpp` |
 | Backend table | `src/decidb/utility/solver_registry.cpp`, `src/include/duckdb/decidb/solver_registry.hpp` |
-| Capability declarations | `src/include/duckdb/decidb/solver_capabilities.hpp` |
+| Capability types, model-class gap, convexity predicate | `src/include/duckdb/decidb/solver_capabilities.hpp` |
+| `GeneralConstraintKind` → construct flag table | `src/include/duckdb/decidb/solver_input.hpp` |
 | Normalized outcome and default error text | `src/include/duckdb/decidb/solver_result.hpp` |
 | Session contract | `src/include/duckdb/decidb/solver_session.hpp` |
 | Time limits | `src/include/duckdb/decidb/solver_config.hpp` |

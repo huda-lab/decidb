@@ -415,10 +415,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             model.has_quadratic_obj = true;
             double q_sign = input.quadratic_sign;  // +1.0 or -1.0
 
-            // Determine convexity: non-convex when sign and sense conflict
-            // MAXIMIZE + PSD (sign>0) or MINIMIZE + NSD (sign<0) → non-convex
-            bool is_maximize = (input.sense == DecideSense::MAXIMIZE);
-            model.nonconvex_quadratic = (q_sign > 0.0) == is_maximize;
+            // Non-convex when sign and sense conflict: MAXIMIZE + PSD (sign>0), or
+            // MINIMIZE + NSD (sign<0). Shared with stage 05's plan-time prediction so
+            // the refusal there and the fact recorded here cannot disagree.
+            model.nonconvex_quadratic = IsNonconvexQuadraticObjective(q_sign, input.sense);
 
             idx_t num_q_terms = input.quadratic_inner_variable_indices.size();
 

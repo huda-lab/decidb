@@ -58,6 +58,11 @@ redundant work on a model Gurobi already recognizes as a clique.
 indicator constraints, a loader symbol, an adapter branch, and link metadata from stage
 05, which currently lowers `IN` completely and records nothing to gate on.
 
+There is therefore no `in_list` field in `SolverConstructSupport`, and the comment where
+one used to sit points back here. A permanently-false flag nobody reads cannot be told
+apart from one whose implementation is merely still pending, so the measurement is the
+record instead.
+
 That is the capability rule applied as written — a flag has to be A/B-verifiable, and
 this one is verifiable and fails. If `IN` is ever worth accelerating, the lead is the
 *formulation*, not the branching hint.
