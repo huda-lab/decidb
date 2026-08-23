@@ -534,6 +534,118 @@ def test_maximize_max_mixed_sign_coefficient(decidb_cli):
     assert abs(obj - 10.0) <= 1e-6, f"expected MAX(c*x)=10, got {obj}"
 
 
+# ----------------------------------------------------------------------------
+# Row-varying CONSTANT inside the extremum.
+#
+# The linking Big-M used to be derived from the DECISION VARIABLES' reach alone,
+# discarding each row's constant part on the grounds that a constant cancels in
+# the `(aux - expr)` difference a link row slackens. It cancels within ONE row.
+# A row deactivated by its indicator has to stay slack up to
+# `family.hi - exprmin_row`, and `family.hi` belongs to whichever row reaches
+# highest — so one row's constant is measured against another's. When rows carry
+# DIFFERENT constants the derived M came out too small, which does not merely
+# loosen the relaxation: it cuts off legal answers.
+#
+# Both shapes below are feasible and have an optimum of 110. Before the fix the
+# objective path silently returned 100 and the composed path reported the query
+# INFEASIBLE. Oracle-checked, with a deliberately generous M so the reference
+# model shares nothing with DecidB's derivation.
+# ----------------------------------------------------------------------------
+
+_ROW_CONSTANT_DATA = [(1, 0.0), (2, 100.0)]  # (id, c)
+_ROW_CONSTANT_SQL_HEAD = """
+        WITH data AS (
+            SELECT 1 AS id, 0.0 AS c UNION ALL
+            SELECT 2 AS id, 100.0 AS c
+        )
+        SELECT id, c, x
+        FROM data
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 10 AND SUM(x) <= 10
+"""
+
+
+def _oracle_max_x_plus_c(oracle_solver, name, extra_obj):
+    """Reference model for `MAX(x + c)` over `_ROW_CONSTANT_DATA`, budget SUM(x) <= 10.
+
+    Hard direction, so the extremum needs the closing family: `z <= x_i + c_i`
+    for at least one row. `M` is 1000 — far larger than any span in this model —
+    so the reference cannot inherit the under-estimate being tested for.
+
+    ``extra_obj`` is added to the objective (nonzero drives the composed shape).
+    """
+    n = len(_ROW_CONSTANT_DATA)
+    M = 1000.0
+    oracle_solver.create_model(name)
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0, ub=10.0)
+        oracle_solver.add_variable(f"y_{i}", VarType.BINARY)
+    oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=110.0)
+
+    oracle_solver.add_constraint(
+        {f"x_{i}": 1.0 for i in range(n)}, "<=", 10.0, name="budget",
+    )
+    oracle_solver.add_constraint(
+        {f"y_{i}": 1.0 for i in range(n)}, ">=", 1.0, name="sum_y_ge_1",
+    )
+    for i, (_, c) in enumerate(_ROW_CONSTANT_DATA):
+        # z <= x_i + c_i + M*(1 - y_i)  ->  z - x_i + M*y_i <= M + c_i
+        oracle_solver.add_constraint(
+            {"z": 1.0, f"x_{i}": -1.0, f"y_{i}": M}, "<=", M + c, name=f"link_{i}",
+        )
+    obj = {"z": 1.0}
+    for i in range(n):
+        if extra_obj:
+            obj[f"x_{i}"] = extra_obj
+    oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+    return result
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_maximize_max_row_varying_constant(decidb_cli, oracle_solver):
+    """MAXIMIZE MAX(x + c) with c differing across rows — the objective-path Big-M.
+
+    Budget SUM(x) <= 10 forces a choice between the two rows, so an extremum
+    capped too low picks the WRONG row rather than merely reporting a low value.
+    Optimum: spend the budget on the c=100 row for MAX = 110.
+    """
+    rows, cols = decidb_cli.execute(_ROW_CONSTANT_SQL_HEAD + "        MAXIMIZE MAX(x + c)")
+    ci = {name: i for i, name in enumerate(cols)}
+    obj = max(float(r[ci["x"]]) + float(r[ci["c"]]) for r in rows)
+
+    expected = _oracle_max_x_plus_c(oracle_solver, "max_row_constant", 0.0)
+    assert abs(obj - expected.objective_value) <= 1e-6, (
+        f"objective mismatch: DecidB MAX(x+c)={obj}, oracle={expected.objective_value}"
+    )
+
+
+@pytest.mark.min_max
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_maximize_composed_max_row_varying_constant(decidb_cli, oracle_solver):
+    """MAXIMIZE MAX(x + c) + 0.001*SUM(x) — the same Big-M on the COMPOSED path.
+
+    A composed term emits the envelope as well as the closing family, so a
+    too-small M contradicts the envelope outright and the query was reported
+    infeasible rather than answered with the wrong number.
+    """
+    rows, cols = decidb_cli.execute(
+        _ROW_CONSTANT_SQL_HEAD + "        MAXIMIZE MAX(x + c) + 0.001 * SUM(x)"
+    )
+    ci = {name: i for i, name in enumerate(cols)}
+    obj = (max(float(r[ci["x"]]) + float(r[ci["c"]]) for r in rows)
+           + 0.001 * sum(float(r[ci["x"]]) for r in rows))
+
+    expected = _oracle_max_x_plus_c(oracle_solver, "composed_max_row_constant", 0.001)
+    assert abs(obj - expected.objective_value) <= 1e-6, (
+        f"objective mismatch: DecidB={obj}, oracle={expected.objective_value}"
+    )
+
+
 @pytest.mark.min_max
 @pytest.mark.obj_maximize
 @pytest.mark.correctness

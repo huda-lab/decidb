@@ -612,3 +612,39 @@ MINIMIZE SUM(x);
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT x >= 0 AND SUM(x) >= 2
 MINIMIZE MAX(x * weight);
+
+-- ---------------------------------------------------------------------------
+-- Row-varying CONSTANTS inside an extremum, and extrema over group SUMS
+-- ---------------------------------------------------------------------------
+-- Two shapes the corpus was blind to until 2026-08-23, both of which set the
+-- linking Big-M. A hard extremum's members used to be scaled off the DECISION
+-- VARIABLES' reach alone, discarding each row's constant; a constant cancels
+-- inside one row's `(aux - expr)` but not between two rows, so a family whose
+-- rows carry DIFFERENT constants got an M too small to be valid. `price`
+-- differs per row, so `x + price` is exactly that family.
+
+-- 89 objective side. Without the budget the cap does not change the argmax, so
+-- the row-limited SUM is what makes an invalid M visible in the dump.
+SELECT id, price, x FROM items DECIDE x(INT)
+SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <= 5
+MAXIMIZE MAX(x + price);
+
+-- 90 composed side, which emits the envelope AND the closing family. A too-small
+-- M contradicts the envelope outright, so this shape reported INFEASIBLE rather
+-- than answering with the wrong number.
+SELECT id, price, x FROM items DECIDE x(INT)
+SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <= 5
+MAXIMIZE MAX(x + price) + 0.001 * SUM(x);
+
+-- 91 an extremum over GROUP SUMS rather than over rows. Its members leave any
+-- single row's range as soon as a group holds more than one row, so its M comes
+-- from the group-sum family; it used to be the per-row span multiplied by the
+-- row count, which is a bound on that family rather than a measurement of it.
+SELECT grp, id, x FROM items DECIDE x(INT)
+SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <= 6
+MAXIMIZE MAX(SUM(x)) PER grp;
+
+-- 92 the MIN mirror of 91, whose hard direction is the other arm.
+SELECT grp, id, x FROM items DECIDE x(INT)
+SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 4
+MINIMIZE MIN(SUM(x)) PER grp;

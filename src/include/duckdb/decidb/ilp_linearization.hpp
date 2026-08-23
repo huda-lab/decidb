@@ -220,8 +220,9 @@ void LinearizeAbsMaximize(SolverInput &input);
 //! is the gate's; this only translates.
 void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer);
 
-//! The reachable range of a family of row expressions, and the coefficient spread a
-//! Big-M row needs — one object, because they come from the same walk over the data.
+//! The reachable range of a family of row expressions: the box every auxiliary over
+//! that family is declared with, and — as `Span()` — the only Big-M an extremum link
+//! over it may use. One object, because both come from the same walk over the data.
 //!
 //! Every continuous auxiliary stage 05 introduces stands for an extremum over such a
 //! family, so its bounds are always derivable at the moment it is created. Returning
@@ -229,11 +230,13 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer);
 //! being computed and then discarded, which used to leave every continuous auxiliary
 //! declared `[-1e30, 1e30]` and the root LP with no box to work in.
 //!
-//! `lo`/`hi` INCLUDE constant terms: an auxiliary is pinned against the whole
-//! expression, constant and all, so its box has to contain them. `spread` EXCLUDES
-//! them, because a constant cancels in the `(aux - expr)` difference a Big-M row
-//! slackens. Keeping the two separate is what lets bounds tighten without perturbing
-//! any Big-M value the linearizer already emits.
+//! `lo`/`hi` INCLUDE constant terms, and there is deliberately no constant-free
+//! counterpart. One existed until 2026-08-23 and was what extremum links scaled off,
+//! on the reasoning that a constant cancels in the `(aux - expr)` difference a link row
+//! slackens. It cancels within one row, not between two, so it was invalid wherever
+//! rows carried different constants — see `Span()`. Both readings cannot coexist in one
+//! object without the wrong one eventually being picked, so only the sound one is
+//! representable.
 //!
 //! Both endpoints seed at 0. That only ever widens the box — it never cuts off a
 //! reachable value — and it keeps the box consistent with the sites that pin an
@@ -241,7 +244,6 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer);
 struct AuxRange {
     double lo = 0.0;
     double hi = 0.0;
-    double spread = 0.0;
     //! The two ends are tracked separately because they fail separately. A decision
     //! variable declared `x >= 0` with no ceiling leaves `hi` underivable and `lo`
     //! perfectly well known, and a box keeping the closed side is strictly better than
@@ -255,19 +257,29 @@ struct AuxRange {
     idx_t unbounded_var = DConstants::INVALID_INDEX;
 
     //! True when EITHER end is open. This is the test for everything that needs both
-    //! ends finite — every Big-M, which has to dominate the whole spread. Boxing a
+    //! ends finite — every Big-M, which has to dominate the whole span. Boxing a
     //! column is the one caller entitled to read the per-side flags instead, because a
     //! half-open box is still a valid box.
     bool Unbounded() const { return lo_unbounded || hi_unbounded; }
 
-    //! The Big-M constant for this family. Defined ONLY when `!Unbounded()`: no
-    //! constant dominates a range open at either end, so a caller must check
-    //! `Unbounded()` and refuse before asking. There is no fallback value to return —
-    //! that is the point. A half-open range is enough to box a column but not to
-    //! scale a row, which is why boxing reads the per-side flags and this does not.
-    double BigM() const {
+    //! The full reach of this family, constants INCLUDED — and the only Big-M any
+    //! extremum link may use. Defined ONLY when `!Unbounded()`: no constant dominates a
+    //! range open at either end, so a caller must check `Unbounded()` and refuse before
+    //! asking. There is no fallback value to return — that is the point. A half-open
+    //! range is enough to box a column but not to scale a row, which is why boxing reads
+    //! the per-side flags and this does not.
+    //!
+    //! Why constants are included: a link row deactivated on row r must stay slack up
+    //! to `hi - exprmin_r`, and `hi` is whichever row in the family reaches highest — so
+    //! row r's constant is measured against a DIFFERENT row's and does not cancel. It
+    //! cancels only within one row's own `(aux - expr)`. Scaling off a constant-free
+    //! reach instead, which is what this did until 2026-08-23, hands back a Big-M too
+    //! small to be valid wherever rows carry different constants (`MAX(x + c)` with `c`
+    //! a data column) — and a too-small Big-M cuts off legal answers rather than merely
+    //! loosening the relaxation.
+    double Span() const {
         D_ASSERT(!Unbounded());
-        return spread;
+        return hi - lo;
     }
 
     //! Record an unbounded contributor. Keeps the FIRST one seen, so the message a
@@ -295,7 +307,6 @@ struct AuxRange {
     void Cover(const AuxRange &other) {
         lo = MinOf(lo, other.lo);
         hi = MaxOf(hi, other.hi);
-        spread = MaxOf(spread, other.spread);
         // The blame travels with the openness. Merging the flags without the variable
         // leaves a range that reports `Unbounded()` but has no column to name, so a
         // refusal over the merged family degrades to the generic "one of them is
@@ -308,46 +319,31 @@ struct AuxRange {
         hi_unbounded = hi_unbounded || other.hi_unbounded;
     }
 
-    //! Extend by one more row expression bracketed by [`row_lo`, `row_hi`], whose
-    //! variable-only part (constants excluded) is bracketed by [`var_lo`, `var_hi`].
-    void CoverRow(double row_lo, double row_hi, double var_lo, double var_hi) {
+    //! Extend by one more row expression bracketed by [`row_lo`, `row_hi`].
+    void CoverRow(double row_lo, double row_hi) {
         D_ASSERT(!std::isinf(row_lo) && !std::isinf(row_hi));
         lo = MinOf(lo, row_lo);
         hi = MaxOf(hi, row_hi);
-        var_low = MinOf(var_low, var_lo);
-        var_high = MaxOf(var_high, var_hi);
-        spread = var_high - var_low;
     }
 
     //! `CoverRow` for a bracket that may be infinite on either end, as the signed walk
     //! over a row's terms returns. Each end is folded in or marked open on its own, so
     //! a row open on one side still contributes its closed side to the box. `var`
     //! names the variable to blame if a Big-M is later asked for over this family.
-    //!
-    //! `spread` is only ever read through `BigM()`, which refuses unless both ends are
-    //! closed, so a partial `spread` left behind by a one-sided row is unreachable.
-    void CoverRowSided(double row_lo, double row_hi, double var_lo, double var_hi, idx_t var) {
+    void CoverRowSided(double row_lo, double row_hi, idx_t var) {
         if (std::isinf(row_lo)) {
             MarkLoUnbounded(var);
         } else {
             lo = MinOf(lo, row_lo);
-            var_low = MinOf(var_low, var_lo);
         }
         if (std::isinf(row_hi)) {
             MarkHiUnbounded(var);
         } else {
             hi = MaxOf(hi, row_hi);
-            var_high = MaxOf(var_high, var_hi);
         }
-        spread = var_high - var_low;
     }
 
 private:
-    //! Running variable-only extremes behind `spread`. Held separately so `spread`
-    //! stays exactly the value the pre-existing Big-M walk produced.
-    double var_low = 0.0;
-    double var_high = 0.0;
-
     static double MinOf(double a, double b) { return a < b ? a : b; }
     static double MaxOf(double a, double b) { return a > b ? a : b; }
 };

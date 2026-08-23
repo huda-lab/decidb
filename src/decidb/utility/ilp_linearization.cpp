@@ -208,7 +208,7 @@ static idx_t FindUnboundedContributor(const EvaluatedConstraint &ec,
 
 //! The auxiliary-family twin of ThrowUnboundedBigM: a MIN/MAX auxiliary is linked to
 //! its expression by `(aux - expr) +/- M*y`, so M has to stay slack across the whole
-//! family's spread. An unbounded contributor leaves no such M, and the same rule
+//! family's span. An unbounded contributor leaves no such M, and the same rule
 //! applies — refuse rather than guess.
 [[noreturn]] static void ThrowUnboundedAuxBigM(const AuxRange &range, const vector<string> &var_names,
                                                const char *construct) {
@@ -578,9 +578,9 @@ static vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const Var
         double row_lo = 0.0, row_hi = 0.0;
         DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, row_lo, row_hi);
         double constant = DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, r);
-        // The member carries the constant part too, so shift the variable-only bracket by
-        // it before using it as a box; the spread the Big-M reads keeps them apart.
-        member.range.CoverRowSided(row_lo + constant, row_hi + constant, row_lo, row_hi,
+        // The member carries the constant part too, so the box is the variable-only
+        // bracket shifted by it — which is also what the Big-M over the family reads.
+        member.range.CoverRowSided(row_lo + constant, row_hi + constant,
                                    DConstants::INVALID_INDEX);
         group.family.Cover(member.range);
 
@@ -659,11 +659,10 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             spec.need_closing = true;
             // Deactivated, a member row reads `z - expr_var <= M + const`, whose worst
             // case is `family.hi - member.lo`. Maximised over members that is the
-            // family's full span, constants included — which is why this is not the
-            // constant-free `spread` an objective link uses.
+            // family's full span, constants included — which is what `Span()` is, and
+            // every extremum link now scales off it for the same reason.
             spec.closing_underivable = group.family.Unbounded();
-            spec.closing_big_m =
-                spec.closing_underivable ? 0.0 : group.family.hi - group.family.lo;
+            spec.closing_big_m = spec.closing_underivable ? 0.0 : group.family.Span();
             // The range walk reports an infinity, not a culprit, so the column to name is
             // found the same way every other row-Big-M refusal finds it.
             spec.blame_var =
@@ -1740,10 +1739,9 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             // when some other row's are not — which `abs_range` could not express, being
             // one number for the whole link. Free only where nothing at all is derivable,
             // which is precisely the query this arm exists to answer and the only case
-            // that earns a free column. `lo`/`hi` carry the constant, `spread` does not.
+            // that earns a free column. The bracket carries the constant, as `k` here.
             AuxRange inner_range;
-            inner_range.CoverRowSided(k - vars_hi, k - vars_lo, -vars_hi, -vars_lo,
-                                      DConstants::INVALID_INDEX);
+            inner_range.CoverRowSided(k - vars_hi, k - vars_lo, DConstants::INVALID_INDEX);
             // `ABS(x)` is the common shape, and there `t = x`: one column and one
             // equality row per data row to restate a column that already exists. C1
             // spells the argument as `inner = k - sum c_t x_t`, so a renaming is one
@@ -1966,9 +1964,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     }
 
     // One row of the saved objective expression, bracketed against every contributing
-    // variable's box. `lo`/`hi` include constant terms — an auxiliary is pinned against
-    // the whole expression — while `var_lo`/`var_hi` exclude them, because a constant
-    // cancels in the (aux - expr) difference a Big-M row slackens.
+    // variable's box. Constant terms are INCLUDED: an auxiliary is pinned against the
+    // whole expression, and the Big-M over the family is this bracket's own span.
     //! An end no contributing variable's box could derive is reported as an infinity
     //! rather than as a flag beside a partial sum. That is what lets a caller add these
     //! up: a group sum is open below exactly when some member is, and `-inf + finite`
@@ -1977,8 +1974,6 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     struct SavedRowRange {
         double lo = 0.0;
         double hi = 0.0;
-        double var_lo = 0.0;
-        double var_hi = 0.0;
         idx_t unbounded_var = DConstants::INVALID_INDEX;
     };
     auto saved_row_range = [&](idx_t r) -> SavedRowRange {
@@ -2008,46 +2003,41 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 if (out.unbounded_var == DConstants::INVALID_INDEX) {
                     out.unbounded_var = v;
                 }
-                out.var_lo = -INF;
                 out.lo = -INF;
             } else {
-                double term_lo = lo_from_ub ? c * ub : c * lb;
-                out.var_lo += term_lo;
-                out.lo += term_lo;
+                out.lo += lo_from_ub ? c * ub : c * lb;
             }
             if (lo_from_ub ? lb_open : ub_open) {
                 if (out.unbounded_var == DConstants::INVALID_INDEX) {
                     out.unbounded_var = v;
                 }
-                out.var_hi = INF;
                 out.hi = INF;
             } else {
-                double term_hi = lo_from_ub ? c * lb : c * ub;
-                out.var_hi += term_hi;
-                out.hi += term_hi;
+                out.hi += lo_from_ub ? c * lb : c * ub;
             }
         }
         return out;
     };
 
     // The family every per-row MIN/MAX auxiliary (z, z_g) reduces over: one entry per
-    // row of the saved objective expression. Its `spread` is the Big-M these sites use.
-    // Unlike the per-row constraint sites (where M bounds an expression against a fixed
-    // RHS), an objective auxiliary is linked via (aux - expr) +/- M*y (>=|<=) +/- M, so
-    // the deactivated branch must stay slack across the GLOBAL spread
+    // row of the saved objective expression. Unlike the per-row constraint sites (where
+    // M bounds an expression against a fixed RHS), an objective auxiliary is linked via
+    // (aux - expr) +/- M*y (>=|<=) +/- M, so the deactivated branch must stay slack
+    // across the GLOBAL span
     //   max_r exprmax_r  -  min_r exprmin_r
-    // taking the SIGN of every coefficient against the variable's [lb, ub]. That is the
-    // tight, data-driven value (a per-row range can under-estimate it when coefficient
-    // signs differ across rows). Computed once and reused; an unbounded contributor has
-    // no such value at all, and the query is refused rather than given a constant.
+    // taking the SIGN of every coefficient against the variable's [lb, ub]. Constants
+    // INCLUDED: `aux` reaches the family's own ceiling, so a deactivated row r has to
+    // stay slack across `family.hi - exprmin_r`, and row r's constant is measured
+    // against a DIFFERENT row's — it is only within one row's `(aux - expr)` that a
+    // constant cancels. Computed once and reused; an unbounded contributor has no such
+    // value at all, and the query is refused rather than given a constant.
     bool row_family_cached = false;
     AuxRange row_family_range;
     auto row_family = [&]() -> const AuxRange & {
         if (!row_family_cached) {
             for (idx_t r = 0; r < num_rows; r++) {
                 auto rr = saved_row_range(r);
-                row_family_range.CoverRowSided(rr.lo, rr.hi, rr.var_lo, rr.var_hi,
-                                               rr.unbounded_var);
+                row_family_range.CoverRowSided(rr.lo, rr.hi, rr.unbounded_var);
             }
             row_family_cached = true;
         }
@@ -2058,7 +2048,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     auto row_range_for = [&](idx_t row) -> AuxRange {
         AuxRange range;
         auto rr = saved_row_range(row);
-        range.CoverRowSided(rr.lo, rr.hi, rr.var_lo, rr.var_hi, rr.unbounded_var);
+        range.CoverRowSided(rr.lo, rr.hi, rr.unbounded_var);
         return range;
     };
 
@@ -2067,19 +2057,20 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     //! direction supplies the envelope — so these are always complementary here, unlike
     //! at a composed site where the clause sits in a constraint and neither is supplied.
     //!
-    //! `big_m_scale` is 1 everywhere except the outer link over group SUMS, whose members
-    //! each span up to a group's worth of per-row reach rather than one row's.
+    //! `family` is the range the MEMBERS of this link reduce over, and it is a parameter
+    //! rather than `row_family()` because the outer PER link reduces over group SUMS, not
+    //! over rows. Both the Big-M and the blame column come from it, so a link can never
+    //! be scaled off one family while its members live in another.
     auto objective_link = [&](idx_t result_column, bool is_max, bool is_easy,
-                              double big_m_scale = 1.0) {
+                              const AuxRange &family) {
         ExtremumLinkSpec link_spec;
         link_spec.result_column = result_column;
         link_spec.is_max = is_max;
         link_spec.need_envelope = is_easy;
         link_spec.need_closing = !is_easy;
-        link_spec.closing_underivable = row_family().Unbounded();
-        link_spec.closing_big_m =
-            link_spec.closing_underivable ? 0.0 : row_family().BigM() * big_m_scale;
-        link_spec.blame_var = row_family().unbounded_var;
+        link_spec.closing_underivable = family.Unbounded();
+        link_spec.closing_big_m = link_spec.closing_underivable ? 0.0 : family.Span();
+        link_spec.blame_var = family.unbounded_var;
         return link_spec;
     };
 
@@ -2193,7 +2184,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     members.push_back(std::move(member));
                 }
                 EmitExtremumLink(input, indexer,
-                                 objective_link(group_value_indices[g], !inner_is_min, inner_easy),
+                                 objective_link(group_value_indices[g], !inner_is_min,
+                                                inner_easy, row_family()),
                                  members, var_names, native_min_max);
             }
         }
@@ -2227,10 +2219,11 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 member.range = row_family();
                 members.push_back(std::move(member));
             }
-            // Outer Big-M: the family range is the global spread of the objective
-            // expression (max_r exprmax - min_r exprmin), which bounds the spread of
-            // (w - z_g) since every z_g lies within it.
-            EmitExtremumLink(input, indexer, objective_link(w_idx, !outer_is_min, outer_easy),
+            // Outer Big-M: the family range is the global span of the objective
+            // expression (max_r exprmax - min_r exprmin), which bounds the span of
+            // (w - z_g) since every z_g is boxed by that same range.
+            EmitExtremumLink(input, indexer,
+                             objective_link(w_idx, !outer_is_min, outer_easy, row_family()),
                              members, var_names, native_min_max);
         } else if (!inner_is_minmax && outer_is_sum) {
             if (spec.per_inner_was_avg) {
@@ -2265,19 +2258,17 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             AuxRange group_sum_family;
             for (idx_t g = 0; g < K; g++) {
                 double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
-                double g_lo = 0.0, g_hi = 0.0, g_var_lo = 0.0, g_var_hi = 0.0;
+                double g_lo = 0.0, g_hi = 0.0;
                 idx_t g_unbounded_var = DConstants::INVALID_INDEX;
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     auto rr = saved_row_range(obj_flat_rows[k]);
                     g_lo += rr.lo * scale;
                     g_hi += rr.hi * scale;
-                    g_var_lo += rr.var_lo * scale;
-                    g_var_hi += rr.var_hi * scale;
                     if (g_unbounded_var == DConstants::INVALID_INDEX) {
                         g_unbounded_var = rr.unbounded_var;
                     }
                 }
-                group_sum_family.CoverRowSided(g_lo, g_hi, g_var_lo, g_var_hi, g_unbounded_var);
+                group_sum_family.CoverRowSided(g_lo, g_hi, g_unbounded_var);
             }
             idx_t w_idx = AddGlobalContinuousAux(input, indexer, group_sum_family, 1.0); // objective = w
 
@@ -2310,10 +2301,13 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 // doesn't push the otherwise-unconstrained w to ±∞.
                 PinGlobalAux(input, indexer, w_idx, 0.0);
             } else {
-                // A group sum spans at most a group's worth of the per-row reach, so the
-                // closing Big-M is the per-row spread scaled by the row count.
+                // The members ARE the group sums, so the Big-M comes from the family
+                // over group sums — the same range `w` and every member is boxed by. It
+                // used to be the per-row span multiplied by the row count, which is a
+                // different family and a bound on it rather than a measurement of it.
                 EmitExtremumLink(input, indexer,
-                                 objective_link(w_idx, !outer_is_min, outer_easy, (double)num_rows),
+                                 objective_link(w_idx, !outer_is_min, outer_easy,
+                                                group_sum_family),
                                  members, var_names, native_min_max);
             }
         }
@@ -2367,7 +2361,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             member.range = row_range_for(row);
             members.push_back(std::move(member));
         }
-        EmitExtremumLink(input, indexer, objective_link(z_idx, !is_min_agg, is_easy), members,
+        EmitExtremumLink(input, indexer,
+                         objective_link(z_idx, !is_min_agg, is_easy, row_family()), members,
                          var_names, native_min_max);
     }
 }
@@ -2411,7 +2406,7 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
         if (!filter_mask[row]) {
             continue;
         }
-        double row_lo = 0.0, row_hi = 0.0, var_lo = 0.0, var_hi = 0.0;
+        double row_lo = 0.0, row_hi = 0.0;
         for (idx_t it = 0; it < inner_terms.size(); it++) {
             double c = per_term_coefs[it][row];
             if (std::abs(c) < 1e-15) {
@@ -2419,8 +2414,6 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
             }
             idx_t v = inner_terms[it].variable_index;
             if (v == DConstants::INVALID_INDEX) {
-                // A constant reaches the auxiliary's box (it is pinned against the whole
-                // expression) but cancels in the spread a Big-M row slackens.
                 row_lo += c;
                 row_hi += c;
                 continue;
@@ -2431,14 +2424,10 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
                 range.MarkUnbounded(v);
                 continue;
             }
-            double term_lo = (c > 0.0) ? c * lb : c * ub;
-            double term_hi = (c > 0.0) ? c * ub : c * lb;
-            var_lo += term_lo;
-            var_hi += term_hi;
-            row_lo += term_lo;
-            row_hi += term_hi;
+            row_lo += (c > 0.0) ? c * lb : c * ub;
+            row_hi += (c > 0.0) ? c * ub : c * lb;
         }
-        range.CoverRow(row_lo, row_hi, var_lo, var_hi);
+        range.CoverRow(row_lo, row_hi);
     }
     return range;
 }
@@ -2501,7 +2490,10 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
         spec.need_envelope = true;
         spec.need_closing = !ta.is_easy;
         spec.closing_underivable = term_range[i].Unbounded();
-        spec.closing_big_m = spec.closing_underivable ? 0.0 : term_range[i].BigM();
+        // Constants INCLUDED, for the reason the objective path records: a deactivated
+        // member row has to stay slack across `range.hi - member_lo`, which compares one
+        // row's constant against another's. Only within a single row does it cancel.
+        spec.closing_big_m = spec.closing_underivable ? 0.0 : term_range[i].Span();
         spec.blame_var = term_range[i].unbounded_var;
         spec.label = ta.label;
         // The closing rows ARE the user's clause on this side, so they are loosenable;

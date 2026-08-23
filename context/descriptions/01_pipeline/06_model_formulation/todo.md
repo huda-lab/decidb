@@ -2,35 +2,6 @@
 
 ---
 
-## The committed golden baseline is older than the corpus it baselines
-
-**Pointers**: `test/decide/golden/baseline.dump` (+ `.results`) against
-`test/decide/golden/corpus.sql`.
-
-The baseline was captured 2026-08-12; the corpus was last edited 2026-08-13 and
-has uncommitted changes. Diffing a fresh capture therefore reports corpus edits as
-if they were regressions.
-
-**Why it matters for this stage specifically**: `capture.sh` dumps the built
-`SolverModel`, which makes it *this stage's* characterization oracle. A change
-claiming not to alter the model is verified by diffing dumps, and a baseline that
-no longer corresponds to the corpus silently removes that guarantee. The natural
-reaction to a noisy diff is to stop trusting it.
-
-**Fix**: regenerate `baseline.dump` and `baseline.dump.results` in the same commit
-that settles `corpus.sql`.
-
-**Test**: `./test/decide/golden/capture.sh` against the committed baseline must
-diff clean on an unmodified tree.
-
-**Done file**: `done.md` §9 — the golden-corpus row can then be described as a
-live oracle rather than a corpus.
-
-*(Also listed in [`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md),
-where it was first recorded. Remove from both when fixed.)*
-
----
-
 ## `VarIndexer::BuildRef()` has no production callers
 
 **Pointers**: `src/include/duckdb/decidb/ilp_model.hpp:106-110`.

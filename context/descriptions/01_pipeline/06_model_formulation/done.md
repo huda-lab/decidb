@@ -354,7 +354,7 @@ tightness on the table for chained implications.
 effective bound magnitude plus its worst-case term contribution, plus a 1-unit
 margin covering the integer-step band of the `<>` rewrite. `DecideRowTermRange()`
 is the shared per-row worst case, also used by the ABS-maximize and aggregate `<>`
-paths that still emit from stage 08. `AuxRange::BigM()` is the auxiliary-family
+paths that still emit from stage 08. `AuxRange::Span()` is the auxiliary-family
 twin, for the MIN/MAX auxiliaries that are pinned against a whole expression rather
 than compared to a fixed bound.
 
@@ -426,11 +426,26 @@ copies away. Measured on `MAXIMIZE MAX(x)` at 15K rows: 0.97s with the copies, 0
 without, same answer. `MAX(2 * x)` and `MAX(x + 1)` are genuine expressions and still
 earn a column, boxed by that member's own reach.
 
-**The closing Big-M is resolved by the caller**, because the family a link reduces over
-is not always the family of its own members: an outer MIN/MAX over group *sums* spans a
-group's worth of the per-row reach, not one row's. A MIN/MAX constraint's is the
-family's full span including constants (`family.hi - family.lo`), because a deactivated
-member row reads `z - expr <= M + const` and its worst case is `family.hi - member.lo`.
+**The closing Big-M is resolved by the caller**, because the family a link reduces
+over is not always the per-row family: an outer MIN/MAX over group *sums* reduces over
+the group-sum family, which leaves any single row's range as soon as a group holds more
+than one row. Every caller passes the family its own members live in, and the Big-M and
+the blame column both come from it, so a link cannot be scaled off one family while its
+members sit in another.
+
+**The value is always `AuxRange::Span()` — the family's full reach, constants
+INCLUDED.** A deactivated member row reads `z - expr_var <= M + const`, whose worst case
+is `family.hi - member.lo`; `family.hi` belongs to whichever row reaches highest, so one
+row's constant is measured against a *different* row's. Only within a single row does a
+constant cancel in the `(aux - expr)` difference. The objective and composed links used
+to scale off a constant-free reach on exactly that mistaken reasoning, which is sound
+only while every row carries the same constant — `MAX(x + c)` with `c` a data column got
+an `M` too small to be valid, and a too-small `M` cuts off legal answers rather than
+merely loosening the relaxation. Fixed 2026-08-23; corpus queries 89–92 cover it.
+
+That constant-free reach no longer exists. `AuxRange` carries one bracket, `Span()` is
+its only Big-M, and the accumulators that maintained the second reading are gone — so a
+future caller has no wrong value available to pick.
 
 ### MIN/MAX constraints
 
@@ -483,9 +498,9 @@ sides of an extremum link the objective supplies for free. Easy (`MINIMIZE`+`MAX
 `MAXIMIZE`+`MIN`) means the direction already drives the auxiliary onto the extremum,
 so the closing side is free and only the envelope is emitted — no binaries. Hard
 (`MAXIMIZE`+`MAX`, `MINIMIZE`+`MIN`) pushes the auxiliary the other way, so the
-envelope is free and the closing side is emitted instead. `M` is the global spread of
-the objective expression over the rows (`max_r exprmax - min_r exprmin`), which
-dominates `|z - expr_r|` at every row.
+envelope is free and the closing side is emitted instead. `M` is the global span of
+the objective expression over the rows (`max_r exprmax - min_r exprmin`, constants
+included), which dominates `|z - expr_r|` at every row.
 
 This function builds members and specs; it emits nothing itself. All four of its links
 go through `EmitExtremumLink`, so which formulation each takes is decided once, in one
@@ -746,7 +761,7 @@ bound where a Big-M would.
 `hi_unbounded`, not one flag, because the two ends fail independently: `x >= 0` with no
 ceiling has a derived floor and no derivable roof, and the auxiliary over it is emitted
 `[0, 1e30]`. Only a Big-M needs both ends, since a constant has to dominate the whole
-spread — `BigM()` asserts `!Unbounded()` and every refusal site tests the same. Boxing
+span — `Span()` asserts `!Unbounded()` and every refusal site tests the same. Boxing
 is the one caller entitled to read the ends apart, because half a box is still a box,
 and it is strictly better than none for the root simplex.
 

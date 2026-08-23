@@ -337,11 +337,13 @@ the codebase touches `SolverInput::num_global_vars`.
 A continuous auxiliary always stands for the extremum of a known family of row
 expressions, so its box is derivable at the moment it is created — and the same walk
 over the data that produces the Big-M constant produces it. `AuxRange` is that walk's
-return value: `lo`/`hi` bracket the expression (constants included, since the auxiliary
-is pinned against the whole thing), while `spread` excludes constants because they
-cancel in the `(aux - expr)` difference a Big-M row slackens. `BigM()` is derived from
-the range, not the other way round, which is what keeps the endpoints from being
-computed and discarded.
+return value: `lo`/`hi` bracket the expression, constants included, since the auxiliary
+is pinned against the whole thing. `Span()` — the bracket's own width, and the only
+Big-M an extremum link may use — is derived from the range rather than the other way
+round, which is what keeps the endpoints from being computed and discarded. There is
+deliberately no constant-free counterpart: one existed until 2026-08-23 and was invalid
+wherever a family's rows carried different constants (`../06_model_formulation/done.md`
+§9).
 
 `AddGlobalContinuousAux` takes an `AuxRange` and cannot be called without one. Infinite
 bounds are reachable only via `AuxRange::unbounded` — set when a contributing decision

@@ -58,6 +58,13 @@ gated by derivability — its arm is still chosen by capability alone. The 10% i
 reproducible but an order of magnitude smaller than the MIN/MAX effect, and the cause
 has not been isolated. Worth a look; not worth guessing at.
 
+Note what closing it would cost, which was not obvious when this was written. Gating ABS
+by derivability means allocating its Big-M sign indicator per-link at stage 06 like the
+others, which means flattening the ABS lowering from a per-link rewrite into a per-row
+one — the exact per-row cost measured and *removed* above. So the trade is a known 10%
+against a known representation regression, on an unisolated cause. Measure the cause
+first; it may be neither.
+
 ---
 
 ## SOS1 for `IN` — measured and declined
