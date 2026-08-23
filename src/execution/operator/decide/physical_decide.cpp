@@ -2756,12 +2756,11 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
         LinearizeMinMaxConstraints(solver_input, var_indexer, decide_var_names, native_min_max);
     }
 
-    // Encode `<>` as its disjunction: a Big-M pair, or a pair of implications on the
-    // backend that states those. Both spellings — per-row against the row-scoped
-    // indicator, aggregate against a global binary per group — are finished here.
+    // Encode `<>` as the disjunction it is: two conditional rows per instance. Whether a
+    // condition is stated to the backend or encoded with a Big-M is settled once, by
+    // LowerDecideConstructs at the end of this function.
     if (!ne_indicator_indices.empty()) {
-        LinearizeNotEqual(solver_input, var_indexer, aux_var_expressions, decide_var_names,
-                          use_native_constructs.not_equal);
+        LinearizeNotEqual(solver_input, var_indexer, aux_var_expressions, decide_var_names);
     }
 
     // Emit the McCormick envelope for every bilinear w = b * x auxiliary.
@@ -3148,9 +3147,20 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
         }
     }
 
-    // Refresh total_vars: the row/entity blocks were finalized at construction,
-    // but global aux vars were appended throughout deferred-NE and MIN/MAX expansion.
+    // Refresh total_vars: the row/entity blocks were finalized before linearization,
+    // but global aux vars were appended by the construct sites above.
     var_indexer.total_vars = var_indexer.global_block_start + solver_input.num_global_vars;
+
+    // THE LOWERING, and the last pass of stage 06. Every site above emitted the semantic
+    // form of its construct and nothing else; this is where the constructs the chosen
+    // backend cannot state become ordinary rows. It runs last because it needs every
+    // column box final — a Big-M reads them, and the sites above are what narrow them.
+    //
+    // What it reads is the answer stage 05 recorded on the plan, carried here as a value.
+    // No backend is consulted at execution time, and nothing here re-decides a
+    // formulation: a pass that answered differently from the rewrites would run a model
+    // on a solver it was not built for.
+    LowerDecideConstructs(solver_input, var_indexer, decide_var_names, use_native_constructs);
 
     out_var_indexer = std::move(var_indexer);
     return solver_input;

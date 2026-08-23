@@ -51,6 +51,13 @@ struct VarIndexer {
     //! For scalar vars: the single flat column index in the scalar block
     vector<idx_t> scalar_var_index;
 
+    //! Inverses of the three decide-variable blocks, for OwnerOf(). Kept as tables
+    //! rather than recomputed per lookup because the only caller that matters is a
+    //! refusal, and a refusal must not cost a scan to phrase itself.
+    vector<idx_t> row_offset_var;   //!< position within a row → var_idx
+    vector<idx_t> scalar_slot_var;  //!< position within the scalar block → var_idx
+    vector<idx_t> entity_block_var; //!< entity-scoped var_idx, ascending by base
+
     //! Pointer to entity mappings (not owned — caller ensures lifetime)
     const vector<EntityMapping> *entity_mappings_ref = nullptr;
     //! Owned copy of entity mappings (used when VarIndexer must outlive its source)
@@ -101,6 +108,15 @@ struct VarIndexer {
         }
         }
     }
+
+    //! Which decide variable a flat column instantiates — the inverse of `Get()` and
+    //! `InstanceColumn()`. `DConstants::INVALID_INDEX` for a global-block column, which
+    //! no decide variable owns, and for a column past the end.
+    //!
+    //! Exists so a layer working in flat columns can still speak the user's language.
+    //! A Big-M lowering reads column boxes, so its refusal has a column and needs a
+    //! NAME; without this it could only say "some variable is unbounded".
+    idx_t OwnerOf(idx_t col) const;
 
     //! Build a VarIndexer that OWNS a copy of entity_mappings.
     //! Safe to use after the SolverInput is destroyed (e.g., stored on gstate for readback).

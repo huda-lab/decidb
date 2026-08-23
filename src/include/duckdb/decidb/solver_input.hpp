@@ -526,34 +526,43 @@ struct SolverInput {
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t repair_group_id = DConstants::INVALID_INDEX;
         //! Flat column of the `<>` disjunction binary this row belongs to (mirrors
-        //! ConstraintProvenance::indicator_col). Set at the aggregate-`<>` global
-        //! site so the infeasible removal dial groups the two rows; INVALID otherwise.
+        //! ConstraintProvenance::indicator_col). Set at the `<>` sites so the infeasible
+        //! removal dial groups the rows of one clause; INVALID otherwise.
         idx_t indicator_col = DConstants::INVALID_INDEX;
+        //! PER/WHEN group id, its printable key, the reducer qualifier text, and whether
+        //! the clause's LHS was an aggregate — the display half of the provenance every
+        //! row carries. A per-row clause emitted through `EvaluatedConstraint` gets these
+        //! from its `row_group_ids` / `group_labels` / `qualifier`; a clause emitted in
+        //! flat columns has to state them, and does, so that changing a row's SHAPE never
+        //! changes what diagnosis calls it.
+        idx_t group_key = DConstants::INVALID_INDEX;
+        string group_label;
+        string qualifier;
+        bool is_aggregate = false;
+        //! What a lowering (or a folded LHS constant) added to the user's literal to
+        //! build this row's `rhs`; the reported clause quotes `rhs` minus this.
+        double rhs_mechanism_offset = 0.0;
     };
     vector<RawConstraint> global_constraints;
 
-    //! `binary_column == binary_value` implies this row. A *conditional row*, which is
-    //! why it is its own list rather than a `GeneralConstraintSpec` kind: the kinds
-    //! there relate columns to columns and carry no row at all.
+    //! A ROW, conditioned: it holds whenever `binary_column == binary_value`, and says
+    //! nothing otherwise. This is the semantic form of a disjunctive clause, and it is
+    //! its own list rather than a `GeneralConstraintSpec` kind because the kinds there
+    //! relate columns to columns and carry no row at all.
     //!
-    //! This is what a `<>` becomes on a backend that has indicator constraints — the
-    //! two halves of `LHS <= K-1 OR LHS >= K+1` stated as implications instead of
-    //! encoded with a Big-M. Unlike the general constraints, an indicator constraint
-    //! DOES carry a row, so infeasible diagnosis can still reach it: the removal dial
-    //! walks these alongside the matrix rows.
+    //! A `<>` is emitted this way and only this way. On a backend that states indicator
+    //! constraints the pair goes down as written; on one that does not,
+    //! `LowerDecideConstructs` turns each half into an ordinary matrix row with a Big-M
+    //! that switches it. Holding the row itself — rather than a description of one — is
+    //! what makes that lowering a rewrite of one field, and what keeps infeasible
+    //! diagnosis reaching the clause either way: the removal dial walks these alongside
+    //! the matrix rows.
     struct IndicatorConstraintSpec {
         int binary_column = -1;
         int binary_value = 1;
-        vector<int> indices;
-        vector<double> coefficients;
-        char sense = '<'; //!< '<' (<=), '>' (>=), '=' (==)
-        double rhs = 0.0;
-        ConstraintKind kind = ConstraintKind::STRUCTURAL;
-        idx_t source_clause_id = DConstants::INVALID_INDEX;
-        idx_t repair_group_id = DConstants::INVALID_INDEX;
-        //! The clause's own binary, mirroring ConstraintProvenance::indicator_col, so
-        //! the removal dial groups the two halves of one `<>` together.
-        idx_t indicator_col = DConstants::INVALID_INDEX;
+        //! The implied row, provenance included. Composed rather than restated so a
+        //! conditional row and the matrix row it lowers to cannot drift apart.
+        RawConstraint row;
     };
     vector<IndicatorConstraintSpec> indicator_constraints;
 

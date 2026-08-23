@@ -53,6 +53,7 @@ static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
         idx.var_scope[v] = scope;
         if (scope == DecideVarScope::ROW) {
             idx.row_var_offset[v] = row_var_count;
+            idx.row_offset_var.push_back(v);
             row_var_count++;
         }
     }
@@ -71,6 +72,7 @@ static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
         D_ASSERT(scope_idx < entity_mappings.size());
         idx.var_entity_mapping_idx[v] = scope_idx;
         idx.entity_var_base[v] = idx.entity_block_start + entity_offset;
+        idx.entity_block_var.push_back(v);
         entity_offset += entity_mappings[scope_idx].num_entities;
     }
 
@@ -82,11 +84,35 @@ static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
             continue;
         }
         idx.scalar_var_index[v] = idx.scalar_block_start + scalar_count;
+        idx.scalar_slot_var.push_back(v);
         scalar_count++;
     }
 
     idx.global_block_start = idx.scalar_block_start + scalar_count;
     idx.total_vars = idx.global_block_start + input.num_global_vars;
+}
+
+idx_t VarIndexer::OwnerOf(idx_t col) const {
+    if (col >= global_block_start) {
+        return DConstants::INVALID_INDEX; // global block: no decide variable owns it
+    }
+    if (col < entity_block_start) {
+        // Row block, laid out row-major: every row holds one slot per row-scoped var.
+        return num_row_vars == 0 ? DConstants::INVALID_INDEX : row_offset_var[col % num_row_vars];
+    }
+    if (col < scalar_block_start) {
+        // Entity block: bases ascend in entity_block_var order, so the owner is the
+        // last variable whose base does not exceed `col`.
+        idx_t owner = DConstants::INVALID_INDEX;
+        for (idx_t v : entity_block_var) {
+            if (entity_var_base[v] > col) {
+                break;
+            }
+            owner = v;
+        }
+        return owner;
+    }
+    return scalar_slot_var[col - scalar_block_start];
 }
 
 VarIndexer VarIndexer::Build(const SolverInput &input) {
@@ -1255,27 +1281,41 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
         // removal dial groups the two global rows just like a per-row `<>`.
         constr.provenance.indicator_col = raw.indicator_col;
+        // The display half. A per-row clause emitted through EvaluatedConstraint gets
+        // these stamped from its group columns; one emitted in flat columns states them
+        // itself, so a clause reads the same in a diagnosis whichever shape its rows took.
+        constr.provenance.group_key = raw.group_key;
+        constr.provenance.group_label = raw.group_label;
+        constr.provenance.qualifier = raw.qualifier;
+        constr.provenance.is_aggregate = raw.is_aggregate;
+        constr.provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
         model.constraints.push_back(std::move(constr));
     }
 
-    // Constructs the chosen backend takes natively. Already in flat columns (stage 08
-    // emits them once the VarIndexer exists), so this only re-homes the loose
-    // provenance fields into the record every row carries. Empty unless the backend
-    // declared the construct, in which case the lowered rows are in `constraints`
-    // above instead — never both.
+    // Conditional rows the chosen backend states itself. Whatever `LowerDecideConstructs`
+    // did not lower arrives here still conditioned; everything it did lower is an ordinary
+    // row in `global_constraints` above. A model holds one or the other for a given
+    // clause, never both. The row half carries the same provenance a matrix row does, so
+    // this only re-homes it.
     model.indicator_constraints.reserve(input.indicator_constraints.size());
     for (auto &spec : input.indicator_constraints) {
         SolverModel::IndicatorConstraint ic;
         ic.binary_column = spec.binary_column;
         ic.binary_value = spec.binary_value;
-        ic.indices = std::move(spec.indices);
-        ic.coefficients = std::move(spec.coefficients);
-        ic.sense = spec.sense;
-        ic.rhs = spec.rhs;
-        ic.provenance.kind = spec.kind;
-        ic.provenance.source_clause_id = spec.source_clause_id;
-        ic.provenance.repair_group_id = spec.repair_group_id;
-        ic.provenance.indicator_col = spec.indicator_col;
+        ic.indices = std::move(spec.row.indices);
+        ic.coefficients = std::move(spec.row.coefficients);
+        ic.sense = spec.row.sense;
+        ic.rhs = spec.row.rhs;
+        ic.provenance.kind = spec.row.kind;
+        ic.provenance.shape = spec.row.shape;
+        ic.provenance.source_clause_id = spec.row.source_clause_id;
+        ic.provenance.repair_group_id = spec.row.repair_group_id;
+        ic.provenance.indicator_col = spec.row.indicator_col;
+        ic.provenance.group_key = spec.row.group_key;
+        ic.provenance.group_label = spec.row.group_label;
+        ic.provenance.qualifier = spec.row.qualifier;
+        ic.provenance.is_aggregate = spec.row.is_aggregate;
+        ic.provenance.rhs_mechanism_offset = spec.row.rhs_mechanism_offset;
         model.indicator_constraints.push_back(std::move(ic));
     }
 

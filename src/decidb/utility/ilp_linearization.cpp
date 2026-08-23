@@ -1000,79 +1000,88 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
     return seen ? verdict : NECollapse::DISJUNCTION;
 }
 
-//! The NATIVE arm of one per-row `<>`: each row's disjunction as two implications,
-//! `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1`, instead of a Big-M pair. No
-//! constant to dominate the row, so no contributing variable needs a finite bound —
-//! the same payoff ABS and MIN/MAX get from their general constraints.
-static void EmitNativeNotEqual(SolverInput &input, const VarIndexer &indexer,
-                               const EvaluatedConstraint &ec) {
+//! One per-row `<>`, as the disjunction it is: `z == 0 => LHS <= K-1` and
+//! `z == 1 => LHS >= K+1`, one pair per active row against that row's own copy of the
+//! row-scoped binary stage 05 allocated.
+//!
+//! This is the only spelling emitted. A backend that states indicator constraints takes
+//! the pair as written; on one that does not, `LowerDecideConstructs` gives each half the
+//! Big-M that switches it. Nothing here asks which backend is in play, and nothing here
+//! computes a bound — that is the point: a conditional row needs no constant to dominate
+//! it, so whether a contributing variable is bounded is a question for the lowering and
+//! only for the lowering.
+static void EmitNotEqualDisjunction(SolverInput &input, const VarIndexer &indexer,
+                                    const EvaluatedConstraint &ec) {
     const idx_t num_rows = input.num_rows;
-    {
-        idx_t z_var = ec.ne_indicator_idx;
-        for (idx_t r = 0; r < num_rows; r++) {
-            if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-                continue; // masked out by WHEN/PER, or a non-integer bound on this row
-            }
-            // `z` is row-scoped: each row's disjunction gets its own binary, exactly as
-            // the Big-M encoding does.
-            int z_col = static_cast<int>(indexer.Get(z_var, r));
-            double k = ec.rhs_values.Get(r);
-
-            vector<int> indices;
-            vector<double> coefficients;
-            double constant = 0.0;
-            for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-                idx_t v = ec.variable_indices[t];
-                double coef = ec.row_coefficients[t].Get(r);
-                if (v == DConstants::INVALID_INDEX) {
-                    constant += coef; // constant LHS part folds into the bound
-                    continue;
-                }
-                if (coef == 0.0) {
-                    continue;
-                }
-                indices.push_back(static_cast<int>(indexer.Get(v, r)));
-                coefficients.push_back(coef);
-            }
-
-            // Both halves carry the clause's provenance and its indicator column, so
-            // the infeasible removal dial groups them into one droppable `<>` — the
-            // same grouping the Big-M rows get, and the reason this construct is
-            // expressed as indicator constraints rather than general ones.
-            // The row's terms are taken by value so the half that no longer needs them
-            // can hand them straight over: only the first half copies.
-            auto emit = [&](vector<int> row_indices, vector<double> row_coefficients, int binval,
-                            char sense, double rhs) {
-                SolverInput::IndicatorConstraintSpec ic;
-                ic.binary_column = z_col;
-                ic.binary_value = binval;
-                ic.indices = std::move(row_indices);
-                ic.coefficients = std::move(row_coefficients);
-                ic.sense = sense;
-                ic.rhs = rhs;
-                ic.kind = ConstraintKind::USER_MECHANISM;
-                ic.source_clause_id = ec.source_clause_id;
-                ic.repair_group_id = ec.repair_group_id;
-                ic.indicator_col = static_cast<idx_t>(z_col);
-                input.indicator_constraints.push_back(std::move(ic));
-            };
-            // z = 0  =>  LHS <= K - 1
-            emit(indices, coefficients, 0, '<', k - 1.0 - constant);
-            // z = 1  =>  LHS >= K + 1. Last use of the row's terms.
-            emit(std::move(indices), std::move(coefficients), 1, '>', k + 1.0 - constant);
+    bool has_groups = !ec.row_group_ids.empty();
+    idx_t z_var = ec.ne_indicator_idx;
+    for (idx_t r = 0; r < num_rows; r++) {
+        if (has_groups && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+            continue; // masked out by WHEN/PER, or a non-integer bound on this row
         }
+        // `z` is row-scoped: each row's disjunction gets its own binary.
+        int z_col = static_cast<int>(indexer.Get(z_var, r));
+        double k = ec.rhs_values.Get(r);
+
+        vector<int> indices;
+        vector<double> coefficients;
+        double constant = 0.0;
+        for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+            idx_t v = ec.variable_indices[t];
+            double coef = ec.row_coefficients[t].Get(r);
+            if (v == DConstants::INVALID_INDEX) {
+                constant += coef; // constant LHS part folds into the bound
+                continue;
+            }
+            if (coef == 0.0) {
+                continue;
+            }
+            indices.push_back(static_cast<int>(indexer.Get(v, r)));
+            coefficients.push_back(coef);
+        }
+
+        // Both halves carry the clause's provenance and its indicator column, so the
+        // infeasible removal dial groups them into one droppable `<>` — and they carry
+        // it on the ROW, which is why `<>` is stated as a conditional row rather than as
+        // a general constraint. A general constraint has no row for diagnosis to reach,
+        // and dropping the clause is the only repair a `<>` has.
+        // The row's terms are taken by value so the half that no longer needs them can
+        // hand them straight over: only the first half copies.
+        auto emit = [&](vector<int> row_indices, vector<double> row_coefficients, int binval,
+                        char sense, double rhs) {
+            SolverInput::IndicatorConstraintSpec ic;
+            ic.binary_column = z_col;
+            ic.binary_value = binval;
+            ic.row.indices = std::move(row_indices);
+            ic.row.coefficients = std::move(row_coefficients);
+            ic.row.sense = sense;
+            ic.row.rhs = rhs;
+            ic.row.kind = ConstraintKind::USER_MECHANISM;
+            ic.row.shape = ElasticShape::PER_ROW_DATA;
+            ic.row.source_clause_id = ec.source_clause_id;
+            ic.row.repair_group_id = ec.repair_group_id;
+            ic.row.indicator_col = static_cast<idx_t>(z_col);
+            ic.row.group_key = has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX;
+            // The folded LHS constant, so a report quotes the user's `K` and not the
+            // bound this fold produced.
+            ic.row.rhs_mechanism_offset = -constant;
+            input.indicator_constraints.push_back(std::move(ic));
+        };
+        // z = 0  =>  LHS <= K - 1
+        emit(indices, coefficients, 0, '<', k - 1.0 - constant);
+        // z = 1  =>  LHS >= K + 1. Last use of the row's terms.
+        emit(std::move(indices), std::move(coefficients), 1, '>', k + 1.0 - constant);
     }
 }
-
 
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                     vector<EvaluatedConstraint> &deferred_aggregate,
                                     const vector<pair<idx_t, string>> &aux_var_expressions,
-                                    const vector<string> &var_names, bool native_not_equal);
+                                    const vector<string> &var_names);
 
 void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
                        const vector<pair<idx_t, string>> &aux_var_expressions,
-                       const vector<string> &var_names, bool native_not_equal) {
+                       const vector<string> &var_names) {
     const idx_t num_rows = input.num_rows;
 
     // The aggregate spelling is collected on this walk and finished below: it needs one
@@ -1180,82 +1189,11 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
             continue;
         }
 
-        idx_t indicator_var_idx = ec.ne_indicator_idx;
-
-        if (native_not_equal) {
-            EmitNativeNotEqual(input, indexer, ec);
-            continue;
-        }
-
-        // Tight data-driven per-row Big-M for the inline NE expansion. Computed
-        // after the tautology filter: a row this rewrite never emits must not be
-        // asked for an M, and an infinite bound is exactly such a row
-        // (`LHS <> Infinity` always holds), so it is dropped above rather than
-        // refused by the Big-M guard.
-        double M = DecideTightPerRowBigM(ec, input.lower_bounds, input.upper_bounds, num_rows, var_names);
-
-        // Build the indicator coefficient column. With no WHEN/PER filter every row
-        // gets -M (broadcast scalar). Otherwise only the active rows hold -M and the
-        // rest are 0 — stored as SparseMasked instead of Dense to skip the
-        // per-excluded-row 0 allocation. ec.row_group_ids is iterated in row order,
-        // so the resulting sparse_indices list is already sorted ascending (the
-        // SparseMasked invariant).
-        CoefficientColumn indicator_coeffs;
-        if (ec.row_group_ids.empty()) {
-            indicator_coeffs = CoefficientColumn::MakeScalar(-M, num_rows);
-        } else {
-            vector<idx_t> active_indices;
-            active_indices.reserve(num_rows / 8);
-            for (idx_t r = 0; r < num_rows; r++) {
-                if (ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
-                    active_indices.push_back(r);
-                }
-            }
-            indicator_coeffs = CoefficientColumn::MakeSparseMasked(
-                num_rows, std::move(active_indices), -M);
-        }
-
-        // Constraint 1: x - M*z <= K - 1
-        EvaluatedConstraint ec1;
-        ec1.variable_indices = ec.variable_indices;
-        ec1.row_coefficients = ec.row_coefficients;
-        ec1.variable_indices.push_back(indicator_var_idx);
-        ec1.row_coefficients.push_back(indicator_coeffs);
-        ec1.rhs_values = BuildShiftedRhs(-1.0);
-        ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-        ec1.lhs_is_aggregate = false; // per-row
-        ec1.row_group_ids = ec.row_group_ids;
-        ec1.num_groups = ec.num_groups;
-        ec1.group_labels = ec.group_labels;
-        ec1.qualifier = ec.qualifier;
-        ec1.kind = ConstraintKind::USER_MECHANISM;
-        // I4: tag this disjunction row with its indicator so the elastic engine can
-        // group the pair and offer removal (remove-only `<>`).
-        ec1.ne_indicator_idx = indicator_var_idx;
-        new_constraints.push_back(std::move(ec1));
-
-        // Constraint 2: x - M*z >= K + 1 - M
-        EvaluatedConstraint ec2;
-        ec2.variable_indices = ec.variable_indices;
-        ec2.row_coefficients = ec.row_coefficients;
-        ec2.variable_indices.push_back(indicator_var_idx);
-        ec2.row_coefficients.push_back(std::move(indicator_coeffs));
-        ec2.rhs_values = BuildShiftedRhs(1.0 - M);
-        ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-        ec2.lhs_is_aggregate = false; // per-row
-        ec2.row_group_ids = ec.row_group_ids;
-        ec2.num_groups = ec.num_groups;
-        ec2.group_labels = ec.group_labels;
-        ec2.qualifier = ec.qualifier;
-        ec2.kind = ConstraintKind::USER_MECHANISM;
-        // I4: same indicator as ec1 — both rows form one removable `<>`.
-        ec2.ne_indicator_idx = indicator_var_idx;
-        new_constraints.push_back(std::move(ec2));
+        EmitNotEqualDisjunction(input, indexer, ec);
     }
     input.constraints = std::move(new_constraints);
 
-    ExpandAggregateNotEqual(input, indexer, deferred_aggregate, aux_var_expressions, var_names,
-                            native_not_equal);
+    ExpandAggregateNotEqual(input, indexer, deferred_aggregate, aux_var_expressions, var_names);
 }
 
 //! The AGGREGATE spelling of `<>`. It cannot expand against the row-scoped indicator
@@ -1267,7 +1205,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                     vector<EvaluatedConstraint> &deferred_aggregate,
                                     const vector<pair<idx_t, string>> &aux_var_expressions,
-                                    const vector<string> &var_names, bool native_not_equal) {
+                                    const vector<string> &var_names) {
     if (deferred_aggregate.empty()) {
         return;
     }
@@ -1393,25 +1331,6 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                 continue; // this group's aggregate cannot reach K — it excludes nothing
             }
 
-            // Tight per-group Big-M: the aggregate LHS ranges over the SUM of this
-            // group's rows, so M must cover the summed magnitude. A single per-row
-            // bound is far too small at scale and would silently cap the aggregate.
-            // Only the disjunctive encoding needs one.
-            double M = 0.0;
-            if (collapse == NECollapse::DISJUNCTION && !native_not_equal) {
-                bool grp_unbounded = false;
-                double grp_range = 0.0;
-                for (idx_t k = g_begin; k < g_end; k++) {
-                    grp_range += DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
-                                                    flat_rows[k], input.lower_bounds,
-                                                    input.upper_bounds, grp_unbounded);
-                }
-                M = grp_range + std::abs(rhs) + 1.0;
-                if (grp_unbounded) {
-                    ThrowUnboundedBigM(ec, input.lower_bounds, input.upper_bounds, var_names, "<>");
-                }
-            }
-
             // Allocate one global binary z for this group. A collapsed group still gets
             // one, unreferenced by any row: it is what carries the clause's label and
             // groups its rows for the remove-only `<>` repair, so allocating it keeps
@@ -1438,12 +1357,26 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                 }
             }
 
-            // Flush once into a deduped (idx, coeff) snapshot reused for both rc1 and rc2.
+            // Flush once into a deduped (idx, coeff) snapshot reused for both halves.
             vector<int> common_indices;
             vector<double> common_coefs;
             accum.Flush(common_indices, common_coefs);
 
-            // Collapsed: one plain inequality, no indicator term and no Big-M.
+            // The provenance both halves carry, whichever shape they end up in.
+            auto stamp = [&](SolverInput::RawConstraint &rc) {
+                rc.kind = ConstraintKind::USER_MECHANISM;
+                rc.source_clause_id = ec.source_clause_id;
+                rc.repair_group_id = ec.repair_group_id;
+                rc.indicator_col = z_idx;
+                rc.group_key = has_groups ? g : DConstants::INVALID_INDEX;
+                rc.qualifier = ec.qualifier;
+                rc.is_aggregate = true;
+                if (has_groups && g < ec.group_labels.size()) {
+                    rc.group_label = ec.group_labels[g];
+                }
+            };
+
+            // Collapsed: one plain inequality, no indicator and no disjunction left.
             if (collapse != NECollapse::DISJUNCTION) {
                 bool lower = collapse == NECollapse::LOWER_ONLY;
                 SolverInput::RawConstraint rc;
@@ -1451,70 +1384,145 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                 rc.rhs = lower ? rhs - 1.0 : rhs + 1.0;
                 rc.indices = std::move(common_indices);
                 rc.coefficients = std::move(common_coefs);
-                rc.kind = ConstraintKind::USER_MECHANISM;
-                rc.source_clause_id = ec.source_clause_id;
-                rc.repair_group_id = ec.repair_group_id;
-                rc.indicator_col = z_idx;
+                stamp(rc);
                 input.global_constraints.push_back(std::move(rc));
                 continue;
             }
 
-            if (native_not_equal) {
-                // Native: the two halves as implications on this group's binary, so the
-                // group's summed Big-M — which is what forces a bound on every
-                // contributing variable — is not needed at all.
-                // By value, as in the per-row twin above: only the first half copies
-                // the group's snapshot, the second hands it over.
-                auto emit = [&](vector<int> grp_indices, vector<double> grp_coefs, int binval,
-                                char sense, double bound) {
-                    SolverInput::IndicatorConstraintSpec ic;
-                    ic.binary_column = static_cast<int>(z_idx);
-                    ic.binary_value = binval;
-                    ic.indices = std::move(grp_indices);
-                    ic.coefficients = std::move(grp_coefs);
-                    ic.sense = sense;
-                    ic.rhs = bound;
-                    ic.kind = ConstraintKind::USER_MECHANISM;
-                    ic.source_clause_id = ec.source_clause_id;
-                    ic.repair_group_id = ec.repair_group_id;
-                    ic.indicator_col = z_idx;
-                    input.indicator_constraints.push_back(std::move(ic));
-                };
-                emit(common_indices, common_coefs, 0, '<', rhs - 1.0);
-                // Last use of the snapshot on this arm.
-                emit(std::move(common_indices), std::move(common_coefs), 1, '>', rhs + 1.0);
-                continue;
-            }
-
-            // ec1: SUM(coeffs) - M*z <= K - 1
-            SolverInput::RawConstraint rc1;
-            rc1.sense = '<';
-            rc1.rhs = rhs - 1.0;
-            rc1.indices = common_indices;
-            rc1.coefficients = common_coefs;
-            rc1.indices.push_back(static_cast<int>(z_idx));
-            rc1.coefficients.push_back(-M);
-            rc1.kind = ConstraintKind::USER_MECHANISM;
-            rc1.source_clause_id = ec.source_clause_id;
-            rc1.repair_group_id = ec.repair_group_id;
-            rc1.indicator_col = z_idx;
-            input.global_constraints.push_back(std::move(rc1));
-
-            // ec2: SUM(coeffs) - M*z >= K + 1 - M
-            SolverInput::RawConstraint rc2;
-            rc2.sense = '>';
-            rc2.rhs = rhs + 1.0 - M;
-            rc2.indices = std::move(common_indices);
-            rc2.coefficients = std::move(common_coefs);
-            rc2.indices.push_back(static_cast<int>(z_idx));
-            rc2.coefficients.push_back(-M);
-            rc2.kind = ConstraintKind::USER_MECHANISM;
-            rc2.source_clause_id = ec.source_clause_id;
-            rc2.repair_group_id = ec.repair_group_id;
-            rc2.indicator_col = z_idx;
-            input.global_constraints.push_back(std::move(rc2));
+            // The disjunction, as two conditional rows on this group's binary. The
+            // summed Big-M that used to be computed here — and that is what forced a
+            // finite bound on every contributing variable — is not computed at all now:
+            // `LowerDecideConstructs` derives one per half, and only where the chosen
+            // backend cannot state the condition itself.
+            //
+            // By value, as in the per-row twin above: only the first half copies the
+            // group's snapshot, the second hands it over.
+            auto emit = [&](vector<int> grp_indices, vector<double> grp_coefs, int binval,
+                            char sense, double bound) {
+                SolverInput::IndicatorConstraintSpec ic;
+                ic.binary_column = static_cast<int>(z_idx);
+                ic.binary_value = binval;
+                ic.row.indices = std::move(grp_indices);
+                ic.row.coefficients = std::move(grp_coefs);
+                ic.row.sense = sense;
+                ic.row.rhs = bound;
+                stamp(ic.row);
+                input.indicator_constraints.push_back(std::move(ic));
+            };
+            emit(common_indices, common_coefs, 0, '<', rhs - 1.0);
+            // Last use of the snapshot.
+            emit(std::move(common_indices), std::move(common_coefs), 1, '>', rhs + 1.0);
         }
     }
+}
+
+
+//===--------------------------------------------------------------------===//
+// Lowering: constructs the chosen backend cannot state
+//===--------------------------------------------------------------------===//
+
+//! The box of one flat column, in the coordinates every construct emits in. Mirrors
+//! what `SolverModel::Build` will expand into `col_lower` / `col_upper`, and must:
+//! a Big-M derived from a wider box than the model declares would be slack, and one
+//! derived from a narrower box would cut the feasible region.
+static void FlatColumnBox(const SolverInput &input, const VarIndexer &indexer, int col,
+                          double &lo, double &hi) {
+    idx_t c = static_cast<idx_t>(col);
+    if (c >= indexer.global_block_start) {
+        idx_t g = c - indexer.global_block_start;
+        lo = input.global_lower_bounds[g];
+        hi = input.global_upper_bounds[g];
+        if (input.global_variable_types[g] == LogicalType::BOOLEAN) {
+            lo = MaxValue<double>(lo, 0.0);
+            hi = MinValue<double>(hi, 1.0);
+        }
+        return;
+    }
+    idx_t v = indexer.OwnerOf(c);
+    D_ASSERT(v != DConstants::INVALID_INDEX);
+    // The same asymmetry the model builder applies: the lower bound is authoritative
+    // (stage 08 already resolved it, negatives included), the upper is intersected with
+    // the type ceiling.
+    lo = input.lower_bounds[v];
+    hi = input.upper_bounds[v];
+    if (input.variable_types[v] == LogicalType::BOOLEAN) {
+        hi = MinValue<double>(hi, 1.0);
+    }
+}
+
+//! How far a row's left-hand side can reach, toward the end its bound is on. `hi_end`
+//! asks for the maximum (a `<=` row), otherwise the minimum (a `>=` row). Returns false
+//! and names the offending column when the box that end depends on is open — there is no
+//! Big-M then, and the query is refused rather than given a constant.
+static bool FlatRowReach(const SolverInput &input, const VarIndexer &indexer,
+                         const vector<int> &indices, const vector<double> &coefficients,
+                         bool hi_end, double &reach, idx_t &blame_col) {
+    reach = 0.0;
+    for (idx_t k = 0; k < indices.size(); k++) {
+        double c = coefficients[k];
+        if (c == 0.0) {
+            continue;
+        }
+        double lo, hi;
+        FlatColumnBox(input, indexer, indices[k], lo, hi);
+        // A negative coefficient swaps which end of the box feeds which end of the term,
+        // so the sign has to be respected before an end is blamed.
+        double end = (c > 0.0) == hi_end ? hi : lo;
+        if (end >= 1e20 || end <= -1e20) {
+            blame_col = static_cast<idx_t>(indices[k]);
+            return false;
+        }
+        reach += c * end;
+    }
+    return true;
+}
+
+void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
+                           const vector<string> &var_names,
+                           const SolverConstructSupport &constructs) {
+    if (constructs.not_equal || input.indicator_constraints.empty()) {
+        return;
+    }
+    for (auto &ic : input.indicator_constraints) {
+        auto &row = ic.row;
+        D_ASSERT(row.sense == '<' || row.sense == '>');
+        // The Big-M is the distance from the row's bound to the far end of its own
+        // reach: relaxed by exactly that much, the row admits everything the columns can
+        // produce and cuts nothing. Derived per HALF, from that half's own row, which is
+        // tighter than the single constant the two used to share.
+        bool hi_end = row.sense == '<';
+        double reach = 0.0;
+        idx_t blame_col = DConstants::INVALID_INDEX;
+        if (!FlatRowReach(input, indexer, row.indices, row.coefficients, hi_end, reach,
+                          blame_col)) {
+            // No finite M exists over an open box. Refuse, naming a column the user can
+            // bound — which is what `OwnerOf` is for: this layer works in flat columns
+            // and still has to speak the user's language.
+            ThrowUnboundedBigMNaming(indexer.OwnerOf(blame_col), var_names, "<>");
+        }
+        double M = hi_end ? reach - row.rhs : row.rhs - reach;
+        // A row already implied by its own box needs no relaxation at all. The margin is
+        // the integer-step band the `<>` rewrite works on: the bound is `K±1` on an
+        // integer lattice, so one unit of slack costs nothing and keeps the relaxed
+        // branch clear of floating-point wobble in the solver's own row activity.
+        M = MaxValue<double>(M, 0.0) + 1.0;
+
+        SolverInput::RawConstraint lowered = std::move(row);
+        // `z == v` implies the row, so the row must be slackened by M exactly when
+        // `z != v`: by `M*z` when v is 0, and by `M*(1-z)` when v is 1 — which moves the
+        // bound as well as adding the term.
+        double m_coeff;
+        if (ic.binary_value == 0) {
+            m_coeff = hi_end ? -M : M;
+        } else {
+            m_coeff = hi_end ? M : -M;
+            lowered.rhs += hi_end ? M : -M;
+        }
+        lowered.indices.push_back(ic.binary_column);
+        lowered.coefficients.push_back(m_coeff);
+        input.global_constraints.push_back(std::move(lowered));
+    }
+    input.indicator_constraints.clear();
 }
 
 //===--------------------------------------------------------------------===//

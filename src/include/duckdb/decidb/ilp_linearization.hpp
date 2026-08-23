@@ -136,29 +136,50 @@ struct NativeConstructPolicy {
 void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
                                 const vector<string> &var_names, NativeConstructPolicy policy);
 
-//! Encode every constraint stage 05 tagged with a `<>` indicator: the disjunction
-//! `LHS <= K-1 OR LHS >= K+1`, as the Big-M pair `x - M*z <= K-1` / `x - M*z >= K+1-M`
-//! or as the two implications `z == 0 => LHS <= K-1` / `z == 1 => LHS >= K+1`, per
-//! `native_not_equal`. The native arm has no constant to dominate the row, so no
-//! contributing variable needs a finite bound.
+//! Encode every constraint stage 05 tagged with a `<>` indicator as the disjunction it
+//! is: `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1`, a pair of CONDITIONAL ROWS.
+//! That is the only spelling this emits. Whether the chosen backend states a condition
+//! itself or needs it encoded with a Big-M is settled once, afterwards, by
+//! `LowerDecideConstructs` — so no bound is asked for here and no backend is consulted.
 //!
 //! Both spellings of the clause are finished here. A per-row `<>` expands against the
 //! row-scoped indicator stage 05 allocated; an aggregate one allocates a *global* binary
-//! per group, because its Big-M must cover the group's summed range rather than a single
-//! row's. `aux_var_expressions` supplies the clause text stage 05 recorded for the
-//! indicator, so a dropped aggregate `<>` can be named in a repair.
+//! per group, because a group's rows sum onto one row and one row needs one binary.
+//! `aux_var_expressions` supplies the clause text stage 05 recorded for the indicator, so
+//! a dropped aggregate `<>` can be named in a repair.
 //!
-//! Whichever encoding a clause receives, both of its halves carry the clause's
-//! `indicator_col`, so the infeasible removal dial groups them into one droppable `<>`.
-//! That is why `<>` is stated as *indicator* constraints rather than as a general
-//! constraint, which carries no row for diagnosis to reach.
+//! Both halves carry the clause's `indicator_col` on the row, so the infeasible removal
+//! dial groups them into one droppable `<>`. That is why `<>` is stated as a conditional
+//! ROW rather than as a general constraint, which carries no row for diagnosis to reach —
+//! and dropping the clause is the only repair a `<>` has.
 //!
 //! Refuses a left-hand side that is not integer-valued — the ±1 band is only exact
 //! on the integer lattice — and silently drops a comparison whose bound no integer
 //! can equal, since every assignment already satisfies it.
 void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
                        const vector<pair<idx_t, string>> &aux_var_expressions,
-                       const vector<string> &var_names, bool native_not_equal);
+                       const vector<string> &var_names);
+
+//! The one place a construct is lowered, and the last pass of stage 06.
+//!
+//! Every construct site above emits the SEMANTIC form and nothing else: a `<>` becomes a
+//! pair of conditional rows whether or not any backend can state one. This pass reads
+//! what the chosen backend declared — the answer stage 05 recorded on the plan, not a
+//! fresh question to a backend — and rewrites whatever it cannot state into ordinary
+//! rows.
+//!
+//! Lowering a conditional row is one rewrite: give it a Big-M term on its own binary,
+//! sized so the row is exactly slack when the condition is off. Everything a Big-M needs
+//! — the row, and the box of every column in it — is already here, which is why this can
+//! be one pass over the model rather than a second emitter inside every construct.
+//!
+//! Refuses, naming a column to bound, where no finite Big-M exists. That refusal belongs
+//! HERE and only here: a construct the backend states needs no constant to dominate it,
+//! so whether a contributing variable is bounded is a question about the lowering and not
+//! about the query.
+void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
+                           const vector<string> &var_names,
+                           const SolverConstructSupport &constructs);
 
 //! Emit the McCormick envelope for every `w = b * x` link. For `x >= 0` the lower
 //! corner is implied by `w`'s own non-negative bound and the upper corner collapses
