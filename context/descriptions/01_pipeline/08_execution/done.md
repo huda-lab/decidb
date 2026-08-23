@@ -339,15 +339,22 @@ every linearizer after it derives its `M` from column boxes. See
 ### The construct routing — a decision this stage reads, not one it makes
 
 Whether a construct is lowered is a **formulation** choice, and formulation belongs to
-stage 05. This stage reads the answer off the operator and routes on it. Three
-constructs are routed today: ABS, MIN/MAX and `<>`:
+stage 05. This stage reads the answer off the operator and applies it.
 
 ```cpp
 const bool native_abs = use_native_constructs.abs;          // decided by stage 05
+const NativeConstructPolicy native_min_max {use_native_constructs.min_max,
+                                            force_native_constructs};
+VarIndexer var_indexer = VarIndexer::Build(solver_input);   // the flat column space
+
 DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, /*refuse_when_unbounded=*/!native_abs);
-if (!native_abs) { LinearizeAbsMaximize(solver_input); }
+if (native_abs) { EmitNativeAbs(solver_input, var_indexer); }
+else            { LinearizeAbsMaximize(solver_input); }
+LinearizeMinMaxConstraints(solver_input, var_indexer, decide_var_names, native_min_max);
+LinearizeNotEqual(solver_input, var_indexer, decide_var_names);
+LinearizeBilinear(solver_input, decide_var_names);
 ...
-if (native_abs) { EmitNativeAbs(solver_input, var_indexer); }   // after the VarIndexer exists
+LowerDecideConstructs(solver_input, var_indexer, decide_var_names, use_native_constructs);
 ```
 
 `use_native_constructs` is a `SolverConstructSupport` copied from
@@ -358,64 +365,54 @@ against, and a second, independently-derived answer is exactly how the plan and 
 solve come to disagree about what was lowered. Deferring the choice also kept stage 05
 from acting on it: see [`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
 
+**The `VarIndexer` is built before linearization, not after.** It reads `num_rows`, the
+variable scopes and the entity mappings — all settled by the time the first pass runs —
+and only the global block grows afterwards, with `total_vars` refreshed before the
+solve. Building it first is what lets every construct site emit in flat columns at the
+point it decides something, instead of stashing a decision for a second pass to
+execute. Four such deferrals used to exist, one per construct, and they existed for no
+reason but ordering.
+
 **MIN/MAX arrives as a policy, not an answer**, and the difference matters. It reaches
 this stage as a `NativeConstructPolicy` — the capability, plus whether a declared
 construct is used everywhere or only as a fallback — and the shipping policy is
 *fallback*: the lowering is the smaller model wherever it is valid, so native is
 reserved for the clause that has no valid Big-M at all. Whether a given clause has one
 is a question about **evaluated coefficients**, which nothing before this stage can
-answer, so this stage answers it — per clause, via `MinMaxBigMDerivable`, a
-non-throwing twin of the walk `DecideTightPerRowBigM` makes.
+answer, so this stage answers it — per clause, from the reach of that clause's own
+family. That is applying a decision to data, not making one; the distinction is the
+same one the `<>` range collapse already relies on. One statement can have a bounded
+clause and an unbounded one, and each gets the formulation it can actually use.
 
-That is applying a decision to data, not making one. The distinction is the same one
-the `<>` range collapse already relies on (`ClassifyNERow`), and it is why both arms
-now run for MIN/MAX: `ExtractNativeMinMaxConstraints` lifts out only the clauses that
-will be stated natively, and `LinearizeMinMaxIndicators` picks up whatever it left. One
-statement can have a bounded clause and an unbounded one, and each gets the formulation
-it can actually use.
-
-Both arms read the same stage-05 tag (`abs_aux_idx`, `abs_is_pos_bound`) — stage 05
-tags rather than fully lowering, because the Big-M constants are functions of
-evaluated data, and that tag *is* the native-construct record. Neither arm decides
-anything: all routing is the `if` above, and the adapters below only translate. That
-is what keeps the two comparable, and `DECIDB_NATIVE_CONSTRUCTS` A/B-tests them on one
-machine — `off` forces every construct down its lowering path, `force` states every
-declared one natively, and `on` (the default, and what an unset variable means) is the
-shipping policy. For MIN/MAX the A/B has to be `force` against `off`: on a bounded shape
-the default *is* the lowering, so comparing it against `off` would compare the lowering
-with itself.
+`DECIDB_NATIVE_CONSTRUCTS` A/B-tests the two arms on one machine: `off` forces every
+construct down its lowering path, `force` states every declared one natively, and `on`
+(the default, and what an unset variable means) is the shipping policy. For MIN/MAX the
+A/B has to be `force` against `off`: on a bounded shape the default *is* the lowering,
+so comparing it against `off` would compare the lowering with itself.
 
 The backend itself reaches this stage as a **name**. `PlannedSolverBackend()` resolves
 `solver_backend_name` through the registry at the two points that are about to solve —
 the primary solve and each diagnostic re-solve — so nothing here holds a solver handle
 it is not immediately using, and nothing here re-selects.
 
-The native arm runs later than the lowering one because a general constraint names
-flat columns, which exist only once the `VarIndexer` does — the same reason the
-aggregate `<>` expansion waits.
+**Only two constructs still choose between two emitters**, and the count used to be
+six. `<>` no longer chooses at all: it is emitted once, as conditional rows, and
+`LowerDecideConstructs` turns those into Big-M rows where the backend cannot state a
+condition. Every MIN/MAX — a constraint, a flat objective, a PER-nested objective, an
+outer aggregate over groups or group sums, and a composed term — goes through one
+`EmitExtremumLink`, which makes the choice once for all of them. What is left is ABS,
+where the two formulations are genuinely different objects rather than projections of
+one description: see [`../06_model_formulation/done.md`](../06_model_formulation/done.md)
+§9a, and the ABS entry in `todo.md`.
 
-MIN/MAX is gated in four places, because it has four hard forms — a constraint, a flat
-objective, a PER-nested objective, and a composed term. All four ask the same question
-of their own range, so a query cannot take one arm for its inner aggregate and the other
-for its outer one. The
-constraint side has one extra requirement: its tagged row reads as `SUM(inner) <op> K`
-while the clause means `MAX(inner) <op> K`, so the native arm must **lift it out of the
-model** (`ExtractNativeMinMaxConstraints`) rather than leave it for later. Nothing
-between the gate and the expansion may see a row it would misread. Both arms run the
-same bound classification first — vacuous and unreachable bounds are settled by
-direction, not by an encoding.
-
-Only the *hard* directions route through the gate. `MAX(e) <= K`, `MIN(e) >= K`,
+Only the *hard* directions need a choice at all. `MAX(e) <= K`, `MIN(e) >= K`,
 `MINIMIZE MAX`, `MAXIMIZE MIN` are exact with a one-sided envelope plus outer pressure:
 no Big-M, so nothing to replace.
 
-`<>` is gated on both its spellings — the per-row expansion and the deferred aggregate
-one — and both defer to the post-`VarIndexer` phase for the same reason. It is stated
-with **indicator constraints**, not a general constraint, because a `<>` clause has no
-row of its own and diagnosis can only drop what it can reach; see
-[`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9a. A clause whose
-range collapses to a plain inequality never had a disjunction to state and takes neither
-arm.
+Both ABS arms read the same stage-05 tag (`abs_aux_idx`, `abs_is_pos_bound`) — stage 05
+tags rather than fully lowering, because the Big-M constants are functions of evaluated
+data, and that tag *is* the native-construct record. Neither arm decides anything, which
+is what keeps the two comparable.
 
 **A member that is already a column is passed through, not copied.** A general
 constraint relates columns, so a member expression normally has to be pinned to a fresh

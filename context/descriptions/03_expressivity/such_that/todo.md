@@ -9,7 +9,7 @@ objective forms `MAXIMIZE + MAX` / `MINIMIZE + MIN`) is now implemented for both
 constraints and objectives. See `done.md` → "Composed MIN/MAX (both directions)".
 The base one-sided envelope pin (already emitted for both directions) is
 augmented, for a hard term, with a per-row binary `y_i`, `SUM(y_i) >= 1`, and a
-Big-M link (`EmitComposedHardMinMaxIndicators` in `ilp_linearization.cpp`); the M
+Big-M link (`EmitExtremumLink` in `ilp_linearization.cpp`); the M
 is the signed spread of the inner expression, shared with the flat hard-MIN/MAX
 objective's. A latent bug in the same landing — `ExtractCoefficientWithoutVariable`
 dropped a nested scalar factor like the `2` in `(2*x)*v` (which reaches the

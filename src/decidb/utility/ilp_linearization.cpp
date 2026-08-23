@@ -507,9 +507,9 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
                     // and the solver reports it as an infeasibility naming this clause
                     // rather than a rewrite refusing the query.
                     EvaluatedConstraint ec_no_solution = ec;
-                    // Drop the MIN/MAX marking as well as the indicator: what is emitted
-                    // is an ordinary per-row constraint, and nothing downstream should
-                    // read its LHS as an extremum again.
+                    // Drop the MIN/MAX marking: what is emitted is an ordinary per-row
+                    // constraint, and nothing downstream should read its LHS as an
+                    // extremum again.
                     ec_no_solution.minmax_clause_idx = DConstants::INVALID_INDEX;
                     ec_no_solution.minmax_agg_type.clear();
                     ec_no_solution.lhs_is_aggregate = false;

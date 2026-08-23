@@ -384,48 +384,91 @@ direction classify it first, so what still arrives is a bound with no reading at
 all — NaN — and the auto-`M` `norm(e, 0)` links, whose `M` bounds an expression
 rather than answering a comparison.
 
-### Hard MIN/MAX rows
+### Extremum links — the one place a MIN/MAX auxiliary is pinned
 
-`LinearizeMinMaxIndicators()` encodes every constraint stage 05 marked as a hard
-MIN/MAX, matching constraints to indicators by tag rather than position. Untagged
-constraints pass through unchanged.
+Every MIN/MAX in the model is the same statement: some auxiliary column equals the
+extremum of a family of linear expressions. `EmitExtremumLink()` is the only thing
+that writes one, and `ExtremumLinkSpec` is the only description of one. Five sites
+feed it — a hard MIN/MAX *constraint*'s `z` per group, the flat objective's `z`, a
+`PER` group's `z_g`, the outer `w` over those or over group sums, and each composed
+term's `z_k`. Each used to write the three formulations out by hand.
 
-The **marking** is `minmax_agg_type` (`"min"` / `"max"`), not `minmax_indicator_idx`,
-and the difference matters: only the lowering arm reads the indicator. It is
-nevertheless allocated on **both**, and the asymmetry is the reason. A backend that
-states `z = MAX(t..)` itself has no disjunction for one to switch — but which arm a
-clause takes is now decided per clause, at stage 08, from evaluated coefficients
-(native is the fallback for a clause with no valid Big-M; see
-[`../05_optimizer/done.md`](../05_optimizer/done.md) §0). Stage 05 cannot see that, and
-stage 08 can add columns to the global block but not row-scoped ones, so an indicator
-the lowering might need has to exist before routing starts.
+A link has **two independent sides**, and which of them the surrounding model already
+supplies is a property of the *site*, not of the construct:
 
-The cost is one binary per data row, referenced by nothing and presolved away, on the
-arm that no longer runs for ordinary bounded queries. That is a deliberate trade: it
-buys the right to choose the *common* arm on measured evidence rather than by omission.
-Contrast the ABS sign indicator (§ABS), which is still skipped — ABS is not routed by
-derivability, so its arm really is known at stage 05.
+- The **envelope** (`result >= member` for MAX) holds the result at or above every
+  member. An objective that minimizes it supplies this for free.
+- The **closing** side pins the result down onto some member: one Big-M row per
+  member and a `SUM(y) >= 1` that makes one bind. An objective that maximizes it
+  supplies this for free.
 
-| Direction | Per-row rows | Selector row |
-|---|---|---|
-| `MAX(expr) >= K` | `expr_r - M*y_r >= K - M` | `SUM(y) >= 1` |
-| `MIN(expr) <= K` | `expr_r + M*y_r <= K + M` | `SUM(y) >= 1` |
+An objective-side link therefore needs exactly one of the two, and which one is the
+easy/hard classification stage 05 makes. A composed clause sits in a *constraint*,
+where no optimization pressure acts on the auxiliary at all, so its hard direction
+needs both. A MIN/MAX constraint needs only the closing side: `MAX(e) >= K` needs
+`z <= MAX(e)`, or a `z` inflated past every member would satisfy a bound nothing else
+does — but nothing pushes `z` down, so the envelope would be rows for nothing.
 
-`ClassifyMinMaxBound()` reads an infinite bound by the direction it points before
-any `M` is asked for. A hard MAX is "some active row has LHS >= K", so `K = -inf`
-holds for every assignment and the group is dropped, while `K = +inf` is out of
-every row's reach and the group is re-emitted as a plain per-row constraint
-carrying that bound — an ordinary infeasibility naming the user's clause, not a
-refusal. MIN is the mirror image. The verdict is per group because
-`ReduceAggregateRhsPerGroup` has already collapsed a row-varying bound to the
-tightest one, which is also what settles a group whose rows mix finite and
-infinite bounds. A bound-side reducer is what reaches the mixed case from SQL —
-`MIN(x) <= MAX(cap) PER g` where `cap` holds an infinity in one group and finite
-values in another — so one group drops while the group beside it still
-linearizes. A literal bound gives every group the same verdict.
+**Native is the closing side's alternative, never the envelope's.** The envelope costs
+one row per member, needs no constant to dominate anything, and is *implied* by a
+general constraint rather than contradicted by it. So where a spec asks for it, it is
+emitted on both arms. The choice — `result = MIN/MAX(cols)` stated for the backend, or
+the Big-M family that encodes it — is made once, inside `EmitExtremumLink`, and the
+rule is `NativeConstructPolicy`: native is the fallback, taken where the family's reach
+is underivable and there is therefore no Big-M at all.
 
-Emitted rows carry `ConstraintKind::USER_MECHANISM`: they are rigid mechanism
-rows, not user parameters, so diagnosis does not offer to loosen them.
+**A member becomes a column only when it is not one already.** `ExtremumArgumentColumn`
+hands the general constraint the member's own column where the member is an exact
+renaming — one surviving term, unit coefficient, no constant. `MAX(x)` is that shape,
+and pinning `t = x` there costs one column and one equality row per member to say
+nothing; a general constraint *reads* its arguments, so presolve cannot substitute the
+copies away. Measured on `MAXIMIZE MAX(x)` at 15K rows: 0.97s with the copies, 0.29s
+without, same answer. `MAX(2 * x)` and `MAX(x + 1)` are genuine expressions and still
+earn a column, boxed by that member's own reach.
+
+**The closing Big-M is resolved by the caller**, because the family a link reduces over
+is not always the family of its own members: an outer MIN/MAX over group *sums* spans a
+group's worth of the per-row reach, not one row's. A MIN/MAX constraint's is the
+family's full span including constants (`family.hi - family.lo`), because a deactivated
+member row reads `z - expr <= M + const` and its worst case is `family.hi - member.lo`.
+
+### MIN/MAX constraints
+
+`LinearizeMinMaxConstraints()` turns every clause stage 05 marked as a hard MIN/MAX
+into what it says: an extremum column per group, and the user's own bound as a single
+row over it.
+
+`ClassifyMinMaxBound()` runs first and reads an infinite bound by the direction it
+points, before any `M` is asked for. A hard MAX is "some active row has LHS >= K", so
+`K = -inf` holds for every assignment and the group is dropped, while `K = +inf` is out
+of every row's reach and the group is re-emitted as a plain per-row constraint carrying
+that bound — an ordinary infeasibility naming the user's clause, not a refusal. MIN is
+the mirror image. The verdict is per group because `ReduceAggregateRhsPerGroup` has
+already collapsed a row-varying bound to the tightest one, which is also what settles a
+group whose rows mix finite and infinite bounds. A bound-side reducer is what reaches
+the mixed case from SQL — `MIN(x) <= MAX(cap) PER g` where `cap` holds an infinity in
+one group and finite values in another — so one group drops while the group beside it
+still linearizes. A literal bound gives every group the same verdict.
+
+**The clause reads the same on both arms, and that is the point of stating it this
+way.** The lowering used to spread the bound across a per-row Big-M family
+(`e_r - M*y_r >= K - M`) and carry `K` in a `rhs_mechanism_offset` so a diagnosis could
+quote it back; the native arm stated it once. Now both produce `z <op> K`, which is the
+line of SQL the user wrote, so an infeasible MIN/MAX is diagnosed identically whatever
+backend the host has. The cost is one column and one row per group; the per-member rows
+are the same rows the Big-M family emitted, with `z` in place of the bound.
+
+The outer row carries `ElasticShape::SHARED_SCALAR` for a literal bound, without which
+it does not fold: one `PER` clause emits one of these per group and they are all the
+same literal, so the user edits it once and every group moves. A genuinely per-group
+bound stays `PER_ROW_DATA` and reports a virtual offset. The extremum column is
+labelled with the clause text stage 05 recorded (`minmax_clause_labels`), so a repair
+names `MAX(x * c)` rather than an internal column.
+
+**No indicator is allocated before the rows that read it.** Stage 05 records only the
+marking — `minmax_agg_type`, and a `minmax_clause_idx` naming the clause. The binaries
+a Big-M pinning needs are global-block columns `EmitExtremumLink` creates for the
+members it actually writes, so the native arm allocates none at all.
 
 ### MIN/MAX objectives
 
@@ -435,19 +478,29 @@ rows pin: `z` for the flat `MAXIMIZE MAX(expr)` spelling, and for the nested
 `OUTER(INNER(expr)) PER key` spelling a `z_g` per group plus an outer `w` over
 them. The objective is then just that auxiliary.
 
-Each level is *easy* or *hard*. Easy (`MINIMIZE`+`MAX`, `MAXIMIZE`+`MIN`) means
-the optimization direction already drives the auxiliary onto the extremum, so one
-envelope row per active row is enough — no binaries. Hard (`MAXIMIZE`+`MAX`,
-`MINIMIZE`+`MIN`) pushes the auxiliary the other way, so the envelope alone would
-let it float; those levels add one indicator binary per active row, a Big-M link
-on the opposite side, and `SUM(y) >= 1` to make one row bind. `M` is the global
-spread of the objective expression over the rows (`max_r exprmax - min_r exprmin`),
-which dominates `|z - expr_r|` at every row.
+Each level is *easy* or *hard*, and that classification is exactly which of the two
+sides of an extremum link the objective supplies for free. Easy (`MINIMIZE`+`MAX`,
+`MAXIMIZE`+`MIN`) means the direction already drives the auxiliary onto the extremum,
+so the closing side is free and only the envelope is emitted — no binaries. Hard
+(`MAXIMIZE`+`MAX`, `MINIMIZE`+`MIN`) pushes the auxiliary the other way, so the
+envelope is free and the closing side is emitted instead. `M` is the global spread of
+the objective expression over the rows (`max_r exprmax - min_r exprmin`), which
+dominates `|z - expr_r|` at every row.
+
+This function builds members and specs; it emits nothing itself. All four of its links
+go through `EmitExtremumLink`, so which formulation each takes is decided once, in one
+place, by the rule described above — and a query cannot take the native arm for its
+inner aggregate and the lowered arm for its outer one, because all four read the same
+row family's derivability.
 
 Rows are skipped where every coefficient is zero, which keeps a binary and a row
 off each vacuous row; a `PER` group left with no active row has its `z_g` pinned to
 0 by its bounds instead, since the vacuous rows it used to emit were what held it
-there. The shape flags (`flat_agg`, `per_inner_agg`, easy/hard per level, the
+there. The outer link over group *sums* drops an identically-zero group from the
+**envelope** only: there the optimization direction settles it, while on the closing
+side every group is a real member of the extremum and an all-zero one participates as
+the constant 0 it is. That filter is applied where the members are built, not inside
+the emitter, because it is a fact about the site. The shape flags (`flat_agg`, `per_inner_agg`, easy/hard per level, the
 inner-AVG rewrite) arrive from stage 05 as `MinMaxObjectiveSpec`; the `WHEN` mask
 and the coefficients arrive evaluated.
 
@@ -455,8 +508,8 @@ and the coefficients arrive evaluated.
 
 A composed clause mixes reducers additively — `SUM(a) + 2*MAX(b) <= K`, or the same
 in an objective. `LinearizeComposedMinMaxConstraint()` and
-`LinearizeComposedMinMaxObjective()` give every MIN/MAX term its own global `z_k`
-with the same envelope + indicator layer as above, then compose: the constraint
+`LinearizeComposedMinMaxObjective()` give every MIN/MAX term its own global `z_k`,
+pinned by the same `EmitExtremumLink` every other MIN/MAX uses, then compose: the constraint
 sums the `z_k`s and the SUM/AVG terms into one outer row against the constant RHS,
 the objective writes the same composition into `global_obj_coeffs` and
 `objective_coefficients`. Each `z_k` is labelled with the user's source text
@@ -468,14 +521,31 @@ coefficients, the query-wide factor the canonicalizer peeled off the reducer, th
 row mask the reducer runs over — is already evaluated by stage 08, and an empty row
 set is refused there before these functions see it.
 
+A composed term needs **both** sides of its link in the hard direction, and that is the
+one place the two-flag spec earns its keep. The clause sits in a constraint, so nothing
+drives `z_k` at all: the envelope holds it against the members and the closing side
+pins it onto one. In the easy direction the outer comparison supplies the closing side
+and the envelope alone is exact. Every term's reach is walked once by
+`ComposedTermRange` and reused three times — as the auxiliary's box, as the closing
+Big-M, and as the box of any column the native arm pins — so the arms cannot disagree
+about what the term can reach.
+
 ### `<>` disjunctions
 
-`LinearizeNotEqual()` encodes `x <> K` as the disjunctive pair
-`x - M*z <= K-1` / `x - M*z >= K+1-M`, where `z` is the binary stage 05 created.
-Both rows carry the same `ne_indicator_idx`, which is what lets the elastic engine
-group them and offer removal rather than loosening half a disjunction.
+`LinearizeNotEqual()` encodes `x <> K` as the disjunction it is: two **conditional
+rows**, `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1`, on a binary of that
+instance's own. That is the only spelling it emits. Nothing here asks which backend is
+in play and nothing here computes a bound — a conditional row needs no constant to
+dominate it, so whether a contributing variable is bounded is a question for
+`LowerDecideConstructs` and only for it.
 
-Two guards run before any `M` is asked for, and the order matters:
+Both halves carry the clause's `indicator_col` **on the row**, which is what lets the
+elastic engine group them and offer removal rather than loosening half a disjunction.
+That is also why `<>` is stated as a conditional row rather than as a general
+constraint: a general constraint carries no row for diagnosis to reach, and dropping
+the clause is the only repair a `<>` has.
+
+Two guards run before anything is emitted, and the order matters:
 
 - **`NELhsIsIntegerValued`** is an invariant check, not a user-facing refusal. The ±1 band
   is only exact on the integer lattice; on a continuous quantity it would silently cut the
@@ -487,12 +557,18 @@ Two guards run before any `M` is asked for, and the order matters:
 - **`NEIsIntegerValuedRhs`** *drops* a comparison whose bound no integer can equal,
   because every assignment already satisfies it. Emitting the pair anyway would
   wrongly exclude `floor(K)` and `ceil(K)`. An infinite `K` is the same case for the
-  same reason, and it must drop here rather than reach the Big-M — the predicate
-  requires finiteness outright, since `inf - round(inf)` is NaN and every comparison
-  against NaN is false.
+  same reason.
 
 A per-row spelling with a row-varying bound masks only its non-integer rows, via
 `row_group_ids`, instead of dropping the whole constraint.
+
+**The binary is allocated where the disjunction is written**, one global per emitted
+instance, and labelled with the clause text stage 05 recorded (`ne_clause_labels`).
+Stage 05 records only the marking, `ne_clause_idx`; it used to allocate a row-scoped
+Boolean per data row instead, and three of the four things a `<>` can become do not use
+one — an aggregate spelling needs one binary per *group*, a collapsed one needs a
+column but no disjunction, and a dropped one needs nothing. None of those is knowable
+before the data is seen.
 
 #### The range collapse
 
@@ -536,24 +612,21 @@ Per-row and aggregate spellings differ in granularity. Groups are already emitte
 independently, so each gets the encoding its own range earns. A per-row constraint shares
 one `EvaluatedConstraint` across every row, so a mixed verdict would mean splitting it into
 up to three constraints with complementary row masks; instead the verdict must be unanimous
-across active rows, and a mixed one keeps the Big-M pair unsplit.
+across active rows, and a mixed one keeps the disjunction unsplit.
 
-A collapsed row keeps its `ne_indicator_idx` even though the indicator no longer appears in
-it, and a collapsed aggregate group still allocates its `z`. That is what carries the
-clause's label and groups its rows for the remove-only `<>` repair, so diagnosis reads the
-same whichever encoding a clause received. The removal engine falls back to a range-derived
-`M₂` when it finds no indicator coefficient to read one from — without that fallback the
-group would get a coefficient of 0 and the removal would be offered but inert.
+A collapsed row **still allocates its binary**, appearing in no row. That column is what
+carries the clause's text and what groups the clause's rows for the remove-only `<>`
+repair, so diagnosis reads the same whichever shape a clause received — it must still be
+offered as a `<>` to drop rather than as a bound the user can nudge. The removal engine
+falls back to a range-derived `M₂` when it finds no indicator coefficient to read one
+from; without that fallback the group would get a coefficient of 0 and the removal would
+be offered but inert. A row dropped as a tautology allocates nothing at all.
 
-**Aggregate spellings cannot expand in place.** They need one *global* binary per
-group, and the group's `M` must cover the summed range over its rows — a single
-per-row bound is far too small at scale and would silently cap the aggregate. So
-`LinearizeNotEqual` moves them to a deferred list and
-`ExpandDeferredAggregateNotEqual()` finishes them once `VarIndexer` exists,
-emitting `SolverInput::RawConstraint`s in flat column space. Each group allocates
-its own `z` and carries the clause text stage 05 recorded, so a dropped aggregate
-`<>` can be named in a repair. Groups skipped by the integer-RHS guard allocate no
-`z`, so the model stays clean.
+**Aggregate spellings expand per group.** They need one binary per group rather than per
+row, and their LHS is the group's rows summed onto one row, so `ExpandAggregateNotEqual`
+accumulates each group's coefficients and emits the same two conditional rows over the
+sum. Groups skipped by the integer-RHS guard allocate no binary, so the model stays
+clean.
 
 ### Bilinear products
 
@@ -616,7 +689,7 @@ formulation choice — the arm is known at the moment the variable would be allo
 the row's own C1: `inner_r = k_r - sum_{v != aux} c_v x_v`, walked with
 `DecideRowSignedRange` (skipping the auxiliary) and folded in with
 `AuxRange::CoverRowSided` — the same per-row machinery
-`ExpandNativeMinMaxConstraints` already uses, keeping each end it can derive
+`LinearizeMinMaxConstraints` already uses, keeping each end it can derive
 independently. It previously reused `abs_range`, which is the **maximum over rows**, so
 every row but the extreme one was handed more room than it can reach; and because
 `abs_range` is one number per link, a single unbounded row left every row's column
@@ -687,16 +760,21 @@ no Big-M, and they carry the clause provenance the elastic engine reads.
 `SolverModel::indicator_constraints` is the second native list, and it exists because
 `<>` needs something general constraints cannot give: a **row**.
 
-A `<>` clause has no row of its own. The two Big-M disjunction rows *are* the clause,
-both `USER_MECHANISM`, and dropping them is the only repair infeasible diagnosis can
-offer for it. Expressed as a general constraint the clause would vanish from the matrix
-entirely and become undiagnosable. An indicator constraint — `binary == value` implies
-this row — keeps the row, so the removal dial wires its `w` into the implied row exactly
-as it does into a matrix row, and the diagnosis is unchanged. That is why the two lists
-are separate rather than one list with a kind: the difference is not vocabulary, it is
+A `<>` clause has no row of its own. Its two disjunction rows *are* the clause, both
+`USER_MECHANISM`, and dropping them is the only repair infeasible diagnosis can offer
+for it. Expressed as a general constraint the clause would vanish from the matrix
+entirely and become undiagnosable. A conditional row — `binary == value` implies this
+row — keeps the row, so the removal dial wires its `w` into the implied row exactly as
+it does into a matrix row, and the diagnosis is unchanged. That is why the two lists are
+separate rather than one list with a kind: the difference is not vocabulary, it is
 whether a row exists.
 
-`z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1` say what the Big-M pair said, with no
+`SolverInput::IndicatorConstraintSpec` therefore **holds a `RawConstraint`** rather than
+restating its fields. A conditional row and the matrix row it lowers to are the same row
+with the same provenance, and composing them is what makes that literally true instead
+of a convention two field lists have to keep.
+
+`z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1` say what a Big-M pair says, with no
 constant to dominate the row — so no contributing variable needs a finite bound.
 
 Two consequences follow from a construct having no rows. `DumpSolverModel` renders
@@ -705,6 +783,44 @@ rows quietly disappearing. And `BuildUnboundedRayFallbackModel` **declines** a m
 that has any — or any indicator constraint — exactly as it declines a quadratic one: the
 ray model rebuilds the matrix row by row, so a conditional row cannot come along either,
 and dropping one would relax the model past what a ray argument permits.
+
+---
+
+## 9b. `LowerDecideConstructs` — the one place a construct is lowered
+
+The last pass of this stage. Every construct site above emits the **semantic** form and
+nothing else: a `<>` becomes a pair of conditional rows whether or not any backend can
+state one. This pass reads what the chosen backend declared — the answer stage 05
+recorded on the plan, carried here as a value, not a fresh question to a backend — and
+rewrites whatever it cannot state into ordinary rows.
+
+Lowering a conditional row is one rewrite: give it a Big-M term on its own binary, sized
+so the row is exactly slack when the condition is off.
+
+| Condition | Sense | Emitted |
+|---|---|---|
+| `z == 0` | `<=` | `a·x - M z <= b` |
+| `z == 0` | `>=` | `a·x + M z >= b` |
+| `z == 1` | `<=` | `a·x + M z <= b + M` |
+| `z == 1` | `>=` | `a·x - M z >= b - M` |
+
+`M` is the distance from the row's bound to the far end of its own reach —
+`max(a·x) - b` for a `<=` row, `b - min(a·x)` for a `>=` one — read off the boxes of the
+columns actually in that row, with each coefficient's sign respected before an end is
+blamed. Relaxed by exactly that much, the row admits everything the columns can produce
+and cuts nothing. Plus a one-unit margin: the `<>` bound is `K±1` on an integer lattice,
+so a unit of slack costs nothing there and keeps the relaxed branch clear of
+floating-point wobble in the solver's own row activity.
+
+Derived **per half**, from that half's own row. The two halves used to share one
+constant, maximised over every row of the clause; on the corpus an aggregate `<>` over
+four binary columns went from `M = 21` on both halves to `M = 22` and `M = 2`.
+
+It runs last because a Big-M reads column boxes and the sites above are what narrow
+them. It refuses, naming a column to bound, where no finite `M` exists — and that
+refusal belongs here and only here, because a construct the backend states needs no
+constant to dominate it. `VarIndexer::OwnerOf` is what lets a pass working in flat
+columns still name a decide variable in that message.
 
 ---
 

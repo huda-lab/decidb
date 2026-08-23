@@ -325,7 +325,7 @@ engine actually spent was the bound's. Pinned by `TestNativeConstructDiagnosis` 
 `test/decide/tests/test_query_diagnostics_relation.py`, which applies the reported edit and
 re-runs the query, and compares the native and lowered arms against each other.
 
-**A natively-stated `PER` clause folds like any other.** `ExpandNativeMinMaxConstraints`
+**A `PER` MIN/MAX clause folds like any other.** `LinearizeMinMaxConstraints`
 emits one bound row per group, all carrying the user's single literal, and stamps them
 from `EvaluatedConstraint::rhs_is_shared_scalar` — the same flag the linear builder reads,
 so the native and lowered arms classify one clause identically. Left `UNSET` those rows
@@ -568,16 +568,19 @@ removal mechanic, weighting, and reporting are identical.
 at the two `<>` mechanism sites (per-row *and* aggregate), so it does triple duty: it marks a
 row as removable (`!= INVALID`), groups the disjunction pair (rows sharing one `z` = one `<>`
 instance), and sources both the removal Big-M and the label.
-- **Per-row.** It carries the `<>`'s indicator decide-var on the expanded rows:
-  `physical_decide.cpp` stamps `ec1.ne_indicator_idx = ec2.ne_indicator_idx =
-  indicator_var_idx` on the two disjunction rows, and the per-row builder site
-  (`ilp_model_builder.cpp`) resolves `provenance.indicator_col = indexer.Get(ne_indicator_idx,
-  row)`.
-- **Aggregate.** The deferred aggregate-`<>` expansion (`physical_decide.cpp`) allocates one
-  global binary `z` per group and emits its two rows as `SolverInput::RawConstraint`s with
-  `indicator_col = z_idx`. The global-constraint copy in `ilp_model_builder.cpp` propagates
-  `raw.indicator_col → constr.provenance.indicator_col`, so the global rows group exactly like
-  per-row rows.
+Both spellings set it the same way, because both are now emitted in flat columns by
+`LinearizeNotEqual` (`ilp_linearization.cpp`, stage 06):
+- **Per-row.** One global binary `z` per emitted instance, stamped onto both halves of that
+  row's disjunction — and onto the single row a *collapsed* `<>` becomes, which is what keeps
+  a collapsed clause offered as a `<>` to drop rather than as a bound to nudge.
+- **Aggregate.** One global binary `z` per group, stamped on that group's two rows over the
+  group's summed LHS.
+
+The rows reach the model either as `SolverInput::RawConstraint`s or, where the backend states
+the condition itself, as `IndicatorConstraintSpec`s — which *hold* a `RawConstraint`, so the
+provenance is the same record and not a second copy of the same fields. `ilp_model_builder.cpp`
+propagates `indicator_col` from both lists, so a conditional row groups exactly like a matrix
+row.
 
 The previously-INVALID clause_id of these rows is untouched, so no existing clause-id consumer
 is disturbed.

@@ -63,12 +63,15 @@ must refuse the query outright. Whether a given clause has a Big-M depends on ev
 coefficients, so stage 08 answers *that* — it applies this policy to data only it can
 see, exactly as the `<>` range collapse does. It does not re-decide the policy.
 
-One consequence is recorded where it lands: `EmitHardMinMaxIndicator` now allocates its
-indicator on **both** arms. It used to skip the native one, since a general constraint
-has no disjunction to switch; but a stage that cannot see the data cannot know which
-arm a clause takes, and stage 08 can add columns to the global block but not row-scoped
-ones. The cost is one binary per data row, unread and presolved away, on the arm that
-is now rare.
+One consequence is recorded where it lands: **stage 05 allocates no indicator variable
+for a MIN/MAX or a `<>` at all.** It briefly allocated one on both arms, because a stage
+that cannot see the data cannot know which arm a clause takes and stage 08 could add
+columns to the global block but not row-scoped ones — so the native arm carried a binary
+per data row that nothing referenced. Both constructs now allocate their binaries in the
+pass that emits the rows reading them, in the global block, so the question never arises:
+`EmitHardMinMaxClause` and `FindNotEqualConstraints` record only the **marking** — which
+clause this is, what it reduces with, and the text to call it in a diagnosis — and the
+clause index rides the tag.
 
 The choice is made **once** and rides the plan: `LogicalDecide` → `PhysicalDecide` →
 the solve → every diagnostic re-solve. Nothing downstream selects again — stage 08
@@ -296,7 +299,7 @@ loosened. Atomic source-level DROP repair is recorded in `todo.md`.
 **Constraints.** An *easy* direction (`MAX(...) <= K`, `MIN(...) >= K`) strips the
 reducer and becomes a per-row constraint — one row per data row, no Big-M. A *hard*
 direction creates a Boolean indicator per active row and rewrites to
-`SUM` + linking rows (`EmitHardMinMaxIndicator`). Equality splits into both
+`SUM` + linking rows (`EmitHardMinMaxClause`). Equality splits into both
 directions. `WHEN` / `PER` wrappers are preserved; `out_was_easy` tells the caller
 whether `PER` should be stripped, since an easy rewrite has already become
 per-row.
@@ -377,7 +380,7 @@ use — correct, and tighter than widening the per-row range by the row count.
 ### `<>` — `RewriteNotEqual`
 
 Each `COMPARE_NOTEQUAL` gets a Boolean indicator recorded in
-`ne_indicator_indices`. The Big-M disjunction rows are generated at execution
+`ne_clause_labels`. The disjunction rows are generated at execution
 time, once bounds are known.
 
 ### AVG → SUM — `RewriteAvgToSum`

@@ -103,7 +103,7 @@ Grouped by who writes it:
 **From the canonicalizer** — `objective_constant_offset`.
 
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
-`force_native_constructs`, `ne_indicator_indices`, `minmax_indicator_links`, `bilinear_links`,
+`force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
 `abs_maximize_links`, `aux_var_expressions`, `composed_minmax_constraints`,
 `composed_minmax_objective_terms`, `flat_objective_agg` /
 `flat_objective_is_easy`, and the five `per_*` objective fields.
