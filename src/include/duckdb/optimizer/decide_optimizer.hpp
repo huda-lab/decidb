@@ -55,7 +55,7 @@ private:
 
 	//! Rewrite not-equal (<>) constraints by creating auxiliary indicator variables.
 	//! For each COMPARE_NOTEQUAL found in the constraint tree, creates a BOOLEAN
-	//! indicator variable and records its index in ne_indicator_indices.
+	//! indicator variable and records its index in ne_clause_labels.
 	//! The actual Big-M constraints are generated at execution time when bounds are known.
 	void RewriteNotEqual(LogicalDecide &decide);
 

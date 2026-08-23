@@ -1702,7 +1702,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
         eval_const.minmax_clause_idx = constraint->minmax_clause_idx;
         eval_const.minmax_agg_type = constraint->minmax_agg_type;
-        eval_const.ne_indicator_idx = constraint->ne_indicator_idx;
+        eval_const.ne_clause_idx = constraint->ne_clause_idx;
         eval_const.abs_aux_idx = constraint->abs_aux_idx;
         eval_const.abs_is_pos_bound = constraint->abs_is_pos_bound;
         eval_const.kind = constraint->kind;
@@ -2158,7 +2158,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // in the deferred NE expansion. Mixed AVG/non-AVG terms or bilinear/quadratic
         // LHS fall through to the existing path (which may still reject).
         bool ne_avg_hoist = false;
-        if (constraint->ne_indicator_idx != DConstants::INVALID_INDEX &&
+        if (constraint->ne_clause_idx != DConstants::INVALID_INDEX &&
             constraint->lhs_is_aggregate && !constraint->has_bilinear && !constraint->has_quadratic &&
             !constraint->lhs_terms.empty()) {
             ne_avg_hoist = true;
@@ -2609,6 +2609,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // hand the constraints and the formulation links over before the first pass.
     solver_input.constraints = std::move(gstate.evaluated_constraints);
     solver_input.minmax_clause_labels = minmax_clause_labels;
+    solver_input.ne_clause_labels = ne_clause_labels;
     for (auto &link : bilinear_links) {
         solver_input.bilinear_links.push_back(
             BilinearLinkSpec {link.aux_idx, link.bool_var_idx, link.other_var_idx});
@@ -2760,8 +2761,8 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // Encode `<>` as the disjunction it is: two conditional rows per instance. Whether a
     // condition is stated to the backend or encoded with a Big-M is settled once, by
     // LowerDecideConstructs at the end of this function.
-    if (!ne_indicator_indices.empty()) {
-        LinearizeNotEqual(solver_input, var_indexer, aux_var_expressions, decide_var_names);
+    if (!ne_clause_labels.empty()) {
+        LinearizeNotEqual(solver_input, var_indexer, decide_var_names);
     }
 
     // Emit the McCormick envelope for every bilinear w = b * x auxiliary.

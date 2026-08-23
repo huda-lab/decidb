@@ -99,7 +99,7 @@ public:
     vector<bool> is_boolean_var;
 
     // Indices of auxiliary indicator variables for not-equal (<>) constraints
-    vector<idx_t> ne_indicator_indices;
+    vector<string> ne_clause_labels;
 
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<string> minmax_clause_labels;

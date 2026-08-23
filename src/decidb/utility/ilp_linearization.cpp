@@ -188,7 +188,7 @@ static idx_t FindUnboundedContributor(const EvaluatedConstraint &ec,
                                       const vector<double> &upper_bounds) {
     for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
         idx_t v = ec.variable_indices[t];
-        if (v == DConstants::INVALID_INDEX || v == ec.ne_indicator_idx || v == ec.abs_aux_idx) {
+        if (v == DConstants::INVALID_INDEX || v == ec.abs_aux_idx) {
             continue;
         }
         if (v < upper_bounds.size() && v < lower_bounds.size() &&
@@ -219,7 +219,7 @@ static idx_t FindUnboundedContributor(const EvaluatedConstraint &ec,
 //! Which construct asked for this Big-M, for the refusal above. Read off the
 //! indicator the rewrite attached, so the message names what the user wrote.
 static const char *DescribeBigMConstruct(const EvaluatedConstraint &ec) {
-    if (ec.ne_indicator_idx != DConstants::INVALID_INDEX) {
+    if (ec.ne_clause_idx != DConstants::INVALID_INDEX) {
         return "<>";
     }
     if (ec.abs_aux_idx != DConstants::INVALID_INDEX) {
@@ -328,7 +328,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
         // A row that means something other than what its terms say: a hard MIN/MAX
         // (marked by its aggregate name, which both arms carry), a `<>` disjunction, or
         // an ABS envelope. None of them implies a bound on anything.
-        if (!ec.minmax_agg_type.empty() || ec.ne_indicator_idx != DConstants::INVALID_INDEX ||
+        if (!ec.minmax_agg_type.empty() || ec.ne_clause_idx != DConstants::INVALID_INDEX ||
             ec.abs_aux_idx != DConstants::INVALID_INDEX) {
             continue;
         }
@@ -889,27 +889,38 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
     return seen ? verdict : NECollapse::DISJUNCTION;
 }
 
-//! One per-row `<>`, as the disjunction it is: `z == 0 => LHS <= K-1` and
-//! `z == 1 => LHS >= K+1`, one pair per active row against that row's own copy of the
-//! row-scoped binary stage 05 allocated.
+//! The clause text stage 05 recorded for a `<>`, naming every binary it allocates so a
+//! diagnosis renders `SUM(x) <> 0` rather than an internal column.
+static string NotEqualClauseLabel(const SolverInput &input, const EvaluatedConstraint &ec) {
+    if (ec.ne_clause_idx < input.ne_clause_labels.size()) {
+        return input.ne_clause_labels[ec.ne_clause_idx];
+    }
+    return string();
+}
+
+//! One per-row `<>`, in whichever shape its own reachable range earns.
 //!
-//! This is the only spelling emitted. A backend that states indicator constraints takes
-//! the pair as written; on one that does not, `LowerDecideConstructs` gives each half the
-//! Big-M that switches it. Nothing here asks which backend is in play, and nothing here
-//! computes a bound — that is the point: a conditional row needs no constant to dominate
-//! it, so whether a contributing variable is bounded is a question for the lowering and
-//! only for the lowering.
-static void EmitNotEqualDisjunction(SolverInput &input, const VarIndexer &indexer,
-                                    const EvaluatedConstraint &ec) {
+//! `DISJUNCTION` is the general case: `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1`,
+//! a pair of CONDITIONAL ROWS on a binary of this row's own. That is the only spelling
+//! emitted — whether the chosen backend states a condition itself or needs it encoded
+//! with a Big-M is settled once, afterwards, by `LowerDecideConstructs`, so nothing here
+//! asks for a bound or consults a backend.
+//!
+//! A COLLAPSED row is a plain inequality: one branch was unreachable, so there is no
+//! disjunction left. It still allocates the binary, appearing in no row, because that
+//! column is what carries the clause's text and what groups the clause's rows for the
+//! remove-only `<>` repair — diagnosis must still offer this clause as a `<>` to drop
+//! rather than as a bound the user can nudge. A row dropped as a tautology allocates
+//! nothing at all.
+static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
+                             const EvaluatedConstraint &ec, NECollapse collapse,
+                             const string &label) {
     const idx_t num_rows = input.num_rows;
     bool has_groups = !ec.row_group_ids.empty();
-    idx_t z_var = ec.ne_indicator_idx;
     for (idx_t r = 0; r < num_rows; r++) {
         if (has_groups && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
             continue; // masked out by WHEN/PER, or a non-integer bound on this row
         }
-        // `z` is row-scoped: each row's disjunction gets its own binary.
-        int z_col = static_cast<int>(indexer.Get(z_var, r));
         double k = ec.rhs_values.Get(r);
 
         vector<int> indices;
@@ -929,31 +940,56 @@ static void EmitNotEqualDisjunction(SolverInput &input, const VarIndexer &indexe
             coefficients.push_back(coef);
         }
 
-        // Both halves carry the clause's provenance and its indicator column, so the
-        // infeasible removal dial groups them into one droppable `<>` — and they carry
-        // it on the ROW, which is why `<>` is stated as a conditional row rather than as
-        // a general constraint. A general constraint has no row for diagnosis to reach,
-        // and dropping the clause is the only repair a `<>` has.
+        // Each row's disjunction gets its own binary, allocated HERE — by the pass that
+        // knows whether this row has a disjunction at all. Stage 05 used to allocate a
+        // row-scoped one per data row before the range collapse could be computed, so a
+        // clause that collapsed, or dropped as a tautology, or turned out to be an
+        // aggregate (which needs a global per group instead), left a column per row that
+        // nothing referenced.
+        idx_t z_col = AddGlobalBinaryAux(input, indexer, 0.0, label);
+
+        // The provenance every shape of this clause carries. `indicator_col` is both the
+        // marker that says "remove-only `<>`" and the key that groups the clause's rows.
+        auto stamp = [&](SolverInput::RawConstraint &rc) {
+            rc.kind = ConstraintKind::USER_MECHANISM;
+            rc.shape = ElasticShape::PER_ROW_DATA;
+            rc.source_clause_id = ec.source_clause_id;
+            rc.repair_group_id = ec.repair_group_id;
+            rc.indicator_col = z_col;
+            rc.group_key = has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX;
+            // The folded LHS constant, so a report quotes the user's `K` and not the
+            // bound this fold produced.
+            rc.rhs_mechanism_offset = -constant;
+        };
+
+        if (collapse != NECollapse::DISJUNCTION) {
+            bool lower = collapse == NECollapse::LOWER_ONLY;
+            SolverInput::RawConstraint rc;
+            rc.indices = std::move(indices);
+            rc.coefficients = std::move(coefficients);
+            rc.sense = lower ? '<' : '>';
+            rc.rhs = (lower ? k - 1.0 : k + 1.0) - constant;
+            stamp(rc);
+            input.global_constraints.push_back(std::move(rc));
+            continue;
+        }
+
+        // Both halves carry the clause's provenance ON THE ROW, which is why `<>` is
+        // stated as a conditional row rather than as a general constraint: a general
+        // constraint has no row for diagnosis to reach, and dropping the clause is the
+        // only repair a `<>` has.
         // The row's terms are taken by value so the half that no longer needs them can
         // hand them straight over: only the first half copies.
         auto emit = [&](vector<int> row_indices, vector<double> row_coefficients, int binval,
                         char sense, double rhs) {
             SolverInput::IndicatorConstraintSpec ic;
-            ic.binary_column = z_col;
+            ic.binary_column = static_cast<int>(z_col);
             ic.binary_value = binval;
             ic.row.indices = std::move(row_indices);
             ic.row.coefficients = std::move(row_coefficients);
             ic.row.sense = sense;
             ic.row.rhs = rhs;
-            ic.row.kind = ConstraintKind::USER_MECHANISM;
-            ic.row.shape = ElasticShape::PER_ROW_DATA;
-            ic.row.source_clause_id = ec.source_clause_id;
-            ic.row.repair_group_id = ec.repair_group_id;
-            ic.row.indicator_col = static_cast<idx_t>(z_col);
-            ic.row.group_key = has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX;
-            // The folded LHS constant, so a report quotes the user's `K` and not the
-            // bound this fold produced.
-            ic.row.rhs_mechanism_offset = -constant;
+            stamp(ic.row);
             input.indicator_constraints.push_back(std::move(ic));
         };
         // z = 0  =>  LHS <= K - 1
@@ -965,11 +1001,9 @@ static void EmitNotEqualDisjunction(SolverInput &input, const VarIndexer &indexe
 
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                     vector<EvaluatedConstraint> &deferred_aggregate,
-                                    const vector<pair<idx_t, string>> &aux_var_expressions,
                                     const vector<string> &var_names);
 
 void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
-                       const vector<pair<idx_t, string>> &aux_var_expressions,
                        const vector<string> &var_names) {
     const idx_t num_rows = input.num_rows;
 
@@ -978,7 +1012,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
     vector<EvaluatedConstraint> deferred_aggregate;
     vector<EvaluatedConstraint> new_constraints;
     for (auto &ec : input.constraints) {
-        if (ec.ne_indicator_idx == DConstants::INVALID_INDEX) {
+        if (ec.ne_clause_idx == DConstants::INVALID_INDEX) {
             new_constraints.push_back(std::move(ec));
             continue;
         }
@@ -1034,55 +1068,18 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
             }
         }
 
-        auto BuildShiftedRhs = [&](double shift) {
-            if (ec.rhs_values.IsUniform()) {
-                return CoefficientColumn::MakeScalar(ec.rhs_values.UniformValue() + shift, num_rows);
-            }
-            auto col = CoefficientColumn::MakeDense(num_rows, 0.0);
-            for (idx_t r = 0; r < num_rows; r++) {
-                col.Set(r, ec.rhs_values.Get(r) + shift);
-            }
-            return col;
-        };
-
-        // Range collapse, before any Big-M is computed. When the LHS cannot reach the
-        // far side of K, one disjunct is dead and the constraint is a plain inequality.
+        // Range collapse, decided before anything is emitted. When the LHS cannot reach
+        // the far side of K, one disjunct is dead and the clause is a plain inequality.
         NECollapse collapse = ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds,
                                                    input.rigid_upper_bounds);
         if (collapse == NECollapse::ALWAYS_TRUE) {
             continue; // excludes nothing reachable — drop, like the tautology case
         }
-        if (collapse != NECollapse::DISJUNCTION) {
-            bool lower = collapse == NECollapse::LOWER_ONLY;
-            EvaluatedConstraint ec_collapsed;
-            ec_collapsed.variable_indices = ec.variable_indices;
-            ec_collapsed.row_coefficients = ec.row_coefficients;
-            ec_collapsed.rhs_values = BuildShiftedRhs(lower ? -1.0 : 1.0);
-            ec_collapsed.comparison_type = lower ? ExpressionType::COMPARE_LESSTHANOREQUALTO
-                                                 : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-            ec_collapsed.lhs_is_aggregate = false; // per-row
-            ec_collapsed.row_group_ids = ec.row_group_ids;
-            ec_collapsed.num_groups = ec.num_groups;
-            ec_collapsed.group_labels = ec.group_labels;
-            ec_collapsed.qualifier = ec.qualifier;
-            ec_collapsed.source_clause_id = ec.source_clause_id;
-            ec_collapsed.repair_group_id = ec.repair_group_id;
-            ec_collapsed.kind = ConstraintKind::USER_MECHANISM;
-            // Keep the `<>` provenance even though the indicator no longer appears in
-            // the row: diagnosis must still offer this clause as a remove-only `<>`
-            // rather than as a bound the user can nudge, whichever encoding it received.
-            // The removal engine falls back to a range-derived M when it finds no
-            // indicator coefficient to read one from.
-            ec_collapsed.ne_indicator_idx = ec.ne_indicator_idx;
-            new_constraints.push_back(std::move(ec_collapsed));
-            continue;
-        }
-
-        EmitNotEqualDisjunction(input, indexer, ec);
+        EmitNotEqualRows(input, indexer, ec, collapse, NotEqualClauseLabel(input, ec));
     }
     input.constraints = std::move(new_constraints);
 
-    ExpandAggregateNotEqual(input, indexer, deferred_aggregate, aux_var_expressions, var_names);
+    ExpandAggregateNotEqual(input, indexer, deferred_aggregate, var_names);
 }
 
 //! The AGGREGATE spelling of `<>`. It cannot expand against the row-scoped indicator
@@ -1093,7 +1090,6 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
 //! repair.
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
                                     vector<EvaluatedConstraint> &deferred_aggregate,
-                                    const vector<pair<idx_t, string>> &aux_var_expressions,
                                     const vector<string> &var_names) {
     if (deferred_aggregate.empty()) {
         return;
@@ -1118,17 +1114,9 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
     for (auto &ec : deferred_aggregate) {
         bool has_groups = !ec.row_group_ids.empty();
 
-        // I4 (aggregate `<>`): clause text used to name a dropped aggregate `<>`.
-        // Stage 05 recorded "(SUM(x) <> K)" in aux_var_expressions keyed by the
-        // indicator decide-var; carry it onto every global z this `ec` allocates so
-        // the infeasible removal dial can label the DROP edit.
-        string ne_label;
-        for (auto &ae : aux_var_expressions) {
-            if (ae.first == ec.ne_indicator_idx) {
-                ne_label = ae.second;
-                break;
-            }
-        }
+        // I4 (aggregate `<>`): clause text used to name a dropped aggregate `<>`, carried
+        // onto every global z this `ec` allocates so the removal dial can label the edit.
+        string ne_label = NotEqualClauseLabel(input, ec);
 
         // Build group → rows mapping. For grouped constraints reuse the CSR index
         // already attached to ec; for ungrouped, materialize the trivial

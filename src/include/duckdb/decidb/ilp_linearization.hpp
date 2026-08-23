@@ -157,7 +157,6 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
 //! on the integer lattice — and silently drops a comparison whose bound no integer
 //! can equal, since every assignment already satisfies it.
 void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
-                       const vector<pair<idx_t, string>> &aux_var_expressions,
                        const vector<string> &var_names);
 
 //! The one place a construct is lowered, and the last pass of stage 06.

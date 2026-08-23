@@ -402,7 +402,7 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 	// Walk the bound constraint tree and find all COMPARE_NOTEQUAL expressions.
 	// For each one, create an auxiliary BOOLEAN indicator variable.
 	// The constraint expression itself is NOT modified — the physical operator
-	// matches COMPARE_NOTEQUAL constraints with ne_indicator_indices at execution time.
+	// matches COMPARE_NOTEQUAL constraints with ne_clause_labels at execution time.
 	FindNotEqualConstraints(*decide.decide_constraints, decide);
 }
 
@@ -437,23 +437,20 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		auto &comp = expr.Cast<BoundComparisonExpression>();
 		if (comp.type == ExpressionType::COMPARE_NOTEQUAL) {
-			// Create auxiliary BOOLEAN indicator variable
-			idx_t ind_idx = decide.decide_variables.size();
-			string ind_name = "__ne_ind_" + to_string(decide.ne_indicator_indices.size()) + "__";
-			auto ind_var = make_uniq<BoundColumnRefExpression>(
-			    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
-			decide.decide_variables.push_back(std::move(ind_var));
-			decide.ne_indicator_indices.push_back(ind_idx);
-			decide.num_auxiliary_vars++;
-			decide.is_boolean_var.push_back(true);
-			if (!decide.variable_scopes.empty()) {
-				decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
-			}
-			// F6: record the user's original <> comparison for diagnosis naming
-			decide.aux_var_expressions.emplace_back(
-			    ind_idx, DiagnosisComparand(*comp.left) + " <> " + DiagnosisComparand(*comp.right));
-			// Tag the comparison with the indicator index for direct matching
-			AddDecideTag(comp.alias, string(NE_INDICATOR_TAG_PREFIX) + to_string(ind_idx) + "__");
+			// No indicator variable. Whether a `<>` even HAS a disjunction to switch is a
+			// question about evaluated data — a range that lies wholly on one side of `K`
+			// collapses to a plain inequality — and an aggregate spelling needs one binary
+			// per GROUP rather than per row. Neither is knowable here, so allocating a
+			// row-scoped binary per data row now meant allocating one for every clause
+			// that turned out to need none.
+			//
+			// What stage 05 owns is the marking: which clause this is, and the text to
+			// call it in a diagnosis. The clause index rides the tag; stage 06 allocates
+			// the binaries for the disjunctions it actually emits, and labels them here.
+			idx_t clause_idx = decide.ne_clause_labels.size();
+			decide.ne_clause_labels.push_back(DiagnosisComparand(*comp.left) + " <> " +
+			                                  DiagnosisComparand(*comp.right));
+			AddDecideTag(comp.alias, string(NE_INDICATOR_TAG_PREFIX) + to_string(clause_idx) + "__");
 		}
 	}
 }

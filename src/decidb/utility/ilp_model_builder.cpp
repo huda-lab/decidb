@@ -1024,13 +1024,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
                                           string(), rhs_adjustment);
-                // I4: per-row `<>` disjunction rows carry their indicator (a
-                // row-scoped aux var) so the elastic engine groups the pair per row
-                // and offers removal.
-                if (eval_const.ne_indicator_idx != DConstants::INVALID_INDEX) {
-                    constr.provenance.indicator_col =
-                        indexer.Get(eval_const.ne_indicator_idx, row);
-                }
                 PushNormalizedConstraint(std::move(constr));
             }
         }

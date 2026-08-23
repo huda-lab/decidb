@@ -1250,7 +1250,7 @@ private:
 			// Parse not-equal indicator tag if present
 			string payload;
 			if (ExtractDecideTagPayload(comp.alias, NE_INDICATOR_TAG_PREFIX, payload)) {
-				constraint->ne_indicator_idx = std::stoull(payload);
+				constraint->ne_clause_idx = std::stoull(payload);
 				constraint->kind = ConstraintKind::USER_MECHANISM;
 			}
 
