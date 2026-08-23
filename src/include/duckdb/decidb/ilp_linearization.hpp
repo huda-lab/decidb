@@ -406,6 +406,65 @@ struct MinMaxLinkRow {
     }
 };
 
+//! One member of an extremum family: `(result - expr)` as a half-row — `MinMaxLinkRow`
+//! already stores the expression negated, with its constant part separate — plus the
+//! reach of `expr` on its own, which is the box a column pinned to it deserves.
+struct ExtremumMember {
+    MinMaxLinkRow link;
+    AuxRange range;
+};
+
+//! `result = MIN/MAX(members)`, in flat columns. Every MIN/MAX auxiliary in the model is
+//! one of these: the flat objective's `z`, a `PER` group's `z_g`, the outer `w` over
+//! those or over group sums, and each composed term's `z_k`.
+//!
+//! Two independent sides, because which of them the surrounding model already supplies
+//! differs by site and is not a property of the construct:
+//!
+//!   - The **envelope** (`result >= member` for MAX) holds `result` at or above every
+//!     member. An objective that minimizes `result` supplies it for free.
+//!   - The **closing** side pins `result` down onto some member: one Big-M row per
+//!     member and a `SUM(y) >= 1` that makes one bind. An objective that maximizes
+//!     `result` supplies it for free.
+//!
+//! An objective-side link needs exactly one of them, and which one is the easy/hard
+//! classification stage 05 makes. A composed link sits in a *constraint*, where no
+//! optimization pressure exists at all, so its hard direction needs both.
+struct ExtremumLinkSpec {
+    idx_t result_column = DConstants::INVALID_INDEX;
+    bool is_max = false;
+    bool need_envelope = false;
+    bool need_closing = false;
+    //! The closing Big-M, and whether one exists at all. Resolved by the CALLER, because
+    //! the family a link reduces over is not always the family of its own members: an
+    //! outer MIN/MAX over group SUMS spans the per-row reach times a group's row count,
+    //! not the per-row reach. `blame_var` names the variable that left it open.
+    double closing_big_m = 0.0;
+    bool closing_underivable = false;
+    idx_t blame_var = DConstants::INVALID_INDEX;
+    //! Names every column and binary this emits, through the global label channel, so a
+    //! diagnosis renders `MAX(x)` rather than an internal column.
+    string label;
+    //! The two sides can carry different provenance. A composed clause's closing rows
+    //! ARE the user's clause and are loosenable; its envelope is mechanism, and an
+    //! objective's linking rows are structural throughout.
+    ConstraintKind envelope_kind = ConstraintKind::STRUCTURAL;
+    ConstraintKind closing_kind = ConstraintKind::STRUCTURAL;
+};
+
+//! Emit one extremum link, in whichever form the policy and the spec call for. This is
+//! the ONLY place a MIN/MAX auxiliary is pinned, and the only place that three-way
+//! choice is made: it used to be written out at each of the five sites above.
+//!
+//! The envelope, where the spec asks for it, is emitted either way — it costs one row
+//! per member, needs no constant to dominate anything, and is implied by the general
+//! constraint on the native arm. The closing side is where the two formulations part:
+//! `result = MIN/MAX(cols)` stated for the backend, or the Big-M family that encodes it.
+//! `members` is consumed.
+void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
+                      const ExtremumLinkSpec &spec, vector<ExtremumMember> &members,
+                      const vector<string> &var_names, NativeConstructPolicy policy);
+
 //! How stage 05 classified the objective's MIN/MAX shape, as `LinearizeMinMaxObjective`
 //! needs it. `flat_*` describes an unqualified `MIN(expr)` / `MAX(expr)` objective;
 //! `per_*` describes the two-level `OUTER(INNER(expr)) PER key` spelling, whose group
