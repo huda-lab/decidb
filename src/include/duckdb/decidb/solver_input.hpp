@@ -220,9 +220,9 @@ struct EvaluatedConstraint {
     CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
-    //! Big-M indicator for a hard MIN/MAX, and INVALID_INDEX on the native arm, which
-    //! has no disjunction to switch and so allocates none.
-    idx_t minmax_indicator_idx = DConstants::INVALID_INDEX;
+    //! Which hard MIN/MAX clause this row is, as an index into `minmax_clause_labels`.
+    //! Names the extremum column the clause becomes; not a variable.
+    idx_t minmax_clause_idx = DConstants::INVALID_INDEX;
     //! "min" or "max", empty when this row is not a hard MIN/MAX. THIS is the marking
     //! both arms read: it is set whenever stage 05 tagged the row, whichever formulation
     //! was chosen for it.
@@ -542,6 +542,9 @@ struct SolverInput {
         //! What a lowering (or a folded LHS constant) added to the user's literal to
         //! build this row's `rhs`; the reported clause quotes `rhs` minus this.
         double rhs_mechanism_offset = 0.0;
+        //! Symbolic name of a data-backed RHS column, for a PER_ROW_DATA row. Empty for a
+        //! literal/shared bound.
+        string rhs_label;
     };
     vector<RawConstraint> global_constraints;
 
@@ -565,6 +568,11 @@ struct SolverInput {
         RawConstraint row;
     };
     vector<IndicatorConstraintSpec> indicator_constraints;
+
+    //! Diagnosis text of each hard MIN/MAX clause (`MAX(x * c)`), indexed by
+    //! `EvaluatedConstraint::minmax_clause_idx`. Names the extremum column the clause
+    //! becomes, so a repair reads the clause rather than an internal column.
+    vector<string> minmax_clause_labels;
 
     //! Constructs left native for the backend, in flat columns. Emitted at stage 08
     //! once the VarIndexer exists — like `global_constraints`, and for the same reason.

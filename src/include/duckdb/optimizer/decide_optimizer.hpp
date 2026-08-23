@@ -174,13 +174,15 @@ private:
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                       vector<AbsPairInfo> &abs_pairs, bool in_objective);
 
-	//! Helper: allocate a Boolean indicator variable for a hard MIN/MAX aggregate and
-	//! produce the corresponding SUM(inner) aggregate tagged with MINMAX_INDICATOR_TAG_PREFIX.
-	//! Appends to decide.decide_variables, decide.minmax_indicator_links, and related metadata.
-	//! Returns the tagged SUM expression; the indicator variable index is written to out_ind_idx.
-	unique_ptr<Expression> EmitHardMinMaxIndicator(LogicalDecide &decide, const string &agg_name,
-	                                               const Expression &inner, const Expression *filter,
-	                                               idx_t &out_ind_idx);
+	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
+	//! aggregate tagged with MINMAX_INDICATOR_TAG_PREFIX. Records the clause's diagnosis
+	//! text in decide.minmax_clause_labels and writes its index to out_clause_idx; the tag
+	//! carries that index, which is how stage 06 names the column it pins. Allocates no
+	//! variable — the binaries a Big-M pinning needs are global-block columns, created by
+	//! the pass that emits the rows reading them.
+	unique_ptr<Expression> EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name,
+	                                            const Expression &inner, const Expression *filter,
+	                                            idx_t &out_clause_idx);
 
 	//! Helper: append a constraint to the decide constraint tree via AND conjunction
 	//! Thin forwarder to LogicalDecide::AddConstraint, which canonicalizes on insert.

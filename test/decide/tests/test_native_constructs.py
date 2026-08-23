@@ -313,13 +313,15 @@ def test_minmax_prefers_the_lowering_when_a_big_m_exists(decidb_cli_gurobi):
     # ...and the fallback is still reachable, on demand and on its own merits.
     assert re.search(r"^gen \d+: kind=max ", forced, re.MULTILINE), forced
 
-    # One indicator per data row on the arm that switches the disjunction. The native
-    # arm never reads it, but stage 05 allocates it there too: whether a clause HAS a
-    # Big-M depends on evaluated data, so stage 08 routes, and a row-scoped column it
-    # might need cannot be created that late. One presolved-away binary per row, on the
-    # rare arm, is the price of letting the common arm be chosen on the evidence.
+    # One indicator per data row on the arm that switches the disjunction, and NONE on
+    # the arm that does not. Stage 05 used to allocate a row-scoped binary per data row
+    # on both — it could not know which arm a clause would take, because that depends on
+    # evaluated data — so the native arm carried a column no row referenced. It no longer
+    # allocates one at all: the clause becomes an extremum column plus the user's bound
+    # over it, and the binaries a Big-M pinning needs are global-block columns created by
+    # the pass that emits the rows reading them.
     assert binary_columns(lowered) == 4, lowered
-    assert binary_columns(forced) == 4, forced
+    assert binary_columns(forced) == 0, forced
 
 
 @pytest.mark.correctness

@@ -190,7 +190,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", decide_objective);
 	serializer.WritePropertyWithDefault<idx_t>(205, "num_auxiliary_vars", num_auxiliary_vars);
 	serializer.WritePropertyWithDefault<vector<idx_t>>(207, "ne_indicator_indices", ne_indicator_indices);
-	serializer.WritePropertyWithDefault<vector<pair<string, idx_t>>>(208, "minmax_indicator_links", minmax_indicator_links);
+	serializer.WritePropertyWithDefault<vector<string>>(208, "minmax_clause_labels", minmax_clause_labels);
 	// Serialize bilinear_links as three parallel vectors (aux_idx, bool_var_idx, other_var_idx)
 	{
 		vector<idx_t> bl_aux, bl_bool, bl_other;
@@ -289,7 +289,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", result->decide_objective);
 	deserializer.ReadPropertyWithDefault<idx_t>(205, "num_auxiliary_vars", result->num_auxiliary_vars);
 	deserializer.ReadPropertyWithDefault<vector<idx_t>>(207, "ne_indicator_indices", result->ne_indicator_indices);
-	deserializer.ReadPropertyWithDefault<vector<pair<string, idx_t>>>(208, "minmax_indicator_links", result->minmax_indicator_links);
+	deserializer.ReadPropertyWithDefault<vector<string>>(208, "minmax_clause_labels", result->minmax_clause_labels);
 	// Deserialize bilinear_links from three parallel vectors
 	{
 		vector<idx_t> bl_aux, bl_bool, bl_other;

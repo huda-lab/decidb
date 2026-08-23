@@ -1289,6 +1289,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         constr.provenance.qualifier = raw.qualifier;
         constr.provenance.is_aggregate = raw.is_aggregate;
         constr.provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
+        constr.provenance.rhs_label = raw.rhs_label;
         model.constraints.push_back(std::move(constr));
     }
 
@@ -1316,6 +1317,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         ic.provenance.qualifier = spec.row.qualifier;
         ic.provenance.is_aggregate = spec.row.is_aggregate;
         ic.provenance.rhs_mechanism_offset = spec.row.rhs_mechanism_offset;
+        ic.provenance.rhs_label = spec.row.rhs_label;
         model.indicator_constraints.push_back(std::move(ic));
     }
 

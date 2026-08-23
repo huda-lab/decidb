@@ -1288,7 +1288,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 			hard_cmp_type = FlipComparisonExpression(hard_cmp_type);
 		}
 		idx_t ind_idx;
-		auto hard_lhs = EmitHardMinMaxIndicator(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
+		auto hard_lhs = EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
 		comp.left = apply_scale(std::move(hard_lhs));
 		comp.type = hard_cmp_type;
 		return;
@@ -1331,62 +1331,39 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// coefficients, which is exact whatever its sign because the indicator layer
 		// has already pinned the auxiliary to the true MIN/MAX.
 		idx_t ind_idx;
-		auto hard_lhs = EmitHardMinMaxIndicator(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
+		auto hard_lhs = EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
 		comp.left = apply_scale(std::move(hard_lhs));
 		return;
 	}
 }
 
-unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxIndicator(LogicalDecide &decide,
-                                                                 const string &agg_name,
-                                                                 const Expression &inner,
-                                                                 const Expression *filter,
-                                                                 idx_t &out_ind_idx) {
-	// The indicator exists to switch this row's Big-M disjunction on and off, so only
-	// the lowering arm reads it. It is nevertheless allocated on BOTH arms, and the
-	// asymmetry is the reason: which arm a clause takes is not knowable here.
+unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &decide,
+                                                            const string &agg_name,
+                                                            const Expression &inner,
+                                                            const Expression *filter,
+                                                            idx_t &out_clause_idx) {
+	// No indicator variable. `MAX(e) >= K` now becomes an extremum COLUMN and the user's
+	// own bound as a single row over it, whichever way that column is then pinned, and the
+	// binaries a Big-M pinning needs are global-block columns stage 06 allocates for the
+	// rows it actually emits. A row-scoped binary per data row, created here before anyone
+	// knows whether it will be read, is exactly what that removed.
 	//
-	// Native is the fallback now, taken only where the lowering has no valid Big-M, and
-	// whether a Big-M is derivable depends on evaluated coefficients. Stage 08 answers
-	// that. It can add columns to the global block but not row-scoped ones, so an
-	// indicator it might need has to exist before it starts -- skipping it here would
-	// let stage 05 decide, by omission, a question it cannot see the data for.
-	//
-	// The cost is one binary per data row appearing in no row, and ONLY on the arm that
-	// does not read it: the native one, which is now the rare unbounded case. Solvers
-	// presolve such a column away.
-	idx_t ind_idx = decide.decide_variables.size();
-	{
-		string ind_name = "__minmax_ind_" + to_string(decide.minmax_indicator_links.size()) + "__";
-		auto ind_var = make_uniq<BoundColumnRefExpression>(
-		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));
-		decide.decide_variables.push_back(std::move(ind_var));
-		decide.num_auxiliary_vars++;
-		decide.is_boolean_var.push_back(true);
-		if (!decide.variable_scopes.empty()) {
-			decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
-		}
-		// F6: record the user's original MIN/MAX(inner) for diagnosis naming
-		decide.aux_var_expressions.emplace_back(
-		    ind_idx, StringUtil::Upper(agg_name) + "(" + inner.ToString() + ")");
-	}
-	// Recorded on both arms: physical execution reads only whether the list is EMPTY, to
-	// decide whether this query has a hard MIN/MAX at all, and that question has the same
-	// answer either way.
-	decide.minmax_indicator_links.emplace_back(agg_name, ind_idx);
+	// What stage 05 still owns is the marking: which clause this is, what it reduces with,
+	// and the text to call it in a diagnosis. The clause index rides the tag.
+	idx_t clause_idx = decide.minmax_clause_labels.size();
+	decide.minmax_clause_labels.push_back(StringUtil::Upper(agg_name) + "(" + inner.ToString() + ")");
 
-	// Build a SUM(inner) aggregate tagged as a hard MIN/MAX. The AGGREGATE is what marks
-	// the row -- the indicator index rides along only when there is one.
+	// Build a SUM(inner) aggregate tagged as a hard MIN/MAX. The aggregate name is the
+	// marking; the clause index rides along so stage 06 can name what it emits.
 	vector<unique_ptr<Expression>> sum_children;
 	sum_children.push_back(inner.Copy());
 	auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
 	if (filter) {
 		new_sum->Cast<BoundAggregateExpression>().filter = filter->Copy();
 	}
-	new_sum->alias = string(MINMAX_INDICATOR_TAG_PREFIX) +
-	                 (ind_idx == DConstants::INVALID_INDEX ? string() : to_string(ind_idx) + "_") +
-	                 agg_name + "__";
-	out_ind_idx = ind_idx;
+	new_sum->alias =
+	    string(MINMAX_INDICATOR_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__";
+	out_clause_idx = clause_idx;
 	return new_sum;
 }
 

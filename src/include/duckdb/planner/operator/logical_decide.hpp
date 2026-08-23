@@ -92,7 +92,7 @@ public:
     vector<idx_t> ne_indicator_indices;
 
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
-    vector<pair<string, idx_t>> minmax_indicator_links;
+    vector<string> minmax_clause_labels;
 
     // Links from bilinear McCormick auxiliary variables: w = b * x
     // (aux_idx, bool_var_idx, other_var_idx) — for execution-time Big-M constraint generation

@@ -176,27 +176,34 @@ static void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
                                 construct, name, name, name);
 }
 
-//! Locate the blame for a row Big-M: a contributing decision variable with an open box.
-[[noreturn]] static void ThrowUnboundedBigM(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
-                                            const vector<double> &upper_bounds,
-                                            const vector<string> &var_names, const char *construct) {
-    // Name a column the user can actually bound: the first contributing decision
-    // variable whose box is open. The indicator this rewrite created is skipped — it
-    // is ours, not theirs, and it is binary anyway.
-    idx_t bad = DConstants::INVALID_INDEX;
+//! Locate the blame for a row Big-M: the first contributing decision variable whose box
+//! is open, and so a column the user can actually bound. The indicators a rewrite created
+//! are skipped — they are ours, not theirs, and they are binary anyway.
+//!
+//! Separate from the throw because a caller working in FLAT columns still has to name a
+//! decide variable, and the range walk that discovers the openness there
+//! (`DecideRowSignedRange`) reports an infinity rather than a culprit.
+static idx_t FindUnboundedContributor(const EvaluatedConstraint &ec,
+                                      const vector<double> &lower_bounds,
+                                      const vector<double> &upper_bounds) {
     for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
         idx_t v = ec.variable_indices[t];
-        if (v == DConstants::INVALID_INDEX || v == ec.minmax_indicator_idx || v == ec.ne_indicator_idx ||
-            v == ec.abs_aux_idx) {
+        if (v == DConstants::INVALID_INDEX || v == ec.ne_indicator_idx || v == ec.abs_aux_idx) {
             continue;
         }
         if (v < upper_bounds.size() && v < lower_bounds.size() &&
             (upper_bounds[v] >= 1e20 || lower_bounds[v] <= -1e20)) {
-            bad = v;
-            break;
+            return v;
         }
     }
-    ThrowUnboundedBigMNaming(bad, var_names, construct);
+    return DConstants::INVALID_INDEX;
+}
+
+[[noreturn]] static void ThrowUnboundedBigM(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
+                                            const vector<double> &upper_bounds,
+                                            const vector<string> &var_names, const char *construct) {
+    ThrowUnboundedBigMNaming(FindUnboundedContributor(ec, lower_bounds, upper_bounds), var_names,
+                             construct);
 }
 
 //! The auxiliary-family twin of ThrowUnboundedBigM: a MIN/MAX auxiliary is linked to
@@ -503,7 +510,7 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
                     // Drop the MIN/MAX marking as well as the indicator: what is emitted
                     // is an ordinary per-row constraint, and nothing downstream should
                     // read its LHS as an extremum again.
-                    ec_no_solution.minmax_indicator_idx = DConstants::INVALID_INDEX;
+                    ec_no_solution.minmax_clause_idx = DConstants::INVALID_INDEX;
                     ec_no_solution.minmax_agg_type.clear();
                     ec_no_solution.lhs_is_aggregate = false;
                     for (idx_t r = 0; r < num_rows; r++) {
@@ -533,60 +540,51 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
 }
 
 
-//! The NATIVE arm for one clause: `z = MAX(t..)` stated for the backend rather than
-//! encoded. One extremum column per group, pinned by a general constraint to that
-//! group's member columns, and the user's own bound as a single row over it. No Big-M
-//! and no indicators, so no contributing variable needs a finite bound — which is the
-//! only reason this arm exists.
-void EmitNativeMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
-                                const EvaluatedConstraint &ec, bool is_max_agg) {
+//! The family one group of a MIN/MAX constraint reduces over, in flat columns: one
+//! member per active row, each holding that row's inner expression negated (the shape
+//! `MinMaxLinkRow` and `EmitExtremumLink` take) with its constant part separate.
+//!
+//! `family` accumulates the reach of the whole group, which boxes the extremum column
+//! and sizes the Big-M; each member also keeps its OWN reach, which is the box a native
+//! arm gives a column pinned to it. Each end is kept independently — a row open above
+//! still contributes the floor it does have.
+struct MinMaxGroup {
+    vector<ExtremumMember> members;
+    AuxRange family;
+    //! The row this group reads its bound off. Group-constant by construction:
+    //! `ReduceAggregateRhsPerGroup` has already collapsed a row-varying bound.
+    idx_t first_row = DConstants::INVALID_INDEX;
+};
+
+//! Split one tagged constraint into its groups' families. An ungrouped clause is the
+//! single group 0.
+static vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const VarIndexer &indexer,
+                                             const EvaluatedConstraint &ec) {
     const idx_t num_rows = input.num_rows;
     bool has_groups = !ec.row_group_ids.empty();
     idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
+    vector<MinMaxGroup> groups(group_count);
 
-    vector<vector<int>> group_args(group_count);
-    vector<AuxRange> group_range(group_count);
-    // The row each group's outer clause reads its bound off, recorded on the walk
-    // that already visits every row. Finding it again per group below would rescan
-    // the whole table once per group.
-    vector<idx_t> group_first_row(group_count, DConstants::INVALID_INDEX);
     for (idx_t r = 0; r < num_rows; r++) {
         idx_t g = has_groups ? ec.row_group_ids[r] : 0;
         if (g == DConstants::INVALID_INDEX || g >= group_count) {
             continue;
         }
-        if (group_first_row[g] == DConstants::INVALID_INDEX) {
-            group_first_row[g] = r;
+        auto &group = groups[g];
+        if (group.first_row == DConstants::INVALID_INDEX) {
+            group.first_row = r;
         }
-        // A column pinned to this row's inner expression. The general constraint
-        // relates variables, so the linear half is a row either way. Boxed by that
-        // expression's own range wherever one exists — a free continuous column is
-        // a measured performance cliff — and free only where none does, which is
-        // the case this arm exists to answer at all.
-        AuxRange row_range;
-        double row_constant =
-            DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, r);
-        {
-            double row_lo = 0.0, row_hi = 0.0;
-            DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, row_lo, row_hi);
-            // Each end on its own. `DecideRowSignedRange` already reports them
-            // independently, and a row open on one side — `x >= 0` with no ceiling
-            // is the common one — still has a derived bound on the other.
-            // `t` carries the constant part too, so shift the variable-only bracket
-            // by it before using it as the box.
-            row_range.CoverRowSided(row_lo + row_constant, row_hi + row_constant, row_lo, row_hi,
-                                    DConstants::INVALID_INDEX);
-        }
-        // `MAX(x) <op> K` over a decision variable is a renaming, not an expression:
-        // `t = x` would cost one column and one equality row per data row to say
-        // nothing, and presolve cannot substitute a column that a general constraint
-        // reads. So when this row's inner expression is exactly one variable with
-        // coefficient 1 and no constant part, the variable's own column IS the
-        // argument. Any other coefficient or a constant makes it a real expression,
-        // and a general constraint relates columns, so that one still needs one.
-        idx_t sole_var = DConstants::INVALID_INDEX;
-        double sole_coef = 0.0;
-        idx_t term_count = 0;
+        ExtremumMember member;
+        double row_lo = 0.0, row_hi = 0.0;
+        DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, row_lo, row_hi);
+        double constant = DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, r);
+        // The member carries the constant part too, so shift the variable-only bracket by
+        // it before using it as a box; the spread the Big-M reads keeps them apart.
+        member.range.CoverRowSided(row_lo + constant, row_hi + constant, row_lo, row_hi,
+                                   DConstants::INVALID_INDEX);
+        group.family.Cover(member.range);
+
+        // `z - expr`: the expression enters negated, its constant part lands on the bound.
         for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
             idx_t v = ec.variable_indices[t];
             if (v == DConstants::INVALID_INDEX) {
@@ -596,183 +594,12 @@ void EmitNativeMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
             if (coef == 0.0) {
                 continue;
             }
-            term_count++;
-            sole_var = v;
-            sole_coef = coef;
+            member.link.AddColumn(static_cast<int>(indexer.Get(v, r)), -coef);
         }
-        if (term_count == 1 && sole_coef == 1.0 && row_constant == 0.0) {
-            group_args[g].push_back(static_cast<int>(indexer.Get(sole_var, r)));
-            group_range[g].Cover(row_range);
-            continue;
-        }
-
-        idx_t t_idx = AddGlobalContinuousAux(input, indexer, row_range, 0.0);
-
-        SolverInput::RawConstraint pin;
-        pin.indices.push_back(static_cast<int>(t_idx));
-        pin.coefficients.push_back(1.0);
-        for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-            idx_t v = ec.variable_indices[t];
-            if (v == DConstants::INVALID_INDEX) {
-                continue;
-            }
-            double coef = ec.row_coefficients[t].Get(r);
-            if (coef == 0.0) {
-                continue;
-            }
-            // `t - inner = 0`. A constant term of `inner` folds into the bound.
-            pin.indices.push_back(static_cast<int>(indexer.Get(v, r)));
-            pin.coefficients.push_back(-coef);
-        }
-        pin.sense = '=';
-        pin.rhs = row_constant;
-        pin.kind = ConstraintKind::STRUCTURAL;
-        pin.source_clause_id = ec.source_clause_id;
-        pin.repair_group_id = ec.repair_group_id;
-        input.global_constraints.push_back(std::move(pin));
-
-        group_args[g].push_back(static_cast<int>(t_idx));
-        group_range[g].Cover(row_range);
+        member.link.constant = constant;
+        group.members.push_back(std::move(member));
     }
-
-    for (idx_t g = 0; g < group_count; g++) {
-        if (group_args[g].empty()) {
-            continue; // masked-out group: nothing to take an extremum over
-        }
-        // The extremum of a family lies inside the family's own bracket, so the
-        // union of the member ranges boxes it.
-        idx_t z_idx = AddGlobalContinuousAux(input, indexer, group_range[g], 0.0);
-
-        GeneralConstraintSpec gc;
-        gc.kind = is_max_agg ? GeneralConstraintKind::MAX : GeneralConstraintKind::MIN;
-        gc.result_column = static_cast<int>(z_idx);
-        gc.argument_columns = std::move(group_args[g]);
-        gc.source_clause_id = ec.source_clause_id;
-        gc.repair_group_id = ec.repair_group_id;
-        input.general_constraints.push_back(std::move(gc));
-
-        // The user's clause, now over the extremum itself: `z <op> K`. This is the
-        // row the elastic engine sees, and it is the one the user actually wrote —
-        // an improvement on the lowered form, where the bound was spread across a
-        // per-row Big-M family.
-        D_ASSERT(group_first_row[g] != DConstants::INVALID_INDEX);
-
-        SolverInput::RawConstraint outer;
-        outer.indices.push_back(static_cast<int>(z_idx));
-        outer.coefficients.push_back(1.0);
-        outer.sense = is_max_agg ? '>' : '<';
-        // The raw bound, not the effective one: each `t` above already carries its
-        // row's constant LHS part, because a per-row constant can differ inside a
-        // group and the extremum is taken over the whole expression, constant
-        // included. (The lowering arm nets the constant out instead, since it
-        // compares row by row.) Group-constant by construction —
-        // ReduceAggregateRhsPerGroup collapsed a row-varying bound already.
-        // A uniform bound is the same value whichever row is picked, so the
-        // representative row is not even consulted.
-        outer.rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue()
-                                              : ec.rhs_values.Get(group_first_row[g]);
-        outer.kind = ConstraintKind::USER_PARAMETER;
-        // The elastic shape, without which this row does not fold. One `PER` clause
-        // emits one of these rows per group, and they are all the same line of SQL:
-        // the user edits a single literal and every group moves with it. Left UNSET
-        // they never fold, so an infeasible `MAX(e) >= K PER g` reported one edit per
-        // group — and only the loosest of them repaired anything. Applying any other
-        // left the query infeasible, which is a worse failure than reporting nothing.
-        // Read from the same flag the linear builder reads, so the native and lowered
-        // arms classify the clause identically; a genuinely per-group bound stays
-        // PER_ROW_DATA and reports a virtual offset, as it does elsewhere.
-        outer.shape = ec.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR
-                                              : ElasticShape::PER_ROW_DATA;
-        outer.source_clause_id = ec.source_clause_id;
-        outer.repair_group_id = ec.repair_group_id;
-        input.global_constraints.push_back(std::move(outer));
-    }
-}
-
-//! The LOWERED arm for one clause: the per-row Big-M family plus the `SUM(y) >= 1` that
-//! makes one row bind. Rewrites the clause in the per-row representation it arrived in,
-//! so a `MAX(e) >= K` over a large relation stays one spec until the model builder fans
-//! it out.
-void EmitLoweredMinMaxConstraint(SolverInput &input, const EvaluatedConstraint &ec,
-                                 bool is_max_agg, const vector<string> &var_names,
-                                 vector<EvaluatedConstraint> &out) {
-    const idx_t num_rows = input.num_rows;
-    // Stage 05 allocates the indicator exactly when it routed this query here.
-    // Reaching this arm without one would mean the plan and the solve disagree about
-    // which formulation was chosen.
-    D_ASSERT(ec.minmax_indicator_idx != DConstants::INVALID_INDEX);
-    idx_t indicator_idx = ec.minmax_indicator_idx;
-
-    // Compute Big-M from variable bounds. Skip constant LHS terms
-    // (var_idx == INVALID_INDEX) — they have no associated variable
-    // bound; their contribution will be folded into the RHS by the
-    // per-row constraint emitter.
-    double M = DecideTightPerRowBigM(ec, input.lower_bounds, input.upper_bounds, num_rows,
-                                     var_names);
-
-    auto BuildShiftedRhs = [&](double shift) {
-        if (ec.rhs_values.IsUniform()) {
-            return CoefficientColumn::MakeScalar(ec.rhs_values.UniformValue() + shift, num_rows);
-        }
-        auto col = CoefficientColumn::MakeDense(num_rows, 0.0);
-        for (idx_t r = 0; r < num_rows; r++) {
-            col.Set(r, ec.rhs_values.Get(r) + shift);
-        }
-        return col;
-    };
-
-    // Hard MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M.
-    // Hard MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M.
-    // The two directions are mirror images: only the Big-M's sign and the
-    // comparison direction flip.
-    double m_sign = is_max_agg ? -1.0 : 1.0;
-    ExpressionType cmp = is_max_agg ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
-                                     : ExpressionType::COMPARE_LESSTHANOREQUALTO;
-
-    EvaluatedConstraint ec_row;
-    ec_row.variable_indices = ec.variable_indices;
-    ec_row.row_coefficients = ec.row_coefficients;
-    ec_row.variable_indices.push_back(indicator_idx);
-    ec_row.row_coefficients.push_back(CoefficientColumn::MakeScalar(m_sign * M, num_rows));
-    ec_row.rhs_values = BuildShiftedRhs(m_sign * M);
-    ec_row.comparison_type = cmp;
-    ec_row.lhs_is_aggregate = false; // per-row!
-    ec_row.row_group_ids = ec.row_group_ids;
-    ec_row.num_groups = ec.num_groups;
-    ec_row.group_labels = ec.group_labels;
-    ec_row.qualifier = ec.qualifier;
-    // These N rows ARE the user's clause, so they carry it. `MAX(e) >= K` lowers to
-    // `e_i - M*y_i >= K - M` per row, and lowering K moves every one of them by the
-    // same amount — one editable literal, one shared slack, one reported edit. Left
-    // rigid, the clause had no loosenable row at all and diagnosis fell back to
-    // whatever column bound happened to be nearby, so the same SQL was repaired
-    // differently depending on which solver the host had. The Big-M lives in
-    // `rhs_mechanism_offset` so the report subtracts it back off and quotes `K`.
-    //
-    // The companion `SUM(y) >= 1` below stays rigid: it is the disjunction itself,
-    // not a number the user wrote, and slackening it would let the clause be
-    // satisfied by no row at all — a "repair" with no SQL edit behind it.
-    ec_row.kind = ConstraintKind::USER_PARAMETER;
-    ec_row.source_clause_id = ec.source_clause_id;
-    ec_row.repair_group_id = ec.repair_group_id;
-    ec_row.rhs_is_shared_scalar = ec.rhs_is_shared_scalar;
-    ec_row.rhs_label = ec.rhs_label;
-    ec_row.rhs_mechanism_offset = m_sign * M;
-    out.push_back(std::move(ec_row));
-
-    // SUM(y) >= 1 (at least one row must satisfy)
-    EvaluatedConstraint ec_sum;
-    ec_sum.variable_indices = {indicator_idx};
-    ec_sum.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
-    ec_sum.rhs_values.AssignScalar(num_rows, 1.0);
-    ec_sum.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-    ec_sum.lhs_is_aggregate = true;
-    ec_sum.row_group_ids = ec.row_group_ids;
-    ec_sum.num_groups = ec.num_groups;
-    ec_sum.group_labels = ec.group_labels;
-    ec_sum.qualifier = ec.qualifier;
-    ec_sum.kind = ConstraintKind::USER_MECHANISM;
-    out.push_back(std::move(ec_sum));
+    return groups;
 }
 
 } // namespace
@@ -782,38 +609,100 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
     const idx_t num_rows = input.num_rows;
     vector<EvaluatedConstraint> new_constraints;
     for (auto &ec : input.constraints) {
-        // The aggregate name is the marking, not the indicator index: both arms carry
-        // the name, and the indicator now exists whichever arm runs.
+        // The aggregate name is the marking: `MAX(e) >= K` arrives spelled as an ordinary
+        // `SUM(e) >= K` row and means something else entirely until this rewrites it.
         if (ec.minmax_agg_type.empty()) {
             new_constraints.push_back(std::move(ec));
             continue;
         }
-        // The routing, per clause. A `MAX(e) >= K` whose contributors are all bounded
-        // lowers to a smaller model than a general constraint does; one whose range is
-        // underivable has no lowering at all and goes native, which is the only reason
-        // that arm exists.
-        //
-        // Per CLAUSE and not per query: one clause can be bounded while another in the
-        // same statement is not, and each gets the formulation it can actually use.
-        // Asked BEFORE the bound classification below, which masks groups off: what the
-        // policy weighs is whether the clause as written has a Big-M, not what is left
-        // of it after the vacuous groups are dropped.
-        bool native =
-            policy.Use(!MinMaxBigMDerivable(ec, input.lower_bounds, input.upper_bounds, num_rows));
         bool is_max_agg = (ec.minmax_agg_type == "max");
-        // Settle every group's bound before either arm encodes anything. A bound that is
-        // out of reach or beyond reach is answered by the direction it points, not by an
-        // encoding, so both arms make exactly the same decisions here — and whatever it
-        // emits (the unsatisfiable group's plain row) is an ordinary constraint that
-        // rejoins the model.
+        // Settle every group's bound before anything is encoded. A bound out of reach or
+        // beyond reach is answered by the direction it points, not by an encoding, and
+        // whatever this emits (the unsatisfiable group's plain row) is an ordinary
+        // constraint that rejoins the model.
         if (!ClassifyMinMaxGroups(ec, num_rows, is_max_agg, new_constraints)) {
             continue;
         }
-        if (native) {
-            EmitNativeMinMaxConstraint(input, indexer, ec, is_max_agg);
-            continue;
+
+        // The clause becomes what it says: an extremum column, and the user's own bound
+        // as a single row over it. That is the same shape whichever way the extremum is
+        // then pinned — so the row diagnosis reports is the row the user wrote, and it no
+        // longer depends on which backend the host has. It used to: the lowering spread
+        // the bound across a per-row Big-M family and carried `K` in a mechanism offset,
+        // while the native arm stated it once.
+        //
+        // The extra column and the extra row per group are what buy that. They are also
+        // all it costs: the per-member rows below are the same rows the Big-M family
+        // emitted, with `z` in place of the bound.
+        auto groups = BuildMinMaxGroups(input, indexer, ec);
+        for (idx_t g = 0; g < groups.size(); g++) {
+            auto &group = groups[g];
+            if (group.members.empty()) {
+                continue; // masked-out group: nothing to take an extremum over
+            }
+            // The extremum of a family lies inside the family's own bracket. Labelled
+            // with the clause text stage 05 recorded, so a diagnosis over this column
+            // reads `MAX(x * c)` rather than an internal name.
+            string label;
+            if (ec.minmax_clause_idx < input.minmax_clause_labels.size()) {
+                label = input.minmax_clause_labels[ec.minmax_clause_idx];
+            }
+            idx_t z_idx = AddGlobalContinuousAux(input, indexer, group.family, 0.0, label);
+
+            ExtremumLinkSpec spec;
+            spec.result_column = z_idx;
+            spec.is_max = is_max_agg;
+            // Closing only. `MAX(e) >= K` needs `z <= MAX(e)`, or a `z` inflated past
+            // every member would satisfy the bound that nothing else does; it does not
+            // need `z >= MAX(e)`, because nothing pushes `z` down. The mirror holds for
+            // MIN. Emitting the envelope as well would double the rows for nothing.
+            spec.need_closing = true;
+            // Deactivated, a member row reads `z - expr_var <= M + const`, whose worst
+            // case is `family.hi - member.lo`. Maximised over members that is the
+            // family's full span, constants included — which is why this is not the
+            // constant-free `spread` an objective link uses.
+            spec.closing_underivable = group.family.Unbounded();
+            spec.closing_big_m =
+                spec.closing_underivable ? 0.0 : group.family.hi - group.family.lo;
+            // The range walk reports an infinity, not a culprit, so the column to name is
+            // found the same way every other row-Big-M refusal finds it.
+            spec.blame_var =
+                FindUnboundedContributor(ec, input.lower_bounds, input.upper_bounds);
+            spec.closing_kind = ConstraintKind::USER_MECHANISM;
+            EmitExtremumLink(input, indexer, spec, group.members, var_names, policy);
+
+            // The user's clause, over the extremum itself: `z <op> K`.
+            SolverInput::RawConstraint outer;
+            outer.indices.push_back(static_cast<int>(z_idx));
+            outer.coefficients.push_back(1.0);
+            outer.sense = is_max_agg ? '>' : '<';
+            // The raw bound, not the effective one: each member carries its own row's
+            // constant LHS part, because a per-row constant can differ inside a group and
+            // the extremum is taken over the whole expression, constant included. A
+            // uniform bound is the same value whichever row is picked, so the
+            // representative row is not even consulted.
+            outer.rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue()
+                                                  : ec.rhs_values.Get(group.first_row);
+            outer.kind = ConstraintKind::USER_PARAMETER;
+            // The elastic shape, without which this row does not fold. One `PER` clause
+            // emits one of these per group, and they are all the same line of SQL: the
+            // user edits a single literal and every group moves with it. Left UNSET they
+            // never fold, so an infeasible `MAX(e) >= K PER g` reported one edit per group
+            // — and only the loosest of them repaired anything. A genuinely per-group
+            // bound stays PER_ROW_DATA and reports a virtual offset, as it does elsewhere.
+            outer.shape = ec.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR
+                                                  : ElasticShape::PER_ROW_DATA;
+            outer.rhs_label = ec.rhs_is_shared_scalar ? string() : ec.rhs_label;
+            outer.source_clause_id = ec.source_clause_id;
+            outer.repair_group_id = ec.repair_group_id;
+            outer.group_key = ec.row_group_ids.empty() ? DConstants::INVALID_INDEX : g;
+            outer.qualifier = ec.qualifier;
+            outer.is_aggregate = true;
+            if (g < ec.group_labels.size()) {
+                outer.group_label = ec.group_labels[g];
+            }
+            input.global_constraints.push_back(std::move(outer));
         }
-        EmitLoweredMinMaxConstraint(input, ec, is_max_agg, var_names, new_constraints);
     }
     input.constraints = std::move(new_constraints);
 }

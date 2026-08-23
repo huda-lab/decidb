@@ -1700,7 +1700,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         eval_const.repair_group_id = c;
         // Preserve whether the original LHS was an aggregate (e.g., SUM(...))
         eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
-        eval_const.minmax_indicator_idx = constraint->minmax_indicator_idx;
+        eval_const.minmax_clause_idx = constraint->minmax_clause_idx;
         eval_const.minmax_agg_type = constraint->minmax_agg_type;
         eval_const.ne_indicator_idx = constraint->ne_indicator_idx;
         eval_const.abs_aux_idx = constraint->abs_aux_idx;
@@ -2608,6 +2608,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // Everything below this point is stage 06 working on the evaluated model, so
     // hand the constraints and the formulation links over before the first pass.
     solver_input.constraints = std::move(gstate.evaluated_constraints);
+    solver_input.minmax_clause_labels = minmax_clause_labels;
     for (auto &link : bilinear_links) {
         solver_input.bilinear_links.push_back(
             BilinearLinkSpec {link.aux_idx, link.bool_var_idx, link.other_var_idx});
@@ -2752,7 +2753,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // directly and needs no Big-M, so it also needs no bound on the contributing
     // variables; the lowering arm's indicator family does. Both read the same tag and
     // make the same bound classification first.
-    if (!minmax_indicator_links.empty()) {
+    if (!minmax_clause_labels.empty()) {
         LinearizeMinMaxConstraints(solver_input, var_indexer, decide_var_names, native_min_max);
     }
 

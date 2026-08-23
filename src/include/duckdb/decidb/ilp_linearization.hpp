@@ -80,7 +80,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
 //! Encode every constraint stage 05 tagged with a hard MIN/MAX indicator:
 //!   MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M, and SUM(y) >= 1
 //!   MIN(expr) <= K: for each row i, expr_i + M*y_i <= K + M, and SUM(y) >= 1
-//! Constraints are matched to their indicator variables via `minmax_indicator_idx`
+//! Constraints are matched to their indicator variables via `minmax_clause_idx`
 //! (not positionally). Untagged constraints pass through unchanged, so
 //! `input.constraints` is replaced in place by the encoded list. A group whose bound
 //! is unreachable in its own direction is emitted as a plain per-row constraint

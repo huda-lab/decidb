@@ -1035,7 +1035,7 @@ private:
 			if (sep == string::npos) {
 				constraint.minmax_agg_type = minmax_payload;
 			} else {
-				constraint.minmax_indicator_idx = std::stoull(minmax_payload.substr(0, sep));
+				constraint.minmax_clause_idx = std::stoull(minmax_payload.substr(0, sep));
 				constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
 			}
 			constraint.kind = ConstraintKind::USER_MECHANISM;

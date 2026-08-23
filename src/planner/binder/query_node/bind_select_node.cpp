@@ -826,7 +826,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         result->variable_scopes = variable_scopes;
 
         // ne_indicator_indices is now populated by DecideOptimizer (post-binding)
-        // minmax_indicator_links, flat_objective_agg/is_easy, per_inner/outer_agg/is_easy
+        // minmax_clause_labels, flat_objective_agg/is_easy, per_inner/outer_agg/is_easy
         // are now populated by DecideOptimizer::RewriteMinMax (post-binding)
 
         // Hide auxiliary vars from SELECT * by truncating the bind context binding.
