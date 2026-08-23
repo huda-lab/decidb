@@ -103,28 +103,35 @@ Grouped by who writes it:
 **From the canonicalizer** — `objective_constant_offset`.
 
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
-`ne_indicator_indices`, `minmax_indicator_links`, `bilinear_links`,
+`force_native_constructs`, `ne_indicator_indices`, `minmax_indicator_links`, `bilinear_links`,
 `abs_maximize_links`, `aux_var_expressions`, `composed_minmax_constraints`,
 `composed_minmax_objective_terms`, `flat_objective_agg` /
 `flat_objective_is_easy`, and the five `per_*` objective fields.
 
 ### The solver is named, not held
 
-Stage 05 has to settle two solver questions before it rewrites anything (see
-[`../05_optimizer/done.md`](../05_optimizer/done.md) §0), and both answers ride the
+Stage 05 has to settle three solver questions before it rewrites anything (see
+[`../05_optimizer/done.md`](../05_optimizer/done.md) §0), and every answer rides the
 plan from here. What the plan carries is the *answers*, never the solver:
 
 - `solver_backend_name` — the registered identifier (`"gurobi"`, `"highs"`).
-- `use_native_constructs` — a `SolverConstructSupport`, which constructs this query
-  leaves for the backend to state itself.
+- `use_native_constructs` — a `SolverConstructSupport`, which constructs this backend
+  can state itself.
+- `force_native_constructs` — the policy over them: whether a declared construct is used
+  wherever it is declared, or only where the lowering has no valid Big-M. False ships.
+
+The third is a policy rather than a fact, and that is deliberate. Applying it needs a
+per-clause test on evaluated coefficients, which no stage before execution can run — so
+the plan carries the *rule* and stage 08 carries it out. That is not the plan deferring
+a decision; it is the decision arriving where the data it ranges over exists.
 
 A live `SolverBackend` handle here would let a logical plan open a solver session,
 and session creation is stage 07's. A name cannot: turning it back into a backend is
 a registry lookup (`SolverRegistry::Find`), and that happens where a solve is about
 to run — `PhysicalDecide::PlannedSolverBackend()` — not on the plan.
 
-Neither field is serialized. Which solver a host has is a fact about the host, not
-about the query, so a plan replayed elsewhere re-resolves both.
+None of the three is serialized. Which solver a host has is a fact about the host, not
+about the query, so a plan replayed elsewhere re-resolves them.
 
 ### `entity_key_expressions`
 

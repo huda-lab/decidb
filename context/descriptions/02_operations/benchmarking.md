@@ -125,7 +125,7 @@ A full run (3 iterations × 2 sizes) takes roughly 17 minutes at these settings.
 | Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); WHEN+PER (full `orders` scale) |
 | Q7 | `q7_nonconvex.sql` | MIQP + non-convex QP + non-convex bilinear; per-row quadratic constraint (full `orders` scale, Gurobi `NonConvex=2`) |
 | Q8 | `q8_feasibility_join.sql` | Feasibility (no objective); entity-scoped variable over a join; multi-column PER; WHEN+PER; IS NOT NULL |
-| Q9 | `q9_maximize_max.sql` | MAXIMIZE MAX (hard, Big-M); equality constraint (row-limited — hard-MAX indicators couple globally, least scalable query) |
+| Q9 | `q9_maximize_max.sql` | MAXIMIZE MAX (hard, Big-M); equality constraint (row-limited, tier not yet re-chosen — the "least scalable query" reading was a missing auxiliary box, fixed 2026-08-18) |
 | Q10 | `q10_maximize_abs.sql` | MAXIMIZE SUM(ABS) + ABS Path-B `>=` constraint (Big-M; full scale — per-row-independent sign binaries, 5M vars at 1M rows; heaviest query in the suite) |
 | Q11 | `q11_lp_allocation.sql` | Pure LP continuous allocation; MAXIMIZE AVG |
 

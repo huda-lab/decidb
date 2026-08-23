@@ -2712,8 +2712,15 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // what is fast; that is exactly why it has to be the same answer the rewrites above
     // were selected against. Both arms below only translate.
     const bool native_abs = use_native_constructs.abs;
-    const bool native_min_max = use_native_constructs.min_max;
     const bool native_not_equal = use_native_constructs.not_equal;
+    // MIN/MAX arrives as a POLICY rather than an answer. Stage 05 decided both halves of
+    // it — whether the backend can state the construct, and whether a declared construct
+    // is used everywhere or only as a fallback — and neither is re-decided here. What is
+    // left is a question about the data: whether THIS clause has a Big-M, which only a
+    // stage that has seen the evaluated coefficients can answer. Applying a decision to
+    // data is this layer's job; choosing the decision was not.
+    const NativeConstructPolicy native_min_max {use_native_constructs.min_max,
+                                                force_native_constructs};
 
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from
@@ -2732,11 +2739,11 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // the same tag and make the same bound classification first.
     vector<EvaluatedConstraint> deferred_native_minmax;
     if (!minmax_indicator_links.empty()) {
-        if (native_min_max) {
-            ExtractNativeMinMaxConstraints(solver_input, deferred_native_minmax);
-        } else {
-            LinearizeMinMaxIndicators(solver_input, decide_var_names);
-        }
+        // Both arms run, and which clauses reach each is decided per clause by the
+        // extraction: it lifts out only what will be stated natively, and whatever it
+        // leaves behind is still tagged for the lowering to pick up.
+        ExtractNativeMinMaxConstraints(solver_input, deferred_native_minmax, native_min_max);
+        LinearizeMinMaxIndicators(solver_input, decide_var_names);
     }
 
     // Encode `<>` as its disjunctive Big-M pair. Per-row spellings expand in

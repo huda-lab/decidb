@@ -27,11 +27,23 @@ const SolverBackendInfo REGISTERED_BACKENDS[] = {
      DeterministicNaive::CreateSession},
 };
 
-//! Test-only A/B switch, mirroring DECIDB_FORCE_SOLVER. `DECIDB_NATIVE_CONSTRUCTS=off`
-//! turns every construct capability off, so the same query takes the lowering path and
-//! must reach the same optimum. That equivalence is the standard a construct flag has
-//! to meet before it goes in the table at all — and the only way to test it without a
-//! second machine.
+//! Test-only A/B switch, mirroring DECIDB_FORCE_SOLVER. It is three-valued because the
+//! shipping policy sits between its two extremes:
+//!
+//!   off     every construct capability is turned off, so the query takes the lowering
+//!           path and must reach the same optimum.
+//!   on      the default, and what an unset variable means. A construct is stated
+//!           natively only where the lowering has no valid Big-M to use — the lowering
+//!           is the smaller model wherever it works. Spelled out so a test can pin the
+//!           shipping policy instead of relying on the variable being absent, which an
+//!           ambient setting would silently override.
+//!   force   stated natively wherever the backend declares it, which is what the
+//!           default used to do.
+//!
+//! `off` and `force` are the two arms of the A/B equivalence test, and that equivalence
+//! is the standard a construct flag has to meet before it goes in the table at all —
+//! and the only way to test it without a second machine. The default is deliberately
+//! NEITHER arm: it picks per site, so neither setting alone would exercise both.
 //!
 //! It lives HERE, above every backend, rather than inside the one backend that happens
 //! to declare a construct today: the switch is part of the capability contract, so a
@@ -52,6 +64,18 @@ bool NativeConstructsEnabled() {
 }
 
 } // namespace
+
+bool NativeConstructsForced() {
+	static const bool forced = []() {
+		const char *setting = std::getenv("DECIDB_NATIVE_CONSTRUCTS");
+		if (!setting) {
+			return false;
+		}
+		string value(setting);
+		return value == "force" || value == "FORCE";
+	}();
+	return forced;
+}
 
 const char *SolverBackend::Name() const {
 	D_ASSERT(info);

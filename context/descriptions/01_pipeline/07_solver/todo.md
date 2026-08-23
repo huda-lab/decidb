@@ -2,30 +2,61 @@
 
 ---
 
-## The scaling win is not yet measured
+## The scaling win was measured — and it is the other way round
 
-**Status**: the mechanism shipped; the benchmark that motivated it has not been run.
+**Status**: measured 2026-08-23, and the mechanism was re-gated as a result. This is the
+record of what the numbers said. Nothing here is open.
 
-The general-constraint and indicator channel now exists — ABS, MIN/MAX and `<>` all
-reach Gurobi natively when it declares them, with the Big-M path intact as the fallback
-for every other backend. What has *not* been measured is the thing that justified
-building it: the hard-direction MIN/MAX encoding is the one place where the LP
-relaxation demonstrably weakens with row count, and that is what caps Q9's benchmark
-scale. The encoding analysis is in
-[`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md).
+The general-constraint channel shipped without the benchmark that motivated it. The
+claim was that the hard-direction MIN/MAX encoding is where the LP relaxation weakens
+with row count, so stating `z = MAX(t..)` natively would flatten Q9's curve. Q9 was run
+at 5K / 7.5K / 15K / 30K on Gurobi, native against the lowering, `medium.db`, solver
+time only:
 
-**Test**: Q9 at 5K / 7.5K / 15K / 30K against the recorded Big-M curve, on both
-backends. HiGHS must be unchanged — it declares no construct, so its model is
-byte-identical. Gurobi must flatten, because `z = MAX(t..)` has no Big-M whose
-relaxation can loosen.
+| rows | native | lowering | objective |
+|---|---|---|---|
+| 5,000 | 183 ms | 93 ms | identical |
+| 7,500 | 302 ms | 93 ms | identical |
+| 15,000 | 334 ms | 205 ms | identical |
+| 30,000 | 787 ms | 456 ms | identical |
 
-This is a long CPU-bound run; it is worth doing deliberately rather than as part of a
-routine suite.
+**There was no curve left to flatten.** The 2026-08-18 auxiliary-boxing fix had already
+done that, and it is what the premise was written before. Both arms are near-linear, and
+at Gurobi's default settings both finish in **0–1 nodes** — the relaxations are exact, so
+there is no search to improve. Q9 cannot test the claim it was chosen to test.
 
-**Correctness is already covered.** `test_native_constructs.py` A/B-tests every gated
-shape against its lowering path on one machine (`DECIDB_NATIVE_CONSTRUCTS=off`), and the
-golden corpus shows HiGHS byte-identical throughout. What is missing is only the speed
-claim.
+**Native is the slower arm, structurally.** Two reasons, both measurable:
+
+- A general constraint relates *columns*, so every member expression is pinned to a
+  fresh one. Presolve cannot substitute a column a general constraint reads, so the
+  copies survive: at 15K rows the native model presolved to 60,001 columns / 45,003 rows
+  against the lowering's 30,001 / 15,003.
+- `z = MAX(t..)` is an *equality*, so the backend expands both directions; the lowering
+  emits only the direction the clause needs. Hand-lowering the same dump one-sided and
+  two-sided at 30K rows: 0.85s against 1.36s.
+
+The **constraint** side is far worse than the objective side. `MAX(keep * price) >= K`,
+native against the lowering: 912 ms vs 90 ms at 15K, and 3,357 ms vs 93 ms at 30K —
+native's cost grows with row count while the lowering stays flat.
+
+**Where the claim was right.** With `Presolve=0 Cuts=0 Heuristics=0` the ranking
+inverts: native takes 125–341 nodes against the lowering's 490–2,585, and runs 5–15x
+faster. The Big-M formulation really is the harder one to search. Gurobi's default
+presolve and cuts close that gap completely on this shape, which leaves model size as
+the only thing that still separates the arms — and there the lowering is smaller.
+
+**What changed as a result.** Native MIN/MAX is now the *fallback*, taken per clause
+only where the lowering has no valid Big-M. The capability payoff is untouched:
+`MAX(x) >= 5` over an unbounded `x` still answers, because that clause has no lowering.
+Bounded queries take the smaller model. See
+[`../05_optimizer/done.md`](../05_optimizer/done.md) §0 for the policy and
+[`../08_execution/done.md`](../08_execution/done.md) for where it is applied.
+
+**Still open, and small.** Native ABS is ~10% slower than its lowering on the Q10 shape
+(50K rows: 2,458 ms against 2,238 ms, three runs each, tight variance). ABS is *not*
+gated by derivability — its arm is still chosen by capability alone. The 10% is real and
+reproducible but an order of magnitude smaller than the MIN/MAX effect, and the cause
+has not been isolated. Worth a look; not worth guessing at.
 
 ---
 

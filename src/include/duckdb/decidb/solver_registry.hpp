@@ -102,4 +102,14 @@ struct SolverRegistry {
 	static vector<string> BackendsSupporting(const SolverModelClass &needed);
 };
 
+//! Test-only: `DECIDB_NATIVE_CONSTRUCTS=force` asks for a construct to be stated
+//! natively even where a valid Big-M exists — which is NOT the shipping policy, since
+//! the lowering is the smaller model wherever it is valid (see NativeConstructPolicy).
+//!
+//! It exists so the A/B equivalence tests keep testing something. Without it, every
+//! bounded query takes the lowering on both settings of the switch, and a test that
+//! compares the two arms would compare the lowering against itself and pass while
+//! proving nothing. `off` and `force` are the two arms; the default is neither.
+bool NativeConstructsForced();
+
 } // namespace duckdb

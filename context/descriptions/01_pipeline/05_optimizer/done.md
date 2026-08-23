@@ -30,29 +30,53 @@ which settles two things and records both on the plan:
 | Recorded | What it is |
 |---|---|
 | `LogicalDecide::solver_backend_name` | *Which* backend, from `SelectSolverBackend()`. A name, not a handle — see [`../03_logical_plan/done.md`](../03_logical_plan/done.md) §4. |
-| `LogicalDecide::use_native_constructs` | *Which constructs stay native*, read once off that backend's `SolverConstructSupport`. |
+| `LogicalDecide::use_native_constructs` | *Which constructs the backend can state itself*, read once off that backend's `SolverConstructSupport`. |
+| `LogicalDecide::force_native_constructs` | *The policy* governing them: use a declared construct everywhere, or only as a fallback. False ships; true is the test-only `DECIDB_NATIVE_CONSTRUCTS=force`. |
 
-Both happen here, ahead of every pass, and the second is the reason for the first.
+All three happen here, ahead of every pass, and the rest are the reason for the first.
 The passes below decide **how to express** a construct, and the right answer depends
 on what the backend accepts natively — a solver with a native `ABS` needs no Big-M
 envelope, so lowering it would be work that only loses accuracy.
 
 **Choosing a formulation is this stage's job, and it is settled here rather than
 where the rows are built.** Stage 08 used to make that call itself, reading
-`Capabilities()` at execution time; it now reads `use_native_constructs` and
-translates. The decision is three boolean reads with no dependence on data, so
-nothing was gained by deferring it, and two things were lost: the layer boundary,
-and the ability of a rewrite to *see* the choice. Seeing it matters — a rewrite that
-knows ABS will be stated natively can skip the sign indicator that only a Big-M
-envelope has a use for (§ABS below), which is not expressible while the arm is
-picked two stages later.
+`Capabilities()` at execution time; it now reads the fields above and translates. The
+layer boundary was the thing lost by deferring it, along with the ability of a rewrite
+to *see* the choice. Seeing it matters — a rewrite that knows ABS will be stated
+natively can skip the sign indicator that only a Big-M envelope has a use for (§ABS
+below), which is not expressible while the arm is picked two stages later.
+
+**Capability is not the same question as policy, and MIN/MAX is where they come
+apart.** A general constraint and a Big-M family encode the same thing, so where both
+are available the choice is a performance one — and, measured, the lowering wins it.
+A general constraint relates *columns*, so every member expression that is not already
+a column has to be pinned to a fresh one that presolve cannot substitute away; and
+`z = MAX(t..)` is an *equality*, so the backend expands both directions while the
+lowering emits only the one the clause needs. On the Q9 benchmark shape at 30K rows the
+native arm ran 1.8x slower; on a `MAX(e) >= K` constraint at the same size, 41x, and
+its cost grew with row count while the lowering stayed flat. Neither arm branched, so
+there was no search quality to buy back.
+
+So for MIN/MAX, native is the **fallback**: taken only where the lowering has no valid
+Big-M, which is the case it was built to answer and the only one where the lowering
+must refuse the query outright. Whether a given clause has a Big-M depends on evaluated
+coefficients, so stage 08 answers *that* — it applies this policy to data only it can
+see, exactly as the `<>` range collapse does. It does not re-decide the policy.
+
+One consequence is recorded where it lands: `EmitHardMinMaxIndicator` now allocates its
+indicator on **both** arms. It used to skip the native one, since a general constraint
+has no disjunction to switch; but a stage that cannot see the data cannot know which
+arm a clause takes, and stage 08 can add columns to the global block but not row-scoped
+ones. The cost is one binary per data row, unread and presolved away, on the arm that
+is now rare.
 
 The choice is made **once** and rides the plan: `LogicalDecide` → `PhysicalDecide` →
-the solve → every diagnostic re-solve. Nothing downstream selects again. That is not
+the solve → every diagnostic re-solve. Nothing downstream selects again — stage 08
+applies the recorded policy to the data, which is a different act from choosing it. That is not
 tidiness: once a rewrite has consulted the backend's capabilities, a second selection
 that answered differently would run a model on a solver it was not built for.
 
-Neither field is **serialized**. Which solver a host has is a fact about the host,
+None of the three is **serialized**. Which solver a host has is a fact about the host,
 not about the query, so a plan deserialized elsewhere re-resolves both rather than
 carrying a choice that machine cannot honor. If the DECIDE optimizer is disabled
 outright (`SET disabled_optimizers='decide_optimizer'`), physical planning calls

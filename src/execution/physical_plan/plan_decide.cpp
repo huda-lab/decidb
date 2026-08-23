@@ -88,6 +88,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         std::move(op.decide_constraints), op.decide_sense, std::move(op.decide_objective));
     decide_op->solver_backend_name = op.solver_backend_name;
     decide_op->use_native_constructs = op.use_native_constructs;
+    decide_op->force_native_constructs = op.force_native_constructs;
     decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
     decide_op->is_boolean_var = op.is_boolean_var;
     decide_op->ne_indicator_indices = std::move(op.ne_indicator_indices);

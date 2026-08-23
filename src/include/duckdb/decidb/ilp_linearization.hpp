@@ -87,6 +87,39 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
 //! instead, and a group whose bound every assignment satisfies is dropped.
 void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_names);
 
+//! Whether a construct is stated natively or lowered, and the rule that decides.
+//!
+//! A general constraint (`z = MAX(t..)`) and a Big-M family encode the same thing, so
+//! where both are valid this is a pure performance question — and the answer, measured,
+//! is the lowering. Two reasons, both structural:
+//!
+//!   - A general constraint relates COLUMNS, so every member expression that is not
+//!     already a column has to be pinned to a fresh one: an extra column and an extra
+//!     equality row per data row, which presolve cannot substitute away because a
+//!     general constraint reads them.
+//!   - `z = MAX(t..)` is an EQUALITY, so the backend expands both directions. The
+//!     lowering emits only the direction the clause needs.
+//!
+//! Measured on the Q9 benchmark shape (MAXIMIZE MAX over 5K-30K rows) the native arm ran
+//! 1.7x-3.3x slower; on a `MAX(e) >= K` constraint at 30K rows, 40x slower and growing
+//! with row count while the lowering stayed flat. Neither arm branched, so there was no
+//! search quality to buy back: the Big-M here is per-row tight.
+//!
+//! So native is the FALLBACK, not the default — reserved for the case that has no valid
+//! Big-M at all, which is the case it was built to answer and the only one where the
+//! lowering must refuse the query.
+struct NativeConstructPolicy {
+    //! The backend declares this construct (stage 05, read off its capabilities).
+    bool available = false;
+    //! Test-only `DECIDB_NATIVE_CONSTRUCTS=force`: state it natively wherever it is
+    //! declared, so the A/B equivalence tests still have two arms to compare.
+    bool forced = false;
+
+    //! The rule. `big_m_underivable` is this SITE's question, not the query's: one
+    //! clause can have a derivable range while another in the same query does not.
+    bool Use(bool big_m_underivable) const { return available && (forced || big_m_underivable); }
+};
+
 //! The native arm of the MIN/MAX gate, in two halves for the same reason the
 //! aggregate `<>` is: a general constraint names flat columns, which exist only once
 //! the VarIndexer does.
@@ -95,7 +128,8 @@ void LinearizeMinMaxIndicators(SolverInput &input, const vector<string> &var_nam
 //! to, because until an arm rewrites it the row reads as `SUM(inner) <op> K` while the
 //! clause means `MAX(inner) <op> K`, and anything walking the model in between would
 //! believe the row. Both arms run the same bound classification first.
-void ExtractNativeMinMaxConstraints(SolverInput &input, vector<EvaluatedConstraint> &deferred);
+void ExtractNativeMinMaxConstraints(SolverInput &input, vector<EvaluatedConstraint> &deferred,
+                                    NativeConstructPolicy policy);
 
 //! Expand finishes them: a free column per active row pinned to that row's inner
 //! expression, one extremum column per group pinned by a `MIN`/`MAX` general
@@ -400,7 +434,7 @@ struct MinMaxObjectiveSpec {
 //! no MIN/MAX aggregate: `input.objective_coefficients` is then left as it arrived.
 void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                               const MinMaxObjectiveSpec &spec, const vector<string> &var_names,
-                              bool native_min_max);
+                              NativeConstructPolicy native_min_max);
 
 //! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
 //! or the objective spelling — with everything data-dependent already evaluated by the
@@ -440,13 +474,13 @@ struct ComposedMinMaxTermData {
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
                                        ExpressionType outer_cmp, idx_t source_clause_id,
-                                       const vector<string> &var_names, bool native_min_max);
+                                       const vector<string> &var_names, NativeConstructPolicy native_min_max);
 
 //! Encode a composed MIN/MAX *objective*: the same auxiliary layer, but the composition is
 //! written into the objective — a coefficient on each auxiliary's column, and per-row
 //! coefficients for the SUM/AVG terms. Replaces `input.objective_coefficients`.
 void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                                       vector<ComposedMinMaxTermData> &terms,
-                                      const vector<string> &var_names, bool native_min_max);
+                                      const vector<string> &var_names, NativeConstructPolicy native_min_max);
 
 } // namespace duckdb

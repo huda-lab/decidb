@@ -355,17 +355,35 @@ if (native_abs) { EmitNativeAbs(solver_input, var_indexer); }   // after the Var
 backend before it rewrote anything. **This stage must not ask a backend what it
 supports.** The routing has to be the same answer the rewrites upstream were selected
 against, and a second, independently-derived answer is exactly how the plan and the
-solve come to disagree about what was lowered. The decision is data-independent —
-three boolean reads — so there was never anything to gain by deferring it, and
-deferring it kept stage 05 from acting on its own choice: see
-[`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
+solve come to disagree about what was lowered. Deferring the choice also kept stage 05
+from acting on it: see [`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
+
+**MIN/MAX arrives as a policy, not an answer**, and the difference matters. It reaches
+this stage as a `NativeConstructPolicy` — the capability, plus whether a declared
+construct is used everywhere or only as a fallback — and the shipping policy is
+*fallback*: the lowering is the smaller model wherever it is valid, so native is
+reserved for the clause that has no valid Big-M at all. Whether a given clause has one
+is a question about **evaluated coefficients**, which nothing before this stage can
+answer, so this stage answers it — per clause, via `MinMaxBigMDerivable`, a
+non-throwing twin of the walk `DecideTightPerRowBigM` makes.
+
+That is applying a decision to data, not making one. The distinction is the same one
+the `<>` range collapse already relies on (`ClassifyNERow`), and it is why both arms
+now run for MIN/MAX: `ExtractNativeMinMaxConstraints` lifts out only the clauses that
+will be stated natively, and `LinearizeMinMaxIndicators` picks up whatever it left. One
+statement can have a bounded clause and an unbounded one, and each gets the formulation
+it can actually use.
 
 Both arms read the same stage-05 tag (`abs_aux_idx`, `abs_is_pos_bound`) — stage 05
 tags rather than fully lowering, because the Big-M constants are functions of
 evaluated data, and that tag *is* the native-construct record. Neither arm decides
 anything: all routing is the `if` above, and the adapters below only translate. That
-is what keeps the two comparable, and `DECIDB_NATIVE_CONSTRUCTS=off` A/B-tests them on
-one machine.
+is what keeps the two comparable, and `DECIDB_NATIVE_CONSTRUCTS` A/B-tests them on one
+machine — `off` forces every construct down its lowering path, `force` states every
+declared one natively, and `on` (the default, and what an unset variable means) is the
+shipping policy. For MIN/MAX the A/B has to be `force` against `off`: on a bounded shape
+the default *is* the lowering, so comparing it against `off` would compare the lowering
+with itself.
 
 The backend itself reaches this stage as a **name**. `PlannedSolverBackend()` resolves
 `solver_backend_name` through the registry at the two points that are about to solve —
@@ -376,8 +394,10 @@ The native arm runs later than the lowering one because a general constraint nam
 flat columns, which exist only once the `VarIndexer` does — the same reason the
 aggregate `<>` expansion waits.
 
-MIN/MAX is gated the same way, in four places, because it has four hard forms — a
-constraint, a flat objective, a PER-nested objective, and a composed term. The
+MIN/MAX is gated in four places, because it has four hard forms — a constraint, a flat
+objective, a PER-nested objective, and a composed term. All four ask the same question
+of their own range, so a query cannot take one arm for its inner aggregate and the other
+for its outer one. The
 constraint side has one extra requirement: its tagged row reads as `SUM(inner) <op> K`
 while the clause means `MAX(inner) <op> K`, so the native arm must **lift it out of the
 model** (`ExtractNativeMinMaxConstraints`) rather than leave it for later. Nothing
@@ -397,8 +417,18 @@ row of its own and diagnosis can only drop what it can reach; see
 range collapses to a plain inequality never had a disjunction to state and takes neither
 arm.
 
-The native columns are **boxed**, not free, wherever a range is derivable — the same
-`AuxRange` walk that produces the Big-M constant. A free continuous column is a
+**A member that is already a column is passed through, not copied.** A general
+constraint relates columns, so a member expression normally has to be pinned to a fresh
+one — but `MAX(x)`, `MIN(x)` and `ABS(x)` name a decision variable directly, and there
+`t = x` was a column and an equality row per data row to restate a column that already
+existed. Presolve cannot substitute a column a general constraint reads, so the copies
+survived into the solve: measured on `MAXIMIZE MAX(x)` at 15K rows, 0.97s with the
+copies against 0.29s without, for the same answer. Only an exact renaming qualifies —
+one variable term, coefficient 1, no constant — since `MAX(2 * x)` or `ABS(x - target)`
+is a genuine expression and still earns a column.
+
+The native columns that remain are **boxed**, not free, wherever a range is derivable —
+the same `AuxRange` walk that produces the Big-M constant. A free continuous column is a
 measured performance cliff, and it is earned only by the one case that has no range at
 all, which is precisely the query the native path exists to answer.
 

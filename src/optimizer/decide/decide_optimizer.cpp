@@ -1342,18 +1342,21 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxIndicator(LogicalDecide &d
                                                                  const Expression &inner,
                                                                  const Expression *filter,
                                                                  idx_t &out_ind_idx) {
-	// The indicator exists to switch this row's Big-M disjunction on and off. A backend
-	// that states `z = MAX(t..)` itself has no disjunction and never reads it, so it is
-	// allocated only on the arm that does. Left in on the native arm it was one free
-	// binary PER DATA ROW -- row-scoped, so it grew with the relation -- appearing in no
-	// row and no general constraint. Solvers presolve such a column away, so it never
-	// changed an answer; it was still built, stored and marshalled for every input row.
+	// The indicator exists to switch this row's Big-M disjunction on and off, so only
+	// the lowering arm reads it. It is nevertheless allocated on BOTH arms, and the
+	// asymmetry is the reason: which arm a clause takes is not knowable here.
 	//
-	// Readable here only because stage 05 now OWNS the formulation decision: the arm is
-	// known at the moment the variable would be allocated.
-	idx_t ind_idx = DConstants::INVALID_INDEX;
-	if (!decide.use_native_constructs.min_max) {
-		ind_idx = decide.decide_variables.size();
+	// Native is the fallback now, taken only where the lowering has no valid Big-M, and
+	// whether a Big-M is derivable depends on evaluated coefficients. Stage 08 answers
+	// that. It can add columns to the global block but not row-scoped ones, so an
+	// indicator it might need has to exist before it starts -- skipping it here would
+	// let stage 05 decide, by omission, a question it cannot see the data for.
+	//
+	// The cost is one binary per data row appearing in no row, and ONLY on the arm that
+	// does not read it: the native one, which is now the rare unbounded case. Solvers
+	// presolve such a column away.
+	idx_t ind_idx = decide.decide_variables.size();
+	{
 		string ind_name = "__minmax_ind_" + to_string(decide.minmax_indicator_links.size()) + "__";
 		auto ind_var = make_uniq<BoundColumnRefExpression>(
 		    ind_name, LogicalType::BOOLEAN, ColumnBinding(decide.decide_index, ind_idx));

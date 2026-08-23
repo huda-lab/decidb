@@ -139,6 +139,10 @@ void ChooseDecideSolver(LogicalDecide &op) {
 	// carries both — but the question is asked exactly once, at the only stage entitled
 	// to choose a formulation.
 	op.use_native_constructs = backend.Capabilities().constructs;
+	// ...and the policy that governs their use. Read here, with the rest of the
+	// formulation decision, rather than at the emission site: an environment read
+	// scattered across stage 08 would be a second place the formulation gets decided.
+	op.force_native_constructs = NativeConstructsForced();
 }
 
 SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {

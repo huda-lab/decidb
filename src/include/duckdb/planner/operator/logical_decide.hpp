@@ -265,6 +265,17 @@ public:
     //! reproduces the pre-capability lowering behaviour.
     SolverConstructSupport use_native_constructs;
 
+    //! Stage 05's formulation POLICY, beside the capability table above: whether a
+    //! declared construct is used wherever it is declared, or only where the lowering
+    //! has no valid Big-M. False is the shipping answer — the lowering is the smaller
+    //! model wherever it works, so native is the fallback (see NativeConstructPolicy).
+    //! True only under the test-only `DECIDB_NATIVE_CONSTRUCTS=force`.
+    //!
+    //! Whether a given SITE has a valid Big-M depends on evaluated data, so stage 08
+    //! answers that question. It does not re-decide the policy: it applies this one to
+    //! a fact only it can see, the same way the `<>` range collapse does.
+    bool force_native_constructs = false;
+
     // --- Prepared linear form (built by BuildDecidePreparedModel, stage 05) ---
 
     //! Every constraint and the objective, already flattened into additive terms.

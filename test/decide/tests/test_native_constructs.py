@@ -10,20 +10,26 @@ plan time, and recorded on the plan; stage 08 reads it and routes. There are exa
 two arms and they are equivalent:
 whichever runs, the optimum is the same. That equivalence is the standard a
 capability flag has to meet before it goes in the table, and
-``DECIDB_NATIVE_CONSTRUCTS=off`` is how it is checked — it forces every construct
-back down its lowering path on the same machine.
+``DECIDB_NATIVE_CONSTRUCTS`` is how it is checked on one machine: ``off`` forces every
+construct down its lowering path, ``force`` states every declared one natively.
 
-Native is not only faster. A Big-M needs a finite bound on every contributing
-variable, and where none exists DeciDB refuses (see ``test_unbounded_bigm``). A
-general constraint needs no bound at all, so the capability turns some refused
-queries into answered ones. That is the one place the two arms visibly differ, and
-it is the payoff.
+Native is not faster — measured, it is slower wherever the lowering is available, since
+a general constraint relates columns (so every member expression needs a pinned one)
+and states an equality (so the backend expands both directions). What it is, is
+*possible* where the lowering is not: a Big-M needs a finite bound on every contributing
+variable, and where none exists DeciDB refuses (see ``test_unbounded_bigm``). A general
+constraint needs no bound at all.
+
+So for MIN/MAX native is the FALLBACK, taken per clause only where no Big-M exists.
+That is why its A/B runs ``force`` against ``off`` rather than the default against
+``off`` — the default would take the lowering on these bounded shapes and the test
+would compare the lowering with itself.
 
 Covers:
   - test_native_and_lowered_agree: the A/B, over the ABS-maximize shapes
   - test_minmax_native_and_lowered_agree: the A/B, over the MIN/MAX shapes
   - test_native_replaces_rows_with_a_general_constraint: the model really changed
-  - test_native_minmax_allocates_no_indicator: no Big-M means no binary to switch it
+  - test_minmax_prefers_the_lowering_when_a_big_m_exists: the gate, read off the model
   - test_native_abs_needs_no_bound: the payoff — refused when lowered, answered native
   - test_native_minmax_needs_no_bound: the same payoff on MIN/MAX
   - test_not_equal_native_and_lowered_agree: the A/B, over the `<>` shapes
@@ -258,21 +264,28 @@ def test_minmax_native_and_lowered_agree(decidb_cli_gurobi, name, clause, object
     PER-nested form and a composed form, each with its own hard branch — so the A/B
     runs over all of them rather than a representative.
     """
-    native = objective(_solve_grouped(decidb_cli_gurobi, clause))
+    native = objective(_solve_grouped(decidb_cli_gurobi, clause,
+                                      {"DECIDB_NATIVE_CONSTRUCTS": "force"}))
     lowered = objective(_solve_grouped(decidb_cli_gurobi, clause,
                                        {"DECIDB_NATIVE_CONSTRUCTS": "off"}))
     assert abs(native - lowered) <= 1e-6, f"{name}: native {native} != lowered {lowered}"
 
 
 @pytest.mark.min_max
-def test_native_minmax_allocates_no_indicator(decidb_cli_gurobi):
-    """The MIN/MAX twin of the column check above, on its own allocation site.
+def test_minmax_prefers_the_lowering_when_a_big_m_exists(decidb_cli_gurobi):
+    """Which arm a bounded MIN/MAX clause takes, read off the model.
 
-    The indicator binary exists to switch the Big-M disjunction. `z = MAX(t..)` has no
-    disjunction, so the native arm allocates none — and, like the ABS sign indicator,
-    the indicator is row-scoped, so one left behind is one dead binary per data row.
-    Presolve removes it and every answer stays right, which is exactly why this has to
-    be checked against the model rather than the result.
+    Both arms encode the same thing, so where both are available this is a performance
+    question — and the lowering wins it. A general constraint relates COLUMNS, so each
+    member expression has to be pinned to a fresh one that presolve cannot substitute
+    away, and `z = MAX(t..)` is an equality, so the backend expands both directions
+    while the lowering emits only the one the clause needs. Measured on this shape at
+    30K rows: 3.4s native against 0.09s lowered, and native's cost grew with row count
+    while the lowering stayed flat.
+
+    So native is the FALLBACK — `test_native_minmax_needs_no_bound` covers the case it
+    exists for, where no Big-M exists at all. Answers are identical either way, which
+    is exactly why this has to be checked against the model rather than the result.
     """
     sql = (f"SELECT id, g, c, x FROM {_GROUPED} DECIDE x(INT) "
            "SUCH THAT x <= 9 AND MAX(x * c) >= 20 MINIMIZE SUM(x)")
@@ -284,17 +297,29 @@ def test_native_minmax_allocates_no_indicator(decidb_cli_gurobi):
             with open(path) as f:
                 return f.read()
 
-    native = dump_of({})
+    # `on` is the shipping policy spelled out. Pinned rather than left unset so the
+    # assertion still means the default when the whole suite runs under an ambient
+    # setting of the switch.
+    default = dump_of({"DECIDB_NATIVE_CONSTRUCTS": "on"})
+    forced = dump_of({"DECIDB_NATIVE_CONSTRUCTS": "force"})
     lowered = dump_of({"DECIDB_NATIVE_CONSTRUCTS": "off"})
 
     def binary_columns(dump):
         return len(re.findall(r"^col \d+: .* bin=1 ", dump, re.MULTILINE))
 
-    assert "num_genconstrs: 0" in lowered, lowered
-    assert re.search(r"^gen \d+: kind=max ", native, re.MULTILINE), native
-    # One indicator per data row when lowered; none at all when native.
+    # `x` is bounded here, so a Big-M exists and the default takes the lowering.
+    assert "num_genconstrs: 0" in default, default
+    assert default == lowered, f"default arm is not the lowering:\n{default}\n---\n{lowered}"
+    # ...and the fallback is still reachable, on demand and on its own merits.
+    assert re.search(r"^gen \d+: kind=max ", forced, re.MULTILINE), forced
+
+    # One indicator per data row on the arm that switches the disjunction. The native
+    # arm never reads it, but stage 05 allocates it there too: whether a clause HAS a
+    # Big-M depends on evaluated data, so stage 08 routes, and a row-scoped column it
+    # might need cannot be created that late. One presolved-away binary per row, on the
+    # rare arm, is the price of letting the common arm be chosen on the evidence.
     assert binary_columns(lowered) == 4, lowered
-    assert binary_columns(native) == 0, native
+    assert binary_columns(forced) == 4, forced
 
 
 @pytest.mark.correctness

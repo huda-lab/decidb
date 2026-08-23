@@ -391,13 +391,20 @@ MIN/MAX, matching constraints to indicators by tag rather than position. Untagge
 constraints pass through unchanged.
 
 The **marking** is `minmax_agg_type` (`"min"` / `"max"`), not `minmax_indicator_idx`,
-and the difference matters: the indicator exists only on this arm. A backend that
-states `z = MAX(t..)` itself has no disjunction for one to switch, so stage 05
-allocates none and `minmax_indicator_idx` stays `INVALID_INDEX` there. The indicator is
-row-scoped, so leaving it in on the native arm cost one dead binary per data row — the
-same waste, and the same fix, as the ABS sign indicator (§ABS). The tag carries the
-index only when there is one: `__minmax_ind_<idx>_<agg>__` when lowered,
-`__minmax_ind_<agg>__` when native.
+and the difference matters: only the lowering arm reads the indicator. It is
+nevertheless allocated on **both**, and the asymmetry is the reason. A backend that
+states `z = MAX(t..)` itself has no disjunction for one to switch — but which arm a
+clause takes is now decided per clause, at stage 08, from evaluated coefficients
+(native is the fallback for a clause with no valid Big-M; see
+[`../05_optimizer/done.md`](../05_optimizer/done.md) §0). Stage 05 cannot see that, and
+stage 08 can add columns to the global block but not row-scoped ones, so an indicator
+the lowering might need has to exist before routing starts.
+
+The cost is one binary per data row, referenced by nothing and presolved away, on the
+arm that no longer runs for ordinary bounded queries. That is a deliberate trade: it
+buys the right to choose the *common* arm on measured evidence rather than by omission.
+Contrast the ABS sign indicator (§ABS), which is still skipped — ABS is not routed by
+derivability, so its arm really is known at stage 05.
 
 | Direction | Per-row rows | Selector row |
 |---|---|---|
@@ -644,6 +651,16 @@ the model over.
 The linear half of a native construct is therefore an ordinary row emitted alongside
 it: `t = inner` for ABS, and one such row per member for a MIN/MAX family, plus the
 extremum column the general constraint pins.
+
+**Unless the member is already a column.** `ABS(x)`, `MAX(x)` and `MIN(x)` name a
+decision variable directly, and there `t = x` restates a column that already exists —
+one column and one equality row per data row, saying nothing. They are not free: a
+general constraint reads its arguments, so presolve cannot substitute them away, and
+the copies survive into the solve. Measured on `MAXIMIZE MAX(x)` at 15K rows, 0.97s
+with the copies against 0.29s without, same answer. So an exact renaming — one variable
+term, coefficient 1, no constant — passes the variable's own column to the general
+constraint. `MAX(2 * x)` and `ABS(x - target)` are genuine expressions and still earn a
+column.
 
 Those columns are **boxed by the same `AuxRange` walk the Big-M constant comes from**,
 never left free as a matter of course. A free continuous column is a measured
