@@ -120,61 +120,45 @@ struct NativeConstructPolicy {
     bool Use(bool big_m_underivable) const { return available && (forced || big_m_underivable); }
 };
 
-//! The native arm of the MIN/MAX gate, in two halves for the same reason the
-//! aggregate `<>` is: a general constraint names flat columns, which exist only once
-//! the VarIndexer does.
+//! Encode every MIN/MAX *constraint* stage 05 tagged, routing each clause between the
+//! two formulations `NativeConstructPolicy` describes. Both arms make the same bound
+//! classification first — a vacuous or unreachable bound is settled by the direction it
+//! points, not by an encoding — and then:
 //!
-//! Extract lifts every tagged MIN/MAX constraint out of `input.constraints` — it has
-//! to, because until an arm rewrites it the row reads as `SUM(inner) <op> K` while the
-//! clause means `MAX(inner) <op> K`, and anything walking the model in between would
-//! believe the row. Both arms run the same bound classification first.
-void ExtractNativeMinMaxConstraints(SolverInput &input, vector<EvaluatedConstraint> &deferred,
-                                    NativeConstructPolicy policy);
-
-//! Expand finishes them: a free column per active row pinned to that row's inner
-//! expression, one extremum column per group pinned by a `MIN`/`MAX` general
-//! constraint, and the user's own bound as a single row over that extremum. No Big-M,
-//! no indicators, and therefore no requirement that any contributing variable be
-//! bounded.
-void ExpandNativeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
-                                   vector<EvaluatedConstraint> &deferred);
-
-//! Encode every constraint stage 05 tagged with a `<>` indicator as the disjunctive
-//! Big-M pair `x - M*z <= K-1` / `x - M*z >= K+1-M`.
+//!   - **Lowered** (`MAX(e) >= K` -> `e_r - M*y_r >= K - M` per row, plus `SUM(y) >= 1`)
+//!     rewrites the clause in place, in the per-row representation it arrived in.
+//!   - **Native** states `z = MAX(t..)` for the backend: a column per member expression
+//!     (or the member's own column, where the expression is nothing but one), one
+//!     extremum column per group, and the user's bound as a single row over it. No Big-M,
+//!     so no contributing variable needs a finite bound.
 //!
-//! Per-row spellings are expanded in place with the row-scoped indicator. Aggregate
-//! spellings cannot be: they need one *global* binary per group, and the group's
-//! Big-M must cover the summed range rather than a single row's, so they are moved
-//! into `deferred_aggregate` and finished by `ExpandDeferredAggregateNotEqual` once
-//! the `VarIndexer` exists.
+//! Untagged constraints pass through unchanged.
+void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
+                                const vector<string> &var_names, NativeConstructPolicy policy);
+
+//! Encode every constraint stage 05 tagged with a `<>` indicator: the disjunction
+//! `LHS <= K-1 OR LHS >= K+1`, as the Big-M pair `x - M*z <= K-1` / `x - M*z >= K+1-M`
+//! or as the two implications `z == 0 => LHS <= K-1` / `z == 1 => LHS >= K+1`, per
+//! `native_not_equal`. The native arm has no constant to dominate the row, so no
+//! contributing variable needs a finite bound.
+//!
+//! Both spellings of the clause are finished here. A per-row `<>` expands against the
+//! row-scoped indicator stage 05 allocated; an aggregate one allocates a *global* binary
+//! per group, because its Big-M must cover the group's summed range rather than a single
+//! row's. `aux_var_expressions` supplies the clause text stage 05 recorded for the
+//! indicator, so a dropped aggregate `<>` can be named in a repair.
+//!
+//! Whichever encoding a clause receives, both of its halves carry the clause's
+//! `indicator_col`, so the infeasible removal dial groups them into one droppable `<>`.
+//! That is why `<>` is stated as *indicator* constraints rather than as a general
+//! constraint, which carries no row for diagnosis to reach.
 //!
 //! Refuses a left-hand side that is not integer-valued — the ±1 band is only exact
 //! on the integer lattice — and silently drops a comparison whose bound no integer
 //! can equal, since every assignment already satisfies it.
-void LinearizeNotEqual(SolverInput &input, vector<EvaluatedConstraint> &deferred_aggregate,
-                       const vector<string> &var_names, bool native_not_equal,
-                       vector<EvaluatedConstraint> &deferred_native);
-
-//! The native arm of the `<>` gate: each row's disjunction as two implications,
-//! `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1`, instead of a Big-M pair. No
-//! constant to dominate the row, so no contributing variable needs a finite bound.
-//!
-//! Deferred like every native emission — an indicator constraint names flat columns.
-//! Both halves keep the clause's `indicator_col`, so the infeasible removal dial still
-//! groups them into one droppable `<>`; that is why `<>` is expressed as indicator
-//! constraints rather than as a general constraint, which carries no row for diagnosis
-//! to reach.
-void ExpandNativeNotEqual(SolverInput &input, const VarIndexer &indexer,
-                          vector<EvaluatedConstraint> &deferred_native);
-
-//! Finish the aggregate `<>` spellings `LinearizeNotEqual` deferred, one global
-//! binary per non-empty group, emitting into `input.global_constraints` in flat
-//! column space. `aux_var_expressions` supplies the clause text stage 05 recorded
-//! for the indicator, so a dropped aggregate `<>` can be named in a repair.
-void ExpandDeferredAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
-                                     vector<EvaluatedConstraint> &deferred_aggregate,
-                                     const vector<pair<idx_t, string>> &aux_var_expressions,
-                                     const vector<string> &var_names, bool native_not_equal);
+void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
+                       const vector<pair<idx_t, string>> &aux_var_expressions,
+                       const vector<string> &var_names, bool native_not_equal);
 
 //! Emit the McCormick envelope for every `w = b * x` link. For `x >= 0` the lower
 //! corner is implied by `w`'s own non-negative bound and the upper corner collapses
@@ -203,12 +187,11 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
 void LinearizeAbsMaximize(SolverInput &input);
 
 //! Phase 2, NATIVE path: one column `t` per active row, an equality row `t = inner`,
-//! and a `GeneralConstraintSpec` saying `aux = |t|`. Emitted in flat columns, so it runs
-//! once the VarIndexer exists — the same phase as ExpandDeferredAggregateNotEqual, and
-//! for the same reason.
+//! and a `GeneralConstraintSpec` saying `aux = |t|`. Emitted in flat columns, which is
+//! why every construct site takes the `VarIndexer`.
 //!
 //! Each `t` is boxed by ITS OWN row's reach, keeping each end it can derive
-//! independently, exactly as ExpandNativeMinMaxConstraints boxes its argument columns.
+//! independently, exactly as `LinearizeMinMaxConstraints` boxes its argument columns.
 //! A row whose contributors are all bounded gets a real box even when another row's are
 //! not; a column is left free only where nothing is derivable at all, which is the query
 //! this arm exists to answer.

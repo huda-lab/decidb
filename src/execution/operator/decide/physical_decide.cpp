@@ -2712,7 +2712,6 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // what is fast; that is exactly why it has to be the same answer the rewrites above
     // were selected against. Both arms below only translate.
     const bool native_abs = use_native_constructs.abs;
-    const bool native_not_equal = use_native_constructs.not_equal;
     // MIN/MAX arrives as a POLICY rather than an answer. Stage 05 decided both halves of
     // it — whether the backend can state the construct, and whether a declared construct
     // is used everywhere or only as a fallback — and neither is re-decided here. What is
@@ -2722,6 +2721,20 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     const NativeConstructPolicy native_min_max {use_native_constructs.min_max,
                                                 force_native_constructs};
 
+    // The flat column space, built ONCE and handed to every construct site below. A
+    // general or indicator constraint names flat columns, so a site that may state one
+    // natively needs the index before it can emit — which is why this is built here,
+    // ahead of linearization, rather than after it. Nothing below adds a decide
+    // variable, so the row / entity / scalar blocks are final from this point; only
+    // `solver_input.num_global_vars` keeps growing as auxiliary globals are appended,
+    // and `total_vars` is refreshed just before the solve.
+    //
+    // It is reused for: (1) the flat indices every construct site emits against,
+    // (2) the SolverModel::Build() call inside SolveModel(), and (3) gstate.var_indexer
+    // for solution readback after the solve. The owning form, so it survives past
+    // `solver_input` once that is moved onto gstate.
+    VarIndexer var_indexer = VarIndexer::Build(solver_input);
+
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from
     // column boxes — run them first and an outer MIN/MAX or `<>` over ABS(...) sees an
@@ -2729,31 +2742,26 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // the LOWERING path refuses an underivable range; the native path leaves the
     // auxiliary open and answers.
     DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);
-    if (!native_abs) {
+    if (native_abs) {
+        EmitNativeAbs(solver_input, var_indexer);
+    } else {
         LinearizeAbsMaximize(solver_input);
     }
 
-    // Encode every hard MIN/MAX constraint stage 05 tagged with an indicator. Native
-    // states `z = MAX(t..)` directly and needs no Big-M, so it also needs no bound on
-    // the contributing variables; the lowering arm's indicator family does. Both read
-    // the same tag and make the same bound classification first.
-    vector<EvaluatedConstraint> deferred_native_minmax;
+    // Encode every hard MIN/MAX constraint stage 05 tagged. Native states `z = MAX(t..)`
+    // directly and needs no Big-M, so it also needs no bound on the contributing
+    // variables; the lowering arm's indicator family does. Both read the same tag and
+    // make the same bound classification first.
     if (!minmax_indicator_links.empty()) {
-        // Both arms run, and which clauses reach each is decided per clause by the
-        // extraction: it lifts out only what will be stated natively, and whatever it
-        // leaves behind is still tagged for the lowering to pick up.
-        ExtractNativeMinMaxConstraints(solver_input, deferred_native_minmax, native_min_max);
-        LinearizeMinMaxIndicators(solver_input, decide_var_names);
+        LinearizeMinMaxConstraints(solver_input, var_indexer, decide_var_names, native_min_max);
     }
 
-    // Encode `<>` as its disjunctive Big-M pair. Per-row spellings expand in
-    // place; aggregate ones need a global binary per group and so are deferred
-    // until the VarIndexer exists.
-    vector<EvaluatedConstraint> deferred_ne_aggregate;
-    vector<EvaluatedConstraint> deferred_ne_native;
+    // Encode `<>` as its disjunction: a Big-M pair, or a pair of implications on the
+    // backend that states those. Both spellings — per-row against the row-scoped
+    // indicator, aggregate against a global binary per group — are finished here.
     if (!ne_indicator_indices.empty()) {
-        LinearizeNotEqual(solver_input, deferred_ne_aggregate, decide_var_names, native_not_equal,
-                          deferred_ne_native);
+        LinearizeNotEqual(solver_input, var_indexer, aux_var_expressions, decide_var_names,
+                          use_native_constructs.not_equal);
     }
 
     // Emit the McCormick envelope for every bilinear w = b * x auxiliary.
@@ -2921,34 +2929,9 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     //   Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN
     //   Hard (Big-M indicators): MINIMIZE+MIN or MAXIMIZE+MAX
 
-    // Build the VarIndexer once and reuse it for: (1) computing absolute variable
-    // indices during deferred-NE / MIN/MAX objective construction below, (2) the
-    // SolverModel::Build() call inside SolveModel(), and (3) gstate.var_indexer
-    // for solution readback after the solve. Use the owning form so it survives
-    // past `solver_input` once moved onto gstate.
-    //
-    // The row+entity portions of the index never change after this point;
-    // however `solver_input.num_global_vars` keeps growing as auxiliary globals
-    // are added below. We refresh `total_vars` just before SolveModel is called.
-    VarIndexer var_indexer = VarIndexer::Build(solver_input);
-
     // Global variables are appended at var_indexer.global_block_start.
     // As we add more global vars, their indices are global_block_start + g
     // where g is the position in the global vars array.
-
-    // Finish the aggregate `<>` spellings deferred above, now that flat columns
-    // exist. Emits into solver_input.global_constraints at stage 06.
-    ExpandDeferredAggregateNotEqual(solver_input, var_indexer, deferred_ne_aggregate,
-                                    aux_var_expressions, decide_var_names, native_not_equal);
-
-    // The native arm of the ABS gate. Deferred to here, not skipped: a general
-    // constraint names flat columns, which only exist once the VarIndexer does — the
-    // same reason the aggregate `<>` expansion waits.
-    if (native_abs) {
-        EmitNativeAbs(solver_input, var_indexer);
-    }
-    ExpandNativeMinMaxConstraints(solver_input, var_indexer, deferred_native_minmax);
-    ExpandNativeNotEqual(solver_input, var_indexer, deferred_ne_native);
 
     // Encode a MIN/MAX objective (flat `MIN(expr)`/`MAX(expr)` or the nested
     // `OUTER(INNER(expr)) PER key` spelling) into global auxiliaries and their
