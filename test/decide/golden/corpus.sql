@@ -648,3 +648,42 @@ MAXIMIZE MAX(SUM(x)) PER grp;
 SELECT grp, id, x FROM items DECIDE x(INT)
 SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 4
 MINIMIZE MIN(SUM(x)) PER grp;
+
+-- ---------------------------------------------------------------------------
+-- A plain column as the bound of a reduced constraint (C1/C2/C3)
+-- ---------------------------------------------------------------------------
+-- Until 2026-08-25 a bare column reaching IsAllowedDecisionFreeBoundExpression's
+-- default case was refused, which blocked the paper's own running example below.
+
+-- 93 the paper's Figure 1, verbatim data. Two PER'd constraints (line 8, line 9)
+-- each bound by a plain column -- `stock`, `demand` -- collapsing to the tightest
+-- per-group value (C1). The published output is 450 / 0 / 0, D1 open, D2 closed.
+WITH Depots(depotID, stock, opening_cost) AS (
+    VALUES ('D1', 800, 12000), ('D2', 500, 8000)
+),
+Routes(routeID, depotID, regionID, capacity, unit_cost) AS (
+    VALUES ('T1', 'D1', 'R1', 500, 6),
+           ('T2', 'D1', 'R2', 350, 6),
+           ('T3', 'D2', 'R2', 300, 3)
+),
+Regions(regionID, demand, priority) AS (
+    VALUES ('R1', 450, 'critical'), ('R2', 600, 'standard')
+)
+SELECT routeID, depotID, regionID, open, ship
+DECIDE D.open(BOOL), T.ship(INT)
+FROM Depots D JOIN Routes T USING (depotID) JOIN Regions R USING (regionID)
+SUCH THAT
+    ship BETWEEN 0 AND capacity * open AND
+    SUM(ship) <= stock PER depotID AND
+    SUM(ship) >= demand WHEN priority = 'critical' PER regionID
+MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open);
+
+-- 94 `<>` with a bound that varies within a PER group (C3): every excluded value
+-- is kept -- `SUM(x) <> 3 AND SUM(x) <> 7` for group 'a' -- rather than collapsed
+-- to one, so one binary and one Big-M pair is allocated per distinct value.
+SELECT id, grp, x FROM (VALUES (1, 'a', 3), (2, 'a', 7)) t(id, grp, cap)
+DECIDE x(INT)
+SUCH THAT x BETWEEN 0 AND 10
+    AND SUM(x) >= 3 AND SUM(x) <= 7
+    AND SUM(x) <> cap PER grp
+MAXIMIZE SUM(x);

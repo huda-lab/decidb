@@ -175,7 +175,7 @@ private:
 	                       vector<AbsPairInfo> &abs_pairs, bool in_objective);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
-	//! aggregate tagged with MINMAX_INDICATOR_TAG_PREFIX. Records the clause's diagnosis
+	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis
 	//! text in decide.minmax_clause_labels and writes its index to out_clause_idx; the tag
 	//! carries that index, which is how stage 06 names the column it pins. Allocates no
 	//! variable — the binaries a Big-M pinning needs are global-block columns, created by

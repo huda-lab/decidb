@@ -152,19 +152,22 @@ class TestBinderErrors:
             """, match=r"Triple.*products.*not supported")
 
     def test_between_non_scalar(self, decidb_cli):
-        """SUM BETWEEN with a non-scalar bound.
+        """SUM BETWEEN with a column bound is now supported (C1).
 
-        BETWEEN desugars into paired `<=` / `>=` constraints; the non-scalar
-        check fires on the leg that references the column. Tightened match
-        confirms it's the aggregate-RHS scalar check, not some unrelated
-        "not a scalar" path elsewhere in the binder.
+        BETWEEN desugars into paired `<=` / `>=` constraints, and a bare column is
+        now a legal decision-free bound on either leg — each collapses to the
+        tightest value the per-tuple conjunction implies (MAX for the `>=` leg
+        here). See `test_reduced_bound_data_column.py` for the oracle-verified
+        proof of that collapse; this pins that BETWEEN composes with it correctly.
         """
-        decidb_cli.assert_error("""
-                SELECT l_quantity FROM lineitem
+        result, cols = decidb_cli.execute("""
+                SELECT id, x FROM (VALUES (1, 4), (2, 9), (3, 6)) t(id, cap)
                 DECIDE x(INT)
-                SUCH THAT SUM(x) BETWEEN l_quantity AND 1
-                MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
+                SUCH THAT SUM(x) BETWEEN cap AND 100
+                MINIMIZE SUM(x)
+            """)
+        xi = cols.index("x")
+        assert sum(int(r[xi]) for r in result) == 9  # MAX(4, 9, 6)
 
     def test_decide_between_decide_variable(self, decidb_cli):
         """Multi-variable per-row constraints are now supported (e.g. x BETWEEN y AND 1).
@@ -188,13 +191,21 @@ class TestBinderErrors:
             """, match=r"IN domain constraints on DECIDE variables are not yet supported")
 
     def test_sum_rhs_non_scalar(self, decidb_cli):
-        """SUM comparison RHS must be a scalar."""
-        decidb_cli.assert_error("""
-                SELECT l_quantity FROM lineitem
+        """A bare column RHS is now a legal bound of a reduced constraint (C1).
+
+        Without PER there is one group, so `SUM(x) <= l_quantity` is the
+        conjunction of every row's own bound — `SUM(x) <= MIN(l_quantity)`. See
+        `test_canonicalize_side_agnostic.py::test_row_varying_bound_collapses_to_tightest_on_either_side`
+        for the oracle-verified proof of the collapse itself.
+        """
+        result, cols = decidb_cli.execute("""
+                SELECT id, x FROM (VALUES (1, 4), (2, 9), (3, 6)) t(id, cap)
                 DECIDE x(INT)
-                SUCH THAT SUM(x) <= l_quantity
-                MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"not a scalar")
+                SUCH THAT SUM(x) <= cap
+                MAXIMIZE SUM(x)
+            """)
+        xi = cols.index("x")
+        assert sum(int(r[xi]) for r in result) == 4  # MIN(4, 9, 6)
 
     def test_decide_variable_rhs_with_decide(self, decidb_cli):
         """Multi-variable per-row constraints are now supported (e.g. x <= y).
@@ -211,13 +222,15 @@ class TestBinderErrors:
         assert len(result) > 0
 
     def test_sum_equal_non_scalar(self, decidb_cli):
-        """SUM = non-scalar expression."""
+        """`SUM(x) = l_quantity` (C2): a bare column is a legal `=` bound in general
+        (C1), but `l_quantity` genuinely varies across `lineitem`, so the single
+        group's `=` constraint contradicts itself and is refused as infeasible."""
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x) = l_quantity
                 MAXIMIZE SUM(x) LIMIT 1
-            """, match=r"not a scalar")
+            """, match=r"cannot hold two different values.*infeasible")
 
     def test_objective_with_addition_succeeds(self, decidb_cli):
         """`MAXIMIZE SUM(...) + 3` is now supported: the constant offset is
@@ -595,8 +608,8 @@ class TestBinderErrors:
     def test_correlated_subquery_aggregate_equality_rhs_rejected(self, decidb_cli):
         """`SUM(x) = <per-row value>` is N contradictory constraints, not a bound.
 
-        `<=`/`>=` collapse to the tightest bound; `=` cannot, so it is refused with
-        the two conflicting values named.
+        `<=`/`>=` collapse to the tightest bound; `=` cannot, so it is refused
+        (C2) as a contradiction, with the two conflicting values named.
         """
         decidb_cli.assert_error("""
                 SELECT ps_partkey, ps_suppkey, x
@@ -606,7 +619,7 @@ class TestBinderErrors:
                 SUCH THAT SUM(x) = (SELECT CAST(p_size AS INTEGER) FROM part
                                     WHERE p_partkey = ps_partkey)
                 MAXIMIZE SUM(x)
-            """, match=r"takes more than one value here.*has no single bound")
+            """, match=r"takes more than one value here.*cannot hold two different values.*infeasible")
 
     # --- Division with a DECIDE variable in the divisor ---
     # `x / 2` and `x / data_col` are linear (coefficient scaling); `x / y`

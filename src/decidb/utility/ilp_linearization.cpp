@@ -647,7 +647,63 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             if (ec.minmax_clause_idx < input.minmax_clause_labels.size()) {
                 label = input.minmax_clause_labels[ec.minmax_clause_idx];
             }
-            idx_t z_idx = AddGlobalContinuousAux(input, indexer, group.family, 0.0, label);
+            // The raw bound, not the effective one: each member carries its own row's
+            // constant LHS part, because a per-row constant can differ inside a group and
+            // the extremum is taken over the whole expression, constant included. A
+            // uniform bound is the same value whichever row is picked, so the
+            // representative row is not even consulted.
+            double clause_bound = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue()
+                                                            : ec.rhs_values.Get(group.first_row);
+            // A bound the family cannot reach is still part of the reach this encoding
+            // has to cover. `MAX(x) >= 5` over `x` in [-1, 1] boxes the extremum column at
+            // 1 and sizes the closing Big-M off a span of 2, so the repair "widen x's box"
+            // is not representable and the infeasible diagnosis can only offer to weaken
+            // the MAX — advice worth 2 where advice worth 10 was available at the same
+            // edit cost. Widening here is the same rule `DemandedAuxReach` applies to ABS,
+            // and it fires under the same condition: only when the bound lies outside the
+            // family, which is only when the clause cannot be met as written. Nothing is
+            // loosened for a query that solves.
+            bool bound_out_of_reach = false;
+            if (std::isfinite(clause_bound)) {
+                if (is_max_agg) {
+                    if (!group.family.hi_unbounded && clause_bound > group.family.hi) {
+                        group.family.hi = clause_bound;
+                        bound_out_of_reach = true;
+                    }
+                } else if (!group.family.lo_unbounded && clause_bound < group.family.lo) {
+                    group.family.lo = clause_bound;
+                    bound_out_of_reach = true;
+                }
+            }
+            // The two arms need different boxes here, and only one number separates
+            // them. The lowering emits the CLOSING side alone (`z <= max`), so `K` is a
+            // perfectly good ceiling for `z` and the family's widened span is a valid
+            // Big-M. The native arm states `z = MAX(t..)` as an EQUALITY, so `z` has to
+            // hold whatever the members actually reach — and a member may have to go
+            // past `K` for the extremum to get there (`MAX(x + c) >= 25` is met at
+            // `x = 23` with `c = 4`, an expression of 27). There is no derivable number
+            // for that: how far the repair travels is not known until it is solved. So
+            // the native arm's demanded end is OPENED, and the pin row tying each member
+            // column to its expression does the constraining, as it already does. The
+            // native arm derives no Big-M from this family, so an open end costs it
+            // nothing but a looser root relaxation on a query that cannot solve anyway.
+            AuxRange z_range = group.family;
+            if (bound_out_of_reach && policy.Use(group.family.Unbounded())) {
+                auto open_demanded_end = [&](AuxRange &range) {
+                    if (is_max_agg) {
+                        range.MarkHiUnbounded(DConstants::INVALID_INDEX);
+                    } else {
+                        range.MarkLoUnbounded(DConstants::INVALID_INDEX);
+                    }
+                };
+                open_demanded_end(z_range);
+                // `member.range` boxes the native argument column and is read nowhere
+                // else — the lowering reads `member.link` and the family span.
+                for (auto &member : group.members) {
+                    open_demanded_end(member.range);
+                }
+            }
+            idx_t z_idx = AddGlobalContinuousAux(input, indexer, z_range, 0.0, label);
 
             ExtremumLinkSpec spec;
             spec.result_column = z_idx;
@@ -675,13 +731,7 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             outer.indices.push_back(static_cast<int>(z_idx));
             outer.coefficients.push_back(1.0);
             outer.sense = is_max_agg ? '>' : '<';
-            // The raw bound, not the effective one: each member carries its own row's
-            // constant LHS part, because a per-row constant can differ inside a group and
-            // the extremum is taken over the whole expression, constant included. A
-            // uniform bound is the same value whichever row is picked, so the
-            // representative row is not even consulted.
-            outer.rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue()
-                                                  : ec.rhs_values.Get(group.first_row);
+            outer.rhs = clause_bound;
             outer.kind = ConstraintKind::USER_PARAMETER;
             // The elastic shape, without which this row does not fold. One `PER` clause
             // emits one of these per group, and they are all the same line of SQL: the
@@ -1150,31 +1200,24 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
             }
             idx_t g_size = g_end - g_begin;
 
-            // Base (unscaled) RHS, read from a row that actually belongs to this
-            // group. For AVG(x) <> K we store the original K in rhs_values and
-            // multiply by the group size below.
-            double rhs = ec.rhs_values.Get(flat_rows[g_begin]);
-            if (ec.ne_avg_rhs_scale) {
-                rhs *= static_cast<double>(g_size);
-            }
+            // The fixed (decision-free) part of the LHS does not depend on which
+            // excluded value is being stated, so it is computed once per group.
             double fixed_offset = SumFixedAggregateLhsOffset(
                 ec, &flat_rows, g_begin, g_end, "fixed aggregate <> term");
-            rhs -= fixed_offset;
 
-            // Integer-RHS guard: with integer LHS (already enforced by
-            // NELhsIsIntegerValued at deferral time) and a non-integer K,
-            // `LHS <> K` is a tautology — every integer LHS satisfies it. The ±1
-            // Big-M rewrite would wrongly cut floor(K) and ceil(K). Skip the group
-            // entirely. For AVG <> with mixed group sizes, some groups may have
-            // integer K*N_g and others not — each is handled independently. No
-            // global z is allocated for skipped groups, so the model stays clean.
-            // The predicate is shared with the per-row path: spelling the negation
-            // inline here let an infinite K through, because `inf - round(inf)` is
-            // NaN and every comparison against NaN is false — so the group reached
-            // the Big-M below and built an infinite coefficient instead of dropping
-            // as a tautology.
-            if (!NEIsIntegerValuedRhs(rhs)) {
-                continue;
+            // Every value this group's bound takes, deduplicated. `ReduceAggregate-
+            // RhsPerGroup` (physical_decide.cpp) leaves a `<>` bound exactly as it
+            // arrived when it varies, rather than collapsing it to one value the way
+            // it does for `<=`/`>=` — standing decision 3: a `<>` bound does not
+            // collapse, every excluded value is kept. The common case (a uniform
+            // bound, or no PER at all) yields exactly one value here and this loop
+            // runs once, identically to before this supported more than one.
+            vector<double> distinct_rhs;
+            for (idx_t k = g_begin; k < g_end; k++) {
+                double raw = ec.rhs_values.Get(flat_rows[k]);
+                if (std::find(distinct_rhs.begin(), distinct_rhs.end(), raw) == distinct_rhs.end()) {
+                    distinct_rhs.push_back(raw);
+                }
             }
 
             // Range collapse, per group. Same reasoning as the per-row path, over the
@@ -1182,11 +1225,13 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
             // column, so the group's reachable range is the sum of its rows' ranges.
             // Unlike the per-row path a mixed verdict costs nothing here, because groups
             // are already emitted independently — each gets the encoding its own range
-            // earns.
-            NECollapse collapse = NECollapse::DISJUNCTION;
-            if (ec.bilinear_terms.empty() && ec.quadratic_groups.empty()) {
-                double grp_lo = 0.0;
-                double grp_hi = 0.0;
+            // earns. Neither the range nor the LHS accumulation below depends on which
+            // excluded value is being tested, so both are computed once per group and
+            // reused for every value in `distinct_rhs`.
+            const bool has_linear_range = ec.bilinear_terms.empty() && ec.quadratic_groups.empty();
+            double grp_lo = 0.0;
+            double grp_hi = 0.0;
+            if (has_linear_range) {
                 for (idx_t k = g_begin; k < g_end; k++) {
                     double row_lo;
                     double row_hi;
@@ -1195,25 +1240,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                     grp_lo += row_lo; // -inf is absorbing, and only ever accumulates here
                     grp_hi += row_hi;
                 }
-                if (grp_hi < rhs - 0.5 || grp_lo > rhs + 0.5) {
-                    collapse = NECollapse::ALWAYS_TRUE;
-                } else if (grp_lo > rhs - 0.5) {
-                    collapse = NECollapse::UPPER_ONLY;
-                } else if (grp_hi < rhs + 0.5) {
-                    collapse = NECollapse::LOWER_ONLY;
-                }
             }
-            if (collapse == NECollapse::ALWAYS_TRUE) {
-                continue; // this group's aggregate cannot reach K — it excludes nothing
-            }
-
-            // Allocate one global binary z for this group. A collapsed group still gets
-            // one, unreferenced by any row: it is what carries the clause's label and
-            // groups its rows for the remove-only `<>` repair, so allocating it keeps
-            // diagnosis identical whichever encoding the group received. The per-row
-            // path is in the same position — its indicator is allocated at stage 05,
-            // before any range is knowable.
-            idx_t z_idx = AddGlobalBinaryAux(input, var_indexer, 0.0, ne_label);
 
             // Accumulate LHS coefficients for active rows in this group.
             for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
@@ -1233,61 +1260,115 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                 }
             }
 
-            // Flush once into a deduped (idx, coeff) snapshot reused for both halves.
-            vector<int> common_indices;
-            vector<double> common_coefs;
-            accum.Flush(common_indices, common_coefs);
+            // Flush once into a deduped (idx, coeff) snapshot, copied for every
+            // excluded value's disjunction below (only the last consumes it by move).
+            vector<int> group_indices;
+            vector<double> group_coefs;
+            accum.Flush(group_indices, group_coefs);
 
-            // The provenance both halves carry, whichever shape they end up in.
-            auto stamp = [&](SolverInput::RawConstraint &rc) {
-                rc.kind = ConstraintKind::USER_MECHANISM;
-                rc.source_clause_id = ec.source_clause_id;
-                rc.repair_group_id = ec.repair_group_id;
-                rc.indicator_col = z_idx;
-                rc.group_key = has_groups ? g : DConstants::INVALID_INDEX;
-                rc.qualifier = ec.qualifier;
-                rc.is_aggregate = true;
-                if (has_groups && g < ec.group_labels.size()) {
-                    rc.group_label = ec.group_labels[g];
+            for (idx_t vi = 0; vi < distinct_rhs.size(); vi++) {
+                // Base (unscaled) value. For AVG(x) <> K we store the original K in
+                // rhs_values and multiply by the group size here.
+                double rhs = distinct_rhs[vi];
+                if (ec.ne_avg_rhs_scale) {
+                    rhs *= static_cast<double>(g_size);
                 }
-            };
+                rhs -= fixed_offset;
 
-            // Collapsed: one plain inequality, no indicator and no disjunction left.
-            if (collapse != NECollapse::DISJUNCTION) {
-                bool lower = collapse == NECollapse::LOWER_ONLY;
-                SolverInput::RawConstraint rc;
-                rc.sense = lower ? '<' : '>';
-                rc.rhs = lower ? rhs - 1.0 : rhs + 1.0;
-                rc.indices = std::move(common_indices);
-                rc.coefficients = std::move(common_coefs);
-                stamp(rc);
-                input.global_constraints.push_back(std::move(rc));
-                continue;
+                // Integer-RHS guard: with integer LHS (already enforced by
+                // NELhsIsIntegerValued at deferral time) and a non-integer K,
+                // `LHS <> K` is a tautology for this value — every integer LHS
+                // satisfies it, so this exclusion alone is dropped, not the whole
+                // group. The ±1 Big-M rewrite would wrongly cut floor(K) and ceil(K).
+                // The predicate is shared with the per-row path: spelling the negation
+                // inline here let an infinite K through, because `inf - round(inf)` is
+                // NaN and every comparison against NaN is false — so the group reached
+                // the Big-M below and built an infinite coefficient instead of dropping
+                // as a tautology.
+                if (!NEIsIntegerValuedRhs(rhs)) {
+                    continue;
+                }
+
+                NECollapse collapse = NECollapse::DISJUNCTION;
+                if (has_linear_range) {
+                    if (grp_hi < rhs - 0.5 || grp_lo > rhs + 0.5) {
+                        collapse = NECollapse::ALWAYS_TRUE;
+                    } else if (grp_lo > rhs - 0.5) {
+                        collapse = NECollapse::UPPER_ONLY;
+                    } else if (grp_hi < rhs + 0.5) {
+                        collapse = NECollapse::LOWER_ONLY;
+                    }
+                }
+                if (collapse == NECollapse::ALWAYS_TRUE) {
+                    continue; // this group's aggregate cannot reach this K — excludes nothing
+                }
+
+                // Allocate one global binary z per (group, excluded value). A collapsed
+                // one still gets one, unreferenced by any row: it is what carries the
+                // clause's label and groups its rows for the remove-only `<>` repair,
+                // so allocating it keeps diagnosis identical whichever encoding the
+                // value received. The per-row path is in the same position — its
+                // indicator is allocated at stage 05, before any range is knowable.
+                idx_t z_idx = AddGlobalBinaryAux(input, var_indexer, 0.0, ne_label);
+
+                // Copy the group's LHS snapshot for every value but the last, which
+                // consumes it by move — the same by-value handoff the per-row twin
+                // above uses between its two halves.
+                bool last_value = (vi + 1 == distinct_rhs.size());
+                vector<int> indices = last_value ? std::move(group_indices) : group_indices;
+                vector<double> coefs = last_value ? std::move(group_coefs) : group_coefs;
+
+                // The provenance both halves carry, whichever shape they end up in.
+                auto stamp = [&](SolverInput::RawConstraint &rc) {
+                    rc.kind = ConstraintKind::USER_MECHANISM;
+                    rc.source_clause_id = ec.source_clause_id;
+                    rc.repair_group_id = ec.repair_group_id;
+                    rc.indicator_col = z_idx;
+                    rc.group_key = has_groups ? g : DConstants::INVALID_INDEX;
+                    rc.qualifier = ec.qualifier;
+                    rc.is_aggregate = true;
+                    if (has_groups && g < ec.group_labels.size()) {
+                        rc.group_label = ec.group_labels[g];
+                    }
+                };
+
+                // Collapsed: one plain inequality, no indicator and no disjunction left.
+                if (collapse != NECollapse::DISJUNCTION) {
+                    bool lower = collapse == NECollapse::LOWER_ONLY;
+                    SolverInput::RawConstraint rc;
+                    rc.sense = lower ? '<' : '>';
+                    rc.rhs = lower ? rhs - 1.0 : rhs + 1.0;
+                    rc.indices = std::move(indices);
+                    rc.coefficients = std::move(coefs);
+                    stamp(rc);
+                    input.global_constraints.push_back(std::move(rc));
+                    continue;
+                }
+
+                // The disjunction, as two conditional rows on this value's binary. The
+                // summed Big-M that used to be computed here — and that is what forced a
+                // finite bound on every contributing variable — is not computed at all now:
+                // `LowerDecideConstructs` derives one per half, and only where the chosen
+                // backend cannot state the condition itself.
+                //
+                // By value, as in the per-row twin above: only the first half copies the
+                // snapshot, the second hands it over.
+                auto emit = [&](vector<int> row_indices, vector<double> row_coefs, int binval,
+                                char sense, double bound) {
+                    SolverInput::IndicatorConstraintSpec ic;
+                    ic.binary_column = static_cast<int>(z_idx);
+                    ic.binary_value = binval;
+                    ic.row.indices = std::move(row_indices);
+                    ic.row.coefficients = std::move(row_coefs);
+                    ic.row.sense = sense;
+                    ic.row.rhs = bound;
+                    stamp(ic.row);
+                    input.indicator_constraints.push_back(std::move(ic));
+                };
+                emit(indices, coefs, 0, '<', rhs - 1.0);
+                // Last use of this value's snapshot.
+                emit(std::move(indices), std::move(coefs), 1, '>', rhs + 1.0);
             }
-
-            // The disjunction, as two conditional rows on this group's binary. The
-            // summed Big-M that used to be computed here — and that is what forced a
-            // finite bound on every contributing variable — is not computed at all now:
-            // `LowerDecideConstructs` derives one per half, and only where the chosen
-            // backend cannot state the condition itself.
-            //
-            // By value, as in the per-row twin above: only the first half copies the
-            // group's snapshot, the second hands it over.
-            auto emit = [&](vector<int> grp_indices, vector<double> grp_coefs, int binval,
-                            char sense, double bound) {
-                SolverInput::IndicatorConstraintSpec ic;
-                ic.binary_column = static_cast<int>(z_idx);
-                ic.binary_value = binval;
-                ic.row.indices = std::move(grp_indices);
-                ic.row.coefficients = std::move(grp_coefs);
-                ic.row.sense = sense;
-                ic.row.rhs = bound;
-                stamp(ic.row);
-                input.indicator_constraints.push_back(std::move(ic));
-            };
-            emit(common_indices, common_coefs, 0, '<', rhs - 1.0);
-            // Last use of the snapshot.
-            emit(std::move(common_indices), std::move(common_coefs), 1, '>', rhs + 1.0);
         }
     }
 }
@@ -1518,6 +1599,82 @@ unordered_map<idx_t, AbsConstraintPair> BuildAbsTagMap(const SolverInput &input)
     return abs_tag_map;
 }
 
+//! The largest value some clause requires `aux` to reach, or 0 when nothing does.
+//!
+//! Every Big-M and every derived column ceiling in this file is sized from the decision
+//! box as the query states it, and that is right for the solve. It is wrong for the
+//! diagnosis that follows an infeasible one: the elastic engine repairs an infeasible
+//! query by WIDENING a bound, and a ceiling baked in at the old width makes the widened
+//! repair unrepresentable — so the engine reports a different, worse edit. It also
+//! reports a DIFFERENT edit per backend, because a natively-stated construct bakes in
+//! nothing (`x >= -1 AND x <= 1 AND ABS(x) >= 5` was advised to widen the box on Gurobi
+//! and to weaken the ABS on HiGHS, one repair worth five times the other).
+//!
+//! So a clause that asks the auxiliary for more than the box can supply sizes the
+//! ceiling itself. Note when that fires: only when the demand EXCEEDS the box, which is
+//! exactly when the clause cannot be met as written. A query that solves reaches its own
+//! bound by definition, so its ceiling and its Big-M are untouched and no tightness is
+//! traded away. A looser M is valid in any case — it only ever slackens the deactivated
+//! arm of a disjunction — whereas a too-small one cuts off legal answers.
+static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t num_rows) {
+    double demanded = 0.0;
+    // The common shape, and the one B3 was reported against: `ABS(x) >= 5` is a simple
+    // `var OP const` comparison over the auxiliary, so stage 05 absorbs it into the
+    // auxiliary's own box rather than leaving a row (`AbsorbVariableBounds`). The floor
+    // it puts there IS the demand, and without this the ceiling below is set under it —
+    // an empty column, which no widening of `x` can repair.
+    if (aux_idx < input.lower_bounds.size() && input.lower_bounds[aux_idx] > -1e20) {
+        demanded = MaxValue<double>(demanded, input.lower_bounds[aux_idx]);
+    }
+    for (const auto &ec : input.constraints) {
+        if (ec.abs_aux_idx == aux_idx) {
+            continue; // the definitional pair: it states what the auxiliary IS, not what was asked of it
+        }
+        idx_t term = DConstants::INVALID_INDEX;
+        for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+            if (ec.variable_indices[t] == aux_idx) {
+                term = t;
+                break;
+            }
+        }
+        if (term == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        bool pushes_up = ec.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
+                         ec.comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
+                         ec.comparison_type == ExpressionType::COMPARE_EQUAL;
+        bool pushes_down = ec.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+                           ec.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
+                           ec.comparison_type == ExpressionType::COMPARE_EQUAL;
+        for (idx_t r = 0; r < num_rows; r++) {
+            if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+                continue; // row excluded by WHEN/PER: this clause asks nothing here
+            }
+            double a = ec.row_coefficients[term].Get(r);
+            if (std::abs(a) < 1e-15) {
+                continue;
+            }
+            double k = DecideRowEffectiveBound(ec, r);
+            if (!std::isfinite(k)) {
+                continue;
+            }
+            // The row reads `a*aux + S <op> k` with `S` the rest of its variable terms.
+            // The auxiliary has to cover the worst `S` the box allows, and only an
+            // UPWARD demand matters here: this raises a ceiling, and an ABS auxiliary
+            // is non-negative and floored by its own definitional pair.
+            double lo = 0.0;
+            double hi = 0.0;
+            DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, lo, hi, aux_idx);
+            if (a > 0.0 && pushes_up && std::isfinite(lo)) {
+                demanded = MaxValue<double>(demanded, (k - lo) / a);
+            } else if (a < 0.0 && pushes_down && std::isfinite(hi)) {
+                demanded = MaxValue<double>(demanded, (k - hi) / a);
+            }
+        }
+    }
+    return demanded;
+}
+
 } // namespace
 
 void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_names,
@@ -1588,6 +1745,14 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
                 "such as ABS(...) >= K or ABS(...) = K.)",
                 name, name, name);
         }
+
+        // A clause may demand more of the auxiliary than the box can supply, and then
+        // the box is not the reach the encoding has to cover: `ABS(x) >= 5` over
+        // `x` in [-1, 1] needs `aux` to be ABLE to hold 5, or the only repair the
+        // infeasible diagnosis can see is weakening the ABS itself. See
+        // `DemandedAuxReach` — this can only widen, and only on a clause that cannot
+        // be met as written.
+        M = MaxValue<double>(M, DemandedAuxReach(input, link.aux_idx, num_rows));
 
         link.abs_range = M;
         // The formulation that follows — Big-M rows or a native `aux = |t|` — pins

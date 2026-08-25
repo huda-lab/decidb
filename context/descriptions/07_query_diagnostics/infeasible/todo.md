@@ -113,6 +113,21 @@ clause, so "which row is the knob" is never asked and the defect class is unrepr
 through stage 03's entry points, which is the shape this rewrite has. Stage 07/08 would keep
 only the solve and the readback.
 
+**Second defect class it would close (added 2026-08-25, from B3).** A diagnosis is computed
+inside the model *as it was built*, and every Big-M and derived column ceiling in that model is
+sized from the decision box as the query states it. The repair the engine is looking for is a
+**widening** of that box, so an encoding sized at the old width can make the better repair
+unrepresentable — and where one arm bakes in nothing and the other does, the same query gets
+different advice on different hosts. `done.md` closes the two instances that bit (ABS and
+MIN/MAX) with a local rule: a clause demanding more of an auxiliary than the box can supply
+sizes that auxiliary itself.
+
+`<>`, bilinear (McCormick) and `norm` have encodings of the same shape and are **not** covered.
+They are left alone deliberately rather than patched one at a time: attaching slack before
+lowering makes the whole class unrepresentable, exactly as it does for the misattribution class
+above. Anyone extending the local rule to a third construct should read that as the signal to
+price this rewrite instead.
+
 ---
 
 ## Suggested batches

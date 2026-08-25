@@ -6,6 +6,33 @@
 
 ---
 
+## Row-Varying RHS with PER (C1/C2/C3)
+
+The paper's own running example (Figure 1, lines 8–9) binds now:
+
+```sql
+SUM(ship) <= stock  PER depotID
+SUM(ship) >= demand WHEN priority = 'critical' PER regionID
+```
+
+Both lines bound a reduced constraint with a bare data column — `stock`, `demand` —
+that varies per row. This used to be a `Binder Error`: the RHS validator switched on
+`ExpressionClass` with no `COLUMN_REF` case, so a bare column fell to its default
+rejection before PER was even considered. Adding the case
+(`IsAllowedDecisionFreeBoundExpression`, `decide_constraints_binder.cpp`) was the whole
+fix — `ReduceAggregateRhsPerGroup` (`physical_decide.cpp`) already implemented paper
+§3.2.1's rule (take the tightest per-row value in each group) for a scalar-subquery
+bound, and needed no change to serve a plain column too. See "Reducers as a Bound" in
+[`../sql_functions/done.md`](../sql_functions/done.md) for the full collapse rule,
+including `=` (refused as a contradiction when the bound genuinely varies) and `<>`
+(every excluded value is kept, not collapsed).
+
+Test: `test/decide/tests/test_reduced_bound_data_column.py` runs Figure 1 verbatim
+against the paper's published data and checks the output matches exactly, cross-verified
+against an independently built model.
+
+---
+
 ## Semantics beyond the syntax spec
 
 - **Grammar for column refs**: PER uses `columnref_opt_indirection` (the same production SELECT/WHERE/GROUP BY use), so any column-reference shape valid in those clauses is valid in PER. The qualifier is purely syntactic — qualified and unqualified PER produce identical solutions when the unqualified form is unambiguous.

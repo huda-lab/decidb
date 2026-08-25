@@ -597,6 +597,11 @@ static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
                           cmp == ExpressionType::COMPARE_LESSTHAN;
     const bool take_max = cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
                           cmp == ExpressionType::COMPARE_GREATERTHAN;
+    // `<>` does not collapse (standing decision 3): every excluded value is kept, not
+    // just the tightest. So a varying bound under `<>` is left exactly as it arrived —
+    // raw, per row — and ExpandAggregateNotEqual (ilp_linearization.cpp) reads the
+    // distinct values straight out of it, one Big-M disjunction per value per group.
+    const bool is_not_equal = cmp == ExpressionType::COMPARE_NOTEQUAL;
 
     auto group_of = [&](idx_t row) -> idx_t {
         if (!has_groups) {
@@ -624,13 +629,17 @@ static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
         if (v == reduced[g]) {
             continue;
         }
+        if (is_not_equal) {
+            // Keep going: the raw values stay in the column untouched (see below), so
+            // there is nothing to reduce here, only the fact that it varies to record.
+            varies = true;
+            continue;
+        }
         if (!take_min && !take_max) {
             throw InvalidInputException(
-                "%s takes more than one value here (%g and %g), so `%s` has no single "
-                "bound. Use <= or >=, or compare against one value such as a scalar "
-                "subquery.",
-                rhs_text.c_str(), reduced[g], v,
-                cmp == ExpressionType::COMPARE_EQUAL ? "=" : "<>");
+                "%s takes more than one value here (%g and %g) — an `=` bound cannot "
+                "hold two different values at once, so this DECIDE query is infeasible.",
+                rhs_text.c_str(), reduced[g], v);
         }
         varies = true;
         if (take_min ? (v < reduced[g]) : (v > reduced[g])) {
@@ -640,6 +649,9 @@ static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
 
     if (!varies) {
         return; // every group already agreed — leave the column alone
+    }
+    if (is_not_equal) {
+        return; // exclusions are kept, not collapsed — leave every row's raw value
     }
     auto &col = ec.rhs_values.MutableDense();
     for (idx_t row = 0; row < rows; row++) {

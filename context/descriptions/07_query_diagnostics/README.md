@@ -72,6 +72,18 @@ too-open one; slow is a runtime event masking the other states.
   its binary into the implied row exactly as into a matrix row and the diagnosis is
   unchanged. ABS and MIN/MAX lose only structural rows — the user's own clause row
   survives either way — so the choice only bites where the clause *is* its encoding.
+- **A repair the model cannot represent is a repair the diagnosis cannot offer** — the
+  cost of the bullet above, stated plainly. The rows a lowering emits are sized from the
+  decision box *as the query states it*, and the elastic engine repairs by **widening**
+  that box: a ceiling baked in at the old width silently rules the widened repair out,
+  so the engine reports whatever else it can still see. That is worse advice, and where
+  one arm bakes in nothing it is worse advice **on one host only**. The rule that closes
+  it: a clause demanding more of an auxiliary than the box can supply sizes that
+  auxiliary itself. It fires only when the demand exceeds the box — only when the clause
+  cannot be met as written — so no query that solves has its Big-M loosened, which the
+  golden corpus checks. Applied to ABS and MIN/MAX; `<>`, McCormick and `norm` have
+  encodings of the same shape and are **not** covered, see
+  [`infeasible/todo.md`](infeasible/todo.md).
 - **Diagnosed on the solver that failed** — every re-solve (the elastic model, the
   `INF_OR_UNBD` probe, the unbounded-ray fallback) runs on the backend the *primary*
   solve ran on, resolved from `PhysicalDecide::solver_backend_name` through

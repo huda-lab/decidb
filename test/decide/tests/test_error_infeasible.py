@@ -166,6 +166,22 @@ class TestInfeasibleModels:
         oracle_solver.set_objective({"x": 1.0}, ObjSense.MAXIMIZE)
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
 
+    def test_equal_bound_varying_per_group_is_infeasible(self, decidb_cli):
+        """C2: a reduced `=` constraint whose bound varies within a group contradicts
+        itself — ``SUM(x) = 500`` and ``SUM(x) = 350`` cannot both hold for the same
+        group sum. The message says so directly (no ``<=``/``>=`` suggestion, which
+        would mean a different constraint), unlike `<>` (C3), which keeps every
+        excluded value instead of contradicting.
+        """
+        decidb_cli.assert_error("""
+            SELECT id, grp, x FROM (
+                VALUES (1, 'a', 500), (2, 'a', 350)
+            ) t(id, grp, cap)
+            DECIDE x(INT)
+            SUCH THAT SUM(x) = cap PER grp
+            MAXIMIZE SUM(x)
+        """, match=r"(?i)cannot hold two different values.*infeasible")
+
     def test_user_overridden_negative_lower_is_feasible(self, decidb_cli):
         """Part C guard: `x <= -1 AND x >= -5` explicitly lowers the floor below 0, so
         the box [-5, -1] is feasible and must NOT trip the non-negativity rejection —

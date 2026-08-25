@@ -1027,17 +1027,15 @@ private:
 		}
 
 		string minmax_payload;
-		if (ExtractDecideTagPayload(agg.alias, MINMAX_INDICATOR_TAG_PREFIX, minmax_payload)) {
-			// "<idx>_<agg>" when a Big-M indicator was allocated, bare "<agg>" when the
-			// backend states MIN/MAX itself and no indicator exists. The aggregate name is
-			// the part that is always there, and it is what marks the row downstream.
+		if (ExtractDecideTagPayload(agg.alias, MINMAX_CLAUSE_TAG_PREFIX, minmax_payload)) {
+			// "<clause_idx>_<agg>", always both parts: the clause is registered where it is
+			// tagged, before either formulation is chosen, so the index is there whichever
+			// arm follows. Neither "min" nor "max" contains an underscore, so the first one
+			// separates the two.
 			auto sep = minmax_payload.find('_');
-			if (sep == string::npos) {
-				constraint.minmax_agg_type = minmax_payload;
-			} else {
-				constraint.minmax_clause_idx = std::stoull(minmax_payload.substr(0, sep));
-				constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
-			}
+			D_ASSERT(sep != string::npos);
+			constraint.minmax_clause_idx = std::stoull(minmax_payload.substr(0, sep));
+			constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
 			constraint.kind = ConstraintKind::USER_MECHANISM;
 		}
 	}
@@ -1249,7 +1247,7 @@ private:
 
 			// Parse not-equal indicator tag if present
 			string payload;
-			if (ExtractDecideTagPayload(comp.alias, NE_INDICATOR_TAG_PREFIX, payload)) {
+			if (ExtractDecideTagPayload(comp.alias, NE_CLAUSE_TAG_PREFIX, payload)) {
 				constraint->ne_clause_idx = std::stoull(payload);
 				constraint->kind = ConstraintKind::USER_MECHANISM;
 			}

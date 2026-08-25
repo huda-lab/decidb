@@ -1464,17 +1464,17 @@ def test_composed_minmax_nonconst_rhs_subquery_rejected(decidb_cli):
 def test_composed_minmax_nonconst_rhs_column_rejected(decidb_cli):
     """Composed MIN/MAX with a column-reference RHS is rejected in v1.
 
-    Different rejection path than the subquery shape: the binder fails
-    earlier with a generic SUM-comparison error before the composed
-    guard runs. Pinned anyway so a future widen of the composed RHS
-    grammar surfaces here.
+    Same rejection path as the subquery shape now (C1): a bare column is a legal
+    decision-free bound in general, so the generic SUM-comparison gate no longer
+    fires here — the composed-MIN/MAX-specific guard does, one step later, naming
+    the actual requirement (a constant RHS) instead of a generic one.
     """
     decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true, 12), (2, 5.0, true, 12)) t(id, v, w, cap)
         DECIDE x(BOOL)
         SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= cap
         MAXIMIZE SUM(x * v)
-    """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate")
+    """, match=r"Composed MIN/MAX in DECIDE v1 requires a constant RHS")
 
 
 @pytest.mark.min_max

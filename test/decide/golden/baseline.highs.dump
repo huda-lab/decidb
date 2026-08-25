@@ -1638,3 +1638,40 @@ row 1: sense=> rhs=-10 nnz=4 | 0:-1 1:-1 4:1 5:-10
 row 2: sense=> rhs=-10 nnz=4 | 2:-1 3:-1 4:1 6:-10
 row 3: sense=> rhs=1 nnz=2 | 5:1 6:1
 === END MODEL DUMP ===
+=== DECIDB MODEL DUMP ===
+sense: minimize
+num_vars: 5
+num_rows: 6
+num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
+col 0: lb=0 ub=1 int=1 bin=1 obj=12000
+col 1: lb=0 ub=1 int=1 bin=1 obj=8000
+col 2: lb=0 ub=800 int=1 bin=0 obj=6
+col 3: lb=0 ub=800 int=1 bin=0 obj=6
+col 4: lb=0 ub=800 int=1 bin=0 obj=3
+row 0: sense=< rhs=0 nnz=2 | 0:-500 2:1
+row 1: sense=< rhs=0 nnz=2 | 0:-350 3:1
+row 2: sense=< rhs=0 nnz=2 | 1:-300 4:1
+row 3: sense=< rhs=800 nnz=2 | 2:1 3:1
+row 4: sense=< rhs=500 nnz=1 | 4:1
+row 5: sense=> rhs=450 nnz=1 | 2:1
+=== END MODEL DUMP ===
+=== DECIDB MODEL DUMP ===
+sense: maximize
+num_vars: 4
+num_rows: 6
+num_qrows: 0
+num_genconstrs: 0
+num_indconstrs: 0
+col 0: lb=0 ub=7 int=1 bin=0 obj=1
+col 1: lb=0 ub=7 int=1 bin=0 obj=1
+col 2: lb=0 ub=1 int=1 bin=1 obj=0
+col 3: lb=0 ub=1 int=1 bin=1 obj=0
+row 0: sense=> rhs=3 nnz=2 | 0:1 1:1
+row 1: sense=< rhs=7 nnz=2 | 0:1 1:1
+row 2: sense=< rhs=2 nnz=3 | 0:1 1:1 2:-13
+row 3: sense=> rhs=-1 nnz=3 | 0:1 1:1 2:-5
+row 4: sense=< rhs=6 nnz=3 | 0:1 1:1 3:-9
+row 5: sense=> rhs=-1 nnz=3 | 0:1 1:1 3:-9
+=== END MODEL DUMP ===

@@ -218,17 +218,16 @@ static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
 //! Tag prefix marking a SUM(...) that really means a hard MIN/MAX (on
 //! BoundAggregateExpression.alias).
-//! Format: "__minmax_ind_<indicator_idx>_<min|max>__" on the lowering arm, and
-//!         "__minmax_ind_<min|max>__"                on the native arm.
-//! The aggregate name is always present and is what marks the row; the indicator index
-//! is present only when one was allocated, which is only on the arm that emits a Big-M
-//! disjunction for it to switch. Neither "min" nor "max" contains an underscore, so the
-//! two spellings are told apart by whether the payload has one.
-static constexpr const char *MINMAX_INDICATOR_TAG_PREFIX = "__minmax_ind_";
+//! Format: "__minmax_clause_<clause_idx>_<min|max>__", on both arms.
+//! The clause index points into `LogicalDecide::minmax_clause_labels`, which holds the
+//! text a diagnosis renders for this clause. Both parts are always present: the clause
+//! is registered where it is tagged, before either formulation is chosen, so the index
+//! does not depend on whether a Big-M disjunction or a native extremum follows.
+static constexpr const char *MINMAX_CLAUSE_TAG_PREFIX = "__minmax_clause_";
 
-//! Tag prefix for not-equal indicator linking (on BoundComparisonExpression.alias)
-//! Format: "__ne_ind_tag_<indicator_idx>__"
-static constexpr const char *NE_INDICATOR_TAG_PREFIX = "__ne_ind_tag_";
+//! Tag prefix linking a `<>` comparison to its clause (on BoundComparisonExpression.alias).
+//! Format: "__ne_clause_tag_<clause_idx>__", indexing `LogicalDecide::ne_clause_labels`.
+static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
 
 //! Tag marking a comparison whose LHS was an easy-direction MIN/MAX aggregate
 //! (MAX(e) <= K, MIN(e) >= K) that the optimizer stripped to a per-row form.

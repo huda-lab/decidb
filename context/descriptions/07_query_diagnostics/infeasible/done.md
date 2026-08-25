@@ -556,6 +556,19 @@ latter the renderer can only fabricate, so a row that cannot name a clause is no
 can be told to edit. `D_ASSERT` is debug-only, so the release-build backstop is the Python
 invariant helper described in `foundations/done.md`.
 
+**What the tags are called (B5).** The pipeline aliases that carry this linkage are
+`MINMAX_CLAUSE_TAG_PREFIX` (`__minmax_clause_<clause_idx>_<min|max>__`) and
+`NE_CLAUSE_TAG_PREFIX` (`__ne_clause_tag_<clause_idx>__`), both in
+`common/enums/decide.hpp`. The payload is a **clause** index — into
+`LogicalDecide::minmax_clause_labels` / `ne_clause_labels`, which hold the text a diagnosis
+renders — and not an indicator index, which is what the names and the surrounding comments used
+to say. The distinction matters because an indicator is allocated by the formulation and a
+clause is not: the clause is registered where it is *tagged*, before either arm is chosen, so
+both parts of the payload are always present. The header used to document a second, bare
+`__minmax_ind_<min|max>__` spelling for a native arm that allocates no indicator; the single
+producer cannot emit it, and the reader branch that handled it was dead. Both are gone, and the
+reader asserts the shape instead.
+
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): one shared slack spans all N
 rows with the correct sign; a PER `SHARED_SCALAR` clause folds to one block in query and
 one-per-group in expanded; a data RHS folds to one block in query and stays independent per-row
@@ -789,6 +802,104 @@ loosen tie** (`x <= 0 AND y <= 0 AND x + y >= 10` with no MAXIMIZE — Gurobi an
 name different clauses) reports the same single floor edit on both backends
 (`test_infeasible_no_objective_loosen_tie_is_solver_agnostic`), the stage-2b guarantee for
 loosen repairs.
+
+## Elastic engine: repairs the model can reach (B3)
+
+Stage 2 above picks the best repair **among those the elastic model can express**, and that
+qualifier used to cost the user real advice. Every Big-M and every derived column ceiling in
+`ilp_linearization.cpp` is sized from the decision box as the query states it — correct for
+the solve, wrong for the diagnosis that follows an infeasible one, because the repair the
+engine is looking for is precisely a **widening** of that box. A ceiling baked in at the old
+width makes the widened repair unrepresentable, and stage 2 then reports whatever else it can
+still see.
+
+**The two faces of it.**
+
+```
+x(REAL): x >= -1 AND x <= 1 AND ABS(x) >= 5          MAXIMIZE 6*x
+  gurobi (native ABS)  → loosen `x <= 1`      to `x <= 5`      amount 4, objective 30
+  highs  (lowered ABS) → loosen `ABS(x) >= 5` to `ABS(x) >= 1` amount 4, objective 6
+```
+
+Both repairs are valid and both re-solve, but one is worth five times the other and the user
+got whichever their host happened to have. Gurobi states ABS natively and bakes in nothing, so
+it saw both and the achievable-objective rule picked correctly; the lowered arm's Big-M
+envelope, sized at 1, made the box repair infeasible inside the elastic model. Verified as a
+formulation split and not a solver one: `DECIDB_NATIVE_CONSTRUCTS=off` reproduces the HiGHS
+answer on Gurobi.
+
+MIN/MAX has the same blind spot without the disagreement. `MAX(x + c) >= 25 PER g` over
+`x` in `[0, 9]` boxes the extremum column at the family's own reach, so **every** arm
+advised loosening the MAX for a query worth 36 when `x <= 23` was the same size of edit
+and worth 92. Symmetric blindness reads as agreement, which is why the cross-backend
+invariant never caught it.
+
+**The rule.** A clause that demands more of an auxiliary than the box can supply sizes that
+auxiliary itself. Note when it fires: only when the demand *exceeds* the box, which is only
+when the clause cannot be met as written. A query that solves reaches its own bound by
+definition, so its ceilings and Big-Ms are untouched — the golden corpus dump is byte-identical
+on both backends across this change. A looser M is valid in any case; it only slackens the
+deactivated arm of a disjunction, whereas a too-small one cuts off legal answers.
+
+**Where it lands.**
+- **ABS** — `DemandedAuxReach` (`ilp_linearization.cpp`) returns the largest value any clause
+  requires the auxiliary to hold, and `DeriveAbsAuxiliaryBounds` takes `max(box reach, demand)`
+  before setting `link.abs_range` and the auxiliary's ceiling. Both consumers follow: the
+  ceiling, and the `2M` envelope `LinearizeAbsMaximize` emits off `abs_range`. The demand is
+  usually **not** a row — `ABS(x) >= 5` is a simple `var OP const` comparison, so
+  `AbsorbVariableBounds` folds it into the auxiliary's own box — which is why the helper reads
+  `lower_bounds[aux]` first and only then walks the rows. Without that, the ceiling was set
+  *under* the floor: an empty column no widening of `x` could repair.
+- **MIN/MAX** — `LinearizeMinMaxConstraints` widens `group.family` to cover the clause's bound
+  before the extremum column is boxed, so both the column and the closing Big-M (`family.Span()`)
+  follow.
+- **MIN/MAX, native arm** — one level further down, and it needs the opposite treatment. The
+  lowering emits the closing side alone (`z <= max`), so `K` is a fine ceiling for `z`. A
+  general constraint states `z = MAX(t..)` as an **equality**, so `z` must hold whatever the
+  members actually reach — and a member may have to go past `K` to get the extremum there
+  (`MAX(x + c) >= 25` is met at `x = 23` with `c = 4`, an expression of 27). Boxing `z` and the
+  member columns at 25 caps `x` at 21 and quietly costs three units of objective: the forced
+  arm reported 89 where the lowered arms read 92. There is no derivable number — how far the
+  repair travels is not known until it is solved — so on the native arm the demanded end is
+  **opened** and the pin row tying each member column to its expression does the constraining.
+  The native arm derives no Big-M from the family, so an open end costs it nothing but a looser
+  root relaxation on a query that cannot solve anyway.
+
+**Residual class, accepted not fixed.** A diagnosis is computed inside the model as it was
+built, so any encoding sized from a bound the repair wants to widen can hide a better repair.
+`<>`, bilinear (McCormick) and `norm` all have encodings of that shape and are untouched here.
+Making it structurally impossible is the parked "elastic diagnosis as a stage-05 rewrite"
+question in [`todo.md`](todo.md), which reopens stages 07 and 08.
+
+**Tests** (`test_query_diagnostics_relation.py::TestRepairsTheModelCanReach`). B3's query
+across three arms via `assert_backends_agree` — B2's helper, and this is the caller it was
+written for; the lowered arm is exercised **on Gurobi** so the comparison is of the two
+formulations rather than of two solvers that happen to differ. The reported repair is checked
+to be the better one, with its stated payoff oracled against a real re-solve of the edited
+query. `test_the_abs_clause_wins_when_it_is_the_smaller_edit` proves the rule is not "always
+prefer the bound": weighting `x` inside the ABS breaks the symmetry that made the two repairs
+tie, the clause becomes the smallest edit at 4.5 against the box's 9, and it is reported with
+no tie-break consulted. The MIN/MAX tie runs `DECIDB_NATIVE_CONSTRUCTS=force` as its own arm,
+because MIN/MAX goes native only where the Big-M is underivable and the native path is
+otherwise never reached.
+
+## An `IN`-only conflict is reported by the static error, not by a diagnosis (B4)
+
+`x IN (3,5) AND x IN (2,4)` raises the plain infeasible error and **zero** diagnostic rows, on
+both backends. That is correct and deliberate, not a gap: `IN` over a decision is lowered to a
+membership disjunction whose rows are all mechanism, so the empty-block guard finds nothing
+relaxable and returns an empty diagnosis rather than inventing one. The error already says the
+only true thing there is to say. The documented guard listed `<>` and McCormick as its
+occupants; `IN` belongs on that list too.
+
+The static text it falls back to no longer mentions a `SUM` the user may not have written:
+
+> DECIDE optimization is infeasible: the SUCH THAT constraints cannot all be satisfied at
+> once. Look for two clauses that bound the same decision in opposite directions, or a bound
+> no value can reach.
+
+It stays in SQL terms and does not point at `PRAGMA diagnose_decide` — this path is reached
+*with* diagnosis already on.
 
 ## Elastic engine: column-bound conflicts (intrinsic reset, inverted box, type-domain errors)
 

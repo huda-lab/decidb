@@ -69,6 +69,12 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
     switch (expr.GetExpressionClass()) {
         case ExpressionClass::CONSTANT:
             return true;
+        case ExpressionClass::COLUMN_REF:
+            // A plain data column, e.g. `stock` in `SUM(ship) <= stock PER depotID`.
+            // `ExpressionContainsDecideVariable` (checked by every caller of this
+            // function) already excludes an actual decision variable by name on this
+            // same parsed tree, so a bare column reaching here is always data.
+            return true;
         case ExpressionClass::FUNCTION: {
             auto &func = expr.Cast<FunctionExpression>();
             if (func.is_operator) {

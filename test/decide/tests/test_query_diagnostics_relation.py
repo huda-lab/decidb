@@ -2170,17 +2170,13 @@ class TestNativeConstructDiagnosis:
         infeasible, so the diagnosis handed back an edit that made no progress.
         """
         cli = request.getfixturevalue(cli_fixture)
-        sql = (
-            "SELECT g, x FROM (VALUES (0,1),(0,2),(1,3),(1,4)) t(g,c) "
-            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND MAX(x + c) >= 25 PER g "
-            "MAXIMIZE SUM(x)"
-        )
+        sql = self._MINMAX_SQL
         result = _diagnose(cli, sql)
         rows = _rows(result)
 
         edits = _clause_edits(rows)
         assert len(edits) == 1, f"one clause, one edit:\n{rows}"
-        assert edits[0]["subject"] == "MAX(x + c) >= 25 PER g", rows
+        assert edits[0]["subject"] == "MAX(x * 0.5 + c) >= 25 PER g", rows
         # A shared literal, not a per-row data offset — the user has a number to retype.
         assert edits[0]["edit_source"] == "source_literal", rows
 
@@ -2191,9 +2187,16 @@ class TestNativeConstructDiagnosis:
         assert float(reported) == pytest.approx(
             sum(float(r["x"]) for r in repaired))
 
+    #: `x` carries a fractional weight inside the MAX on purpose. Both this clause and
+    #: the column bound `x <= 9` can repair the query, and with a weight of 1 they cost
+    #: the SAME edit (14 either way) — a tie the achievable-objective rule then settles
+    #: in favour of the bound, which is correct but tests nothing about MIN/MAX. At 0.5
+    #: the column bound has to travel twice as far (37 against the clause's 18.5), so
+    #: the clause is the cheapest repair outright and naming it means what it says.
+    #: The tie itself is covered by `test_a_tie_goes_to_the_repair_worth_more`.
     _MINMAX_SQL = (
         "SELECT g, x FROM (VALUES (0,1),(0,2),(1,3),(1,4)) t(g,c) "
-        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND MAX(x + c) >= 25 PER g "
+        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND MAX(x * 0.5 + c) >= 25 PER g "
         "MAXIMIZE SUM(x)"
     )
 
@@ -2227,7 +2230,7 @@ class TestNativeConstructDiagnosis:
             rows = list(csv.DictReader(io.StringIO(proc.stdout)))
             edits = _clause_edits(rows)
             assert len(edits) == 1, f"{label}: one clause, one edit:\n{rows}"
-            assert edits[0]["subject"] == "MAX(x + c) >= 25 PER g", f"{label}:\n{rows}"
+            assert edits[0]["subject"] == "MAX(x * 0.5 + c) >= 25 PER g", f"{label}:\n{rows}"
             _apply_reported_fix(runner, self._MINMAX_SQL, rows)
 
         distinct = set(seen.values())
@@ -2262,3 +2265,139 @@ class TestNativeConstructDiagnosis:
         for subject in subjects:
             assert subject in sql, f"{subject!r} is not in the query:\n{sql}"
         _apply_reported_fix(cli, sql, rows)
+
+
+@pytest.mark.query_diagnostics
+class TestRepairsTheModelCanReach:
+    """A repair the model cannot represent is a repair the diagnosis cannot offer.
+
+    Every Big-M and every derived column ceiling in the linearizer is sized from the
+    decision box as the query states it. That is right for the solve and wrong for the
+    diagnosis that follows an infeasible one, because the elastic engine repairs by
+    WIDENING a bound — and a ceiling baked in at the old width makes the widened repair
+    unrepresentable. The engine then reports whatever else it can still see.
+
+    B3 is the worked example. `ABS(x) >= 5` over `x` in [-1, 1] has two repairs of
+    identical size: widen the box to `x <= 5` (worth 30) or weaken the ABS to
+    `ABS(x) >= 1` (worth 6). Gurobi states ABS natively and bakes in nothing, so it saw
+    both and took the better one; HiGHS lowers ABS to a Big-M envelope sized at 1, so
+    the first repair was invisible to it and it reported the second. Same SQL, same
+    tie-break rule, advice worth five times as much on one host than the other.
+
+    The rule these tests hold: a clause that demands more of an auxiliary than the box
+    can supply sizes that auxiliary itself. It fires only when the demand exceeds the
+    box, which is only when the clause cannot be met as written — so no query that
+    solves has its Big-M loosened.
+    """
+
+    #: B3 verbatim. `contrib` is projected so the achievable objective can be oracled
+    #: against a real re-solve of the repaired query rather than a hand-computed number.
+    _ABS_SQL = (
+        "SELECT id, x * 6 AS contrib FROM (VALUES (1)) t(id) "
+        "DECIDE x(REAL) SUCH THAT x >= -1 AND x <= 1 AND ABS(x) >= 5 "
+        "MAXIMIZE SUM(x * 6)"
+    )
+
+    def test_abs_advice_does_not_depend_on_the_backend(
+        self, decidb_cli_gurobi, decidb_cli_highs
+    ):
+        """Invariant 2 in its observable form, for ABS — `assert_backends_agree`'s
+        intended caller. The lowered arm is exercised on Gurobi too, so the check is of
+        the two FORMULATIONS and not of two solvers that happen to differ."""
+        by_backend = {}
+        arms = {
+            "gurobi (native)": decidb_cli_gurobi,
+            "gurobi (lowered)": decidb_cli_gurobi.with_env(
+                {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+            "highs": decidb_cli_highs,
+        }
+        for label, runner in arms.items():
+            rows = _rows(_diagnose(runner, self._ABS_SQL))
+            by_backend[label] = {
+                "edits": _clause_edits(rows),
+                "achievable_objective": _attrs(rows, "model", "NULL").get(
+                    "achievable_objective"),
+            }
+        assert_backends_agree(by_backend, "ABS over a boxed decision")
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_the_reported_repair_is_the_one_worth_more(self, request, cli_fixture):
+        """Of the two equally small repairs, the reported one is the better repair —
+        and its stated payoff survives a real re-solve of the edited query."""
+        cli = request.getfixturevalue(cli_fixture)
+        rows = _rows(_diagnose(cli, self._ABS_SQL))
+        edits = _clause_edits(rows)
+        assert len(edits) == 1, f"one clause, one edit:\n{rows}"
+        assert edits[0]["subject"] == "x <= 1", rows
+        assert edits[0]["suggested_change"] == "x <= 5", rows
+
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        fixed_sql = _apply_reported_fix(cli, self._ABS_SQL, rows)
+        solved = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(
+            sum(float(r["contrib"]) for r in solved))
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_the_abs_clause_wins_when_it_is_the_smaller_edit(self, request, cli_fixture):
+        """The rule is not "always prefer the bound".
+
+        Weighting `x` inside the ABS breaks the symmetry that made the two repairs tie:
+        reaching 5 through `ABS(x * 0.5)` needs the box to travel to 10 (an edit of 9),
+        while the clause itself only has to come down to 0.5 (an edit of 4.5). The
+        clause is now the smallest edit, so it is the one reported — no tie-break is
+        even consulted."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x * 6 AS contrib FROM (VALUES (1)) t(id) "
+            "DECIDE x(REAL) SUCH THAT x >= -1 AND x <= 1 AND ABS(x * 0.5) >= 5 "
+            "MAXIMIZE SUM(x * 6)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        edits = _clause_edits(rows)
+        assert len(edits) == 1, f"one clause, one edit:\n{rows}"
+        assert edits[0]["subject"] == "ABS(x * 0.5) >= 5", rows
+        assert float(edits[0]["amount"]) == pytest.approx(4.5), rows
+        _apply_reported_fix(cli, sql, rows)
+
+    def test_a_minmax_tie_goes_to_the_repair_worth_more(
+        self, decidb_cli_gurobi, decidb_cli_highs
+    ):
+        """The same blind spot on MIN/MAX, where it never showed as a disagreement.
+
+        `MAX(x + c) >= 25 PER g` over `x` in [0, 9] boxes the extremum column at the
+        family's own reach and sizes the closing Big-M off its span, so widening
+        `x <= 9` was unrepresentable on EVERY arm — native included, because the
+        extremum column is boxed the same way whichever formulation pins it. All three
+        agreed, and all three advised loosening the MAX for a query worth 36 when
+        `x <= 23` was the same size of edit and worth 92."""
+        sql = (
+            "SELECT g, x FROM (VALUES (0,1),(0,2),(1,3),(1,4)) t(g,c) "
+            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND MAX(x + c) >= 25 PER g "
+            "MAXIMIZE SUM(x)"
+        )
+        # `force` earns its place here: MIN/MAX is native only where the Big-M is
+        # underivable, so this clause takes the LOWERING on the default arm and the
+        # native path is otherwise never reached. It caps differently — a general
+        # constraint states `z = MAX(t..)` as an equality, so the extremum column has to
+        # hold whatever the members reach rather than just the bound — and it kept
+        # reporting an objective of 89 after the lowered arms already read 92.
+        arms = {
+            "gurobi (lowered)": decidb_cli_gurobi.with_env(
+                {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+            "gurobi (native)": decidb_cli_gurobi.with_env(
+                {"DECIDB_NATIVE_CONSTRUCTS": "force"}),
+            "highs": decidb_cli_highs,
+        }
+        for label, runner in arms.items():
+            rows = _rows(_diagnose(runner, sql))
+            edits = _clause_edits(rows)
+            assert len(edits) == 1, f"{label}: one clause, one edit:\n{rows}"
+            assert edits[0]["subject"] == "x <= 9", f"{label}:\n{rows}"
+
+            reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+            fixed_sql = _apply_reported_fix(runner, sql, rows)
+            solved = list(csv.DictReader(io.StringIO(
+                runner.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+            assert float(reported) == pytest.approx(
+                sum(float(r["x"]) for r in solved)), label

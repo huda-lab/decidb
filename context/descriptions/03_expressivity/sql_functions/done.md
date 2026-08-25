@@ -54,13 +54,14 @@ SUCH THAT SUM(x * price) <= MIN(price) * 4      -- MIN/MAX, not just SUM/AVG
 SUCH THAT SUM(x) <= COUNT(*) PER grp            -- counts the group's rows
 SUCH THAT SUM(x * price) <= MIN(price) + 90     -- mixed with an ordinary term
 SUCH THAT SUM(x) <= (SELECT b FROM g WHERE ...) -- row-varying: tightest bound
+SUCH THAT SUM(ship) <= stock PER depotID        -- a plain column, the same way (C1)
 ```
 
 This removes an asymmetry that could not be explained without describing internals: `<= AVG(col)` worked and `<= MIN(col)` did not, because the old hoist moved a data term to the left where it is reduced by **summing a column** — which is SUM by luck, and cannot express MIN.
 
 **Semantics.** The evaluator implements the construction order paper §3.2.2 fixes for every reducer — `when` selection → `per` partitioning → qualifier-key grouping and de-duplication → aggregation. A reducer's own `WHEN` scopes only that reducer, so the right side is *not* narrowed by the left side's aggregate-local `WHEN`: in `(SUM(x) WHEN a) <= MIN(b)`, `MIN(b)` still ranges over every row.
 
-**A row-varying bound** (a data column, a correlated subquery) collapses to the single bound the per-tuple conjunction implies — MIN for `<=`/`<`, MAX for `>=`/`>` — per paper §3.2.1. `=` and `<>` have no such collapse and are refused, but only when the values genuinely differ.
+**A row-varying bound** — a plain data column (C1) or a correlated subquery — collapses to the single bound the per-tuple conjunction implies for `<=`/`<`/`>=`/`>`: MIN for `<=`/`<`, MAX for `>=`/`>`, per paper §3.2.1. `=` has no such collapse and is refused as a contradiction when the values genuinely differ (two different single numbers can't both be *the* sum). `<>` also has no collapse, but for the opposite reason: nothing contradicts, so every excluded value is kept rather than reduced to one (C3) — `SUM(x) <> 500 AND SUM(x) <> 350` within one group, not just the tighter of the two. Both are Standing Decision 3.
 
 **AVG on the right** keeps its fractional value, including when mixed with other terms (`<= 2 * AVG(col)`). This briefly did not work: the optimizer's AVG→SUM rewrite redeclares the node with SUM's integral type while its value stays fractional, and this is the one place a reducer's value is handed back to a surrounding expression bound against that type, so the fraction was cast away. `RewriteAvgInExpression` now **skips any AVG with no decision variable** — there is nothing to linearize in one, and DuckDB's `AVG` already returns `DOUBLE`.
 

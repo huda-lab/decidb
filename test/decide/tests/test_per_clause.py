@@ -6,6 +6,8 @@ means a separate SUM(x) <= 5 constraint for each distinct s_nationkey value.
 
 Also covers:
   - PER with <> operator (Big-M disjunction per group)
+  - PER with <> and a bound that itself varies within a group (C3): every
+    excluded value is kept, not collapsed to one
   - NULL values in PER column (excluded from all groups)
   - Two PER constraints on different grouping columns
 """
@@ -253,6 +255,48 @@ def test_per_not_equal(
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.per_clause
+@pytest.mark.cons_comparison
+@pytest.mark.correctness
+def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_solver):
+    """C3: a `<>` bound that varies within a PER group excludes every value it takes,
+    not just the tightest one (standing decision 3).
+
+    Group 'a' has two rows whose `cap` column reads 3 and 7, so the group's own bound
+    excludes both: `SUM(x) <> 3 AND SUM(x) <> 7`. Bounding the sum's own range to
+    [3, 7] and maximizing isolates the discriminating case — an optimum that sits
+    *between* the two excluded values. A wrong reading that collapsed the varying
+    bound to its tightest value (as `<=`/`>=` do) would keep only `<> 3` and answer 7;
+    keeping both gives 6, the next value down from the excluded ceiling.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, grp, x FROM (
+            VALUES (1, 'a', 3), (2, 'a', 7)
+        ) t(id, grp, cap)
+        DECIDE x(INT)
+        SUCH THAT x BETWEEN 0 AND 10
+            AND SUM(x) >= 3 AND SUM(x) <= 7
+            AND SUM(x) <> cap PER grp
+        MAXIMIZE SUM(x)
+    """)
+    xi = cols.index("x")
+    actual_sum = sum(int(r[xi]) for r in rows)
+
+    oracle_solver.create_model("per_not_equal_varying_bound")
+    oracle_solver.add_variable("x_1", VarType.INTEGER, lb=0.0, ub=10.0)
+    oracle_solver.add_variable("x_2", VarType.INTEGER, lb=0.0, ub=10.0)
+    coeffs = {"x_1": 1.0, "x_2": 1.0}
+    oracle_solver.add_constraint(coeffs, ">=", 3.0, name="range_lo")
+    oracle_solver.add_constraint(coeffs, "<=", 7.0, name="range_hi")
+    _add_ne_bigm(oracle_solver, coeffs, rhs=3.0, row_count=2, name="ne_a_3")
+    _add_ne_bigm(oracle_solver, coeffs, rhs=7.0, row_count=2, name="ne_a_7")
+    oracle_solver.set_objective(coeffs, ObjSense.MAXIMIZE)
+    result = oracle_solver.solve()
+
+    assert actual_sum == pytest.approx(result.objective_value)
+    assert actual_sum == 6, f"expected the optimum strictly between 3 and 7, got {actual_sum}"
 
 
 @pytest.mark.per_clause

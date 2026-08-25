@@ -30,6 +30,16 @@ counts. The rule and the message are the same on both backends.
   - **Per-row NE, uniform RHS**: whole constraint is dropped if `K` is non-integer.
   - **Per-row NE, varying RHS** (e.g. correlated subquery): only the rows whose `K_row` is non-integer are masked out (added to `row_group_ids` as `INVALID_INDEX`); the remaining rows still get the real Big-M pair.
   - **Aggregate NE (`SUM(x) <> K`, `AVG(x) <> K`)**: handled per-group in the deferred expansion. For `AVG(x) <> K` the effective per-group RHS is `K * N_g`, so groups with integer `K * N_g` get the full Big-M pair while groups whose effective RHS is non-integer are skipped (no global `z` allocated). Mixed PER queries with some groups in each category are valid. The Big-M for each group is computed by **summing the worst-case contribution over that group's rows** (the aggregate LHS ranges over the whole group); a single per-row bound would be far below the true range and silently cap the aggregate. See `../../01_pipeline/05_optimizer/done.md`.
+  - **A `K` that itself varies within a group (C3)**: `ExpandAggregateNotEqual`
+    (`ilp_linearization.cpp`) does not read one representative RHS value per group —
+    it collects every distinct value the group's rows carry and allocates one binary
+    and one Big-M pair **per distinct value**, all against the same accumulated LHS.
+    `ReduceAggregateRhsPerGroup` (`physical_decide.cpp`) is what makes the values
+    available: for `<>` it leaves a varying bound exactly as it arrived, rather than
+    collapsing it the way it does for `<=`/`>=`. The integer-tautology guard and the
+    range collapse both run per value, so one excluded value in a group can drop as a
+    tautology (or collapse to a plain inequality) while another in the same group
+    keeps its full disjunction.
 
   Enforced at `src/execution/operator/decide/physical_decide.cpp` (per-row guard inside the NE expansion loop; per-group guard inside the deferred-aggregate expansion before the `z_idx` allocation). Tolerance for the integer test is `1e-9`.
 
@@ -66,10 +76,18 @@ SUCH THAT SUM(x * v) <= SUM(y * v)            -- a reducer on both sides
 SUCH THAT SUM(x * v) <= MAX(x * w) + 30       -- composed reducer as the bound
 ```
 
-A **data** bound still has to reduce to one value per group, and that check runs on
-whichever side is the bound rather than on `right` by position — so `SUM(x) <= price`
-and `price >= SUM(x)` are refused identically. Homogeneity (K3) is checked further
-down: a *row-scoped* decision as the bound of a reduced constraint
+A **data** bound reduces to one value per group — the tightest of its own rows'
+values for `<=`/`<`/`>=`/`>` (paper §3.2.1) — and that check runs on whichever side is
+the bound rather than on `right` by position, so `SUM(x) <= stock PER depotID` and
+`stock >= SUM(x) PER depotID` build the same model. `IsAllowedDecisionFreeBoundExpression`
+(`decide_constraints_binder.cpp`) accepts a plain column here (C1) exactly as it
+already accepted a scalar subquery — a bare column is just another decision-free
+expression, and the physical reduction (`ReduceAggregateRhsPerGroup`) does not care
+where its per-row value came from. `=` refuses a bound that genuinely varies (a
+contradiction: two different single numbers can't both be *the* sum); `<>` instead
+keeps every value it took (C3) — see "Reducers as a Bound" in
+[`../sql_functions/done.md`](../sql_functions/done.md). Homogeneity (K3) is checked
+further down: a *row-scoped* decision as the bound of a reduced constraint
 (`SUM(x) <= y`) is rejected by the aggregate term extractor, which names the offending
 term. A query-wide (`scalar`) one is legal, because it is row-invariant.
 

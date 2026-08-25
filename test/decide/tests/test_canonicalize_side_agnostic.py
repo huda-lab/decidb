@@ -15,9 +15,15 @@ admits aggregate-against-aggregate, which no single-sided gate could express.
 Nothing new happens below the binder: the canonicalizer moves the term left and
 the physical layer sees the reduced shape B.3/B.5 already built.
 
-**Shapes that stay closed, but symmetrically.** A row-varying *data* bound is
-still refused — that is group B of the paper sweep, not C.2 — and the refusal is
-now the same whichever side it is written on.
+**A row-varying *data* bound now opens too (C1).** `IsAllowedDecisionFreeBoundExpression`
+gained a `COLUMN_REF` case, so a bare column is a legal bound of a reduced constraint —
+this is what the paper's own running example needs (`SUM(ship) <= stock PER depotID`).
+The conjunction `LHS ⊙ rᵢ` over every row is exactly the tightest one (MIN for `<=`, MAX
+for `>=`), applied per `PER` group when one is present; `=` still refuses a bound that
+genuinely varies (it would be a contradiction, not a tightening), and `<>` keeps every
+excluded value instead of collapsing. See `test_reduced_bound_data_column.py` for the
+PER and PER+WHEN cases (Figure 1's own two constraints); this file keeps the no-PER,
+side-agnostic case.
 
 Every positive case is checked against an independent oracle model. "It no longer
 errors" is not the claim; the claim is that the model DecidB builds for a reversed
@@ -31,7 +37,7 @@ Covers:
   - test_reversed_per_row_bound: 5 >= x, no binder flip involved
   - test_correlated_subquery_bound_on_either_side: correlated row bounds retain
     their per-row meaning through a side swap
-  - test_row_varying_bound_rejected_on_either_side: symmetry of the refusal
+  - test_row_varying_bound_collapses_to_tightest_on_either_side: C1, the no-PER case
   - test_row_scoped_decision_as_aggregate_bound_rejected: K3, named and actionable
 """
 
@@ -289,23 +295,49 @@ def test_correlated_subquery_bound_on_either_side(decidb_cli):
     assert f_values == r_values == [(1, 2, 2), (2, 4, 4)]
 
 
-@pytest.mark.error_binder
-@pytest.mark.error
-def test_row_varying_bound_rejected_on_either_side(decidb_cli):
-    """A row-varying *data* bound stays refused, and refused the same way reversed.
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+def test_row_varying_bound_collapses_to_tightest_on_either_side(
+    decidb_cli, oracle_solver
+):
+    """C1: a bare data column is now a legal bound of a reduced constraint.
 
-    C.2 opened the decision-bearing bound, not this: a bare data column as the
-    bound of a reduced constraint is group B of the paper sweep and needs per-tuple
-    fan-out at the binder. What C.2 does own is the symmetry — the check now runs on
-    whichever side is the bound, so the two spellings cannot disagree.
+    Without PER there is one group — the whole selection — so `SUM(x) <= cap`
+    is the conjunction of `SUM(x) <= cap_i` over every row, which is exactly
+    `SUM(x) <= MIN(cap_i)`. Verified against an independently built model (three
+    redundant per-row bounds, exactly as the conjunction reads), not a
+    hand-computed MIN — Gurobi finds the tightest one itself.
+
+    Reversing the comparison (`cap >= SUM(x)`) must build the identical model:
+    the bound rule runs on whichever side is the bound, not on `right` by
+    position.
     """
-    for constraint in ("SUM(x) <= l_quantity", "l_quantity >= SUM(x)"):
-        decidb_cli.assert_error(f"""
-            SELECT l_quantity FROM lineitem
+    caps = {1: 4, 2: 9, 3: 6}
+    fixture = "(VALUES (1, 4), (2, 9), (3, 6)) t(id, cap)"
+
+    for label, constraint in (
+        ("forward", "SUM(x) <= cap"), ("reversed", "cap >= SUM(x)")
+    ):
+        rows, cols = decidb_cli.execute(f"""
+            SELECT id, x FROM {fixture}
             DECIDE x(INT)
             SUCH THAT {constraint}
-            MAXIMIZE SUM(x * l_quantity) LIMIT 1
-        """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate")
+            MAXIMIZE SUM(x)
+        """)
+        xi = cols.index("x")
+        actual_sum = sum(int(r[xi]) for r in rows)
+
+        oracle_solver.create_model(f"row_varying_bound_{label}")
+        for i in caps:
+            oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0)
+        for i in caps:
+            oracle_solver.add_constraint(
+                {f"x_{j}": 1.0 for j in caps}, "<=", float(caps[i]), name=f"row_{i}_bound"
+            )
+        oracle_solver.set_objective({f"x_{i}": 1.0 for i in caps}, ObjSense.MAXIMIZE)
+        result = oracle_solver.solve()
+        assert result.status == SolverStatus.OPTIMAL
+        assert actual_sum == pytest.approx(result.objective_value)
 
 
 @pytest.mark.error

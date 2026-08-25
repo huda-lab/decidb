@@ -450,7 +450,7 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 			idx_t clause_idx = decide.ne_clause_labels.size();
 			decide.ne_clause_labels.push_back(DiagnosisComparand(*comp.left) + " <> " +
 			                                  DiagnosisComparand(*comp.right));
-			AddDecideTag(comp.alias, string(NE_INDICATOR_TAG_PREFIX) + to_string(clause_idx) + "__");
+			AddDecideTag(comp.alias, string(NE_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "__");
 		}
 	}
 }
@@ -1359,7 +1359,7 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &deci
 		new_sum->Cast<BoundAggregateExpression>().filter = filter->Copy();
 	}
 	new_sum->alias =
-	    string(MINMAX_INDICATOR_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__";
+	    string(MINMAX_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__";
 	out_clause_idx = clause_idx;
 	return new_sum;
 }

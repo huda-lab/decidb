@@ -448,7 +448,8 @@ void ThrowDecideSolveError(const SolverResult &result) {
     case SolverStatus::INFEASIBLE:
         throw InvalidInputException(
             "DECIDE optimization is infeasible: the SUCH THAT constraints cannot all be satisfied at once. "
-            "Check for conflicting constraints or an unreachable SUM target.");
+            "Look for two clauses that bound the same decision in opposite directions, or a bound no "
+            "value can reach.");
     case SolverStatus::UNBOUNDED:
         throw InvalidInputException(
             "DECIDE optimization is unbounded: a decision variable can grow without bound. "

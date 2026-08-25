@@ -2,37 +2,6 @@
 
 ---
 
-## Row-Varying RHS with PER
-
-**Priority: High — paper-facing. This is the shape of the CIDR'27 running example
-(Example 1, lines 8–9), which §3 and §5 of the draft both build on, and it does not
-bind today.**
-
-```sql
--- NOT YET SUPPORTED
-SUM(x * hours) <= max_hours PER empID
-
--- The paper's Example 1, same shape — both lines rejected today:
-SUM(ship) <= stock  PER depotID
-SUM(ship) >= demand WHEN (priority = 'critical') PER regionID
-```
-
-Where `max_hours` varies per group. Requires resolving which row's value to use per group (e.g., validate all rows in a group have the same value, or take the first). Users can work around this today by using multiple WHEN constraints with explicit values.
-
-**Where it is rejected**: `src/planner/expression_binder/decide_constraints_binder.cpp:207`
-— an aggregate LHS requires the RHS to be a scalar or an aggregate, so a bare
-(non-reduced) column RHS fails with *"SUM cannot be compared to an expression that is
-not a scalar or aggregate without DECIDE variables"*. The check runs before PER is
-considered, so it fires whether or not a PER key would make the RHS single-valued
-within its partition. The draft's §3.2.1 rule — every non-reduced attribute referenced
-by the constraint must have a single value within its partition — is exactly the
-validation this task needs to implement.
-
-*Priority raised 2026-08-04 during paper §5 review, after confirming against
-`build/release/decidb` that neither line of Example 1 binds.*
-
----
-
 ## Open Design Question: PER binds the inner aggregate by convention, not by syntax
 
 **Priority: Low — open question, no code change proposed yet. Needs a decision before it is picked up.**
