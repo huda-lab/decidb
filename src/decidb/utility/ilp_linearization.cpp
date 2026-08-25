@@ -2496,9 +2496,19 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
         spec.closing_big_m = spec.closing_underivable ? 0.0 : term_range[i].Span();
         spec.blame_var = term_range[i].unbounded_var;
         spec.label = ta.label;
-        // The closing rows ARE the user's clause on this side, so they are loosenable;
-        // the envelope is mechanism.
-        spec.closing_kind = ConstraintKind::USER_PARAMETER;
+        // Mechanism, matching the hard MIN/MAX path above. The closing rows encode
+        // `z = MIN/MAX(members)`; their slack loosens that *definition*, not the user's
+        // bound, and the two differ by whatever coefficient `z` carries in the outer
+        // row -- `3*MIN(e) + SUM(x) <= 22` needs three times the slack a closing row
+        // reports, so quoting it back as an edit understates the repair and re-solves
+        // to infeasible. Relaxing the outer row is mathematically equivalent (lowering
+        // `z` by s/a and raising the bound by s admit the same solutions) and is already
+        // in the user's own units, so repair goes there: EmitComposedMinMaxOuter stamps
+        // USER_PARAMETER, SHARED_SCALAR, a repair_group_id and a source_clause_id.
+        // A closing row had none of the last of those, so a diagnosis that blamed one
+        // rebuilt its text from raw coefficients and printed the Big-M as the user's
+        // own clause.
+        spec.closing_kind = ConstraintKind::USER_MECHANISM;
         EmitExtremumLink(input, indexer, spec, members, var_names, native_min_max);
     }
 }

@@ -651,9 +651,18 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	auto has_explicit_shape = [](const ConstraintProvenance &p) {
 		return p.shape == ElasticShape::PER_ROW_DATA || p.shape == ElasticShape::SHARED_SCALAR;
 	};
-	auto assert_explicit_shape = [&](const ConstraintProvenance &p) {
+	// Everything a blamable row must carry. A relaxable row is one the diagnosis may
+	// tell the user to edit, so besides an explicit shape it has to be able to name
+	// WHICH clause of theirs it is: without a source_clause_id, SourceAwareLhs falls
+	// back to FormatLhs and rebuilds the clause from the row's own coefficients, so the
+	// user is shown a lowering's Big-M as though they had typed it. A row that encodes
+	// a construct's mechanism rather than its bound is USER_MECHANISM and never gets
+	// here -- which is also the honest answer when no editable form exists, since
+	// "relax the definition of MIN" is not a change anyone can make to their SQL.
+	auto assert_blamable_row = [&](const ConstraintProvenance &p) {
 		if (IsRelaxableForElastic(p.kind) && p.repair_group_id != DConstants::INVALID_INDEX) {
 			D_ASSERT(has_explicit_shape(p));
+			D_ASSERT(p.source_clause_id != DConstants::INVALID_INDEX);
 		}
 	};
 	auto is_data_offset = [](const ConstraintProvenance &p) {
@@ -697,7 +706,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	};
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
 		const auto &row = elastic.constraints[r];
-		assert_explicit_shape(row.provenance);
+		assert_blamable_row(row.provenance);
 		lin_norm[r] = rms_norm(row.coefficients);
 		if (IsRelaxableForElastic(row.provenance.kind) && !is_data_offset(row.provenance)) {
 			consider_ref(lin_norm[r]);
@@ -705,7 +714,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	}
 	for (idx_t qr = 0; qr < elastic.quadratic_constraints.size(); qr++) {
 		const auto &qc = elastic.quadratic_constraints[qr];
-		assert_explicit_shape(qc.provenance);
+		assert_blamable_row(qc.provenance);
 		qc_norm[qr] = rms_norm(qc.linear_coefficients);
 		if (IsRelaxableForElastic(qc.provenance.kind)) {
 			consider_ref(qc_norm[qr]);

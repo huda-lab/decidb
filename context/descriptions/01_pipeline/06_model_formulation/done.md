@@ -417,6 +417,15 @@ the Big-M family that encodes it — is made once, inside `EmitExtremumLink`, an
 rule is `NativeConstructPolicy`: native is the fallback, taken where the family's reach
 is underivable and there is therefore no Big-M at all.
 
+**`closing_kind` is a diagnosis-visible choice, not bookkeeping.** A closing row carries the
+Big-M, and marking it `USER_PARAMETER` offers it to the elastic engine as a clause the user
+may be told to edit. It is not one: it encodes `z = MIN/MAX(members)`, its slack is in the
+auxiliary's units rather than the user's bound's, and `ExtremumLinkSpec` carries no
+`source_clause_id` for a diagnosis to name it by. Both MIN/MAX paths therefore mark closing
+rows `USER_MECHANISM`; the user's clause is the outer row, which holds the bound in the
+user's own units and already carries its source. See `07_query_diagnostics/infeasible/done.md`,
+I2.e, for what went wrong when the composed path diverged from this.
+
 **A member becomes a column only when it is not one already.** `ExtremumArgumentColumn`
 hands the general constraint the member's own column where the member is an exact
 renaming — one surviving term, unit coefficient, no constant. `MAX(x)` is that shape,

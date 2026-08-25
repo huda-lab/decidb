@@ -23,6 +23,8 @@ import re
 
 import pytest
 
+from ._diagnostic_invariants import assert_backends_agree, assert_edits_are_users_text
+
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
@@ -115,9 +117,14 @@ def _apply_reported_fix(cli, sql, rows, subject_to_sql=None):
     MAX(x) composition, subquery/foldable RHS, whitespace). Returns the edited SQL
     so callers can oracle-check the achievable objective against it."""
     subject_to_sql = subject_to_sql or {}
+    edits = _clause_edits(rows)
+    # Every test that applies a fix also asserts the fix was the user's own text.
+    # Checked before applying, so a fabricated clause is reported as a fabrication
+    # rather than as "cannot locate <clause> in <sql>".
+    assert_edits_are_users_text(sql, edits, "reported repair")
     fixed_sql = sql
     edited = False
-    for edit in _clause_edits(rows):
+    for edit in edits:
         clause = subject_to_sql.get(edit["subject"], edit["subject"])
         if edit["edit_kind"] == "drop":
             assert f"{clause} AND " in fixed_sql or f" AND {clause}" in fixed_sql, (
@@ -1749,6 +1756,91 @@ class TestInfeasibleHeadlineAndRendering:
         for text in (result.stdout, result.stderr):
             assert not re.search(r"\bcol\d+\b", text), text
         _apply_reported_fix(cli, sql, rows, {subject: "MAX(x) + SUM(x) <= -1"})
+
+    # `c` differs per row (0 / 100) INSIDE the extremum, so the closing Big-M is the
+    # family's Span (110) rather than its BigM (10). That gap is what made the internal
+    # row ~11x cheaper to blame than any clause the user wrote; the test above cannot
+    # see it, because `MAX(x)` has no data column and there Span == BigM.
+    _COMPOSED_DATA_SQL = (
+        "SELECT id, x, x * v AS contrib FROM (VALUES (1, 1.0, 0.0), (2, 2.0, 100.0)) t(id, v, c) "
+        "DECIDE x(REAL) "
+        "SUCH THAT x >= 0 AND x <= 10 AND SUM(x) >= 19 AND MIN(x + c) + SUM(x) <= 22 "
+        "MAXIMIZE SUM(x * v)"
+    )
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_composed_minmax_never_blames_its_own_big_m(self, request, cli_fixture):
+        """A composed MIN/MAX lowers to an envelope, closing rows and an outer row. Only
+        the outer row is the user's clause; the closing rows encode `z = MIN(...)`, carry
+        the Big-M, and used to be marked loosenable, so the engine blamed one and printed
+        `MIN((x + c)) - x - 110*MIN((x + c)) >= -110` — a string appearing nowhere in the
+        query, with `edit_source=source_literal` asserting the user had typed it."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = self._COMPOSED_DATA_SQL
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+
+        # The blamed clause is one the user can find in their own query. (The shared
+        # invariant in _apply_reported_fix asserts this generally; naming it here says
+        # which regression this test exists for.)
+        edits = _clause_edits(rows)
+        assert len(edits) == 1, rows
+        assert "110" not in edits[0]["subject"], edits[0]["subject"]
+
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        fixed_sql = _apply_reported_fix(cli, sql, rows)
+        # Oracle: the promised payoff is what the repaired query actually returns.
+        solved = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(
+            sum(float(r["contrib"]) for r in solved))
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_composed_minmax_repair_is_in_the_users_units(self, request, cli_fixture):
+        """The number, not the name. Slack on a closing row is measured in the auxiliary's
+        units; the user's bound moves by that slack times the coefficient `z` carries in
+        the outer row. With `3*MIN(...)` the two differ by 3 — the engine reported 8 where
+        the real repair is 24, and `<= 30` re-solved to infeasible. Blaming the outer row
+        instead puts the slack on the user's bound directly, factor 1 by construction.
+
+        `_apply_reported_fix` re-solves the edited query, so an amount in the wrong units
+        fails here even when the clause it names is perfectly correct."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x, x * v AS contrib FROM (VALUES (1, 1.0, 0.0), (2, 2.0, 100.0)) t(id, v, c) "
+            "DECIDE x(REAL) "
+            "SUCH THAT x >= 0 AND x <= 10 AND SUM(x) >= 19 AND 3*MIN(x + c) + SUM(x) <= 22 "
+            "MAXIMIZE SUM(x * v)"
+        )
+        result = _diagnose(cli, sql)
+        rows = _rows(result)
+        assert {r["state"] for r in rows} == {"infeasible"}
+
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        fixed_sql = _apply_reported_fix(cli, sql, rows)
+        solved = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(
+            sum(float(r["contrib"]) for r in solved))
+
+    def test_composed_minmax_advice_does_not_depend_on_the_backend(
+        self, request, decidb_cli_highs, decidb_cli_gurobi
+    ):
+        """Invariant 2 in its observable form. The two backends state MIN/MAX differently
+        (native vs lowered), so they hand the elastic engine different row sets; any repair
+        choice not fixed by a stated rule falls out differently and a user moving hosts is
+        told to edit a different line of their own query."""
+        sql = self._COMPOSED_DATA_SQL
+        by_backend = {}
+        for name, cli in (("highs", decidb_cli_highs), ("gurobi", decidb_cli_gurobi)):
+            rows = _rows(_diagnose(cli, sql))
+            by_backend[name] = {
+                "edits": _clause_edits(rows),
+                "achievable_objective": _attrs(rows, "model", "NULL").get(
+                    "achievable_objective"),
+            }
+        assert_backends_agree(by_backend, "composed MIN/MAX over a data column")
 
 
 @pytest.mark.query_diagnostics

@@ -44,3 +44,24 @@ Currently, NULL values in constraint or objective coefficients (e.g., `SUM(x * w
 **Arguments for treating as 0**: SQL semantics — `SUM()` ignores NULLs. Users expect DeciDB to extend SQL naturally.
 
 **Arguments for current behavior (error)**: NULLs in optimization coefficients are almost certainly a data quality issue. Silent coercion to 0 could hide bugs. The current error message helpfully suggests `COALESCE()`, making the user's intent explicit.
+
+---
+
+## Vector-valued right-hand sides
+
+**Priority: Low — not yet broken into tasks**
+
+A bound today is one value per clause (or per group, once a reducer scale is fixed).
+A vector-valued RHS would let a clause take its bound from a column, so one written
+constraint states a different bound per row or per entity.
+
+This pairs with **scoped reducers on the bound side**, which are already partly built:
+qualified and WHEN-scoped reducers as bounds (`<= SUM(D: cost)`, `<= SUM(b) WHEN w`)
+ship today — see [`../sql_functions/done.md`](../sql_functions/done.md) → "Qualified and
+WHEN-scoped reducers as bounds". What is not settled is the shape one step past that,
+where the bound varies across the rows the left side reduces over.
+
+**Open before this can be scoped**: which reducer scale a row-varying bound is read at,
+how it interacts with `PER`, and whether the canonicalizer's "bound right" rule needs a
+second spelling or holds unchanged. Stage 04 owns that answer — see
+[`../../01_pipeline/04_canonicalizer/done.md`](../../01_pipeline/04_canonicalizer/done.md).

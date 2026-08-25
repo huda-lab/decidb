@@ -524,11 +524,37 @@ re-emits as one global cap: the easy rewrite makes `MAX(x) <= K PER g` the unifo
 
 ### I2.e — rigid shapes confirmed
 
-`<>` indicator rows (`USER_MECHANISM`) and McCormick bilinear links (`STRUCTURAL`) are not
+`<>` indicator rows (`USER_MECHANISM`), McCormick bilinear links (`STRUCTURAL`) and every
+MIN/MAX **closing** row (`USER_MECHANISM`, both the hard and the composed path) are not
 relaxable (`IsRelaxableForElastic`), so the elastic transform attaches no slack to them: a `<>`
 or bilinear conflict is resolved by loosening an editable bound, and a conflict reachable only
 through those rigid rows falls through to the static error (the empty-block guard). `<>` is
 remove-only; actual removal is the **I4** L0 dial — I2 only confirms the rigid behavior.
+
+**A Big-M row is never an editable knob.** A row carrying a Big-M states some construct's
+*mechanism*, and slack on it is measured in that mechanism's units, not the user's. A composed
+MIN/MAX lowers to an envelope, closing rows and an outer row; only the outer row is the user's
+clause. Making the closing rows relaxable broke both halves of a diagnosis at once:
+
+- *The name.* `ExtremumLinkSpec` carries no `source_clause_id`, so a blamed closing row had no
+  clause to name. `SourceAwareLhs` fell back to `FormatLhs` and rebuilt the text from the row's
+  own coefficients, reporting `MIN((x + c)) - x - 110*MIN((x + c)) >= -110` — a string appearing
+  nowhere in the query, stamped `edit_source=source_literal`.
+- *The number.* Slack on a closing row lets the auxiliary `z` leave its extremum; the user's
+  bound moves by that slack times the coefficient `z` carries in the outer row. For
+  `3*MIN(x + c) + SUM(x) <= 22` the engine reported 8 where the real repair is 24, and the
+  suggested `<= 30` re-solved to infeasible.
+
+Relaxing the outer row is mathematically equivalent — lowering `z` by `s/a` and raising the
+bound by `s` admit the same solutions — and is already in the user's own units, so repair goes
+there. `EmitComposedMinMaxOuter` stamps it `USER_PARAMETER` + `SHARED_SCALAR` with a
+`repair_group_id` and a `source_clause_id`.
+
+The guard that makes this structural is `assert_blamable_row` in the elastic transform: a
+relaxable row must carry an explicit `ElasticShape` **and** a `source_clause_id`. Without the
+latter the renderer can only fabricate, so a row that cannot name a clause is not one the user
+can be told to edit. `D_ASSERT` is debug-only, so the release-build backstop is the Python
+invariant helper described in `foundations/done.md`.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): one shared slack spans all N
 rows with the correct sign; a PER `SHARED_SCALAR` clause folds to one block in query and

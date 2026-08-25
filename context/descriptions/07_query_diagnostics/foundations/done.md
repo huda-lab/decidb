@@ -353,6 +353,42 @@ Previously each file redefined its own copy (`EFFECTIVE_INFINITY`,
 `UNBOUNDED_RAY_IMPROVEMENT_EPSILON`, `RAY_ESCAPE_EPSILON`); the shared header removes
 the drift risk.
 
+## Diagnosis invariants (shared test helper)
+
+A diagnostics defect does not fail a test the way a wrong answer does. The solve still fails,
+the diagnosis still appears, and its numbers are often still right — what breaks is *which line
+of the user's query gets blamed*. The suite stays green while the feature's promise stops
+holding. `test/decide/tests/_diagnostic_invariants.py` asserts that promise mechanically, on
+every diagnostics test, rather than per construct: there are nine auxiliary kinds that reach the
+elastic engine (`<>` per-row and aggregate, ABS, MIN/MAX hard and composed, `norm` 0/1/inf,
+bilinear), and a hand-written assertion only ever guards the one its author had in mind.
+
+1. **A reported edit is made of the user's own text** (`assert_edits_are_users_text`). Every
+   identifier in a blamed clause, and every coefficient on its left-hand side, must occur in the
+   query the user typed. The two sides are held to different standards on purpose: a left-side
+   number multiplies a term and is structure no lowering may invent, while the right-side bound
+   is one canonicalization legitimately *computes* (`x + 2 <= 7` folds to `x <= 5`, and 5 was
+   never typed). A `suggested_change` is grounded on names only — proposing a new bound value is
+   what a repair *is*.
+2. **Ties break on achievable objective** (`assert_backends_agree`), in its observable form.
+   Gurobi and HiGHS state some constructs differently (native vs lowered), so they hand the
+   engine different row sets; a choice not fixed by a stated rule falls out differently and a
+   user moving hosts is told to edit a different line of their own query.
+3. **A construct is reported in the user's spelling** (`assert_no_internal_names`). `ABS(x) >= 5`
+   reports as `ABS(x) >= 5`, never as the rows it lowers to. An internal column (`col3`) or a
+   pipeline tag (`__…__`) in a blamed clause means the user is reading our bookkeeping.
+
+The helper deliberately does **not** consult the `subject_to_sql` map that `_apply_reported_fix`
+takes. That map exists so a test can *apply* a fix whose rendering differs from the typed SQL (a
+`BETWEEN` split in two, a reversed bound, a composed extremum). Honoring it would let a future
+author silence a fabricated clause by adding a map entry — the guard would be defeatable by the
+same edit that makes a test pass. Token grounding needs no such hatch, because a legitimate
+re-spelling reuses the query's own names and numbers.
+
+Rule 1 is wired into `_apply_reported_fix`, so every clause-edit test in
+`test_query_diagnostics_relation.py` checks it without opting in. It is the release-build
+counterpart to `assert_blamable_row`, whose `D_ASSERT` does not run in a release binary.
+
 ## The `decide_diagnostics()` reporting relation
 
 A structured diagnosis a state engine populates, stashed per-connection, surfaced

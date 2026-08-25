@@ -67,6 +67,54 @@ tasks remain here; this file only tracks deferred follow-ups.
 
 ---
 
+## Open architectural question — should elastic diagnosis be a stage-05 rewrite?
+
+**Raised 2026-08-25, while fixing the composed MIN/MAX misattribution. Recorded, not
+scheduled — deliberately out of scope before sign-off, since it reopens stages 07 and 08.**
+
+The elastic program is expressible as a DECIDE query. Given
+
+```sql
+SUCH THAT SUM(x) >= 19 AND MIN(x + c) + SUM(x) <= 22
+```
+
+its diagnosis is
+
+```sql
+DECIDE x(REAL), e1(REAL), e2(REAL)
+SUCH THAT SUM(x) + e1 >= 19 AND MIN(x + c) + SUM(x) - e2 <= 22
+MINIMIZE e1 + e2
+```
+
+Nothing there needs a solver-level facility; it is DECIDE expressing DECIDE. The engine today
+instead builds the elastic model at stage 07/08, *after* lowering, where one user clause has
+already fanned into an outer row, envelope rows and closing rows. It must therefore reconstruct
+which of those rows is the user's editable knob — and that reconstruction is what produced both
+halves of the bug fixed in `done.md` (I2.e): the wrong clause name and the wrong repair amount.
+
+Attaching the slack at stage 05, on the canonical bound tree before lowering, makes that
+reconstruction unnecessary. `e2` rides through the MIN/MAX lowering as part of the user's
+clause, so "which row is the knob" is never asked and the defect class is unrepresentable.
+
+**What the move would cost, and what has to be answered first:**
+
+- **Weights.** `rms_norm` needs each row's coefficient magnitudes, which exist only after the
+  model is built. A source-level rewrite needs those weights before it has them.
+- **Lexicographic tiers.** DECIDE's `MINIMIZE` is single-objective; the engine runs editable /
+  data-offset / removal as ordered tiers. Each becomes a separate solve.
+- **The removal tier.** Dropping a clause needs a binary and a Big-M — expressible, but that is
+  the `<>` machinery, the most expensive construct in the system.
+- **Cost.** Re-binding and re-planning a rewritten query per diagnosis, against mutating a model
+  already in memory. `README.md`'s own argument for compiling DuckDB in-process is that "one
+  query needs more than one solve: the diagnostic programs are an example."
+- **Recursion.** The diagnosis of a DECIDE query is a DECIDE query, which can itself fail.
+
+**Where it would live if taken:** stage 05 owns formulation selection and returns emitted rows
+through stage 03's entry points, which is the shape this rewrite has. Stage 07/08 would keep
+only the solve and the readback.
+
+---
+
 ## Suggested batches
 
 - None active.

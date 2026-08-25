@@ -52,18 +52,82 @@ Bounded queries take the smaller model. See
 [`../05_optimizer/done.md`](../05_optimizer/done.md) §0 for the policy and
 [`../08_execution/done.md`](../08_execution/done.md) for where it is applied.
 
-**Still open, and small.** Native ABS is ~10% slower than its lowering on the Q10 shape
-(50K rows: 2,458 ms against 2,238 ms, three runs each, tight variance). ABS is *not*
-gated by derivability — its arm is still chosen by capability alone. The 10% is real and
-reproducible but an order of magnitude smaller than the MIN/MAX effect, and the cause
-has not been isolated. Worth a look; not worth guessing at.
+**ABS was the one arm left ungated, and it stays that way.** That question is now
+answered in its own section below; nothing about ABS is open here.
 
-Note what closing it would cost, which was not obvious when this was written. Gating ABS
-by derivability means allocating its Big-M sign indicator per-link at stage 06 like the
-others, which means flattening the ABS lowering from a per-link rewrite into a per-row
-one — the exact per-row cost measured and *removed* above. So the trade is a known 10%
-against a known representation regression, on an unisolated cause. Measure the cause
-first; it may be neither.
+
+---
+
+## Derivability-gated ABS — measured and declined
+
+**Status**: measured 2026-08-24 on Gurobi 12.0.3, not built, and this is the record of
+why. Do not re-open without a new Gurobi version.
+
+MIN/MAX takes its native arm only where the lowering has no valid Big-M (above). ABS
+never got that gating: its arm is chosen by backend capability alone, and native ABS
+measured slower than its own lowering. The question was whether to gate it the same way.
+
+**The gap is real, and it grows with the data.** Q10's shape (`MAXIMIZE SUM(ABS(adj -
+l_quantity))` with a hard `SUM(ABS(adj - 15)) >= K` constraint) on `medium.db`, three
+runs per point, `DECIDB_NATIVE_CONSTRUCTS=force` against `=off`, solver time only:
+
+| rows | native | lowering | gap | ratio |
+|---|---|---|---|---|
+| 1,000 | 63 ms | 63 ms | 0 ms | 1.00x |
+| 5,000 | 304 ms | 221 ms | 83 ms | 1.38x |
+| 15,000 | 736 ms | 650 ms | 86 ms | 1.13x |
+| 50,000 | 2,413 ms | 2,196 ms | 217 ms | 1.10x |
+| 500,000 | 32,267 ms | 30,189 ms | 2,078 ms | 1.07x |
+
+Identical objective at every size. Read the **gap**, not the ratio: the ratio falls only
+because the query's own cost grows alongside the penalty. Past 50K the gap is linear in
+row count — 10x the rows, 9.6x the gap. Below 50K it is flat at roughly 85 ms.
+
+**The cause is Gurobi's presolve, not our model.** Rebuilt in gurobipy on the shape
+`DECIDB_DUMP_MODEL` shows us emitting, at 50K rows:
+
+| | native | lowering |
+|---|---|---|
+| what DeciDB hands over | 250,000 cols / 300,002 rows / **0 binaries** / 700,000 nz | 250,000 cols / 400,002 rows / 100,000 binaries / 1,100,000 nz |
+| after Gurobi presolve | **345,565 cols** / 295,567 rows / 79,113 bin / 849,356 nz | **208,226 cols** / 316,454 rows / 79,113 bin / 947,356 nz |
+| nodes | 1 | 1 |
+
+Both arms finish at the root, so search quality is not involved — the relaxations are
+exact either way. Gurobi expands every `aux = |t|` into its own binary formulation during
+presolve: the 79,113 binaries appear from nothing, and the presolved native model ends up
+137,000 columns *larger* than the presolved lowering. Our lowering presolves **down**
+(250,000 → 208,226 cols); Gurobi's expansion of the same idea presolves **up**. Timed
+separately, presolve is 2,244 ms native against 1,374 ms — an 870 ms delta that accounts
+for essentially the whole 862 ms difference in solve time. Model construction is ours and
+holds a constant 5% share of the gap (145 ms vs 41 ms at 500K).
+
+**Declined, because we hand Gurobi the better model and it makes a worse one.** The
+native arm is smaller on every axis we control and it is the *truthful* one: it states
+the absolute value the user wrote. Routing around a third-party presolve inefficiency
+would put a vendor workaround permanently into our formulation layer, to be maintained,
+A/B tested on both arms and carried in the golden baselines — and silently inverted the
+moment Gurobi improves `GenConstrAbs` presolve.
+
+The MIN/MAX precedent above does not transfer. That re-gating was driven by 1.7–3.3x on
+the objective side and **41x** on the constraint side, with native's cost growing while
+the lowering stayed flat. 7% on a shape where both arms solve at the root is a different
+kind of number, and the same construct family is not reason enough to make it the same
+call.
+
+**What it would have cost**, since both routes were priced:
+
+- Allocating the sign binary unconditionally at stage 05 and routing per link at stage 08
+  (`link.range_unbounded` is already computed there, before the branch). About a dozen
+  lines, no flattening — but it re-introduces for ABS the stage-05 guess that B5/S4 just
+  removed from `<>` and MIN/MAX.
+- Moving the binary to the global block, matching `<>` and MIN/MAX. Structurally
+  consistent, but a global column is per-row, so the lowering's four compressed per-link
+  rows flatten into 4xR rows — the per-row cost measured and removed above.
+
+**Re-check trigger**: a new Gurobi major version, or any release noting general-constraint
+presolve changes. Nothing in DeciDB needs to change for the finding to flip.
+
+**Done file**: none — nothing shipped.
 
 ---
 
