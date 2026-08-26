@@ -50,6 +50,9 @@ void AttachUnboundedRayIfRequested(const SolverModel &model, SolverBackend backe
 	    (result.status != SolverStatus::UNBOUNDED && result.status != SolverStatus::INF_OR_UNBD)) {
 		return;
 	}
+	if (!result.ray.empty()) {
+		return; // already known exactly — RejectIntegerCeilingOptimum names its own column
+	}
 
 	SolverModel ray_model;
 	if (!BuildUnboundedRayFallbackModel(model, ray_model)) {
@@ -311,6 +314,53 @@ static SolverResult DisambiguateInfOrUnbd(const SolverModel &model, SolverBacken
     }
 }
 
+//! No MIP solver can represent an unbounded integer. Both backends silently cap an
+//! integer column at roughly ±2e9 and then report the answer against that cap as
+//! OPTIMAL, so a genuinely unbounded query comes back as a confident 2147483647 rather
+//! than as unbounded. That is not a status any backend gets wrong on its own — it is a
+//! question we should not have asked, and it is invisible to the INF_OR_UNBD probe
+//! above because the solver never claims to be unsure.
+//!
+//! So: an optimum that lands on the integer ceiling of a column we declared open is not
+//! an answer. Reported as UNBOUNDED, which is what it is, and which routes into the
+//! ray diagnosis and the "add an upper bound" message like any other unbounded solve.
+//! Deliberately shared rather than per-adapter — the limitation is arithmetic, not
+//! vendor behaviour, and a new backend inherits the guard for free.
+static SolverResult RejectIntegerCeilingOptimum(const SolverModel &model, const SolverResult &result) {
+	if (result.status != SolverStatus::OPTIMAL || result.solution.empty()) {
+		return result;
+	}
+	for (idx_t col = 0; col < model.num_vars && col < result.solution.size(); col++) {
+		if (!model.is_integer[col] || model.is_binary[col]) {
+			continue; // a binary, or a continuous column, has no integer ceiling to hit
+		}
+		double value = result.solution[col];
+		// Only a column the query never bounded can be pinned by the solver's own
+		// integer range. One the user bounded is answered against THAT bound, however
+		// large, and is a real optimum.
+		bool open_above = model.col_upper[col] >= EFFECTIVE_INFINITY;
+		bool open_below = model.col_lower[col] <= -EFFECTIVE_INFINITY;
+		if ((open_above && value >= INTEGER_SOLVER_CEILING) ||
+		    (open_below && value <= -INTEGER_SOLVER_CEILING)) {
+			SolverResult unbounded = result;
+			unbounded.status = SolverStatus::UNBOUNDED;
+			unbounded.solution.clear();
+			unbounded.objective_value = 0.0;
+			unbounded.has_solution = false;
+			// The pinned column IS the escaping direction, so hand the ray over rather
+			// than making the fallback re-derive it. It cannot: the constructs that get
+			// a query into this state (a native `<>`, its indicator rows) are exactly
+			// what BuildUnboundedRayFallbackModel refuses, which is why the diagnosis
+			// would otherwise fall back to "a non-linear term prevents naming the
+			// variable" while we are holding the variable's name.
+			unbounded.ray.assign(model.num_vars, 0.0);
+			unbounded.ray[col] = open_above ? 1.0 : -1.0;
+			return unbounded;
+		}
+	}
+	return result;
+}
+
 //! Layer 8 does not repair what an earlier stage decided; it checks it. Both halves of
 //! the capability contract are re-read off the model AS BUILT and compared against the
 //! backend that is about to receive it. Every failure here is an upstream prediction
@@ -422,6 +472,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	}
 	SolverResult result = session->Solve(model, time_limit);
 	result = DisambiguateInfOrUnbd(model, backend, diagnostic_options, result);
+	result = RejectIntegerCeilingOptimum(model, result);
 	AttachUnboundedRayIfRequested(model, backend, options, diagnostic_options, result);
 	// Hand the live session to the continuation loop if one asked for it, so a
 	// time-limit stop can Continue() the same warm solver. Done before moving the

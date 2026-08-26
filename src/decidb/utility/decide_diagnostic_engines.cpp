@@ -406,7 +406,25 @@ const ConstraintSourceInfo *FindConstraintSource(const SolverModel &model,
 string SourceAwareLhs(const SolverModel &model, const ModelConstraint &row,
 	                  const vector<ColumnProvenance> &columns) {
 	auto source = FindConstraintSource(model, row.provenance);
-	return source && !source->canonical_lhs.empty() ? source->canonical_lhs : FormatLhs(row, columns);
+	if (!source) {
+		return FormatLhs(row, columns);
+	}
+	// The written spelling wins when canonicalization moved a term across the
+	// comparison, so a diagnosis names a clause the user can find in their query
+	// rather than the algebra stage 04 produced. Only set when the two forms differ.
+	if (!source->source_lhs.empty()) {
+		return source->source_lhs;
+	}
+	return !source->canonical_lhs.empty() ? source->canonical_lhs : FormatLhs(row, columns);
+}
+
+//! The bound to quote beside SourceAwareLhs. When the written spelling is in play the
+//! two must come from the SAME form -- pairing a written LHS with a canonical bound
+//! would read as a clause that is neither. Empty when there is no written spelling to
+//! honour, which leaves every existing caller on its current path.
+string SourceWrittenRhs(const SolverModel &model, const ConstraintProvenance &provenance) {
+	auto source = FindConstraintSource(model, provenance);
+	return source ? source->source_rhs : string();
 }
 
 string SourceAwareQuadraticLhs(const SolverModel &model, const SolverModel::QuadraticConstraint &row,
@@ -1011,6 +1029,9 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		const ConstraintProvenance &prov = orig.provenance;
 		auto display_provenance = SourceAwareProvenance(orig_model, prov);
 		string display_lhs = SourceAwareLhs(orig_model, orig, columns);
+		// Non-empty only when canonicalization moved a term across the comparison, in
+		// which case it pairs with the written LHS that SourceAwareLhs just returned.
+		string written_rhs = SourceWrittenRhs(orig_model, prov);
 		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA &&
 		                prov.repair_group_id != DConstants::INVALID_INDEX;
 		if (expanded) {
@@ -1031,7 +1052,13 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			// data-derived bound has no number in the query to edit, so it renders as
 			// a symbolic offset over the column, exactly as query mode does.
 			ClauseEdit e;
-			if (data_rhs) {
+			if (!written_rhs.empty()) {
+				// Canonicalization moved a term across this comparison, so the bound the
+				// model carries is a literal the query does not contain. Offset the bound
+				// the user actually wrote instead — the same relaxation, named where they
+				// can apply it.
+				e = MakeVirtualOffsetEdit(display_provenance, display_lhs, written_rhs, sl.sense, amount);
+			} else if (data_rhs) {
 				string rhs_text = SourceAwareRhs(orig_model, prov, orig.rhs);
 				e = MakeVirtualOffsetEdit(display_provenance, display_lhs, rhs_text, sl.sense, amount);
 			} else {
@@ -1052,7 +1079,13 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		// Query mode: the block folds a whole clause (all PER groups) into one edit, so it
 		// is reported clause-level with no single-group identity.
 		ClauseEdit e;
-		if (data_rhs) {
+		if (!written_rhs.empty()) {
+			// As above: offset the written bound, not the literal canonicalization left
+			// behind. Reported as a virtual offset because that is what it is — there is
+			// no number in the query to retype.
+			e = MakeVirtualOffsetEdit(display_provenance, display_lhs, written_rhs, sl.sense, amount);
+			e.edit_source = "virtual_offset";
+		} else if (data_rhs) {
 			// The folded shared slack `delta` is one virtual query-level offset over the
 			// data column (`x <= col + delta`). rhs_label names the column; fall back to
 			// the numeric representative RHS when it is unavailable.

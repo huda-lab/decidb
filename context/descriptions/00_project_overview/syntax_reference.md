@@ -1,5 +1,19 @@
 # Syntax Reference
 
+> **Frozen as the canonical spec — 2026-08-26.**
+>
+> This file is the authoritative description of what a DECIDE query may contain.
+> Every claim in it was checked by running it during the batch-F paper review, and
+> where this file and `context/DeciDB_Paper.pdf` disagree, **this file is right**: the
+> paper is submitted and cannot be edited, so the code is what we build and the paper's
+> wrong claims are simply not repeated on the website.
+>
+> Frozen means the spec leads and the code follows, not that it can never change. A
+> behaviour change updates this file **first**, in the same commit; a change that lands
+> here without one is the bug. Feature docs under `03_expressivity/` deliberately do not
+> restate syntax — they hold semantics and code pointers — so this stays the single
+> place a syntax question is answered.
+
 ## 1. The DECIDE Clause usage
 
 Two clause orders are accepted; they parse to the same plan and neither is

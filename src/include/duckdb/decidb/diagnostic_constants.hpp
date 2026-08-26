@@ -20,6 +20,14 @@ namespace duckdb {
 //! which upper bounds to open in the box-LP ray-fallback model.
 constexpr double EFFECTIVE_INFINITY = 1e20;
 
+//! The largest magnitude a mixed-integer solver will actually give an integer
+//! column. Gurobi documents ~2e9 and HiGHS behaves the same way; neither can
+//! represent an unbounded integer, so both silently answer against this ceiling
+//! and call it optimal. An optimum landing here, on a column the query left
+//! open, is the solver's limit rather than the query's answer — see
+//! RejectIntegerCeilingOptimum in ilp_solver.cpp.
+constexpr double INTEGER_SOLVER_CEILING = 2e9;
+
 //! A ray / objective-improvement component whose absolute value is at or below
 //! this epsilon is treated as zero. Used both to confirm the fallback LP found a
 //! genuine improving ray and to filter which variables actually escape.

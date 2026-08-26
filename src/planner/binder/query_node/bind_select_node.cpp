@@ -728,7 +728,8 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 // ever called for SUM/AVG/MIN/MAX arguments.
                 ValidateDecideConstraintDegree(*result->decide_constraints, result->decide_index);
                 result->decide_constraint_sources = InitializeConstraintSourceInfo(
-                    *result->decide_constraints, decide_source_fragments, entity_scopes);
+                    *result->decide_constraints, decide_source_fragments, entity_scopes,
+                    result->decide_index);
                 result->decide_source_fragments = decide_source_fragments;
             }
             // Types are now determined from the DECIDE clause, not from constraint binding

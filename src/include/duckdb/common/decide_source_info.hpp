@@ -27,6 +27,23 @@ struct ConstraintSourceInfo {
 	string canonical_rhs;
 	string qualifier;
 	ConstraintSourceRhsKind rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
+	//! The clause as WRITTEN, captured before canonicalization moved anything.
+	//!
+	//! Canonicalization is free to move a decision-bearing term across the
+	//! comparison, and usually there is nothing to see: `SUM(x) >= 100` is already
+	//! canonical, so re-rendering the canonical tree reproduces what the user typed.
+	//! But a bound that CONTAINS a decision genuinely has to move --
+	//! `ship <= capacity * open` becomes `ship - capacity * open <= 0` -- and
+	//! re-rendering then shows the user algebra they never wrote, against a clause
+	//! they cannot find in their own query.
+	//!
+	//! These two fields keep the written spelling so a diagnosis can quote it. The
+	//! offset a repair computes is valid against EITHER form: moving a term across
+	//! the comparison does not change what adding a constant to the bound means, so
+	//! `<canonical_rhs> + d` and `<source_rhs> + d` relax by the same amount.
+	//! Empty when the source and canonical forms agree, which is the common case.
+	string source_lhs;
+	string source_rhs;
 };
 
 } // namespace duckdb

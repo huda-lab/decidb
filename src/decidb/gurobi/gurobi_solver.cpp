@@ -176,6 +176,24 @@ void GurobiSession::Load(const SolverModel &ilp) {
     // 2. Create model with variables
     //===--------------------------------------------------------------------===//
 
+    // An open column box has to arrive as Gurobi's OWN infinity, not ours. The model
+    // builder writes 1e30 for "no bound" and every DeciDB-side check reads it that way
+    // (EFFECTIVE_INFINITY is 1e20), but GRB_INFINITY is 1e100 — so 1e30 lands as a
+    // perfectly finite bound. Gurobi then solves an unbounded query to "optimality"
+    // against that ceiling, and an INTEGER column comes back at its integer limit
+    // (2147483647) instead of the query being reported as unbounded. Translating here
+    // keeps the sentinel local to each backend rather than forcing one on the model.
+    vector<double> col_lower(ilp.col_lower.begin(), ilp.col_lower.end());
+    vector<double> col_upper(ilp.col_upper.begin(), ilp.col_upper.end());
+    for (idx_t i = 0; i < total_vars; i++) {
+        if (col_lower[i] <= -EFFECTIVE_INFINITY) {
+            col_lower[i] = -GRB_INFINITY_VALUE;
+        }
+        if (col_upper[i] >= EFFECTIVE_INFINITY) {
+            col_upper[i] = GRB_INFINITY_VALUE;
+        }
+    }
+
     vector<char> var_types(total_vars);
     for (idx_t i = 0; i < total_vars; i++) {
         if (ilp.is_binary[i]) {
@@ -190,8 +208,8 @@ void GurobiSession::Load(const SolverModel &ilp) {
     error = api.newmodel(guard.env, &guard.model, "decidb_decide",
                          (int)total_vars,
                          const_cast<double *>(ilp.obj_coeffs.data()),
-                         const_cast<double *>(ilp.col_lower.data()),
-                         const_cast<double *>(ilp.col_upper.data()),
+                         col_lower.data(),
+                         col_upper.data(),
                          var_types.data(), nullptr);
     if (error) {
         throw InternalException("Failed to create Gurobi model: %s",

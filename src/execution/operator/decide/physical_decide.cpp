@@ -1126,7 +1126,8 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 
 	if (decide_constraints) {
 		vector<string> constraint_strs;
-		CollectDecideExpressionStrings(*decide_constraints, source_fragments, entity_scopes, constraint_strs);
+		CollectDecideExpressionStrings(*decide_constraints, source_fragments, entity_scopes, constraint_strs,
+		                               &constraint_sources);
 		string constraints_info;
 		for (idx_t i = 0; i < constraint_strs.size(); i++) {
 			if (i > 0) {

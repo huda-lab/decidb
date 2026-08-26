@@ -6,6 +6,7 @@
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -240,9 +241,27 @@ static void VisitSourceComparisons(Expression &expr, const vector<string> &fragm
 	}
 }
 
+//! Whether an expression references a decision variable -- a column ref bound to the
+//! DECIDE table index. Used to spot the one thing that forces canonicalization to move
+//! a term across the comparison: a BOUND that contains a decision.
+static bool ReferencesDecideVariable(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+	    expr.Cast<BoundColumnRefExpression>().binding.table_index == decide_index) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = ReferencesDecideVariable(child, decide_index);
+		}
+	});
+	return found;
+}
+
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints,
 	                                                        const vector<string> &fragments,
-	                                                        const vector<EntityScopeInfo> &entity_scopes) {
+	                                                        const vector<EntityScopeInfo> &entity_scopes,
+	                                                        idx_t decide_index) {
 	vector<ConstraintSourceInfo> result;
 	VisitSourceComparisons(constraints, fragments, entity_scopes, false, string(),
 	                       [&](BoundComparisonExpression &cmp, const string &) {
@@ -250,7 +269,29 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       auto alias = cmp.GetAlias();
 		                       AddDecideTag(alias, MakeSourceClauseTag(source_id));
 		                       cmp.SetAlias(std::move(alias));
-	                       result.emplace_back();
+		                       // Rendered HERE, on the bound-but-not-yet-canonical tree, because
+		                       // this is the last point at which the written spelling still
+		                       // exists -- but only for the one rewrite that leaves algebra the
+		                       // user cannot recognize, which is when BOTH sides bear decisions.
+		                       //
+		                       // That is the case the canonicalizer cannot resolve by moving a
+		                       // side: it has to MERGE them, and `ship <= capacity * open`
+		                       // becomes `ship - capacity * open <= 0` -- a clause the query
+		                       // does not contain, against a literal bound that is not in it
+		                       // either.
+		                       //
+		                       // When only one side bears decisions the rewrite is a clean move
+		                       // and the leftover bound folds into something BETTER than what
+		                       // was written: `(SELECT 7) >= x + 2` becomes `x <= 5`, turning an
+		                       // opaque subquery into a number the user can edit. Quoting the
+		                       // written form there would take that away, so this stays quiet.
+		                       ConstraintSourceInfo info;
+		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
+		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
+			                       info.source_lhs = RenderSource(*cmp.left, fragments, entity_scopes);
+			                       info.source_rhs = RenderSource(*cmp.right, fragments, entity_scopes);
+		                       }
+		                       result.push_back(std::move(info));
 	                       });
 	// A DECIDE-variable IN is intentionally an opaque pre-optimizer marker, not
 	// a comparison. Give it the same stable source identity now so every emitted
@@ -295,6 +336,23 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, entity_scopes);
 		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, entity_scopes);
 		                       info.qualifier = qualifier;
+		                       // The written spelling is only worth carrying when it differs
+		                       // from the canonical one. Two cases retire it here. When both
+		                       // sides render identically nothing moved, so the canonical text
+		                       // already IS the user's. When the sides were merely SWAPPED
+		                       // (`100000 <= SUM(x)` canonicalizing to `SUM(x) >= 100000`) the
+		                       // canonical form is a faithful, better-oriented reading of the
+		                       // same clause, and the repair's offset belongs on the bound it
+		                       // now names -- quoting the written order would put the offset on
+		                       // the wrong side.
+		                       bool unchanged = info.source_lhs == info.canonical_lhs &&
+		                                        info.source_rhs == info.canonical_rhs;
+		                       bool swapped = info.source_lhs == info.canonical_rhs &&
+		                                      info.source_rhs == info.canonical_lhs;
+		                       if (unchanged || swapped) {
+			                       info.source_lhs.clear();
+			                       info.source_rhs.clear();
+		                       }
 		                       if (!IsQueryWideBoundTag(cmp.GetAlias()) &&
 		                           !ContainsSubquerySource(*cmp.right)) {
 			                       info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
@@ -310,14 +368,15 @@ string RenderDecideSource(const Expression &expr, const vector<string> &fragment
 }
 
 void CollectDecideExpressionStrings(const Expression &expr, const vector<string> &fragments,
-                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out) {
+                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out,
+                                    const vector<ConstraintSourceInfo> *sources) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		// PER wrapper: child[0] is the constraint, children[1..N] are the PER key columns.
 		if (IsPerConstraintTag(conj.GetAlias()) && conj.children.size() >= 2) {
 			string suffix = " " + PerQualifier(conj, fragments, entity_scopes);
 			vector<string> inner;
-			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner);
+			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner, sources);
 			for (auto &s : inner) {
 				out.push_back(s + suffix);
 			}
@@ -327,7 +386,7 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 		if (HasDecideTag(conj.GetAlias(), WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
 			string suffix = " WHEN " + RenderSource(*conj.children[1], fragments, entity_scopes);
 			vector<string> inner;
-			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner);
+			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner, sources);
 			for (auto &s : inner) {
 				out.push_back(s + suffix);
 			}
@@ -335,9 +394,24 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 		}
 		// A plain AND is the constraint list itself, so each child is its own clause.
 		for (auto &child : conj.children) {
-			CollectDecideExpressionStrings(*child, fragments, entity_scopes, out);
+			CollectDecideExpressionStrings(*child, fragments, entity_scopes, out, sources);
 		}
 		return;
+	}
+	// A clause canonicalization rewrote reads back as it was written, for the same
+	// reason a diagnosis quotes the written form: `ship - capacity * open <= 0` is not
+	// a clause anyone can find in their query. Only set when the two forms differ.
+	if (sources && expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+		idx_t source_id;
+		if (TryParseSourceClauseTag(expr.GetAlias(), source_id) && source_id < sources->size()) {
+			auto &info = (*sources)[source_id];
+			if (!info.source_lhs.empty()) {
+				auto &cmp = expr.Cast<BoundComparisonExpression>();
+				out.push_back(info.source_lhs + " " + ExpressionTypeToOperator(cmp.type) + " " +
+				              info.source_rhs);
+				return;
+			}
+		}
 	}
 	out.push_back(RenderSource(expr, fragments, entity_scopes));
 }

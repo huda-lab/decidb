@@ -91,6 +91,28 @@ too-open one; slow is a runtime event masking the other states.
   at plan time, before any rewrite. Diagnosis never re-selects: a second, independently
   answered selection would diagnose a failure on a solver that did not produce it, and
   once selection depends on the model the two answers can genuinely differ.
+- **A clause is quoted as the user wrote it** — never as canonicalization built it.
+  Stage 04 puts decisions left and the bound right, which for most constraints is
+  invisible: `SUM(x) >= 100` is already canonical, so re-rendering the canonical tree
+  reproduces what was typed. One shape does not survive it. When **both sides carry
+  decisions** the canonicalizer must merge them, and the paper's own Figure 1 line 7 —
+  `ship BETWEEN 0 AND capacity * open` — becomes `ship - capacity * open <= 0`: a clause
+  the query does not contain, against a literal bound that is not in it either. The
+  repair offered against it, `ship - capacity * open <= 25`, named nothing the user
+  could edit.
+
+  `ConstraintSourceInfo` now carries the written spelling, captured before
+  canonicalization runs, and the diagnosis quotes that. The offset is valid against
+  either form — moving a term across a comparison does not change what adding a constant
+  to the bound means — so the repair reads `ship <= capacity * open + 25` off the same
+  `virtual_offset` machinery that already served column bounds. `EXPLAIN` reads the same
+  registry, so it stopped printing the algebra too.
+
+  It stays narrow deliberately. Where only **one** side carries decisions the rewrite is
+  a clean move and the leftover bound folds into something *better* than what was
+  written: `(SELECT 7) >= x + 2` becomes `x <= 5`, turning an opaque subquery into a
+  number the user can edit. Quoting the written form there would be a regression, so it
+  does not fire. Tests: `test/decide/tests/test_diagnosis_written_clause.py`.
 - **Differential testing** — every phase tests against `oracle_solver` on
   constructed cases, never hand-computed answers.
 

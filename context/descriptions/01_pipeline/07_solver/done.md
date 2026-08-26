@@ -257,6 +257,40 @@ Gurobi additionally applies its documented recipe first (set `DualReductions=0` 
 the model's env and re-optimize), since presolve dual reductions are what blur the
 two.
 
+### Rejecting an optimum found against the integer ceiling
+
+`DisambiguateInfOrUnbd` only helps when the backend admits it is unsure. One case
+gives no such signal: **no mixed-integer solver can represent an unbounded integer.**
+Both cap an integer column near ±2e9 and then report the answer against that cap as a
+confident `OPTIMAL`.
+
+This is invisible on the normal path, because a query that leaves an integer column
+open is refused earlier — the Big-M lowering needs a finite box and says so (§5). But a
+backend that expresses a construct **natively** needs no Big-M, so it never meets that
+refusal. A native `<>` over an open column was the concrete case: `SUM(ship) <> 500`
+with `MAXIMIZE SUM(ship)` came back as `ship = 2147483647`.
+
+`RejectIntegerCeilingOptimum` closes it. An `OPTIMAL` whose value sits at
+`INTEGER_SOLVER_CEILING` on a column **the query left open** is not an answer, and is
+reported as `UNBOUNDED`. Two things keep it narrow:
+
+- It keys on the returned **value**, not on the box being open. The same open box under
+  `MINIMIZE` has a real optimum of 0, and a backend that can express `<>` natively still
+  answers it. That capability is the point — refusing there would give up something
+  HiGHS cannot do anyway.
+- A bound the **user** wrote is answered against, however large. `x <= 2000000000`
+  returns 2000000000.
+
+It also hands over its own ray. The pinned column *is* the escaping direction, and
+`BuildUnboundedRayFallbackModel` cannot derive one through an indicator row — so
+without this the diagnosis would fall back to "a non-linear term prevents naming the
+variable" while the guard was holding the variable's name.
+
+Deliberately in the shared facade rather than in an adapter: the limitation is
+arithmetic, not vendor behaviour, and a new backend inherits the guard for free.
+
+Tests: `test/decide/tests/test_unbounded_bigm.py` — the native-path trio.
+
 ---
 
 ## 4. Gurobi backend

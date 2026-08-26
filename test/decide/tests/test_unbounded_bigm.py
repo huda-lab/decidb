@@ -205,3 +205,76 @@ def test_abs_auxiliary_box_is_derived(decidb_cli):
     assert all(ub < 1e20 for ub in uppers), (
         f"an unbounded column survived; every box should be derived:\n{dump}"
     )
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.error
+def test_native_path_reports_unbounded_rather_than_the_integer_ceiling(decidb_cli_gurobi):
+    """The other half of "no backend answers *wrongly*" — the NATIVE path.
+
+    A backend that expresses ``<>`` itself needs no Big-M and so never meets the
+    refusal above. That is correct, and for a bounded query it is strictly better:
+    see ``test_native_path_still_answers_a_bounded_query`` below.
+
+    But it left the unbounded query with nothing checking it at all. No solver can
+    represent an unbounded integer — both cap the column near 2e9 — so the solve came
+    back OPTIMAL with ``x = 2147483647``, a confidently wrong answer to a query with no
+    answer. Exactly the failure mode the Big-M refusal exists to prevent, reached by
+    the one route that skipped it.
+
+    Pinned to Gurobi, not just to ``NATIVE_CONSTRUCTS=force``: forcing native only asks
+    for the native path where the backend HAS one, and HiGHS does not express ``<>``
+    itself. Under ``DECIDB_FORCE_SOLVER=highs`` this query still lowers and still meets
+    the Big-M refusal above — correct behaviour, and a different test.
+    """
+    native = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
+    with pytest.raises(DecidBCliError) as excinfo:
+        native.execute(f"""
+            SELECT id, x FROM {_ROWS}
+            DECIDE x(INT)
+            SUCH THAT x >= 0 AND SUM(x) <> 500
+            MAXIMIZE SUM(x)
+        """)
+    message = excinfo.value.message
+    assert "unbounded" in message.lower(), message
+    # Naming the variable is the whole point: the ray fallback cannot derive it
+    # through an indicator row, so the ceiling check hands its own column over.
+    assert "x" in message, message
+    assert "2147483647" not in message, message
+
+
+@pytest.mark.cons_comparison
+def test_native_path_still_answers_a_bounded_query(decidb_cli_gurobi):
+    """The ceiling check must not become a second refusal.
+
+    Same open box as above, but MINIMIZE — so nothing pushes ``x`` at the ceiling and
+    the optimum is a real 0. A backend that can express ``<>`` natively answers it,
+    and that capability is the reason the check keys on the returned VALUE rather
+    than on the box being open. Gurobi-pinned for the same reason as above.
+    """
+    native = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
+    rows, cols = native.execute(f"""
+        SELECT id, x FROM {_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND SUM(x) <> 500
+        MINIMIZE SUM(x)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    assert [int(r[ci["x"]]) for r in rows] == [0, 0, 0], rows
+
+
+@pytest.mark.cons_comparison
+def test_a_large_user_written_bound_is_not_mistaken_for_the_ceiling(decidb_cli):
+    """A bound the user wrote is answered against, however large.
+
+    The ceiling check only fires on a column the query left open. One bounded at
+    2e9 is a real optimum at 2e9, not a solver artefact.
+    """
+    rows, cols = decidb_cli.execute(f"""
+        SELECT id, x FROM {_ROWS}
+        DECIDE x(INT)
+        SUCH THAT x >= 0 AND x <= 2000000000
+        MAXIMIZE SUM(x)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    assert [int(r[ci["x"]]) for r in rows] == [2000000000] * 3, rows

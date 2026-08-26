@@ -102,6 +102,17 @@ so this is opt-in and nothing existing changes meaning.
   §3.2.2's carve-out: it is row-invariant, so it contributes the same value to every tuple
   regardless of which relation owns it (`SUM(D: opening_cost * cap)`). It is refused only
   when it is the *whole* body (`SUM(D: cap)`), by the general row-invariance rule above.
+- **A row-scoped decision inside a qualified reducer is rejected, and stays rejected**
+  (settled 2026-08-26). A row-scoped `y(INT)` is a different variable on every
+  join-result row, so collapsing a depot's rows down to one would keep an arbitrary one
+  of its `y` variables and silently drop the rest — the answer would depend on the row
+  order the join happened to produce. The error names both one-word fixes: declare it on
+  the qualified relation (`D.y(INT)`), or move the term into its own unqualified reducer.
+  Two alternatives were weighed and ruled out. Summing a group's row-scoped variables
+  before de-duplicating is well defined, but makes `D:` mean "de-duplicate" for one
+  operand and "sum first" for another. Allowing it when the join happens to be 1:1 would
+  make a query's validity depend on its data rather than on the query — already rejected
+  for `PER` on the same grounds.
 - **Rejections** (all at bind time, in `BindQualifiedReducer` /
   `CheckQualifiedReducerBody`): a column or entity-scoped decision from a relation *not*
   named in the qualifier, a row-scoped decision, an unknown relation name, a qualifier on a

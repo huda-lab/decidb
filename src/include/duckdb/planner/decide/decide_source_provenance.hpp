@@ -23,7 +23,8 @@ void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bo
 //! Assign stable source ids to bound comparisons before planning rewrites them.
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints,
                                                             const vector<string> &fragments,
-                                                            const vector<EntityScopeInfo> &entity_scopes);
+                                                            const vector<EntityScopeInfo> &entity_scopes,
+                                                            idx_t decide_index);
 
 //! Rebuild canonical display templates after PlanSubqueries and canonicalization.
 void FinalizeConstraintSourceInfo(const Expression &constraints,
@@ -50,7 +51,11 @@ string RenderDecideSource(const Expression &expr, const vector<string> &fragment
 //! the user wrote. Leaves are rendered by RenderDecideSource. Used by the logical and
 //! physical EXPLAIN paths, which see the tree AFTER the optimizer, so the output
 //! includes the rows linearization emitted as well as the ones the user wrote.
+//! `sources`, when supplied, lets a comparison that canonicalization rewrote print as
+//! the user wrote it instead of as the algebra stage 04 produced. Optional so callers
+//! without the registry keep the plain canonical rendering.
 void CollectDecideExpressionStrings(const Expression &expr, const vector<string> &fragments,
-                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out);
+                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out,
+                                    const vector<ConstraintSourceInfo> *sources = nullptr);
 
 } // namespace duckdb
