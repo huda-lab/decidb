@@ -769,7 +769,14 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                     auto &binding = col_ref.binding;
                     // Check if this column belongs to any scoped table
                     for (auto &scope : entity_scopes) {
-                        if (binding.table_index == scope.source_table_index) {
+                        bool in_scope = false;
+                        for (auto scope_table_index : scope.source_table_indices) {
+                            if (binding.table_index == scope_table_index) {
+                                in_scope = true;
+                                break;
+                            }
+                        }
+                        if (in_scope) {
                             data_columns.insert((static_cast<uint64_t>(binding.table_index) << 32) |
                                                 static_cast<uint64_t>(binding.column_index));
                         }

@@ -212,14 +212,86 @@ class TestScalarReducerRejected:
                 MINIMIZE AVG(cap)
             """, match=r"query-wide decision")
 
-    def test_sum_over_expression_containing_scalar(self, decidb_cli):
-        """The scalar need not be the whole reducer argument to be rejected."""
+    def test_sum_over_two_scalars_rejected(self, decidb_cli):
+        """A body built from nothing but scalars/constants is still row-invariant,
+        whichever combination of them it is (batch D: reducer body is row-invariant,
+        not "contains a scalar")."""
         decidb_cli.assert_error("""
-                SELECT cap FROM lineitem
-                DECIDE x(INT), scalar cap(INT)
-                SUCH THAT x <= 5
-                MINIMIZE SUM(x + cap)
+                SELECT cap1, cap2 FROM lineitem
+                DECIDE scalar cap1(INT), scalar cap2(INT)
+                SUCH THAT cap1 <= 5 AND cap2 <= 5
+                MINIMIZE SUM(cap1 + cap2)
             """, match=r"query-wide decision")
+
+
+# ---------------------------------------------------------------------------
+# Test 5b: A scalar multiplied by row-varying data inside a reducer is legal
+# (batch D). `SUM(cost * cap)` is not row-invariant -- `cost` varies per row --
+# so there is real work for the reducer to do: `(Sum cost)*cap`, a standard
+# scalar-times-vector reduction.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, duckdb_conn,
+                                                                   oracle_solver, perf_tracker):
+    """`SUM(l_linenumber * cap) <= K` must use the coefficient `SUM(l_linenumber)`
+    over the counted rows -- not 1 (bare scalar misreading) and not the row count
+    (uniform-weight misreading). MAXIMIZE cap makes the constant discriminate the
+    chosen value of cap directly."""
+    sql = """
+        SELECT l_orderkey, l_linenumber, cap
+        FROM lineitem
+        WHERE l_orderkey <= 200
+        DECIDE scalar cap(INT)
+        SUCH THAT SUM(l_linenumber * cap) <= 300
+        MAXIMIZE cap
+    """
+    result, _ = decidb_cli.execute(sql)
+    cap_values = {int(row[2]) for row in result}
+    assert len(cap_values) == 1, f"cap must be one value for the query, got {cap_values}"
+    cap_value = cap_values.pop()
+
+    weight_sum, num_rows = duckdb_conn.execute("""
+        SELECT SUM(l_linenumber), COUNT(*) FROM lineitem WHERE l_orderkey <= 200
+    """).fetchone()
+    weight_sum = float(weight_sum)
+    assert weight_sum != 1.0 and weight_sum != float(num_rows), \
+        "fixture must separate the correct weight from both wrong readings"
+
+    oracle_solver.create_model("scalar_times_data_in_reducer")
+    oracle_solver.add_variable("cap", VarType.INTEGER, lb=0.0)
+    oracle_solver.add_constraint({"cap": weight_sum}, "<=", 300.0, name="cap_bound")
+    oracle_solver.set_objective({"cap": 1.0}, ObjSense.MAXIMIZE)
+    oracle_cap = oracle_solver.solve().objective_value
+
+    assert abs(cap_value - oracle_cap) < 1e-4, \
+        f"cap mismatch: DecidB={cap_value}, Oracle={oracle_cap}"
+
+
+@pytest.mark.correctness
+def test_scalar_plus_row_scoped_term_inside_reducer_is_legal(decidb_cli, perf_tracker):
+    """`SUM(x + cap)` is not row-invariant -- `x` varies per row -- so it means
+    `SUM(x) + n*cap`, not a rejection. Discriminates the row-count weighting from
+    the `x + cap` misreading of a naive "contains a scalar" test."""
+    sql = """
+        SELECT l_linenumber, x, cap
+        FROM lineitem
+        WHERE l_orderkey <= 50
+        DECIDE x(INT), scalar cap(INT)
+        SUCH THAT SUM(x) <= 10 AND cap <= 5
+        MAXIMIZE SUM(x + cap)
+    """
+    rows, _ = decidb_cli.execute(sql)
+    num_rows = len(rows)
+    assert num_rows > 1, "need multiple rows for the row-count weighting to matter"
+
+    cap_values = {int(r[2]) for r in rows}
+    assert len(cap_values) == 1
+    cap_value = cap_values.pop()
+    assert cap_value == 5, f"cap should be driven to its bound, got {cap_value}"
+
+    x_total = sum(int(r[1]) for r in rows)
+    assert x_total == 10, f"SUM(x) should be driven to its bound, got {x_total}"
 
 
 # ---------------------------------------------------------------------------

@@ -58,11 +58,11 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `ABS()` | Yes (linearized) | — |
 | `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | — |
 | `DIAGNOSE <query>` prefix | No (paper §5; `PRAGMA diagnose_decide='auto'` today) | [diagnose/todo.md](diagnose/todo.md) |
-| Relation-qualified reducer `SUM(D: expr)` | No (paper §3.2; aggregates run over join-result rows today) | [decide/todo.md](decide/todo.md) |
-| `DECIDE` before `FROM` (paper clause order) | No (paper Figure 1; `SELECT…FROM…DECIDE` only today — both orders will be accepted) | [decide/todo.md](decide/todo.md) |
-| `DECIDE x(BOOL)` / `x(INT)` type form | No (paper §3.1; `BOOL` / `INT` only today — both forms will be accepted) | [decide/todo.md](decide/todo.md) |
-| `DECIDE scalar x(INT)` (query-wide) | No (paper §3.1; row-scoped and table-scoped only today) | [decide/todo.md](decide/todo.md) |
-| `IS BETWEEN a AND b` | No (paper Figure 1; bare `BETWEEN` only today — both spellings will be accepted) | [such_that/todo.md](such_that/todo.md) |
+| Relation-qualified reducer `SUM(D: expr)` / `SUM(D, T: expr)` | Yes (paper §3.2.2; composite multi-relation keys included) | — |
+| `DECIDE` before `FROM` (paper clause order) | Yes (both orders accepted) | — |
+| `DECIDE x(BOOL)` / `x(INT)` type form | Yes (both forms accepted) | — |
+| `DECIDE scalar x(INT)` (query-wide) | Yes (paper §3.1) | — |
+| `IS BETWEEN a AND b` | **No** (paper Figure 1; bare `BETWEEN` only — a known paper-vs-code divergence) | [such_that/todo.md](such_that/todo.md) |
 
 ### Problem Classification
 
@@ -72,21 +72,17 @@ For a complete taxonomy of what mathematical optimization problem classes DeciDB
 
 ## Development Priorities
 
-All previously planned expressivity priorities are implemented (see the status matrix above).
-**Remaining** — the queue is now driven by the submitted CIDR'27 paper; the full
-paper-vs-code sweep and its staging order live in [`../todo.md`](../todo.md).
+Every expressivity item the paper sweep raised is now implemented, bar two, and the
+matrix above is the current state rather than a plan. What is left:
 
-**Stage 1 — grammar batch** (one `make grammar-build` cycle; both orders and both spellings
-accepted, nothing deprecated, no existing query migrates):
-- **Clause order: `DECIDE` before `FROM`** — largest of the four; watch the `in_decide_clause` lexer flag. [decide/todo.md](decide/todo.md)
-- **Parenthesized type form `x(BOOL)` / `x(INT)`** — [decide/todo.md](decide/todo.md)
-- **Query-wide `scalar` decisions** — keyword, settled by the draft. [decide/todo.md](decide/todo.md)
-- **`IS BETWEEN` spelling** — smallest. [such_that/todo.md](such_that/todo.md)
+- **`IS BETWEEN` spelling** — not parsed; bare `BETWEEN` is. Paper Figure 1 uses the long
+  form, so the figure does not run as printed. A known divergence, not scheduled work.
+  [such_that/todo.md](such_that/todo.md)
+- **`DIAGNOSE <query>` statement prefix** — deferred to the diagnostics stage and blocked
+  on one semantic decision; `PRAGMA diagnose_decide='auto'` is today's route.
+  [diagnose/todo.md](diagnose/todo.md)
 
-**After stage 1:**
-- **Relation-qualified reducer `SUM(D: expr)`** — paper-facing; small grammar edit, real work is the de-duplication stage and multi-relation keys. [decide/todo.md](decide/todo.md)
-- **Row-varying RHS with PER** — with the sibling constraint shapes in `../todo.md` group B. [per/todo.md](per/todo.md)
-- **`DIAGNOSE` statement prefix** — deferred to the diagnostics stage; blocked on one semantic decision. [diagnose/todo.md](diagnose/todo.md)
+Both are carried into the paper-vs-code review in [`../todo.md`](../todo.md).
 
 ---
 

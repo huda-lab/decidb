@@ -114,14 +114,23 @@ MINIMIZE max_shortfall - SUM(ship)
   constraint** — `SUM(ship) <= max_shortfall`, and the paper's Example 1
   `demand - SUM(ship) <= max_shortfall PER regionID` — since being row-invariant
   is exactly what lets it stand beside a reducer.
-- **Not aggregable.** A reducer around a query-wide decision — `SUM(cap)`,
-  `AVG(cap)`, or `SUM(x + cap)` — is **rejected**. There is one column, so there
-  is nothing to reduce over, and either plausible reading (coefficient `1` or
-  coefficient `n`) is a different optimization problem. Use the bare name.
-- **In objectives.** Because reducers are rejected, a query-wide decision appears
-  in `MAXIMIZE`/`MINIMIZE` bare, either alone (`MINIMIZE max_shortfall`) or as an
-  additive term beside reducers (`MINIMIZE max_shortfall - SUM(ship)`). Its
-  objective coefficient is applied **once**, not once per row.
+- **A reducer is rejected iff its body is row-invariant** — holds the same value
+  on every row, with no data column and no row- or entity-scoped decision
+  anywhere inside it. `SUM(cap)`, `AVG(cap)` and `SUM(cap1 + cap2)` are rejected:
+  there is one column and nothing for the reducer to reduce over, so either
+  plausible reading (coefficient `1` or coefficient `n`) is a different
+  optimization problem. Use the bare name instead.
+  A body that mixes a scalar with row-varying data is **not** row-invariant and
+  is a standard scalar-times-vector reduction: `SUM(cost * cap)` means
+  `(SUM cost) * cap`, and `SUM(x + cap)` means `SUM(x) + n*cap` where `n` is the
+  number of counted rows (the group's, under `PER`; the qualified relation's
+  distinct tuples, under `agg(D: ...)` — see §5.1). This is the same rule stated
+  on a relation-qualified reducer's body.
+- **In objectives.** A query-wide decision may appear bare, either alone
+  (`MINIMIZE max_shortfall`) or as an additive term beside reducers
+  (`MINIMIZE max_shortfall - SUM(ship)`) — its coefficient is applied **once**,
+  not once per row — or inside a reducer whose body is not row-invariant
+  (`MINIMIZE SUM(cost * cap)`), where it is weighted like any other term.
 
 Tests: `test/decide/tests/test_scalar_scope.py`.
 
@@ -278,8 +287,10 @@ tuples once per match, so an unqualified reducer over a table-scoped decision we
 decision by how many rows its entity joined with. A **relation-qualified reducer** reduces
 over the qualified relation's tuple identities instead, contributing one term per tuple.
 
-**Syntax**: `agg(Rel: expr)`, where `agg` is `SUM`, `AVG`, `MIN` or `MAX`, and `Rel` is a
-table alias or table name bound in the `FROM` clause.
+**Syntax**: `agg(Rel[, Rel, ...]: expr)`, where `agg` is `SUM`, `AVG`, `MIN` or `MAX`, and
+each `Rel` is a table alias or table name bound in the `FROM` clause. Naming more than one
+relation widens the tuple identity to their concatenation — see "Several relations at
+once" below.
 
 ```sql
 SELECT routeID, depotID, open, ship
@@ -297,19 +308,34 @@ it three times. Both forms remain available and the unqualified one is unchanged
   terms. This is not `SUM(DISTINCT expr)`.
 - **Scope is the surviving rows, not the base table.** The join and `WHERE` decide which
   tuples contribute; a depot filtered out has no term and no decision variable.
-- **Everything inside must come from the qualified relation.** A column or decision from
-  another relation is rejected at bind time — `SUM(D: opening_cost + unit_cost * ship)`
-  names `T`'s columns and is refused rather than picking an arbitrary route per depot.
-  Row-scoped and query-wide (`scalar`) decisions are refused for the same reason: they are
-  not determined by the qualifier's key. Constants are fine.
+- **Everything inside must come from a qualified relation.** A column or decision from a
+  relation *not* named in the qualifier is rejected at bind time — `SUM(D: opening_cost +
+  unit_cost * ship)` names `T`'s columns and is refused rather than picking an arbitrary
+  route per depot. A row-scoped decision is refused for the same reason: it is not
+  determined by any qualified relation's key. Constants are fine. A query-wide (`scalar`)
+  decision is exempt from this rule — it is row-invariant, so it contributes the same
+  value to every tuple regardless of which relation "owns" it (`SUM(D: opening_cost *
+  cap)` is legal). It is still refused when it is the *whole* body, since a row-invariant
+  body has nothing left to de-duplicate or sum over (`SUM(D: cap)` is rejected — batch D's
+  row-invariance rule, §2.2).
 - **Construction order** is `WHEN` selection → `PER` partitioning → qualifier grouping and
   de-duplication → aggregation. De-duplication happens **inside** each `PER` group.
 - **`AVG(D: expr)` divides by the number of distinct tuples**, not the number of rows.
 - **`MIN`/`MAX` are unaffected by de-duplication** — every row of a tuple identity carries
   the same value, so dropping repeats cannot move an extremum. The qualifier is accepted
   and is a no-op for them.
-- **One relation per qualifier.** `SUM(D,T: ...)` is rejected with a message naming the
-  single-relation form.
+- **Several relations at once — `SUM(D, T: expr)`.** The tuple identity widens to the
+  concatenation of every named relation's own key, so a row is a duplicate only when it
+  repeats on *all* of them together. Naming a relation removes the fan-out it would
+  otherwise contribute to the reducer; a relation left unnamed still contributes its
+  fan-out, uncollapsed — so with a third, unqualified relation `X` in the join,
+  `SUM(D, T: expr)` differs from both `SUM(D: expr)` and the unqualified `SUM(expr)`.
+  `expr` may draw columns and decisions from any of the named relations, not just one.
+  The list is order-independent (`SUM(D, T: ...)` and `SUM(T, D: ...)` are the same
+  reducer). One consequence follows directly: if `D` and `T` are the *only* two relations
+  the query joins, naming both is a no-op — the composite key already is the join-result
+  row, so `SUM(D, T: expr)` and unqualified `SUM(expr)` compute the same thing. The two
+  forms only diverge once some relation the query joins is left out of the qualifier.
 
 ## 6. Conditional Expressions — `WHEN`
 

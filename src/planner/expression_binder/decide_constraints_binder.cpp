@@ -313,16 +313,26 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
     if (func.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
         auto &candidate = func.children[0]->Cast<FunctionExpression>();
         if (candidate.is_operator && candidate.function_name == QUALIFIED_REDUCER_TAG &&
-            candidate.children.size() == 2 &&
-            candidate.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION &&
-            candidate.children[1]->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-            auto agg_name = candidate.children[0]->Cast<FunctionExpression>().function_name;
-            auto relation = candidate.children[1]->Cast<ColumnRefExpression>().GetColumnName();
-            return BindResult(BinderException::Unsupported(*expr_ptr,
-                StringUtil::Format(
-                    "A relation-qualified reducer's WHEN must follow the comparison, not precede it. "
-                    "Write %s(%s: ...) <= bound WHEN cond.",
-                    StringUtil::Upper(agg_name), relation)));
+            candidate.children.size() >= 2 &&
+            candidate.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
+            bool all_column_refs = true;
+            vector<string> relation_names;
+            for (idx_t i = 1; i < candidate.children.size(); i++) {
+                if (candidate.children[i]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+                    all_column_refs = false;
+                    break;
+                }
+                relation_names.push_back(candidate.children[i]->Cast<ColumnRefExpression>().GetColumnName());
+            }
+            if (all_column_refs) {
+                auto agg_name = candidate.children[0]->Cast<FunctionExpression>().function_name;
+                auto relation = StringUtil::Join(relation_names, ", ");
+                return BindResult(BinderException::Unsupported(*expr_ptr,
+                    StringUtil::Format(
+                        "A relation-qualified reducer's WHEN must follow the comparison, not precede it. "
+                        "Write %s(%s: ...) <= bound WHEN cond.",
+                        StringUtil::Upper(agg_name), relation)));
+            }
         }
     }
 

@@ -131,6 +131,37 @@ decide-variable index span fits the cap (~1M slots), or a sorted/merged
 
 Both aggregate branches use the same selector.
 
+### A query-wide decision's term: once, or once per counted row
+
+`CanUseRowScopedFastPath()` treats a `SCALAR`-scoped term the same as an
+entity-scoped one — it always needs the accumulator, since a scalar's flat index
+never changes across rows and would collide with itself under the fast path.
+Inside the accumulator, a scalar term takes one of two rules, distinguished by
+`DecideTerm::reduction` (constraint side: `EvaluatedConstraint::
+linear_term_reductions`; objective side: `SolverInput::objective_term_reductions`,
+carried the same way):
+
+- **`LinearTermReduction::NONE`** — the term is a bare additive sibling of a
+  reducer, not inside one (`SUM(x) - max_shortfall <= cap`). It is row-invariant
+  by construction, so it contributes its coefficient **once** — read from row 0 (or
+  the group's first row under `PER`), never summed across rows. Multiplying it by
+  the row count would silently change the problem.
+- **`LinearTermReduction::SUM`** — the term came from inside a real reducer's body
+  (`SUM(opening_cost * cap)`), stamped by `ApplyAggregateMetadata` on the
+  constraint side and by the matching inline stamp in
+  `ExtractAggregateObjectiveTerms` / `AnalyzeObjective` on the objective side. It
+  falls through to the same per-row accumulation loop an entity-scoped variable
+  uses, so its coefficient becomes the **sum of every counted row's data** — the
+  scalar's contribution is `(Σ counted rows' coefficient) * cap`, not `1 * cap`.
+
+Getting this backwards in either direction is a silent wrong answer, not a
+rejection: reading a `SUM`-reduced scalar term as `NONE` drops every row's
+contribution but one; reading a `NONE` term as `SUM` multiplies a row-invariant
+sibling term by the row count it was never supposed to scale by. See
+`03_expressivity/sql_functions/done.md` → "A Query-Wide Decision Multiplied by a
+Vector, Inside a Reducer (Batch D)" for the binder-side rule this implements, and
+why a scalar was never previously reachable through the `SUM`-reduced path.
+
 ### Path 1 — aggregate, ungrouped
 
 One `ModelConstraint` summing over all rows. RHS is `rhs_values[0]`, then fixed

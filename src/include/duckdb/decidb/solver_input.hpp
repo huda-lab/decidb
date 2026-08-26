@@ -469,6 +469,12 @@ struct SolverInput {
     // Linear objective
     vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
     vector<idx_t> objective_variable_indices;          // [term_idx]
+    //! [term_idx] SUM when the term came from inside a reducer (its coefficient is a sum
+    //! over the counted rows); NONE for a query-wide decision standing beside a reducer,
+    //! whose coefficient is a single row-invariant value. Distinguishes `SUM(cost * cap)`
+    //! (contributes once per counted row) from `SUM(x) + cap` (contributes once). Mirrors
+    //! EvaluatedConstraint::linear_term_reductions on the constraint side.
+    vector<LinearTermReduction> objective_term_reductions; // [term_idx]
     DecideSense sense;
 
     // Quadratic objective: inner linear expression of SUM(sign * POWER(expr, 2)).

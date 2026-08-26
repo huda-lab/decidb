@@ -67,6 +67,13 @@ parentheses on that path. Objective WHEN uses `WHEN_DECIDE_OBJECTIVE` and may
 consume one comparison between atomic operands because an objective has no
 trailing bound. This replaces the former objective parsed-tree reassociation.
 
+The qualifier's `func_arg_list` (the one before `:`) was restricted to length 1 and
+unpacked into a lone `PGColumnRef` until batch E. It now validates every element is a
+`PGColumnRef` and passes the whole list through as one `PGList` (cast to `PGNode*`,
+the same idiom `columnrefList` uses for multi-column `PER`), so `sum(D: e)` and
+`sum(D, T: e)` share one grammar action; the binder resolves what the relation list
+means (`02_binder/done.md`, "Relation-qualified reducers").
+
 `decide_item_expr` closes a constraint or objective body at `DECIDE_ITEM`
 precedence. That precedence is above `AND`, so `A AND B WHEN c` and
 `A AND B PER col` attach the modifier to `B`, but below `WHEN_DECIDE` and the

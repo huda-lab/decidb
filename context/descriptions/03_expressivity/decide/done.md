@@ -30,14 +30,14 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
   - **Constraints**: a scalar may be compared against row-varying data (`ship <= cap`). The constraint fans out per row, but every generated row references the same column — that is what makes the decision shared. The row-scoped fast path in the model builder is skipped for scalars for the same reason it is skipped for entity-scoped variables (many rows, one column).
   - **As a term of an aggregate constraint**: a scalar is row-invariant, so it is a complete term of an aggregate constraint on its own — `SUM(x) - cap <= 4`, the paper's `max_shortfall` shape (§3.1). This mirrors the objective rule below and is canonical form's K3 ("every term is a reducer **or row-invariant**"). Two things had to agree for it to be right, and they fail differently: `ExtractAggregateConstraintTerms` used to *reject* the term outright, while both model-builder accumulators (ungrouped and `PER`) fan every term out over the group's rows, which for a one-column variable silently multiplies its coefficient by the row count. The accumulators now add a scalar's coefficient **once per constraint row**, matching the objective path. Since the canonicalization refactor the scalar may equally be written as the **bound** — `SUM(x) <= cap`, `demand - SUM(x) <= cap PER g` — which is the paper's Example 1 spelling; canonicalization moves it to the left, so the shape reaching the extractor is the same one. A **row-scoped** decision as the bound is the other half of K3 and is rejected there (*"non-aggregate term: y"*), because there is no single `y` for a number that has no row. Tests: `test/decide/tests/test_scalar_var_in_aggregate.py`, `test_scalar_scope.py::test_scalar_as_aggregate_rhs[_with_per]`, `test_canonicalize_side_agnostic.py`, golden corpus 55/56 and 75/76/77.
   - **Objectives**: a scalar contributes **bare**, not through a reducer — alone (`MINIMIZE cap`) or as an additive term beside reducers (`MINIMIZE cap - SUM(x)`). `AnalyzeObjective` (`src/optimizer/decide/decide_linear_form.cpp`) recognises a purely-scalar objective (which carries no aggregate at all), and `ExtractAggregateObjectiveTerms` accepts a scalar leaf. The model builder adds the coefficient **once** instead of once per row; without that the coefficient would be silently multiplied by input cardinality.
-  - **Reducers are rejected**: `SUM(cap)` / `AVG(cap)` / `SUM(x + cap)` raise a binder error naming the variable and the fix. There is one column, so nothing to reduce over, and the two plausible readings (coefficient 1 vs. coefficient `n`) are different optimization problems — so neither is chosen silently. Enforced in both `decide_objective_binder.cpp` and `decide_constraints_binder.cpp` via `DecideBinder::FindScalarDecideVariable`, which the binders can answer because `bind_select_node.cpp` passes them the set of `scalar`-declared names.
+  - **A reducer is rejected iff its body is row-invariant**: `SUM(cap)` / `AVG(cap)` / `SUM(cap1 + cap2)` raise a binder error quoting the body and naming the fix. There is one column and nothing to reduce over, and the two plausible readings (coefficient 1 vs. coefficient `n`) are different optimization problems — so neither is chosen silently. A body that *mixes* a scalar with row-varying data is not row-invariant and is an ordinary scalar-times-vector reduction: `SUM(cost * cap)` means `(Σ cost)·cap`, and `SUM(x + cap)` means `SUM(x) + n·cap` over the counted rows. Enforced once, in `DecideBinder`'s shared aggregate classification via `DecideBinder::IsRowInvariantExpression` (`decide_binder.cpp`), which it can answer because `bind_select_node.cpp` passes it the set of `scalar`-declared names; the objective and constraint binders inherit it rather than each testing for a scalar themselves. The weighting the accepted case implies is carried to stage 06 by `DecideTerm::reduction` — see `../sql_functions/done.md` → "A Query-Wide Decision Multiplied by a Vector, Inside a Reducer (Batch D)".
   - **Output**: the value is repeated on every result row (paper §3.1), which falls out of `Get()` resolving every row to the same column.
   - **Diagnostics**: a scalar has a single instance, so `FormatEscapingInstances` already suppresses the `affected_rows`/`affected_entities` cell and the unbounded report carries only `grows_toward`. The candidate provider returns no grouping candidates for a scalar — there is no subset of rows to characterize.
   - Tests: `test/decide/tests/test_scalar_scope.py`.
 - **Table-scoped entity identification**: all columns from the source table form a composite key. During physical execution (Phase 1.5), the executor scans result rows, extracts the source-table columns for each scoped variable, and maps each distinct entity key to a single solver variable index — the **entity consistency guarantee**. There is no syntax for a custom key subset.
 - **Aggregate semantics with table scope**: SUM/AVG aggregate over result rows, not entities — if an entity appears in 5 join-result rows, its shared variable contributes 5 times (standard SQL aggregation over the join result). A **relation-qualified reducer** opts out of that per reducer; see below.
 
-## Relation-qualified reducers — `agg(D: expr)`
+## Relation-qualified reducers — `agg(D: expr)`, `agg(D, T: expr)`
 
 `SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result rows,
 contributing one term per surviving `D` tuple (paper §3.2.2). Syntax and semantics:
@@ -83,11 +83,29 @@ so this is opt-in and nothing existing changes meaning.
   `MIN`/`MAX`: it is provably a no-op there, so one code path beats a special case.
 - **`MIN`/`MAX` need no de-duplication.** Dropping repeats of a value already present
   cannot move an extremum. The qualifier is accepted, carried, and has no effect for them.
+- **Several relations at once — `agg(D, T: expr)`.** The qualifier is a *list* of
+  relations, and the tuple identity is the concatenation of each named relation's own key,
+  so a row is a duplicate only when it repeats on every named key at once. Naming a
+  relation removes the fan-out it would otherwise contribute; a relation left unnamed still
+  contributes its fan-out uncollapsed. The body may draw columns and decisions from any of
+  the named relations. The list is order-independent — `FindOrCreateEntityScope`
+  canonicalizes it (sorted, case-insensitively) as the scope cache key, so `SUM(D, T: ...)`
+  and `SUM(T, D: ...)` share one scope and one `EntityMapping`. One consequence follows
+  directly: naming *every* relation the query joins is a no-op, since the composite key
+  already is the join-result row; the forms diverge only once some joined relation is left
+  out of the list. This is a binder-only change — the optimizer's `qualifier_scope_idx`
+  stamping, the prepared model's term structs and `BuildQualifierKeepMask` /
+  `BuildEntityMappings` all treat a scope as an opaque index into `entity_scopes` and did
+  not move. Details: `../../01_pipeline/02_binder/done.md` → "Relation-qualified reducers",
+  `../sql_functions/done.md` → "Several Relations at Once — A Composite Qualifier (Batch E)".
+- **A query-wide (`scalar`) decision is allowed inside a qualified reducer**, matching paper
+  §3.2.2's carve-out: it is row-invariant, so it contributes the same value to every tuple
+  regardless of which relation owns it (`SUM(D: opening_cost * cap)`). It is refused only
+  when it is the *whole* body (`SUM(D: cap)`), by the general row-invariance rule above.
 - **Rejections** (all at bind time, in `BindQualifiedReducer` /
-  `CheckQualifiedReducerBody`): a column or entity-scoped decision from another relation, a
-  row-scoped decision, a query-wide (`scalar`) decision, an unknown relation name, a
-  qualifier on a non-`SUM`/`AVG`/`MIN`/`MAX` function. Multi-relation qualifiers
-  (`SUM(D,T: ...)`) are rejected in the grammar action.
+  `CheckQualifiedReducerBody`): a column or entity-scoped decision from a relation *not*
+  named in the qualifier, a row-scoped decision, an unknown relation name, a qualifier on a
+  non-`SUM`/`AVG`/`MIN`/`MAX` function, and a row-invariant body.
 - Tests: `test/decide/tests/test_qualified_reducer.py`.
 
 ### Code Pointers — qualified reducers

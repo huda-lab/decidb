@@ -16,14 +16,21 @@
 
 namespace duckdb {
 
-//! Tracks entity-scope metadata for decision variables scoped to a base table.
+//! Tracks entity-scope metadata for decision variables scoped to a base table, or
+//! for a reducer qualifier scoped to a set of relations at once (`sum(D, T: e)`).
 //! When a variable is declared as "T.x IS BOOLEAN", it has one value per unique
-//! row in table T, not per join result row.
+//! row in table T, not per join result row. A multi-relation qualifier extends the
+//! same idea: its tuple identity is the concatenation of every named relation's
+//! own key, so de-duplication collapses only the fan-out contributed by relations
+//! it does *not* name.
 struct EntityScopeInfo {
-    //! Table alias or name used in the DECIDE declaration (e.g., "S" or "Sensors")
+    //! Table alias or name used in the DECIDE declaration (e.g., "S" or "Sensors").
+    //! For a multi-relation qualifier, the named relations joined by ",", e.g. "D,T".
     string table_alias;
-    //! DuckDB table index from the bind context (Binding::index)
-    idx_t source_table_index;
+    //! DuckDB table index/indices from the bind context (Binding::index). A
+    //! declaration scope always has exactly one; a qualifier scope has one per
+    //! named relation.
+    vector<idx_t> source_table_indices;
     //! Column types for the entity key columns
     vector<LogicalType> entity_key_column_types;
     //! Physical column indices in the child's output data chunk.

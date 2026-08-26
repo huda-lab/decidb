@@ -3081,7 +3081,8 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 				}
 			| func_name '(' func_arg_list ':' func_arg_list ')'		%prec DECIDE_ITEM
 				{
-					/* DecidB: relation-qualified reducer, sum(D: expr).
+					/* DecidB: relation-qualified reducer, sum(D: expr) or, qualified by
+					 * several relations at once, sum(D, T: expr).
 					 *
 					 * The qualifier is parsed as a func_arg_list rather than as a
 					 * dedicated name list on purpose. `sum(D, T: e)` and `sum(a, b)`
@@ -3089,24 +3090,23 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					 * both sides are read as argument lists and the qualifier's shape
 					 * is checked here instead of in the grammar. The decision point
 					 * moves to ':' vs ')' after a completed func_arg_list, which is
-					 * conflict-free.
+					 * conflict-free. Every item in the list must be a bare relation
+					 * name; the whole list travels as one PGList (cast to PGNode*, the
+					 * same idiom `columnrefList` uses for multi-column PER) rather than
+					 * being unpacked here, so the binder sees the full qualifier set.
 					 */
-					if ($3->length != 1)
+					for (PGListCell *lc = $3->head; lc != NULL; lc = lc->next)
 					{
-						ereport(ERROR, (errcode(PG_ERRCODE_FEATURE_NOT_SUPPORTED),
-							errmsg("a reducer can be qualified by one relation only; write sum(D: ...) and join the other relation's terms in a separate reducer"),
-							parser_errposition(@3)));
-					}
-					PGNode *qualifier = (PGNode *) $3->head->data.ptr_value;
-					if (!IsA(qualifier, PGColumnRef))
-					{
-						ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
-							errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
-							parser_errposition(@3)));
+						if (!IsA((PGNode *) lc->data.ptr_value, PGColumnRef))
+						{
+							ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
+								errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
+								parser_errposition(@3)));
+						}
 					}
 					PGFuncCall *n = makeFuncCall($1, $5, @1);
 					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, qualifier, @4);
+						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, (PGNode *) $3, @4);
 				}
 			| func_name '(' func_arg_list ':' func_arg_list ')' decide_aggregate_when_condition	%prec POSTFIXOP
 				{
@@ -3124,22 +3124,18 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					 * `a_expr WHEN_DECIDE b_expr` production instead, which swallows
 					 * a trailing comparison like `<= bound` into the WHEN condition.
 					 */
-					if ($3->length != 1)
+					for (PGListCell *lc = $3->head; lc != NULL; lc = lc->next)
 					{
-						ereport(ERROR, (errcode(PG_ERRCODE_FEATURE_NOT_SUPPORTED),
-							errmsg("a reducer can be qualified by one relation only; write sum(D: ...) and join the other relation's terms in a separate reducer"),
-							parser_errposition(@3)));
-					}
-					PGNode *qualifier = (PGNode *) $3->head->data.ptr_value;
-					if (!IsA(qualifier, PGColumnRef))
-					{
-						ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
-							errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
-							parser_errposition(@3)));
+						if (!IsA((PGNode *) lc->data.ptr_value, PGColumnRef))
+						{
+							ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
+								errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
+								parser_errposition(@3)));
+						}
 					}
 					PGFuncCall *n = makeFuncCall($1, $5, @1);
 					PGNode *qualified_reducer = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, qualifier, @4);
+						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, (PGNode *) $3, @4);
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", qualified_reducer, $7, @7);
 				}

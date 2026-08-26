@@ -69,6 +69,129 @@ This removes an asymmetry that could not be explained without describing interna
 
 **Code**: `EvaluateRhsReducerPerGroup` and `ReduceAggregateRhsPerGroup` in `src/execution/operator/decide/physical_decide.cpp`; reducer substitution via `TransformToChunkExpression`'s `agg_substitutions`. Design and the findings behind it: `the canonicalization refactor, B.5.
 
+#### A Query-Wide Decision Multiplied by a Vector, Inside a Reducer (Batch D)
+
+A reducer is rejected iff its **body is row-invariant** — holds the same value on every
+row, with no data column and no row- or entity-scoped decision anywhere inside it — not
+merely because it *contains* a query-wide (`scalar`) decision:
+
+```sql
+SUM(cap)                    -- rejected: row-invariant, nothing to reduce over
+SUM(cap1 + cap2)            -- rejected: still row-invariant (two scalars, no data)
+SUM(opening_cost * cap)     -- valid: opening_cost varies per row, means (Σcost)·cap
+SUM(D: opening_cost * cap)  -- valid: means (Σ over D's distinct tuples of cost)·cap
+SUM(x + cap)                -- valid: x is row-scoped, means SUM(x) + n·cap
+```
+
+Before this, the test was "does a scalar appear anywhere in the body", which rejected
+`SUM(opening_cost * cap)` even though the body plainly varies per row and the reduction
+is unambiguous — a standard scalar-times-vector product. The relation-qualified form
+follows the same rule: a scalar is exempt from "everything must come from the qualified
+relation" (§5.1) because it is row-invariant and contributes uniformly to every tuple,
+but a qualified reducer whose entire body is scalars/constants is still rejected for the
+same "nothing to reduce over" reason.
+
+**Formulation (stage 05/06).** Term extraction (`decide_linear_form.cpp`) was already
+scope-agnostic — `FindDecideVariable`/`ExtractTerms` don't special-case a variable's
+scope, so `opening_cost * cap` correctly extracts to `DecideTerm{var=cap,
+coefficient=opening_cost}` regardless of `cap`'s scope. The bug was one layer down, in
+the **accumulator** that folds per-row-evaluated coefficients into the flat solver
+column a variable resolves to (`ilp_model_builder.cpp`): it took a shortcut for any
+`SCALAR`-scoped term — add the coefficient **once**, from row 0 or the group's first
+row — because the only shape that shortcut had ever needed to handle was a scalar
+standing **beside** a reducer as a bare additive term (`SUM(x) - max_shortfall <= cap`),
+which is genuinely row-invariant and must not be multiplied by the row count. Now that a
+scalar can also sit **inside** a reducer body, that same shortcut would silently drop
+every row's contribution but one. The fix distinguishes the two shapes using
+`DecideTerm::reduction`: `LinearTermReduction::SUM` marks a term that came from inside a
+real reducer (stamped by `ApplyAggregateMetadata` on the constraint side, and now the
+same way in `ExtractAggregateObjectiveTerms`/`AnalyzeObjective`'s aggregate branch on the
+objective side); `NONE` marks a bare sibling term. The accumulator's scalar shortcut now
+fires only when `var_scope == SCALAR && reduction != SUM` — a `SUM`-reduced scalar term
+falls through to the same per-row accumulation loop entity-scoped variables already use,
+so its coefficient becomes the sum of every counted row's data. `SolverInput` grew a
+parallel `objective_term_reductions` array (the constraint side already had
+`EvaluatedConstraint::linear_term_reductions`) so the objective-side accumulator
+(`BuildIlpModel`'s linear-objective loop) can make the same distinction.
+
+**De-duplication.** A relation-qualified `SUM(D: cost * cap)` still charges each of `D`'s
+distinct tuples once, even when two tuples share the same `cost` — identity is the tuple,
+not the value, same as every other qualified reducer (§5.1). The qualifier's existing
+row-masking (`ApplyQualifierToFilter`/`BuildQualifierKeepMask`) runs before the
+accumulator sees the row data, so the accumulator itself needs no qualifier-specific case.
+
+**Tests**: `test/decide/tests/test_scalar_scope.py` —
+`test_scalar_times_data_inside_reducer_is_weighted_by_row_data` (unqualified, oracle
+discriminates coefficient `Σcost` from both the bare-scalar and row-count misreadings),
+`test_scalar_plus_row_scoped_term_inside_reducer_is_legal` (additive mix),
+`test_sum_over_two_scalars_rejected` (still-rejected row-invariant case).
+`test/decide/tests/test_qualified_reducer.py` —
+`test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated` (oracle,
+weighted by distinct-entity data, equal-cost entities still counted twice),
+`test_query_wide_decision_alone_inside_qualified_reducer_rejected` (still-rejected).
+
+**Code**: `DecideBinder::IsRowInvariantExpression` and `ClassifyReducerCall`
+(unqualified/parsed-tree gate), `IsBoundReducerBodyRowInvariant` and
+`BindQualifiedReducer` (qualified/bound-tree gate) in `decide_binder.cpp`;
+`ExtractAggregateConstraintTerms`/`ExtractAggregateObjectiveTerms` in
+`decide_linear_form.cpp` (the `BOUND_AGGREGATE` exclusion on the bare-scalar shortcut);
+the three `var_scope == SCALAR` sites in `ilp_model_builder.cpp` (two constraint paths,
+one objective path).
+
+### Several Relations at Once — A Composite Qualifier (Batch E)
+
+`SUM(D: expr)` (§5.1) named exactly one relation; `SUM(D, T: expr)` names several.
+Paper §3.2.2 claims this shape but the grammar rejected it outright until now.
+
+**Semantics.** A composite qualifier's tuple identity is the concatenation of every
+named relation's own key — the same "all columns of the table" key a single-relation
+scope already used, just for each relation in the list. A row is a duplicate only when
+it repeats on *every* named relation's key at once, so naming a relation removes the
+fan-out it would otherwise contribute, and a relation left unnamed still contributes
+its fan-out uncollapsed. `expr` may draw columns and decisions from any of the named
+relations (`CheckQualifiedReducerBody`'s "must come from the qualifier" rule now checks
+set membership instead of equality), and the relation list is order-independent — `D,
+T` and `T, D` resolve to the same scope.
+
+One consequence of that identity rule is worth stating: with exactly two relations in
+the whole query, `SUM(D, T: expr)` and the unqualified `SUM(expr)` are the same
+reducer — the composite key already *is* the join-result row, since there is no third,
+unqualified relation left to contribute fan-out for the qualifier to collapse. The two
+forms only diverge once a relation the query joins is left out of the qualifier list —
+which needs three relations to demonstrate, since the two-relation case can't produce
+an unqualified relation to fan out from.
+
+**Implementation.** `EntityScopeInfo` (`logical_decide.hpp`) carries
+`source_table_indices` (plural) instead of a single index; `FindOrCreateEntityScope`
+gained a `vector<string>` overload that canonicalizes (sorts, case-insensitively) the
+relation list before using it as the scope cache key, so the composite scope is built
+once regardless of the order the query names its relations in. Everything below the
+binder — the optimizer's `qualifier_scope_idx` stamping, the prepared model's
+`DecideTerm`/`BilinearConstraintTerm`/objective terms, and physical execution's
+`BuildQualifierKeepMask`/`BuildEntityMappings` — already treated a scope as an opaque
+index into `entity_scopes`, so none of it changed: the composite-ness lives entirely
+inside the `EntityScopeInfo` the binder builds. The grammar change is a single
+`func_arg_list` passed through as one `PGList` (the same idiom multi-column `PER`
+already used) instead of being restricted to length 1 and unpacked into a lone
+`PGColumnRef`.
+
+**Tests**: `test/decide/tests/test_qualified_reducer.py` —
+`test_three_relation_composite_qualifier_differs_from_single_and_unqualified` (oracle,
+a customer/orders/lineitem chain where the composite, single-relation and unqualified
+forms compute three genuinely different weightings — order count, one, and row count —
+and are checked against three independent oracle models),
+`test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only_those_two_relations`
+(confirms the no-op case above, row-for-row), `test_unknown_relation_in_multi_relation_qualifier_rejected`.
+
+**Code**: grammar actions for `PG_AEXPR_QUALIFIED_REDUCER` in
+`third_party/libpg_query/grammar/statements/select.y`; the matching transform case in
+`transform_operator.cpp`; `FindOrCreateEntityScope`, `BindQualifiedReducer`,
+`CheckQualifiedReducerBody`, `ScopeContainsTable`/`ScopeTablesIntersect` in
+`decide_binder.cpp`; the `EntityScopeInfo` struct in `logical_decide.hpp`; the
+entity-key data-column refinement in `bind_select_node.cpp`; `Serialize`/`Deserialize`
+in `logical_decide.cpp` (field 239 carries the per-scope table-index count; old plans
+without it default to one table per scope).
+
 ### AVG() — Coefficient Scaling at Execution Time
 
 `AVG(expr)` over decision variables is treated as an aggregate constraint like SUM, but terms are scaled by the row count N at execution time so the model represents the average, not the raw sum.

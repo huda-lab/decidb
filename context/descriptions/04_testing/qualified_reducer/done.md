@@ -1,6 +1,6 @@
 # Relation-Qualified Reducer Test Coverage — Done
 
-Tests live in `test/decide/tests/test_qualified_reducer.py` (20 tests), plus
+Tests live in `test/decide/tests/test_qualified_reducer.py` (23 tests), plus
 `test_clause_order.py::test_entity_scoped_declaration_in_split_slot` for a
 qualified reducer in the split clause order.
 
@@ -62,21 +62,38 @@ makes the row-weighted and identity-weighted optima diverge.
   `+ MAX(...)` to a clause holding `SUM(D: ...)` must not change what the qualifier
   means. Both use the inverting 5/14 fixture, so a dropped qualifier changes the
   chosen nation (objective) or empties the selection (constraint).
-- **Rejections** (error tier, all at bind time except the first): multi-relation
-  qualifier `SUM(D,T: ...)` (grammar action), a column from another relation, a
-  row-scoped decision, a query-wide (`scalar`) decision, and an unknown relation
-  name.
+- **A composite qualifier weights differently from both alternatives**
+  (`test_three_relation_composite_qualifier_differs_from_single_and_unqualified`,
+  oracle-verified): a customer/orders/lineitem chain where `sum(c, o: ...)`,
+  `sum(c: ...)` and the unqualified `sum(...)` weight the same decision by distinct
+  order count, by 1, and by lineitem row count respectively — each checked against
+  its own independent oracle model. A two-relation fixture cannot tell these apart, which is
+  why this one needs three.
+- **Naming every relation the query joins is a no-op**
+  (`test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only_those_two_relations`):
+  with no third, unnamed relation left to fan out, `SUM(D, T: expr)` and the
+  unqualified `SUM(expr)` agree row for row.
+- **A query-wide decision inside a qualified reducer is weighted and de-duplicated**
+  (`test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated`,
+  oracle-verified): `SUM(n: (n_nationkey + 1) * cap)` over `customer JOIN nation`
+  weights `cap` by the sum over *distinct* nations, not over join-result rows.
+- **Rejections** (error tier, all at bind time): a column from a relation not named
+  in the qualifier, a row-scoped decision, an unknown relation name — including one
+  inside a multi-relation list
+  (`test_unknown_relation_in_multi_relation_qualifier_rejected`) — and a
+  row-invariant body, i.e. a query-wide decision standing alone inside the reducer
+  (`test_query_wide_decision_alone_inside_qualified_reducer_rejected`).
 
 ## Caveats
 
-- `test_row_scoped_decision_inside_qualified_reducer_rejected` and
-  `test_query_wide_decision_inside_qualified_reducer_rejected` pin *current*
-  rejections that are still open questions, not settled semantics — see
+- `test_row_scoped_decision_inside_qualified_reducer_rejected` pins a *current*
+  rejection that is still an open question, not settled semantics — see
   `03_expressivity/decide/todo.md` → "Row-scoped decisions inside a
-  relation-qualified reducer". The second is a deliberate divergence from paper
-  §3.2.2, which carves out query-wide decisions as always allowed.
-- `test_multi_relation_qualifier_rejected` pins a deferral, not a limitation of
-  the design — `03_expressivity/decide/todo.md` → "Multi-relation qualifiers".
+  relation-qualified reducer".
+- `test_query_wide_decision_alone_inside_qualified_reducer_rejected` is **not** in
+  that category: it pins the general row-invariance rule (a body with nothing to
+  aggregate over), and the paper's §3.2.2 carve-out for query-wide decisions is
+  honoured by the neighbouring positive test.
 - `test_composed_minmax_preserves_the_qualifier` and
   `…_in_a_constraint` are **regressions for a fixed wrong answer**, not aspirational
   pins: `SUM(D: ...) + MAX(...)` used to revert to row semantics because
@@ -96,7 +113,8 @@ makes the row-weighted and identity-weighted optima diverge.
 | qualified reducer | unqualified reducer in the same objective | ✓ |
 | qualified reducer | entity-scoped decision | ✓ |
 | qualified reducer | row-scoped decision (rejected) | ✓ |
-| qualified reducer | query-wide decision (rejected) | ✓ |
+| qualified reducer | query-wide decision times entity data | ✓ (oracle) |
+| qualified reducer | query-wide decision as the whole body (rejected) | ✓ |
 | qualified reducer | split clause order | ✓ (`test_clause_order.py`) |
 | qualified reducer | hard-direction MAX objective | ✓ |
 | qualified reducer | hard-direction MIN constraint | ✓ |
@@ -104,4 +122,6 @@ makes the row-weighted and identity-weighted optima diverge.
 | qualified reducer | aggregate-local `WHEN` (constraint) | ✓ |
 | qualified reducer | composed MIN/MAX (objective) | ✓ |
 | qualified reducer | composed MIN/MAX (constraint) | ✓ |
-| qualified reducer | multi-relation qualifier | rejected (deferred) |
+| qualified reducer | multi-relation qualifier, 3 relations | ✓ (oracle) |
+| qualified reducer | multi-relation qualifier, no-op case | ✓ |
+| qualified reducer | unknown relation in a multi-relation list (rejected) | ✓ |

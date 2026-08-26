@@ -27,6 +27,16 @@ idx_t FindOrCreateEntityScope(BindContext &bind_context, const string &table_nam
                               vector<EntityScopeInfo> &entity_scopes,
                               case_insensitive_map_t<idx_t> &table_scope_map);
 
+//! Composite form for a reducer qualified by several relations at once
+//! (`sum(D, T: ...)`). The scope's tuple identity is the concatenation of each
+//! named relation's own key; de-duplication then collapses fan-out contributed
+//! only by relations *not* named. `table_names` is canonicalized (sorted,
+//! case-insensitively) before being used as the cache key, so `sum(D,T: ...)`
+//! and `sum(T,D: ...)` share one scope.
+idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &table_names,
+                              vector<EntityScopeInfo> &entity_scopes,
+                              case_insensitive_map_t<idx_t> &table_scope_map);
+
 //! Peels the parser's qualified-reducer wrapper so checks that key off the
 //! aggregate's name see the aggregate: `sum(D: e)` reads as `sum(e)`. Returns
 //! `expr` unchanged when it is not a qualified reducer.
@@ -155,11 +165,16 @@ protected:
 
     //! True when `expr` is a bare reference to a query-wide (`scalar`) decision.
     //! A scalar has one solver column, so it needs no reducer to collapse it —
-    //! and conversely may not appear inside one.
+    //! and conversely may not appear inside one on its own.
     bool IsScalarDecideVariable(const ParsedExpression &expr) const;
-    //! Name of the query-wide decision referenced anywhere inside `expr`, or ""
-    //! if there is none. Used to reject scalars inside reducers.
-    string FindScalarDecideVariable(const ParsedExpression &expr) const;
+    //! True when `expr` holds the same value on every input row: every leaf is
+    //! either a literal/constant, an uncorrelated subquery, or a query-wide
+    //! (`scalar`) decision — no data column and no row- or entity-scoped decision
+    //! appears anywhere inside it. A reducer around a row-invariant body has
+    //! nothing to reduce over (SUM(cap), SUM(cap1 + cap2)); a reducer whose body
+    //! mixes a scalar with row-varying data (SUM(cost * cap)) is not row-invariant
+    //! and is legal — the scalar just contributes uniformly to every term.
+    bool IsRowInvariantExpression(const ParsedExpression &expr) const;
 
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
     BindResult BindLocalWhenAggregate(FunctionExpression &when_expr, idx_t depth);

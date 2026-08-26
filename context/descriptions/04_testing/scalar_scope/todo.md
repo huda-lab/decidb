@@ -25,21 +25,32 @@ oracle-verified positives priced so the optimum is interior rather than all-zero
 `test_canonicalize_side_agnostic.py::test_data_term_left_of_reducer`, and golden
 corpus 75/76/77.
 
-What is *not* opened: a bare row-varying **data** column as the bound
-(`SUM(x) <= price`). That is still group B of the paper sweep and needs per-tuple
-fan-out at the binder; it is now refused identically on either side.
+A bare row-varying **data** column as the bound (`SUM(x) <= price`) was listed
+here as still refused. Batch C opened it on 2026-08-25: a reduced constraint may be
+bounded by a plain data column, and the group's tightest value wins for `<`/`<=`/`>`/`>=`.
+Coverage lives in `test_reduced_bound_data_column.py` — see
+`../../03_expressivity/such_that/done.md`.
 
-## Scalar composed with the remaining rewrites
+## Scalar inside `norm(...)` and inside a quadratic objective — now reachable, not covered
 
 Covered now: `ABS`, quadratic constraint, bilinear, `<>` — all in per-row
-constraint position, which is the only position a scalar can reach them from,
-since a scalar inside a reducer is rejected (A3) and objectives must be
-aggregates.
+constraint position.
 
-Not covered, and not currently reachable: a scalar inside `norm(...)`, or in a
-quadratic **objective**. Both desugar into reducers (`norm(e, 1)` → `SUM(ABS(e))`,
-QP objectives are `SUM(POWER(...))`), so they hit the same A3 rejection. Nothing
-to test until that rule changes — and if it ever does, the coefficient question
-it was protecting against (1 vs. `n`) has to be answered first.
+Not covered: a scalar inside `norm(...)`, and a scalar in a quadratic
+**objective**. Both desugar into reducers (`norm(e, 1)` → `SUM(ABS(e))`, QP
+objectives are `SUM(POWER(...))`), so until batch D these were unreachable — any
+reducer containing a scalar was rejected. Batch D replaced that with the
+row-invariance rule, so a body mixing a scalar with row-varying data now binds and
+solves. Both shapes were confirmed to run on 2026-08-26:
 
-LOW priority: these are consequences of a settled decision, not gaps.
+```sql
+SUCH THAT norm(l_linenumber * cap - 3, 1) <= 100      -- binds, solves
+MINIMIZE SUM(POWER(l_linenumber * cap - 4, 2))        -- binds, solves
+```
+
+What is missing is an **oracle check** that the coefficient the scalar picks up
+through those two desugarings is the same `Σ (counted rows' data)` weighting the
+plain `SUM(cost * cap)` path was verified to use. The desugaring makes that
+plausible, not proven.
+
+LOW priority: two oracle tests in `test_scalar_scope.py`, no code expected.

@@ -13,8 +13,11 @@ Covers:
   - Qualified reducer on the constraint side
   - PER composed with a qualified reducer (de-duplication runs inside the partition)
   - Mixed qualified and unqualified reducers in one objective
-  - Errors: multi-relation qualifier, foreign column, foreign / row-scoped / query-wide
-    decision inside the reducer, unknown relation
+  - A scalar decision multiplied by the qualified relation's own data (batch D):
+    weighted and de-duplicated the same as an entity-scoped term
+  - Errors: multi-relation qualifier, foreign column, foreign / row-scoped decision
+    inside the reducer, a query-wide decision standing alone (row-invariant),
+    unknown relation
 """
 
 import pytest
@@ -59,6 +62,48 @@ def _keep_by_nation(result, nation_col, keep_col):
                 f"Nation {nkey} has inconsistent keepN: {values[nkey]} vs {keep}"
         values[nkey] = keep
     return values
+
+
+def _pick_chain_nation(duckdb_conn, min_customers=15):
+    """Smallest-by-customer-count nation (by customer/orders/lineitem chain size)
+    with enough customers for a `>= 10` keep-constraint to be meaningful — keeps
+    the MIP this test solves comparable in size to the nation-scoped tests above."""
+    row = duckdb_conn.execute(f"""
+        SELECT c.c_nationkey, COUNT(DISTINCT c.c_custkey) n
+        FROM customer c
+        JOIN orders o ON o.o_custkey = c.c_custkey
+        JOIN lineitem l ON l.l_orderkey = o.o_orderkey
+        GROUP BY c.c_nationkey
+        HAVING COUNT(DISTINCT c.c_custkey) >= {min_customers}
+        ORDER BY n LIMIT 1
+    """).fetchone()
+    assert row is not None, "fixture has no nation with enough customers for this test"
+    return int(row[0])
+
+
+def _customer_order_chain_data(duckdb_conn, nation_key):
+    """Per-customer acctbal, distinct order count, and total (order, lineitem) row
+    count for one nation's customer/orders/lineitem chain. `order_count` differing
+    from `row_count` (which also differs across customers) is what makes the
+    composite, single-relation and unqualified qualified reducers diverge: the
+    composite scope's tuple identity is (customer, order), so it weights by
+    `order_count`; the single-relation scope's is customer alone, weight 1; the
+    unqualified form has no identity at all, weight `row_count`."""
+    rows = duckdb_conn.execute("""
+        SELECT c.c_custkey, MAX(c.c_acctbal),
+               COUNT(DISTINCT o.o_orderkey), COUNT(*)
+        FROM customer c
+        JOIN orders o ON o.o_custkey = c.c_custkey
+        JOIN lineitem l ON l.l_orderkey = o.o_orderkey
+        WHERE c.c_nationkey = ?
+        GROUP BY c.c_custkey
+        ORDER BY 1
+    """, [nation_key]).fetchall()
+    custkeys = [int(r[0]) for r in rows]
+    acctbal = {int(r[0]): float(r[1]) for r in rows}
+    order_count = {int(r[0]): int(r[2]) for r in rows}
+    row_count = {int(r[0]): int(r[3]) for r in rows}
+    return custkeys, acctbal, order_count, row_count
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +208,79 @@ def test_qualified_and_unqualified_diverge(decidb_cli, duckdb_conn, oracle_solve
     # it pass vacuously — retune the threshold if this fires.
     assert q_keep != u_keep, \
         "qualified and unqualified reducers chose the same solution; retune the threshold"
+
+
+# ---------------------------------------------------------------------------
+# Test 2b (batch E): a composite qualifier needs a third relation to prove itself
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """`sum(c,o: ...)` over a customer/orders/lineitem chain. The composite
+    qualifier's tuple identity is (customer, order): it collapses only the fan-out
+    lineitem (unnamed) contributes, keeping every distinct order a customer has —
+    unlike `sum(c: ...)` (collapses all the way to one term per customer) and the
+    unqualified form (one term per join row, i.e. per lineitem). The two-relation
+    case above cannot tell these apart; three relations can (batch E1)."""
+    nation_key = _pick_chain_nation(duckdb_conn)
+    custkeys, acctbal, order_count, row_count = _customer_order_chain_data(duckdb_conn, nation_key)
+    assert len(set(order_count.values())) > 1 and len(set(row_count.values())) > 1, \
+        "fixture must have customers of differing order/row degree for this test to mean anything"
+
+    template = """
+        SELECT c.c_custkey, o.o_orderkey, l.l_linenumber, keepC
+        FROM customer c
+        JOIN orders o ON o.o_custkey = c.c_custkey
+        JOIN lineitem l ON l.l_orderkey = o.o_orderkey
+        WHERE c.c_nationkey = {nation_key}
+        DECIDE c.keepC(BOOL)
+        SUCH THAT SUM(c: keepC) >= 10
+        MINIMIZE SUM({reducer})
+    """
+
+    def solve_oracle(weight, tag):
+        oracle_solver.create_model(f"composite_qualifier_{tag}")
+        names = {ck: f"keepC_{ck}" for ck in custkeys}
+        for ck in custkeys:
+            oracle_solver.add_variable(names[ck], VarType.BINARY)
+        oracle_solver.add_constraint(
+            {names[ck]: 1.0 for ck in custkeys}, ">=", 10.0, name="keep_floor")
+        oracle_solver.set_objective(
+            {names[ck]: weight(ck) for ck in custkeys}, ObjSense.MINIMIZE)
+        return oracle_solver.solve().objective_value
+
+    single, _ = decidb_cli.execute(
+        template.format(nation_key=nation_key, reducer="c: c.c_acctbal * keepC"))
+    composite, _ = decidb_cli.execute(
+        template.format(nation_key=nation_key, reducer="c,o: c.c_acctbal * keepC"))
+    unqualified, _ = decidb_cli.execute(
+        template.format(nation_key=nation_key, reducer="c.c_acctbal * keepC"))
+
+    single_keep = _keep_by_nation(single, 0, 3)
+    composite_keep = _keep_by_nation(composite, 0, 3)
+    unqualified_keep = _keep_by_nation(unqualified, 0, 3)
+
+    single_obj = sum(acctbal[ck] * single_keep.get(ck, 0) for ck in custkeys)
+    composite_obj = sum(acctbal[ck] * order_count[ck] * composite_keep.get(ck, 0) for ck in custkeys)
+    unqualified_obj = sum(acctbal[ck] * row_count[ck] * unqualified_keep.get(ck, 0) for ck in custkeys)
+
+    assert abs(single_obj - solve_oracle(lambda ck: acctbal[ck], "single")) < 1e-4
+    assert abs(composite_obj - solve_oracle(
+        lambda ck: acctbal[ck] * order_count[ck], "composite")) < 1e-4
+    assert abs(unqualified_obj - solve_oracle(
+        lambda ck: acctbal[ck] * row_count[ck], "unqualified")) < 1e-4
+
+    # Genuinely three different optimization problems, not just three spellings of
+    # the same one. Composite vs. single-relation lands on a different 10-customer
+    # set on this fixture; composite vs. unqualified is pinned on the objective
+    # value instead — order_count and row_count are correlated enough here that the
+    # cheapest-10 argmin can coincide by chance even though the two formulas (weight
+    # by distinct orders vs. weight by every lineitem row) are not the same function.
+    assert composite_keep != single_keep, \
+        "composite and single-relation qualifiers chose the same solution; retune the fixture"
+    assert abs(composite_obj - unqualified_obj) > 1e-4, \
+        "composite and unqualified objectives coincided; retune the fixture"
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +481,48 @@ def test_mixed_qualified_and_unqualified_objective(decidb_cli, duckdb_conn,
 
 
 # ---------------------------------------------------------------------------
+# Test 7b: A scalar decision multiplied by the qualified relation's own data
+# (batch D). The body is not row-invariant -- `n.n_nationkey` varies per
+# nation -- so `SUM(n: (nationkey+1) * cap)` is legal and means
+# `(sum over distinct nations of nationkey+1) * cap`, charged once per nation
+# and not once per customer row.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.correctness
+def test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated(
+        decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+    """D1: `SUM(n: (nationkey+1) * cap)` charges each nation's weight once, not
+    once per customer row -- the qualifier's de-duplication applies to a scalar's
+    term exactly as it does to an entity-scoped one."""
+    sql = """
+        SELECT c.c_custkey, n.n_nationkey, cap
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+        DECIDE scalar cap(INT)
+        SUCH THAT SUM(n: (n.n_nationkey + 1) * cap) <= 300
+        MAXIMIZE cap
+    """
+    result, _ = decidb_cli.execute(sql)
+    cap_values = {int(row[2]) for row in result}
+    assert len(cap_values) == 1, f"cap must be one value for the query, got {cap_values}"
+    cap_value = cap_values.pop()
+
+    nation_ids, row_count, _ = _nation_data(duckdb_conn)
+    assert max(row_count.values()) > 1, \
+        "fixture must have a nation with more than one customer row for dedup to matter"
+    weight_sum = sum(n + 1 for n in nation_ids)  # each nation counted once
+
+    oracle_solver.create_model("qualified_scalar_weighted")
+    oracle_solver.add_variable("cap", VarType.INTEGER, lb=0.0)
+    oracle_solver.add_constraint({"cap": float(weight_sum)}, "<=", 300.0, name="cap_bound")
+    oracle_solver.set_objective({"cap": 1.0}, ObjSense.MAXIMIZE)
+    oracle_cap = oracle_solver.solve().objective_value
+
+    assert abs(cap_value - oracle_cap) < 1e-4, \
+        f"cap mismatch: DecidB={cap_value}, Oracle={oracle_cap}"
+
+
+# ---------------------------------------------------------------------------
 # Tests 8-12: rejections
 # ---------------------------------------------------------------------------
 
@@ -376,14 +536,41 @@ _REJECT_BASE = """
 """
 
 
+@pytest.mark.correctness
+def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only_those_two_relations(
+        decidb_cli, duckdb_conn):
+    """`sum(n,c: ...)` is now legal (batch E). Its composite tuple identity is the
+    concatenation of n's and c's own keys — which, in a query joining only n and c,
+    *is* the join-result row, so de-duplication is a no-op and the composite form
+    must match the unqualified form exactly. (Batch E1: the paper's own two-relation
+    example can't tell a composite scope apart from "no scope" — the two only
+    diverge once a third, unnamed relation is in the join and fans out; see
+    test_three_relation_composite_qualifier_differs_from_single_and_unqualified.)"""
+    template = """
+        SELECT c.c_custkey, n.n_nationkey, keepN
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+        DECIDE n.keepN(BOOL)
+        SUCH THAT SUM(keepN * c.c_acctbal) >= 700000
+        MINIMIZE SUM({reducer})
+    """
+    composite, _ = decidb_cli.execute(template.format(reducer="n,c: n.n_nationkey * keepN"))
+    unqualified, _ = decidb_cli.execute(template.format(reducer="n.n_nationkey * keepN"))
+
+    # Row-for-row identical output, not just the same objective: every (customer,
+    # nation) row keeps the same keepN either way.
+    assert composite == unqualified
+
+
 @pytest.mark.error_binder
-def test_multi_relation_qualifier_rejected(decidb_cli):
-    """`sum(n,c: ...)` is not supported; the message names the single-relation form."""
-    with pytest.raises(DecidBCliError, match="qualified by one relation only"):
+def test_unknown_relation_in_multi_relation_qualifier_rejected(decidb_cli):
+    """`sum(n,bogus: ...)`: the same "not in the FROM clause" rejection as the
+    single-relation case, naming the unresolvable relation."""
+    with pytest.raises(DecidBCliError, match="not in the FROM clause"):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls="",
             constraint="SUM(keepN) <= 5",
-            objective="SUM(n,c: n.n_nationkey * keepN)"))
+            objective="SUM(n,bogus: n.n_nationkey * keepN)"))
 
 
 @pytest.mark.error_binder
@@ -408,15 +595,17 @@ def test_row_scoped_decision_inside_qualified_reducer_rejected(decidb_cli):
 
 
 @pytest.mark.error_binder
-def test_query_wide_decision_inside_qualified_reducer_rejected(decidb_cli):
-    """A `scalar` decision inside a reducer is rejected whether or not the reducer
-    is qualified: the two readings (coefficient 1 vs. coefficient n) are different
-    problems, so neither is chosen silently."""
+def test_query_wide_decision_alone_inside_qualified_reducer_rejected(decidb_cli):
+    """A `scalar` decision standing *alone* inside a qualified reducer is still
+    rejected: the body is row-invariant, so there is nothing for the reducer to
+    de-duplicate or sum over (batch D: "row-invariant", not "contains a scalar" --
+    a scalar *combined with* the qualified relation's own data is legal instead,
+    see test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated)."""
     with pytest.raises(DecidBCliError, match="query-wide decision"):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls=", scalar cap(INT)",
             constraint="cap <= 5",
-            objective="SUM(n: n.n_nationkey * keepN + cap)"))
+            objective="SUM(n: cap)"))
 
 
 @pytest.mark.error_binder

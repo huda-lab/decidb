@@ -171,6 +171,30 @@ row. `CheckQualifiedReducerBody` validates the body against that relation. The
 scope is looked up through the same `FindOrCreateEntityScope` used by
 table-scoped variables.
 
+A reducer may name more than one relation, `SUM(D, T: expr)` (batch E). The
+composite scope's tuple identity is the concatenation of every named relation's
+own key — the same "all columns of the table" key a single-relation scope
+already uses, just for each relation in the list — so a row is a duplicate only
+when it repeats on **every** named relation's key at once. Concretely: naming a
+relation removes the fan-out it would otherwise contribute; a relation left
+unnamed still contributes its fan-out, uncollapsed. `CheckQualifiedReducerBody`'s
+"must come from the qualifier" rule generalizes the same way — a column must
+come from *one of* the named relations, not from a single fixed one, and a
+decision variable must be scoped to a relation in that set (or be a query-wide
+scalar, as before).
+
+This has one consequence worth stating plainly: naming every relation a query
+joins is a no-op. With exactly two relations in the query, `SUM(D, T: expr)`
+and unqualified `SUM(expr)` are the same reducer, because the composite key
+already *is* the join-result row — there is no third, unnamed relation left to
+contribute fan-out for the qualifier to collapse. The two forms only diverge
+once a relation is left out of the list while still appearing in the join.
+
+The relation list is order-independent — `FindOrCreateEntityScope` canonicalizes
+it (sorted, case-insensitively) before using it as the scope cache key, so
+`SUM(D, T: ...)` and `SUM(T, D: ...)` share one scope and one `EntityMapping`
+rather than building the identity twice.
+
 ---
 
 ## 4. Constraints

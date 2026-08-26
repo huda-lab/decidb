@@ -1236,6 +1236,7 @@ public:
     vector<EvaluatedConstraint> evaluated_constraints;
     vector<CoefficientColumn> evaluated_objective_coefficients;  // [term_idx]
     vector<idx_t> objective_variable_indices;
+    vector<LinearTermReduction> objective_term_reductions;       // [term_idx]
 
     // Quadratic objective: evaluated inner linear expression coefficients
     vector<CoefficientColumn> evaluated_quadratic_coefficients;  // [term_idx]
@@ -2363,13 +2364,18 @@ PhysicalDecide::ObjectiveEvalState PhysicalDecide::EvaluateObjective(ClientConte
             vector<CoefficientColumn> *out_coeffs;
             vector<idx_t> *out_var_indices;
             vector<TermFilterState> *out_term_filters;
+            //! Only set for the linear bucket: the model builder's scalar-once shortcut
+            //! needs to tell a reducer-summed term from a row-invariant sibling term.
+            //! Quadratic terms have no such shortcut, so this stays null there.
+            vector<LinearTermReduction> *out_reductions = nullptr;
         };
         vector<ObjBucket> buckets;
         if (!gstate.objective->terms.empty()) {
             buckets.push_back({&gstate.objective->terms,
                                &gstate.evaluated_objective_coefficients,
                                &gstate.objective_variable_indices,
-                               &obj_linear_term_filters});
+                               &obj_linear_term_filters,
+                               &gstate.objective_term_reductions});
         }
         if (gstate.objective->has_quadratic) {
             buckets.push_back({&gstate.objective->squared_terms,
@@ -2395,6 +2401,9 @@ PhysicalDecide::ObjectiveEvalState PhysicalDecide::EvaluateObjective(ClientConte
                         obj_filter_slots.push_back({term.filter.get(), &(*b.out_term_filters)[term_idx]});
                     }
                     b.out_var_indices->push_back(term.variable_index);
+                    if (b.out_reductions) {
+                        b.out_reductions->push_back(term.reduction);
+                    }
                 }
             }
 
@@ -2783,6 +2792,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // Objective (linear part)
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
+    solver_input.objective_term_reductions = std::move(gstate.objective_term_reductions);
     solver_input.sense = decide_sense;
 
     // Quadratic objective (if present)

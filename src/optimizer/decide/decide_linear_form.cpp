@@ -983,11 +983,15 @@ private:
 				return;
 			}
 		}
-		// A query-wide (`scalar`) decision is row-invariant, so it is a complete term of
-		// an aggregate constraint on its own -- there is nothing for a reducer to collapse.
-		// This is K3's "reducer or row-invariant" rule; the objective path already reads
-		// the same way (see ExtractAggregateObjectiveTerms).
-		if (IsScalarDecideTerm(expr)) {
+		// A query-wide (`scalar`) decision standing alone (not inside a reducer) is
+		// row-invariant, so it is a complete term of an aggregate constraint on its own --
+		// there is nothing for a reducer to collapse. This is K3's "reducer or
+		// row-invariant" rule; the objective path already reads the same way (see
+		// ExtractAggregateObjectiveTerms). The BOUND_AGGREGATE exclusion matters: a scalar
+		// may also sit *inside* a reducer body now (`SUM(cost * cap)`), and that case must
+		// fall through to the SUM extraction below so the coefficient is evaluated per row
+		// instead of being read as a bare `cap` with coefficient 1.
+		if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE && IsScalarDecideTerm(expr)) {
 			ExtractConstraintTerms(expr, constraint, sign);
 			return;
 		}
@@ -1527,8 +1531,11 @@ private:
 				return;
 			}
 		}
-		// A query-wide decision contributes without a reducer.
-		if (IsScalarDecideTerm(expr)) {
+		// A query-wide decision standing alone (not inside a reducer) contributes without
+		// one. Excludes BOUND_AGGREGATE for the same reason as the constraint side above:
+		// a scalar inside a reducer body (`SUM(cost * cap)`) must fall through to the SUM
+		// extraction below instead of being read as a bare `cap` with coefficient 1.
+		if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE && IsScalarDecideTerm(expr)) {
 			ExtractLinearAndBilinearTerms(expr, obj, sign, nullptr);
 			return;
 		}
@@ -1558,6 +1565,7 @@ private:
 		for (idx_t i = before; i < obj.terms.size(); i++) {
 			obj.terms[i].avg_scale = is_avg;
 			obj.terms[i].qualifier_scope_idx = qualifier_scope;
+			obj.terms[i].reduction = LinearTermReduction::SUM;
 		}
 		for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
 			obj.bilinear_terms[i].avg_scale = is_avg;
@@ -1615,6 +1623,7 @@ private:
 			for (idx_t i = before; i < objective->terms.size(); i++) {
 				objective->terms[i].avg_scale = is_avg;
 				objective->terms[i].qualifier_scope_idx = qualifier_scope;
+				objective->terms[i].reduction = LinearTermReduction::SUM;
 			}
 			for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
 				objective->bilinear_terms[i].avg_scale = is_avg;

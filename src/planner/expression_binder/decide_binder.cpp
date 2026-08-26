@@ -23,6 +23,7 @@
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include <unordered_set>
+#include <algorithm>
 #include <cmath>
 
 #include "duckdb/main/client_context.hpp"
@@ -117,34 +118,50 @@ bool IsDecideAggregateName(const string &name) {
 idx_t FindOrCreateEntityScope(BindContext &bind_context, const string &table_name,
                               vector<EntityScopeInfo> &entity_scopes,
                               case_insensitive_map_t<idx_t> &table_scope_map) {
-	auto scope_it = table_scope_map.find(table_name);
+	return FindOrCreateEntityScope(bind_context, vector<string> {table_name}, entity_scopes, table_scope_map);
+}
+
+idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &table_names,
+                              vector<EntityScopeInfo> &entity_scopes,
+                              case_insensitive_map_t<idx_t> &table_scope_map) {
+	D_ASSERT(!table_names.empty());
+	// Canonicalize order so sum(D,T: ...) and sum(T,D: ...) share one scope: the
+	// composite identity is a set, not a sequence.
+	auto sorted_names = table_names;
+	std::sort(sorted_names.begin(), sorted_names.end(), [](const string &a, const string &b) {
+		return StringUtil::Lower(a) < StringUtil::Lower(b);
+	});
+	string cache_key = StringUtil::Join(sorted_names, ",");
+	auto scope_it = table_scope_map.find(cache_key);
 	if (scope_it != table_scope_map.end()) {
 		return scope_it->second;
 	}
-	ErrorData error;
-	auto binding = bind_context.GetBinding(table_name, error);
-	D_ASSERT(binding); // callers resolve the name first so they can word their own error
-	// Register every source-table column via GetColumnBinding. This forces the
-	// columns into the scan's column_ids and returns the correct ColumnBinding
-	// (table_index, position-in-col_ids).
 	EntityScopeInfo scope_info;
-	scope_info.table_alias = table_name;
-	scope_info.source_table_index = binding->index;
-	if (binding->binding_type == BindingType::TABLE) {
-		auto &tbl_binding = binding->Cast<TableBinding>();
-		for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-			scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-			scope_info.entity_key_bindings.push_back(tbl_binding.GetColumnBinding(col_idx));
-		}
-	} else {
-		// Non-base table (e.g., subquery): fall back to raw bindings.
-		for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-			scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-			scope_info.entity_key_bindings.push_back(ColumnBinding(binding->index, col_idx));
+	scope_info.table_alias = cache_key;
+	for (auto &table_name : sorted_names) {
+		ErrorData error;
+		auto binding = bind_context.GetBinding(table_name, error);
+		D_ASSERT(binding); // callers resolve the name first so they can word their own error
+		scope_info.source_table_indices.push_back(binding->index);
+		// Register every source-table column via GetColumnBinding. This forces the
+		// columns into the scan's column_ids and returns the correct ColumnBinding
+		// (table_index, position-in-col_ids).
+		if (binding->binding_type == BindingType::TABLE) {
+			auto &tbl_binding = binding->Cast<TableBinding>();
+			for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
+				scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
+				scope_info.entity_key_bindings.push_back(tbl_binding.GetColumnBinding(col_idx));
+			}
+		} else {
+			// Non-base table (e.g., subquery): fall back to raw bindings.
+			for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
+				scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
+				scope_info.entity_key_bindings.push_back(ColumnBinding(binding->index, col_idx));
+			}
 		}
 	}
 	idx_t scope_idx = entity_scopes.size();
-	table_scope_map.emplace(table_name, scope_idx);
+	table_scope_map.emplace(cache_key, scope_idx);
 	entity_scopes.push_back(std::move(scope_info));
 	return scope_idx;
 }
@@ -1062,17 +1079,20 @@ bool DecideBinder::IsScalarDecideVariable(const ParsedExpression &expr) const {
 	return !colref.IsQualified() && scalar_variables.count(colref.GetColumnName()) > 0;
 }
 
-string DecideBinder::FindScalarDecideVariable(const ParsedExpression &expr) const {
-	if (IsScalarDecideVariable(expr)) {
-		return expr.Cast<const ColumnRefExpression>().GetColumnName();
+bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const {
+	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+		if (!IsVariableExpression(expr, variables)) {
+			return false; // a plain data column varies per row
+		}
+		return IsScalarDecideVariable(expr); // row/entity-scoped decisions vary; scalars don't
 	}
-	string found;
+	bool invariant = true;
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
-		if (found.empty()) {
-			found = FindScalarDecideVariable(child);
+		if (invariant && !IsRowInvariantExpression(child)) {
+			invariant = false;
 		}
 	});
-	return found;
+	return invariant;
 }
 
 bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, bool allow_bilinear, DecideExpression &result,
@@ -1089,12 +1109,12 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, bool allow_bili
 		return true;
 	}
 	if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
-		auto scalar_name = FindScalarDecideVariable(*func.children.front());
-		if (!scalar_name.empty()) {
+		if (!func.children.empty() && IsRowInvariantExpression(*func.children.front())) {
+			auto body_text = func.children.front()->ToString();
 			error_msg = StringUtil::Format(
-			    "'%s' is a query-wide decision, so %s(%s) has nothing to aggregate over; "
+			    "%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "
 			    "use %s on its own",
-			    scalar_name, StringUtil::Upper(fname), scalar_name, scalar_name);
+			    body_text, StringUtil::Upper(fname), body_text, body_text);
 			result = DecideExpression::INVALID;
 		} else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true,
 		                                allow_bilinear)) {
@@ -1259,42 +1279,93 @@ BindResult DecideBinder::BindLocalWhenAggregate(FunctionExpression &when_expr, i
 	return BindResult(std::move(aggregate_expr));
 }
 
+//! True when `expr` holds the same value on every row of the qualified relation: no
+//! plain data column and no row- or entity-scoped decision appears anywhere inside it.
+//! The bound-tree twin of `DecideBinder::IsRowInvariantExpression`, used once the
+//! reducer body is bound and its columns carry scope information.
+static bool IsBoundReducerBodyRowInvariant(const Expression &expr, const DecideQualifierContext &ctx) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = expr.Cast<const BoundColumnRefExpression>();
+		if (colref.binding.table_index != ctx.decide_index) {
+			return false; // a plain data column varies per row
+		}
+		idx_t var_idx = colref.binding.column_index;
+		auto &scopes = *ctx.variable_scopes;
+		return var_idx < scopes.size() && scopes[var_idx].IsScalar();
+	}
+	bool invariant = true;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (invariant && !IsBoundReducerBodyRowInvariant(child, ctx)) {
+			invariant = false;
+		}
+	});
+	return invariant;
+}
+
+//! Whether `table_index` is one of the tables `scope` names.
+static bool ScopeContainsTable(const EntityScopeInfo &scope, idx_t table_index) {
+	return std::find(scope.source_table_indices.begin(), scope.source_table_indices.end(), table_index) !=
+	       scope.source_table_indices.end();
+}
+
+//! Whether two scopes name any table in common. Used to check a decision variable's
+//! own (always single-relation) declaration scope against a qualifier's — possibly
+//! composite — scope.
+static bool ScopeTablesIntersect(const EntityScopeInfo &a, const EntityScopeInfo &b) {
+	for (auto table_index : a.source_table_indices) {
+		if (ScopeContainsTable(b, table_index)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 //! Enforces the well-formedness rule for a relation-qualified reducer: everything the
-//! reducer body reads must come from the qualified relation, so that all rows sharing a
-//! tuple identity carry the same value and de-duplication can keep any one of them.
-//! Anything else — another relation's column, a decision not scoped to this relation —
-//! would make the kept row an arbitrary choice, so it is rejected here rather than
-//! resolved silently. Returns "" when the body is well formed, else the message to raise.
-static string CheckQualifiedReducerBody(const Expression &expr, const string &relation,
+//! reducer body reads must come from one of the qualified relations, so that all rows
+//! sharing a tuple identity carry the same value and de-duplication can keep any one of
+//! them. A query-wide (`scalar`) decision is exempt — it is row-invariant, so it
+//! contributes the same value to every tuple regardless of which relation "owns" it; the
+//! caller rejects it separately when it is the *only* thing in the body (nothing left to
+//! reduce over). Anything else — a column from an unnamed relation, a decision not
+//! scoped to any named relation — would make the kept row an arbitrary choice, so it is
+//! rejected here rather than resolved silently. Returns "" when the body is well formed,
+//! else the message to raise. `relations` names the qualifier for error text, in the
+//! order the query wrote them.
+static string CheckQualifiedReducerBody(const Expression &expr, const vector<string> &relations,
                                         const string &agg_name, idx_t scope_idx,
                                         const DecideQualifierContext &ctx) {
 	string error;
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<const BoundColumnRefExpression>();
 		auto name = colref.GetName();
+		auto relation_list = StringUtil::Join(relations, ", ");
+		auto &qualifier_scope = (*ctx.entity_scopes)[scope_idx];
 		if (colref.binding.table_index == ctx.decide_index) {
 			idx_t var_idx = colref.binding.column_index;
 			auto &scopes = *ctx.variable_scopes;
 			if (var_idx < scopes.size() && scopes[var_idx].IsEntity() &&
-			    scopes[var_idx].entity_scope_idx == scope_idx) {
+			    ScopeTablesIntersect((*ctx.entity_scopes)[scopes[var_idx].entity_scope_idx], qualifier_scope)) {
 				return "";
 			}
 			if (var_idx < scopes.size() && scopes[var_idx].IsScalar()) {
+				return ""; // row-invariant: contributes uniformly, whichever relation it sits beside
+			}
+			if (relations.size() == 1) {
 				return StringUtil::Format(
-				    "'%s' is a query-wide decision, so %s(%s: ...) cannot use it; add it outside "
-				    "the reducer instead",
-				    name, StringUtil::Upper(agg_name), relation);
+				    "'%s' is not a decision of %s, so %s(%s: ...) cannot use it; declare it as "
+				    "%s.%s(...) or move that term into its own reducer",
+				    name, relation_list, StringUtil::Upper(agg_name), relation_list, relation_list, name);
 			}
 			return StringUtil::Format(
-			    "'%s' is not a decision of %s, so %s(%s: ...) cannot use it; declare it as "
-			    "%s.%s(...) or move that term into its own reducer",
-			    name, relation, StringUtil::Upper(agg_name), relation, relation, name);
+			    "'%s' is not a decision of %s, so %s(%s: ...) cannot use it; declare it on one of "
+			    "those relations or move that term into its own reducer",
+			    name, relation_list, StringUtil::Upper(agg_name), relation_list);
 		}
-		if (colref.binding.table_index != (*ctx.entity_scopes)[scope_idx].source_table_index) {
+		if (!ScopeContainsTable(qualifier_scope, colref.binding.table_index)) {
 			return StringUtil::Format(
-			    "'%s' does not come from %s, so %s(%s: ...) cannot use it; keep only %s's columns "
-			    "inside the qualified reducer and sum the rest separately",
-			    name, relation, StringUtil::Upper(agg_name), relation, relation);
+			    "'%s' does not come from %s, so %s(%s: ...) cannot use it; keep only those relations' "
+			    "columns inside the qualified reducer and sum the rest separately",
+			    name, relation_list, StringUtil::Upper(agg_name), relation_list);
 		}
 		return "";
 	}
@@ -1302,41 +1373,50 @@ static string CheckQualifiedReducerBody(const Expression &expr, const string &re
 		if (!error.empty()) {
 			return;
 		}
-		error = CheckQualifiedReducerBody(child, relation, agg_name, scope_idx, ctx);
+		error = CheckQualifiedReducerBody(child, relations, agg_name, scope_idx, ctx);
 	});
 	return error;
 }
 
 BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth) {
-	if (qualified_expr.children.size() != 2) {
+	if (qualified_expr.children.size() < 2) {
 		return BindResult(BinderException::Unsupported(
-		    qualified_expr, "A qualified reducer expects one relation and one expression, as in sum(D: ...)."));
+		    qualified_expr, "A qualified reducer expects one or more relations and an expression, as in "
+		                    "sum(D: ...) or sum(D, T: ...)."));
 	}
-	auto &qualifier = *qualified_expr.children[1];
-	if (qualifier.GetExpressionClass() != ExpressionClass::COLUMN_REF ||
-	    qualifier.Cast<ColumnRefExpression>().IsQualified()) {
-		return BindResult(BinderException::Unsupported(
-		    qualified_expr, "The qualifier of a reducer must be a relation name or alias, as in sum(D: ...)."));
+	vector<string> relations;
+	for (idx_t i = 1; i < qualified_expr.children.size(); i++) {
+		auto &qualifier = *qualified_expr.children[i];
+		if (qualifier.GetExpressionClass() != ExpressionClass::COLUMN_REF ||
+		    qualifier.Cast<ColumnRefExpression>().IsQualified()) {
+			return BindResult(BinderException::Unsupported(
+			    qualified_expr,
+			    "The qualifier of a reducer must be a relation name or alias, as in sum(D: ...)."));
+		}
+		relations.push_back(qualifier.Cast<ColumnRefExpression>().GetColumnName());
 	}
-	auto relation = qualifier.Cast<ColumnRefExpression>().GetColumnName();
+	auto relation_list = StringUtil::Join(relations, ", ");
 
 	if (!qualifier_context) {
 		return BindResult(BinderException::Unsupported(
 		    qualified_expr, "A relation-qualified reducer is only allowed inside a DECIDE clause."));
 	}
 	auto &ctx = *qualifier_context;
-	ErrorData binding_error;
-	auto binding = binder.bind_context.GetBinding(relation, binding_error);
-	if (!binding || binding->index == ctx.decide_index) {
-		return BindResult(BinderException::Unsupported(
-		    qualified_expr,
-		    StringUtil::Format("Relation '%s' is not in the FROM clause, so a reducer cannot be qualified by it.",
-		                       relation)));
+	for (auto &relation : relations) {
+		ErrorData binding_error;
+		auto binding = binder.bind_context.GetBinding(relation, binding_error);
+		if (!binding || binding->index == ctx.decide_index) {
+			return BindResult(BinderException::Unsupported(
+			    qualified_expr, StringUtil::Format(
+			                        "Relation '%s' is not in the FROM clause, so a reducer cannot be qualified by it.",
+			                        relation)));
+		}
 	}
 	// A qualifier is an entity scope with no variable of its own, so it shares the
 	// declaration path's key and the one EntityMapping the executor builds per scope.
+	// Naming several relations widens the scope's tuple identity to their concatenation.
 	idx_t scope_idx =
-	    FindOrCreateEntityScope(binder.bind_context, relation, *ctx.entity_scopes, *ctx.table_scope_map);
+	    FindOrCreateEntityScope(binder.bind_context, relations, *ctx.entity_scopes, *ctx.table_scope_map);
 
 	auto aggregate_result = BindExpression(qualified_expr.children[0], depth);
 	if (aggregate_result.HasError()) {
@@ -1349,7 +1429,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		    qualified_expr, StringUtil::Format(
 		                        "A relation qualifier is only allowed on SUM, AVG, MIN or MAX; write %s(...) without "
 		                        "the '%s:' qualifier.",
-		                        StringUtil::Upper(relation), relation)));
+		                        StringUtil::Upper(relation_list), relation_list)));
 	}
 	auto agg_name = StringUtil::Lower(aggregate->function.name);
 	if (!IsDecideAggregateName(agg_name)) {
@@ -1358,8 +1438,23 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		    StringUtil::Format("'%s' cannot be qualified by a relation; only SUM, AVG, MIN and MAX can.",
 		                       StringUtil::Upper(agg_name))));
 	}
+	bool any_row_varying = false;
 	for (auto &child : aggregate->children) {
-		auto error = CheckQualifiedReducerBody(*child, relation, agg_name, scope_idx, ctx);
+		if (!IsBoundReducerBodyRowInvariant(*child, ctx)) {
+			any_row_varying = true;
+			break;
+		}
+	}
+	if (!any_row_varying) {
+		auto body_text = aggregate->children.empty() ? "" : aggregate->children[0]->ToString();
+		return BindResult(BinderException::Unsupported(
+		    qualified_expr, StringUtil::Format(
+		                        "%s is a query-wide decision, so %s(%s: ...) has nothing to aggregate over; "
+		                        "use %s on its own",
+		                        body_text, StringUtil::Upper(agg_name), relation_list, body_text)));
+	}
+	for (auto &child : aggregate->children) {
+		auto error = CheckQualifiedReducerBody(*child, relations, agg_name, scope_idx, ctx);
 		if (!error.empty()) {
 			return BindResult(BinderException::Unsupported(qualified_expr, error));
 		}
