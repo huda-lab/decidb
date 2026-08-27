@@ -1,6 +1,6 @@
 # Clause-Order Test Coverage — Done
 
-Tests live in `test/decide/tests/test_clause_order.py` (17 tests).
+Tests live in `test/decide/tests/test_clause_order.py`.
 
 Covers the two accepted positions of the `DECIDE` declaration — the paper's
 split order (declaration between `SELECT` and `FROM`, constraints and objective
@@ -50,13 +50,8 @@ orders" and `00_project_overview/syntax_reference.md` §1.
   single-block spelling of the same query rather than asserted in isolation,
   since the claim under test is equivalence.
 
-## Caveats
-
-- `test_declaration_in_both_slots_rejected` asserts only that the query is a
-  parser error, not the wording. The message emitted today is the missing-`SUCH
-  THAT` one, which names a fix the user already applied — logged in
-  `06_issues/code_quality/todo.md` → "Declaring DECIDE in both clause slots
-  reports the wrong fix".
+`test_declaration_in_both_slots_rejected` pins the duplicate-declaration message:
+declare variables either before `FROM` or with `SUCH THAT`, not in both slots.
 
 ## Feature interactions covered
 

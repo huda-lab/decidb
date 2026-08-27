@@ -44,7 +44,7 @@ MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp   -- sum per-group SSE; ≡ flat
 MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp   -- inner AVG scales each row by 1/n_g
 ```
 
-Nothing expands these before binding, so the `POWER(linear, 2)` pattern reaches the QP extractor intact and the post-bind optimizer strips the outer wrapper. `SUM(MIN(POWER(...))) PER grp` and `SUM(MAX(POWER(...))) PER grp` also bind, but physical-layer correctness for the quadratic per-row auxiliary path is tracked separately in `../../04_testing/quadratic/todo.md`.
+Nothing expands these before binding, so the `POWER(linear, 2)` pattern reaches the QP extractor intact and the post-bind optimizer strips the outer wrapper. `SUM(MIN(POWER(...))) PER grp` and `SUM(MAX(POWER(...))) PER grp` are also oracle-covered; see `test_per_objective.py` and `../../04_testing/quadratic/done.md`.
 
 ---
 

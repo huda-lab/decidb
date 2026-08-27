@@ -101,3 +101,110 @@ class TestDiagnoseIsTheOnlyTrigger:
         cli = request.getfixturevalue(cli_fixture)
         out = _combined(cli.execute_raw("DIAGNOSE SELECT 1 AS a;"))
         assert "decide clause" in out
+
+
+# A failing solve nested inside another DECIDE clause, and two failing solves side
+# by side. Both put more than one DECIDE operator in the plan.
+_NESTED_SQL = (
+    "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) SUCH THAT x >= 0 "
+    "AND SUM(x) <= (SELECT SUM(y) FROM (VALUES (1), (2)) u(uid) "
+    "DECIDE y(INT) SUCH THAT y >= 5 AND y <= 1 MAXIMIZE SUM(y)) MAXIMIZE SUM(x)"
+)
+_SIBLING_FIRST_FAILS = (
+    "SELECT a.id, a.x, b.y FROM "
+    "(SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) "
+    " SUCH THAT x >= 5 AND x <= 1 MAXIMIZE SUM(x)) a JOIN "
+    "(SELECT id, y FROM (VALUES (1), (2)) t(id) DECIDE y(INT) "
+    " SUCH THAT y >= 0 AND y <= 3 MAXIMIZE SUM(y)) b USING (id)"
+)
+_SIBLING_SECOND_FAILS = (
+    "SELECT a.id, a.x, b.y FROM "
+    "(SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) "
+    " SUCH THAT x >= 0 AND x <= 3 MAXIMIZE SUM(x)) a JOIN "
+    "(SELECT id, y FROM (VALUES (1), (2)) t(id) DECIDE y(INT) "
+    " SUCH THAT y >= 5 AND y <= 1 MAXIMIZE SUM(y)) b USING (id)"
+)
+
+
+@pytest.mark.query_diagnostics
+class TestDiagnoseReportsOnOneOptimization:
+    """A query may run several optimizations; the diagnosis relation describes one.
+
+    `DIAGNOSE` used to arm whichever DECIDE operator the plan walk reached first,
+    so whether you got a diagnosis at all depended on which solve happened to fail
+    — and when it was the wrong one, the query raised the unprefixed error telling
+    the user to add the prefix they had already added. It now refuses up front and
+    says how to get an answer. Solving such queries is unaffected; only the prefix
+    is refused.
+    """
+
+    @pytest.mark.error
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "sql,shape",
+        [
+            (_NESTED_SQL, "nested"),
+            (_SIBLING_FIRST_FAILS, "sibling, first fails"),
+            (_SIBLING_SECOND_FAILS, "sibling, second fails"),
+        ],
+    )
+    def test_the_prefix_is_refused_on_more_than_one_decide(
+        self, request, cli_fixture, sql, shape
+    ):
+        cli = request.getfixturevalue(cli_fixture)
+        out = _combined(cli.execute_raw(f"DIAGNOSE {sql};"))
+        assert "one optimization at a time" in out, shape
+        assert "2 decide clauses" in out, shape
+        assert "separately" in out, shape
+        # The refusal replaces the old self-contradicting advice.
+        assert "prefix the query with diagnose" not in out, shape
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "sql,shape",
+        [(_NESTED_SQL, "nested"), (_SIBLING_SECOND_FAILS, "sibling")],
+    )
+    def test_isolating_the_failing_decide_diagnoses_it(
+        self, request, cli_fixture, sql, shape
+    ):
+        """The refusal is actionable: the inner query on its own does diagnose."""
+        cli = request.getfixturevalue(cli_fixture)
+        isolated = (
+            "SELECT SUM(y) FROM (VALUES (1), (2)) u(uid) "
+            "DECIDE y(INT) SUCH THAT y >= 5 AND y <= 1 MAXIMIZE SUM(y)"
+        )
+        result = cli.execute_raw(f"DIAGNOSE {isolated};")
+        assert not result.stderr.strip(), result.stderr
+        assert "infeasible" in result.stdout.lower(), shape
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_several_decide_clauses_still_solve_without_the_prefix(
+        self, request, cli_fixture
+    ):
+        """Only the diagnosis is refused. A query composing several optimizations
+        runs exactly as before."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT a.id, a.x, b.y FROM "
+            "(SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) "
+            " SUCH THAT x >= 0 AND x <= 3 MAXIMIZE SUM(x)) a JOIN "
+            "(SELECT id, y FROM (VALUES (1), (2)) t(id) DECIDE y(INT) "
+            " SUCH THAT y >= 0 AND y <= 2 MAXIMIZE SUM(y)) b USING (id)"
+        )
+        result = cli.execute_raw(f"{sql};")
+        assert not result.stderr.strip(), result.stderr
+        assert "one optimization at a time" not in result.stdout.lower()
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_plain_subquery_is_not_a_second_optimization(self, request, cli_fixture):
+        """The count is of DECIDE operators, not of subqueries: an ordinary scalar
+        subquery on a constraint bound still leaves exactly one optimization."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) "
+            "SUCH THAT x >= 9 AND x <= (SELECT MIN(id) FROM (VALUES (1), (2)) u(id)) "
+            "MAXIMIZE SUM(x)"
+        )
+        result = cli.execute_raw(f"DIAGNOSE {sql};")
+        assert not result.stderr.strip(), result.stderr
+        assert "infeasible" in result.stdout.lower()

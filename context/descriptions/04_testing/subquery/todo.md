@@ -1,5 +1,3 @@
 # Subquery Test Coverage — Todo
 
-## Missing coverage
-
-_No open gaps._
+No open coverage gaps. Shipped coverage is recorded in `done.md`.

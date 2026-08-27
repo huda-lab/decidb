@@ -1,6 +1,8 @@
 # Code Quality Issues — Open
 
-Code-quality issues (duplication, dead code, fragile patterns, unclear naming, missing test coverage) spotted opportunistically while working on other tasks. Not bugs — nothing here produces wrong results today; these are things that make the code harder to change safely. Actual bugs go to `../bugs/todo.md`.
+Code-quality issues include duplication, dead code, fragile patterns, unclear
+naming, missing coverage, and diagnostic-quality defects that do not change the
+ordinary optimization result. Solve-correctness bugs belong in `../bugs/todo.md`.
 
 Each entry: short title, location (`file:line`), what's wrong, why it matters, and when/during which task it was discovered.
 
@@ -13,9 +15,9 @@ without it:
 
 | Construct         | Site                                                                                         | Reads                                |
 | ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------ |
-| L0`norm` auto-M | `physical_decide.cpp:2672` → `DecideTightPerRowBigM`                                    | `lower_bounds` / `upper_bounds`  |
-| `<>` lowering   | `ilp_linearization.cpp` `LowerDecideConstructs` → `FlatRowReach` → `FlatColumnBox` | `lower_bounds` / `upper_bounds`  |
-| McCormick         | `ilp_linearization.cpp` `LinearizeBilinear`                                              | `upper_bounds[link.other_var_idx]` |
+| L0 `norm` auto-M | `physical_decide.cpp:2672` → `DecideTightPerRowBigM`                              | `lower_bounds` / `upper_bounds`     |
+| `<>` lowering    | `ilp_linearization.cpp` `LowerDecideConstructs` → `FlatRowReach` → `FlatColumnBox` | `lower_bounds` / `upper_bounds`     |
+| McCormick        | `ilp_linearization.cpp` `LinearizeBilinear`                                       | `lower_bounds` / `upper_bounds`     |
 
 **What's wrong.** `SolverInput` carries two column boxes. `lower_bounds`/`upper_bounds` is
 the box as the query states it, with user bounds like `x <= 5` absorbed into the column by
@@ -49,8 +51,8 @@ control's is the correct one:
 
 | Case                             | Gurobi                    | HiGHS                      | Correct |
 | -------------------------------- | ------------------------- | -------------------------- | ------- |
-| control`SUM(x) >= 60`          | 60 (`x <= 20`)          | 60 (`x <= 20`)           | 60      |
-| control`SUM(x) >= 30`          | 30 (`x <= 10`)          | 30 (`x <= 10`)           | 30      |
+| control `SUM(x) >= 60`         | 60 (`x <= 20`)          | 60 (`x <= 20`)           | 60      |
+| control `SUM(x) >= 30`         | 30 (`x <= 10`)          | 30 (`x <= 10`)           | 30      |
 | `+ x <> 3`                     | 60 (`x <= 20`)          | **18** (`x <= 6`)  | 60      |
 | `+ norm(x, 0) <= 2`            | **18** (`x <= 6`) | **15** (no box edit) | 30      |
 | `SUM(b * x) >= 30`, `b` BOOL | **15**              | **15**               | 30      |
@@ -73,13 +75,13 @@ wrong even though no solve is.
 objective 18" to "one edit, `SUM(x) >= 30` untouched, objective 30". That rules out the
 repair-tie weighting and isolates the constant as the cause.
 
-**Fix shape, and why it was not done pre-release.** Point the three sites at `rigid_*`. ABS
+**Fix shape.** Point the three sites at `rigid_*`. ABS
 and MIN/MAX read the non-rigid box too, but B3 gave them a targeted mitigation
 (`DemandedAuxReach`, family widening) that patches the symptom for the *auxiliary* case;
 `rigid_*` is the general contract, introduced by the `<>` classifier work and never adopted
 by the constant-deriving paths. The change **widens every affected Big-M**, so it moves the
 golden dumps and loosens root relaxations on queries that solve fine today. It needs its own
-batch with a golden re-capture and a benchmark pass. Sequence after `v0.3.0`.
+batch with a golden re-capture and a benchmark pass.
 
 **Test**: the five rows of the table above, asserted with `assert_backends_agree` — the
 per-backend divergence is the sharpest available oracle and needs no hand-computed number.
@@ -89,5 +91,44 @@ cases live.
 **Done file**: `07_query_diagnostics/infeasible/done.md` — the B3 "Residual class, accepted
 not fixed" paragraph is what this closes.
 
-**Discovered**: 2026-08-27, reviewing the batch-I open questions before the `v0.3.0`
-sign-off.
+**Discovered**: 2026-08-27 during release review.
+
+---
+
+## A cancelled-by-you message on a composed query that no one cancelled
+
+**Location**: the slow-solve checkpoint report in
+`src/execution/operator/decide/physical_decide.cpp` (S2 block, "Slow-solve checkpoint
+report"), reached from `Finalize`.
+
+**What's wrong.** When a SELECT composes two DECIDE subqueries side by side and the
+*second* one is infeasible, its throw aborts the pipeline while the first is still
+running. The first operator then prints its interruption report, which is worded for
+Ctrl-C:
+
+```
+DECIDE stopped at your request before finding a solution yet.
+  elapsed 0.00065s · peak memory 29.3 MB
+Invalid Input Error: DECIDE optimization is infeasible. …
+```
+
+Nobody asked it to stop. The two lines contradict each other, and the elapsed/memory
+figures describe a solve that was never the problem.
+
+**Why it matters.** It is the first thing printed, so it is the first thing read, and
+it sends the user looking for a cancellation instead of the infeasible clause named
+underneath. Purely presentational — the error and its exit status are correct.
+
+**Reproduces**: two DECIDE subqueries joined with `USING`, the second infeasible, no
+`DIAGNOSE` prefix. A single DECIDE clause does not show it, and neither does a *nested*
+DECIDE whose inner clause is infeasible — only the sibling shape, where one operator is
+live when another throws.
+
+**Fix shape**: the interruption report should distinguish "the user interrupted" from
+"another operator in this query failed" and stay silent in the second case.
+
+**Test**: the composed-infeasible query above, asserting the cancellation wording is
+absent while the infeasible error is present. `test_diagnose_trigger.py` already holds
+the sibling fixtures.
+
+**Discovered**: 2026-08-27, while verifying the multi-DECIDE `DIAGNOSE` refusal.

@@ -1,91 +1,51 @@
 # Query Diagnostics — Infeasible (remaining work)
 
-The elastic engine is shipped end to end (I1-I5: slack loosening, per-shape slack
-placement, `<>` removal, stage-2 achievable objective, lean reporting), plus the T1
-scale-normalized editable weights, T2 lexicographic repair ladder, T3 two-mode slack-scope
-policy (query vs expanded), T4 objective-best stage-2 removal-set refinement, and T5
-lean-reporting polish. See `done.md` for how it currently works. No active implementation
-tasks remain here; this file only tracks deferred follow-ups.
+The elastic engine is complete. The entries below are deferred output-policy or
+determinism improvements; current behavior is recorded in `done.md`.
 
----
+## Repair-set tie policy is not a total order
 
-## Deferred notes
+The stage-2b rank tie-break covers every repair kind, but several exact ties can
+still be backend-dependent:
 
-- **Degeneracy guard (deferred, from T1's decision).** A backstop that rejects any elastic edit
-  collapsing the user's objective to zero and surfaces the objective-preserving alternative
-  instead. Not implemented: T1's scale-normalized weights already steer stage 1 to the
-  genuinely-tight constraint, after which stage-2 objective-maximization keeps
-  `achievable_objective > 0`, so the guard is a redundant second concern with no failing test.
-  Revisit only if a case surfaces where even the geometrically-smallest edit zeroes the objective.
-- **Broader repair-tie policy (deferred after T4/A5).** The stage-2b rank tie-break now covers
-  every repair kind (removals, editable loosens, data offsets), with and without an objective,
-  so both backends name the same clause on the common single-drop / single-loosen ties. Gaps
-  that remain. (a) **Rank-sum ties**: the tie-break minimizes a rank-weighted sum, which is not
-  a total order over repair *sets* — two different equally-budgeted sets with an equal rank-sum
-  (only reachable at cardinality `≥ 2`) can still be solver-arbitrary. A super-increasing
-  weighting would totalize it but reintroduces the Big-M scaling the lexicographic passes
-  removed; a second frozen pass over a finer key is the clean fix if a case surfaces.
-  (b) **Quadratic-objective ties**: the tie-break is skipped when the objective is quadratic
-  (freezing it needs a quadratic row), so an exact tie there is still solver-dependent.
-  (c) **Absorbed-bound declaration order**: slack ranks follow emission order — matrix rows in
-  declaration order, then re-emitted absorbed bounds (their synthetic clause ids start past the
-  matrix rows; the bound's original position among the clauses is not recorded anywhere). So on
-  a bound-vs-row tie the row wins regardless of which was written first; true source order would
-  need a declaration-rank stamp carried from the binder through `user_absorbed_bounds` and
-  `ConstraintProvenance`. (d) **User-intent criteria** beyond source order (preserve the more
-  meaningful clause, expose multiple equivalent repairs) remain unaddressed.
-- **Unbounded-after-fix witness policy (deferred after T4).** A minimal infeasibility repair can
-  make the original problem feasible while the restored objective is unbounded. Current behavior
-  reports the repair plus an `edit_source='unbounded_after_fix'` finding; T4 did not change that. A
-  future task could decide whether an unbounded post-fix model should still optimize for a more
-  useful finite witness, name which repair unlocks the unbounded direction, or report multiple
-  equivalent repairs.
-- **A per-row clause's diagnosis does not name which PER group failed (deferred, 2026-08-18).**
-  An unreachable bound reduced per group names the clause with its qualifier but not the
-  group carrying the failure:
+- two multi-edit sets can have the same rank sum;
+- quadratic-objective ties skip the tie-break because freezing the objective
+  would require a quadratic row; and
+- absorbed bounds are ranked after matrix rows because their original declaration
+  position is not carried through provenance.
 
-  ```sql
-  WITH data AS (SELECT 0 AS g, -1e1000::DOUBLE AS cap UNION ALL SELECT 0, -1e1000::DOUBLE
-                UNION ALL SELECT 1, 3.0 UNION ALL SELECT 1, 1.0)
-  SELECT g, x FROM data
-  DECIDE x(INT) SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g MAXIMIZE SUM(x)
-  ```
+A total ordering needs either another frozen pass or a source-order rank stamped
+from binding through `user_absorbed_bounds` and `ConstraintProvenance`. Do not use
+super-increasing weights; that would reintroduce the scaling problem the
+lexicographic passes removed.
 
-  reports `clause  MIN(x) <= -inf PER g  unreachable_bound  true`. Group `0` carries the
-  infinity; group `1`'s bound is finite and fine, and with many groups the user cannot tell
-  which to look at. The cause is not in the diagnosis layer —
-  `CollectUnreachableClauses` reads `group_label` and populates the typed finding's `group`
-  column whenever it is set, the same as `MakeLoosenEdit`. `ConstraintProvenance::group_label` is stamped only
-  on the *aggregate* emission path (`ilp_model_builder.cpp:861`, `:1177`), and the hard
-  MIN/MAX `NO_SOLUTION` re-emission sets `lhs_is_aggregate = false`, so it goes down the
-  per-row branch, which never stamps a label. The limitation is that branch's, not this
-  constraint's, so a fix would change the subject text of other per-row grouped diagnoses
-  too — check `_apply_reported_fix` and the golden dump before committing to it. Deferred
-  as cosmetic: the finding is correct and the qualifier keeps the clause recognizable, only
-  the instance is underspecified.
+**Test**: construct equal-budget alternatives for each case and assert both
+backends select the same repair set.
 
-- **The parked residual class is root-caused and tracked as an issue (2026-08-27).**
-  `done.md`'s B3 section notes that `<>`, bilinear (McCormick) and `norm` still have encodings
-  sized from a bound the repair may want to widen. That is now traced to a documented contract
-  that is not honoured — `SolverInput::rigid_*` is "the only part of the column box a
-  structural rewrite may rely on", and no derived Big-M or envelope constant reads it. All
-  three constructs are affected, and `<>` and L0 `norm` report a **different repair per
-  backend**. Full trace, measurements, isolating proof and fix shape:
-  [`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md), "Big-M and
-  envelope constants ignore the rigid box they are contracted to use". Deferred past `v0.3.0`
-  — the fix widens every affected Big-M, so it needs a golden re-capture and a benchmark pass.
+## Unbounded-after-fix witness policy
 
-- **Should elastic diagnosis be a stage-05 rewrite rather than a stage-07/08 engine?**
-  The elastic program is itself a DECIDE query, and attaching slack *before* lowering would
-  make the whole defect class above structurally unrepresentable: there would be no constant
-  baked from a bound the repair wants to move, because the repair would already be part of the
-  query when the constant is derived. The cost is that it reopens stages 07 and 08, which
-  `v0.2.0` signed off, and it replaces a working engine rather than fixing one. Not scheduled.
-  Pointing the three sites at `rigid_*` is the cheap version of the same benefit and should be
-  tried first.
+A minimal infeasibility repair can make the constraints feasible while leaving
+the restored objective unbounded. Current behavior reports the repair plus an
+`edit_source='unbounded_after_fix'` finding.
 
----
+**Decision needed**: whether that is the final contract, or whether diagnosis
+should search for a different finite repair, identify which repair unlocked the
+ray, or return multiple equivalent repairs.
 
-## Suggested batches
+## Grouped unreachable bounds omit the failing group
 
-- None active.
+An unreachable bound reduced per group names the clause and qualifier but not the
+group that contains the failure. `CollectUnreachableClauses` already emits the
+typed `group` field when `ConstraintProvenance::group_label` is set; the label is
+lost because a hard MIN/MAX `NO_SOLUTION` row is re-emitted as non-aggregate and
+takes a branch that does not stamp it.
+
+**Pointers**: grouped provenance in `src/decidb/utility/ilp_model_builder.cpp` and
+`CollectUnreachableClauses` in the diagnostic engine.
+
+**Decision needed**: whether every per-row grouped diagnosis should carry its
+group label. This is presentation-only—the reported clause is correct—but it
+changes typed output and golden text.
+
+**Test**: a multi-group hard MIN/MAX constraint with an unreachable bound in only
+one group, plus `_apply_reported_fix` and golden-output checks.

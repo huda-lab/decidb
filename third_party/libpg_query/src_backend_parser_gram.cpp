@@ -2727,7 +2727,7 @@ static const yytype_uint16 yyrline[] =
      206,   214,   226,   235,   243,   251,   260,   268,   280,   282,
      287,   294,   296,   298,   300,   302,   304,   306,   314,   316,
      324,   329,   337,   345,   350,   356,   362,   372,   382,   392,
-     408,   409,   414,   443,   451,   464,   465,   466,   470,   472,
+     408,   409,   414,   444,   451,   464,   465,   466,   470,   472,
      474,   479,   487,   495,   500,   506,   512,   517,   534,   552,
      571,   590,   591,   610,   614,   618,   622,   626,   636,   647,
      657,   666,   677,   688,   700,   715,   733,   733,   737,   737,
@@ -25775,7 +25775,7 @@ yyreduce:
 #line 373 "third_party/libpg_query/grammar/statements/select.y"
     {
                     PGDecideClause *n = makeNode(PGDecideClause);
-                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
+                    PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = (yyvsp[(3) - (5)].node);
                     n->sense = PG_OBJ_MAXIMIZE;
@@ -25788,7 +25788,7 @@ yyreduce:
 #line 383 "third_party/libpg_query/grammar/statements/select.y"
     {
                     PGDecideClause *n = makeNode(PGDecideClause);
-                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
+                    PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = (yyvsp[(3) - (5)].node);
                     n->sense = PG_OBJ_MINIMIZE;
@@ -25801,7 +25801,7 @@ yyreduce:
 #line 393 "third_party/libpg_query/grammar/statements/select.y"
     {
                     PGDecideClause *n = makeNode(PGDecideClause);
-                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
+                    PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = (yyvsp[(3) - (3)].node);
                     n->sense = PG_OBJ_FEASIBILITY;
@@ -25834,6 +25834,7 @@ yyreduce:
                                 (errcode(PG_ERRCODE_SYNTAX_ERROR),
                                  errmsg("DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint"),
                                  parser_errposition((yylsp[(1) - (3)]))));
+                    PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n = (PGDecideClause *) (yyvsp[(3) - (3)].node);
                     n->variables = (yyvsp[(2) - (3)].list);
                     (yyval.node) = (PGNode *)n;
@@ -25841,10 +25842,9 @@ yyreduce:
     break;
 
   case 583:
-#line 444 "third_party/libpg_query/grammar/statements/select.y"
+#line 445 "third_party/libpg_query/grammar/statements/select.y"
     {
-					pg_yyget_extra(yyscanner)->in_decide_clause = false;
-					pg_yyget_extra(yyscanner)->decide_case_depth = 0;
+					PGDecidePopLexState(pg_yyget_extra(yyscanner));
 					pg_yyget_extra(yyscanner)->decide_declared_before_from = true;
 					(yyval.list) = (yyvsp[(2) - (2)].list);
 				;}

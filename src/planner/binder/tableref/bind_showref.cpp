@@ -142,20 +142,18 @@ unique_ptr<BoundTableRef> Binder::BindShowQuery(ShowRef &ref) {
 	return make_uniq<BoundTableFunction>(std::move(show));
 }
 
-//! Find the DECIDE operator in a bound plan and tell it to diagnose. There is exactly
-//! one per DIAGNOSE-able query (a DECIDE clause is a suffix of one SELECT), and it may
-//! sit under projections / ORDER BY / LIMIT that the prefix does not care about.
-static optional_ptr<LogicalDecide> FindDecide(LogicalOperator &op) {
+//! Collect every DECIDE operator in a bound plan. A usual DIAGNOSE query has exactly one
+//! under projections / ORDER BY / LIMIT. A query that nests a DECIDE subquery inside a
+//! DECIDE clause, or joins two DECIDE subqueries side by side, contributes one operator
+//! each -- both are already flattened into the operator tree by the time BindDiagnose
+//! runs, so counting here sees them.
+static void CollectDecides(LogicalOperator &op, vector<reference<LogicalDecide>> &result) {
 	if (op.type == LogicalOperatorType::LOGICAL_DECIDE) {
-		return &op.Cast<LogicalDecide>();
+		result.push_back(op.Cast<LogicalDecide>());
 	}
 	for (auto &child : op.children) {
-		auto found = FindDecide(*child);
-		if (found) {
-			return found;
-		}
+		CollectDecides(*child, result);
 	}
-	return nullptr;
 }
 
 unique_ptr<BoundTableRef> Binder::BindDiagnose(ShowRef &ref) {
@@ -164,15 +162,25 @@ unique_ptr<BoundTableRef> Binder::BindDiagnose(ShowRef &ref) {
 	auto child_binder = Binder::CreateBinder(context, this);
 	auto plan = child_binder->Bind(*ref.query);
 
-	auto decide = FindDecide(*plan.plan);
-	if (!decide) {
+	vector<reference<LogicalDecide>> decides;
+	CollectDecides(*plan.plan, decides);
+	if (decides.empty()) {
 		throw BinderException("DIAGNOSE needs a query with a DECIDE clause — it reports on "
 		                      "an optimization run, and this query has no optimization to run. "
 		                      "Use EXPLAIN ANALYZE for a plain SQL query.");
 	}
+	// One report, one optimization. A query with several DECIDE clauses runs several
+	// solves, and a single diagnosis relation cannot say which one it describes -- so
+	// refuse rather than pick one and report it as if it were the query's answer.
+	if (decides.size() > 1) {
+		throw BinderException("DIAGNOSE reports on one optimization at a time, and this query has "
+		                      "%s DECIDE clauses. Isolate each decision query and run DIAGNOSE "
+		                      "on each separately.",
+		                      to_string(decides.size()));
+	}
 	// The trigger, carried on the plan itself rather than read back out of a session
 	// setting: this operator, in this statement, diagnoses.
-	decide->diagnose = true;
+	decides[0].get().diagnose = true;
 
 	auto diagnose = make_uniq<LogicalDecideDiagnose>(GenerateTableIndex());
 	diagnose->children.push_back(std::move(plan.plan));

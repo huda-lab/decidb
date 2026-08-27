@@ -11,15 +11,15 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
-| [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | Negative domains, explicit bounds, SOCP |
-| [decide/](decide/) | BOOL, INT, REAL (type mandatory), multiple vars, row-scoped/table-scoped, both clause orders, linearity | Query-wide `scalar`, relation-qualified reducer `SUM(D: expr)` — paper §3 |
-| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`) | `IS BETWEEN` spelling (paper §3) |
+| [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | SOCP |
+| [decide/](decide/) | BOOL, INT, REAL, row/entity/query-wide scope, both clause orders, relation-qualified reducers | Qualified-reducer rendering in EXPLAIN |
+| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`) | NULL-coefficient policy |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
-| [when/](when/) | Full implementation (constraints + objectives + PER composition + aggregate-local filters) | *(no planned features)* |
-| [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row_group_ids architecture | Row-varying RHS |
-| [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, `<>`, IN (dec. vars), arithmetic, comparisons, BETWEEN, NULL | division |
+| [when/](when/) | Constraints, objectives, PER composition, aggregate-local filters, grammar restrictions | Friendly CASE rejection outside reducers |
+| [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row-varying RHS | *(no planned features)* |
+| [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, norm, `<>`, IN (dec. vars), arithmetic including division, comparisons, BETWEEN, NULL | *(no planned features)* |
 | [bilinear/](bilinear/) | Bool×anything (McCormick), non-convex (Q matrix), bilinear constraints, data coefficients, WHEN composition | *(no planned features)* |
-| [explain/](explain/) | `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN (FORMAT JSON)` on a DECIDE query: node structure, the shared `WHEN`/`PER` renderer, cardinality | A live tag-leak bug in the Constraints section; layered as-written → canonical → rewritten rendering |
+| [explain/](explain/) | `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN (FORMAT JSON)` on a DECIDE query: node structure, the shared `WHEN`/`PER` renderer, cardinality | Layered as-written → canonical → rewritten rendering |
 | [diagnose/](diagnose/) | `DIAGNOSE <query>` statement prefix — the only trigger for the diagnostics engine, returning its findings as a relation | — |
 
 ---
@@ -62,7 +62,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `DECIDE` before `FROM` (paper clause order) | Yes (both orders accepted) | — |
 | `DECIDE x(BOOL)` / `x(INT)` type form | Yes (both forms accepted) | — |
 | `DECIDE scalar x(INT)` (query-wide) | Yes (paper §3.1) | — |
-| `IS BETWEEN a AND b` | **No** (paper Figure 1; bare `BETWEEN` only — a known paper-vs-code divergence) | [such_that/todo.md](such_that/todo.md) |
+| `IS BETWEEN a AND b` | **No** (bare `BETWEEN` is the supported syntax) | — |
 
 ### Problem Classification
 
@@ -72,14 +72,15 @@ For a complete taxonomy of what mathematical optimization problem classes DeciDB
 
 ## Development Priorities
 
-Every expressivity item the paper sweep raised is now implemented, bar one, and the
-matrix above is the current state rather than a plan. What is left:
+The active language-surface queue is deliberately small:
 
-- **`IS BETWEEN` spelling** — not parsed; bare `BETWEEN` is. Paper Figure 1 uses the long
-  form, so the figure does not run as printed. A known divergence, not scheduled work.
-  [such_that/todo.md](such_that/todo.md)
+- qualified-reducer and layered rendering in
+  [decide/todo.md](decide/todo.md) and [explain/todo.md](explain/todo.md);
+- [SOCP](problem_types/todo.md);
+- the [NULL-coefficient policy](such_that/todo.md); and
+- the [CASE error-message follow-up](when/todo.md).
 
-`DIAGNOSE <query>` shipped in batch H (2026-08-26) — [diagnose/done.md](diagnose/done.md).
+`DIAGNOSE <query>` is implemented — [diagnose/done.md](diagnose/done.md).
 
 ---
 

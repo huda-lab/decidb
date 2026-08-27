@@ -2,8 +2,7 @@
 
 Tests live in:
 - `test/decide/tests/test_cons_subquery.py` — uncorrelated scalar subquery RHS
-- `test/decide/tests/test_cons_correlated_subquery.py` — correlated subquery RHS (6 tests)
-- `test/decide/tests/test_sql_subquery.py` — SQL subquery features
+- `test/decide/tests/test_cons_correlated_subquery.py` — correlated subquery RHS
 
 ## Scenarios covered
 

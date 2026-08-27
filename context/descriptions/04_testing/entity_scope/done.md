@@ -1,6 +1,6 @@
 # Entity-Scope Test Coverage — Done
 
-Tests live in `test/decide/tests/test_entity_scope.py` (36 tests).
+Tests live in `test/decide/tests/test_entity_scope.py`.
 
 Oracle-verified tests compare DeciDB's output against an independently-formulated
 gurobipy ILP via `compare_solutions` (objective + decision vector). A few tests

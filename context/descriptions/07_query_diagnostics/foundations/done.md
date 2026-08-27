@@ -1,7 +1,7 @@
 # Query Diagnostics — Foundations (how it works)
 
 Shared plumbing every diagnosis state consumes. This doc describes the shipped
-infrastructure, topic by topic. Remaining foundation work is in `todo.md`.
+infrastructure, topic by topic. No foundation work remains open.
 
 ## Structured solver result
 
@@ -270,8 +270,8 @@ whole idea of an automatic path.
   `ShowType::DIAGNOSE`, so `select_with_parens`' existing `'(' VariableShowStmt ')'`
   production makes `SELECT * FROM (DIAGNOSE …)` compose for free.
 - **How it travels.** `Binder::BindDiagnose` (`bind_showref.cpp`) binds the inner query
-  unchanged, finds the one `LogicalDecide` in the resulting plan, and sets
-  `LogicalDecide::diagnose = true`. `plan_decide.cpp` copies it to
+  unchanged, collects the `LogicalDecide` operators in the resulting plan, and sets
+  `LogicalDecide::diagnose = true` on the one it requires there to be. `plan_decide.cpp` copies it to
   `PhysicalDecide::diagnose`. It is a property of the STATEMENT, carried parser → binder
   → logical plan → stage 08, and never read back out of a setting.
 - **What it arms.** `PhysicalDecide::FinalizeSolveResult` reads the flag once as
@@ -284,6 +284,17 @@ whole idea of an automatic path.
   gone with the setting they read.
 - **A query with no DECIDE clause is rejected**, at bind time, by `BindDiagnose`:
   DIAGNOSE reports on an optimization run, and there is none.
+- **A query with more than one DECIDE clause is rejected too**, at bind time, in the
+  same place. Such a query runs several solves and one diagnosis relation cannot say
+  which one it describes, so the prefix refuses and names the way forward: isolate
+  each decision query and run `DIAGNOSE` on each separately. This covers both shapes
+  that put two operators in the plan — a DECIDE subquery nested inside a DECIDE
+  clause, and two DECIDE subqueries joined side by side; both are already flattened
+  into the operator tree by the time `BindDiagnose` walks it. **Only the prefix is
+  refused**: the same queries solve exactly as before. Before this, the walk armed
+  whichever operator it reached first, so a diagnosis appeared only when that
+  operator was the failing one — and when it was not, the query raised the
+  unprefixed error telling the user to add the prefix they had already added.
 
 Tested in `test/decide/tests/test_diagnose_trigger.py` (both backends).
 

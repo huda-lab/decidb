@@ -1,6 +1,6 @@
 # Relation-Qualified Reducer Test Coverage — Done
 
-Tests live in `test/decide/tests/test_qualified_reducer.py` (23 tests), plus
+Tests live in `test/decide/tests/test_qualified_reducer.py`, plus
 `test_clause_order.py::test_entity_scoped_declaration_in_split_slot` for a
 qualified reducer in the split clause order.
 
@@ -86,14 +86,15 @@ makes the row-weighted and identity-weighted optima diverge.
 
 ## Caveats
 
-- `test_row_scoped_decision_inside_qualified_reducer_rejected` pins a *current*
-  rejection that is still an open question, not settled semantics — see
-  `03_expressivity/decide/todo.md` → "Row-scoped decisions inside a
-  relation-qualified reducer".
-- `test_query_wide_decision_alone_inside_qualified_reducer_rejected` is **not** in
-  that category: it pins the general row-invariance rule (a body with nothing to
-  aggregate over), and the paper's §3.2.2 carve-out for query-wide decisions is
-  honoured by the neighbouring positive test.
+- `test_row_scoped_decision_inside_qualified_reducer_rejected` pins settled
+  semantics: de-duplicating a qualified relation cannot choose one arbitrary
+  row-scoped variable from a repeated identity. The error offers the two valid
+  rewrites: scope the decision to the qualified relation, or move it to an
+  unqualified reducer.
+- `test_query_wide_decision_alone_inside_qualified_reducer_rejected` pins the
+  general row-invariance rule (a body with nothing to aggregate over), while the
+  paper's §3.2.2 carve-out for a weighted query-wide decision is covered by the
+  neighbouring positive test.
 - `test_composed_minmax_preserves_the_qualifier` and
   `…_in_a_constraint` are **regressions for a fixed wrong answer**, not aspirational
   pins: `SUM(D: ...) + MAX(...)` used to revert to row semantics because

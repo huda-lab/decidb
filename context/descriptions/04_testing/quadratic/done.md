@@ -1,8 +1,8 @@
 # Quadratic Programming Test Coverage — Done
 
 Tests live in:
-- `test/decide/tests/test_quadratic.py` — QP/MIQP objectives (41 tests)
-- `test/decide/tests/test_quadratic_constraints.py` — QCQP (quadratic constraints, 29 tests)
+- `test/decide/tests/test_quadratic.py` — QP/MIQP objectives
+- `test/decide/tests/test_quadratic_constraints.py` — QCQP (quadratic constraints)
 
 Covers `POWER(expr, 2)` via Q matrix construction. Convex forms run on both
 solvers; non-convex and MIQP require Gurobi. Three syntax forms supported:

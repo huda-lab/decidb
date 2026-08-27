@@ -187,7 +187,7 @@ All Python tests live in `tools/pythonpkg/tests/`:
 tests/
 ├── conftest.py              # Fixtures, markers, extension skip logic
 ├── pytest.ini               # Warning filters
-├── fast/                    # Fast test suite (~3100 tests)
+├── fast/                    # Fast test suite
 │   ├── api/                 # DBAPI, connection, config tests
 │   ├── arrow/               # PyArrow integration tests
 │   ├── pandas/              # Pandas integration tests
@@ -228,13 +228,13 @@ python -m pytest tools/pythonpkg/tests/fast --verbose
 ```
 
 ### Skipped Tests
-- **Optional dependency tests** (~315 tests) — Tests for `torch`, `tensorflow`, `polars`, `pyspark`, `adbc_driver_manager` are skipped if those packages aren't installed.
+- **Optional dependency tests** — Tests for `torch`, `tensorflow`, `polars`, `pyspark`, `adbc_driver_manager` are skipped if those packages aren't installed.
 
 ### Test Result Expectations
-With all extensions bundled and `pandas<3.0`:
-- **~2859 passed**
-- **~315 skipped** (optional dependencies not installed)
-- **0 failed**
+
+With all extensions bundled and `pandas<3.0`, the required tests pass. Tests for
+optional dependencies may skip when those packages are not installed; treat any
+failure or unexpected skip as a regression rather than relying on a fixed count.
 
 ### Key Test Fixtures (`conftest.py`)
 - `duckdb_cursor` — Creates a fresh in-memory DeciDB connection per test

@@ -277,7 +277,7 @@ Every skip must be declared in advance, in `_DECLARED_SKIPS`, with the reason it
 is allowed to vary between runs. On session teardown the controller prints:
 
 ```
-  DECIDE skip audit: 1213 passed + 0 skipped = 1213 outcomes
+  DECIDE skip audit: <passed> passed + <skipped> skipped = <outcomes> outcomes
   (compare this total across runs, not the pass count)
 ```
 
@@ -364,7 +364,7 @@ map of the categories. Run `bash run_tests.sh -m <marker>` to select a category
 - **Constraints** (`test_cons_aggregate.py`, `test_cons_perrow.py`, `test_cons_mixed.py`, `test_cons_between.py`, `test_cons_subquery.py`, `test_cons_multi.py`) — aggregate budgets, per-row bounds (constant and column-valued), BETWEEN, scalar-subquery RHS (resolved via plain SQL first), multi-constraint with joins.
 - **Objectives** (`test_obj_minimize.py`, `test_obj_complex_coeffs.py`) — MINIMIZE with `>=` covering constraints; multi-column coefficient arithmetic like `x * price * (1 - discount) * (1 + tax)` (oracle pre-computes the coefficient per row).
 - **SQL features** (`test_sql_joins.py`) — JOIN in FROM; oracle builds the model on the joined rows.
-- **Scale** (`test_large_scale.py`) — ~500- and ~2200-row instances; compare objective values and record timing.
+- **Scale** (`benchmark/decide/test_large_scale.py`) — ~500- and ~2200-row instances; compare objective values and record timing.
 
 **Error tests** (no oracle; assert exception type + message):
 - **Parser** (`test_error_parser.py`) — missing SUCH THAT / variable name / DECIDE keyword, empty constraint. Expect `decidb.ParserException`.

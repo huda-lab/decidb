@@ -4,12 +4,12 @@
 
 ## Hand-maintained serialization has no test that a new field was added
 
-**Pointers**: `src/planner/operator/logical_decide.cpp:184-280`
-(`Serialize`), and the matching `Deserialize` below it.
+**Pointers**: `LogicalDecide::Serialize` and `LogicalDecide::Deserialize` in
+`src/planner/operator/logical_decide.cpp`.
 
 `LogicalDecide` is marked `"custom_implementation": true`, so DuckDB's generated
-serializer is bypassed and both directions are written by hand. There are 37
-property ids and eight structs flattened into parallel vectors. Adding a field to
+serializer is bypassed and both directions are written by hand. Dozens of
+properties and several structs are flattened into parallel vectors. Adding a field to
 the header and forgetting the two serializer lines compiles, passes every test
 that does not use a prepared statement, and silently drops the field on replay.
 

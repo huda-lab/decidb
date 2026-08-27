@@ -22,7 +22,7 @@ PROJ_DIR := $(dir $(MKFILE_PATH))
 
 # Auto-detect safe parallelism: min(nproc, RAM_GB / 1.5), floor 1
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-MEM_GB := $(shell if [ -f /proc/meminfo ]; then awk '/MemTotal/{printf "%d", $$2/1048576}' /proc/meminfo; else sysctl -n hw.memsize 2>/dev/null | awk '{printf "%d", $$0/1073741824}'; fi)
+MEM_GB := $(shell if [ -f /proc/meminfo ]; then awk '/MemTotal/{printf "%d", $$2/1048576}' /proc/meminfo; else bytes=$$(sysctl -n hw.memsize 2>/dev/null || true); if [ -n "$$bytes" ]; then echo "$$bytes" | awk '{printf "%d", $$0/1073741824}'; else echo 0; fi; fi)
 MEM_JOBS := $(shell echo $$(( $(MEM_GB) * 2 / 3 )) )
 BUILD_JOBS := $(shell if [ $(MEM_JOBS) -lt $(NPROC) ] && [ $(MEM_JOBS) -gt 0 ]; then echo $(MEM_JOBS); else echo $(NPROC); fi)
 

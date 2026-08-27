@@ -124,9 +124,17 @@ it: a capability may not be declared ahead of the code that honors it.
 
 There is deliberately **no** `in_list` field. SOS1 acceleration for `x IN (a, b, c)` was
 measured and declined — the formulation's LP relaxation is already integral, so there is
-nothing to branch on ([`todo.md`](todo.md), "SOS1 for `IN`"). A measured-and-rejected
+nothing to branch on. Across the measured domain sizes and row counts, the declaration
+was redundant work at the root and produced no meaningful win. A measured-and-rejected
 capability is not a field: a permanently-false flag nobody reads cannot be told apart
 from one whose implementation is merely still pending.
+
+Native ABS remains enabled whenever the backend declares it. A 2026-08-24 Gurobi
+comparison found the native arm about 7% slower at 500K rows because Gurobi's presolve
+expanded it into a larger formulation, but routing around a vendor-specific presolve
+choice was declined: the native model is the smaller, direct statement and supports
+unbounded contributors that the Big-M lowering must refuse. Revisit only with new solver
+evidence.
 
 Which construct flag gates a given `GeneralConstraintKind` is one table,
 `DeclaresGeneralConstraint`, kept beside that enum in `solver_input.hpp` — so adding a

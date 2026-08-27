@@ -1,6 +1,6 @@
 # Bilinear Term Test Coverage — Done
 
-Tests live in `test/decide/tests/test_bilinear.py` (36 tests) plus interactions
+Tests live in `test/decide/tests/test_bilinear.py` plus interactions
 in `test_aggregate_local_when.py` and `test_quadratic_constraints.py`.
 
 Bilinear terms (`x * y`, two different DECIDE variables) split into two

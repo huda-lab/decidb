@@ -1,7 +1,7 @@
 # Slow solves — remaining work
 
-Slow-solve handling is shipped; see `slow_solves.md` for current behavior. This file keeps
-the follow-up ideas that are not specified yet.
+Current slow-solve behavior is recorded in `slow_solves.md`. Two policy questions
+remain open here.
 
 ## Bucket B elastic-as-classifier
 

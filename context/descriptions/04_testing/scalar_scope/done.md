@@ -1,6 +1,6 @@
 # Query-Wide (`scalar`) Scope Test Coverage — Done
 
-Tests live in `test/decide/tests/test_scalar_scope.py` (20 tests), plus
+Tests live in `test/decide/tests/test_scalar_scope.py`, plus
 `test_clause_order.py::test_scalar_declaration_in_split_slot` for the
 pre-`FROM` declaration position.
 
@@ -24,12 +24,11 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
 - **One column regardless of cardinality**
   (`test_scalar_is_one_column_regardless_of_cardinality`) and **the value is
   repeated on every output row** (`test_scalar_value_repeated_on_every_row`).
-- **Reducers over a scalar are rejected** (`TestScalarReducerRejected`, error
-  tier): `SUM(cap)` and `AVG(cap)` in both objective and constraint position,
-  and `SUM(x + cap)` where the scalar is an additive term inside the reducer.
-  There is one column, so nothing to reduce over, and the two plausible readings
-  (coefficient 1 vs. coefficient `n`) are different problems — the rejection is
-  what stops one being picked silently.
+- **A row-invariant reducer body is rejected** (`TestScalarReducerRejected`, error
+  tier): `SUM(cap)` and `AVG(cap)` in both objective and constraint position. A
+  scalar mixed with row-varying data or a row-scoped decision is legal and is
+  weighted once per counted row; `test_scalar_var_in_aggregate.py` and the
+  scalar-in-reducer tests in `test_scalar_scope.py` cover that distinction.
 - **Grammar** (error tier): a `scalar` with no type, and `scalar T.x(TYPE)`,
   each rejected with a message naming the fix.
 - **`scalar` remains an ordinary identifier**
@@ -50,12 +49,14 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
   rewrite appends auxiliaries to the global block, which sits immediately above
   the scalar block in `VarIndexer`'s four-block layout — these are the cases
   where a misplaced block boundary would surface.
-- **A scalar on the RHS of a reduced constraint is rejected**
-  (`test_scalar_as_aggregate_rhs_rejected`, and the `PER` variant). This is the
-  paper's own §3.1 shape and is blocked on group B; see `todo.md`.
+- **A scalar on the RHS of a reduced constraint is supported**, with and without
+  `PER` (`test_scalar_as_aggregate_rhs`,
+  `test_scalar_as_aggregate_rhs_with_per`). Canonicalization moves the scalar to
+  the model side, and the same single query-wide column participates in every
+  group row.
 - **Diagnostics** (`test_unbounded_scalar_reports_a_single_instance`): an
-  unbounded scalar reports only `grows_toward`, with no `affected_rows` /
-  `affected_entities` cell — there is no subset of rows to characterize.
+  unbounded scalar produces one runaway finding with no amount or categorical
+  slice — there is no subset of rows to characterize.
 
 ## Feature interactions covered
 
@@ -67,12 +68,12 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
 | scalar | additive beside a reducer (`MINIMIZE 2*cap - SUM(x)`) | ✓ |
 | scalar | JOIN source | ✓ |
 | scalar | split clause order | ✓ (`test_clause_order.py`) |
-| scalar | qualified reducer (rejected) | ✓ (`test_qualified_reducer.py`) |
+| scalar | qualified reducer | ✓ when weighted by qualified-row data; bare row-invariant body rejected |
 | scalar | empty input | ✓ |
 | scalar | ABS (per-row constraint) | ✓ |
 | scalar | quadratic constraint (QCQP, Gurobi) | ✓ |
 | scalar | bilinear `b * cap` (McCormick) | ✓ |
 | scalar | `<>` (Big-M disjunction) | ✓ |
 | scalar | unbounded diagnostics report | ✓ |
-| scalar | reduced-constraint RHS | rejected (group B) |
-| scalar | `PER` | not reachable — see `todo.md` |
+| scalar | reduced-constraint RHS | ✓ |
+| scalar | `PER` | ✓ |

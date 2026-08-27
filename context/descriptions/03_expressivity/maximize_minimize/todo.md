@@ -1,5 +1,4 @@
 # MAXIMIZE / MINIMIZE — Planned Features
 
-No keyword-specific features currently planned.
-
-For future problem type support (QCQP, SOCP), see [problem_types/todo.md](../problem_types/todo.md).
+No MAXIMIZE/MINIMIZE-specific work is open. Shipped behavior is recorded in
+`done.md`; problem-class extensions are owned by `../problem_types/todo.md`.

@@ -56,6 +56,7 @@ PGList *raw_parser(const char *str) {
 	yyextra.in_decide_objective = false;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
+	yyextra.decide_state_depth = 0;
 
 	/* initialize the bison parser */
 	parser_init(&yyextra);
@@ -115,6 +116,7 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
 	yyextra.in_decide_objective = false;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
+	yyextra.decide_state_depth = 0;
 
 	while(true) {
 		YYSTYPE type;
@@ -214,6 +216,15 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 	 * parsing). No lookahead is needed for this decision.
 	 */
 	if (cur_token == DECIDE || cur_token == SUCH) {
+		/*
+		 * DecidB: a DECIDE clause may open while another is still being lexed
+		 * (a DECIDE query as a subquery inside an outer DECIDE clause). Save
+		 * the enclosing clause's state so the inner clause's reduction restores
+		 * it instead of disarming the outer clause's remaining WHENs. The
+		 * matching pop lives in the decide_clause / decide_declaration /
+		 * decide_tail actions, one per DECIDE and one per SUCH.
+		 */
+		PGDecidePushLexState(yyextra);
 		/*
 		 * SUCH re-arms the flag for the split clause order
 		 * (SELECT ... DECIDE ... FROM ... SUCH THAT ...), where the

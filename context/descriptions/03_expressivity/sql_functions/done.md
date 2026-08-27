@@ -221,7 +221,9 @@ MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
 
 **Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so DeciDB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead.
 
-**Tests**: `test/decide/tests/test_avg.py` — 11 test cases covering objectives, constraints, WHEN, PER, WHEN+PER, BOOL, INT, non-linear rejection, `<>` with and without WHEN, and no-decide-var passthrough.
+**Tests**: `test/decide/tests/test_avg.py` covers objectives, constraints, WHEN, PER,
+WHEN+PER, BOOL, INT, non-linear rejection, `<>` with and without WHEN, and
+no-decision-variable passthrough.
 
 ---
 
@@ -357,7 +359,7 @@ For each `ABS(expr)` that references a DECIDE variable, the system:
 
 The lower-envelope alone forces `d >= |expr|`. To pin `d` to exactly `|expr|`, one of two mechanisms is used per ABS occurrence:
 
-Classification is **per ABS occurrence and by sign**, not by which side of the comparison the ABS was written on. The constraint is read as `E <op> 0` with `E = LHS - RHS`; each ABS then carries an effective sign, and the question "does this comparison push `d` down?" has a single answer per occurrence. Sign is tracked through `+`, binary and unary `-`, casts, aggregate bodies, and numeric literal factors. (A factor whose sign is only known at execution — a data column, as in `SUM(w * ABS(x - t))` — is currently assumed positive; see `../../06_issues/bugs/todo.md`.)
+Classification is **per ABS occurrence and by sign**, not by which side of the comparison the ABS was written on. The constraint is read as `E <op> 0` with `E = LHS - RHS`; each ABS then carries an effective sign, and the question "does this comparison push `d` down?" has a single answer per occurrence. Sign is tracked through `+`, binary and unary `-`, casts, aggregate bodies, and numeric literal factors. A factor whose sign is known only at execution — a data column, as in `SUM(w * ABS(x - t))` — is classified as unknown and conservatively takes the Big-M path.
 
 **Path A (lower-envelope only) — when the constraint pushes `d` down.** The effective sign is positive under `<` / `<=`, or negative under `>` / `>=`. Covers `ABS(...) <= K` (LHS), `K >= ABS(...)` (RHS), the aggregate forms `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MIN(ABS) <= K`, `AVG(ABS) <= K`, and the *positively-signed* ABS of a shape like `ABS(a - k) - ABS(b - k) <= 0`. The constraint itself caps `d` from above; the solver picks `d_i = |e_i|` to minimize slack. No extra variables.
 
@@ -416,7 +418,9 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 - Transfer: `plan_decide.cpp` moves `abs_maximize_links` from logical to physical operator.
 - Serialization: `logical_decide.cpp` (`LogicalDecide::Serialize`/`Deserialize`, hand-maintained) fields 230/231 (`abs_maximize_link_aux`, `abs_maximize_link_y`).
 
-**Tests**: `test/decide/tests/test_abs_linearization.py` — 10 test cases covering MINIMIZE objectives, MAXIMIZE objectives (basic + missing-bound error), constraints, WHEN, PER, multiple ABS terms, no-decide-var, and mixed variable types.
+**Tests**: `test/decide/tests/test_abs_linearization.py` covers MINIMIZE objectives,
+MAXIMIZE objectives (including the missing-bound error), constraints, WHEN, PER,
+multiple ABS terms, no-decision-variable passthrough, and mixed variable types.
 
 ---
 

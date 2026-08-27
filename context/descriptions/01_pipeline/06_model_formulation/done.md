@@ -280,9 +280,9 @@ than checking it numerically.
 
 It is also, for a `POWER` group spanning more than one decision variable, *singular*
 — one row of `A` gives a Q of rank one, whose minimizers form a flat valley rather
-than a point. Gurobi handles that; HiGHS currently does not, and returns a
-suboptimal answer or an error on roughly half such models. See the singular-QP
-entry in `06_issues/bugs/todo.md`.
+than a point. Gurobi handles that. HiGHS is declared not to support the
+`singular_quadratic` model class, so stage 05 refuses the query before rows are read;
+see `05_optimizer/done.md` → "The model-class gate".
 
 ---
 

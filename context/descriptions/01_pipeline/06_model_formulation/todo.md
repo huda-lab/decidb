@@ -4,17 +4,18 @@
 
 ## `VarIndexer::BuildRef()` has no production callers
 
-**Pointers**: `src/include/duckdb/decidb/ilp_model.hpp:106-110`.
+**Pointers**: `VarIndexer::BuildRef` in
+`src/include/duckdb/decidb/ilp_model.hpp` and
+`src/decidb/utility/ilp_model_builder.cpp`.
 
-The non-owning constructor is retained "for tests and future use". The owning
-`Build()` is used everywhere in production. Two constructors with one caller
-between them is a small maintenance surface, but it is a real one: any change to
-the entity-mapping lifetime has to be reasoned about twice.
+The non-owning constructor is used throughout the focused C++ tests, while the
+owning `Build()` is used in production. Two lifetime contracts are a small but
+real maintenance surface: changes to entity-mapping ownership have to be reasoned
+about twice.
 
-**Decision needed**: delete it, or find the caller it was built for. The lifetime
-contract it encodes (caller guarantees the `SolverInput` outlives the indexer) is
-the harder of the two to get right, so keeping it unused is the worse of the two
-outcomes.
+**Decision needed**: retain and document it as a test helper, or update the tests
+to use the owning constructor and delete it. Its non-owning lifetime contract
+(the `SolverInput` must outlive the indexer) is the harder of the two to get right.
 
 **Test**: build + full suite; there is no behavior to pin.
 

@@ -252,11 +252,9 @@ class TestClauseOrderErrors:
     def test_declaration_in_both_slots_rejected(self, decidb_cli):
         """Declaring in both slots is rejected.
 
-        The message is currently the missing-``SUCH THAT`` one — the first
-        declaration's slot closes when the second ``DECIDE`` appears where
-        ``SUCH THAT`` was expected. Logged as a message-quality issue in
-        ``06_issues/code_quality/todo.md``; this test pins the rejection, not
-        the wording beyond "it is a parser error".
+        The parser names the duplicate declaration and tells the user to choose
+        either the pre-FROM or the trailing slot. This test pins the rejection;
+        the parser unit test pins the exact message.
         """
         decidb_cli.assert_error("""
                 SELECT c_custkey, x

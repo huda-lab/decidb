@@ -35,11 +35,12 @@ The DECIDE node prints three sections:
 └─────────────┬─────────────┘
 ```
 
-Each line is the clause the user typed. That is not what the bound tree says —
-`Expression::ToString()` would print `(sum((CAST(x AS DECIMAL(13,0)) * w)) <=
-CAST(6 AS HUGEINT))`, spelling out casts the binder inserted while reconciling
-types and arithmetic as `"-"("*"(a, b), c)`. Section 2 covers the renderer that
-answers this properly.
+Each user-clause line is rendered in the spelling the user can edit. That is not
+what the bound tree says — `Expression::ToString()` would print
+`(sum((CAST(x AS DECIMAL(13,0)) * w)) <= CAST(6 AS HUGEINT))`, spelling out casts
+the binder inserted while reconciling types and arithmetic as
+`"-"("*"(a, b), c)`. Optimizer-emitted mechanism rows may also appear in the same
+section with their internal variable names; section 2 covers the shared renderer.
 
 ---
 

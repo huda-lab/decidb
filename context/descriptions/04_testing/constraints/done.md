@@ -38,7 +38,7 @@ All oracle-verified: per-row bounds (`test_cons_perrow.py`), aggregate
 constraints (`test_cons_aggregate.py`), per-row + aggregate combined
 (`test_cons_mixed.py`), multiple aggregate constraints (`test_cons_multi.py`),
 subquery RHS (`test_cons_subquery.py`), correlated subquery RHS
-(`test_cons_correlated_subquery.py`, 6 tests).
+(`test_cons_correlated_subquery.py`).
 
 ### Edge cases
 

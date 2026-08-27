@@ -1,20 +1,5 @@
 # EXPLAIN — open work
 
----
-
-## Constraints render the binder's implicit casts
-
-**This is live and reproducible.** Full entry, with the reproduction, in
-[`../../06_issues/bugs/todo.md`](../../06_issues/bugs/todo.md).
-
-Short form: a constraint written `SUM(x * l_quantity) <= 100` renders as
-`(sum((CAST(x AS DECIMAL(18,0)) * l_quantity)) <= CAST(100 AS DECIMAL(38,2)))`.
-The casts are binding artifacts, not the user's SQL. Layer 8 already unwraps them
-for diagnosis labels; the open question is where a shared user-facing renderer
-should live.
-
----
-
 ## Layered constraint rendering: as-written → canonical → rewritten
 
 **Goal**. The Constraints section prints one form per constraint — whatever tree

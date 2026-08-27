@@ -403,7 +403,7 @@ outer aggregate over groups or group sums, and a composed term — goes through 
 `EmitExtremumLink`, which makes the choice once for all of them. What is left is ABS,
 where the two formulations are genuinely different objects rather than projections of
 one description: see [`../06_model_formulation/done.md`](../06_model_formulation/done.md)
-§9a, and the ABS entry in `todo.md`.
+§9a and [`../07_solver/done.md`](../07_solver/done.md) §2.
 
 Only the *hard* directions need a choice at all. `MAX(e) <= K`, `MIN(e) >= K`,
 `MINIMIZE MAX`, `MAXIMIZE MIN` are exact with a one-sided envelope plus outer pressure:

@@ -1,15 +1,5 @@
 # Problem Types — Planned Features
 
----
-
-## Explicit Variable Bound Syntax (`IN [a, b]`) — sugar only, deprioritized
-
-`DECIDE x(INT) IN [0, 100]` would be pure **syntactic sugar** over `SUCH THAT x >= 0 AND x <= 100`. Both the clarity-vs and the original efficiency argument ("bounds are O(1), constraint rows are not") are now moot: constraint absorption already turns `x >= a AND x <= b` into the exact same O(1) column bounds (`01_pipeline/05_optimizer/done.md`), and every domain the syntax could express — including negative ones — already works via constraints. So this buys only conciseness, at the cost of a checked-in generated-parser regen.
-
-Left here only as an optional ergonomic nicety, low priority. Not planned. If revisited, it should reuse the existing bound arrays (`absorbed_*_bounds`), not add a parallel bound path.
-
----
-
 ## SOCP (Second-Order Cone Programming)
 
 **Priority: Low**

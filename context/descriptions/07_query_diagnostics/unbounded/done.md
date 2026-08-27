@@ -150,7 +150,7 @@ characterizer distinguishes three cases:
   within-group escape rate `a/b` (a = escaping instances with `c=v`, b = group size).
   Every group meeting the threshold becomes its own finding with
   `group = "c = 'v'"` and `amount = a`, strongest first. Rules are an independent
-  **union** across columns/values (conjunctions are tracked in `todo.md`).
+  **union** across columns/values; conjunction rules are not produced.
 - **Fallback**: a scattered escape that no categorical group characterizes reports
   its escaping count in `amount` with `group = NULL`; single-instance and auxiliary
   name-only cases omit the count.

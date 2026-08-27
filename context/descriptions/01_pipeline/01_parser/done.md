@@ -117,10 +117,23 @@ DECIDE's `WHEN` cannot be the global SQL `WHEN`: after a function call it
 collided with `WITHIN GROUP` and corrupted ordinary function-call parsing. So
 the lexer emits DECIDE-only tokens inside the clause:
 
-- `DECIDE` **or** `SUCH` sets `in_decide_clause` and resets `decide_case_depth`.
-  `SUCH` re-arms the flag for the split clause order, where the declaration slot
-  cleared it so `FROM` / `JOIN ... ON` / `WHERE` lex as ordinary SQL.
-- Grammar actions clear the flag once the clause is closed.
+- `DECIDE` **or** `SUCH` sets `in_decide_clause` and resets `decide_case_depth`,
+  after saving the enclosing clause's state (`PGDecidePushLexState`,
+  `third_party/libpg_query/include/parser/gramparse.hpp`). `SUCH` re-arms the flag
+  for the split clause order, where the declaration slot popped it so
+  `FROM` / `JOIN ... ON` / `WHERE` lex as ordinary SQL.
+- The `decide_clause`, `decide_declaration` and `decide_tail` grammar actions pop
+  that state once their clause is closed — one pop per `DECIDE`, one per `SUCH`.
+  With nothing stacked a pop leaves the clause disarmed, which is what a
+  non-nested query sees.
+- **Nesting.** A DECIDE query may be a subquery inside another DECIDE clause. The
+  saved state is what makes the inner clause restore its parent instead of
+  disarming it; before it, an outer `WHEN` written after the subquery lexed as
+  ordinary SQL `WHEN` and failed to parse, while nesting alone and an outer `WHEN`
+  alone both worked. `decide_declared_before_from` is saved with the rest, so an
+  inner declaration cannot make the outer clause look like a duplicate `DECIDE`.
+  Sixteen levels are restored exactly; deeper still parses. Pinned by
+  `test/decide/tests/test_nested_decide.py`.
 - While armed, `CASE` increments `decide_case_depth` and `END` decrements it, so a
   `CASE ... WHEN ... END` keeps its ordinary `WHEN` and still parses.
 - A depth-0 `WHEN` becomes `WHEN_DECIDE` in constraints. After `MAXIMIZE` or

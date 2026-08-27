@@ -2,9 +2,8 @@
 
 Tests live in:
 - `test/decide/tests/test_edge_cases.py` — boundary conditions and degenerate inputs
-- `test/decide/tests/test_large_scale.py` — scale/performance tests
+- `benchmark/decide/test_large_scale.py` — scale/performance checks
 - `test/decide/tests/test_sql_joins.py` — JOIN sources
-- `test/decide/tests/test_sql_subquery.py` — SQL subquery features
 - `test/decide/tests/test_explain.py` — EXPLAIN output
 
 ## Boundary conditions
@@ -20,8 +19,10 @@ feasibility problem (no objective), all-zero objective coefficients
 
 Error tests (not oracle-verified):
 - NULL coefficients (with COALESCE hint) — `test_edge_cases.py::test_null_coefficients`
-- Aggregate LHS vs aggregate RHS (`SUM(x*v) <= SUM(y*v)`) rejected — `test_error_binder.py::test_aggregate_vs_aggregate_constraint_rejected`
 - Unconstrained INT var in objective (mixed w/ bounded BOOL) — `test_error_infeasible.py::TestUnboundedModels::test_mixed_unbounded_integer_var`
+
+Aggregate LHS versus aggregate RHS (`SUM(x*v) <= SUM(y*v)`) is supported and
+oracle-verified in `test_canonicalize_side_agnostic.py::test_aggregate_vs_aggregate`.
 
 ## Data shapes
 
@@ -39,7 +40,7 @@ JOIN + entity-scoped (many tests in `test_entity_scope.py`).
 
 ## Scale / performance
 
-Oracle-verified in `test_large_scale.py`: 501-row knapsack, 2204-row order
+Oracle-verified in `benchmark/decide/test_large_scale.py`: 501-row knapsack, 2204-row order
 selection. Plus a 1500-customer problem in
 `test_entity_scope.py::test_entity_scoped_mixed_when_per` (Gurobi-only).
 
@@ -60,5 +61,4 @@ DeciDB's backend for specific tests via the `decidb_cli_highs` and
 
 ## Infrastructure / meta-tests
 
-EXPLAIN output format (`test_explain.py`); SQL subquery features, non-DECIDE
-(`test_sql_subquery.py`).
+EXPLAIN output format is covered in `test_explain.py`.

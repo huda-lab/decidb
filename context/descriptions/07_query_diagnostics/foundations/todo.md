@@ -1,7 +1,3 @@
 # Query Diagnostics — Foundations (remaining)
 
-Shared infrastructure consumed by all diagnosis states. The structured result,
-constraint/variable provenance, relaxability tagging, the statement-level `DIAGNOSE`
-trigger, and the reporting relation have shipped (`done.md`).
-
-No active foundation tasks remain.
+No open work. Current behavior is recorded in `done.md`.

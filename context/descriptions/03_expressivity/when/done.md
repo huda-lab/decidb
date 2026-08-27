@@ -99,9 +99,6 @@ SUM(x * v) <= 12 WHEN (a + b > 5)
 
 **Actionable parser hint.** The raw bison error for these shapes (`syntax error at or near "NOT"` / `"<="`) is uninformative on its own, so DECIDE queries whose syntax error names one of the WHEN-breaking tokens get a one-line hint appended: *"wrap the WHEN condition in parentheses — e.g. WHEN (a = b), WHEN (NOT flag), or WHEN (a + b > 5)."* The augmentation lives in `src/decidb/utility/decide_parse_hints.cpp` (`MaybeAppendDecideWhenHint`), called from `src/parser/parser.cpp` at the syntax-error throw site; it is gated on the query containing `DECIDE` + `WHEN` and the error naming a break token, so it never fires on unrelated syntax errors. Pinned by `test_when_grammar.py::test_when_unparen_error_carries_paren_hint`.
 
-See `../when/todo.md` for the remaining complex-condition grammar limitation and
-the constraint-bound ambiguity.
-
 ### Expression-level and Aggregate-local WHEN Do Not Mix
 
 DeciDB rejects a constraint or objective that contains both a whole-expression `WHEN` and one or more aggregate-local `WHEN` filters:
@@ -218,7 +215,14 @@ The DECIDE `WHEN` keyword is lexed as a **distinct token `WHEN_DECIDE`**, separa
 
 The rewrite is suppressed inside a `CASE … END` (tracked by `decide_case_depth`), so a `CASE` written inside a DECIDE expression still parses with ordinary `WHEN` and is then rejected by the binder with the friendly error above — rather than failing with a raw parser syntax error.
 
-**Known limitation — nested DECIDE clauses.** `in_decide_clause` is a single `bool`, not a depth counter. A DECIDE clause nested inside a subquery that is itself inside another DECIDE clause would have the inner `decide_clause` action clear the flag prematurely, so a subsequent outer `WHEN` would lex as ordinary `WHEN` (and the outer aggregate-local/constraint WHEN would fail to parse). This shape is not currently supported semantically and no test exercises it, so the single flag is sufficient today. If nested DECIDE is ever introduced, promote `in_decide_clause` to a depth counter (incremented on the `DECIDE` token, decremented in the `decide_clause` action) — mirroring how `decide_case_depth` already handles CASE nesting.
+**Known limitation — lexically nested DECIDE clauses.** Queries can compose
+multiple DECIDE subqueries, but `in_decide_clause` is a single `bool`, not a depth
+counter. If an inner DECIDE clause is parsed while an outer DECIDE clause is still
+open, the inner `decide_clause` action can clear the flag prematurely, causing a
+subsequent outer `WHEN` to lex as ordinary `WHEN`. No focused test covers that
+shape. Supporting it robustly requires a depth counter, mirroring
+`decide_case_depth`; see
+[`../../01_pipeline/01_parser/todo.md`](../../01_pipeline/01_parser/todo.md).
 
 ### Summary
 

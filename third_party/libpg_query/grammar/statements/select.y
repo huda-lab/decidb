@@ -372,7 +372,7 @@ decide_tail:
 			SUCH THAT decide_constraint_list MAXIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
-                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
+                    PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = $3;
                     n->sense = PG_OBJ_MAXIMIZE;
@@ -382,7 +382,7 @@ decide_tail:
 			| SUCH THAT decide_constraint_list MINIMIZE decide_objective_item
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
-                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
+                    PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = $3;
                     n->sense = PG_OBJ_MINIMIZE;
@@ -392,7 +392,7 @@ decide_tail:
 			| SUCH THAT decide_constraint_list
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
-                    pg_yyget_extra(yyscanner)->in_decide_clause = false;
+                    PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = $3;
                     n->sense = PG_OBJ_FEASIBILITY;
@@ -424,6 +424,7 @@ decide_clause:
                                 (errcode(PG_ERRCODE_SYNTAX_ERROR),
                                  errmsg("DECIDE requires a SUCH THAT clause; add SUCH THAT with at least one constraint"),
                                  parser_errposition(@1)));
+                    PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n = (PGDecideClause *) $3;
                     n->variables = $2;
                     $$ = (PGNode *)n;
@@ -432,7 +433,7 @@ decide_clause:
 
 /* DecidB: declaration slot. Sits between the target list and FROM, giving the
  * paper's clause order (SELECT ... DECIDE ... FROM ... SUCH THAT ...). The
- * action clears in_decide_clause so FROM / JOIN ... ON / WHERE lex as ordinary
+ * action pops the clause's lexer state so FROM / JOIN ... ON / WHERE lex as ordinary
  * SQL -- otherwise a CASE WHEN in a join condition would lex as WHEN_DECIDE.
  * The body slot re-arms the flag on its SUCH token. decide_declared_before_from
  * records that this slot fired, so a second DECIDE reaching decide_clause
@@ -442,8 +443,7 @@ decide_clause:
 decide_declaration:
 			DECIDE typed_decide_variable_list
 				{
-					pg_yyget_extra(yyscanner)->in_decide_clause = false;
-					pg_yyget_extra(yyscanner)->decide_case_depth = 0;
+					PGDecidePopLexState(pg_yyget_extra(yyscanner));
 					pg_yyget_extra(yyscanner)->decide_declared_before_from = true;
 					$$ = $2;
 				}

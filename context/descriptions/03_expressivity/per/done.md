@@ -48,6 +48,12 @@ against an independently built model.
 
 The nested-aggregate objective `OUTER(INNER(expr)) PER col` uses two levels of auxiliary variables: inner (per-group) and outer (across-group), each with easy/hard classification — see [../maximize_minimize/done.md](../maximize_minimize/done.md).
 
+The trailing `PER` binds the inner aggregate by convention. With exactly two
+supported nesting levels this is unambiguous and mirrors SQL's trailing `GROUP BY`:
+the inner aggregate is evaluated per group, then the outer aggregate ranges over
+the groups. A third nesting level is not supported; adding one would require new
+syntax that states which aggregate `PER` binds.
+
 **Zero-coefficient row pre-filter (PATH B inner MIN/MAX, both easy and hard)**: A row whose every term coefficient is zero contributes a vacuous `z_g op 0` linking row in the easy branch and an unnecessary indicator binary plus Big-M row in the hard branch. The inner formulation builds a per-group active-rows CSR (mirroring PATH A's flat pre-filter) and emits constraints only for rows with at least one nonzero coefficient. For groups with no active rows, `z_g`'s bounds are pinned to `[0, 0]` directly — preserving the original semantics, where the elided constraints combined with the outer optimization direction would have settled `z_g` at `0`. Outer-easy `MIN/MAX` over inner-`SUM` group sums applies the analogous group-level skip: groups with all-zero contribution don't emit a `w op 0` row, and if every group is identically zero, `w` is pinned to `0` directly.
 
 ---
@@ -109,7 +115,8 @@ The number of generated constraints equals `|distinct_values| x |PER_constraints
 - `src/include/duckdb/decidb/solver_input.hpp` — `row_group_ids` replaces `row_mask`
 - `third_party/libpg_query/` — grammar rules, keyword, enum
 - `src/parser/transform/expression/transform_operator.cpp` — transformer
-- `src/planner/expression_binder/decide_constraints_binder.cpp/.hpp` — `BindPerConstraint`
+- `src/planner/expression_binder/decide_constraints_binder.cpp` and
+  `src/include/duckdb/planner/expression_binder/decide_constraints_binder.hpp` — `BindPerConstraint`
 - `src/planner/expression_binder/decide_objective_binder.cpp` — nested aggregate PER objective binding
 - `src/planner/binder/query_node/bind_select_node.cpp` — nested aggregate detection for PER objectives
 - `src/execution/operator/decide/physical_decide.cpp` — unified WHEN+PER evaluation

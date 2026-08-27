@@ -872,9 +872,7 @@ built, so any encoding sized from a bound the repair wants to widen can hide a b
 `SolverInput::rigid_*` is the box a structural rewrite is contracted to use, so a repair caps
 at `box + 1`, and on `<>` and L0 the reported repair differs per backend. Tracked with its
 trace, measurements and fix shape in
-[`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md). Making it
-structurally impossible instead is the parked "elastic diagnosis as a stage-05 rewrite"
-question in [`todo.md`](todo.md), which reopens stages 07 and 08.
+[`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md).
 
 **Tests** (`test_query_diagnostics_relation.py::TestRepairsTheModelCanReach`). B3's query
 across three arms via `assert_backends_agree` — B2's helper, and this is the caller it was

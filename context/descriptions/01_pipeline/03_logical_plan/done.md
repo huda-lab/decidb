@@ -182,10 +182,12 @@ setting:
   binder does not consult the executor, and the executor does not consult the session.
 
 `BindDiagnose` binds the inner query exactly as it would without the prefix — DIAGNOSE
-changes what is reported, never what is asked — then finds the plan's one `LogicalDecide`
-(a `DECIDE` clause is a suffix of one SELECT, so there is exactly one; it may sit under
-projections, ORDER BY, or LIMIT that the prefix does not care about), sets the flag, and
-wraps the whole plan in `LogicalDecideDiagnose`.
+changes what is reported, never what is asked — then finds the first `LogicalDecide`
+under projections, ORDER BY, or LIMIT, sets the flag, and wraps the whole plan in
+`LogicalDecideDiagnose`. A plan composed from multiple DECIDE subqueries can contain
+several operators; only the first is armed today, so a later failing subquery can bypass
+the diagnosis relation. The unresolved policy is tracked in
+[`../../07_query_diagnostics/foundations/todo.md`](../../07_query_diagnostics/foundations/todo.md).
 
 **`LogicalDecideDiagnose`** (`planner/operator/logical_decide_diagnose.hpp`) is the
 prefix's own plan node: one child (the whole decision query), and an output schema that

@@ -1,6 +1,6 @@
 # AVG Aggregate Test Coverage — Done
 
-Tests live in `test/decide/tests/test_avg.py` (11 tests) plus interactions in
+Tests live in `test/decide/tests/test_avg.py` plus interactions in
 `test_aggregate_local_when.py` and `test_per_objective.py`.
 
 ## Scenarios covered

@@ -28,6 +28,23 @@ namespace duckdb_libpgquery {
  * The YY_EXTRA data that a flex scanner allows us to pass around.  Private
  * state needed for raw parsing/lexing goes here.
  */
+/*
+ * DecidB: the lexer state a DECIDE clause owns. A DECIDE query may appear as a
+ * subquery inside an outer DECIDE clause; the inner clause must restore this
+ * state on its way out rather than clear it, or the outer clause's remaining
+ * WHENs lex as ordinary SQL WHEN and fail to parse.
+ */
+typedef struct PGDecideLexState {
+	bool in_decide_clause;
+	bool in_decide_objective;
+	int decide_case_depth;
+	bool decide_declared_before_from;
+} PGDecideLexState;
+
+/* Nesting deeper than this keeps parsing; only the innermost levels' state is
+ * restored exactly, which no realistic query reaches. */
+#define PG_DECIDE_STATE_STACK_MAX 16
+
 typedef struct base_yy_extra_type {
 	/*
 	 * Fields used by the core scanner.
@@ -46,7 +63,8 @@ typedef struct base_yy_extra_type {
 
 	/*
 	 * DecidB: true while lexing inside a DECIDE clause. Set when base_yylex()
-	 * returns the DECIDE token; cleared by the decide_clause grammar action.
+	 * returns the DECIDE or SUCH token; restored to the enclosing clause's value
+	 * by the decide_clause / decide_declaration / decide_tail grammar actions.
 	 * While set, base_yylex() rewrites depth-0 WHEN to a DECIDE-specific token
 	 * so it can't collide with CASE ... WHEN ... or pollute the global
 	 * expression grammar.
@@ -76,6 +94,16 @@ typedef struct base_yy_extra_type {
 	bool decide_declared_before_from;
 
 	/*
+	 * DecidB: saved copies of the four fields above, one per DECIDE clause
+	 * currently open. Pushed by base_yylex() when it arms a clause on DECIDE
+	 * or SUCH; popped by the decide_clause, decide_declaration and decide_tail
+	 * grammar actions, which is what makes a nested DECIDE restore its parent
+	 * instead of disarming it.
+	 */
+	PGDecideLexState decide_state_stack[PG_DECIDE_STATE_STACK_MAX];
+	int decide_state_depth;
+
+	/*
 	 * State variables that belong to the grammar.
 	 */
 	PGList *parsetree; /* final parse result is delivered here */
@@ -88,6 +116,39 @@ typedef struct base_yy_extra_type {
  * cheating a bit to use an inline macro.
  */
 #define pg_yyget_extra(yyscanner) (*((base_yy_extra_type **)(yyscanner)))
+
+/* DecidB: save the enclosing DECIDE clause's lexer state before arming a new one. */
+static inline void PGDecidePushLexState(base_yy_extra_type *yyextra) {
+	if (yyextra->decide_state_depth >= 0 && yyextra->decide_state_depth < PG_DECIDE_STATE_STACK_MAX) {
+		PGDecideLexState *slot = &yyextra->decide_state_stack[yyextra->decide_state_depth];
+		slot->in_decide_clause = yyextra->in_decide_clause;
+		slot->in_decide_objective = yyextra->in_decide_objective;
+		slot->decide_case_depth = yyextra->decide_case_depth;
+		slot->decide_declared_before_from = yyextra->decide_declared_before_from;
+	}
+	yyextra->decide_state_depth++;
+}
+
+/* DecidB: restore the enclosing DECIDE clause's lexer state as this one closes.
+ * With nothing pushed this leaves the clause disarmed, matching the plain
+ * assignment these call sites used before nesting was supported. */
+static inline void PGDecidePopLexState(base_yy_extra_type *yyextra) {
+	if (yyextra->decide_state_depth <= 0) {
+		yyextra->decide_state_depth = 0;
+		yyextra->in_decide_clause = false;
+		yyextra->in_decide_objective = false;
+		yyextra->decide_case_depth = 0;
+		return;
+	}
+	yyextra->decide_state_depth--;
+	if (yyextra->decide_state_depth < PG_DECIDE_STATE_STACK_MAX) {
+		PGDecideLexState *slot = &yyextra->decide_state_stack[yyextra->decide_state_depth];
+		yyextra->in_decide_clause = slot->in_decide_clause;
+		yyextra->in_decide_objective = slot->in_decide_objective;
+		yyextra->decide_case_depth = slot->decide_case_depth;
+		yyextra->decide_declared_before_from = slot->decide_declared_before_from;
+	}
+}
 
 /* from parser.c */
 int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner);

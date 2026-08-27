@@ -1,12 +1,7 @@
 # Query Diagnostics — Unbounded (remaining work)
 
-The unbounded engine is shipped end to end: it reaches a clean `UNBOUNDED` state,
-extracts a portable recession ray, names the escaping variables, reports direction, and
-characterizes affected rows/entities with categorical rules. See `done.md` for how it
-currently works. The engine's actionable core — name the runaway variable, prescribe the
-bound — is complete; categorical slices are returned as separate typed findings, and
-SELECT-only columns can be named from their user-written projection aliases. What remains
-are two pending tasks plus a deferred item blocked on unrelated expressivity work.
+The actionable engine is complete. Two output-quality tasks remain; current
+behavior is recorded in `done.md`.
 
 ---
 
@@ -17,14 +12,16 @@ are two pending tasks plus a deferred item blocked on unrelated expressivity wor
   finding. On a small input this floods: the candidate filter is
   `2 ≤ distinct ≤ max(min_categories, ratio × N)` with `min_categories` = 20
   (`physical_decide.cpp`), so on an N-row table with N ≲ 20 *every* column is categorical,
-  and every singleton group holding an escaper scores rate 1.0. Measured on the paper's Figure 1
-  data (3 joined rows, 9 columns, 2 escaping rows): **12 findings**, including
-  `capacity = '300'`, `routeID = 'T2'`, `unit_cost = '6'`. That breaks the concision half of the
+  and every singleton group holding an escaper scores rate 1.0. Re-measured 2026-08-27 on the paper's
+  Figure 1 data (3 joined rows, 9 columns, 2 escaping rows): **4 findings** —
+  `capacity = '300'` (1/1), `capacity = '350'` (1/1), `priority = 'standard'` (2/2),
+  `unit_cost = '3'` (1/1). The original filing recorded 12; the unnamed-column
+  suppression added since has narrowed the candidate set to the columns the DECIDE
+  clause references, which is also why `routeID` and `demand` no longer appear. That breaks the concision half of the
   user-facing-output principle — the actionable rule is buried in coincidences.
   **Change:** drop rules whose escaping-instance set is identical to an already-emitted rule's
   set, so perfectly-correlated columns collapse to one representative. Do **not** cap or truncate
-  the relation: Batch H deliberately removed headline truncation, and every distinct finding
-  remains queryable.
+  the relation; every distinct finding must remain queryable.
   **Decision needed from the user:** which representative wins when several columns partition
   the escaping rows *identically* (on Figure 1, `priority='standard'`, `regionID='R2'` and
   `demand='600'` are indistinguishable). Candidate tie-break: prefer a column the DECIDE clause
@@ -69,12 +66,36 @@ are two pending tasks plus a deferred item blocked on unrelated expressivity wor
   Discovered 2026-08-04 while checking the paper's §4 unbounded example, whose
   reported repair did not map back to the query.
 
-## Deferred
+- **Categorical group names differ by source kind, and can be positional.**
+  `BuildRowGrouping` (`physical_decide.cpp`) suppresses rules over columns whose source
+  name was never resolved, precisely so a finding never names a positional `colN` the
+  user did not type. It still happens. The same logical query gives different findings
+  depending on whether the rows come from a `VALUES` list or a real table:
 
-- **Downward escape (`edit_source='runaway_-inf'`).** Blocked until signed/free variables
-  land (`03_expressivity/decide/todo.md`); today all user variables are non-negative, so
-  downward escape is unreachable end to end. When they ship: open the lower bound in the
-  ray-fallback box (`BuildUnboundedRayFallbackModel`, `diagnostic_solves.cpp`), replace the
-  engine/renderer's mismatched direction strings with one shared representation (also tracked
-  in `../../06_issues/code_quality/todo.md`), and assert an oracle-confirmed negative-ray
-  finding.
+  ```sql
+  -- over (VALUES ('a','red',5), …) t(tag, colour, cap)
+  buy <= <cap>   1/1   row   col0 = 'c'
+  buy <= <cap>   2/2   row   col1 = 'blue'
+  buy <= <cap>   2/2   row   cap = '0'
+
+  -- over a CREATE TABLE items(tag, colour, region, cap) with the same rows
+  buy <= <cap>   2/2   row   cap = '0'
+  ```
+
+  Over `VALUES`, `tag` and `colour` reach the back-fill in
+  `plan_decide.cpp:182-186` carrying the derived table's internal `col0` / `col1`
+  rather than the user's aliases; over a real table they carry no name at all and are
+  dropped. Only `cap`, referenced in the DECIDE clause itself, is named correctly in
+  both. **Note for the dedupe/tie-break work above**: the candidate set is in practice
+  the DECIDE-clause-referenced columns, so the tie-break originally sketched there
+  ("prefer a column the DECIDE clause references") cannot discriminate — every
+  candidate already is one.
+
+  **Change**: make the back-fill resolve the user's alias for a derived-table column,
+  or drop the column as unnamed, so the two sources agree. Decide which, then apply it
+  before ranking rules, since the ranking reads these names.
+
+  **Test**: the same rows over both a `VALUES` list and a table produce the same
+  findings, and no finding names a `colN`.
+  **Done file:** merge into `done.md` → "Escape characterization".
+  **Discovered**: 2026-08-27, while measuring the finding flood on Figure 1 data.

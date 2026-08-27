@@ -7,8 +7,8 @@
 > keep new composed tests on a join for the same reason.
 
 Tests live in:
-- `test/decide/tests/test_min_max.py` — primary MIN/MAX test file (36 tests)
-- `test/decide/tests/test_min_max_multiterm.py` — row expressions that are not a single product term (7 tests)
+- `test/decide/tests/test_min_max.py` — primary MIN/MAX test file
+- `test/decide/tests/test_min_max_multiterm.py` — row expressions that are not a single product term
 - `test/decide/tests/test_per_objective.py` — nested aggregate PER objectives
 - `test/decide/tests/test_aggregate_local_when.py` — aggregate-local WHEN with MAX
 - `test/decide/tests/test_per_interactions.py` — hard MIN/MAX constraints with PER (per-group Big-M)
@@ -35,18 +35,15 @@ MAX(AVG), MIN(AVG), SUM(AVG) nested variants.
 
 ### Composed MIN/MAX (additive LHS/objective with mixed aggregate terms)
 
-Easy-direction compositions, oracle-verified in `test_min_max.py`:
-`SUM + MAX WHEN w <= K` constraint, two easy MAXs / two easy MINs added in one
-constraint, and composed objectives `MINIMIZE SUM + MAX WHEN w` /
-`MAXIMIZE MIN WHEN w + SUM`.
+Oracle-verified in `test_min_max.py`: easy-direction additive constraints and
+objectives; hard-direction constraints and objectives; scalar-multiplied terms;
+and subtraction such as `MAX(...) - MIN(...) <= K`.
 
 ### Error cases (binder rejections)
 
 `test_min_max.py` / `test_per_objective.py`: `MAX(x) <> K` rejected; flat
-`MIN/MAX + PER` (ambiguous) rejected; composed MIN/MAX rejected for hard
-directions (constraint and objective), subtraction (`MAX - MIN <= K`), scalar
-multiplication (`2 * MIN(...) + SUM(...)`), and outer `PER` wrapper on a
-composed constraint.
+`MIN/MAX + PER` (ambiguous) rejected; and composed MIN/MAX rejected for an outer
+`PER`/`WHEN` wrapper, a non-constant RHS, or equality at the outer comparison.
 
 ### Empty `WHEN` rejection (execution-time errors)
 
