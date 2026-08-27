@@ -32,18 +32,10 @@ _ROUTES = "(VALUES ('T1','D1',500), ('T2','D1',350), ('T3','D2',300)) T(routeID,
 
 
 def _diagnostics(cli, sql):
-    """Run the failing DECIDE and the relation read on ONE session, as the diagnosis is
-    stashed per-connection. Returns {subject: {attribute: value}} plus the combined output."""
-    result = cli.execute_script(
-        ".mode csv\n"
-        "PRAGMA diagnose_decide='auto';\n"
-        f"{sql};\n"
-        "SELECT * FROM decide_diagnostics();\n"
-    )
+    """Run `DIAGNOSE <sql>`. Returns {clause: {attribute: value}} plus the raw output."""
+    result = cli.execute_script(".mode csv\n" + f"DIAGNOSE {sql};\n")
     rows = list(csv.DictReader(io.StringIO(result.stdout)))
-    out = {}
-    for r in rows:
-        out.setdefault(r["subject"], {})[r["attribute"]] = r["value"]
+    out = {r["clause"]: r for r in rows}
     return out, result.stdout + result.stderr
 
 

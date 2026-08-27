@@ -191,17 +191,15 @@ def test_collapsed_ne_is_still_removable_in_diagnosis(decidb_cli):
     """
     script = (
         ".mode csv\n"
-        "PRAGMA diagnose_decide='auto';\n"
-        "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+        "DIAGNOSE SELECT id, x FROM (VALUES (1), (2)) t(id) "
         "DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x);\n"
-        "SELECT * FROM decide_diagnostics();\n"
     )
     proc = decidb_cli.execute_script(script)
     text = proc.stdout + proc.stderr
 
-    assert "drop" in text, f"a collapsed `<>` should still be droppable:\n{text}"
+    assert "remove_only" in text, f"a collapsed `<>` should still be droppable:\n{text}"
     assert "x <> 0" in text, f"expected the reachable repair to be named:\n{text}"
-    assert "achievable_objective,0" in text.replace(" ", ""), (
+    assert "achievable_objective" in text and ",0.0," in text.replace(" ", ""), (
         f"dropping `x <> 0` reaches objective 0, not 2:\n{text}")
 
 

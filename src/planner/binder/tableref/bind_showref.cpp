@@ -8,6 +8,9 @@
 #include "duckdb/planner/tableref/bound_table_function.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/logical_decide_diagnose.hpp"
+#include "duckdb/decidb/decide_diagnostic.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 
 namespace duckdb {
@@ -139,6 +142,49 @@ unique_ptr<BoundTableRef> Binder::BindShowQuery(ShowRef &ref) {
 	return make_uniq<BoundTableFunction>(std::move(show));
 }
 
+//! Find the DECIDE operator in a bound plan and tell it to diagnose. There is exactly
+//! one per DIAGNOSE-able query (a DECIDE clause is a suffix of one SELECT), and it may
+//! sit under projections / ORDER BY / LIMIT that the prefix does not care about.
+static optional_ptr<LogicalDecide> FindDecide(LogicalOperator &op) {
+	if (op.type == LogicalOperatorType::LOGICAL_DECIDE) {
+		return &op.Cast<LogicalDecide>();
+	}
+	for (auto &child : op.children) {
+		auto found = FindDecide(*child);
+		if (found) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
+unique_ptr<BoundTableRef> Binder::BindDiagnose(ShowRef &ref) {
+	// Bind the query exactly as it would bind without the prefix: DIAGNOSE changes what
+	// is reported, never what is asked.
+	auto child_binder = Binder::CreateBinder(context, this);
+	auto plan = child_binder->Bind(*ref.query);
+
+	auto decide = FindDecide(*plan.plan);
+	if (!decide) {
+		throw BinderException("DIAGNOSE needs a query with a DECIDE clause — it reports on "
+		                      "an optimization run, and this query has no optimization to run. "
+		                      "Use EXPLAIN ANALYZE for a plain SQL query.");
+	}
+	// The trigger, carried on the plan itself rather than read back out of a session
+	// setting: this operator, in this statement, diagnoses.
+	decide->diagnose = true;
+
+	auto diagnose = make_uniq<LogicalDecideDiagnose>(GenerateTableIndex());
+	diagnose->children.push_back(std::move(plan.plan));
+	diagnose->ResolveOperatorTypes();
+
+	vector<string> names;
+	vector<LogicalType> types;
+	GetDecideDiagnoseSchema(names, types);
+	bind_context.AddGenericBinding(diagnose->table_index, "__diagnose", names, types);
+	return make_uniq<BoundTableFunction>(std::move(diagnose));
+}
+
 unique_ptr<BoundTableRef> Binder::BindShowTable(ShowRef &ref) {
 	auto lname = StringUtil::Lower(ref.table_name);
 
@@ -162,6 +208,9 @@ unique_ptr<BoundTableRef> Binder::BindShowTable(ShowRef &ref) {
 unique_ptr<BoundTableRef> Binder::Bind(ShowRef &ref) {
 	if (ref.show_type == ShowType::SUMMARY) {
 		return BindSummarize(ref);
+	}
+	if (ref.show_type == ShowType::DIAGNOSE) {
+		return BindDiagnose(ref);
 	}
 	if (ref.query) {
 		return BindShowQuery(ref);

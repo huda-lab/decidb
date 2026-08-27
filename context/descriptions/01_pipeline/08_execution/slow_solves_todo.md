@@ -1,7 +1,7 @@
-# Query Diagnostics — Slow (remaining work)
+# Slow solves — remaining work
 
-The slow-solve engine is shipped; see `done.md` for current behavior. This file keeps the
-follow-up ideas that are not specified yet.
+Slow-solve handling is shipped; see `slow_solves.md` for current behavior. This file keeps
+the follow-up ideas that are not specified yet.
 
 ## Bucket B elastic-as-classifier
 
@@ -17,8 +17,7 @@ an absurd optimality percentage, the slow report should not frame that as a
 "usable solution."
 
 Later work should decide the threshold, wording, variable hinting, and backend
-test shape. The idea is just to reframe the timeout report + `decide_diagnostics()`
-relation as: the objective appears to be running away, the model may be
-unbounded, and the user may need to add a finite upper bound such as
-`SUCH THAT x <= <cap>`. The ray-based unbounded engine cannot be reused directly
-because `TIME_LIMIT` carries no ray.
+test shape. The idea is just to reframe the timeout report as: the objective appears to
+be running away, the model may be unbounded, and the user may need to add a finite upper
+bound such as `SUCH THAT x <= <cap>`. The ray-based unbounded engine cannot be reused
+directly because `TIME_LIMIT` carries no ray.

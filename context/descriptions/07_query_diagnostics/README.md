@@ -1,40 +1,43 @@
 # Query Diagnostics
 
-Turning failed or useless DECIDE solves into actionable diagnoses. SQL always
-returns rows; a DECIDE *solve* can fail in ways a lookup can't — and an undiagnosed
-failure is a dead end (a static error paragraph, a timeout, or a silently
-arbitrary answer). This area replaces each dead end with a **diagnosis**: *why*
-it failed and the **least-change** edit that restores a usable solution.
+Turning failed DECIDE solves into actionable diagnoses. SQL always returns rows; a
+DECIDE *solve* can fail in ways a lookup can't — and an undiagnosed failure is a dead
+end (a static error paragraph, or a silently arbitrary answer). This area replaces each
+dead end with a **diagnosis**: *why* it failed and the **least-change** edit that
+restores a usable solution.
+
+Nothing here runs on its own. A user asks for it by name, by prefixing the query with
+`DIAGNOSE`, and gets the findings back as a relation. See
+`00_project_overview/syntax_reference.md` §8 for the syntax and the output schema.
 
 ## The map — everything flows through the router
 
-Every solve outcome flows through one dispatch tree (the **router**): it inspects the
-solver status — plus a couple of sub-signals (is there a recession ray? an
-incumbent?) — and routes to exactly one terminal. The states below are its leaves.
+A solve made under `DIAGNOSE` flows through one dispatch tree (the **router**): it
+inspects the solver status — plus one sub-signal (is there a recession ray?) — and
+routes to exactly one terminal. The states below are its leaves.
 
 ```
-                              solve result
+                       solve result (under DIAGNOSE)
                                    │
-        ┌──────────────────────────┼──────────────────────────┐
-     solved                      failed                    time_limit
-        │                          │                            │
-  (success,         ┌──────────────┼──────────────┐       ┌─────┴─────┐
- no diagnosis)   unbounded     infeasible       inf/unb  incumbent   no sol
-                    │              │               │         │          │
-                 find ray       elastic        check ray   report     report
-                    │              │               │      incum+gap    slow
-                  report         report      ┌──────┴──────┐
-                                          found        not found
-                                            │              │
-                                   "add a bound —       elastic
-                                    may still be          │
-                                    infeasible"         report
+        ┌──────────────────────────┴──────────────────────────┐
+     solved                                                failed
+        │                          ┌─────────────────────────┼──────────────┐
+  (one `feasible`              unbounded                 infeasible        inf/unb
+       finding)                    │                          │              │
+                                find ray                   elastic      check ray
+                                   │                          │              │
+                                 report                     report    ┌──────┴──────┐
+                                                                   found       not found
+                                                                      │             │
+                                                             "add a bound —      elastic
+                                                              may still be          │
+                                                              infeasible"        report
 ```
 
 - `[router/](router/)` — the **spine**: the dispatch tree above and the inf/unb
-  `check ray` disambiguation. All four terminals are wired — solved, unbounded,
-  infeasible, and time_limit (the slow engine, R6) — each an engine dropped behind an
-  existing classifier leaf without editing the classifier.
+  `check ray` disambiguation. Three terminals — solved, unbounded, infeasible — each an
+  engine dropped behind an existing classifier leaf without editing the classifier. A
+  time limit is deliberately *not* a leaf: see below.
 - `[unbounded/](unbounded/)` — terminal `failed → unbounded`: names the escaping
   variable via the ray and prescribes a bound (**tighten** a too-open region).
 - `[infeasible/](infeasible/)` ★ — terminal `failed → infeasible`: elastic
@@ -42,26 +45,25 @@ incumbent?) — and routes to exactly one terminal. The states below are its lea
   (I1–I5, aggregate `<>` removal, and the T3 two-mode slack-scope policy: `query`
   folds each knob to one SQL edit / turns data conflicts into virtual offsets,
   `expanded` exposes the per-row / per-group profile).
-- `[slow/](slow/)` — terminal `time_limit`: **shipped**. A solve that hits the limit
-  returns `SolverStatus::TIME_LIMIT`, prints a plain-language checkpoint report, and — per
-  the `decide_on_timeout` pragma (ask / error / continue) — resumes the **same warm solver**
-  for more wall-clock, returning the best-so-far rows when the user stops. Not a
-  relax/reformulate engine; it reports and continues. (`off` is a master mute → plain
-  error.)
+- **A slow solve is not a diagnosis.** A solve that hits the wall-clock limit — or that
+  a user stops with Ctrl-C — is ordinary execution behaviour: it happens with or without
+  the prefix, no engine runs, and nothing is diagnosed. It lives in
+  `01_pipeline/08_execution/slow_solves.md`.
 - `[foundations/](foundations/)` — the **substrate** every terminal sits on (not
   a terminal): structured solver result, constraint + variable provenance, the
-  `diagnose_decide` gate, the solver-behavior reference, the reporting relation.
+  solver-behavior reference, the reporting relation.
 
 Infeasible and unbounded are mirror images — loosen a too-small region vs. tighten a
-too-open one; slow is a runtime event masking the other states.
+too-open one.
 
 ## Principles
 
 - **Least-change** — propose the smallest edit, not a rewrite.
-- **On by default** — `PRAGMA diagnose_decide` is `auto` by default: a failed solve
-  is diagnosed automatically wherever an engine exists. Set `off` to suppress and
-  get the plain static error. We never edit the user's query; a diagnosis only ever
-  *describes* the failure and prescribes a remedy.
+- **Opt-in, by name** — `DIAGNOSE <query>` is the only thing that starts the engine.
+  There is no automatic path and no setting: a query that is never prefixed never pays
+  for a diagnostic solve, and a bare failure reports its state and stops. Naming the
+  clause *is* the elastic solve, so it happens only when asked. We never edit the user's
+  query; a diagnosis only ever *describes* the failure and prescribes a remedy.
 - **Solver-agnostic** — everything works on Gurobi and HiGHS. We build the
   elastic model in our own model builder so both backends solve it natively;
   Gurobi `feasRelax` is an *accelerator*, never a dependency.
@@ -116,16 +118,17 @@ too-open one; slow is a runtime event masking the other states.
 - **Differential testing** — every phase tests against `oracle_solver` on
   constructed cases, never hand-computed answers.
 
-## Invocation — `PRAGMA diagnose_decide`
+## Invocation — the `DIAGNOSE` prefix
 
-Sticky session pragma with two modes: `auto` (default — diagnose whichever failed
-state the solve lands in, wherever an engine exists) and `off` (suppress diagnosis;
-reproduce the plain static solver error). Diagnosis only ever runs when the solve
-*actually* fails, so leaving `auto` on costs nothing on a successful solve.
+`DIAGNOSE <select>` runs the query and returns its findings as a relation instead of its
+rows. It is a property of the *statement*, carried parser → binder → logical plan →
+stage 08 as `LogicalDecide::diagnose`; nothing reads it back out of a session setting.
+The full syntax and output schema are in `00_project_overview/syntax_reference.md` §8.
 
-A second sticky pragma, `diagnose_decide_infeasible_slack_scope` (`query` default /
-`expanded`), selects how the infeasible engine reports a knob that fans out — one
-folded SQL-level edit vs. the per-row / per-group profile. See `infeasible/done.md`.
+The engine's *tuning* knobs remain sticky session settings — they configure how it works
+once it is running, never whether it runs. The one that changes what you see most is
+`diagnose_decide_infeasible_slack_scope` (`query` default / `expanded`): one folded
+SQL-level edit per knob, vs. the per-row / per-group profile. See `infeasible/done.md`.
 
 ---
 
@@ -134,20 +137,22 @@ folded SQL-level edit vs. the per-row / per-group profile. See `infeasible/done.
 A DECIDE query can end four ways: it **solves**, it is **unbounded** (something can
 grow forever), it is **infeasible** (the constraints contradict each other), or it is
 **slow** (the time limit expires first). This tour shows what DeciDB says in each case.
-Every failure explains itself in one line, names the offending part of *your* query,
-and states the smallest edit that fixes it; the structured detail is always one
-`SELECT * FROM decide_diagnostics();` away.
+The first three are what `DIAGNOSE` reports on: it names the offending part of *your*
+query and states the smallest edit that fixes it, one row per finding. The fourth is
+execution behaviour and prints its own report, prefix or no prefix.
 
 All outputs below are real captured runs against the TPC-H sample database
 (`decidb.db`, scale 0.01 — `part` 2000 rows, `lineitem` 60k, `supplier` 100), Gurobi
 backend, default settings unless a `PRAGMA`/`SET` line is shown. The slow examples set
 the time limit to 1 second (`DECIDB_TIME_LIMIT=1`) so they reproduce in seconds.
+For readability, finding tables project the columns relevant to that state; the
+authoritative fixed schema is in the syntax reference linked above.
 
 ## When it just works
 
-A successful solve returns the decided rows like any SQL query. Diagnosis is on by
-default but costs nothing here — it only runs when a solve fails — and
-`decide_diagnostics()` stays empty.
+A successful solve returns the decided rows like any SQL query. No diagnosis runs, and
+none is paid for. (Under `DIAGNOSE` the same query returns exactly one row saying
+`feasible`.)
 
 ```sql
 SELECT p_partkey, p_retailprice, buy
@@ -196,17 +201,11 @@ MAXIMIZE SUM(buy * p_retailprice);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is unbounded: variable buy can grow without bound. Add an upper bound, e.g. SUCH THAT buy <= <cap>.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬───────────┬──────────────┬─────────┬───────────────┬────────────┐
-│ diagnosis_id │   state   │ subject_kind │ subject │   attribute   │   value    │
-├──────────────┼───────────┼──────────────┼─────────┼───────────────┼────────────┤
-│ 1            │ unbounded │ variable     │ buy     │ grows_toward  │ +inf       │
-│ 1            │ unbounded │ variable     │ buy     │ affected_rows │ all 8 rows │
-└──────────────┴───────────┴──────────────┴─────────┴───────────────┴────────────┘
+┌───────────┬────────┬──────────────────┬────────┬───────┬───────┬──────────────┬───────┬──────┐
+│   state   │ clause │ suggested_change │ amount │ total │ scope │ edit_source  │ group │ row  │
+├───────────┼────────┼──────────────────┼────────┼───────┼───────┼──────────────┼───────┼──────┤
+│ unbounded │ buy    │ buy <= <cap>     │ 8.0    │ 8     │ row   │ runaway_+inf │ NULL  │ NULL │
+└───────────┴────────┴──────────────────┴────────┴───────┴───────┴──────────────┴───────┴──────┘
 ```
 
 When several variables escape, each gets its own rows in the relation and the
@@ -229,17 +228,11 @@ MAXIMIZE SUM(buy * p_retailprice * 0.10);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is unbounded: variable buy can grow without bound. Add an upper bound, e.g. SUCH THAT buy <= <cap>.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬───────────┬──────────────┬─────────┬───────────────┬───────────────────────────────────────────────┐
-│ diagnosis_id │   state   │ subject_kind │ subject │   attribute   │                     value                     │
-├──────────────┼───────────┼──────────────┼─────────┼───────────────┼───────────────────────────────────────────────┤
-│ 1            │ unbounded │ variable     │ buy     │ grows_toward  │ +inf                                          │
-│ 1            │ unbounded │ variable     │ buy     │ affected_rows │ 29 of 29 rows where p_mfgr = 'Manufacturer#1' │
-└──────────────┴───────────┴──────────────┴─────────┴───────────────┴───────────────────────────────────────────────┘
+┌───────────┬────────┬──────────────────┬────────┬───────┬───────┬──────────────┬───────────────────────────┬──────┐
+│   state   │ clause │ suggested_change │ amount │ total │ scope │ edit_source  │           group           │ row  │
+├───────────┼────────┼──────────────────┼────────┼───────┼───────┼──────────────┼───────────────────────────┼──────┤
+│ unbounded │ buy    │ buy <= <cap>     │ 29.0   │ 29    │ row   │ runaway_+inf │ p_mfgr = 'Manufacturer#1' │ NULL │
+└───────────┴────────┴──────────────────┴────────┴───────┴───────┴──────────────┴───────────────────────────┴──────┘
 ```
 
 ### U3 — an entity-level variable, characterized by a joined column
@@ -259,24 +252,18 @@ MAXIMIZE SUM(capacity * ps_supplycost);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is unbounded: variable capacity can grow without bound. Add an upper bound, e.g. SUCH THAT capacity <= <cap>.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬───────────┬──────────────┬──────────┬───────────────────┬───────────────────────────────────────────┐
-│ diagnosis_id │   state   │ subject_kind │ subject  │     attribute     │                   value                   │
-├──────────────┼───────────┼──────────────┼──────────┼───────────────────┼───────────────────────────────────────────┤
-│ 1            │ unbounded │ variable     │ capacity │ grows_toward      │ +inf                                      │
-│ 1            │ unbounded │ variable     │ capacity │ affected_entities │ 20 of 20 entities where r_name = 'EUROPE' │
-└──────────────┴───────────┴──────────────┴──────────┴───────────────────┴───────────────────────────────────────────┘
+┌───────────┬──────────┬───────────────────┬────────┬───────┬────────┬──────────────┬───────────────────┬──────┐
+│   state   │  clause  │ suggested_change  │ amount │ total │ scope  │ edit_source  │       group       │ row  │
+├───────────┼──────────┼───────────────────┼────────┼───────┼────────┼──────────────┼───────────────────┼──────┤
+│ unbounded │ capacity │ capacity <= <cap> │ 20.0   │ 20    │ entity │ runaway_+inf │ r_name = 'EUROPE' │ NULL │
+└───────────┴──────────┴───────────────────┴────────┴───────┴────────┴──────────────┴───────────────────┴──────┘
 ```
 
 ### U4 — when the variable can't be named
 
 A non-linear objective (here a `POWER` term) prevents identifying the runaway
-variable. The error says so honestly — the remedy is unchanged — and no detail
-relation is stashed.
+variable. `DIAGNOSE` says so honestly in one `undiagnosed` finding rather than
+returning an empty relation or raising another error.
 
 ```sql
 SELECT p_partkey, buy
@@ -288,7 +275,11 @@ MAXIMIZE SUM(buy * p_retailprice) + SUM(POWER(buy, 2));
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is unbounded: a non-linear term prevents naming the variable. Add an upper bound, e.g. SUCH THAT x <= <cap>.
+┌───────────┬────────┬─────────────────────────────────────────────────┬────────┬───────┬───────┬─────────────┬───────┬──────┐
+│   state   │ clause │                suggested_change                 │ amount │ total │ scope │ edit_source │ group │ row  │
+├───────────┼────────┼─────────────────────────────────────────────────┼────────┼───────┼───────┼─────────────┼───────┼──────┤
+│ unbounded │ NULL   │ a non-linear term prevents naming the variable. │ NULL   │ NULL  │ NULL  │ undiagnosed │ NULL  │ NULL │
+└───────────┴────────┴─────────────────────────────────────────────────┴────────┴───────┴───────┴─────────────┴───────┴──────┘
 ```
 
 ---
@@ -297,9 +288,9 @@ Invalid Input Error: DECIDE optimization is unbounded: a non-linear term prevent
 
 There is no assignment that satisfies every constraint. DeciDB finds the **smallest
 edit** that restores a solution and quotes it back in your own syntax: which clause,
-loosened to what, by how much — plus `achievable_objective`, the objective value you
-would get after the edit. When more than one clause must give, each edit is listed
-under the same `diagnosis_id`.
+loosened to what, by how much — plus one `achievable_objective` row, the objective value
+you would get after the edit. When more than one clause must give, each gets its own
+row.
 
 ### I1 — two bounds that contradict
 
@@ -316,21 +307,12 @@ MAXIMIZE SUM(make);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `make <= 5`.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬────────────┬──────────────┬───────────┬──────────────────────┬────────────────┐
-│ diagnosis_id │   state    │ subject_kind │  subject  │      attribute       │     value      │
-├──────────────┼────────────┼──────────────┼───────────┼──────────────────────┼────────────────┤
-│ 1            │ infeasible │ clause       │ make <= 5 │ edit_kind            │ loosen         │
-│ 1            │ infeasible │ clause       │ make <= 5 │ suggested_change     │ make <= 10     │
-│ 1            │ infeasible │ clause       │ make <= 5 │ amount               │ 5              │
-│ 1            │ infeasible │ clause       │ make <= 5 │ edit_source          │ source_literal │
-│ 1            │ infeasible │ clause       │ make <= 5 │ offset_scope         │ clause         │
-│ 1            │ infeasible │ model        │ NULL      │ achievable_objective │ 80             │
-└──────────────┴────────────┴──────────────┴───────────┴──────────────────────┴────────────────┘
+┌────────────┬───────────┬──────────────────┬────────┬──────────────────────┬───────┬──────┐
+│   state    │  clause   │ suggested_change │ amount │     edit_source      │ group │ row  │
+├────────────┼───────────┼──────────────────┼────────┼──────────────────────┼───────┼──────┤
+│ infeasible │ make <= 5 │ make <= 10       │ 5.0    │ source_literal       │ NULL  │ NULL │
+│ infeasible │ NULL      │ NULL             │ 80.0   │ achievable_objective │ NULL  │ NULL │
+└────────────┴───────────┴──────────────────┴────────┴──────────────────────┴───────┴──────┘
 ```
 
 ### I2 — an impossible average target, suggested in your own units
@@ -348,21 +330,12 @@ MAXIMIZE SUM(buy);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `AVG(buy * p_retailprice) >= 5000`.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬────────────┬──────────────┬──────────────────────────────────┬──────────────────────┬───────────────────────────────────┐
-│ diagnosis_id │   state    │ subject_kind │             subject              │      attribute       │               value               │
-├──────────────┼────────────┼──────────────┼──────────────────────────────────┼──────────────────────┼───────────────────────────────────┤
-│ 1            │ infeasible │ clause       │ AVG(buy * p_retailprice) >= 5000 │ edit_kind            │ loosen                            │
-│ 1            │ infeasible │ clause       │ AVG(buy * p_retailprice) >= 5000 │ suggested_change     │ AVG(buy * p_retailprice) >= 904.5 │
-│ 1            │ infeasible │ clause       │ AVG(buy * p_retailprice) >= 5000 │ amount               │ 4095.5                            │
-│ 1            │ infeasible │ clause       │ AVG(buy * p_retailprice) >= 5000 │ edit_source          │ source_literal                    │
-│ 1            │ infeasible │ clause       │ AVG(buy * p_retailprice) >= 5000 │ offset_scope         │ clause                            │
-│ 1            │ infeasible │ model        │ NULL                             │ achievable_objective │ 8                                 │
-└──────────────┴────────────┴──────────────┴──────────────────────────────────┴──────────────────────┴───────────────────────────────────┘
+┌────────────┬──────────────────────────────────┬───────────────────────────────────┬────────┬──────────────────────┬───────┬──────┐
+│   state    │              clause              │         suggested_change          │ amount │     edit_source      │ group │ row  │
+├────────────┼──────────────────────────────────┼───────────────────────────────────┼────────┼──────────────────────┼───────┼──────┤
+│ infeasible │ AVG(buy * p_retailprice) >= 5000 │ AVG(buy * p_retailprice) >= 904.5 │ 4095.5 │ source_literal       │ NULL  │ NULL │
+│ infeasible │ NULL                             │ NULL                              │ 8.0    │ achievable_objective │ NULL  │ NULL │
+└────────────┴──────────────────────────────────┴───────────────────────────────────┴────────┴──────────────────────┴───────┴──────┘
 ```
 
 ### I3 — when two constraints must both give
@@ -380,26 +353,13 @@ MAXIMIZE SUM(buy);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `SUM(buy) >= 20` and clause `SUM(buy * p_retailprice) <= 900`.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬────────────┬──────────────┬─────────────────────────────────┬──────────────────────┬──────────────────────────────────┐
-│ diagnosis_id │   state    │ subject_kind │             subject             │      attribute       │              value               │
-├──────────────┼────────────┼──────────────┼─────────────────────────────────┼──────────────────────┼──────────────────────────────────┤
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 20                  │ edit_kind            │ loosen                           │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 20                  │ suggested_change     │ SUM(buy) >= 4                    │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 20                  │ amount               │ 16                               │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 20                  │ edit_source          │ source_literal                   │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 20                  │ offset_scope         │ clause                           │
-│ 1            │ infeasible │ clause       │ SUM(buy * p_retailprice) <= 900 │ edit_kind            │ loosen                           │
-│ 1            │ infeasible │ clause       │ SUM(buy * p_retailprice) <= 900 │ suggested_change     │ SUM(buy * p_retailprice) <= 3610 │
-│ 1            │ infeasible │ clause       │ SUM(buy * p_retailprice) <= 900 │ amount               │ 2710                             │
-│ 1            │ infeasible │ clause       │ SUM(buy * p_retailprice) <= 900 │ edit_source          │ source_literal                   │
-│ 1            │ infeasible │ clause       │ SUM(buy * p_retailprice) <= 900 │ offset_scope         │ clause                           │
-│ 1            │ infeasible │ model        │ NULL                            │ achievable_objective │ 4                                │
-└──────────────┴────────────┴──────────────┴─────────────────────────────────┴──────────────────────┴──────────────────────────────────┘
+┌────────────┬─────────────────────────────────┬──────────────────────────────────┬────────┬──────────────────────┬───────┬──────┐
+│   state    │             clause              │         suggested_change         │ amount │     edit_source      │ group │ row  │
+├────────────┼─────────────────────────────────┼──────────────────────────────────┼────────┼──────────────────────┼───────┼──────┤
+│ infeasible │ SUM(buy) >= 20                  │ SUM(buy) >= 4                    │ 16.0   │ source_literal       │ NULL  │ NULL │
+│ infeasible │ SUM(buy * p_retailprice) <= 900 │ SUM(buy * p_retailprice) <= 3610 │ 2710.0 │ source_literal       │ NULL  │ NULL │
+│ infeasible │ NULL                            │ NULL                             │ 4.0    │ achievable_objective │ NULL  │ NULL │
+└────────────┴─────────────────────────────────┴──────────────────────────────────┴────────┴──────────────────────┴───────┴──────┘
 ```
 
 ### I4 — when only removing a clause helps
@@ -415,17 +375,12 @@ MINIMIZE SUM(promo);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `promo <> 0`.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬────────────┬──────────────┬────────────┬──────────────────────┬───────┐
-│ diagnosis_id │   state    │ subject_kind │  subject   │      attribute       │ value │
-├──────────────┼────────────┼──────────────┼────────────┼──────────────────────┼───────┤
-│ 1            │ infeasible │ clause       │ promo <> 0 │ edit_kind            │ drop  │
-│ 1            │ infeasible │ model        │ NULL       │ achievable_objective │ 0     │
-└──────────────┴────────────┴──────────────┴────────────┴──────────────────────┴───────┘
+┌────────────┬────────────┬────────────────────┬────────┬──────────────────────┬───────┬──────┐
+│   state    │   clause   │  suggested_change  │ amount │     edit_source      │ group │ row  │
+├────────────┼────────────┼────────────────────┼────────┼──────────────────────┼───────┼──────┤
+│ infeasible │ promo <> 0 │ remove this clause │ NULL   │ remove_only          │ NULL  │ NULL │
+│ infeasible │ NULL       │ NULL               │ 0.0    │ achievable_objective │ NULL  │ NULL │
+└────────────┴────────────┴────────────────────┴────────┴──────────────────────┴───────┴──────┘
 ```
 
 ### I5 — when the conflict is in your data
@@ -446,21 +401,12 @@ MAXIMIZE SUM(ship);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `ship <= ps_availqty`.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬────────────┬──────────────┬─────────────────────┬──────────────────────┬──────────────────────────┐
-│ diagnosis_id │   state    │ subject_kind │       subject       │      attribute       │          value           │
-├──────────────┼────────────┼──────────────┼─────────────────────┼──────────────────────┼──────────────────────────┤
-│ 1            │ infeasible │ clause       │ ship <= ps_availqty │ edit_kind            │ loosen                   │
-│ 1            │ infeasible │ clause       │ ship <= ps_availqty │ suggested_change     │ ship <= ps_availqty + 18 │
-│ 1            │ infeasible │ clause       │ ship <= ps_availqty │ amount               │ 18                       │
-│ 1            │ infeasible │ clause       │ ship <= ps_availqty │ edit_source          │ virtual_offset           │
-│ 1            │ infeasible │ clause       │ ship <= ps_availqty │ offset_scope         │ clause                   │
-│ 1            │ infeasible │ model        │ NULL                │ achievable_objective │ 35064                    │
-└──────────────┴────────────┴──────────────┴─────────────────────┴──────────────────────┴──────────────────────────┘
+┌────────────┬─────────────────────┬──────────────────────────┬─────────┬──────────────────────┬───────┬──────┐
+│   state    │       clause        │     suggested_change     │ amount  │     edit_source      │ group │ row  │
+├────────────┼─────────────────────┼──────────────────────────┼─────────┼──────────────────────┼───────┼──────┤
+│ infeasible │ ship <= ps_availqty │ ship <= ps_availqty + 18 │ 18.0    │ virtual_offset       │ NULL  │ NULL │
+│ infeasible │ NULL                │ NULL                     │ 35064.0 │ achievable_objective │ NULL  │ NULL │
+└────────────┴─────────────────────┴──────────────────────────┴─────────┴──────────────────────┴───────┴──────┘
 ```
 
 To see exactly which rows conflict instead, set
@@ -468,26 +414,13 @@ To see exactly which rows conflict instead, set
 row, at its own row's values:
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `ship <= 27` and clause `ship <= 11`.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬────────────┬──────────────┬────────────┬──────────────────────┬──────────────┐
-│ diagnosis_id │   state    │ subject_kind │  subject   │      attribute       │    value     │
-├──────────────┼────────────┼──────────────┼────────────┼──────────────────────┼──────────────┤
-│ 1            │ infeasible │ clause       │ ship <= 27 │ edit_kind            │ loosen       │
-│ 1            │ infeasible │ clause       │ ship <= 27 │ suggested_change     │ ship <= 32   │
-│ 1            │ infeasible │ clause       │ ship <= 27 │ amount               │ 5            │
-│ 1            │ infeasible │ clause       │ ship <= 27 │ edit_source          │ expanded_row │
-│ 1            │ infeasible │ clause       │ ship <= 27 │ offset_scope         │ row          │
-│ 1            │ infeasible │ clause       │ ship <= 11 │ edit_kind            │ loosen       │
-│ 1            │ infeasible │ clause       │ ship <= 11 │ suggested_change     │ ship <= 29   │
-│ 1            │ infeasible │ clause       │ ship <= 11 │ amount               │ 18           │
-│ 1            │ infeasible │ clause       │ ship <= 11 │ edit_source          │ expanded_row │
-│ 1            │ infeasible │ clause       │ ship <= 11 │ offset_scope         │ row          │
-│ 1            │ infeasible │ model        │ NULL       │ achievable_objective │ 34943        │
-└──────────────┴────────────┴──────────────┴────────────┴──────────────────────┴──────────────┘
+┌────────────┬────────────┬──────────────────┬─────────┬──────────────────────┬───────┬──────┐
+│   state    │   clause   │ suggested_change │ amount  │     edit_source      │ group │ row  │
+├────────────┼────────────┼──────────────────┼─────────┼──────────────────────┼───────┼──────┤
+│ infeasible │ ship <= 27 │ ship <= 32       │ 5.0     │ expanded_row         │ NULL  │ NULL │
+│ infeasible │ ship <= 11 │ ship <= 29       │ 18.0    │ expanded_row         │ NULL  │ NULL │
+│ infeasible │ NULL       │ NULL             │ 34943.0 │ achievable_objective │ NULL  │ NULL │
+└────────────┴────────────┴──────────────────┴─────────┴──────────────────────┴───────┴──────┘
 ```
 
 ### I6 — a PER group that can't keep up
@@ -506,55 +439,31 @@ MAXIMIZE SUM(buy);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to clause `SUM(buy) >= 3 PER p_mfgr`.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬────────────┬──────────────┬──────────────────────────┬──────────────────────┬──────────────────────────┐
-│ diagnosis_id │   state    │ subject_kind │         subject          │      attribute       │          value           │
-├──────────────┼────────────┼──────────────┼──────────────────────────┼──────────────────────┼──────────────────────────┤
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr │ edit_kind            │ loosen                   │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr │ suggested_change     │ SUM(buy) >= 1 PER p_mfgr │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr │ amount               │ 2                        │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr │ edit_source          │ source_literal           │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr │ offset_scope         │ clause                   │
-│ 1            │ infeasible │ model        │ NULL                     │ achievable_objective │ 12                       │
-└──────────────┴────────────┴──────────────┴──────────────────────────┴──────────────────────┴──────────────────────────┘
+┌────────────┬──────────────────────────┬──────────────────────────┬────────┬──────────────────────┬───────┬──────┐
+│   state    │          clause          │     suggested_change     │ amount │     edit_source      │ group │ row  │
+├────────────┼──────────────────────────┼──────────────────────────┼────────┼──────────────────────┼───────┼──────┤
+│ infeasible │ SUM(buy) >= 3 PER p_mfgr │ SUM(buy) >= 1 PER p_mfgr │ 2.0    │ source_literal       │ NULL  │ NULL │
+│ infeasible │ NULL                     │ NULL                     │ 12.0   │ achievable_objective │ NULL  │ NULL │
+└────────────┴──────────────────────────┴──────────────────────────┴────────┴──────────────────────┴───────┴──────┘
 ```
 
 In `expanded` mode the headline names the failing groups and each gets its own edit,
 sized to its own shortfall:
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; diagnosis points to grouped clause `SUM(buy) >= 3 PER p_mfgr` for groups `Manufacturer#2` and `Manufacturer#5`.
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬────────────┬──────────────┬──────────────────────────────────────────────────┬──────────────────────┬──────────────────────────┐
-│ diagnosis_id │   state    │ subject_kind │                     subject                      │      attribute       │          value           │
-├──────────────┼────────────┼──────────────┼──────────────────────────────────────────────────┼──────────────────────┼──────────────────────────┤
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#2] │ edit_kind            │ loosen                   │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#2] │ suggested_change     │ SUM(buy) >= 2 PER p_mfgr │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#2] │ amount               │ 1                        │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#2] │ group                │ Manufacturer#2           │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#2] │ edit_source          │ expanded_group           │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#2] │ offset_scope         │ group                    │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#5] │ edit_kind            │ loosen                   │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#5] │ suggested_change     │ SUM(buy) >= 1 PER p_mfgr │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#5] │ amount               │ 2                        │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#5] │ group                │ Manufacturer#5           │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#5] │ edit_source          │ expanded_group           │
-│ 1            │ infeasible │ clause       │ SUM(buy) >= 3 PER p_mfgr [group: Manufacturer#5] │ offset_scope         │ group                    │
-│ 1            │ infeasible │ model        │ NULL                                             │ achievable_objective │ 12                       │
-└──────────────┴────────────┴──────────────┴──────────────────────────────────────────────────┴──────────────────────┴──────────────────────────┘
+┌────────────┬──────────────────────────┬──────────────────────────┬────────┬──────────────────────┬────────────────┬──────┐
+│   state    │          clause          │     suggested_change     │ amount │     edit_source      │     group      │ row  │
+├────────────┼──────────────────────────┼──────────────────────────┼────────┼──────────────────────┼────────────────┼──────┤
+│ infeasible │ SUM(buy) >= 3 PER p_mfgr │ SUM(buy) >= 2 PER p_mfgr │ 1.0    │ expanded_group       │ Manufacturer#2 │ NULL │
+│ infeasible │ SUM(buy) >= 3 PER p_mfgr │ SUM(buy) >= 1 PER p_mfgr │ 2.0    │ expanded_group       │ Manufacturer#5 │ NULL │
+│ infeasible │ NULL                     │ NULL                     │ 12.0   │ achievable_objective │ NULL           │ NULL │
+└────────────┴──────────────────────────┴──────────────────────────┴────────┴──────────────────────┴────────────────┴──────┘
 ```
 
 Two edge behaviors worth knowing: if the proposed repair would leave the objective
-able to grow forever, `achievable_objective` reports `unbounded` instead of a number;
-and if working out the diagnosis itself runs out of time, the error says so in one
-line rather than guessing.
+able to grow forever, a separate `unbounded_after_fix` finding says so instead of
+inventing a number; and if working out the diagnosis itself runs out of time, one
+`undiagnosed` finding says so rather than guessing.
 
 ### I7 — a bound nothing can reach
 
@@ -572,22 +481,17 @@ MAXIMIZE SUM(x);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is infeasible: the constraints cannot all be satisfied at once; clause `SUM(x) >= inf` sets a bound no value can reach.
-Details: SELECT * FROM decide_diagnostics();
+┌────────────┬───────────────┬───────────────────────────────────────────────┬────────┬───────────────────┬───────┬──────┐
+│   state    │    clause     │               suggested_change                │ amount │    edit_source    │ group │ row  │
+├────────────┼───────────────┼───────────────────────────────────────────────┼────────┼───────────────────┼───────┼──────┤
+│ infeasible │ SUM(x) >= inf │ lower this bound — no assignment can reach it │ NULL   │ unreachable_bound │ NULL  │ NULL │
+└────────────┴───────────────┴───────────────────────────────────────────────┴────────┴───────────────────┴───────┴──────┘
 ```
 
-```
-┌──────────────┬────────────┬──────────────┬───────────────┬───────────────────┬───────┐
-│ diagnosis_id │   state    │ subject_kind │    subject    │     attribute     │ value │
-├──────────────┼────────────┼──────────────┼───────────────┼───────────────────┼───────┤
-│ 1            │ infeasible │ clause       │ SUM(x) >= inf │ unreachable_bound │ true  │
-└──────────────┴────────────┴──────────────┴───────────────┴───────────────────┴───────┘
-```
-
-`unreachable_bound` appears instead of `edit_kind` / `suggested_change` / `amount`, and
-it is the one infeasible shape with no edit rows at all. The fix is yours to choose:
-write a finite bound, or drop the clause. The direction matters — `SUM(x) <= inf` points
-the other way, constrains nothing, and is never reported.
+`unreachable_bound` is the finding kind in `edit_source`; it carries an explanation in
+`suggested_change` but no numeric `amount`. The fix is yours to choose: write a finite
+bound, or drop the clause. The direction matters — `SUM(x) <= inf` points the other way,
+constrains nothing, and is never reported.
 
 ---
 
@@ -596,184 +500,26 @@ the other way, constrains nothing, and is never reported.
 Occasionally a solver's first answer is the ambiguous "infeasible *or* unbounded".
 DeciDB settles it with a quick internal check before reporting, so in practice you
 see one of the two definitive diagnoses above. In the rare case the evidence stays
-ambiguous, you get whichever diagnosis the evidence supports: the unbounded report
-with the caveat `It may instead be infeasible.` appended, or the infeasible
-diagnosis.
+ambiguous, the ray still chooses the engine. If the unbounded engine cannot name a
+variable, its `undiagnosed` finding keeps `state='infeasible or unbounded'` rather than
+pretending the status was resolved; no ray routes to the infeasible diagnosis.
 
 ---
 
 ## Slow — the time limit expires first
 
-A solve that hits the wall-clock limit (default 300s; set the `DECIDB_TIME_LIMIT`
-environment variable to change it) is not thrown away: DeciDB prints a checkpoint
-report of what the solver has so far, and the `decide_on_timeout` setting decides
-what happens next — `ask` (default: at a terminal, Enter keeps solving and `s` stops;
-in scripts it behaves like `error`), `error` (report, then stop), or `continue`
-(keep solving until done or interrupted). Ctrl-C works on any solve and behaves like
-reaching the limit: you get the best answer found so far instead of a dead query.
+Not a diagnosis. A solve that runs out of wall-clock, or that a user stops with Ctrl-C,
+is ordinary execution behaviour — it happens with or without the `DIAGNOSE` prefix and
+no engine runs. Its report, its continuation offer, and its worked examples live with
+the layer that owns it: `01_pipeline/08_execution/slow_solves.md`.
 
-### S1 — the limit hits, but a usable solution exists
+## Without the prefix
 
-A hard portfolio pick over 400 parts and six capacity constraints (weights derived
-from the part keys), with a 1-second limit. The solution in hand is quantified —
-within 0.11% of the best possible — so you can decide whether it's already good
-enough.
+Nothing starts the diagnostics engine except `DIAGNOSE`. The same query unprefixed
+reports its state and stops — no clause, no repair, no second statement — and points at
+the prefix that would answer the question.
 
 ```sql
-SELECT p_partkey, buy
-FROM (
-  SELECT p_partkey, p_retailprice,
-         ((p_partkey*7)%97)+1  AS w0, ((p_partkey*9)%97)+1  AS w1,
-         ((p_partkey*11)%97)+1 AS w2, ((p_partkey*13)%97)+1 AS w3,
-         ((p_partkey*15)%97)+1 AS w4, ((p_partkey*17)%97)+1 AS w5
-  FROM part WHERE p_partkey <= 400
-)
-DECIDE buy(BOOL)
-SUCH THAT SUM(w0*buy) <= 9785 AND SUM(w1*buy) <= 9766
-      AND SUM(w2*buy) <= 9747 AND SUM(w3*buy) <= 9776
-      AND SUM(w4*buy) <= 9806 AND SUM(w5*buy) <= 9787
-MAXIMIZE SUM(p_retailprice * buy);
-```
-
-```
-DECIDE hit the 1s time limit with a usable solution (not proven best).
-  best objective so far: 261144  (within 0.11% of the best possible)
-  elapsed 1s · peak memory 108 MB
-Invalid Input Error: DECIDE optimization is slow: the solve hit the time limit with a usable but unproven solution — reduce the input size to prove it, or keep solving with SET decide_on_timeout='continue'
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬───────┬──────────────┬─────────┬─────────────────────────┬────────────────┐
-│ diagnosis_id │ state │ subject_kind │ subject │        attribute        │     value      │
-├──────────────┼───────┼──────────────┼─────────┼─────────────────────────┼────────────────┤
-│ 1            │ slow  │ model        │ NULL    │ stopped_by              │ time_limit     │
-│ 1            │ slow  │ model        │ NULL    │ status                  │ solution_found │
-│ 1            │ slow  │ model        │ NULL    │ best_objective          │ 261144         │
-│ 1            │ slow  │ model        │ NULL    │ within_percent_of_best  │ 0.11%          │
-│ 1            │ slow  │ model        │ NULL    │ best_possible_objective │ 261439         │
-│ 1            │ slow  │ model        │ NULL    │ elapsed                 │ 1s             │
-│ 1            │ slow  │ model        │ NULL    │ peak_memory             │ 108 MB         │
-└──────────────┴───────┴──────────────┴─────────┴─────────────────────────┴────────────────┘
-```
-
-The "within X%" line appears only when the solver has actually proven how close the
-solution is to the best possible; when it hasn't (some purely continuous problems at
-very small limits), the report simply omits the claim rather than fabricate one.
-
-### S2 — the limit hits with no solution at all
-
-A pick that must hit six exact totals simultaneously (coefficients hashed from the
-part keys) — hard enough that 1 second finds nothing either way. The report says so
-plainly; nothing is returned.
-
-```sql
-SELECT p_partkey, pick
-FROM (
-  SELECT p_partkey,
-         hash(p_partkey*6+0)%100 AS c0, hash(p_partkey*6+1)%100 AS c1,
-         hash(p_partkey*6+2)%100 AS c2, hash(p_partkey*6+3)%100 AS c3,
-         hash(p_partkey*6+4)%100 AS c4, hash(p_partkey*6+5)%100 AS c5
-  FROM part WHERE p_partkey <= 60
-)
-DECIDE pick(BOOL)
-SUCH THAT SUM(c0*pick) = 1509 AND SUM(c1*pick) = 1554
-      AND SUM(c2*pick) = 1495 AND SUM(c3*pick) = 1535
-      AND SUM(c4*pick) = 1473 AND SUM(c5*pick) = 1650;
-```
-
-```
-DECIDE hit the 1s time limit without finding a solution yet.
-  elapsed 1s · peak memory 103 MB
-Invalid Input Error: DECIDE optimization is slow: the solve hit the time limit before finding a solution — reduce the input size or loosen the constraints, or keep searching with SET decide_on_timeout='continue'
-Details: SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬───────┬──────────────┬─────────┬─────────────┬─────────────┐
-│ diagnosis_id │ state │ subject_kind │ subject │  attribute  │    value    │
-├──────────────┼───────┼──────────────┼─────────┼─────────────┼─────────────┤
-│ 1            │ slow  │ model        │ NULL    │ stopped_by  │ time_limit  │
-│ 1            │ slow  │ model        │ NULL    │ status      │ no_solution │
-│ 1            │ slow  │ model        │ NULL    │ elapsed     │ 1s          │
-│ 1            │ slow  │ model        │ NULL    │ peak_memory │ 103 MB      │
-└──────────────┴───────┴──────────────┴─────────┴─────────────┴─────────────┘
-```
-
-### S3 — keep solving, stop when satisfied
-
-Same query as S1 with `SET decide_on_timeout='continue';` — the solve resumes past
-each limit (the report repeats with rising elapsed time) until you press Ctrl-C.
-The stop is graceful: the query **succeeds**, returning the best solution found,
-with a one-line caveat on how to read it.
-
-```
-DECIDE hit the 1s time limit with a usable solution (not proven best).
-  best objective so far: 261144  (within 0.11% of the best possible)
-  elapsed 1s · peak memory 107 MB
-DECIDE hit the 2s time limit with a usable solution (not proven best).
-  best objective so far: 261144  (within 0.11% of the best possible)
-  elapsed 2s · peak memory 149 MB
-DECIDE stopped at your request with a usable solution (not proven best).
-  best objective so far: 261144  (within 0.11% of the best possible)
-  elapsed 2.5s · peak memory 165 MB
-DECIDE is returning the best solution found so far — it is NOT proven the best possible.
-```
-
-```
-┌───────────┬───────┐
-│ p_partkey │  buy  │
-│   int64   │ int32 │
-├───────────┼───────┤
-│         1 │     1 │
-│         2 │     1 │
-│         3 │     1 │
-│         4 │     0 │
-│         · │     · │
-│         · │     · │
-│       399 │     1 │
-│       400 │     1 │
-├───────────┴───────┤
-│     400 rows      │
-│    (40 shown)     │
-└───────────────────┘
-```
-
-And because the answer you took is unproven, its quality stays queryable *after* the
-rows return:
-
-```sql
-SELECT * FROM decide_diagnostics();
-```
-
-```
-┌──────────────┬─────────┬──────────────┬─────────┬─────────────────────────┬────────────────┐
-│ diagnosis_id │  state  │ subject_kind │ subject │        attribute        │     value      │
-├──────────────┼─────────┼──────────────┼─────────┼─────────────────────────┼────────────────┤
-│            1 │ slow    │ model        │ NULL    │ stopped_by              │ user_interrupt │
-│            1 │ slow    │ model        │ NULL    │ status                  │ solution_found │
-│            1 │ slow    │ model        │ NULL    │ best_objective          │ 261144         │
-│            1 │ slow    │ model        │ NULL    │ within_percent_of_best  │ 0.11%          │
-│            1 │ slow    │ model        │ NULL    │ best_possible_objective │ 261429         │
-│            1 │ slow    │ model        │ NULL    │ elapsed                 │ 2.5s           │
-│            1 │ slow    │ model        │ NULL    │ peak_memory             │ 165 MB         │
-└──────────────┴─────────┴──────────────┴─────────┴─────────────────────────┴────────────────┘
-```
-
-(On the bundled HiGHS backend, Ctrl-C takes effect at the next report rather than
-instantly, and the stop reads as a time-limit stop; the best-so-far rows are still
-returned.)
-
----
-
-## Turning it off
-
-`PRAGMA diagnose_decide='off'` suppresses every diagnosis: no reports, no
-continuation, an empty `decide_diagnostics()`, and the plain static error — which
-reminds you how to get the detail back.
-
-```sql
-PRAGMA diagnose_decide='off';
 SELECT p_partkey, buy
 FROM part
 WHERE p_partkey <= 8
@@ -783,5 +529,8 @@ MAXIMIZE SUM(buy * p_retailprice);
 ```
 
 ```
-Invalid Input Error: DECIDE optimization is unbounded: a decision variable can grow without bound. Add an upper bound, e.g. SUCH THAT x <= <cap>. For the variable, set PRAGMA diagnose_decide='auto' and re-run.
+Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 ```
+
+That is not a mode you can turn off, and there is nothing to turn on: a query that is
+never prefixed never runs a diagnostic solve, so it never pays for one.

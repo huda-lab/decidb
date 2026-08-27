@@ -165,6 +165,39 @@ indexings coincide there; it surfaces only once a join reorders columns.
 
 ---
 
+## 4b. The `DIAGNOSE` flag, and the operator that reads it
+
+`LogicalDecide::diagnose` is a plain `bool`, set by `Binder::BindDiagnose`
+(`bind_showref.cpp`) when the statement carried the `DIAGNOSE` prefix, and copied to
+`PhysicalDecide::diagnose` at physical planning (`plan_decide.cpp`). It is the ONLY thing
+that arms the diagnostics engines.
+
+Two properties matter, and both are the reason it lives here rather than in a session
+setting:
+
+- **It is a property of the statement.** Two queries on one connection can differ, and a
+  plan carries its own answer. Nothing downstream reads it back out of a setting; layer 8
+  reads the field it was handed, the same way it reads `solver_backend_name`.
+- **It travels down, never sideways.** parser → binder → this operator → stage 08. The
+  binder does not consult the executor, and the executor does not consult the session.
+
+`BindDiagnose` binds the inner query exactly as it would without the prefix — DIAGNOSE
+changes what is reported, never what is asked — then finds the plan's one `LogicalDecide`
+(a `DECIDE` clause is a suffix of one SELECT, so there is exactly one; it may sit under
+projections, ORDER BY, or LIMIT that the prefix does not care about), sets the flag, and
+wraps the whole plan in `LogicalDecideDiagnose`.
+
+**`LogicalDecideDiagnose`** (`planner/operator/logical_decide_diagnose.hpp`) is the
+prefix's own plan node: one child (the whole decision query), and an output schema that
+is *not* the child's. It resolves its types from `GetDecideDiagnoseSchema` — the single
+definition of the diagnosis relation's columns, shared with the physical operator that
+fills them. The child's rows never surface: DIAGNOSE reports on the run, it does not
+return the run's output.
+
+A query with no `DECIDE` clause is rejected here, at bind time, rather than returning an
+empty relation. That is the right layer for it: whether a plan contains a decision is a
+binding fact, and the parser cannot see it (the clause may sit inside a subquery).
+
 ## 5. Serialization
 
 `Serialize` / `Deserialize` are hand-maintained (the operator is marked
@@ -220,4 +253,6 @@ for the output itself.
 | Metadata contract (every field, documented) | `src/include/duckdb/planner/operator/logical_decide.hpp` |
 | Binding resolution shielding | `src/execution/column_binding_resolver.cpp` |
 | Logical → physical, entity key physical indices | `src/execution/physical_plan/plan_decide.cpp` |
+| `DIAGNOSE` binding, and the flag's origin | `src/planner/binder/tableref/bind_showref.cpp` (`BindDiagnose`) |
+| The `DIAGNOSE` plan node and its schema | `src/planner/operator/logical_decide_diagnose.cpp` |
 | Source display registry | `src/planner/decide/decide_source_provenance.cpp` |

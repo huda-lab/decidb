@@ -99,9 +99,9 @@ struct SolverResult {
 
 //! Throws the default user-facing DECIDE error for a non-optimal `result`.
 //! Single home for the message text that both backends used to duplicate. The
-//! operator calls this on the UNDIAGNOSED terminal only — `diagnose_decide` is
-//! `off`, or the status has no engine (ITERATION_LIMIT / OTHER); every diagnosed
-//! failure throws the `decide_diagnostics()` pointer error instead.
+//! operator calls this on the UNDIAGNOSED terminal only — either the statement was
+//! not prefixed with DIAGNOSE, or the status has no engine (ITERATION_LIMIT / OTHER).
+//! A diagnosed failure returns findings instead of throwing.
 [[noreturn]] void ThrowDecideSolveError(const SolverResult &result);
 
 } // namespace duckdb

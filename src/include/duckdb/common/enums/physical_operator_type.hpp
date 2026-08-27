@@ -38,6 +38,7 @@ enum class PhysicalOperatorType : uint8_t {
 	PIVOT,
 	COPY_DATABASE,
     DECIDE,
+    DECIDE_DIAGNOSE,
 
 	// -----------------------------
 	// Scans

@@ -14,6 +14,7 @@ add_library_unity(
   plan_create_secret.cpp
   plan_cross_product.cpp
   plan_decide.cpp
+  plan_decide_diagnose.cpp
   plan_delete.cpp
   plan_delim_get.cpp
   plan_delim_join.cpp

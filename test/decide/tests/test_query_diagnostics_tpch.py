@@ -12,10 +12,9 @@ literal) are **computed from the same database** rather than hard-coded, so the
 assertions stay valid if the fixture data changes.
 
 Eight branches are asserted directly (A row escape, B entity-scoped join-column
-escape, C total escape, D per-group loosen, F per-row conflict, D2 capped group
-headline, G deduplicated `drop` edit, and E — scale-normalized slack weights (T1)
-loosen the tight budget instead of gutting the count floor to a degenerate
-"require nothing").
+escape, C total escape, D per-group loosen, F per-row conflict, D2 many failing groups,
+G deduplicated `drop` edit, and E — scale-normalized slack weights (T1) loosen the tight
+budget instead of gutting the count floor to a degenerate "require nothing").
 
 Runs under both backends.
 """
@@ -26,6 +25,8 @@ import re
 
 import pytest
 
+from . import _diagnose_relation
+
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
@@ -34,32 +35,18 @@ _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 # helpers
 # --------------------------------------------------------------------------- #
 def _diagnose(cli, decide_sql, extra_pragmas=""):
-    """Run a failing DECIDE under `auto`, then read the diagnostics relation.
+    """`DIAGNOSE <query>` — the only thing that starts the engine — as CSV."""
+    return _diagnose_relation.run(cli, decide_sql, pragmas=extra_pragmas, timeout=300)
 
-    Returns the raw CompletedProcess: stderr carries the headline, stdout the
-    CSV of `decide_diagnostics()` (the DECIDE itself errors to stderr, the
-    session continues to the SELECT).
-    """
-    script = (
-        ".mode csv\n"
-        "PRAGMA diagnose_decide='auto';\n"
-        f"{extra_pragmas}"
-        f"{decide_sql};\n"
-        "SELECT * FROM decide_diagnostics();\n"
-    )
-    return cli.execute_script(script)
+
+def _flat(result):
+    """The findings as the relation returns them, one dict per row."""
+    return _diagnose_relation.rows(result)
 
 
 def _rows(result):
-    return list(csv.DictReader(io.StringIO(result.stdout)))
-
-
-def _headline(result):
-    """The single diagnosis line on stderr (drops the `Details:` pointer)."""
-    for line in result.stderr.splitlines():
-        if "DECIDE optimization" in line:
-            return line.strip()
-    raise AssertionError(f"no diagnosis headline on stderr:\n{result.stderr}")
+    """The findings, expressed as long-form (subject, attribute, value) facts."""
+    return _diagnose_relation.eav_rows(result)
 
 
 def _attr(rows, subject_kind, attribute, subject=None):
@@ -106,10 +93,9 @@ class TestSolidBranches:
         )
         rows = _rows(_diagnose(cli, sql))
         assert _attr(rows, "variable", "grows_toward") == "+inf"
-        assert (
-            _attr(rows, "variable", "affected_rows")
-            == f"{n_air} of {n_air} rows where l_shipmode = 'AIR'"
-        )
+        # The slice is named by its real column, and counted.
+        assert _attr(rows, "variable", "escaping_group") == "l_shipmode = 'AIR'"
+        assert _attr(rows, "variable", "escaping_instances") == n_air
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_C_unbounded_total_escape_at_scale(self, request, cli_fixture):
@@ -122,7 +108,9 @@ class TestSolidBranches:
             "DECIDE buy(REAL) SUCH THAT buy >= 0 MAXIMIZE SUM(buy * l_extendedprice)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attr(rows, "variable", "affected_rows") == f"all {n} rows"
+        # Every row escapes, so one finding covers them all with no slice to name.
+        assert _attr(rows, "variable", "escaping_instances") == n
+        assert not [r for r in rows if r["attribute"] == "escaping_group"]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_D_per_group_query_folds_expanded_breaks_out(self, request, cli_fixture):
@@ -154,32 +142,36 @@ class TestSolidBranches:
         subj = "SUM(x) >= 5 PER l_orderkey"
         assert _attr(q, "clause", "edit_source", subject=subj) == "source_literal"
         assert _attr(q, "clause", "offset_scope", subject=subj) == "clause"
-        assert int(_attr(q, "clause", "amount", subject=subj)) == max(5 - s for s in sizes.values())
+        assert int(float(_attr(q, "clause", "amount", subject=subj))) == max(
+            5 - s for s in sizes.values())
         assert not [r for r in q if r["attribute"] == "group"]
 
         # --- expanded mode: one expanded_group edit per failing order ---
-        e = _rows(_diagnose(
+        e_result = _diagnose(
             cli, sql,
             extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
-        ))
+        )
+        e = _rows(e_result)
         reported = {r["value"] for r in e if r["attribute"] == "group"}
         assert reported == set(sizes)
+        # The clause reads as written; the group is its own column.
+        by_group = {
+            f["group"]: f for f in _flat(e_result) if f["edit_source"] == "expanded_group"
+        }
         for gkey, size in sizes.items():
-            esubj = f"SUM(x) >= 5 PER l_orderkey [group: {gkey}]"
-            assert _attr(e, "clause", "edit_source", subject=esubj) == "expanded_group"
-            assert _attr(e, "clause", "amount", subject=esubj) == str(5 - size)
-            assert _attr(e, "clause", "suggested_change", subject=esubj) == (
-                f"SUM(x) >= {size} PER l_orderkey"
-            )
+            edit = by_group[gkey]
+            assert edit["clause"] == "SUM(x) >= 5 PER l_orderkey"
+            assert int(float(edit["amount"])) == 5 - size
+            assert edit["suggested_change"] == f"SUM(x) >= {size} PER l_orderkey"
         # once loosened, MAXIMIZE SUM(x) can select every row
-        assert _attr(e, "model", "achievable_objective") == total_rows
+        assert float(_attr(e, "model", "achievable_objective")) == float(total_rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_F_per_row_data_query_mode_virtual_offset(self, request, cli_fixture):
         """T3 query mode (default): x BOOLEAN but x >= l_quantity is a per-row data RHS with
         no single literal to loosen -> ONE virtual query offset `x >= l_quantity - delta`
-        (delta = max overshoot), tagged edit_source='virtual_offset'. The headline names the
-        data-backed clause by its column name, and the relation carries the offset."""
+        (delta = max overshoot), tagged edit_source='virtual_offset'. The finding names the
+        data-backed clause by its column name and carries the offset."""
         cli = request.getfixturevalue(cli_fixture)
         # A BOOLEAN can reach at most 1, so the tightest row (max l_quantity) needs a
         # -(max-1) offset. Take it from the data, not a hand-computed constant.
@@ -194,7 +186,6 @@ class TestSolidBranches:
         result = _diagnose(cli, sql)
         rows = _rows(result)
 
-        assert "diagnosis points to clause `x >= l_quantity`" in _headline(result)
         subj = "x >= l_quantity"
         assert _attr(rows, "clause", "edit_kind", subject=subj) == "loosen"
         assert _attr(rows, "clause", "edit_source", subject=subj) == "virtual_offset"
@@ -226,22 +217,25 @@ class TestSolidBranches:
         )
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_D2_many_group_headline_is_capped(self, request, cli_fixture):
-        """In expanded mode, with dozens of failing groups the headline summarizes +
-        truncates ('... and N more') instead of listing every group key inline. The full
-        per-group detail stays in decide_diagnostics(). (Query mode folds to one clause,
-        so the group list only arises in expanded mode.)"""
+    def test_D2_many_groups_each_get_their_own_row(self, request, cli_fixture):
+        """In expanded mode, dozens of failing groups produce one row each. The pre-H
+        stderr headline capped its group list at three and pointed elsewhere for the
+        rest; a relation does not truncate, so the cap is gone and the user filters or
+        aggregates the rows themselves. (Query mode folds to one clause, so the group
+        list only arises in expanded mode.)"""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 400 "
             "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
         )
-        headline = _headline(_diagnose(
+        flat = _flat(_diagnose(
             cli, sql,
             extra_pragmas="PRAGMA diagnose_decide_infeasible_slack_scope='expanded';\n",
         ))
-        # a capped headline references the overflow instead of enumerating all groups
-        assert "more" in headline
+        # Every failing group gets its own row — a relation does not truncate, and the
+        # user filters or aggregates it themselves.
+        groups = {f["group"] for f in flat if f["edit_source"] == "expanded_group"}
+        assert len(groups) > 3, flat
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_G_drop_edit_is_deduplicated(self, request, cli_fixture):
@@ -274,7 +268,7 @@ class TestSolidBranches:
                 extra_pragmas="PRAGMA diagnose_decide_categorical_ratio=0.5;\n",
             )
         )
-        assert "n_name = 'GERMANY'" in _attr(rows, "variable", "affected_entities")
+        assert _attr(rows, "variable", "escaping_group") == "n_name = 'GERMANY'"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_E_loosen_should_not_be_degenerate(self, request, cli_fixture):
@@ -290,4 +284,4 @@ class TestSolidBranches:
             "MAXIMIZE SUM(buy)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert int(_attr(rows, "model", "achievable_objective")) > 0
+        assert float(_attr(rows, "model", "achievable_objective")) > 0

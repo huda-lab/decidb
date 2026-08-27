@@ -36,11 +36,10 @@ tasks remain here; this file only tracks deferred follow-ups.
   meaningful clause, expose multiple equivalent repairs) remain unaddressed.
 - **Unbounded-after-fix witness policy (deferred after T4).** A minimal infeasibility repair can
   make the original problem feasible while the restored objective is unbounded. Current behavior
-  reports the repair plus `achievable_objective = 'unbounded'`; T4 did not change that. A
+  reports the repair plus an `edit_source='unbounded_after_fix'` finding; T4 did not change that. A
   future task could decide whether an unbounded post-fix model should still optimize for a more
   useful finite witness, name which repair unlocks the unbounded direction, or report multiple
   equivalent repairs.
-
 - **A per-row clause's diagnosis does not name which PER group failed (deferred, 2026-08-18).**
   An unreachable bound reduced per group names the clause with its qualifier but not the
   group carrying the failure:
@@ -55,8 +54,8 @@ tasks remain here; this file only tracks deferred follow-ups.
   reports `clause  MIN(x) <= -inf PER g  unreachable_bound  true`. Group `0` carries the
   infinity; group `1`'s bound is finite and fine, and with many groups the user cannot tell
   which to look at. The cause is not in the diagnosis layer —
-  `CollectUnreachableClauses` reads `group_label` and emits the `group` EAV row whenever it
-  is set, the same as `MakeLoosenEdit`. `ConstraintProvenance::group_label` is stamped only
+  `CollectUnreachableClauses` reads `group_label` and populates the typed finding's `group`
+  column whenever it is set, the same as `MakeLoosenEdit`. `ConstraintProvenance::group_label` is stamped only
   on the *aggregate* emission path (`ilp_model_builder.cpp:861`, `:1177`), and the hard
   MIN/MAX `NO_SOLUTION` re-emission sets `lhs_is_aggregate = false`, so it goes down the
   per-row branch, which never stamps a label. The limitation is that branch's, not this
@@ -64,69 +63,6 @@ tasks remain here; this file only tracks deferred follow-ups.
   too — check `_apply_reported_fix` and the golden dump before committing to it. Deferred
   as cosmetic: the finding is correct and the qualifier keeps the clause recognizable, only
   the instance is underspecified.
-
----
-
-## Open architectural question — should elastic diagnosis be a stage-05 rewrite?
-
-**Raised 2026-08-25, while fixing the composed MIN/MAX misattribution. Recorded, not
-scheduled — deliberately out of scope before sign-off, since it reopens stages 07 and 08.**
-
-The elastic program is expressible as a DECIDE query. Given
-
-```sql
-SUCH THAT SUM(x) >= 19 AND MIN(x + c) + SUM(x) <= 22
-```
-
-its diagnosis is
-
-```sql
-DECIDE x(REAL), e1(REAL), e2(REAL)
-SUCH THAT SUM(x) + e1 >= 19 AND MIN(x + c) + SUM(x) - e2 <= 22
-MINIMIZE e1 + e2
-```
-
-Nothing there needs a solver-level facility; it is DECIDE expressing DECIDE. The engine today
-instead builds the elastic model at stage 07/08, *after* lowering, where one user clause has
-already fanned into an outer row, envelope rows and closing rows. It must therefore reconstruct
-which of those rows is the user's editable knob — and that reconstruction is what produced both
-halves of the bug fixed in `done.md` (I2.e): the wrong clause name and the wrong repair amount.
-
-Attaching the slack at stage 05, on the canonical bound tree before lowering, makes that
-reconstruction unnecessary. `e2` rides through the MIN/MAX lowering as part of the user's
-clause, so "which row is the knob" is never asked and the defect class is unrepresentable.
-
-**What the move would cost, and what has to be answered first:**
-
-- **Weights.** `rms_norm` needs each row's coefficient magnitudes, which exist only after the
-  model is built. A source-level rewrite needs those weights before it has them.
-- **Lexicographic tiers.** DECIDE's `MINIMIZE` is single-objective; the engine runs editable /
-  data-offset / removal as ordered tiers. Each becomes a separate solve.
-- **The removal tier.** Dropping a clause needs a binary and a Big-M — expressible, but that is
-  the `<>` machinery, the most expensive construct in the system.
-- **Cost.** Re-binding and re-planning a rewritten query per diagnosis, against mutating a model
-  already in memory. `README.md`'s own argument for compiling DuckDB in-process is that "one
-  query needs more than one solve: the diagnostic programs are an example."
-- **Recursion.** The diagnosis of a DECIDE query is a DECIDE query, which can itself fail.
-
-**Where it would live if taken:** stage 05 owns formulation selection and returns emitted rows
-through stage 03's entry points, which is the shape this rewrite has. Stage 07/08 would keep
-only the solve and the readback.
-
-**Second defect class it would close (added 2026-08-25, from B3).** A diagnosis is computed
-inside the model *as it was built*, and every Big-M and derived column ceiling in that model is
-sized from the decision box as the query states it. The repair the engine is looking for is a
-**widening** of that box, so an encoding sized at the old width can make the better repair
-unrepresentable — and where one arm bakes in nothing and the other does, the same query gets
-different advice on different hosts. `done.md` closes the two instances that bit (ABS and
-MIN/MAX) with a local rule: a clause demanding more of an auxiliary than the box can supply
-sizes that auxiliary itself.
-
-`<>`, bilinear (McCormick) and `norm` have encodings of the same shape and are **not** covered.
-They are left alone deliberately rather than patched one at a time: attaching slack before
-lowering makes the whole class unrepresentable, exactly as it does for the misattribution class
-above. Anyone extending the local rule to a third construct should read that as the signal to
-price this rewrite instead.
 
 ---
 

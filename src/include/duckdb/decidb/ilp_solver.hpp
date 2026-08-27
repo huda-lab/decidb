@@ -63,8 +63,8 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
 //! Builds a SolverModel from the given SolverInput, solves it on `backend`, and
 //! returns a SolverResult: the terminal status plus, when optimal, the solution vector of
 //! size (num_rows * num_decide_vars). A non-optimal status is returned, not
-//! thrown — the operator decides whether `diagnose_decide='off'` surfaces the
-//! default error or `auto` routes to a diagnosis terminal.
+//! thrown — the operator decides whether an unprefixed statement surfaces the
+//! default error or DIAGNOSE routes to a diagnosis terminal.
 //!
 //! `input` is taken by non-const reference because the raw global constraints
 //! are moved (not copied) into the SolverModel during Build(). Callers must not

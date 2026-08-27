@@ -176,7 +176,7 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 
 - **Supported Operators**: `=`, `<`, `<=`, `>`, `>=`, `<>`.
   - `<>` (not-equal): Supported on both per-row and aggregate constraints. Rewritten to `LHS <= K-1 OR LHS >= K+1`, which (like strict `<` / `>`) is only valid when the LHS is integer-valued. Rejected at **bind** time with a `BinderException` whenever the compared side is not provably whole-numbered from its declared types — a REAL decision, or a column/literal of a fractional type (`DOUBLE`, `DECIMAL` with scale > 0). The message names the offender and the cast that fixes it. For `AVG(x) <> K` the denominator is hoisted to the RHS (emitted as `SUM(x) <> K*n`, per-group size for PER), keeping the LHS integer-valued.
-    - Encoding depends on where `K` falls in the LHS's reachable range. When `K` is **interior**, the disjunction costs 1 auxiliary binary + 2 Big-M constraints. When the range lies wholly on one side of `K`, one branch is dead and a **single plain inequality** is emitted instead — `SUM(x) <> 0` over non-negative decisions is just `SUM(x) >= 1`, with no binary and no Big-M. When `K` is unreachable the constraint excludes nothing and is dropped. Only a variable's intrinsic domain (BOOL 0/1, default non-negativity) licenses the collapse; a bound you write yourself stays loosenable under `decide_diagnostics()` and keeps the disjunction.
+    - Encoding depends on where `K` falls in the LHS's reachable range. When `K` is **interior**, the disjunction costs 1 auxiliary binary + 2 Big-M constraints. When the range lies wholly on one side of `K`, one branch is dead and a **single plain inequality** is emitted instead — `SUM(x) <> 0` over non-negative decisions is just `SUM(x) >= 1`, with no binary and no Big-M. When `K` is unreachable the constraint excludes nothing and is dropped. Only a variable's intrinsic domain (BOOL 0/1, default non-negativity) licenses the collapse; a bound you write yourself stays loosenable under `DIAGNOSE` and keeps the disjunction.
   - An L0 count is integer-valued whatever it counts, so `norm(e, 0, M) < K` and `norm(e, 0, M) <> K` are accepted even when `e` references a REAL decision. Other norm orders (`1`, `2`, `'inf'`) are not counts and are not exempt.
   - `<` / `>` (strict): Rewritten internally to the integer-step form (`LHS < K` $\rightarrow$ `LHS <= ceil(K) - 1`), which is only valid when the compared side is provably whole-numbered. Use `<=` / `>=` instead when it is not.
     - **The rule is stated on declared types, and rejects at bind time**, before any data is read. A side is whole-numbered when every decision in it is `INT`/`BOOL` and every column, literal and reducer over them has a whole-numbered type: an integer type, or `DECIMAL` with scale 0. `DOUBLE`, `FLOAT` and `DECIMAL(p, s>0)` are not, *whatever values they happen to hold* — otherwise inserting one fractional row could make a working query illegal. The message names the offender and the cast that fixes it (`SUM(x * l_quantity::BIGINT) < 100`).
@@ -473,3 +473,114 @@ WHEN + PER composition is supported: `MINIMIZE MAX(SUM(x * hours)) WHEN active =
 - **Multi-column PER must be parenthesized**: use `PER (col1, col2)`, not `PER col1, col2`. Top-level `SUCH THAT` constraints are separated only by `AND`; a comma in the constraint list is rejected by the parser. The parentheses are required to disambiguate the grouping key from the surrounding constraint syntax.
 - **Constant RHS**: The right-hand side must be constant across groups.
 - **NULL handling**: Rows where any PER column is NULL are excluded.
+
+## 8. `DIAGNOSE` — asking a query to explain itself
+
+`DIAGNOSE` is a prefix on a `SELECT` that carries a `DECIDE` clause:
+
+```sql
+DIAGNOSE SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= 5 AND x >= 8 MAXIMIZE SUM(x);
+```
+
+It runs the query and reports on the run instead of returning its rows — the same
+relationship `EXPLAIN ANALYZE` has to an ordinary query. **It is the only thing that
+starts the diagnostics engine.** A query without the prefix never pays for a diagnostic
+solve.
+
+### 8.1 What it returns
+
+A relation, not a printed report, so it composes:
+
+```
+state | clause | suggested_change | amount | total | scope | edit_source | group | row
+```
+
+| column             | type    | what it holds                                                               |
+| ------------------ | ------- | --------------------------------------------------------------------------- |
+| `state`            | VARCHAR | `infeasible`, `unbounded`, or `feasible`                                     |
+| `clause`           | VARCHAR | the clause as you wrote it, or the runaway decision's name                   |
+| `suggested_change` | VARCHAR | the smallest edit that addresses this finding                                |
+| `amount`           | DOUBLE  | how far a bound moves, escaping instances, or the achievable objective       |
+| `total`            | BIGINT  | denominator for an unbounded escape count; otherwise NULL                    |
+| `scope`            | VARCHAR | `row` or `entity` for an unbounded escape count; otherwise NULL              |
+| `edit_source`      | VARCHAR | what kind of finding this row is (below)                                     |
+| `group`            | VARCHAR | the `PER` key, or the categorical slice a decision escapes on                |
+| `row`              | BIGINT  | the emitted row this finding covers, under the `expanded` slack scope        |
+
+One row per finding. A query that solves returns exactly one row, `state = 'feasible'`,
+everything else NULL — there is no separate output path for a query that worked.
+
+For an unbounded finding with a count, `amount / total` is the escape rate and `scope`
+identifies the counted unit. When `group` names a categorical slice, `total` is that
+slice's size; otherwise it is the variable's total row- or entity-instance count.
+
+`edit_source` is the finding's kind, and the column to filter on:
+
+| value                  | meaning                                                          |
+| ---------------------- | ---------------------------------------------------------------- |
+| `source_literal`       | a literal you wrote, loosened in place                            |
+| `virtual_offset`       | a synthetic offset over a data-backed RHS (`x <= col + delta`)    |
+| `expanded_row`         | one emitted row's own overshoot (`expanded` slack scope)          |
+| `expanded_group`       | one `PER` group's own overshoot (`expanded` slack scope)          |
+| `remove_only`          | a `<>` that cannot be loosened, only deleted                      |
+| `unreachable_bound`    | a bound no assignment can reach (`x >= inf`)                      |
+| `rigid_conflict`       | loosening the clauses you wrote cannot restore feasibility        |
+| `runaway_+inf` / `-inf`| a decision growing without bound, and which way                   |
+| `achievable_objective` | what the objective reaches once the edits are applied             |
+| `unbounded_after_fix`  | the repaired problem has no finite optimum                        |
+| `undiagnosed`          | the state is known but no engine could name a cause               |
+
+Because it is a relation, it can be selected from and filtered:
+
+```sql
+SELECT clause, suggested_change
+FROM (DIAGNOSE SELECT ... DECIDE ...)
+WHERE amount > 1000;
+```
+
+### 8.2 What a query WITHOUT the prefix does
+
+It reports its state and stops:
+
+```
+DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which
+clause to change.
+```
+
+No clause name, no repair, no second statement to run. Naming the clause *is* the
+elastic solve, and that only happens when you ask for it.
+
+### 8.3 Restrictions
+
+- The inner query must contain a `DECIDE` clause. `DIAGNOSE` reports on an optimization
+  run; a plain SQL query has none, and is rejected with a message saying so.
+- `DIAGNOSE` takes no options. There is no `DIAGNOSE (VERBOSE) …`.
+- A query that fails before it can be solved — a syntax error, a semantic error, a model
+  class the host's solver refuses — still raises under the prefix. `DIAGNOSE` explains
+  the *outcome of a solve*; there is nothing to explain when no solve happened.
+
+### 8.4 Tuning the engine
+
+These settings configure *how* the engine works once `DIAGNOSE` has started it. None of
+them starts or suppresses it.
+
+| setting                                     | what it does                                                                                    |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `diagnose_decide_infeasible_slack_scope`    | `query` (default): one edit per SQL-level knob. `expanded`: one per emitted row/group — fills `group` and `row`. |
+| `diagnose_decide_escape_rate`               | report a categorical slice when its within-group escape rate is at least this (default 0.8).      |
+| `diagnose_decide_categorical_ratio`         | treat a column as categorical when distinct values ≤ ratio × rows (default 0.1).                  |
+| `diagnose_decide_min_categories`            | absolute floor on that cap, so small tables still qualify (default 20).                           |
+| `diagnose_decide_removal_bigm`              | override the Big-M used to neutralize a dropped `<>` (0 = auto-derive).                           |
+
+### 8.5 A slow solve is not a diagnosis
+
+Hitting the time limit, or pressing Ctrl-C, is ordinary execution behaviour and happens
+with or without the prefix. The query prints a checkpoint report — what was found and
+how far it can still improve — and then:
+
+- **at a terminal**, offers to keep solving on the warm solver (Enter continues, `s`
+  stops and takes the best so far);
+- **anywhere else** (scripts, pipes, benchmarks, the C API), errors — there is nobody to
+  answer the offer;
+- **after Ctrl-C**, hands back the best solution found so far with the caveat that it is
+  not proven best, terminal or not. You already said stop; there is nothing to ask.

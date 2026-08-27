@@ -1,55 +1,54 @@
-"""Unbounded affected_rows / affected_entities — characterize WHICH rows/entities escape.
+"""Unbounded escape characterization — which rows/entities of a variable escape.
 
-When a variable's name fans out into many scope-instances (row-scoped: one column
-per result row; entity-scoped: one per entity) and only some escape, the
-`affected_rows` / `affected_entities` attribute of `decide_diagnostics()` describes the
-escaping set with self-describing categorical rules — `a of b rows where c = 'v'` for
-every categorical (column, value) whose within-group escape rate clears the threshold.
-Total escape collapses to `all N rows`; a single-instance variable or a scattered escape
-that no categorical group characterizes falls back to the bare `a of b rows`.
+When a variable's name fans out into many scope-instances (row-scoped: one column per
+result row; entity-scoped: one per entity) and only some escape, `DIAGNOSE` breaks the
+escape out by categorical slice: one finding per (column, value) whose within-group
+escape rate clears the threshold, naming the slice in `group`, counting escaping
+instances in `amount`, retaining the denominator in `total`, and identifying rows vs
+entities in `scope`. Total escape collapses to one finding covering every instance; a
+single-instance variable or a scattered escape that no categorical group characterizes
+reports the bare count with no slice named.
 
-Cases are constructed so the escaping slice is known by construction; the
-characterization string is asserted directly (the `details` pointer on stderr
-confirms the solve was classified UNBOUNDED). Runs under both backends.
+Cases are constructed so the escaping slice is known by construction, and the count and
+slice are asserted directly. Runs under both backends.
 """
-
-import csv
-import io
 
 import pytest
 
 from solver.types import ObjSense, SolverStatus, VarType
+
+from . import _diagnose_relation
 
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
 
 
 def _diagnose(cli, decide_sql, setup="", extra_pragmas=""):
-    """PRAGMA + optional setup + a failing DECIDE + the relation read, one session."""
-    script = (
-        ".mode csv\n"
-        f"{setup}"
-        "PRAGMA diagnose_decide='auto';\n"
-        f"{extra_pragmas}"
-        f"{decide_sql};\n"
-        "SELECT * FROM decide_diagnostics();\n"
-    )
-    return cli.execute_script(script)
+    """`DIAGNOSE <query>`, with optional setup and tuning pragmas, in one session."""
+    return _diagnose_relation.run(cli, decide_sql, setup=setup, pragmas=extra_pragmas)
 
 
 def _rows(result):
-    return list(csv.DictReader(io.StringIO(result.stdout)))
+    return _diagnose_relation.rows(result)
 
 
-def _attr(rows, subject, attribute):
-    for row in rows:
-        if (
-            row["subject_kind"] == "variable"
-            and row["subject"] == subject
-            and row["attribute"] == attribute
-        ):
-            return row["value"]
-    raise AssertionError(f"missing attribute {attribute} for {subject}: {rows}")
+def _escape(rows, variable):
+    """The escape characterization as `(count, total, scope, slice)` per finding.
+
+    `total` is the denominator for the reported count: the slice size when `slice` is
+    present, otherwise the variable's total instance count."""
+    found = [
+        (
+            int(float(r["amount"])) if r["amount"] not in ("", "NULL") else None,
+            int(r["total"]) if r["total"] not in ("", "NULL") else None,
+            "" if r["scope"] in ("", "NULL") else r["scope"],
+            "" if r["group"] in ("", "NULL") else r["group"],
+        )
+        for r in rows
+        if r["clause"] == variable and (r["edit_source"] or "").startswith("runaway_")
+    ]
+    assert found, f"no escape reported for {variable}: {rows}"
+    return found
 
 
 def _assert_oracle_unbounded(oracle_solver, model_name, total_rows, uncapped_rows):
@@ -88,7 +87,7 @@ class TestEscapingInstances:
         """Only one categorical value's rows escape -> a single sufficient rule."""
         cli = request.getfixturevalue(cli_fixture)
         rows = _rows(_diagnose(cli, _ROW_PARTIAL))
-        assert _attr(rows, "buy", "affected_rows") == "20 of 20 rows where channel = 'export'"
+        assert _escape(rows, "buy") == [(20, 20, "row", "channel = 'export'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_total_escape_summary(self, request, cli_fixture):
@@ -100,7 +99,8 @@ class TestEscapingInstances:
             "DECIDE buy(REAL) SUCH THAT buy >= 0 MAXIMIZE SUM(buy * margin)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attr(rows, "buy", "affected_rows") == "all 100 rows"
+        # All 100 instances escape, so one finding covers them with no slice to name.
+        assert _escape(rows, "buy") == [(100, 100, "row", "")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_scattered_escape_falls_back_to_count(self, request, cli_fixture):
@@ -114,7 +114,7 @@ class TestEscapingInstances:
             "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id <= 50 MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attr(rows, "buy", "affected_rows") == "50 of 100 rows"
+        assert _escape(rows, "buy") == [(50, 100, "row", "")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_entity_scoped_partial_escape_rule(self, request, cli_fixture):
@@ -132,7 +132,8 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(hire * eid)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attr(rows, "hire", "affected_entities") == "10 of 10 entities where dept = 'A'"
+        # Entity-scoped: the count is entities, not the rows they fan out to.
+        assert _escape(rows, "hire") == [(10, 10, "entity", "dept = 'A'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_entity_scoped_join_column_escape_rule(self, request, cli_fixture):
@@ -148,7 +149,7 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(hire)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _attr(rows, "hire", "affected_entities") == "10 of 10 entities where region = 'A'"
+        assert _escape(rows, "hire") == [(10, 10, "entity", "region = 'A'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_select_only_aliased_column_is_named(self, request, cli_fixture, oracle_solver):
@@ -173,8 +174,7 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
-        value = _attr(rows, "buy", "affected_rows")
-        assert value == "25 of 25 rows where zone = 'A'", value
+        assert _escape(rows, "buy") == [(25, 25, "row", "zone = 'A'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_select_only_unaliased_computed_column_stays_suppressed(
@@ -200,9 +200,10 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
-        value = _attr(rows, "buy", "affected_rows")
-        assert value == "25 of 100 rows", value
-        assert "where" not in value, f"generated name leaked into report: {value}"
+        escape = _escape(rows, "buy")
+        assert escape == [(25, 100, "row", "")], escape
+        # No slice is named at all — a generated name must never surface as one.
+        assert all(not slice_ for _, _, _, slice_ in escape), escape
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_escape_rate_pragma_changes_reporting(self, request, cli_fixture):
@@ -219,10 +220,10 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
-        assert _attr(default, "buy", "affected_rows") == "90 of 300 rows"
+        assert _escape(default, "buy") == [(90, 300, "row", "")]
 
         lowered = _rows(_diagnose(cli, sql, extra_pragmas="PRAGMA diagnose_decide_escape_rate=0.5;\n"))
-        assert _attr(lowered, "buy", "affected_rows") == "90 of 150 rows where category = 'P'"
+        assert _escape(lowered, "buy") == [(90, 150, "row", "category = 'P'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_categorical_ratio_pragma_changes_reporting(self, request, cli_fixture, oracle_solver):
@@ -242,7 +243,7 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
-        assert _attr(default, "buy", "affected_rows") == "4 of 100 rows"
+        assert _escape(default, "buy") == [(4, 100, "row", "")]
 
         raised = _rows(
             _diagnose(
@@ -251,7 +252,7 @@ class TestEscapingInstances:
                 extra_pragmas="PRAGMA diagnose_decide_categorical_ratio=0.25;\n",
             )
         )
-        assert _attr(raised, "buy", "affected_rows") == "4 of 4 rows where bucket = 'target'"
+        assert _escape(raised, "buy") == [(4, 4, "row", "bucket = 'target'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_min_categories_pragma_changes_reporting(self, request, cli_fixture, oracle_solver):
@@ -271,7 +272,7 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
-        assert _attr(default, "buy", "affected_rows") == "8 of 8 rows where segment = 'target'"
+        assert _escape(default, "buy") == [(8, 8, "row", "segment = 'target'")]
 
         lowered = _rows(
             _diagnose(
@@ -280,7 +281,7 @@ class TestEscapingInstances:
                 extra_pragmas="PRAGMA diagnose_decide_min_categories=10;\n",
             )
         )
-        assert _attr(lowered, "buy", "affected_rows") == "8 of 120 rows"
+        assert _escape(lowered, "buy") == [(8, 120, "row", "")]
 
     @pytest.mark.error
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)

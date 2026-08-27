@@ -16,9 +16,9 @@
 
 namespace duckdb {
 
-enum class ShowType : uint8_t { SUMMARY, DESCRIBE };
+enum class ShowType : uint8_t { SUMMARY, DESCRIBE, DIAGNOSE };
 
-//! Represents a SHOW/DESCRIBE/SUMMARIZE statement
+//! Represents a SHOW/DESCRIBE/SUMMARIZE/DIAGNOSE statement
 class ShowRef : public TableRef {
 public:
 	static constexpr const TableReferenceType TYPE = TableReferenceType::SHOW_REF;

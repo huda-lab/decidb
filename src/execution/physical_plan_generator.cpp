@@ -62,6 +62,9 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalOperator &
 	case LogicalOperatorType::LOGICAL_DECIDE:
 		plan = CreatePlan(op.Cast<LogicalDecide>());
 		break;
+	case LogicalOperatorType::LOGICAL_DECIDE_DIAGNOSE:
+		plan = CreatePlan(op.Cast<LogicalDecideDiagnose>());
+		break;
 	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
 		plan = CreatePlan(op.Cast<LogicalAggregate>());
 		break;

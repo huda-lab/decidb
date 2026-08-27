@@ -14,6 +14,14 @@ VariableShowStmt:
 				n->is_summary = 1;
 				$$ = (PGNode *) n;
 			}
+		 | DIAGNOSE SelectStmt {
+				PGVariableShowSelectStmt *n = makeNode(PGVariableShowSelectStmt);
+				n->stmt = $2;
+				n->name = (char*) "select";
+				n->is_summary = 0;
+				n->is_diagnose = 1;
+				$$ = (PGNode *) n;
+			}
 		 | SUMMARIZE qualified_name
 			{
 				PGVariableShowStmt *n = makeNode(PGVariableShowStmt);

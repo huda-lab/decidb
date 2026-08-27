@@ -94,6 +94,21 @@ Grammar changes require `make grammar-build` (bison 2.3).
 
 ---
 
+### The `DIAGNOSE` prefix
+
+`third_party/libpg_query/grammar/statements/variable_show.y`. `DIAGNOSE <SelectStmt>` is
+one more alternative on `VariableShowStmt`, mirroring `SUMMARIZE`: it wraps a `SelectStmt`
+and sets `is_diagnose` on `PGVariableShowSelectStmt`. `DIAGNOSE` is a reserved keyword.
+
+Mirroring `SUMMARIZE` rather than `EXPLAIN` buys two things. `EXPLAIN` carries its own
+statement node and an options syntax (`EXPLAIN (VERBOSE) …`) the prefix does not need; and
+`select_with_parens` already has a `'(' VariableShowStmt ')'` production, so
+`SELECT * FROM (DIAGNOSE …)` composes with no further grammar work.
+
+The prefix is parse-only here — the parser does not check that the inner query has a
+`DECIDE` clause. That is a binding question (the clause may sit inside a subquery), and
+`Binder::BindDiagnose` answers it.
+
 ## 2. Lexer gating: the DECIDE `WHEN` tokens
 
 `third_party/libpg_query/src_backend_parser_parser.cpp`, in `base_yylex`.
@@ -126,6 +141,11 @@ error.
 clause onto the `SelectNode`: `decide_variables` (via `TransformExpressionList`),
 `decide_constraints`, `decide_sense` (`MAXIMIZE` / `MINIMIZE` / `FEASIBILITY`
 when no objective was written), and `decide_objective`.
+
+`src/parser/transform/statement/transform_show_select.cpp` turns the `DIAGNOSE` prefix
+into a `ShowRef` with `ShowType::DIAGNOSE` wrapping the inner query node — the same
+mechanism `SUMMARIZE` and `DESCRIBE` use, so the prefix reaches the binder as a table
+reference rather than as a statement flag it would have to thread separately.
 
 `src/parser/transform/expression/transform_operator.cpp:210-237` converts the two
 DECIDE `PG_AEXPR` node types into tagged `FunctionExpression`s with
@@ -184,9 +204,11 @@ formulation after types, scopes, and DuckDB coercions are known.
 | Concern | Location |
 |---|---|
 | Grammar productions | `third_party/libpg_query/grammar/statements/select.y` |
+| `DIAGNOSE` prefix production | `third_party/libpg_query/grammar/statements/variable_show.y` |
 | Conflict budget and rationale | `third_party/libpg_query/grammar/grammar.y` (header comment) |
 | Reserved keywords | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` |
 | DECIDE `WHEN` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
+| `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |
 | `WHEN`/`PER` tag construction | `src/parser/transform/expression/transform_operator.cpp` |
 | Parse-error hint | `src/decidb/utility/decide_parse_hints.cpp` |

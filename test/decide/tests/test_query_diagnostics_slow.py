@@ -1,28 +1,24 @@
-"""Slow-solve checkpoint report + continuation (S1-S4) for query diagnostics.
+"""Slow-solve checkpoint report + continuation (S1-S4).
 
 A solve that reaches the time limit without a proven optimum returns
-``SolverStatus::TIME_LIMIT``. Under ``diagnose_decide='auto'`` the operator prints a
-plain-language checkpoint block to stderr — what the solver already found and how far
-it can still improve — and then acts on ``decide_on_timeout``. Two report shapes,
-split on whether a feasible solution was found:
+``SolverStatus::TIME_LIMIT``. This is ordinary execution behaviour, not a diagnosis:
+it happens with or without the ``DIAGNOSE`` prefix, and no engine runs. The operator
+prints a plain-language checkpoint block to stderr — what the solver already found and
+how far it can still improve — in one of two shapes:
 
   * **Path 1 (solution found):** "usable solution (not proven best)" + best objective
     so far + closeness + elapsed/peak-memory.
   * **Path 2 (no solution yet):** "without finding a solution yet" + elapsed/peak-memory.
 
-``decide_on_timeout`` governs what happens after the report (only under auto — ``off``
-is a master mute that keeps the plain static error):
+What happens after the report is fixed by who is there to answer, not by a setting:
 
-  * ``ask`` (default): at an interactive terminal, prompt to keep solving on the warm
-    solver (Enter continues a fresh chunk, ``s`` stops). Non-terminal stdin (tests,
-    pipes, benchmarks) falls back to ``error``.
-  * ``error``: print the report, then error — never returns the incumbent.
-  * ``continue``: keep resuming automatically until the solver finishes; Ctrl-C stops
-    at the next checkpoint.
-
-On a stop with an incumbent (``ask`` ``s`` / ``continue`` Ctrl-C), the statement
-SUCCEEDS and returns the best-so-far rows plus a plain stderr caveat that they are not
-proven best. On a stop with no incumbent, the existing timeout error fires.
+  * **At a terminal:** prompt to keep solving on the warm solver (Enter continues a
+    fresh chunk, ``s`` stops and takes the incumbent).
+  * **Anywhere else** (tests, pipes, benchmarks, the C API): print the report, then
+    error — never prompt where no one can answer.
+  * **After Ctrl-C:** the user has already said stop, so there is nothing to ask.
+    The incumbent is returned with the caveat that it is not proven best, terminal or
+    not. With no incumbent, the timeout error fires.
 
 These tests pin the externally visible behavior on both backends. They set a short
 ``DECIDB_TIME_LIMIT`` and use two hard MILPs:
@@ -33,10 +29,8 @@ These tests pin the externally visible behavior on both backends. They set a sho
     point nor a proof of infeasibility within the limit) drives path 2.
 
 The report timing is inherently solver-dependent; the instances are sized with a
-wide margin so the asserted branch is stable across machines. Interactive ``ask`` is
-driven through a pseudo-terminal (``execute_interactive``) so ``isatty`` is true; the
-``continue`` loop is bounded by a SIGINT rather than a fragile "finish in N chunks"
-assertion. Continue-to-proven-optimum correctness is covered by manual/oracle checks.
+wide margin so the asserted branch is stable across machines. The interactive prompt is
+driven through a pseudo-terminal (``execute_interactive``) so ``isatty`` is true.
 """
 
 import os
@@ -118,8 +112,8 @@ class TestSlowCheckpointReport:
         assert "best objective so far" in low, combined[:800]
         assert "of the best possible" in low, combined[:800]
         assert "elapsed" in low and "peak memory" in low, combined[:800]
-        # Default decide_on_timeout='ask' over piped (non-TTY) stdin falls back to
-        # error, so the statement still surfaces the timeout error after the report.
+        # Over piped (non-TTY) stdin there is no one to answer the offer, so the
+        # statement still surfaces the timeout error after the report.
         assert "time limit" in low, combined[:800]
         for word in _FORBIDDEN_JARGON:
             assert word not in low, f"solver jargon {word!r} leaked:\n{combined[:800]}"
@@ -139,71 +133,14 @@ class TestSlowCheckpointReport:
         for word in _FORBIDDEN_JARGON:
             assert word not in low, f"solver jargon {word!r} leaked:\n{combined[:800]}"
 
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_off_suppresses_report(self, request, cli_fixture):
-        """`off` reproduces the plain static timeout error — no checkpoint block."""
-        cli = _slow_cli(request.getfixturevalue(cli_fixture), 2)
-        result = cli.execute_raw(
-            "SET diagnose_decide='off'; " + _MARKET_SPLIT_SQL, timeout=30
-        )
-        combined = result.stderr + result.stdout
-        low = combined.lower()
 
-        assert "without finding a solution yet" not in low, combined[:800]
-        assert "with a usable solution" not in low, combined[:800]
-        # The plain static solver error still fires.
-        assert "time limit" in low, combined[:800]
+def _timeout_report(cli, sql):
+    """Run a DECIDE that will time out and return its combined output.
 
-
-def _slow_diag_rows(cli, sql):
-    """Run the DECIDE + a decide_diagnostics() read on one stdin connection (the timeout
-    throws a pointer error, then the follow-up SELECT reads the stashed diagnosis)."""
-    script = ".mode csv\n" + sql + ";\nSELECT * FROM decide_diagnostics();\n"
-    result = cli.execute_script(script, timeout=30)
-    rows = list(csv.DictReader(io.StringIO(result.stdout)))
-    return result, {r["attribute"]: r["value"] for r in rows if r["subject_kind"] == "model"}
-
-
-@pytest.mark.query_diagnostics
-class TestSlowDiagnosticsRelation:
-    """Relation parity with unbounded/infeasible: a timed-out solve stashes a
-    `state='slow'` diagnosis and the error points to decide_diagnostics()."""
-
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_path1_populates_relation_and_points_to_it(self, request, cli_fixture):
-        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result, attrs = _slow_diag_rows(cli, _KNAPSACK_SQL)
-        # The error headline is diagnosis-style and points to the relation.
-        err = result.stderr.lower()
-        assert "optimization is slow" in err, result.stderr[:800]
-        assert "select * from decide_diagnostics()" in err, result.stderr[:800]
-        # The relation carries the structured facts, in user voice.
-        assert attrs["status"] == "solution_found", attrs
-        assert float(attrs["best_objective"]) > 0, attrs
-        assert attrs["within_percent_of_best"].endswith("%"), attrs
-        assert "best_possible_objective" in attrs and "elapsed" in attrs and "peak_memory" in attrs
-        for word in _FORBIDDEN_JARGON:
-            assert word not in " ".join(attrs).lower()
-
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_path2_relation_marks_no_solution(self, request, cli_fixture):
-        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result, attrs = _slow_diag_rows(cli, _MARKET_SPLIT_SQL)
-        assert "optimization is slow" in result.stderr.lower()
-        assert attrs["status"] == "no_solution", attrs
-        # No incumbent → no objective / closeness rows.
-        assert "best_objective" not in attrs and "within_percent_of_best" not in attrs
-        # Market-split is pure feasibility (no MAXIMIZE/MINIMIZE), so the "best possible
-        # objective" is meaningless and must be suppressed.
-        assert "best_possible_objective" not in attrs, attrs
-
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_off_leaves_relation_empty(self, request, cli_fixture):
-        """`off` gives the plain static error and stashes nothing (no pointer, 0 rows)."""
-        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result, attrs = _slow_diag_rows(cli, "SET diagnose_decide='off'; " + _KNAPSACK_SQL)
-        assert "select * from decide_diagnostics()" not in result.stderr.lower()
-        assert attrs == {}, attrs
+    A timeout is execution behaviour now, so everything the user learns is in the
+    checkpoint report the operator prints — there is no diagnosis relation to read.
+    """
+    return cli.execute_raw(sql, timeout=30)
 
 
 def _large_lp_sql():
@@ -236,40 +173,35 @@ _LARGE_QP_SQL = _large_qp_sql()
 @pytest.mark.query_diagnostics
 class TestNonMipTimeoutHonesty:
     """A2/E2: on an LP/QP timeout no backend proves a bound, so the report and the
-    relation must claim nothing — no 'within …% of the best possible' line, no
-    best_possible_objective / within_percent_of_best rows, and no solver infinity
+    report must claim nothing — no 'within …% of the best possible' line, and no solver
+    infinity
     sentinel (1e+100) or nan leaking into user output. Whether an incumbent exists
     at an LP timeout differs per backend (HiGHS's simplex has a feasible point,
     Gurobi reports none), so only the bound/gap claims are asserted, not the path."""
 
-    def _assert_no_fabricated_bound(self, result, attrs):
+    def _assert_no_fabricated_bound(self, result):
         combined = (result.stderr + result.stdout).lower()
         assert "time limit" in combined, combined[:800]
         assert "of the best possible" not in combined, combined[:800]
         assert "1e+100" not in combined and "nan" not in combined, combined[:800]
-        assert "best_possible_objective" not in attrs, attrs
-        assert "within_percent_of_best" not in attrs, attrs
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_lp_timeout_no_fabricated_bound(self, request, cli_fixture):
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 0.001)
-        result, attrs = _slow_diag_rows(cli, _LARGE_LP_SQL)
-        self._assert_no_fabricated_bound(result, attrs)
+        self._assert_no_fabricated_bound(_timeout_report(cli, _LARGE_LP_SQL))
 
     def test_qp_timeout_no_fabricated_bound_gurobi(self, decidb_cli_gurobi):
         cli = _slow_cli(decidb_cli_gurobi, 0.001)
-        result, attrs = _slow_diag_rows(cli, _LARGE_QP_SQL)
-        self._assert_no_fabricated_bound(result, attrs)
+        self._assert_no_fabricated_bound(_timeout_report(cli, _LARGE_QP_SQL))
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_mip_timeout_still_reports_bound(self, request, cli_fixture):
         """Regression guard: the MIP timeout keeps its real bound + closeness output."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result, attrs = _slow_diag_rows(cli, _KNAPSACK_SQL)
-        combined = (result.stderr + result.stdout).lower()
-        assert "of the best possible" in combined, combined[:800]
-        assert attrs["within_percent_of_best"].endswith("%"), attrs
-        assert "best_possible_objective" in attrs, attrs
+        combined = _timeout_report(cli, _KNAPSACK_SQL)
+        low = (combined.stderr + combined.stdout).lower()
+        assert "of the best possible" in low, low[:800]
+        assert "best objective so far" in low, low[:800]
 
 
 _STOP_CAVEAT = "best solution found so far"  # stderr caveat on a stop-with-incumbent
@@ -285,7 +217,8 @@ def _report_count(text: str) -> int:
 
 @pytest.mark.query_diagnostics
 class TestSlowContinuation:
-    """S3/S4: decide_on_timeout ask/error/continue, warm resume, stop delivery."""
+    """S3/S4: the prompt at a terminal, the plain error anywhere else, warm resume,
+    and what a stop hands back."""
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ask_stop_immediately(self, request, cli_fixture):
@@ -329,98 +262,59 @@ class TestSlowContinuation:
         assert "time limit" in combined, combined[:800]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_error_mode_reports_then_errors(self, request, cli_fixture):
-        """error: print the report, then error — even when an incumbent exists."""
+    def test_non_tty_reports_then_errors(self, request, cli_fixture):
+        """No terminal: print the report, then error — even when an incumbent exists.
+        Nobody is there to say whether to keep going or take it."""
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result = cli.execute_raw(
-            "SET decide_on_timeout='error'; " + _KNAPSACK_SQL, timeout=30
-        )
+        result = cli.execute_raw(_KNAPSACK_SQL, timeout=30)
         combined = (result.stderr + result.stdout).lower()
         assert "usable solution (not proven best)" in combined, combined[:800]
-        assert _STOP_CAVEAT not in combined, "error mode never returns the incumbent"
+        assert _STOP_CAVEAT not in combined, "a clock timeout never delivers unasked"
         assert "time limit" in combined, combined[:800]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_continue_interrupt_breaks(self, request, cli_fixture):
-        """continue: auto-resumes; Ctrl-C stops at the next boundary → rows + caveat."""
-        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
+    def test_interrupt_delivers_the_incumbent_without_a_terminal(
+        self, request, cli_fixture
+    ):
+        """Ctrl-C is not a question. The user has already said stop, so the best-so-far
+        comes back with its caveat — no prompt, no terminal needed, no error."""
+        # Short chunk so the HiGHS boundary-only path (no thread-safe terminate) still
+        # notices the interrupt promptly; Gurobi cuts the solve short mid-search.
+        cli = _slow_cli(request.getfixturevalue(cli_fixture), 3)
         proc = subprocess.Popen(
-            [cli.exe, cli.db, "-readonly", "-c",
-             "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL],
+            [cli.exe, cli.db, "-readonly", "-c", _KNAPSACK_SQL],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env={**os.environ, **(cli.env or {})},
         )
-        time.sleep(3.5)  # let it resume across a couple of 1s chunks
+        time.sleep(1.0)
         proc.send_signal(signal.SIGINT)
-        out, err = proc.communicate(timeout=30)
-        # Continue was honored (looped more than the first chunk) ...
-        assert _report_count(err) >= 2, err[:1200]
-        # ... and the interrupt stopped it gracefully, returning the incumbent.
+        out, err = proc.communicate(timeout=40)
         assert _STOP_CAVEAT in err.lower(), err[:1200]
         assert out.strip(), "expected incumbent rows on stdout after interrupt"
         assert proc.returncode == 0, f"expected success, got {proc.returncode}"
 
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_caveated_success_populates_relation(self, request, cli_fixture):
-        """A caveated stop returns rows AND stashes a queryable state='slow' diagnosis
-        (the quality of the solution you took), unlike a normal solve which clears it."""
-        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        # A marker SELECT after the diagnostics read proves the diagnosis rows were
-        # emitted (the DECIDE's own id/x rows and the diagnostics rows share one output,
-        # so assert on the state-engine tokens, which only the diagnosis produces).
-        proc = subprocess.Popen(
-            [cli.exe, cli.db, "-readonly", "-c",
-             "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL
-             + "; SELECT attribute || '=' || value AS diag FROM decide_diagnostics();"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env={**os.environ, **(cli.env or {})},
-        )
-        time.sleep(3.5)
-        proc.send_signal(signal.SIGINT)
-        out, err = proc.communicate(timeout=30)
-        assert proc.returncode == 0, err[:1200]
-        assert _STOP_CAVEAT in err.lower(), err[:1200]
-        # The incumbent's quality is now queryable after the stop (was empty before).
-        assert "status=solution_found" in out, out[-600:]
-        assert "best_objective=" in out and "within_percent_of_best=" in out, out[-600:]
-
-    def test_continue_interrupt_is_mid_chunk_gurobi(self, decidb_cli_gurobi):
-        """Gurobi: Ctrl-C during a continue chunk cuts the solve short MID-chunk, not at the
-        next boundary. With 6s chunks, an interrupt ~1.5s into the 2nd chunk returns almost
-        immediately (GRBterminate) — far short of the ~4.5s a boundary-only stop would wait
-        out. HiGHS is boundary-only (no mid-solve interrupt) and is intentionally not asserted."""
+    def test_interrupt_is_mid_solve_gurobi(self, decidb_cli_gurobi):
+        """Gurobi: Ctrl-C cuts the solve short MID-chunk, not at the next boundary. With a
+        6s limit, an interrupt ~1.5s in returns almost immediately (GRBterminate) — far
+        short of the ~4.5s a boundary-only stop would wait out. HiGHS is boundary-only (no
+        mid-solve interrupt) and is intentionally not asserted."""
         cli = _slow_cli(decidb_cli_gurobi, 6)
         proc = subprocess.Popen(
-            [cli.exe, cli.db, "-readonly", "-c",
-             "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL],
+            [cli.exe, cli.db, "-readonly", "-c", _KNAPSACK_SQL],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env={**os.environ, **(cli.env or {})},
         )
-        time.sleep(7.5)  # 1st chunk (6s) elapses, then ~1.5s into the 2nd chunk
+        time.sleep(1.5)
         t = time.time()
         proc.send_signal(signal.SIGINT)
         out, err = proc.communicate(timeout=30)
         latency = time.time() - t
         assert proc.returncode == 0, err[:800]
-        assert out.strip(), "expected incumbent rows after the mid-chunk interrupt"
+        assert out.strip(), "expected incumbent rows after the mid-solve interrupt"
         assert _STOP_CAVEAT in err.lower(), err[:800]
-        # Mid-solve terminate returns in well under a second; a boundary-only stop would sit
-        # out the remaining ~4.5s of the chunk. 3s cleanly separates the two behaviors.
-        assert latency < 3.0, f"interrupt took {latency:.2f}s — expected mid-chunk stop (<3s)"
-
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_off_beats_on_timeout(self, request, cli_fixture):
-        """diagnose_decide='off' is a master mute: no report, no continuation, plain error —
-        even with decide_on_timeout='continue'."""
-        cli = _slow_cli(request.getfixturevalue(cli_fixture), 1)
-        result = cli.execute_raw(
-            "SET diagnose_decide='off'; SET decide_on_timeout='continue'; " + _KNAPSACK_SQL,
-            timeout=30,
-        )
-        combined = (result.stderr + result.stdout).lower()
-        assert "usable solution (not proven best)" not in combined, combined[:800]
-        assert _report_count(result.stderr + result.stdout) == 0, combined[:800]
-        assert "time limit" in combined, combined[:800]
+        # Mid-solve terminate returns in well under a second; a boundary-only stop would
+        # sit out the remaining ~4.5s of the chunk. 3s cleanly separates the two.
+        assert latency < 3.0, f"interrupt took {latency:.2f}s — expected mid-solve stop (<3s)"
 
 
 _STOP_REQUEST = "stopped at your request"  # interrupt report wording (vs "hit the … time limit")
@@ -447,10 +341,9 @@ def _interrupt_run(cli, script, delay, timeout=30):
 
 @pytest.mark.query_diagnostics
 class TestSlowFirstSolveInterrupt:
-    """Ctrl-C is a *peer* trigger into the slow branch, decoupled from the time limit: a
-    user interrupt on the FIRST (normal) solve cuts it short and routes into the slow
-    terminal with the best-so-far — instead of aborting the query — even when the wall-clock
-    limit is nowhere near. On Gurobi the stop is attributed to the user (`GRBterminate` →
+    """Ctrl-C is a peer trigger into the slow branch, decoupled from the time limit: a
+    user interrupt on the first solve cuts it short and hands back the best-so-far —
+    instead of aborting the query — even when the wall-clock limit is nowhere near. On Gurobi the stop is attributed to the user (`GRBterminate` →
     `GRB_INTERRUPTED`), so the report says "stopped at your request", not "hit the … time
     limit". HiGHS has no thread-safe terminate, so its first-solve interrupt is boundary-only
     (the documented solver-agnostic fallback) and is reported as a time-limit stop.
@@ -464,7 +357,7 @@ class TestSlowFirstSolveInterrupt:
         the interrupt wording (not a timeout), fast (mid-solve, not at the far boundary)."""
         cli = _slow_cli(decidb_cli_gurobi, 20)
         proc, out, err, latency = _interrupt_run(
-            cli, "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL, delay=1.0
+            cli, _KNAPSACK_SQL, delay=1.0
         )
         low = err.lower()
         assert proc.returncode == 0, err[:1000]
@@ -476,35 +369,17 @@ class TestSlowFirstSolveInterrupt:
         # Mid-first-solve terminate returns fast; a boundary-only stop would sit out ~19s.
         assert latency < 5.0, f"interrupt took {latency:.2f}s — expected a mid-solve stop"
 
-    def test_first_solve_interrupt_error_mode_gurobi(self, decidb_cli_gurobi):
-        """Gurobi, default (ask→error over a pipe): the first-solve interrupt reports
-        "stopped at your request" and then errors — never delivering the incumbent."""
+    def test_first_solve_interrupt_without_an_incumbent_errors_gurobi(
+        self, decidb_cli_gurobi
+    ):
+        """Interrupting a solve that has found nothing yet has no best-so-far to hand
+        back, so it reports what it knows and errors."""
         cli = _slow_cli(decidb_cli_gurobi, 20)
-        proc, out, err, _ = _interrupt_run(cli, _KNAPSACK_SQL, delay=1.0)
+        proc, out, err, _ = _interrupt_run(cli, _MARKET_SPLIT_SQL, delay=1.0)
         low = err.lower()
         assert _STOP_REQUEST in low, err[:1000]
-        assert "time limit" not in low, err[:1000]
-        assert _STOP_CAVEAT not in low, "error mode never returns the incumbent"
-        # Surfaces the diagnosis as an error pointing at the relation, and delivers no rows.
-        # (The CLI's own exit code under -c + SIGINT is an unreliable signal, so assert on
-        # the emitted error + empty stdout instead.)
-        assert "optimization is slow" in low, err[:1000]
-        assert not out.strip(), "error mode delivers no incumbent rows"
-
-    def test_first_solve_interrupt_relation_gurobi(self, decidb_cli_gurobi):
-        """Gurobi: after a first-solve interrupt the stashed diagnosis records the cause as a
-        user interrupt (stopped_by=user_interrupt), queryable via decide_diagnostics()."""
-        cli = _slow_cli(decidb_cli_gurobi, 20)
-        proc, out, err, _ = _interrupt_run(
-            cli,
-            "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL
-            + "; SELECT attribute || '=' || value AS diag FROM decide_diagnostics();",
-            delay=1.0,
-        )
-        assert proc.returncode == 0, err[:1000]
-        assert _STOP_REQUEST in err.lower(), err[:1000]
-        assert "stopped_by=user_interrupt" in out, out[-800:]
-        assert "status=solution_found" in out, out[-800:]
+        assert _STOP_CAVEAT not in low, "nothing was found, so nothing is delivered"
+        assert not out.strip(), "no incumbent means no rows"
 
     def test_first_solve_interrupt_highs_boundary_only(self, decidb_cli_highs):
         """HiGHS has no thread-safe terminate, so a mid-first-solve SIGINT is *not* seen
@@ -514,7 +389,7 @@ class TestSlowFirstSolveInterrupt:
         rows with the "time limit" wording."""
         cli = _slow_cli(decidb_cli_highs, 2)
         proc, out, err, _ = _interrupt_run(
-            cli, "SET decide_on_timeout='continue'; " + _KNAPSACK_SQL, delay=0.7
+            cli, _KNAPSACK_SQL, delay=0.7
         )
         low = err.lower()
         assert proc.returncode == 0, err[:1000]

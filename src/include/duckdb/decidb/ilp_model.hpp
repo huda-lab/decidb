@@ -190,7 +190,7 @@ struct ConstraintProvenance {
     idx_t indicator_col = DConstants::INVALID_INDEX;
     //! Printable PER key of this row's group (`'a'`, or `EU, 2024` for a composite key).
     //! Empty when the clause is ungrouped or not PER-grouped. Lets infeasible diagnosis
-    //! identify which group an edit belongs to and emit a `group` EAV row, so PER
+    //! identify which group an edit belongs to and populate the finding's `group` column, so PER
     //! aggregates can fold to `SUM(x)` without colliding in the relation (Facet A).
     string group_label;
     //! True when the LHS was an aggregate (`SUM`/`AVG`/...). Lets the diagnosis wrap a

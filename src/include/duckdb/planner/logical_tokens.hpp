@@ -26,6 +26,7 @@ class LogicalCreateSecret;
 class LogicalCrossProduct;
 class LogicalCTERef;
 class LogicalDecide;
+class LogicalDecideDiagnose;
 class LogicalDelete;
 class LogicalDelimGet;
 class LogicalDistinct;

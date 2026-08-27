@@ -47,9 +47,10 @@ attribute read, or a solver infinity sentinel. Report writers must skip them whe
 `!std::isfinite`.
 
 `ThrowDecideSolveError` is the single home for the user-facing failure text. The
-operator calls it only on an **undiagnosed** terminal — `diagnose_decide` is off,
-or the status has no engine (`ITERATION_LIMIT` / `OTHER`). Every diagnosed failure
-throws the `decide_diagnostics()` pointer error instead. See
+operator calls it only on an **undiagnosed** terminal — the statement carried no
+`DIAGNOSE` prefix, or the status has no engine (`ITERATION_LIMIT` / `OTHER`). Its text
+names the state and points at the prefix; a diagnosed failure raises nothing at all and
+returns its findings as rows. See
 [`../../07_query_diagnostics/`](../../07_query_diagnostics/).
 
 ---

@@ -1,20 +1,19 @@
-"""The shared diagnostic reporting surface: decide_diagnostics().
+"""The shared diagnostic reporting surface: the relation `DIAGNOSE <query>` returns.
 
-A state engine populates a structured diagnosis, stashes it per-connection, and
-surfaces it via the `decide_diagnostics()` table function with a fixed long-form
-schema. For the unbounded state each variable owns attributes:
+`DIAGNOSE` is the only thing that starts the diagnostics engine. It runs the query and
+returns its findings directly, one row per finding:
 
-    diagnosis_id | state | subject_kind | subject | attribute | value
+    state | clause | suggested_change | amount | total | scope | edit_source | group | row
 
-`affected_rows` characterizes which rows of the variable escape (here all of
-them); `diagnosis_id` ties together every row of one failed solve. The
-forced remedy (add a bound) is prescribed in the stderr summary, not a per-row
-column.
+A feasible query returns one row saying so; an infeasible or unbounded one returns the
+findings and does NOT raise. The same query without the prefix reports its state and
+stops.
 
-The end-to-end flow spans two statements on one connection (a failing DECIDE that
-stashes, then a SELECT that reads it back), so these tests drive the CLI via
-`execute_script` (stdin) — `-c` halts after the DECIDE error. The relation is read
-as CSV so its rows parse unambiguously. Runs under both backends.
+These tests read the relation as CSV so its rows parse unambiguously, and most of them
+read it through `_rows`, which re-expresses each finding as the (subject, attribute,
+value) facts it carries — they are about *what* the engine finds, not about the column
+layout. The layout itself is asserted directly in `TestDiagnoseRelationShape`. Runs under
+both backends.
 """
 
 import csv
@@ -23,6 +22,7 @@ import re
 
 import pytest
 
+from . import _diagnose_relation
 from ._diagnostic_invariants import assert_backends_agree, assert_edits_are_users_text
 
 
@@ -34,34 +34,39 @@ _UNBOUNDED_SQL = (
 )
 
 _EXPECTED_SCHEMA = [
-    "diagnosis_id",
     "state",
-    "subject_kind",
-    "subject",
-    "attribute",
-    "value",
+    "clause",
+    "suggested_change",
+    "amount",
+    "total",
+    "scope",
+    "edit_source",
+    "group",
+    "row",
 ]
 
 
-def _diagnose(cli, decide_sql, mode="auto", scope=None):
-    """Run PRAGMA + a failing DECIDE + the relation read on one stdin session.
-    The relation is emitted as CSV so its rows parse unambiguously. `scope` sets the
-    T3 infeasible slack-scope pragma (query | expanded) when given."""
-    scope_pragma = (
-        f"PRAGMA diagnose_decide_infeasible_slack_scope='{scope}';\n" if scope else ""
-    )
-    script = (
-        ".mode csv\n"
-        f"PRAGMA diagnose_decide='{mode}';\n"
-        f"{scope_pragma}"
-        f"{decide_sql};\n"
-        "SELECT * FROM decide_diagnostics();\n"
-    )
-    return cli.execute_script(script)
+def _diagnose(cli, decide_sql, scope=None):
+    """Run `DIAGNOSE <decide_sql>` on one stdin session and return the result."""
+    return _diagnose_relation.run(cli, decide_sql, scope=scope)
 
 
 def _rows(result):
-    return list(csv.DictReader(io.StringIO(result.stdout)))
+    """The findings, expressed as long-form (subject, attribute, value) facts."""
+    return _diagnose_relation.eav_rows(result)
+
+
+def _flat(result):
+    """The findings as the relation actually returns them, one dict per row."""
+    return _diagnose_relation.rows(result)
+
+
+def _errors(result):
+    """stderr lines that are real errors — DIAGNOSE reports findings, it does not raise."""
+    return [
+        line for line in result.stderr.strip().splitlines()
+        if line and not line.startswith("Warning:")
+    ]
 
 
 def _attrs(rows, subject_kind, subject):
@@ -162,179 +167,137 @@ def _diagnosis_marker(stdout, label):
 
 
 @pytest.mark.query_diagnostics
-class TestDiagnosticsRelation:
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_unbounded_diagnosis_surfaces_as_relation(self, request, cli_fixture):
-        """Failing DECIDE stashes; the follow-up SELECT returns one named row."""
-        cli = request.getfixturevalue(cli_fixture)
-        result = _diagnose(cli, _UNBOUNDED_SQL)
-
-        # The DECIDE itself still errors, with the pointer on stderr.
-        assert (
-            "details: select * from decide_diagnostics()"
-            in result.stderr.lower()
-        )
-
-        rows = _rows(result)
-        assert len(rows) == 2
-        assert {r["state"] for r in rows} == {"unbounded"}
-        attrs = _attrs(rows, "variable", "x")
-        assert attrs["grows_toward"] == "+inf"
-        # Both instances of x escape, so affected_rows reports the total-escape summary.
-        assert attrs["affected_rows"] == "all 2 rows"
+class TestDiagnoseRelationShape:
+    """The relation itself: its columns, its types, and the fact that it composes."""
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_relation_has_fixed_schema(self, request, cli_fixture):
-        """The table function's bind-time schema is the fixed unbounded relation."""
         cli = request.getfixturevalue(cli_fixture)
-        # Fresh process => empty stash => zero rows, but the schema is fixed.
-        # DESCRIBE always yields the column list regardless of stash contents.
-        desc_rows, _ = cli.execute("DESCRIBE SELECT * FROM decide_diagnostics()")
+        desc_rows, _ = cli.execute(f"DESCRIBE SELECT * FROM (DIAGNOSE {_UNBOUNDED_SQL})")
         names = [str(r[0]).lower() for r in desc_rows]
         assert names == _EXPECTED_SCHEMA
+        types = [str(r[1]).upper() for r in desc_rows]
+        # Real types, not the all-VARCHAR EAV shape this replaced: `amount` is a
+        # number you can compare against, `total` and `row` integer identities/counts.
+        assert types[3] == "DOUBLE"
+        assert types[4] == "BIGINT"
+        assert types[8] == "BIGINT"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_empty_when_nothing_diagnosed(self, request, cli_fixture):
-        """With no prior failed DECIDE on the connection, the relation is empty."""
+    def test_unbounded_names_the_runaway_and_does_not_raise(self, request, cli_fixture):
         cli = request.getfixturevalue(cli_fixture)
-        rows, _ = cli.execute("SELECT * FROM decide_diagnostics()")
-        assert rows == []
+        result = _diagnose(cli, _UNBOUNDED_SQL)
+
+        # DIAGNOSE reports on the run; the failure is the answer, not an error.
+        assert not _errors(result), result.stderr
+        flat = _flat(result)
+        assert len(flat) == 1
+        assert flat[0]["state"] == "unbounded"
+        assert flat[0]["clause"] == "x"
+        assert flat[0]["suggested_change"] == "x <= <cap>"
+        assert flat[0]["edit_source"] == "runaway_+inf"
+        # Both instances of x escape, so the count covers the whole variable and no
+        # categorical slice is named.
+        assert float(flat[0]["amount"]) == 2
+        assert int(flat[0]["total"]) == 2
+        assert flat[0]["scope"] == "row"
+        assert flat[0]["group"] in ("", "NULL")
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_fresh_connection_sees_no_prior_diagnosis(self, request, cli_fixture):
-        """Lifecycle isolation (T6): the diagnosis stash is per-connection, so a
-        failed DECIDE on one connection must never leak into a fresh one. Fail a
-        DECIDE on connection A (which stashes a diagnosis, then closes), then open
-        a separate connection B and assert decide_diagnostics() is empty — the
-        stash is neither shared across connections nor persisted to the (shared,
-        read-only) database file. Each CLI invocation is its own process, so the
-        two scripts genuinely run on distinct connections."""
-        cli = request.getfixturevalue(cli_fixture)
-        # Connection A: a failing DECIDE stashes an unbounded diagnosis, then exits.
-        conn_a = _diagnose(cli, _UNBOUNDED_SQL)
-        assert _rows(conn_a), "connection A should have stashed a diagnosis to read back"
-        # Connection B: a brand-new process with no prior failed solve on it.
-        conn_b = cli.execute_script(
-            ".mode csv\nSELECT * FROM decide_diagnostics();\n"
-        )
-        assert _rows(conn_b) == []
-
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_no_diagnosis_stashed_when_off(self, request, cli_fixture):
-        """With diagnosis turned `off`, an unbounded DECIDE stashes nothing."""
-        cli = request.getfixturevalue(cli_fixture)
-        script = (
-            ".mode csv\n"
-            "PRAGMA diagnose_decide='off';\n"
-            f"{_UNBOUNDED_SQL};\nSELECT * FROM decide_diagnostics();\n"
-        )
-        result = cli.execute_script(script)
-        # Static error, no pointer, and the relation stays empty.
-        assert "select * from decide_diagnostics()" not in result.stderr.lower()
-        assert _rows(result) == []
-
-    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_successful_solve_clears_stale_diagnosis(self, request, cli_fixture):
-        """A2: fail -> fix -> succeed invalidates the stash, so decide_diagnostics()
-        does not keep reporting a now-resolved failure. The success DECIDE also emits
-        CSV, so the relation read emits a `rows=N` sentinel to parse past it."""
+    def test_a_feasible_query_returns_one_row_saying_so(self, request, cli_fixture):
+        """No separate output path for a query that worked: one row, state = feasible."""
         cli = request.getfixturevalue(cli_fixture)
         bounded_sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
         )
-        script = (
-            ".mode csv\n"
-            "PRAGMA diagnose_decide='auto';\n"
-            f"{_UNBOUNDED_SQL};\n"  # stashes an unbounded diagnosis (and errors)
-            f"{bounded_sql};\n"  # succeeds -> clears the stash
-            "SELECT 'rows=' || count(*) AS diag FROM decide_diagnostics();\n"
-        )
-        result = cli.execute_script(script)
-        assert "rows=0" in result.stdout
-        assert "rows=1" not in result.stdout
+        result = _diagnose(cli, bounded_sql)
+        assert not _errors(result), result.stderr
+        flat = _flat(result)
+        assert len(flat) == 1
+        assert flat[0]["state"] == "feasible"
+        assert all(flat[0][c] in ("", "NULL") for c in _EXPECTED_SCHEMA[1:])
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_undiagnosed_failure_clears_stale_diagnosis(self, request, cli_fixture):
-        """A4/E5: a diagnosed failure stashes rows, then turning diagnosis `off` and
-        hitting a second failure must not leave the first failure's rows looking
-        like they belong to the second — the stash is cleared, not left stale."""
+    def test_the_relation_composes(self, request, cli_fixture):
+        """It is a relation, not a printed report: it can be selected from and filtered."""
         cli = request.getfixturevalue(cli_fixture)
-        script = (
-            ".mode csv\n"
-            "PRAGMA diagnose_decide='auto';\n"
-            f"{_UNBOUNDED_SQL};\n"  # stashes an unbounded diagnosis (and errors)
-            "PRAGMA diagnose_decide='off';\n"
-            f"{_UNBOUNDED_SQL};\n"  # fails again, undiagnosed -> must clear the stash
-            "SELECT 'rows=' || count(*) AS diag FROM decide_diagnostics();\n"
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
-        result = cli.execute_script(script)
-        assert "rows=0" in result.stdout
+        result = cli.execute_script(
+            ".mode csv\n"
+            f"SELECT clause, amount FROM (DIAGNOSE {sql}) "
+            "WHERE clause IS NOT NULL AND amount > 1;\n"
+        )
+        rows = list(csv.DictReader(io.StringIO(result.stdout)))
+        assert rows == [{"clause": "x <= 5", "amount": "10.0"}], result.stdout
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_repeated_failures_replace_rows_and_advance_diagnosis_id(
-        self, request, cli_fixture
-    ):
-        """The stash holds only the latest failure, while ids advance per diagnosis."""
+    def test_a_bare_failure_reports_its_state_and_stops(self, request, cli_fixture):
+        """Without the prefix: the state, and how to ask for more. No clause name, no
+        repair, no second statement to run — naming the clause IS the elastic solve."""
         cli = request.getfixturevalue(cli_fixture)
-        y_sql = (
-            "SELECT id, y FROM (VALUES (1), (2)) t(id) "
-            "DECIDE y(REAL) SUCH THAT y >= 0 MAXIMIZE SUM(y)"
-        )
-        marker_sql = (
-            "SELECT '{label}=' || min(diagnosis_id) || ':' || "
-            "count(DISTINCT diagnosis_id) || ':' || count(*) AS marker "
-            "FROM decide_diagnostics();\n"
-        )
-        script = (
-            ".mode csv\n"
-            "PRAGMA diagnose_decide='auto';\n"
-            f"{_UNBOUNDED_SQL};\n"
-            f"{marker_sql.format(label='first')}"
-            f"{y_sql};\n"
-            f"{marker_sql.format(label='second')}"
-        )
-        result = cli.execute_script(script)
-
-        first_id, first_distinct, first_rows = _diagnosis_marker(
-            result.stdout, "first"
-        )
-        second_id, second_distinct, second_rows = _diagnosis_marker(
-            result.stdout, "second"
-        )
-        assert (first_distinct, first_rows) == (1, 2)
-        assert (second_distinct, second_rows) == (1, 2)
-        assert second_id == first_id + 1
+        result = cli.execute_script(f".mode csv\n{_UNBOUNDED_SQL};\n")
+        err = result.stderr.lower()
+        assert "decide optimization is unbounded" in err
+        assert "diagnose" in err
+        # None of the diagnosis's own vocabulary leaks into the bare error.
+        assert "x <=" not in err
+        assert "decide_diagnostics" not in err
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_qp_unbounded_no_content_free_diagnosis(self, request, cli_fixture):
-        """A5: an unbounded solve that names no variable must not stash a content-free
-        all-NULL row. A quadratic objective attaches no ray, so under `auto` the
-        diagnosis has no per-variable content and falls through to the rich static
-        error (Gurobi reaches UNBOUNDED here); HiGHS rejects the non-convex QP
-        pre-solve. Either path: no diagnosis pointer and an empty relation.
+    def test_diagnosis_does_not_outlive_its_statement(self, request, cli_fixture):
+        """The findings cross from the DECIDE operator to the DIAGNOSE operator inside
+        one statement and no further: a later DIAGNOSE reports its own run, never the
+        previous one's."""
+        cli = request.getfixturevalue(cli_fixture)
+        bounded_sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 MAXIMIZE SUM(x)"
+        )
+        result = cli.execute_script(
+            ".mode csv\n"
+            f"DIAGNOSE {_UNBOUNDED_SQL};\n"
+            f"DIAGNOSE {bounded_sql};\n"
+        )
+        # Two relations back to back: the unbounded one, then a clean `feasible`.
+        assert "unbounded" in result.stdout
+        assert "feasible" in result.stdout
 
-        C8: when diagnosis was requested but cannot produce content, the error states
-        it is unavailable and why (quadratic) instead of re-advertising the opt-in the
-        user already enabled."""
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_diagnose_needs_a_decide_clause(self, request, cli_fixture):
+        cli = request.getfixturevalue(cli_fixture)
+        result = cli.execute_script(".mode csv\nDIAGNOSE SELECT 1 AS a;\n")
+        assert "decide clause" in result.stderr.lower()
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_qp_unbounded_says_why_it_cannot_name_a_variable(self, request, cli_fixture):
+        """A5/C8: an unbounded solve that names no variable must not report a
+        content-free row. A quadratic objective attaches no ray, so the diagnosis says
+        plainly that it is unavailable and why (Gurobi reaches UNBOUNDED here; HiGHS
+        rejects the non-convex QP in pre-solve)."""
         cli = request.getfixturevalue(cli_fixture)
         qp_sql = (
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x(REAL) SUCH THAT x >= 0 MAXIMIZE SUM(POWER(x, 2))"
         )
-        result = _diagnose(cli, qp_sql, mode="auto")
-        assert "select * from decide_diagnostics()" not in result.stderr.lower()
-        assert _rows(result) == []
+        result = _diagnose(cli, qp_sql)
         if "gurobi" in cli_fixture:
-            # Gurobi reports UNBOUNDED, exercising the C8 "diagnosis unavailable"
-            # message (the old code replaced this with an all-NULL diagnosis row,
-            # then with the generic re-run advert).
-            err = result.stderr.lower()
-            assert "add an upper bound" in err
-            assert "non-linear" in err
-            # The misleading opt-in advert must NOT appear: the mode is already on.
-            assert "set pragma diagnose_decide='auto' and re-run" not in err
+            flat = _flat(result)
+            assert len(flat) == 1
+            assert flat[0]["state"] == "unbounded"
+            assert flat[0]["edit_source"] == "undiagnosed"
+            assert "non-linear" in flat[0]["suggested_change"]
+            assert flat[0]["clause"] in ("", "NULL")
+        else:
+            # HiGHS refuses the model class outright, before any solve.
+            assert _errors(result)
 
+
+@pytest.mark.query_diagnostics
+class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_contradictory_absorbed_bounds_are_diagnosed(self, request, cli_fixture):
         """Bug 1: two contradictory USER bounds both absorbed into the column box
@@ -350,8 +313,8 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x(REAL) SUCH THAT x >= 5 AND x <= 1 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
-        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        result = _diagnose(cli, sql)
+        assert not _errors(result), result.stderr
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         edits = {
@@ -378,9 +341,9 @@ class TestDiagnosticsRelation:
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
-        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        assert not _errors(result), result.stderr
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         attrs = _attrs(rows, "clause", "x <= 5")
@@ -406,7 +369,7 @@ class TestDiagnosticsRelation:
             "SUCH THAT SUM(keepR) >= 6 PER r.r_name "
             "MAXIMIZE SUM(keepR)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -438,7 +401,7 @@ class TestDiagnosticsRelation:
             "SUCH THAT SUM(keepN) >= 1000 PER r.r_name "
             "MAXIMIZE SUM(keepN)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -464,7 +427,7 @@ class TestDiagnosticsRelation:
             "SUCH THAT SUM(buy) >= 5 PER grp "
             "MAXIMIZE SUM(buy)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -484,7 +447,7 @@ class TestDiagnosticsRelation:
             "DECIDE x(REAL), y(REAL) "
             "SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -524,7 +487,7 @@ class TestDiagnosticsRelation:
             "SELECT x, y FROM (VALUES (1)) t(id) "
             "DECIDE x(REAL), y(REAL) SUCH THAT x <= 0 AND y <= 0 AND x + y >= 10"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -533,7 +496,6 @@ class TestDiagnosticsRelation:
         assert len(edits) == 1, rows
         assert edits[0]["subject"] == "x + y >= 10", rows  # same clause on both backends
         assert edits[0]["suggested_change"] == "x + y >= 0"
-        assert "diagnosis points to clause `x + y >= 10`" in result.stderr.lower()
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -546,7 +508,7 @@ class TestDiagnosticsRelation:
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -568,7 +530,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1, 8), (2, 12)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT x >= lo AND MAX(x) <= 5 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -589,7 +551,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1, 8), (2, 12)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT x <= 5 AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -608,7 +570,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,12)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT 5 >= x AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -626,7 +588,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,-1)) t(id, cap) "
             "DECIDE x(REAL) SUCH THAT x <= CAST(cap AS DOUBLE) MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         clause = "x <= CAST(cap AS DOUBLE)"
@@ -643,7 +605,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,'a',true),(2,'a',false)) t(id, grp, active) "
             "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 WHEN active PER grp MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         clause = "SUM(x) >= 5 WHEN active PER grp"
@@ -663,12 +625,11 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) "
             "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
         err = result.stderr.lower()
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        assert "diagnosis points to clause `sum(x) >= 5 per grp`" in err
         edits = _clause_edits(rows)
         assert len(edits) == 1
         edit = edits[0]
@@ -691,14 +652,16 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) "
             "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto", scope="expanded")
+        result = _diagnose(cli, sql, scope="expanded")
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         edits = _clause_edits(rows)
+        # The clause reads as written; the group is its own column, not a suffix on the
+        # label the user has to parse back out.
         assert [e["subject"] for e in edits] == [
-            "SUM(x) >= 5 PER grp [group: a]",
-            "SUM(x) >= 5 PER grp [group: b]",
+            "SUM(x) >= 5 PER grp",
+            "SUM(x) >= 5 PER grp",
         ]
         by_group = {e["group"]: e for e in edits}
         assert set(by_group) == {"a", "b"}
@@ -719,13 +682,13 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,''),(2,'a')) t(id, grp) "
             "DECIDE x(BOOL) SUCH THAT SUM(x) >= 2 PER grp MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto", scope="expanded")
+        result = _diagnose(cli, sql, scope="expanded")
 
         rows = _rows(result)
         edits = _clause_edits(rows)
         by_group = {e["group"]: e for e in edits}
         assert set(by_group) == {"''", "a"}
-        assert by_group["''"]["subject"] == "SUM(x) >= 2 PER grp [group: '']"
+        assert by_group["''"]["subject"] == "SUM(x) >= 2 PER grp"
         assert by_group["''"]["edit_source"] == "expanded_group"
         assert by_group["''"]["offset_scope"] == "group"
         assert by_group["''"]["suggested_change"] == "SUM(x) >= 1 PER grp"
@@ -742,7 +705,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,'a'),(2,'b')) t(id, grp) "
             "DECIDE x(BOOL) SUCH THAT SUM(x) >= 99 WHEN grp='a' MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -763,7 +726,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1), (2)) t(id) "
             "DECIDE x(BOOL) SUCH THAT SUM(x) >= 3 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -786,9 +749,9 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
             "DECIDE x(BOOL) SUCH THAT x >= 1 AND SUM(x) <= 2 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
-        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        assert not _errors(result), result.stderr
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
@@ -809,9 +772,9 @@ class TestDiagnosticsRelation:
             "DECIDE x(BOOL), y(INT) SUCH THAT x <= 0 AND y <= 1 "
             "AND SUM(y) >= 5 AND SUM(x) + SUM(y) >= 9 MAXIMIZE SUM(y)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
-        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        assert not _errors(result), result.stderr
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         fixed_sql = _apply_reported_fix(cli, sql, rows)
@@ -831,9 +794,9 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
             "DECIDE x(BOOL) SUCH THAT x = 1 AND SUM(x) <= 2 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
-        assert "select * from decide_diagnostics()" in result.stderr.lower()
+        assert not _errors(result), result.stderr
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         _apply_reported_fix(cli, sql, rows)
@@ -850,7 +813,7 @@ class TestDiagnosticsRelation:
             "DECIDE x(BOOL) SUCH THAT x <= 1 AND x >= 0 AND SUM(x) >= 3 "
             "MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -876,7 +839,7 @@ class TestDiagnosticsRelation:
             "DECIDE x(BOOL), y(BOOL) SUCH THAT SUM(x) >= 2 "
             "AND SUM(x) + SUM(y) <= 1 MAXIMIZE SUM(x) + SUM(y)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -900,7 +863,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
             "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -924,11 +887,10 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,5),(2,5)) t(id, hi) "
             "DECIDE x(BOOL) SUCH THAT x >= hi MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        assert "diagnosis points to clause `x >= hi`" in result.stderr.lower()
         floor = _attrs(rows, "clause", "x >= hi")
         assert floor["edit_kind"] == "loosen"
         assert floor["edit_source"] == "virtual_offset"
@@ -948,7 +910,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,5),(2,7)) t(id, hi) "
             "DECIDE x(BOOL) SUCH THAT x >= hi MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto", scope="expanded")
+        result = _diagnose(cli, sql, scope="expanded")
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -973,7 +935,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,12)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT x <= 5 AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         cap = _attrs(rows, "clause", "x <= 5")
@@ -992,7 +954,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,1)) t(id, demand) "
             "DECIDE x(REAL) SUCH THAT 10000*x <= 0 AND x >= demand MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1017,7 +979,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT x <= 2 + 3 AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1040,7 +1002,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT x <= (SELECT 5) AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1066,7 +1028,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT (SELECT 5) >= x AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1096,7 +1058,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
             f"DECIDE x(REAL) SUCH THAT {constraint} AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         cap = _attrs(rows, "clause", "x <= 5")
@@ -1117,7 +1079,7 @@ class TestDiagnosticsRelation:
             "DECIDE x(REAL) SUCH THAT x <= (SELECT 2) + (SELECT 3) "
             "AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         cap = _attrs(rows, "clause", "x <= 5")
@@ -1145,7 +1107,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,4),(2,7)) t(id, lo) "
             f"DECIDE x(REAL) SUCH THAT {constraint} AND x >= 100 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         floor = _attrs(rows, "clause", "x >= 100")
@@ -1172,7 +1134,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,5),(2,8)) t(id, hi) "
             "DECIDE x(REAL) SUCH THAT x <= (SELECT hi) AND x >= 100 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1202,7 +1164,7 @@ class TestDiagnosticsRelation:
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(REAL) SUCH THAT x <= 4 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1222,7 +1184,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,10),(2,10),(3,10)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT AVG(x) <= 5 AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         avg = _attrs(rows, "clause", "AVG(x) <= 5")
@@ -1245,7 +1207,7 @@ class TestDiagnosticsRelation:
             "SELECT id, w, x FROM (VALUES (1,10),(2,20),(3,30)) t(id, w) "
             "DECIDE x(BOOL) SUCH THAT AVG(x * w) >= 100 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         # The clause and its suggested edit both name AVG, never SUM.
@@ -1268,7 +1230,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,15)) t(id, lo) "
             "DECIDE x(INT) SUCH THAT SUM(x) < 10 AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         edit = _attrs(rows, "clause", "SUM(x) < 10")
@@ -1286,7 +1248,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,3)) t(id, hi) "
             "DECIDE x(INT) SUCH THAT SUM(x) > 10 AND x <= hi MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         edit = _attrs(rows, "clause", "SUM(x) > 10")
@@ -1304,7 +1266,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,10)) t(id, lo) "
             "DECIDE x(REAL) SUCH THAT POWER(x,2) <= 4 AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1327,7 +1289,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1,4)) t(id, lo) "
             "DECIDE x(INT) SUCH THAT POWER(x,2) < 10 AND x >= lo MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1347,7 +1309,7 @@ class TestDiagnosticsRelation:
             "SELECT id, x FROM (VALUES (1)) t(id) "
             "DECIDE x(INT) SUCH THAT x <> 5 AND x >= 5 AND x <= 5 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1369,7 +1331,7 @@ class TestDiagnosticsRelation:
             "DECIDE x(INT) SUCH THAT x <> 5 AND x >= lo "
             "AND 10000000*x <= 50000000 MINIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1401,7 +1363,7 @@ class TestDiagnosticsRelation:
             "SELECT x FROM (VALUES (1)) t(id) "
             f"DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 {objective}"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1409,7 +1371,6 @@ class TestDiagnosticsRelation:
         assert len(drops) == 1, rows  # minimum-cardinality: exactly one dropped
         dropped = drops[0]["subject"]
         assert dropped == expected_drop
-        assert f"diagnosis points to clause `{expected_drop}`" in result.stderr.lower()
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         assert reported == expected_objective
         # Oracle: re-solve the query with the dropped `<>` removed and confirm the match.
@@ -1432,7 +1393,7 @@ class TestDiagnosticsRelation:
             "SELECT x FROM (VALUES (1)) t(id) "
             f"DECIDE x(BOOL) SUCH THAT SUM(x) <> 0 AND SUM(x) <> 1 {objective}"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1442,7 +1403,6 @@ class TestDiagnosticsRelation:
         assert dropped.strip(), "dropped aggregate `<>` must be named, not empty"
         assert "<>" in dropped and "sum" in dropped.lower(), dropped
         assert dropped == expected_drop
-        assert f"diagnosis points to clause `{expected_drop}`" in result.stderr.lower()
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         assert reported == expected_objective
         # Oracle: re-solve with the dropped aggregate `<>` removed and confirm the match.
@@ -1470,14 +1430,13 @@ class TestDiagnosticsRelation:
             "DECIDE x(BOOL), y(INT) SUCH THAT x <> 0 AND x <> 1 AND y <= 5 "
             "MAXIMIZE SUM(y)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
         assert len(drops) == 1, rows  # minimum-cardinality: exactly one dropped
         assert drops[0]["subject"] == "x <> 0", rows  # earliest-declared, both backends
-        assert "diagnosis points to clause `x <> 0`" in result.stderr.lower()
         reported = _attrs(rows, "model", "NULL")["achievable_objective"]
         assert reported == "5"  # objective is unaffected by which `<>` is dropped
         # Oracle: dropping either `<>` yields the same objective; check the reported one.
@@ -1503,7 +1462,7 @@ class TestDiagnosticsRelation:
             "DECIDE x(BOOL), y(BOOL) SUCH THAT "
             f"x <> 0 AND x <> 1 AND y <> 0 AND y <> 1 {objective}"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1529,14 +1488,10 @@ class TestDiagnosticsRelation:
             "DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
         )
         # A positive override still produces exactly one drop.
-        override = cli.execute_script(
-            ".mode csv\n"
-            "PRAGMA diagnose_decide='auto';\n"
-            "PRAGMA diagnose_decide_removal_bigm=1e7;\n"
-            f"{sql};\n"
-            "SELECT * FROM decide_diagnostics();\n"
+        override = _diagnose_relation.run(
+            cli, sql, pragmas="PRAGMA diagnose_decide_removal_bigm=1e7;\n"
         )
-        rows = list(csv.DictReader(io.StringIO(override.stdout)))
+        rows = _rows(override)
         drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
         assert len(drops) == 1, rows
 
@@ -1573,7 +1528,7 @@ class TestDiagnosticsRelation:
             "DECIDE x(REAL), y(REAL) SUCH THAT x * y <= 1 AND x >= 5 AND y >= 5 "
             "MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="auto")
+        result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1584,42 +1539,43 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_diagnosis_suppressed_when_off(self, request, cli_fixture):
-        """Under `off`, the same infeasible query reproduces the plain static error:
-        no diagnosis pointer and an empty relation."""
+    def test_infeasible_without_the_prefix_reports_only_its_state(self, request, cli_fixture):
+        """The same infeasible query, unprefixed: the plain state, no clause, no repair,
+        and no second solve to find one."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(REAL) SUCH THAT x <= 5 AND 2 * x >= 30 MAXIMIZE SUM(x)"
         )
-        result = _diagnose(cli, sql, mode="off")
-        assert "select * from decide_diagnostics()" not in result.stderr.lower()
-        assert _rows(result) == []
+        result = cli.execute_script(f".mode csv\n{sql};\n")
+        err = result.stderr.lower()
+        assert "decide optimization is infeasible" in err
+        assert "x <= 15" not in err
+        assert not list(csv.DictReader(io.StringIO(result.stdout)))
 
 
 @pytest.mark.query_diagnostics
 class TestInfeasibleHeadlineAndRendering:
-    """The infeasible headline points to the relevant clause, and clause labels read
-    in the user's SQL terms — an ungrouped SUM folds back to `SUM(...)` (not
-    `x + x + x`), and a `<>` drops its implicit CAST/parens."""
+    """The diagnosis names the relevant clause, and clause labels read in the user's SQL
+    terms — an ungrouped SUM folds back to `SUM(...)` (not `x + x + x`), and a `<>` drops
+    its implicit CAST/parens."""
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_headline_points_to_single_problem_clause(self, request, cli_fixture):
-        """A unique loosen fix points to its clause in stderr; the actual edit stays in
-        decide_diagnostics()."""
+    def test_one_problem_clause_is_named(self, request, cli_fixture):
+        """A unique loosen fix names exactly the clause it applies to."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
             "DECIDE x(INT) SUCH THAT x >= 10 AND x <= 5 MAXIMIZE SUM(x)"
         )
-        err = _diagnose(cli, sql).stderr.lower()
-        assert "diagnosis points to clause `x <= 5`" in err
-        assert "loosen `x <= 5` to `x <= 10`" not in err
+        rows = _rows(_diagnose(cli, sql))
+        # One clause is named, and it is the one the user can edit.
+        assert [e["subject"] for e in _clause_edits(rows)] == ["x <= 5"], rows
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_ungrouped_sum_folds_in_subject_and_headline(self, request, cli_fixture):
-        """An ungrouped `SUM(x) >= K` renders as `SUM(x)`, in both the relation subject
-        and the headline pointer — never the row-expanded `x + x + x`."""
+    def test_ungrouped_sum_folds_in_clause_and_change(self, request, cli_fixture):
+        """An ungrouped `SUM(x) >= K` renders as `SUM(x)`, in both the finding's clause
+        and its suggested change — never the row-expanded `x + x + x`."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) "
@@ -1630,7 +1586,7 @@ class TestInfeasibleHeadlineAndRendering:
         attrs = _attrs(rows, "clause", "SUM(x) >= 999999")
         assert attrs["suggested_change"] == "SUM(x) >= 3"
         assert "x + x" not in result.stdout
-        assert "diagnosis points to clause `sum(x) >= 999999`" in result.stderr.lower()
+        assert [e["subject"] for e in _clause_edits(rows)] == ["SUM(x) >= 999999"], rows
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -1653,9 +1609,7 @@ class TestInfeasibleHeadlineAndRendering:
         assert _attrs(rows, "model", "NULL")["achievable_objective"] == "1"
         assert "x + x" not in result.stdout
         # The single objective-preserving fix loosens only the budget clause.
-        err = result.stderr.lower()
-        assert "diagnosis points to clause `sum(x * w) <= -1`" in err
-        assert " or loosen " not in err
+        assert [e["subject"] for e in _clause_edits(rows)] == ["SUM(x * w) <= -1"], rows
         _apply_reported_fix(cli, sql, rows, {"SUM(5*x) <= -1": "SUM(x * w) <= -1"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -1682,7 +1636,7 @@ class TestInfeasibleHeadlineAndRendering:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_ne_drop_label_is_clean(self, request, cli_fixture):
         """A dropped `<>` reads `x <> 1` — the binder's implicit CAST and the wrapping
-        parens are stripped — in both the relation subject and the headline pointer."""
+        parens are stripped — in the finding's clause."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
@@ -1694,11 +1648,10 @@ class TestInfeasibleHeadlineAndRendering:
         assert len(dropped) == 1
         assert "cast" not in dropped[0].lower() and "(" not in dropped[0]
         assert re.fullmatch(r"x <> [01]", dropped[0]), dropped[0]
-        assert f"diagnosis points to clause `{dropped[0].lower()}`" in result.stderr.lower()
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_three_edits_all_pointed_to_in_headline(self, request, cli_fixture):
+    def test_three_edits_are_all_reported(self, request, cli_fixture):
         """Multiple actionable edits point to all problem clauses without implying that
         any one clause alone is sufficient."""
         cli = request.getfixturevalue(cli_fixture)
@@ -1708,10 +1661,11 @@ class TestInfeasibleHeadlineAndRendering:
             "SUCH THAT x<=1 AND x>=5 AND y<=1 AND y>=5 AND z<=1 AND z>=5 MAXIMIZE SUM(x+y+z)"
         )
         result = _diagnose(cli, sql)
-        err = result.stderr.lower()
-        assert "diagnosis points to clause `x <= 1`, clause `y <= 1`, and clause `z <= 1`" in err
-        assert "loosen `x <= 1` to `x <= 5`" not in err
-        assert " or loosen " not in err
+        rows = _rows(result)
+        # All three problem clauses are named, none implied sufficient on its own.
+        assert sorted(e["subject"] for e in _clause_edits(rows)) == [
+            "x <= 1", "y <= 1", "z <= 1"
+        ], rows
         _apply_reported_fix(
             cli, sql, _rows(result),
             {"x <= 1": "x<=1", "y <= 1": "y<=1", "z <= 1": "z<=1"},
@@ -1738,7 +1692,7 @@ class TestInfeasibleHeadlineAndRendering:
         """A3 — the composed MIN/MAX outer pin is a constraint over an internal global
         z variable; the z carries its user source text (`MAX(x)`) so the diagnosis
         renders `SUM(x) + MAX(x) <= -1`, never an internal column name like `col3` —
-        in the relation subject, the suggested change, and the headline pointer."""
+        in both the finding's clause and its suggested change."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1),(2),(3)) t(id) "
@@ -1751,7 +1705,6 @@ class TestInfeasibleHeadlineAndRendering:
         assert len(edits) == 1, rows
         subject = edits[0]["subject"]
         assert "MAX(x)" in subject and "SUM(x)" in subject, subject
-        assert f"diagnosis points to clause `{subject.lower()}`" in result.stderr.lower()
         # No internal column name anywhere a user reads.
         for text in (result.stdout, result.stderr):
             assert not re.search(r"\bcol\d+\b", text), text
@@ -1854,7 +1807,6 @@ class TestEqualityBoundConflict:
         cli = request.getfixturevalue(cli_fixture)
         sql = f"SELECT id,x FROM (VALUES (1)) t(id) DECIDE x(REAL) SUCH THAT {clause} MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
-        assert "infeasible" in result.stderr.lower()
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         _apply_reported_fix(cli, sql, rows)
@@ -1898,7 +1850,6 @@ class TestDegenerateCoefficientFreeRow:
         )
         result = _diagnose(cli, sql)
 
-        assert "infeasible" in result.stderr.lower()
         assert "INTERNAL Error" not in result.stderr, result.stderr
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
@@ -1974,12 +1925,9 @@ class TestUnreachableBound:
         sql = self._ROWS + f"DECIDE x(INT) SUCH THAT x >= 0 AND x <= 6 AND {clause} MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
 
-        assert "infeasible" in result.stderr.lower()
-        # The clause is named in the summary the user sees first, not only in the relation.
-        assert f"`{subject}`" in result.stderr, result.stderr
-
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
+        # The clause is named, and named as the user wrote it.
         assert _attrs(rows, "clause", subject) == {"unreachable_bound": "true"}
         # No edit is offered: there is no finite bound to suggest, and the old behavior
         # (suggesting the user's own text back) is what made this misleading.
@@ -2142,10 +2090,7 @@ class TestNativeConstructDiagnosis:
         """
         cli = request.getfixturevalue(cli_fixture)
         sql = self._sql(decls, construct, x_bound=" AND x <= 100")
-        script = (
-            ".mode csv\nPRAGMA diagnose_decide='auto';\n"
-            f"{sql};\nSELECT * FROM decide_diagnostics();\n"
-        )
+        script = f".mode csv\nDIAGNOSE {sql};\n"
 
         def diagnosis(runner):
             proc = runner.execute_script(script)
@@ -2213,10 +2158,7 @@ class TestNativeConstructDiagnosis:
         solver the host happened to have, and only one of them named the line the user
         wrote. The lowered rows now carry the clause too, so all three arms agree.
         """
-        script = (
-            ".mode csv\nPRAGMA diagnose_decide='auto';\n"
-            f"{self._MINMAX_SQL};\nSELECT * FROM decide_diagnostics();\n"
-        )
+        script = f".mode csv\nDIAGNOSE {self._MINMAX_SQL};\n"
         arms = {
             "gurobi (native)": decidb_cli_gurobi,
             "gurobi (lowered)": decidb_cli_gurobi.with_env(
@@ -2227,7 +2169,7 @@ class TestNativeConstructDiagnosis:
         for label, runner in arms.items():
             proc = runner.execute_script(script)
             seen[label] = proc.stdout + proc.stderr
-            rows = list(csv.DictReader(io.StringIO(proc.stdout)))
+            rows = _rows(proc)
             edits = _clause_edits(rows)
             assert len(edits) == 1, f"{label}: one clause, one edit:\n{rows}"
             assert edits[0]["subject"] == "MAX(x * 0.5 + c) >= 25 PER g", f"{label}:\n{rows}"

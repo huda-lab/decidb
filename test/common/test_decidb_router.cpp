@@ -17,43 +17,48 @@ SolverResult MakeResult(SolverStatus status, duckdb::vector<double> ray = duckdb
 
 } // namespace
 
-// The router is a pure classifier: (status + mode + residual INF_OR_UNBD ray
-// signal) -> terminal. Existing solver/facade probes still run before this point;
+// The router is a pure classifier: (status + DIAGNOSE prefix + residual INF_OR_UNBD
+// ray signal) -> terminal. Existing solver/facade probes still run before this point;
 // if INF_OR_UNBD survives, the router sends a found ray to the unbounded terminal
 // and no ray to the infeasible terminal.
 TEST_CASE("DeciDB query-diagnostics router", "[decidb][query_diagnostics][router]") {
-	SECTION("auto mode routes each failed state to its terminal") {
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::OPTIMAL), "auto") == DiagnosisTerminal::SOLVED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::UNBOUNDED), "auto") == DiagnosisTerminal::UNBOUNDED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INFEASIBLE), "auto") == DiagnosisTerminal::INFEASIBLE);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::TIME_LIMIT), "auto") == DiagnosisTerminal::TIME_LIMIT);
+	SECTION("under DIAGNOSE each failed state routes to its terminal") {
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::OPTIMAL), true) == DiagnosisTerminal::SOLVED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::UNBOUNDED), true) == DiagnosisTerminal::UNBOUNDED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INFEASIBLE), true) == DiagnosisTerminal::INFEASIBLE);
 	}
 
-	SECTION("off mode suppresses diagnosis: every failed state is UNDIAGNOSED") {
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::UNBOUNDED), "off") == DiagnosisTerminal::UNDIAGNOSED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INFEASIBLE), "off") == DiagnosisTerminal::UNDIAGNOSED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), "off") ==
+	SECTION("without the prefix every failed state is UNDIAGNOSED") {
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::UNBOUNDED), false) == DiagnosisTerminal::UNDIAGNOSED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INFEASIBLE), false) == DiagnosisTerminal::UNDIAGNOSED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), false) ==
 		      DiagnosisTerminal::UNDIAGNOSED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), "off") ==
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), false) ==
 		      DiagnosisTerminal::UNDIAGNOSED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::TIME_LIMIT), "off") == DiagnosisTerminal::UNDIAGNOSED);
 	}
 
-	SECTION("off mode still routes a successful solve to SOLVED") {
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::OPTIMAL), "off") == DiagnosisTerminal::SOLVED);
+	SECTION("a successful solve routes to SOLVED with or without the prefix") {
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::OPTIMAL), false) == DiagnosisTerminal::SOLVED);
 	}
 
-	SECTION("residual INF_OR_UNBD routes by ray signal in auto mode") {
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), "auto") ==
+	SECTION("residual INF_OR_UNBD routes by ray signal under DIAGNOSE") {
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD, {1.0}), true) ==
 		      DiagnosisTerminal::UNBOUNDED);
-		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), "auto") ==
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::INF_OR_UNBD), true) ==
 		      DiagnosisTerminal::INFEASIBLE);
 	}
 
-	SECTION("statuses no engine covers are UNDIAGNOSED in both modes") {
-		for (const char *mode : {"auto", "off"}) {
-			CHECK(RouteSolveResult(MakeResult(SolverStatus::ITERATION_LIMIT), mode) == DiagnosisTerminal::UNDIAGNOSED);
-			CHECK(RouteSolveResult(MakeResult(SolverStatus::OTHER), mode) == DiagnosisTerminal::UNDIAGNOSED);
+	SECTION("a time limit is never a diagnosis terminal") {
+		// A slow solve is ordinary execution behaviour — the operator handles it before
+		// the router runs, prefix or no prefix.
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::TIME_LIMIT), true) == DiagnosisTerminal::UNDIAGNOSED);
+		CHECK(RouteSolveResult(MakeResult(SolverStatus::TIME_LIMIT), false) == DiagnosisTerminal::UNDIAGNOSED);
+	}
+
+	SECTION("statuses no engine covers are UNDIAGNOSED either way") {
+		for (bool armed : {true, false}) {
+			CHECK(RouteSolveResult(MakeResult(SolverStatus::ITERATION_LIMIT), armed) == DiagnosisTerminal::UNDIAGNOSED);
+			CHECK(RouteSolveResult(MakeResult(SolverStatus::OTHER), armed) == DiagnosisTerminal::UNDIAGNOSED);
 		}
 	}
 }

@@ -408,8 +408,8 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
     // suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
     // not a proof of optimality; returning it as if it were would silently
     // mislead the caller. Instead we map the raw status to a SolverStatus and
-    // return it (no solution); the operator either surfaces the default error
-    // under diagnose_decide='off' or routes it to diagnosis under auto.
+    // return it (no solution); the operator either surfaces the default error for an
+    // unprefixed statement or routes it to diagnosis under DIAGNOSE.
     if (status != GRB_OPTIMAL) {
         SolverResult result;
         result.raw_status = status;

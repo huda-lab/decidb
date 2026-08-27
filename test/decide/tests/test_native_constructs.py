@@ -395,10 +395,8 @@ def test_native_not_equal_is_still_diagnosable(decidb_cli_gurobi):
     """
     script = (
         ".mode csv\n"
-        "PRAGMA diagnose_decide='auto';\n"
-        "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(BOOL) "
+        "DIAGNOSE SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(BOOL) "
         "SUCH THAT SUM(x) <> 0 AND SUM(x) <> 2 AND SUM(x) <> 1 MINIMIZE SUM(x);\n"
-        "SELECT subject, attribute, value FROM decide_diagnostics();\n"
     )
 
     def diagnosis(cli):
@@ -407,5 +405,5 @@ def test_native_not_equal_is_still_diagnosable(decidb_cli_gurobi):
 
     native = diagnosis(decidb_cli_gurobi)
     lowered = diagnosis(decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}))
-    assert "drop" in native, f"a native `<>` must stay droppable:\n{native}"
+    assert "remove_only" in native, f"a native `<>` must stay droppable:\n{native}"
     assert native == lowered, f"native diagnosis differs:\n{native}\n---\n{lowered}"

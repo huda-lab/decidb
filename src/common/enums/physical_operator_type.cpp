@@ -163,6 +163,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "UPDATE_EXTENSIONS";
 	case PhysicalOperatorType::DECIDE:
 		return "DECIDE";
+	case PhysicalOperatorType::DECIDE_DIAGNOSE:
+		return "DECIDE_DIAGNOSE";
 	case PhysicalOperatorType::INVALID:
 		break;
 	}

@@ -15,6 +15,9 @@ Covers:
   - Empty input behaves like any other empty DECIDE query
 """
 
+import csv
+import io
+
 import pytest
 from solver.types import VarType, ObjSense
 
@@ -669,26 +672,24 @@ def test_scalar_as_aggregate_rhs_with_per(decidb_cli, duckdb_conn, oracle_solver
 
 @pytest.mark.query_diagnostics
 def test_unbounded_scalar_reports_a_single_instance(decidb_cli):
-    """An unbounded scalar has one instance, so the report carries only
-    `grows_toward` — no `affected_rows` / `affected_entities` cell, and no
-    categorical grouping rule, because there is no subset of rows to describe.
+    """An unbounded scalar has one instance, so the finding names the decision and its
+    direction and stops — no count and no categorical slice, because there is no subset
+    of rows to describe.
     """
     script = (
         ".mode csv\n"
-        "PRAGMA diagnose_decide='auto';\n"
-        "SELECT c_custkey, x, cap FROM customer WHERE c_custkey <= 20\n"
+        "DIAGNOSE SELECT c_custkey, x, cap FROM customer WHERE c_custkey <= 20\n"
         "DECIDE x(INT), scalar cap(INT)\n"
         "SUCH THAT x <= 5\n"
         "MAXIMIZE SUM(x) + cap;\n"
-        "SELECT * FROM decide_diagnostics();\n"
     )
     result = decidb_cli.execute_script(script)
-    combined = result.stdout + result.stderr
+    rows = list(csv.DictReader(io.StringIO(result.stdout)))
 
-    assert "unbounded" in combined.lower()
-    assert "cap" in combined
-    assert "grows_toward" in combined
-    assert "affected_rows" not in combined, \
-        "a query-wide decision has no row subset to report"
-    assert "affected_entities" not in combined, \
-        "a query-wide decision has no entity subset to report"
+    assert rows and {r["state"] for r in rows} == {"unbounded"}
+    assert [r["clause"] for r in rows] == ["cap"]
+    assert rows[0]["edit_source"] == "runaway_+inf"
+    assert rows[0]["amount"] == "NULL", \
+        "a query-wide decision has no row subset to count"
+    assert rows[0]["group"] == "NULL", \
+        "a query-wide decision has no slice to name"

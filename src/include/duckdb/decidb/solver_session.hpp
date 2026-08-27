@@ -7,8 +7,8 @@
 // shot (build → solve → discard), a SolverSession keeps the live backend solver
 // (Gurobi env+model / HiGHS object) alive across chunks so the MIP search can be
 // RESUMED for more wall-clock instead of restarted. This is the substrate for
-// slow-solve continuation (`decide_on_timeout`): on a time-limit stop the DECIDE
-// operator can call Continue() to give the same warm solver another chunk.
+// interactive slow-solve continuation: on a time-limit stop the DECIDE operator can
+// call Continue() to give the same warm solver another chunk.
 //
 // Warm-resume semantics were probed on both backends: each honors a PER-CALL
 // time-limit budget (a fresh `chunk_seconds` per call) and RESUMES the search

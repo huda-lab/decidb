@@ -14,12 +14,13 @@ guard's. A bare bound is not absorbed into the column box when it is infinite, f
 that reason: the box has one sentinel per direction and would have kept the
 infinity in one and lost it in the other.
 
-**The verdict is shared; the outcome is the backend's.** Both backends identify the
-unreachable clause and name it in the same words — ``clause `X` sets a bound no value
-can reach``. Gurobi then reports it as an infeasible query; HiGHS cannot load an
-inverted row-bound pair at all and refuses in SQL terms instead, pointing at Gurobi for
-the infeasibility reading. Which of the two a host gives is not a DeciDB decision, so
-the assertions below stop at the shared sentence rather than pinning one host's ending.
+**The verdict is shared; the outcome is the backend's.** Both backends refuse the
+query. HiGHS cannot load an inverted row-bound pair at all, so it names the clause on
+the spot — that refusal is a model-build fact, not a diagnosis. Gurobi solves and comes
+back INFEASIBLE, so an unprefixed query reports just that; ``DIAGNOSE`` names the clause
+and says no assignment can reach its bound. Which of the two a host gives is not a
+DeciDB decision, so the assertions below accept either ending and check the naming
+through whichever path that host takes.
 
 That leaves one thing a rewrite genuinely cannot do: no finite Big-M dominates an
 infinite range. But a bound is only linearized when it constrains something, so an
@@ -67,6 +68,11 @@ import re
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
+
+
+# Both endings of the shared verdict: HiGHS names the clause it cannot load, Gurobi
+# reports the infeasible optimization (and names the clause under DIAGNOSE).
+_UNREACHABLE = r"(sets a bound no value can reach|optimization is infeasible)"
 
 
 @pytest.mark.cons_perrow
@@ -141,7 +147,7 @@ def test_infinite_bound_wrong_direction_is_infeasible(decidb_cli):
             DECIDE x(INT)
             SUCH THAT x <= 6 AND {bound}
             MAXIMIZE SUM(x)
-        """, match=r"sets a bound no value can reach")
+        """, match=_UNREACHABLE)
 
 
 @pytest.mark.cons_perrow
@@ -243,7 +249,7 @@ def test_unreachable_minmax_bound_is_infeasible(decidb_cli):
             DECIDE x(INT)
             SUCH THAT x >= 0 AND x <= 6 AND {constraint}
             MAXIMIZE SUM(x)
-        """, match=r"sets a bound no value can reach")
+        """, match=_UNREACHABLE)
 
 
 @pytest.mark.cons_perrow
@@ -456,7 +462,7 @@ def test_data_reducer_unreachable_bound_is_infeasible(decidb_cli):
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g
         MAXIMIZE SUM(x)
-    """, match=r"`MIN\(x\) <= -inf PER g` sets a bound no value can reach")
+    """, match=_UNREACHABLE)
 
 
 @pytest.mark.min_max

@@ -5,5 +5,3 @@ Code-quality issues (duplication, dead code, fragile patterns, unclear naming, m
 Each entry: short title, location (`file:line`), what's wrong, why it matters, and when/during which task it was discovered.
 
 Resolved entries are removed; if the fix taught a generalizable lesson, record it in `.claude/lessons.md`.
-
-Nothing open right now.

@@ -3,10 +3,10 @@
 > Router terminal: **failed → infeasible** (`elastic` → report). See `router/README.md`.
 
 The feasible region is empty — no assignment satisfies every `SUCH THAT` constraint at
-once. Under `PRAGMA diagnose_decide='auto'`, the infeasible terminal now builds a second
+once. Under `DIAGNOSE`, the infeasible terminal builds a second
 optimization, the **elastic program**, whose optimum is the least-change fix for shipped
 I1/I2 shapes: which user constraints to loosen, and by how much. Shared plumbing it builds
-on (the pragma gate, provenance, the reporting relation) is in `foundations/done.md`.
+on (the statement trigger, provenance, and reporting relation) is in `foundations/done.md`.
 The engine itself is shipped, including the T2 lexicographic repair ladder, T4
 objective-best DROP-set re-optimization, and the stage-2b rank tie-break over **every**
 repair kind — removals, editable loosens, and data offsets, with or without an objective —
@@ -15,13 +15,14 @@ so both backends name the same clause on a repair tie; deferred follow-ups are t
 
 ## Engine seam: infeasible
 
-The seam is wired and now feeds the elastic engine. On an infeasible solve under `auto`,
-`PhysicalDecide::Finalize`'s `DiagnosisTerminal::INFEASIBLE` arm calls `DiagnoseInfeasible`
-(`decide_diagnostic_engines.cpp`), mirroring the unbounded arm: a valid diagnosis is
-stashed (`StashDecideDiagnostic`) and surfaced (`ThrowDecideDiagnosisReady`); otherwise
-control falls through to the static error (`ThrowDecideSolveError`). Under `off` the router
-returns `UNDIAGNOSED` and the arm is never reached. A residual `INF_OR_UNBD` (empty ray) is
-normalized to `INFEASIBLE` in the arm before the message is built.
+The seam is wired and now feeds the elastic engine only under `DIAGNOSE`.
+`PhysicalDecide::Finalize`'s `DiagnosisTerminal::INFEASIBLE` arm calls
+`DiagnoseInfeasible` (`decide_diagnostic_engines.cpp`), mirroring the unbounded arm. A
+valid diagnosis is handed to the `PhysicalDecideDiagnose` operator above it; when the
+engine cannot name an actionable relaxation, the same statement returns one
+`edit_source='undiagnosed'` finding instead of an empty relation. An unprefixed failure
+never enters the arm and raises the state-only `ThrowDecideSolveError`. A residual
+`INF_OR_UNBD` (empty ray) is normalized to `INFEASIBLE` before the engine runs.
 
 **Engine boundary (mirrors `DiagnoseUnbounded`).** `InfeasibleDiagnosisInput`
 (`decide_diagnostic_engines.hpp`) is the unbounded input with one structural swap: it
@@ -99,19 +100,19 @@ from `constraint_sources` in the same spelling the diagnosis uses. The error is 
 `InvalidInputException`, so the session survives it. Only the unreachable direction differs
 between backends: a vacuous infinity pairs cleanly with the sentinel and solves on both.
 
-**Output shape.** One `subject_kind='clause'` row per clause with
-`attribute='unreachable_bound'`, `value='true'`, plus the `group` row when the clause
-carries a PER key. No `edit_kind`, `suggested_change`, or `amount`: there is no finite bound
-to suggest, and offering one is what made the old behavior misleading. A clause fans into
-one model row per relation row, all rendering the same text, so findings are de-duplicated
-on `(label, group)` — the user wrote one clause and reads one finding. Clause text comes
+**Output shape.** One finding per clause with `edit_source='unreachable_bound'`;
+`clause` names the clause, `group` carries its PER key when present, and
+`suggested_change` explains that the bound must be lowered because no assignment can
+reach it. `amount` and `row` are NULL because there is no finite repair magnitude. A
+clause fans into one model row per relation row, all rendering the same text, so findings
+are de-duplicated on `(label, group)` — the user wrote one clause and reads one finding. Clause text comes
 from the same `MakeClauseLabel` the elastic edits use (factored out of `MakeLoosenEdit`), so
 a pre-solve finding and a post-solve edit name a clause identically, PER/WHEN qualifier
 included.
 
 ## Elastic engine: stage-1 core (simple shapes) + elastic-infeasible signal
 
-I1 fills the seam: on an infeasible solve under `auto`, `DiagnoseInfeasible` builds and
+I1 fills the seam: on an infeasible solve under `DIAGNOSE`, `DiagnoseInfeasible` builds and
 solves a **second** optimization — the *elastic program* — whose optimum is the
 least-change fix. Each relaxable user constraint gets a non-negative slack that lets its
 RHS stretch; `<>` clauses get binary removal switches. Stage 1 solves the repair in
@@ -182,27 +183,26 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to R ≤ R*, D ≤ D*
 edit; the amount is the slack value (`=` reports the net `s⁺ − s⁻`). Each clause is labelled
 by reconstructing its algebra from the **original** row's coefficients over user-facing
 column names (`BuildColumnProvenance`) — `x <= 5` → suggestion `x <= 10` — so no source
-expression text needs threading. `BuildInfeasibleDiagnostic` emits, per edit, EAV rows
-`subject_kind='clause'`, `subject=<clause as written>`, `attribute='suggested_change' |
-'amount' | 'edit_source' | 'offset_scope'`, plus a one-line summary. The summary only points
-to the relevant clause target (for example, "diagnosis points to clause `x <= 5`"); suggested
-changes, amounts, edit sources, groups, and achievable-objective facts stay in
-`decide_diagnostics()`. How a fanout clause (data RHS, PER aggregate) reads back is governed
-by the slack-scope pragma — see "Slack-scope policy: query vs expanded" below.
+expression text needs threading. `BuildInfeasibleDiagnostic` emits one finding per edit:
+`clause` = the clause as written, plus `suggested_change`, `amount`,
+`edit_source`, and `group`. (Before batch H this was several EAV rows per edit under a
+`subject_kind='clause'` subject, alongside a one-line stderr summary; the summary is gone
+and the rows collapsed into one.) How a fanout clause (data RHS, PER aggregate) reads back
+is governed by the slack-scope pragma — see "Slack-scope policy: query vs expanded" below.
 
 **Elastic-infeasible signal.** If the elastic program is *itself* infeasible, the conflict
-reaches rigid rows → `BuildElasticInfeasibleDiagnostic` renders a distinct outcome
-(`subject_kind='model'`, `attribute='elastic_infeasible'`, summary: loosening your SUCH THAT
-limits cannot fix it). This is claimed **only** when every user constraint was actually made
+reaches rigid rows → `BuildElasticInfeasibleDiagnostic` renders a distinct outcome: one
+finding, `edit_source='rigid_conflict'`, naming no clause and saying that loosening your
+SUCH THAT limits cannot fix it. This is claimed **only** when every user constraint was actually made
 relaxable: the `has_unhandled_user_bounds` flag (set when the operator absorbed a user bound it
-could not re-emit) suppresses the verdict and falls through to the static error rather than
-wrongly declaring the query unfixable. As of I2.a multi-instance bounds *are* re-emitted, so the
+could not re-emit) suppresses the rigid-conflict verdict rather than wrongly declaring the
+query unfixable. The operator then returns an `undiagnosed` finding. As of I2.a multi-instance bounds *are* re-emitted, so the
 flag stays `false` in practice and remains as a defensive guard. Likewise, when there are no
-relaxable rows at all, the engine returns invalid (static error).
+relaxable rows at all, the engine returns invalid and the operator reports `undiagnosed`.
 
 **Scope.** The achievable-objective re-solve (**I3**, "stage-2 achievable objective
 (freeze-budget)" below), the L0/removal dial (**I4**, `<>` remove-only), lean
-`decide_diagnostics()` reporting (**I5**), and all per-shape slack placement and unit
+reporting (**I5**), and all per-shape slack placement and unit
 conversion (**I2.a–I2.e**, "per-shape slack placement" below) are shipped.
 
 ## Slack-scope policy: query vs expanded (T3)
@@ -216,8 +216,8 @@ answers two different user questions with the same engine:
   folds into **one** slack. The reported edit corresponds to the single literal the user
   would edit. A data RHS with no literal to loosen reports a **virtual offset**.
 - **`expanded`** — *"Which generated rows/groups are actually tight?"* PER/aggregate groups
-  get one slack each (`edit_source='expanded_group'`, `offset_scope='group'`); a data RHS
-  stays per-row (`edit_source='expanded_row'`, `offset_scope='row'`), each conflicting row
+  get one slack each (`edit_source='expanded_group'`, identity in `group`); a data RHS
+  stays per-row (`edit_source='expanded_row'`, identity in `row`), each conflicting row
   exposing its exact overshoot. A debug/profile view, not necessarily a pasteable SQL edit.
 
 **Mechanism (one folding rule, two block keys).** The policy lives entirely in
@@ -234,23 +234,23 @@ the rest of the engine are unchanged. `BuildElasticModel(base, removal_bigm, sla
 
 **Readback (`ReadElasticEdits`, threaded with `slack_scope`).** Per block:
 
-- **query** — one clause-level edit with the group identity dropped (`offset_scope='clause'`,
-  no `group` row). A data RHS → a `virtual_offset` LOOSEN (`MakeVirtualOffsetEdit`:
+- **query** — one clause-level edit with `group` and `row` NULL. A data RHS → a
+  `virtual_offset` LOOSEN (`MakeVirtualOffsetEdit`:
   `x <= col + delta` / `>=` → `col - delta`, where `col` is `ConstraintProvenance::rhs_label`,
   the RHS column name carried from the binder — fall back to the numeric representative RHS
   when absent). Any other literal knob → `source_literal`.
 - **expanded** — a data RHS → `expanded_row` per conflicting row; a PER-grouped literal →
   `expanded_group` per group (keeping the group key); an ungrouped literal → `source_literal`.
 
-**Reporting contract (frozen EAV vocabulary, additive to I5).** Every LOOSEN edit carries
-`edit_source ∈ {source_literal, virtual_offset, expanded_row, expanded_group}` and
-`offset_scope ∈ {clause, row, group}` (emitted by `BuildInfeasibleDiagnostic` when set). The
+**Reporting contract (flat typed vocabulary, additive to I5).** Every LOOSEN finding carries
+`edit_source ∈ {source_literal, virtual_offset, expanded_row, expanded_group}`. The
+`group` and `row` columns encode expanded scope directly; the redundant `offset_scope`
+attribute was deleted with the EAV relation. The
 old `CONFLICT_SUMMARY` edit kind (the data-RHS `"conflicts in M of N rows"` dead-end) is
 **removed** — a data conflict is now an actionable `virtual_offset` (query) or an
-`expanded_row` profile (expanded). The stderr headline stays a lean clause pointer (**T5**):
-in query mode it points to the folded clause (`diagnosis points to clause \`SUM(x) >= 5 PER
-grp\``), never a per-group list; the per-group breakdown and all amounts/sources live in
-`decide_diagnostics()`.
+`expanded_row` profile (expanded). In query mode the clause reads as the folded clause
+(`SUM(x) >= 5 PER grp`) with `group` NULL; expanded mode emits one finding per failing
+group, same clause text, with the key in `group`.
 
 **easy-MAX + PER is one global cap, correctly.** `MAX(x) <= K PER g` is mathematically
 `x <= K` for **every** row, so the optimizer's easy-MIN/MAX rewrite strips the (vacuous) PER
@@ -363,7 +363,7 @@ lives: they render the sense, re-quote a strict `<`/`>` against the typed litera
 the suggestion. The LHS is rendered shape-aware by `FormatLhs` — plain `FormatTerms`,
 AVG-collapsing (`FormatAvgLhs`), or SUM-collapsing (`FormatSumLhs`) — or `FormatQuadraticLhs`
 for a quadratic constraint. A `ClauseEdit` carries a `ClauseEditKind` (`LOOSEN` vs `DROP`,
-`decide_diagnostic.hpp`) plus `edit_source` / `offset_scope` provenance.
+`decide_diagnostic.hpp`), `edit_source`, and optional `group` / `row` identity.
 
 ### I2.c — data-RHS editable-knob preference
 
@@ -450,7 +450,7 @@ preferred when it can restore feasibility. Two parts:
   in `provenance.weight_labels` (see the "data-weighted SUM renders symbolically" note above); it
   only falls back to the raw numeric reconstruction when a data-varying term has *no* label.
   **PER-grouped aggregates fold too** (the old `group_key == INVALID` gate is gone): `SUM(x) >= 5
-  PER grp` renders both groups as `SUM(x) >= 5 PER grp`, kept distinguishable by the `group` EAV row
+  PER grp` renders both groups as `SUM(x) >= 5 PER grp`, kept distinguishable by the `group` column
   + `PER grp` qualifier (see "PER-group identity" below). A **single-row / WHEN aggregate group** has
   no fan-out for `FormatSumLhs` to fold, so `FormatLhs` wraps the reconstruction in `SUM(...)`
   explicitly when `provenance.is_aggregate` and there is no multi-column fan (`HasVarFan`) —
@@ -500,10 +500,10 @@ all carried on `ConstraintProvenance` (no change to PER solve logic):
   `FormatPerGroupKey` joins composite columns with `, `; NULL renders `"NULL"` and an actual
   empty-string key renders `"''"` so it is not confused with "ungrouped." Threaded through
   `EvaluatedConstraint::group_labels` → stamped on `provenance.group_label` at the aggregate-PER
-  emission sites (`ilp_model_builder.cpp`). The diagnosis uses it twice: every EAV row for the
-  edit gets a self-identifying subject (`SUM(x) >= 5 PER grp [group: a]`), and the structured
-  `group` row (`attribute='group'`, `value='a'`) is still emitted. This avoids relying on relation
-  row order to associate `suggested_change`/`amount` with a group.
+  emission sites (`ilp_model_builder.cpp`). In expanded mode the diagnosis copies it into the
+  finding's `group` column while leaving `clause` in the user's original spelling. This avoids
+  relying on relation row order to associate `suggested_change`/`amount` with a group and avoids
+  appending implementation-only `[group: ...]` text to the clause.
 - **`is_aggregate`** — set from `eval_const.lhs_is_aggregate` at the aggregate emission sites;
   drives the single-row / WHEN `SUM(...)` wrapper in `FormatLhs` (see I2.d SUM above).
 - **`qualifier`** — the `PER grp` / `PER (region, year)` / `WHEN <pred>` text, computed once per clause at the
@@ -528,7 +528,7 @@ re-emits as one global cap: the easy rewrite makes `MAX(x) <= K PER g` the unifo
 MIN/MAX **closing** row (`USER_MECHANISM`, both the hard and the composed path) are not
 relaxable (`IsRelaxableForElastic`), so the elastic transform attaches no slack to them: a `<>`
 or bilinear conflict is resolved by loosening an editable bound, and a conflict reachable only
-through those rigid rows falls through to the static error (the empty-block guard). `<>` is
+through those rigid rows produces an `undiagnosed` finding (the empty-block guard). `<>` is
 remove-only; actual removal is the **I4** L0 dial — I2 only confirms the rigid behavior.
 
 **A Big-M row is never an editable knob.** A row carrying a Big-M states some construct's
@@ -669,9 +669,9 @@ set before the engine considers data offsets or editable slack. The next passes 
 The F6 label is built by `DiagnosisComparand` (`decide_optimizer.cpp`), which unwraps the
 implicit `CAST` the binder inserts around a literal and drops the outer parens, so the clause
 reads `x <> 1`, not `(x <> CAST(1 AS INTEGER))`. `BuildInfeasibleDiagnostic` renders a DROP as
-a dedicated EAV row `subject_kind='clause'`, `subject='x <> 3'`, `attribute='edit_kind'`,
-`value='drop'` (distinct from the LOOSEN `suggested_change`/`amount` pair), and points to the
-dropped clause in the summary. A single written `<>` that expands per row has one indicator
+one finding with `clause='x <> 3'`, `suggested_change='remove this clause'`, and
+`edit_source='remove_only'`; `amount`, `group`, and `row` are NULL unless the finding has
+expanded identity. A single written `<>` that expands per row has one indicator
 (hence one `RemovalRef`) per row, all sharing the same clause label; `ReadElasticEdits`
 **dedupes DROP edits by label** (a `std::set<string>` of already-emitted labels) so the
 relation carries one DROP per user clause, not one per row. The
@@ -779,21 +779,21 @@ computed from the solved repair variables so the same coefficient logic feeds re
 the `R*`/`D*`/`E*` freezes.
 
 **Reporting.** `BuildInfeasibleDiagnostic` has two optional arguments
-(`achievable_objective`, `unbounded_after_fix`). When set it emits one EAV row
-`subject_kind='model'`, `attribute='achievable_objective'`, `value=<number>`. The repair
-budgets themselves are **not** surfaced (decision 4), and the stderr headline remains a
-clause pointer rather than an objective report.
+(`achievable_objective`, `unbounded_after_fix`). An achievable finite value becomes one
+model-level finding with `edit_source='achievable_objective'` and the value in typed
+`amount`; an unbounded repaired objective becomes an `unbounded_after_fix` finding. The
+repair budgets themselves are **not** surfaced (decision 4).
 
 **Stage-2 unbounded (decision 2).** If the relaxed region is unbounded in the objective
 direction (`UNBOUNDED` / `INF_OR_UNBD`), there is no finite optimum: the engine keeps the
-stage-1 edit (still valid) and emits model row value `'unbounded'`. It does **not** hand off
-to the unbounded engine — the edit is the actionable part, and composing two diagnoses would
-muddy the message.
+stage-1 edit (still valid) and emits an `edit_source='unbounded_after_fix'` finding. It does
+**not** hand off to the unbounded engine — the edit is the actionable part, and composing two
+diagnoses would muddy the message.
 
 **Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): a non-unique-minimizer 2-var case
 (caps `x ≤ 0`, `y ≤ 0` feeding rigid `x + y ≥ 10`, `MAXIMIZE x`) reports the x-cap edit and
 objective `10` — loosening `y` would give `0`; a stage-2-unbounded case (`MAXIMIZE y` with
-`y` free) reports the edit plus `achievable_objective = 'unbounded'`. Python differential
+`y` free) reports the edit plus the `unbounded_after_fix` finding. Python differential
 (`test_query_diagnostics_relation.py`): the same shape end-to-end on both backends, with the
 reported objective checked against an independent re-solve of the fixed query (the edit
 applied), never a hand-computed value. Existing infeasible tests that carry an objective now
@@ -883,23 +883,15 @@ no tie-break consulted. The MIN/MAX tie runs `DECIDB_NATIVE_CONSTRUCTS=force` as
 because MIN/MAX goes native only where the Big-M is underivable and the native path is
 otherwise never reached.
 
-## An `IN`-only conflict is reported by the static error, not by a diagnosis (B4)
+## An `IN`-only conflict returns an undiagnosed finding (B4)
 
-`x IN (3,5) AND x IN (2,4)` raises the plain infeasible error and **zero** diagnostic rows, on
-both backends. That is correct and deliberate, not a gap: `IN` over a decision is lowered to a
-membership disjunction whose rows are all mechanism, so the empty-block guard finds nothing
-relaxable and returns an empty diagnosis rather than inventing one. The error already says the
-only true thing there is to say. The documented guard listed `<>` and McCormick as its
-occupants; `IN` belongs on that list too.
-
-The static text it falls back to no longer mentions a `SUM` the user may not have written:
-
-> DECIDE optimization is infeasible: the SUCH THAT constraints cannot all be satisfied at
-> once. Look for two clauses that bound the same decision in opposite directions, or a bound
-> no value can reach.
-
-It stays in SQL terms and does not point at `PRAGMA diagnose_decide` — this path is reached
-*with* diagnosis already on.
+`x IN (3,5) AND x IN (2,4)` has no elastic edit to report: `IN` over a decision is lowered to
+a membership disjunction whose rows are all mechanism, so the empty-block guard finds no
+relaxable block. Under `DIAGNOSE`, the operator turns that invalid engine result into one
+`edit_source='undiagnosed'` finding explaining that no loosening of the written clauses
+restores feasibility. Without the prefix, the same query raises the state-only infeasible
+error. The guard already covered `<>` and McCormick mechanism rows; `IN` belongs on that list
+too.
 
 ## Elastic engine: column-bound conflicts (intrinsic reset, inverted box, type-domain errors)
 
@@ -931,7 +923,7 @@ domain rigid:
 - **Inverted-box survival (`SolverInput::tolerate_infeasible_bounds`).** Two opposite absorbed
   bounds (`x <= 4 AND x >= 10`) invert the box (`col_lower > col_upper`). Without help,
   `SolverModel::Build` throws before `retained_model` is populated, so the engine never sees the
-  model. Under diagnosis the flag (set in `Finalize`, same gate as the unbounded-ray extraction)
+  model. Under `DIAGNOSE` the flag (set in `Finalize`, same trigger as the unbounded-ray extraction)
   makes `Build` keep the inverted box, and `SolveModel` short-circuits to INFEASIBLE **without
   handing the box to the backend** — HiGHS hard-rejects `lb>ub` at load and poisons the session;
   Gurobi tolerates it, so the short-circuit is the solver-agnostic path. The intrinsic reset then
@@ -958,58 +950,54 @@ keeps it `PER_ROW_DATA`. Physical evaluation consumes that root classification t
 Diagnostics therefore treat `x <= (SELECT 5)` and `(SELECT 5) >= x` identically, while mixed or
 correlated bounds remain data-backed and never expose the internal `SUBQUERY` placeholder.
 
-## Infeasibility reporting: lean cue summary + frozen vocabulary (I5)
+## Infeasibility reporting: one finding per edit, frozen vocabulary (I5)
 
-I5 is the final reporting step. The structured EAV edit list was already emitted by I1–I4; I5
-makes two refinements and **locks the vocabulary**.
+I5 is the final reporting step. The structured edit list was already emitted by I1–I4; I5
+**locks the vocabulary** — which is now the `edit_source` column, whose full value set is
+in `../../00_project_overview/syntax_reference.md` §8.
 
-**Lean cue summary.** `BuildInfeasibleDiagnostic` (`decide_diagnostic.cpp`) keeps the thrown
-stderr headline short: it points to the relevant clause target(s) and leaves the actual edits to
-`decide_diagnostics()`. This avoids implying that one listed clause is independently sufficient
-when the engine found a combined repair set.
-- Single target → `"…; diagnosis points to clause \`x <= 5\`."` (a data RHS folds to its
-  clause too, e.g. `"…; diagnosis points to clause \`x >= hi\`."` in query mode)
-- Multiple targets → `"…; diagnosis points to clause \`SUM(x) >= 1\` and clause \`SUM(5*x) <= -1\`."`
-- PER groups (**expanded mode only** — query mode folds a PER clause to one clause pointer with
-  no group list) → `"…; diagnosis points to grouped clause \`SUM(x) >= 5 PER grp\` for groups
-  \`a\` and \`b\`."` The group list is **capped** (`QuotedGroupList`, `HEADLINE_GROUP_CAP = 3`):
-  with more than three failing groups the headline shows the first three then `… and N more (see
-  decide_diagnostics())`. The relation still carries one row per failing group.
+Batch H removed the other half of I5: the "lean cue summary". `BuildInfeasibleDiagnostic`
+used to build a one-line stderr headline that pointed at the relevant clause(s)
+(`"…; diagnosis points to clause \`x <= 5\`."`), capping long PER-group lists at three with
+`… and N more`. That headline existed because the *error* was the primary surface and the
+relation was a second statement away. Under `DIAGNOSE` the relation IS the answer: every
+clause it names is a row, so there is nothing to summarize and nothing to truncate. The
+summary field, `BuildDiagnosticTargetPhrases`, `QuotedGroupList`, `JoinDiagnosticPhrases`
+and `AddDiagnosticTarget` were all deleted with it.
 
-Every thrown message still appends `Details: SELECT * FROM decide_diagnostics();`. The table is
-the source of truth for `edit_kind`, `suggested_change`, `amount`, `edit_source`, `offset_scope`,
-`group`, and `achievable_objective`. `BuildElasticInfeasibleDiagnostic` (the "loosening cannot
-fix it" path) is untouched — the cue does not apply when no edit was found.
+One consequence worth stating: a query with dozens of failing PER groups now returns
+dozens of rows rather than three plus a count. That is the right shape for a relation —
+the user filters, aggregates, or `LIMIT`s it themselves.
 
 **Why no runnable rewritten query.** The original plan envisioned emitting a copy-paste rewritten
 DECIDE query. It was deliberately dropped: the engine has no access to the original SQL text (it
 works on `SolverModel` rows, and clause labels are *reconstructed* + canonicalized — the user's
 `5 >= x` comes back as `x <= 5`), so a faithful full query is unbuildable and a reconstructed
 partial would duplicate what the table already carries. The table is the source of truth; the
-headline is only a lean pointer.
+flat finding is the repair fragment the engine can state faithfully.
 
-**Frozen EAV vocabulary.** Every edit row carries a uniform `attribute='edit_kind'`, so
-filtering `attribute='edit_kind'` enumerates all edits and their kinds — the relation is
-self-describing:
-- `subject_kind='clause'`: `edit_kind` ∈ {`loosen`, `drop`}; plus `suggested_change` + `amount`
-  (LOOSEN only), `edit_source` ∈ {`source_literal`, `virtual_offset`, `expanded_row`,
-  `expanded_group`} and `offset_scope` ∈ {`clause`, `row`, `group`} (T3, the slack-scope
-  provenance), `group` = the PER key value (expanded-mode PER edits only — disambiguates
-  per-group edits that share the same folded `subject`).
-- `subject_kind='model'`: `achievable_objective` (the I3 number, or `'unbounded'`),
-  `elastic_infeasible` (`'true'`, the loosening-cannot-fix-it verdict).
+**Frozen flat vocabulary.** Every result row is one finding in the fixed schema
+`state | clause | suggested_change | amount | total | scope | edit_source | group | row`.
+`total` and `scope` are reserved for counted unbounded escapes and remain NULL for
+infeasibility findings. The
+`edit_source` column is the stable kind discriminator:
 
-These strings are stable. The former `conflict` edit kind (data-RHS dead-end) was **removed** by
-T3 — a data conflict is now a `loosen` with `edit_source='virtual_offset'` (query) or
-`'expanded_row'` (expanded).
+- clause-level loosens: `source_literal` or `virtual_offset`;
+- expanded profiles: `expanded_row` or `expanded_group`, with identity in `row` or `group`;
+- remove-only clauses and special findings: `remove_only`, `unreachable_bound`,
+  `rigid_conflict`, `undiagnosed`;
+- model-level facts: `achievable_objective` or `unbounded_after_fix`.
 
-**Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): the loosen section asserts the clause
-pointer (`"diagnosis points to clause \`x <= 5\`"`) and `edit_kind='loosen'`; the must-drop
-section asserts the pointer to `"(x <> 3)"`; the query-mode data section asserts a
-`virtual_offset` edit and the expanded section asserts per-row `expanded_row` edits. Python
-differential (`test_query_diagnostics_relation.py`): a loosen case asserts `edit_kind='loosen'`;
-the data-RHS query case asserts `edit_source='virtual_offset'`, the expanded case
-`edit_source='expanded_row'`.
+The former EAV `edit_kind`, `offset_scope`, and `subject_kind` attributes are gone. The
+former `conflict` kind (data-RHS dead-end) was removed by T3: a data conflict is now an
+actionable `virtual_offset` finding in query mode or an `expanded_row` profile in expanded
+mode.
+
+**Tests.** C++ (`test_decidb_diagnostic_engines.cpp`) asserts the typed schema, renderer,
+statement-scoped handoff, loosen/drop builders, virtual offsets, and expanded identities.
+Python differential (`test_query_diagnostics_relation.py`) asserts the flat relation directly
+and then applies its reported edits: query-mode data uses `virtual_offset`, expanded data uses
+`expanded_row`, and remove-only clauses use `remove_only`.
 
 ## Tests
 
@@ -1033,8 +1021,8 @@ against the bundled HiGHS backend on one-variable models: a relaxable cap confli
 a rigid floor reports the unique minimal loosening (`x <= 5` → `x <= 10`, amount 5); an
 equality row loosens via its two-sided slack (`x = 5` → `x = 8`); a rigid-only conflict
 with a non-helping relaxable row renders the elastic-infeasible row; the
-`has_unhandled_user_bounds` flag suppresses that claim (invalid → static error); and an
-all-rigid model returns invalid. End-to-end differential coverage (both backends, vs
+`has_unhandled_user_bounds` flag suppresses that claim (invalid → `undiagnosed` at the
+operator); and an all-rigid model returns invalid for the same treatment. End-to-end differential coverage (both backends, vs
 `oracle_solver`, including absorbed-bound and BETWEEN cases) is in
 `test/decide/tests/test_query_diagnostics_relation.py`. That file's `_apply_reported_fix`
 harness (E1) guards the core least-change promise mechanically: for each asserted infeasible

@@ -86,6 +86,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         op.types, op.estimated_cardinality, std::move(child_plan),
         op.decide_index, std::move(op.decide_variables),
         std::move(op.decide_constraints), op.decide_sense, std::move(op.decide_objective));
+    // The DIAGNOSE prefix, carried the last leg of parser → binder → plan → stage 08.
+    decide_op->diagnose = op.diagnose;
     decide_op->solver_backend_name = op.solver_backend_name;
     decide_op->use_native_constructs = op.use_native_constructs;
     decide_op->force_native_constructs = op.force_native_constructs;

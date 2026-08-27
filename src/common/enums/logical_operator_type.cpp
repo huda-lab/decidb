@@ -132,6 +132,8 @@ string LogicalOperatorToString(LogicalOperatorType type) {
 		return "UPDATE_EXTENSIONS";
 	case LogicalOperatorType::LOGICAL_DECIDE:
 		return "DECIDE";
+	case LogicalOperatorType::LOGICAL_DECIDE_DIAGNOSE:
+		return "DECIDE_DIAGNOSE";
 	}
 	return "INVALID";
 }

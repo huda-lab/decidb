@@ -96,11 +96,13 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) BETWEEN 2 AND 3 M
 statement ok
 SELECT l_quantity FROM lineitem DECIDE x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
-# SUM Between has non-scalar expression
+# SUM BETWEEN a row-varying column: legal since batch C (a plain column may bound a
+# reduced constraint — the tightest bound in each group wins), so this binds and solves.
+# On this data the two sides conflict, so the solve comes back infeasible.
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) BETWEEN l_quantity and 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found.*
+<REGEX>:.*DECIDE optimization is infeasible.*
 
 # Bind BETWEEN with DECIDE variable bound
 statement ok
@@ -112,21 +114,21 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x IN (1,2,x) MAXIMIZE SU
 ----
 <REGEX>:Binder Error: IN domain constraints on DECIDE variables are not yet supported. The values in the IN list must be constants or table columns, not DECIDE variables.*
 
-# SUM Right-hand side has non-scalar expression
-statement error
+# SUM with a row-varying column as the bound: legal since batch C. The conjunction of
+# `SUM(x) <= l_quantityᵢ` over every tuple is the tightest of them, so this solves.
+statement ok
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= l_quantity MAXIMIZE SUM(x*l_quantity) LIMIT 1;
-----
-<REGEX>:Binder Error: SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found.*
 
 # Bind DECIDE variable right-hand side
 statement ok
 SELECT l_quantity FROM lineitem DECIDE x(INT), y(INT) SUCH THAT x <= y AND y <= 1 MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 
-# SUM Equal Right-hand side has non-scalar expression
+# The same shape with `=`: the per-tuple bounds contradict rather than collapse, and
+# batch C's rule is that this is an error naming the two values (not a binder refusal).
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) = l_quantity MAXIMIZE SUM(x) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found.*
+<REGEX>:.*takes more than one value here.*
 
 # Bind objective with constant offset
 statement ok

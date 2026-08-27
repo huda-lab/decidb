@@ -1607,6 +1607,7 @@ typedef struct PGVariableShowSelectStmt
 	PGNode     *stmt;
 	char       *name;
 	int         is_summary; // whether or not this is a DESCRIBE or a SUMMARIZE
+	int         is_diagnose; // whether or not this is a DIAGNOSE
 } PGVariableShowSelectStmt;
 
 

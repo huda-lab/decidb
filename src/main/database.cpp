@@ -422,7 +422,8 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 		config.options.access_mode = AccessMode::READ_WRITE;
 	}
 	config.extension_parameters = new_config.extension_parameters;
-	// DeciDB: register the diagnose_decide session setting (query diagnostics, F4).
+	// DeciDB: register the DECIDE engine-tuning settings. None of them starts a
+	// diagnosis — only the DIAGNOSE statement prefix does that.
 	RegisterDecideDiagnosticOptions(config);
 	if (new_config.file_system) {
 		config.file_system = std::move(new_config.file_system);

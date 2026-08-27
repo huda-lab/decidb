@@ -16,7 +16,7 @@ namespace {
 struct VarAgg {
 	string name;
 	bool is_aux = false;
-	string direction;
+	EscapeDirection direction = EscapeDirection::POSITIVE;
 	idx_t vidx = DConstants::INVALID_INDEX;
 	std::set<idx_t> instances;
 };
@@ -339,7 +339,7 @@ string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenance> &col
 	// units, so the SUM label makes the suggestion a different, wrong constraint).
 	const char *agg_name = row.provenance.avg_scaled ? "AVG" : "SUM";
 	// Collapse a uniform SUM fan-out to SUM(c*var). PER-grouped aggregates fold too: they
-	// stay distinguishable in the relation via the `group` EAV row + WHEN/PER qualifier
+	// stay distinguishable in the relation via the finding's `group` column + WHEN/PER qualifier
 	// (Facet A), so the old group_key == INVALID gate is gone.
 	// A row off the accumulating build path carries per-entity *totals*, not the coefficients
 	// the user wrote, so every matrix-inference path below misreads it — either as a literal
@@ -498,7 +498,8 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
 	e.kind = ClauseEditKind::LOOSEN;
 	e.label = MakeClauseLabel(prov, lhs, rhs, sense);
 	e.suggestion = lhs + " " + sense_str + " " + FormatNum(new_rhs) + suffix;
-	e.amount = FormatNum(std::fabs(amount));
+	e.has_amount = true;
+	e.amount = std::fabs(amount);
 	e.group = prov.group_label;
 	return e;
 }
@@ -553,7 +554,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 //! (`x <= col`): the clause's folded shared slack `delta` becomes one synthetic
 //! query-level offset `x <= col + delta` (`>=` loosens downward → `col - delta`).
 //! `rhs_text` is the RHS column name (`prov.rhs_label`) or a numeric fallback when no
-//! name is available. `edit_source`/`offset_scope` are stamped by the caller.
+//! name is available. `edit_source` is stamped by the caller.
 ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &lhs,
                                  const string &rhs_text, char sense, double delta) {
 	string sense_str = SenseStr(sense);
@@ -564,7 +565,8 @@ ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string 
 	e.kind = ClauseEditKind::LOOSEN;
 	e.label = lhs + " " + sense_str + " " + rhs_text + suffix;
 	e.suggestion = lhs + " " + sense_str + " " + rhs_text + op + mag + suffix;
-	e.amount = mag;
+	e.has_amount = true;
+	e.amount = std::fabs(delta);
 	e.group = prov.group_label;
 	return e;
 }
@@ -594,7 +596,7 @@ DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
 		if (agg.name.empty()) {
 			agg.name = prov.label;
 			agg.is_aux = prov.kind == ColumnKind::AUX;
-			agg.direction = rv > 0 ? "+inf" : "-inf";
+			agg.direction = rv > 0 ? EscapeDirection::POSITIVE : EscapeDirection::NEGATIVE;
 			agg.vidx = prov.decide_var_idx;
 		}
 		agg.instances.insert(prov.instance);
@@ -987,10 +989,9 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 	//     PER groups (BuildElasticModel). Editable literals report `source_literal`, a
 	//     data RHS reports a `virtual_offset` (`x <= col + delta`); both are clause-level,
 	//     so any per-group identity is dropped.
-	//   expanded: PER/aggregate groups get one slack each (`expanded_group`, offset_scope
-	//     'group', keeping the group key); a data RHS stays per-row (`expanded_row`,
-	//     offset_scope 'row'); a non-grouped literal has nothing to break out and reports
-	//     `source_literal`.
+	//   expanded: PER/aggregate groups get one slack each (`expanded_group`, keeping the
+	//     group key); a data RHS stays per-row (`expanded_row`, keeping the row id); a
+	//     non-grouped literal has nothing to break out and reports `source_literal`.
 	bool expanded = slack_scope == "expanded";
 
 	vector<ClauseEdit> edits;
@@ -1021,7 +1022,6 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			ClauseEdit e = MakeLoosenEdit(display_provenance, SourceAwareQuadraticLhs(orig_model, orig, columns),
 			                              orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
-			e.offset_scope = "clause";
 			edits.push_back(std::move(e));
 			continue;
 		}
@@ -1044,7 +1044,9 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 				// entry. A debug view, not a directly pasteable edit.
 				ClauseEdit e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
 				e.edit_source = "expanded_row";
-				e.offset_scope = "row";
+				// The emitted row's own identity, so an `expanded` profile can be read
+				// back row by row. `group_key` carries the row id for a per-row clause.
+				e.row = prov.group_key;
 				edits.push_back(std::move(e));
 				continue;
 			}
@@ -1068,10 +1070,8 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			// key; otherwise there is nothing per-group to expose.
 			if (!prov.group_label.empty()) {
 				e.edit_source = "expanded_group";
-				e.offset_scope = "group";
 			} else {
 				e.edit_source = data_rhs ? "virtual_offset" : "source_literal";
-				e.offset_scope = "clause";
 			}
 			edits.push_back(std::move(e));
 			continue;
@@ -1096,7 +1096,6 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
 		}
-		e.offset_scope = "clause";
 		e.group.clear(); // folded across groups → clause-level, no single group key
 		edits.push_back(std::move(e));
 	}
@@ -1117,6 +1116,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			ClauseEdit e;
 			e.kind = ClauseEditKind::DROP;
 			e.label = label;
+			e.edit_source = "remove_only";
 			edits.push_back(std::move(e));
 		}
 	}

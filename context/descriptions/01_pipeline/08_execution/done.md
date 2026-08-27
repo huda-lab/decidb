@@ -477,7 +477,7 @@ evaluated terms travel to stage 06 as `ComposedMinMaxTermData`; the objective's
 shape travels as `MinMaxObjectiveSpec`.
 
 A slow-solve checkpoint report runs when a solve exceeds its budget; see
-[`../../07_query_diagnostics/slow/done.md`](../../07_query_diagnostics/slow/done.md).
+[`slow_solves.md`](slow_solves.md).
 
 ---
 
@@ -543,6 +543,38 @@ last `num_auxiliary_vars` slots.
 
 ---
 
+## 7b. `DIAGNOSE`: reporting on the run instead of returning it
+
+Two things change when the statement carried the prefix (`PhysicalDecide::diagnose`,
+copied from `LogicalDecide::diagnose`):
+
+1. **The engines are armed.** `FinalizeSolveResult` reads the flag once as
+   `diagnosis_armed` and turns on the shared pre-solve work the engines need —
+   unbounded-ray extraction, tolerating an inverted column box through Build, and
+   retaining the built model for the elastic engine. An unprefixed query pays for none of
+   it, which is the whole point of the prefix being the trigger.
+2. **A failure stops being an error.** Each failing terminal calls the operator-local
+   `report(...)` instead of throwing: it stashes the findings and sets
+   `gstate.diagnosis_only`, so `Finalize` returns `READY` with no solution and `GetData`
+   emits nothing. `PhysicalDecideDiagnose`, sitting directly above in the same plan,
+   swallows those (absent) rows in its `Sink` and emits the findings in its `GetData`.
+   Without the prefix every failure terminal still raises, and raises the *state only* —
+   naming the clause means running the elastic solve, which is exactly what the user did
+   not ask for.
+
+A successful solve clears the stash, so a `DIAGNOSE` over a query that worked finds
+nothing and reports one `feasible` finding. The handoff is statement-scoped by
+construction: `TakeDecideDiagnostic` consumes it, and nothing outside the statement reads
+it.
+
+**What stays raised even under the prefix.** DIAGNOSE explains the outcome of a *solve*.
+A query that fails before one happens — a semantic error, a bound that contradicts a
+type's own domain (`x <= -1` on a non-negative decision, checked in the sink state's
+constructor), a model class the host's solver refuses — still raises, with the precise
+message that path already had. There is no solve outcome to report on.
+
+The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
+
 ## 8. Source map
 
 | Concern | Location |
@@ -554,3 +586,6 @@ last `num_auxiliary_vars` slots.
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver_input.hpp` |
 | Logical → physical, entity key indices, input column names | `src/execution/physical_plan/plan_decide.cpp` |
 | Binding resolution shielding | `src/execution/column_binding_resolver.cpp` |
+| The `DIAGNOSE` operator (sink the rows, emit the findings) | `src/execution/operator/decide/physical_decide_diagnose.cpp` |
+| Its plan-generator case | `src/execution/physical_plan/plan_decide_diagnose.cpp` |
+| Slow solves: report, continuation, Ctrl-C | [`slow_solves.md`](slow_solves.md) |

@@ -428,8 +428,8 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	// (`SUM(0 * x) <= -1`, `x - x <= -1`). The row was kept so diagnosis can name and
 	// relax it, but it is a coefficient-free row that no backend should be asked to
 	// load. Short-circuit to INFEASIBLE here — retaining the model — for the same
-	// reason as the inverted column box below. Unconditional: with diagnosis off the
-	// retained model is simply discarded and the operator throws its static error.
+	// reason as the inverted column box below. Unconditional: on an unprefixed statement
+	// the retained model is simply discarded and the operator throws its static error.
 	if (model.build_proven_infeasible) {
 		SolverResult result;
 		result.status = SolverStatus::INFEASIBLE;
@@ -491,25 +491,24 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 }
 
 void ThrowDecideSolveError(const SolverResult &result) {
-    // User-facing failure text: one line naming the state + the smallest fix, no
-    // solver/LP jargon, no bullet-list lectures. (UNBOUNDED here is the diagnosis-off
-    // path — under auto the named engine runs instead — so it points back to the
-    // pragma for the per-variable detail.)
+    // A query with no DIAGNOSE prefix reports its state and stops. It does not name a
+    // clause and does not suggest a repair — working either out means running the
+    // diagnosis engines, which is exactly what the prefix asks for and what an
+    // unprefixed query must not be made to pay for. So: the state, and how to ask for
+    // more.
     switch (result.status) {
     case SolverStatus::INFEASIBLE:
         throw InvalidInputException(
-            "DECIDE optimization is infeasible: the SUCH THAT constraints cannot all be satisfied at once. "
-            "Look for two clauses that bound the same decision in opposite directions, or a bound no "
-            "value can reach.");
+            "DECIDE optimization is infeasible. "
+            "Prefix the query with DIAGNOSE to see which clause to change.");
     case SolverStatus::UNBOUNDED:
         throw InvalidInputException(
-            "DECIDE optimization is unbounded: a decision variable can grow without bound. "
-            "Add an upper bound, e.g. SUCH THAT x <= <cap>. "
-            "For the variable, set PRAGMA diagnose_decide='auto' and re-run.");
+            "DECIDE optimization is unbounded. "
+            "Prefix the query with DIAGNOSE to see which decision needs a bound.");
     case SolverStatus::INF_OR_UNBD:
         throw InvalidInputException(
-            "DECIDE optimization is infeasible or unbounded: the constraints conflict, or a decision "
-            "variable is unbounded. Add bounds, e.g. SUCH THAT x <= <cap>.");
+            "DECIDE optimization is infeasible or unbounded. "
+            "Prefix the query with DIAGNOSE to see which clause to change.");
     case SolverStatus::TIME_LIMIT:
         throw InvalidInputException(
             "DECIDE optimization hit the time limit. Simplify the constraints or reduce the input size.");

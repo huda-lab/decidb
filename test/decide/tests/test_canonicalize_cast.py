@@ -435,26 +435,20 @@ def test_mixed_numeric_equality_keeps_one_diagnostic_clause(
     cli = request.getfixturevalue(cli_fixture)
     result = cli.execute_script(
         ".mode csv\n"
-        "PRAGMA diagnose_decide='auto';\n"
-        "SELECT id, value, lim, x "
+        "DIAGNOSE SELECT id, value, lim, x "
         "FROM (VALUES "
         "(1, 9007199254740992::BIGINT, 9007199254740994::DOUBLE)"
         ") t(id, value, lim) "
         "DECIDE x(BOOL) "
         "SUCH THAT x + value = lim "
         "MAXIMIZE SUM(x);\n"
-        "SELECT * FROM decide_diagnostics();\n"
     )
     rows = list(csv.DictReader(io.StringIO(result.stdout)))
     assert rows and {row["state"] for row in rows} == {"infeasible"}
-    edits = [
-        row for row in rows
-        if row["subject_kind"] == "clause" and row["attribute"] == "edit_kind"
-    ]
+    edits = [row for row in rows if row["suggested_change"] not in ("", "NULL")]
     assert len(edits) == 1, rows
-    assert edits[0]["value"] == "loosen"
     # Rigid cast-defined-domain rows must never become diagnostic edit subjects.
-    assert all("structural" not in row["subject"].lower() for row in rows)
+    assert all("structural" not in row["clause"].lower() for row in rows)
 
 
 @pytest.mark.var_integer

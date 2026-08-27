@@ -50,6 +50,13 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 		c.provenance.repair_group_id = i;
 		c.provenance.kind = rows[i].kind;
 		c.provenance.shape = ElasticShape::SHARED_SCALAR;
+		if (IsRelaxableForElastic(rows[i].kind)) {
+			// Test-built rows must satisfy the same provenance contract as rows emitted
+			// by the physical model builder. Source identity is a separate namespace
+			// from repair grouping even when both happen to be one-to-one here.
+			c.provenance.source_clause_id = m.constraint_sources.size();
+			m.constraint_sources.push_back(ConstraintSourceInfo());
+		}
 		m.constraints.push_back(std::move(c));
 	}
 	return m;
@@ -80,6 +87,7 @@ SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
 	m.is_binary.assign(num_vars, false);
 	m.obj_coeffs.assign(num_vars, 0.0);
 	m.maximize = false;
+	std::map<idx_t, idx_t> source_by_repair_group;
 	for (const auto &r : rows) {
 		ModelConstraint c;
 		c.indices = {r.var};
@@ -91,19 +99,49 @@ SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
 		c.provenance.shape = r.shape;
 		c.provenance.group_key = r.group_key;
 		c.provenance.rhs_label = r.rhs_label;
+		if (IsRelaxableForElastic(r.kind) && r.repair_group_id != DConstants::INVALID_INDEX) {
+			auto source = source_by_repair_group.find(r.repair_group_id);
+			if (source == source_by_repair_group.end()) {
+				idx_t source_id = m.constraint_sources.size();
+				m.constraint_sources.push_back(ConstraintSourceInfo());
+				source = source_by_repair_group.emplace(r.repair_group_id, source_id).first;
+			}
+			c.provenance.source_clause_id = source->second;
+		}
 		m.constraints.push_back(std::move(c));
 	}
 	return m;
 }
 
-//! First value of the EAV diagnosis row matching subject+attribute, or "".
-string FindRow(const DecideDiagnostic &diag, const string &subject, const string &attribute) {
-	for (const auto &r : diag.rows) {
-		if (r.subject == subject && r.attribute == attribute) {
-			return r.value;
+//! The first finding whose `clause` column matches, or a default-constructed one.
+DiagnosticFinding Find(const DecideDiagnostic &diag, const string &clause) {
+	for (const auto &f : diag.findings) {
+		if (f.clause == clause) {
+			return f;
 		}
 	}
-	return string();
+	return DiagnosticFinding();
+}
+
+//! `amount` rendered the way the relation would, or "" for a NULL amount. Lets the
+//! assertions below stay written in the user's units instead of in doubles.
+string AmountOf(const DecideDiagnostic &diag, const string &clause) {
+	auto f = Find(diag, clause);
+	if (!f.has_amount) {
+		return string();
+	}
+	return StringUtil::Format("%g", f.amount);
+}
+
+//! How many findings carry a suggested change (one per editable clause).
+idx_t CountSuggestions(const DecideDiagnostic &diag) {
+	idx_t n = 0;
+	for (const auto &f : diag.findings) {
+		if (!f.suggested_change.empty()) {
+			n++;
+		}
+	}
+	return n;
 }
 
 //! The coefficient on column `col` in `row` (0 if the column is absent).
@@ -177,15 +215,44 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
 
 		REQUIRE(diag.valid);
-		REQUIRE(diag.rows.size() == 2);
-		CHECK(diag.rows[0].subject_kind == "variable");
-		CHECK(diag.rows[0].subject == "x");
-		CHECK(diag.rows[0].attribute == "grows_toward");
-		CHECK(diag.rows[0].value == "+inf");
-		CHECK(diag.rows[1].subject_kind == "variable");
-		CHECK(diag.rows[1].subject == "x");
-		CHECK(diag.rows[1].attribute == "affected_rows");
-		CHECK(diag.rows[1].value == "2 of 2 rows where channel = 'export'");
+		CHECK(diag.state == "unbounded");
+		// One finding per characterized slice: x runs to +inf on the 2 export rows.
+		REQUIRE(diag.findings.size() == 1);
+		CHECK(diag.findings[0].clause == "x");
+		CHECK(diag.findings[0].edit_source == "runaway_+inf");
+		CHECK(diag.findings[0].suggested_change == "x <= <cap>");
+		CHECK(diag.findings[0].group == "channel = 'export'");
+		REQUIRE(diag.findings[0].has_amount);
+		CHECK(diag.findings[0].amount == 2.0);
+		REQUIRE(diag.findings[0].has_total);
+		CHECK(diag.findings[0].total == 2);
+		CHECK(diag.findings[0].scope == "row");
+	}
+
+	SECTION("unbounded engine preserves negative ray direction") {
+		SolverInput input = MakeRowScopedInput(1);
+		VarIndexer indexer = VarIndexer::BuildRef(input);
+
+		SolverResult result;
+		result.status = SolverStatus::UNBOUNDED;
+		result.ray = {-1.0};
+
+		duckdb::vector<string> labels {"x"};
+		duckdb::vector<bool> is_aux {false};
+		DecideDiagParams params;
+		UnboundedDiagnosisInput diag_input {
+		    result,
+		    indexer,
+		    labels,
+		    is_aux,
+		    params,
+		    [](idx_t, idx_t) { return duckdb::vector<ColumnGrouping>(); },
+		};
+		DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
+
+		REQUIRE(diag.valid);
+		REQUIRE(diag.findings.size() == 1);
+		CHECK(diag.findings[0].edit_source == "runaway_-inf");
 	}
 
 	SECTION("unbounded engine returns invalid diagnosis when ray names no variable") {
@@ -237,13 +304,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
-		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 10");
-		CHECK(FindRow(diag, "x <= 5", "amount") == "5");
+		CHECK(Find(diag, "x <= 5").suggested_change == "x <= 10");
+		CHECK(AmountOf(diag, "x <= 5") == "5");
 		// The summary points to the problem clause; the structured rows above carry
 		// the concrete edit. edit_kind is uniform.
-		CHECK(FindRow(diag, "x <= 5", "edit_kind") == "loosen");
-		CHECK(diag.summary.find("diagnosis points to clause `x <= 5`") != string::npos);
-		CHECK(diag.summary.find("loosen `x <= 5` to `x <= 10`") == string::npos);
+		CHECK(Find(diag, "x <= 5").edit_source == "source_literal");
 	}
 
 	SECTION("equality row loosens via its two-sided slack") {
@@ -257,8 +322,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		CHECK(FindRow(diag, "x = 5", "suggested_change") == "x = 8");
-		CHECK(FindRow(diag, "x = 5", "amount") == "3");
+		CHECK(Find(diag, "x = 5").suggested_change == "x = 8");
+		CHECK(AmountOf(diag, "x = 5") == "3");
 	}
 
 	SECTION("elastic-infeasible when loosening cannot fix a rigid conflict") {
@@ -274,10 +339,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		REQUIRE(diag.rows.size() == 1);
-		CHECK(diag.rows[0].subject_kind == "model");
-		CHECK(diag.rows[0].attribute == "elastic_infeasible");
-		CHECK(diag.rows[0].value == "true");
+		REQUIRE(diag.findings.size() == 1);
+		CHECK(diag.findings[0].edit_source == "rigid_conflict");
+		CHECK(diag.findings[0].clause.empty());
 	}
 
 	SECTION("punted multi-instance bound suppresses the elastic-infeasible claim") {
@@ -429,15 +493,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
 		// Exactly one edit (one clause), amount = max overshoot = 7.
-		idx_t change_rows = 0;
-		for (const auto &r : diag.rows) {
-			if (r.attribute == "suggested_change") {
-				change_rows++;
-			}
-		}
-		CHECK(change_rows == 1);
-		CHECK(FindRow(diag, "x <= 5", "amount") == "7");
-		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 12");
+		CHECK(CountSuggestions(diag) == 1);
+		CHECK(AmountOf(diag, "x <= 5") == "7");
+		CHECK(Find(diag, "x <= 5").suggested_change == "x <= 12");
 	}
 
 	SECTION("PER SHARED_SCALAR folds by mode: one edit in query, per-group in expanded") {
@@ -516,8 +574,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		REQUIRE(diag.valid);
 		// The cap loosens to 10 (amount 5); the data floor is not touched.
-		CHECK(FindRow(diag, "x <= 5", "suggested_change") == "x <= 10");
-		CHECK(FindRow(diag, "x >= 3", "conflict").empty());
+		CHECK(Find(diag, "x <= 5").suggested_change == "x <= 10");
+		CHECK(Find(diag, "x >= 3").suggested_change.empty());
 	}
 
 	SECTION("query mode folds a data-RHS clause into one virtual offset") {
@@ -543,12 +601,12 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		REQUIRE(diag.valid);
 		// One folded edit: max overshoot is 7 (row 1 needs x >= 12 vs cap 5).
-		CHECK(FindRow(diag, "x <= cap", "edit_kind") == "loosen");
-		CHECK(FindRow(diag, "x <= cap", "suggested_change") == "x <= cap + 7");
-		CHECK(FindRow(diag, "x <= cap", "amount") == "7");
-		CHECK(FindRow(diag, "x <= cap", "edit_source") == "virtual_offset");
-		CHECK(FindRow(diag, "x <= cap", "offset_scope") == "clause");
-		CHECK(diag.summary.find("diagnosis points to clause `x <= cap`") != string::npos);
+		CHECK(Find(diag, "x <= cap").suggested_change == "x <= cap + 7");
+		CHECK(AmountOf(diag, "x <= cap") == "7");
+		CHECK(Find(diag, "x <= cap").edit_source == "virtual_offset");
+		// Clause-level: query scope names no group and no row.
+		CHECK(Find(diag, "x <= cap").group.empty());
+		CHECK(!Find(diag, "x <= cap").has_row);
 	}
 
 	SECTION("expanded mode exposes each data-RHS row as its own profile entry") {
@@ -574,12 +632,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.valid);
 		// Two independent per-row edits (subjects differ by their numeric rhs — same 5 here,
 		// so both render `x <= 5`), each tagged expanded_row/row. Assert the tags exist.
-		CHECK(FindRow(diag, "x <= 5", "edit_source") == "expanded_row");
-		CHECK(FindRow(diag, "x <= 5", "offset_scope") == "row");
+		CHECK(Find(diag, "x <= 5").edit_source == "expanded_row");
 		// Both rows conflict: the max overshoot 7 appears as an amount somewhere.
 		bool saw_amount_7 = false;
-		for (const auto &r : diag.rows) {
-			if (r.attribute == "amount" && r.value == "7") {
+		for (const auto &f : diag.findings) {
+			if (f.has_amount && f.amount == 7.0) {
 				saw_amount_7 = true;
 			}
 		}
@@ -599,8 +656,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		CHECK(FindRow(diag, "x < 5", "suggested_change") == "x < 11");
-		CHECK(FindRow(diag, "x < 5", "amount") == "6");
+		CHECK(Find(diag, "x < 5").suggested_change == "x < 11");
+		CHECK(AmountOf(diag, "x < 5") == "6");
 	}
 
 	SECTION("source registry supplies canonical names, casts, RHS, and qualifiers") {
@@ -615,13 +672,13 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		source.canonical_rhs = "capacity";
 		source.qualifier = "WHEN enabled PER region";
 		source.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
-		model.constraint_sources.push_back(std::move(source));
+		model.constraint_sources[0] = std::move(source);
 		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
 		string clause = "CAST(real_x AS DOUBLE) <= capacity WHEN enabled PER region";
-		CHECK(FindRow(diag, clause, "suggested_change") ==
+		CHECK(Find(diag, clause).suggested_change ==
 		      "CAST(real_x AS DOUBLE) <= capacity + 3 WHEN enabled PER region");
 	}
 
@@ -646,9 +703,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		avg_row.sense = '<';
 		avg_row.rhs = 5.0;
 		avg_row.provenance.repair_group_id = 0;
+		avg_row.provenance.source_clause_id = 0;
 		avg_row.provenance.kind = ConstraintKind::USER_PARAMETER;
 		avg_row.provenance.shape = ElasticShape::SHARED_SCALAR;
 		avg_row.provenance.avg_scaled = true;
+		m.constraint_sources.push_back(ConstraintSourceInfo());
 		m.constraints.push_back(std::move(avg_row));
 		for (int v : {0, 1}) {
 			ModelConstraint floor;
@@ -665,8 +724,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		CHECK(FindRow(diag, "AVG(x) <= 5", "suggested_change") == "AVG(x) <= 10");
-		CHECK(FindRow(diag, "AVG(x) <= 5", "amount") == "5");
+		CHECK(Find(diag, "AVG(x) <= 5").suggested_change == "AVG(x) <= 10");
+		CHECK(AmountOf(diag, "AVG(x) <= 5") == "5");
 	}
 
 	SECTION("BuildElasticModel slacks a quadratic constraint's linear RHS only, never Q") {
@@ -687,8 +746,10 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		qc.sense = '<';
 		qc.rhs = 4.0;
 		qc.provenance.repair_group_id = 0;
+		qc.provenance.source_clause_id = 0;
 		qc.provenance.kind = ConstraintKind::USER_PARAMETER;
 		qc.provenance.shape = ElasticShape::SHARED_SCALAR;
+		model.constraint_sources.push_back(ConstraintSourceInfo());
 		model.quadratic_constraints.push_back(std::move(qc));
 
 		ElasticModel elastic = BuildElasticModel(model);
@@ -743,12 +804,12 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
 		// The fix loosens x's cap to 10 (amount 10), not y's.
-		CHECK(FindRow(diag, "x <= 0", "suggested_change") == "x <= 10");
-		CHECK(FindRow(diag, "x <= 0", "amount") == "10");
-		CHECK(FindRow(diag, "y <= 0", "suggested_change").empty());
+		CHECK(Find(diag, "x <= 0").suggested_change == "x <= 10");
+		CHECK(AmountOf(diag, "x <= 0") == "10");
+		CHECK(Find(diag, "y <= 0").suggested_change.empty());
 		// The achievable objective is reported as a model-level fact, not in the summary.
-		CHECK(FindRow(diag, "", "achievable_objective") == "10");
-		CHECK(diag.summary.find("best achievable objective is 10") == string::npos);
+		CHECK(Find(diag, "").edit_source == "achievable_objective");
+		CHECK(AmountOf(diag, "") == "10");
 	}
 
 	SECTION("stage 2 reports an unbounded objective after the fix") {
@@ -767,57 +828,91 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		CHECK(FindRow(diag, "x <= 0", "suggested_change") == "x <= 5");
-		CHECK(FindRow(diag, "x <= 0", "amount") == "5");
-		CHECK(FindRow(diag, "", "achievable_objective") == "unbounded");
-		CHECK(diag.summary.find("objective is unbounded") == string::npos);
+		CHECK(Find(diag, "x <= 0").suggested_change == "x <= 5");
+		CHECK(AmountOf(diag, "x <= 0") == "5");
+		CHECK(Find(diag, "").edit_source == "unbounded_after_fix");
+		CHECK(!Find(diag, "").has_amount);
 	}
 
-	SECTION("diagnostics relation carries clause-shaped infeasible attributes") {
+	SECTION("the stash crosses one statement and is consumed once") {
 		DuckDB db(nullptr);
 		Connection con(db);
 
 		DecideDiagnostic diag;
 		diag.valid = true;
 		diag.state = "infeasible";
-		diag.summary = "test infeasible summary";
-		DiagnosticRow row;
-		row.subject_kind = "clause";
-		row.subject = "0";
-		row.attribute = "relaxation";
-		row.value = "rhs + 1";
-		diag.rows.push_back(std::move(row));
+		DiagnosticFinding f;
+		f.clause = "x <= 5";
+		f.suggested_change = "x <= 12";
+		f.has_amount = true;
+		f.amount = 7.0;
+		f.edit_source = "source_literal";
+		diag.findings.push_back(std::move(f));
 		StashDecideDiagnostic(*con.context, std::move(diag));
 
-		auto result = con.Query("SELECT * FROM decide_diagnostics()");
-		REQUIRE(!result->HasError());
-		REQUIRE(result->RowCount() == 1);
-		CHECK(result->GetValue(0, 0).ToString() == "1");
-		CHECK(result->GetValue(1, 0).ToString() == "infeasible");
-		CHECK(result->GetValue(2, 0).ToString() == "clause");
-		CHECK(result->GetValue(3, 0).ToString() == "0");
-		CHECK(result->GetValue(4, 0).ToString() == "relaxation");
-		CHECK(result->GetValue(5, 0).ToString() == "rhs + 1");
+		DecideDiagnostic taken = TakeDecideDiagnostic(*con.context);
+		REQUIRE(taken.valid);
+		CHECK(taken.state == "infeasible");
+		REQUIRE(taken.findings.size() == 1);
+		CHECK(taken.findings[0].clause == "x <= 5");
+		CHECK(taken.findings[0].amount == 7.0);
+		// Consumed: the stash exists only to cross from DECIDE to the DIAGNOSE operator
+		// above it within one statement, so a second read finds nothing.
+		CHECK(!TakeDecideDiagnostic(*con.context).valid);
 	}
 
-	SECTION("inf-or-unbounded caveat is query-message only") {
+	SECTION("a diagnosis renders into the flat relation's columns") {
+		duckdb::vector<string> names;
+		duckdb::vector<LogicalType> types;
+		GetDecideDiagnoseSchema(names, types);
+		REQUIRE(names.size() == 9);
+		CHECK(names[0] == "state");
+		CHECK(names[3] == "amount");
+		CHECK(types[3] == LogicalType::DOUBLE);
+		CHECK(names[4] == "total");
+		CHECK(types[4] == LogicalType::BIGINT);
+		CHECK(names[5] == "scope");
+		CHECK(types[5] == LogicalType::VARCHAR);
+		CHECK(names[8] == "row");
+		CHECK(types[8] == LogicalType::BIGINT);
+
 		DecideDiagnostic diag;
 		diag.valid = true;
-		diag.state = "unbounded";
-		diag.summary = "The objective is unbounded because x can grow without bound.";
+		diag.state = "infeasible";
+		DiagnosticFinding f;
+		f.clause = "x <= 5";
+		f.suggested_change = "x <= 12";
+		f.has_amount = true;
+		f.amount = 7.0;
+		f.edit_source = "source_literal";
+		diag.findings.push_back(std::move(f));
 
-		try {
-			ThrowDecideDiagnosisReady(diag, "It may instead be infeasible.");
-			FAIL("expected ThrowDecideDiagnosisReady to throw");
-		} catch (const InvalidInputException &ex) {
-			string message = ex.what();
-			CHECK(message.find("The objective is unbounded because x can grow without bound.") != string::npos);
-			CHECK(message.find("It may instead be infeasible.") != string::npos);
-			CHECK(message.find("SELECT * FROM decide_diagnostics()") != string::npos);
-		}
+		DataChunk chunk;
+		chunk.Initialize(Allocator::DefaultAllocator(), types);
+		idx_t offset = 0;
+		RenderDecideDiagnostic(diag, offset, chunk);
+		REQUIRE(chunk.size() == 1);
+		CHECK(chunk.GetValue(0, 0).ToString() == "infeasible");
+		CHECK(chunk.GetValue(1, 0).ToString() == "x <= 5");
+		CHECK(chunk.GetValue(2, 0).ToString() == "x <= 12");
+		CHECK(chunk.GetValue(3, 0).GetValue<double>() == 7.0);
+		CHECK(chunk.GetValue(4, 0).IsNull());
+		CHECK(chunk.GetValue(5, 0).IsNull());
+		CHECK(chunk.GetValue(6, 0).ToString() == "source_literal");
+		// total, scope, group and row are NULL for a non-counted finding outside
+		// the expanded slack scope.
+		CHECK(chunk.GetValue(7, 0).IsNull());
+		CHECK(chunk.GetValue(8, 0).IsNull());
+	}
 
-		CHECK(diag.summary == "The objective is unbounded because x can grow without bound.");
-		CHECK(diag.summary.find("It may instead be infeasible.") == string::npos);
+	SECTION("a feasible query still reports one finding") {
+		DecideDiagnostic diag = BuildFeasibleDiagnostic();
+		REQUIRE(diag.valid);
+		CHECK(diag.state == "feasible");
+		REQUIRE(diag.findings.size() == 1);
+		CHECK(diag.findings[0].clause.empty());
+		CHECK(diag.findings[0].suggested_change.empty());
+		CHECK(!diag.findings[0].has_amount);
 	}
 
 	SECTION("unbounded unavailable reason distinguishes empty linear rays") {
@@ -901,9 +996,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
-		CHECK(FindRow(diag, "(x <> 3)", "edit_kind") == "drop");
-		CHECK(diag.summary.find("diagnosis points to clause `(x <> 3)`") != string::npos);
-		CHECK(diag.summary.find("remove `(x <> 3)`") == string::npos);
+		CHECK(Find(diag, "(x <> 3)").edit_source == "remove_only");
+		CHECK(Find(diag, "(x <> 3)").suggested_change == "remove this clause");
+		CHECK(!Find(diag, "(x <> 3)").has_amount);
 	}
 
 	SECTION("prefer-loosen: a loosenable knob is chosen over dropping a `<>`") {
@@ -932,8 +1027,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		CHECK(FindRow(diag, "x <= 3", "suggested_change") == "x <= 4");
-		CHECK(FindRow(diag, "(x <> 3)", "edit_kind").empty()); // not dropped
+		CHECK(Find(diag, "x <= 3").suggested_change == "x <= 4");
+		CHECK(Find(diag, "(x <> 3)").edit_source.empty()); // not dropped
 	}
 
 	// I4 follow-up — aggregate `<>` (`SUM(x) <> K`). The disjunction binary is a
@@ -973,6 +1068,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
 		// Without the label channel this subject would be empty (nameless drop).
-		CHECK(FindRow(diag, "(SUM(x) <> 3)", "edit_kind") == "drop");
+		CHECK(Find(diag, "(SUM(x) <> 3)").edit_source == "remove_only");
 	}
 }

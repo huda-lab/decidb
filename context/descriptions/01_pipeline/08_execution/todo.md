@@ -43,11 +43,11 @@ a computed projection expression with no alias produces an empty name, and the
 diagnosis then labels an escaping group by position.
 
 **Decision needed**: whether an unnamed computed column should fall back to its
-SQL text, to a positional label, or be excluded from `affected_rows` output
+SQL text, to a positional label, or be excluded from the escape characterization
 entirely. The current behavior is the second by accident rather than by choice.
 
 **Test**: an unbounded query whose `PER` key is a computed expression with no
-alias — check what `decide_diagnostics()` calls the escaping group.
+alias — check what `DIAGNOSE` puts in the finding's `group` column.
 
 **Done file**: `done.md` §7, and
 [`../../07_query_diagnostics/unbounded/done.md`](../../07_query_diagnostics/unbounded/done.md).

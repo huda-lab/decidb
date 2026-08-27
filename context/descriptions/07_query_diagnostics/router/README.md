@@ -12,7 +12,7 @@ places:
 - the facade's inf/unb disambiguation re-solve (`DisambiguateInfOrUnbd` in
   `ilp_solver.cpp` — zero-objective feasibility probe) — *retained: it keeps
   concrete statuses concrete before the router sees the result*,
-- the `DiagnosisApplies(mode, status)` filter gate — *now a shared helper the
+- the `DiagnosisApplies(armed, status)` statement gate — *now a shared helper the
   classifier defers to*, and
 - the engine-selection / fall-through branch in `PhysicalDecide::Finalize`
   (`physical_decide.cpp`) — **done** (Batch 1): unified behind `RouteSolveResult` +
@@ -28,7 +28,7 @@ ray (`check ray`) and uses that sub-signal to choose the terminal.
 The full dispatch tree is the area's single organizing diagram — it lives in the
 [area README](../README.md) so there is one map of the whole system. This doc covers
 the spine's own detail: each terminal's behavior, why the inf/unb branch uses a ray,
-and the migration off today's scattered logic.
+and the shipped replacement for the former scattered logic.
 
 ## Terminals
 
@@ -37,10 +37,11 @@ and the migration off today's scattered logic.
 | solved | Normal success; no diagnosis. |
 | failed → unbounded | `find ray`, then **report** the escaping variables + forced remedy (the shipped unbounded engine). |
 | failed → infeasible | `elastic` (the infeasible engine), then **report** the relaxation. |
-| failed → inf/unb → ray **found** | **report exactly as standard unbounded** (name the escaping variables + prescribe a bound), with one added query-error caveat: *It may instead be infeasible.* The diagnostics relation is unchanged. |
+| failed → inf/unb → ray **found** | **report exactly as standard unbounded** (name the escaping variables + prescribe a bound). When the engine can name no variable, the `undiagnosed` finding reports the state as `infeasible or unbounded` so the ambiguity is not hidden. |
 | failed → inf/unb → ray **not found** | `elastic`, then **report** (no improving direction exists, so it resolves toward infeasible). |
-| time_limit → **incumbent** present | **report** the incumbent + optimality gap. |
-| time_limit → **no sol** | **report slow** (no feasible solution found within the limit). |
+
+A time limit is not on this list. It is handled before the router runs — see
+`../../01_pipeline/08_execution/slow_solves.md`.
 
 ## Why a ray is the right disambiguator for inf/unb
 
@@ -53,10 +54,10 @@ resolves toward infeasibility.
 
 A found ray means unbounded *if a feasible point exists* — and the inf/unb path is
 exactly the case where the solver never established feasibility. The router does
-not pay for a separate feasibility check on the found branch; instead it reports as
-standard unbounded and always appends *"It may instead be infeasible."* The
-caveat is therefore inherent to inf/unb (not specific to integer models, though a
-MILP gives a second reason it can hold).
+not pay for a separate feasibility check on the found branch. When the engine names
+an escaping variable, it returns the standard unbounded findings. When it cannot,
+the fallback finding keeps `state='infeasible or unbounded'` so the unresolved status
+is not hidden.
 
 ## Status & dependencies
 
@@ -68,20 +69,21 @@ incrementally as those engines exist:
   report unbounded engine behind the `UNBOUNDED` terminal.
 - **residual inf/unb check-ray routing** — **shipped** (Batch 2, `done.md`): if
   `INF_OR_UNBD` survives existing concrete-status probes, ray present routes to
-  the unbounded terminal with the query-only caveat; no ray routes to infeasible.
+  the unbounded terminal; no ray routes to infeasible. An unnamed ray retains the
+  ambiguous state in its `undiagnosed` finding.
 - **elastic / infeasible** engine — **shipped** (`infeasible/`): the `infeasible`
   and inf/unb-`not found` branches run the elastic engine and report the
   least-change relaxation when one is available.
-- **slow / time_limit** handling — **shipped** (`slow/`): the `incumbent`/`no sol`
-  split, the checkpoint report, and the `decide_on_timeout` continuation loop.
+- **slow / time_limit** — **no longer a terminal** (batch H). A time limit, and Ctrl-C,
+  are ordinary execution behaviour: the operator handles them before the router runs, with
+  or without the prefix. See `../../01_pipeline/08_execution/slow_solves.md`.
 
-The `diagnose_decide` setting still gates the whole router: `auto` (default) runs
-it on a failed solve; `off` suppresses it and reproduces the plain static solver
-error (see `foundations/done.md`).
+The `DIAGNOSE` statement prefix gates the whole router: with it, a failed solve routes to
+its engine; without it, every failure collapses to `UNDIAGNOSED` and the plain static
+solver error (see `foundations/done.md`).
 
 ## Docs in this folder
 
 - `README.md` — this overview + per-terminal detail (the tree itself is in the area README).
-- `todo.md` — the work-queue: per-terminal behavior, the migration off the current
-  scattered logic, and open design questions.
+- `todo.md` — records that no router work remains.
 - `done.md` — filled in as the router ships.

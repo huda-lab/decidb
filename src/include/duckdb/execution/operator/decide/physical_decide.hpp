@@ -163,6 +163,14 @@ public:
     //! the unbounded diagnosis to label escaping categorical groups (affected_rows).
     vector<string> input_column_names;
 
+    //! The `DIAGNOSE` prefix the user wrote, carried down from LogicalDecide::diagnose.
+    //! It is the ONLY thing that arms the diagnosis engines. When true a failed solve
+    //! stashes its findings for the DIAGNOSE operator above to return as rows instead of
+    //! raising; when false — every unprefixed query — a failed solve reports its status
+    //! and stops, and none of the diagnostic prep (unbounded-ray extraction, model
+    //! retention, the elastic re-solves) is done or paid for.
+    bool diagnose = false;
+
     //! The registered NAME of the backend this query was planned for, chosen once by
     //! stage 05 (LogicalDecide::solver_backend_name) and copied here at physical
     //! planning. Layer 8 READS it — the primary solve and every diagnostic re-solve run

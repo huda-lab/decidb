@@ -14,7 +14,7 @@
 
 namespace duckdb {
 
-DiagnosisTerminal RouteSolveResult(const SolverResult &result, const string &mode) {
+DiagnosisTerminal RouteSolveResult(const SolverResult &result, bool armed) {
 	switch (result.status) {
 	case SolverStatus::OPTIMAL:
 		return DiagnosisTerminal::SOLVED;
@@ -25,16 +25,19 @@ DiagnosisTerminal RouteSolveResult(const SolverResult &result, const string &mod
 		// solution is present whenever it reports SUBOPTIMAL.
 		return DiagnosisTerminal::SOLVED;
 	case SolverStatus::UNBOUNDED:
-		return DiagnosisApplies(mode, result.status) ? DiagnosisTerminal::UNBOUNDED
+		return DiagnosisApplies(armed, result.status) ? DiagnosisTerminal::UNBOUNDED
 		                                             : DiagnosisTerminal::UNDIAGNOSED;
 	case SolverStatus::INFEASIBLE:
-		return DiagnosisApplies(mode, result.status) ? DiagnosisTerminal::INFEASIBLE
+		return DiagnosisApplies(armed, result.status) ? DiagnosisTerminal::INFEASIBLE
 		                                             : DiagnosisTerminal::UNDIAGNOSED;
 	case SolverStatus::TIME_LIMIT:
-		return DiagnosisApplies(mode, result.status) ? DiagnosisTerminal::TIME_LIMIT
-		                                             : DiagnosisTerminal::UNDIAGNOSED;
+		// Not a diagnosis state. A slow solve is handled on the ordinary execution path
+		// — checkpoint report, then continue or take the incumbent — with or without the
+		// DIAGNOSE prefix, and the operator deals with it before the router ever runs.
+		// Reaching here means the timeout was not handled, so fall to the plain error.
+		return DiagnosisTerminal::UNDIAGNOSED;
 	case SolverStatus::INF_OR_UNBD:
-		if (!DiagnosisApplies(mode, result.status)) {
+		if (!DiagnosisApplies(armed, result.status)) {
 			return DiagnosisTerminal::UNDIAGNOSED;
 		}
 		return result.ray.empty() ? DiagnosisTerminal::INFEASIBLE : DiagnosisTerminal::UNBOUNDED;

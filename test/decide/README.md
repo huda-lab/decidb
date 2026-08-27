@@ -174,7 +174,7 @@ make decide-test
 
 | Marker | Coverage |
 |--------|----------|
-| `query_diagnostics` | Structured solver statuses, `diagnose_decide` settings, `decide_diagnostics()` relation lifecycle/schema, unbounded variable naming, and escaping-instance characterization |
+| `query_diagnostics` | Structured solver statuses, the `DIAGNOSE` prefix as the only trigger, the flat findings relation's schema and composability, unbounded variable naming, escaping-instance characterization, and slow-solve reporting / continuation |
 
 ### Scale & Performance
 

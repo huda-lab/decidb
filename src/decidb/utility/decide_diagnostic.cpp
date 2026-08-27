@@ -3,8 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
-#include "duckdb/function/table_function.hpp"
-#include "duckdb/function/built_in_functions.hpp"
+#include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
 
@@ -15,36 +14,9 @@
 namespace duckdb {
 
 //===----------------------------------------------------------------------===//
-// F4: diagnose_decide session setting + filter gate
+// Engine tuning settings. None of these starts a diagnosis: only the DIAGNOSE
+// statement prefix does that.
 //===----------------------------------------------------------------------===//
-
-static bool IsValidDiagnoseMode(const string &mode) {
-	return mode == "off" || mode == "auto";
-}
-
-static void DiagnoseDecideSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
-	string mode = StringUtil::Lower(parameter.ToString());
-	if (!IsValidDiagnoseMode(mode)) {
-		throw InvalidInputException(
-		    "Invalid diagnose_decide mode '" + parameter.ToString() +
-		    "'. Valid modes: off, auto.");
-	}
-	parameter = Value(mode); // normalize to lowercase
-}
-
-static bool IsValidOnTimeoutMode(const string &mode) {
-	return mode == "ask" || mode == "error" || mode == "continue";
-}
-
-static void DecideOnTimeoutSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
-	string mode = StringUtil::Lower(parameter.ToString());
-	if (!IsValidOnTimeoutMode(mode)) {
-		throw InvalidInputException(
-		    "Invalid decide_on_timeout mode '" + parameter.ToString() +
-		    "'. Valid modes: ask, error, continue.");
-	}
-	parameter = Value(mode); // normalize to lowercase
-}
 
 static void EscapeRateSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
@@ -100,92 +72,6 @@ static void SlackScopeSetCallback(ClientContext &context, SetScope scope, Value 
 static constexpr double DECIDE_L0_TOLERANCE_DEFAULT = 1e-4;
 static constexpr double DECIDE_L0_TOLERANCE_FLOOR = 1e-5;
 
-struct DiagnosticTarget {
-	string label;
-	vector<string> groups;
-	bool has_ungrouped = false;
-};
-
-static void AddDiagnosticTarget(vector<DiagnosticTarget> &targets, const ClauseEdit &edit) {
-	auto target = std::find_if(targets.begin(), targets.end(), [&](const DiagnosticTarget &candidate) {
-		return candidate.label == edit.label;
-	});
-	if (target == targets.end()) {
-		targets.push_back(DiagnosticTarget());
-		target = targets.end() - 1;
-		target->label = edit.label;
-	}
-	if (edit.group.empty()) {
-		target->has_ungrouped = true;
-		return;
-	}
-	if (std::find(target->groups.begin(), target->groups.end(), edit.group) == target->groups.end()) {
-		target->groups.push_back(edit.group);
-	}
-}
-
-static string JoinDiagnosticPhrases(const vector<string> &phrases) {
-	if (phrases.empty()) {
-		return "";
-	}
-	if (phrases.size() == 1) {
-		return phrases[0];
-	}
-	string result;
-	for (idx_t i = 0; i < phrases.size(); i++) {
-		if (i > 0) {
-			result += (i + 1 == phrases.size()) ? (phrases.size() == 2 ? " and " : ", and ") : ", ";
-		}
-		result += phrases[i];
-	}
-	return result;
-}
-
-static string QuotedGroupList(const vector<string> &groups) {
-	// Cap the headline enumeration: with dozens of failing groups, listing every key
-	// inline produces a wall of text. Show the first K, then "and N more"; the full
-	// per-group detail lives in decide_diagnostics(). Relation output is unaffected.
-	static constexpr idx_t HEADLINE_GROUP_CAP = 3;
-	vector<string> quoted;
-	idx_t shown = std::min<idx_t>(groups.size(), HEADLINE_GROUP_CAP);
-	for (idx_t i = 0; i < shown; i++) {
-		quoted.push_back("`" + groups[i] + "`");
-	}
-	if (groups.size() <= HEADLINE_GROUP_CAP) {
-		return JoinDiagnosticPhrases(quoted);
-	}
-	// Over the cap: comma-join the shown keys and append the remainder count. Steer
-	// the user to the relation for the exhaustive list.
-	string result;
-	for (idx_t i = 0; i < quoted.size(); i++) {
-		result += (i > 0 ? ", " : "") + quoted[i];
-	}
-	result += " and " + std::to_string(groups.size() - shown) +
-	          " more (see decide_diagnostics())";
-	return result;
-}
-
-static vector<string> BuildDiagnosticTargetPhrases(const vector<ClauseEdit> &edits) {
-	vector<DiagnosticTarget> targets;
-	for (const auto &edit : edits) {
-		AddDiagnosticTarget(targets, edit);
-	}
-
-	vector<string> phrases;
-	for (const auto &target : targets) {
-		if (target.has_ungrouped) {
-			phrases.push_back("clause `" + target.label + "`");
-		}
-		if (!target.groups.empty()) {
-			string phrase = "grouped clause `" + target.label + "` for ";
-			phrase += target.groups.size() == 1 ? "group " : "groups ";
-			phrase += QuotedGroupList(target.groups);
-			phrases.push_back(phrase);
-		}
-	}
-	return phrases;
-}
-
 static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
 	double v = parameter.GetValue<double>();
 	if (!(v >= DECIDE_L0_TOLERANCE_FLOOR)) {
@@ -196,22 +82,8 @@ static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value
 }
 
 void RegisterDecideDiagnosticOptions(DBConfig &config) {
-	config.AddExtensionOption(
-	    "diagnose_decide",
-	    "DECIDE failure-diagnosis mode: auto (default) or off. Under auto, a failed solve "
-	    "(infeasible / unbounded / time-limit) is automatically diagnosed where an engine exists; "
-	    "off suppresses diagnosis and reproduces the plain static solver error.",
-	    LogicalType::VARCHAR, Value("auto"), DiagnoseDecideSetCallback);
-	config.AddExtensionOption(
-	    "decide_on_timeout",
-	    "DECIDE behavior when the solver hits the time limit (only under diagnose_decide='auto'; "
-	    "'off' still gives the plain static error). ask (default): print the checkpoint report and, "
-	    "at an interactive terminal, prompt to keep solving on the warm solver — Enter continues, s "
-	    "stops (non-terminal stdin falls back to error). error: print the report, then error. "
-	    "continue: keep resuming automatically until the solver finishes (Ctrl-C stops at the next "
-	    "checkpoint).",
-	    LogicalType::VARCHAR, Value("ask"), DecideOnTimeoutSetCallback);
-	// Unbounded characterization knobs (see decide_diagnostics() affected_rows).
+	// Unbounded characterization knobs: they shape the `group` / `amount` columns a
+	// runaway variable reports under DIAGNOSE.
 	config.AddExtensionOption(
 	    "diagnose_decide_escape_rate",
 	    "Unbounded diagnosis: report a categorical group when its within-group escape rate "
@@ -254,22 +126,6 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    LogicalType::DOUBLE, Value::DOUBLE(DECIDE_L0_TOLERANCE_DEFAULT), L0ToleranceSetCallback);
 }
 
-string GetDiagnoseDecideMode(ClientContext &context) {
-	Value value;
-	if (context.TryGetCurrentSetting("diagnose_decide", value) && !value.IsNull()) {
-		return StringUtil::Lower(value.ToString());
-	}
-	return "auto";
-}
-
-string GetDecideOnTimeoutMode(ClientContext &context) {
-	Value value;
-	if (context.TryGetCurrentSetting("decide_on_timeout", value) && !value.IsNull()) {
-		return StringUtil::Lower(value.ToString());
-	}
-	return "ask";
-}
-
 double GetDecideL0Tolerance(ClientContext &context) {
 	Value value;
 	if (context.TryGetCurrentSetting("decide_l0_tolerance", value) && !value.IsNull()) {
@@ -307,21 +163,19 @@ DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
 	return params;
 }
 
-bool DiagnosisApplies(const string &mode, SolverStatus status) {
-	if (mode == "auto") {
-		return status == SolverStatus::INFEASIBLE || status == SolverStatus::UNBOUNDED ||
-		       status == SolverStatus::INF_OR_UNBD ||
-		       status == SolverStatus::TIME_LIMIT;
+bool DiagnosisApplies(bool armed, SolverStatus status) {
+	if (!armed) {
+		return false; // no DIAGNOSE prefix: the query never pays for a diagnosis
 	}
-	return false; // "off" or unrecognized
-}
-
-bool DiagnoseModeArmsDiagnosis(const string &mode) {
-	return mode == "auto";
+	// TIME_LIMIT is deliberately absent. A slow solve is ordinary execution behaviour —
+	// it reports its checkpoint and offers to continue on the normal path, with or
+	// without the prefix — not a state for an engine to explain.
+	return status == SolverStatus::INFEASIBLE || status == SolverStatus::UNBOUNDED ||
+	       status == SolverStatus::INF_OR_UNBD;
 }
 
 //===----------------------------------------------------------------------===//
-// Diagnosis construction + per-connection stash
+// Diagnosis construction + statement-scoped handoff
 //===----------------------------------------------------------------------===//
 
 vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t total_instances,
@@ -379,36 +233,15 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 	return rules;
 }
 
-//! Format one variable's `affected_rows` / `affected_entities` cell. Empty => NULL.
-static string FormatEscapingInstances(const VarEscape &ve) {
-	if (ve.is_aux || ve.total <= 1) {
-		// Aux/linearization columns are name-only; a single-instance variable (no scope
-		// multiplicity — e.g. a DECIDE over a single-row input) has nothing to
-		// disambiguate.
-		return string();
-	}
-	// Plain-language, self-describing cell: "rows"/"entities" per the variable's scope,
-	// so no legend is needed to read it.
-	const char *noun = ve.is_entity_scoped ? " entities" : " rows";
-	if (ve.all_escape) {
-		return "all " + std::to_string(ve.total) + noun;
-	}
-	if (!ve.rules.empty()) {
-		string cell;
-		for (idx_t i = 0; i < ve.rules.size(); i++) {
-			const auto &r = ve.rules[i];
-			cell += (i == 0 ? "" : "; ") + std::to_string(r.escaping) + " of " +
-			        std::to_string(r.total) + noun + " where " + r.column + " = '" + r.value + "'";
-		}
-		return cell;
-	}
-	// Scattered escape that no categorical group characterizes: report the bare count.
-	return std::to_string(ve.escaping) + " of " + std::to_string(ve.total) + noun;
+//! The prescribed remedy for a runaway variable: name what to add, never invent the
+//! cap. DeciDB knows the variable needs a ceiling; only the user knows how high.
+static string PrescribeCap(const VarEscape &ve) {
+	return ve.name + " <= <cap>";
 }
 
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
-	// Precondition: at least one named escaping variable. The caller falls through to
-	// the rich static error when the ray names nothing (a quadratic model attaches no
+	// Precondition: at least one named escaping variable. The caller reports the bare
+	// `undiagnosed` finding when the ray names nothing (a quadratic model attaches no
 	// ray, or only internal auxiliaries escaped), so this never builds a content-free
 	// diagnosis.
 	D_ASSERT(!escapes.empty());
@@ -416,40 +249,57 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 	diag.valid = true;
 	diag.state = "unbounded";
 
-	string names;
-	for (idx_t i = 0; i < escapes.size(); i++) {
-		names += (i == 0 ? "" : ", ") + escapes[i].name;
-	}
-	// Prescribe the forced remedy (add a finite bound) without inventing the cap
-	// value — DeciDB names what to change, the user supplies the magnitude.
-	if (escapes.size() == 1) {
-		diag.summary = "variable " + names + " can grow without bound. Add an upper bound, e.g. SUCH THAT " +
-		               escapes[0].name + " <= <cap>.";
-	} else {
-		string bounds;
-		for (idx_t i = 0; i < escapes.size(); i++) {
-			bounds += (i == 0 ? "" : " AND ") + escapes[i].name + " <= <cap>";
-		}
-		diag.summary = "variables " + names + " can grow without bound. Add upper bounds, e.g. SUCH THAT " +
-		               bounds + ".";
-	}
 	for (const auto &ve : escapes) {
-		DiagnosticRow row;
-		row.subject_kind = "variable";
-		row.subject = ve.name;
-		row.attribute = "grows_toward";
-		row.value = ve.direction;
-		diag.rows.push_back(std::move(row));
+		DiagnosticFinding base;
+		base.clause = ve.name;
+		base.suggested_change = PrescribeCap(ve);
+		base.edit_source =
+		    ve.direction == EscapeDirection::NEGATIVE ? "runaway_-inf" : "runaway_+inf";
 
-		auto escaping_instances = FormatEscapingInstances(ve);
-		if (!escaping_instances.empty()) {
-			DiagnosticRow instances_row;
-			instances_row.subject_kind = "variable";
-			instances_row.subject = ve.name;
-			instances_row.attribute = ve.is_entity_scoped ? "affected_entities" : "affected_rows";
-			instances_row.value = std::move(escaping_instances);
-			diag.rows.push_back(std::move(instances_row));
+		// An aux/linearization column, or a variable with a single instance, has no
+		// slice to break out: one finding, no count worth reporting.
+		if (ve.is_aux || ve.total <= 1) {
+			diag.findings.push_back(std::move(base));
+			continue;
 		}
+		const char *instance_scope = ve.is_entity_scoped ? "entity" : "row";
+		if (ve.all_escape) {
+			// Every instance escapes, so no categorical slice explains anything the
+			// whole-variable count does not: one finding covering all of them.
+			DiagnosticFinding f = base;
+			f.has_amount = true;
+			f.amount = static_cast<double>(ve.total);
+			f.has_total = true;
+			f.total = static_cast<int64_t>(ve.total);
+			f.scope = instance_scope;
+			diag.findings.push_back(std::move(f));
+			continue;
+		}
+		if (!ve.rules.empty()) {
+			// One finding per categorical slice that cleared the escape-rate threshold,
+			// so `WHERE group IS NOT NULL` is the "which slice" question and `amount`
+			// answers "how many instances in it".
+			for (const auto &r : ve.rules) {
+				DiagnosticFinding f = base;
+				f.group = r.column + " = '" + r.value + "'";
+				f.has_amount = true;
+				f.amount = static_cast<double>(r.escaping);
+				f.has_total = true;
+				f.total = static_cast<int64_t>(r.total);
+				f.scope = instance_scope;
+				diag.findings.push_back(std::move(f));
+			}
+			continue;
+		}
+		// Scattered escape that no categorical group characterizes: report the count
+		// alone, with no slice to name.
+		DiagnosticFinding f = base;
+		f.has_amount = true;
+		f.amount = static_cast<double>(ve.escaping);
+		f.has_total = true;
+		f.total = static_cast<int64_t>(ve.total);
+		f.scope = instance_scope;
+		diag.findings.push_back(std::move(f));
 	}
 	return diag;
 }
@@ -458,103 +308,54 @@ DecideDiagnostic BuildInfeasibleDiagnostic(const vector<ClauseEdit> &edits,
                                            const string &achievable_objective,
                                            bool unbounded_after_fix) {
 	// Precondition: at least one edit. The engine returns an invalid diagnosis (so the
-	// caller falls through to the static error) when nothing is loosenable or every
-	// slack came back zero, so this never builds a content-free edit list.
+	// caller emits an `undiagnosed` finding) when nothing is loosenable or every slack
+	// came back zero, so this never builds a content-free edit list.
 	D_ASSERT(!edits.empty());
 	DecideDiagnostic diag;
 	diag.valid = true;
 	diag.state = "infeasible";
 
-	// Summary: keep stderr as a pointer to the relevant query clauses. Suggestions,
-	// amounts, conflict counts, and achievable-objective facts live in decide_diagnostics().
-	auto relation_subject = [](const ClauseEdit &e) {
-		return e.group.empty() ? e.label : e.label + " [group: " + e.group + "]";
-	};
-
-	vector<string> phrases = BuildDiagnosticTargetPhrases(edits);
-	diag.summary = "the constraints cannot all be satisfied at once";
-	if (!phrases.empty()) {
-		diag.summary += "; diagnosis points to " + JoinDiagnosticPhrases(phrases) + ".";
-	}
-
-	// T3: emit the slack-scope provenance rows (edit_source, offset_scope) for any edit
-	// kind that carries them. Empty fields are omitted so the legacy paths are unchanged.
-	auto emit_source_scope = [&](const string &subject, const ClauseEdit &e) {
-		if (!e.edit_source.empty()) {
-			DiagnosticRow src_row;
-			src_row.subject_kind = "clause";
-			src_row.subject = subject;
-			src_row.attribute = "edit_source";
-			src_row.value = e.edit_source;
-			diag.rows.push_back(std::move(src_row));
-		}
-		if (!e.offset_scope.empty()) {
-			DiagnosticRow scope_row;
-			scope_row.subject_kind = "clause";
-			scope_row.subject = subject;
-			scope_row.attribute = "offset_scope";
-			scope_row.value = e.offset_scope;
-			diag.rows.push_back(std::move(scope_row));
-		}
-	};
-
 	for (const auto &e : edits) {
-		string subject = relation_subject(e);
+		DiagnosticFinding f;
+		f.clause = e.label;
+		f.group = e.group;
+		if (e.row != DConstants::INVALID_INDEX) {
+			f.has_row = true;
+			f.row = static_cast<int64_t>(e.row);
+		}
 		if (e.kind == ClauseEditKind::DROP) {
-			// I4: a dedicated structured marker, distinct from the LOOSEN
-			// suggested_change/amount pair. The subject names the clause to delete.
-			DiagnosticRow drop_row;
-			drop_row.subject_kind = "clause";
-			drop_row.subject = subject;
-			drop_row.attribute = "edit_kind";
-			drop_row.value = "drop";
-			diag.rows.push_back(std::move(drop_row));
-			emit_source_scope(subject, e);
+			// A remove-only clause (`<>`) cannot be loosened by any amount, so there is
+			// no re-quotable text and no magnitude — the change itself is the deletion.
+			f.suggested_change = "remove this clause";
+			f.edit_source = e.edit_source.empty() ? "remove_only" : e.edit_source;
+			diag.findings.push_back(std::move(f));
 			continue;
 		}
-		// LOOSEN: edit_kind='loosen' (I5) + the suggested_change/amount pair.
-		DiagnosticRow kind_row;
-		kind_row.subject_kind = "clause";
-		kind_row.subject = subject;
-		kind_row.attribute = "edit_kind";
-		kind_row.value = "loosen";
-		diag.rows.push_back(std::move(kind_row));
-
-		DiagnosticRow change_row;
-		change_row.subject_kind = "clause";
-		change_row.subject = subject;
-		change_row.attribute = "suggested_change";
-		change_row.value = e.suggestion;
-		diag.rows.push_back(std::move(change_row));
-
-		DiagnosticRow amount_row;
-		amount_row.subject_kind = "clause";
-		amount_row.subject = subject;
-		amount_row.attribute = "amount";
-		amount_row.value = e.amount;
-		diag.rows.push_back(std::move(amount_row));
-
-		// Facet A: a PER-grouped edit names its group's printable key so two folded
-		// `SUM(x)` clauses stay distinguishable in the relation. Emitted only when set.
-		if (!e.group.empty()) {
-			DiagnosticRow group_row;
-			group_row.subject_kind = "clause";
-			group_row.subject = subject;
-			group_row.attribute = "group";
-			group_row.value = e.group;
-			diag.rows.push_back(std::move(group_row));
-		}
-		emit_source_scope(subject, e);
+		f.suggested_change = e.suggestion;
+		f.has_amount = e.has_amount;
+		f.amount = e.amount;
+		f.edit_source = e.edit_source;
+		diag.findings.push_back(std::move(f));
 	}
-	// I3: model-level achievable objective. Single stable attribute (the I5 vocabulary
-	// anchor); the value is the number, or "unbounded" when the relaxed problem has no
-	// finite optimum. Omitted entirely when neither is set (the data-RHS-only path).
-	if (unbounded_after_fix || !achievable_objective.empty()) {
-		DiagnosticRow obj_row;
-		obj_row.subject_kind = "model";
-		obj_row.attribute = "achievable_objective";
-		obj_row.value = unbounded_after_fix ? "unbounded" : achievable_objective;
-		diag.rows.push_back(std::move(obj_row));
+	// I3: what the objective reaches once the edits above are applied. A model-level
+	// fact, so it names no clause.
+	if (unbounded_after_fix) {
+		DiagnosticFinding f;
+		f.edit_source = "unbounded_after_fix";
+		f.suggested_change = "the repaired problem has no finite optimum — bound the objective too";
+		diag.findings.push_back(std::move(f));
+	} else if (!achievable_objective.empty()) {
+		DiagnosticFinding f;
+		f.edit_source = "achievable_objective";
+		try {
+			f.amount = std::stod(achievable_objective);
+			f.has_amount = true;
+		} catch (const std::exception &) {
+			// Not a number we can put in a DOUBLE column: keep the text instead of
+			// dropping the finding.
+			f.suggested_change = achievable_objective;
+		}
+		diag.findings.push_back(std::move(f));
 	}
 	return diag;
 }
@@ -565,34 +366,16 @@ DecideDiagnostic BuildUnreachableBoundDiagnostic(const vector<UnreachableClause>
 	diag.valid = true;
 	diag.state = "infeasible";
 
-	vector<string> phrases;
 	for (const auto &c : clauses) {
-		phrases.push_back("clause `" + c.label + "`");
-	}
-	diag.summary = "the constraints cannot all be satisfied at once; " +
-	               JoinDiagnosticPhrases(phrases) +
-	               (phrases.size() == 1 ? " sets" : " set") +
-	               " a bound no value can reach.";
-
-	for (const auto &c : clauses) {
-		string subject = c.group.empty() ? c.label : c.label + " [group: " + c.group + "]";
-		DiagnosticRow row;
-		row.subject_kind = "clause";
-		row.subject = subject;
-		row.attribute = "unreachable_bound";
-		row.value = "true";
-		diag.rows.push_back(std::move(row));
-
-		// Facet A: keep two folded clauses of the same shape distinguishable in the
-		// relation, the same way a LOOSEN edit does.
-		if (!c.group.empty()) {
-			DiagnosticRow group_row;
-			group_row.subject_kind = "clause";
-			group_row.subject = subject;
-			group_row.attribute = "group";
-			group_row.value = c.group;
-			diag.rows.push_back(std::move(group_row));
-		}
+		// No slack to read and no finite loosening that reaches this bound, so the
+		// finding names the clause and says what is wrong with it rather than quoting
+		// the user's own text back as a suggested change.
+		DiagnosticFinding f;
+		f.clause = c.label;
+		f.group = c.group;
+		f.suggested_change = "lower this bound — no assignment can reach it";
+		f.edit_source = "unreachable_bound";
+		diag.findings.push_back(std::move(f));
 	}
 	return diag;
 }
@@ -601,13 +384,30 @@ DecideDiagnostic BuildElasticInfeasibleDiagnostic() {
 	DecideDiagnostic diag;
 	diag.valid = true;
 	diag.state = "infeasible";
-	diag.summary = "the constraints cannot all be satisfied at once, and loosening your SUCH THAT "
-	               "limits cannot fix it — the conflict involves a fixed part of the query.";
-	DiagnosticRow row;
-	row.subject_kind = "model";
-	row.attribute = "elastic_infeasible";
-	row.value = "true";
-	diag.rows.push_back(std::move(row));
+	DiagnosticFinding f;
+	f.suggested_change = "loosening your SUCH THAT limits cannot fix this — the conflict "
+	                     "involves a fixed part of the query";
+	f.edit_source = "rigid_conflict";
+	diag.findings.push_back(std::move(f));
+	return diag;
+}
+
+DecideDiagnostic BuildUndiagnosedDiagnostic(const string &state, const string &reason) {
+	DecideDiagnostic diag;
+	diag.valid = true;
+	diag.state = state;
+	DiagnosticFinding f;
+	f.suggested_change = reason;
+	f.edit_source = "undiagnosed";
+	diag.findings.push_back(std::move(f));
+	return diag;
+}
+
+DecideDiagnostic BuildFeasibleDiagnostic() {
+	DecideDiagnostic diag;
+	diag.valid = true;
+	diag.state = "feasible";
+	diag.findings.push_back(DiagnosticFinding());
 	return diag;
 }
 
@@ -625,99 +425,59 @@ string BuildUnboundedDiagnosisUnavailableReason(bool diagnostic_timed_out, bool 
 	return "the runaway is an internal helper variable.";
 }
 
-void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag) {
-	auto state =
-	    context.registered_state->GetOrCreate<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
-	// Stamp a per-connection id so every row of this diagnosis shares one diagnosis_id
-	// (and a later diagnosis on the same connection gets a distinct one).
-	diag.diagnosis_id = state->next_diagnosis_id++;
-	state->latest = std::move(diag);
+void GetDecideDiagnoseSchema(vector<string> &names, vector<LogicalType> &types) {
+	names = {"state", "clause", "suggested_change", "amount", "total",
+	         "scope", "edit_source", "group", "row"};
+	types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::DOUBLE,
+	         LogicalType::BIGINT,  LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
+	         LogicalType::BIGINT};
 }
 
-void ClearDecideDiagnostic(ClientContext &context) {
-	// Only clear if a stash exists — a successful solve on a connection that never
-	// diagnosed anything has nothing to invalidate (and no reason to create state).
-	auto state = context.registered_state->Get<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
-	if (state) {
-		state->latest = DecideDiagnostic(); // valid=false => decide_diagnostics() returns 0 rows
-	}
-}
-
-void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag) {
-	ThrowDecideDiagnosisReady(diag, string());
-}
-
-void ThrowDecideDiagnosisReady(const DecideDiagnostic &diag, const string &extra_message) {
-	string msg = "DECIDE optimization is " + diag.state + ": " + diag.summary;
-	if (!extra_message.empty()) {
-		msg += " " + extra_message;
-	}
-	msg += "\nDetails: SELECT * FROM decide_diagnostics();";
-	throw InvalidInputException(msg);
-}
-
-void ThrowUnboundedDiagnosisUnavailable(const string &reason) {
-	throw InvalidInputException(
-	    "DECIDE optimization is unbounded: " + reason +
-	    " Add an upper bound, e.g. SUCH THAT x <= <cap>.");
-}
-
-//===----------------------------------------------------------------------===//
-// decide_diagnostics() table function
-//===----------------------------------------------------------------------===//
-
-namespace {
-
-struct DecideDiagnosticsData : public GlobalTableFunctionState {
-	DecideDiagnosticsData() : offset(0) {
-	}
-	DecideDiagnostic diag;
-	idx_t offset;
-};
-
-unique_ptr<FunctionData> DecideDiagnosticsBind(ClientContext &context, TableFunctionBindInput &input,
-                                               vector<LogicalType> &return_types, vector<string> &names) {
-	names = {"diagnosis_id", "state", "subject_kind", "subject", "attribute", "value"};
-	return_types = {LogicalType::BIGINT, LogicalType::VARCHAR, LogicalType::VARCHAR,
-	                LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
-	return nullptr;
-}
-
-unique_ptr<GlobalTableFunctionState> DecideDiagnosticsInit(ClientContext &context, TableFunctionInitInput &input) {
-	auto result = make_uniq<DecideDiagnosticsData>();
-	// Snapshot the stash so the scan is stable even if another statement runs.
-	auto state = context.registered_state->Get<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
-	if (state) {
-		result->diag = state->latest;
-	}
-	return std::move(result);
-}
-
-void DecideDiagnosticsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &data = data_p.global_state->Cast<DecideDiagnosticsData>();
-	if (!data.diag.valid || data.offset >= data.diag.rows.size()) {
-		return; // nothing stashed, or all rows emitted
-	}
+void RenderDecideDiagnostic(const DecideDiagnostic &diag, idx_t &offset, DataChunk &output) {
 	idx_t count = 0;
-	while (data.offset < data.diag.rows.size() && count < STANDARD_VECTOR_SIZE) {
-		auto &row = data.diag.rows[data.offset++];
+	auto text = [](const string &v) { return v.empty() ? Value() : Value(v); };
+	while (offset < diag.findings.size() && count < STANDARD_VECTOR_SIZE) {
+		const auto &f = diag.findings[offset++];
 		idx_t col = 0;
-		output.SetValue(col++, count, Value::BIGINT(data.diag.diagnosis_id));
-		output.SetValue(col++, count, Value(data.diag.state));
-		output.SetValue(col++, count, row.subject_kind.empty() ? Value() : Value(row.subject_kind));
-		output.SetValue(col++, count, row.subject.empty() ? Value() : Value(row.subject));
-		output.SetValue(col++, count, row.attribute.empty() ? Value() : Value(row.attribute));
-		output.SetValue(col, count, row.value.empty() ? Value() : Value(row.value));
+		output.SetValue(col++, count, Value(diag.state));
+		output.SetValue(col++, count, text(f.clause));
+		output.SetValue(col++, count, text(f.suggested_change));
+		output.SetValue(col++, count, f.has_amount ? Value::DOUBLE(f.amount) : Value());
+		output.SetValue(col++, count, f.has_total ? Value::BIGINT(f.total) : Value());
+		output.SetValue(col++, count, text(f.scope));
+		output.SetValue(col++, count, text(f.edit_source));
+		output.SetValue(col++, count, text(f.group));
+		output.SetValue(col, count, f.has_row ? Value::BIGINT(f.row) : Value());
 		count++;
 	}
 	output.SetCardinality(count);
 }
 
-} // namespace
+void StashDecideDiagnostic(ClientContext &context, DecideDiagnostic diag) {
+	auto state =
+	    context.registered_state->GetOrCreate<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
+	state->latest = std::move(diag);
+}
 
-void DecideDiagnosticsFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(TableFunction("decide_diagnostics", {}, DecideDiagnosticsFunction, DecideDiagnosticsBind,
-	                              DecideDiagnosticsInit));
+void ClearDecideDiagnostic(ClientContext &context) {
+	// Only clear if the handoff exists — a solve that never diagnosed anything has nothing
+	// to invalidate, and no reason to create the state.
+	auto state = context.registered_state->Get<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
+	if (state) {
+		state->latest = DecideDiagnostic();
+	}
+}
+
+DecideDiagnostic TakeDecideDiagnostic(ClientContext &context) {
+	auto state = context.registered_state->Get<DecideDiagnosticState>(DECIDE_DIAGNOSTIC_STATE_KEY);
+	if (!state) {
+		return DecideDiagnostic();
+	}
+	// Consume it: the handoff exists only to cross from the DECIDE operator to the
+	// DIAGNOSE operator above it within one statement, so nothing may read it twice.
+	DecideDiagnostic taken = std::move(state->latest);
+	state->latest = DecideDiagnostic();
+	return taken;
 }
 
 } // namespace duckdb

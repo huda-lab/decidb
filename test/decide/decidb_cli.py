@@ -189,11 +189,10 @@ class DecidBCli:
         """Run a multi-statement script via stdin on a single connection.
 
         Unlike ``-c`` (which halts the remaining statements once one errors),
-        stdin mode continues after an error. This is required for the
-        diagnostics flow: a failing DECIDE throws a pointer error, then a
-        follow-up ``SELECT * FROM decide_diagnostics()`` reads the diagnosis
-        that was stashed per-connection before the throw. Both statements must
-        run on the same connection.
+        stdin mode continues after an error. Diagnostics no longer require that
+        recovery path — ``DIAGNOSE <query>`` returns its relation in one statement —
+        but multi-statement setup, tuning pragmas, and lifecycle tests still need one
+        connection.
         """
         return subprocess.run(
             [self.exe, self.db, "-readonly"],
@@ -209,8 +208,8 @@ class DecidBCli:
     ) -> subprocess.CompletedProcess:
         """Run *sql* with a pseudo-terminal as stdin, feeding *responses*.
 
-        The slow-solve ``decide_on_timeout='ask'`` path only prompts when stdin is
-        a terminal (``isatty``); pytest's captured pipe stdin is not one. Driving the
+        Slow-solve continuation only prompts when stdin is a terminal (``isatty``);
+        pytest's captured pipe stdin is not one. Driving the
         child through a PTY makes ``isatty`` true so the interactive continuation
         prompt engages. The SQL is delivered via ``-c`` (so the PTY is free to carry
         only the prompt answers), and *responses* — e.g. ``"s\\n"`` (stop), ``"\\n\\ns\\n"``

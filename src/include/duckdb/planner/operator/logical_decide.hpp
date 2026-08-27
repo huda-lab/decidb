@@ -78,6 +78,16 @@ public:
     // The bound objective function expression
     unique_ptr<Expression> decide_objective;
 
+    //! The `DIAGNOSE` prefix, carried from the statement that was written. True means
+    //! this query was asked to explain its failure: the operator arms the diagnosis
+    //! engines and reports its findings as a relation instead of raising. False — the
+    //! default, and every unprefixed query — means a failed solve reports its status
+    //! and stops, and no diagnostic work is done or paid for.
+    //!
+    //! It is a property of the STATEMENT, not of the session. Nothing reads it back out
+    //! of a setting; it travels parser → binder → here → PhysicalDecide.
+    bool diagnose = false;
+
     // Additive constant peeled from the objective body by
     // DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
     // `MAXIMIZE SUM(x) + 3`). The solver ignores this — it doesn't change

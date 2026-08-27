@@ -67,16 +67,16 @@ so callers branch on the outcome. This gates the whole area.
   region must also be feasible (an infeasible problem can still admit an improving
   ray, e.g. `x − y ≤ −10 AND y − x ≤ −10`). So `DisambiguateInfOrUnbd`
   (`ilp_solver.cpp`) re-solves a zero-objective copy (`MakeZeroObjectiveProbeModel`):
-  feasible ⇒ rewrite to `UNBOUNDED`, infeasible ⇒ `INFEASIBLE`. A genuinely-unbounded
-  solve therefore reaches the normal unbounded diagnosis under `auto` via this
-  rewrite.
+  feasible ⇒ rewrite to `UNBOUNDED`, infeasible ⇒ `INFEASIBLE`. Under `DIAGNOSE`, a
+  genuinely-unbounded solve therefore reaches the normal unbounded engine via this
+  rewrite; an unprefixed query reports the normalized state without running an engine.
   - **Residual `INF_OR_UNBD` is a router fallback, not a broader status policy.** When the
     probe *itself* returns neither OPTIMAL nor INFEASIBLE (a zero-objective model
     can't be unbounded, so this means the solver could not decide feasibility at all
-    — error/limit), the status stays `INF_OR_UNBD`. Under `auto`, the router runs
-    check-ray: ray present reuses the unbounded terminal with the caveat `It may
-    instead be infeasible.`, and no ray routes to the infeasible terminal. Under
-    `off`, it still falls to the static `ThrowDecideSolveError` `INF_OR_UNBD` branch.
+    — error/limit), the status stays `INF_OR_UNBD`. Under `DIAGNOSE`, the router uses
+    the ray signal: a present ray routes to the unbounded terminal and no ray routes
+    to the infeasible terminal. Without the prefix it reports the ambiguous state and
+    stops.
 - **Pre-solve model-builder infeasibility is normalized.** Both contradictory
   accumulated bounds and a violated coefficient-free row are decided inside
   `SolverModel::Build` and reported as `SolverResult{status = INFEASIBLE}`, so a
@@ -86,23 +86,23 @@ so callers branch on the outcome. This gates the whole area.
   model comes back. A violated coefficient-free row (`SUM(0 * x) <= -1`,
   `x - x <= -1`) is **kept** in the model and sets `build_proven_infeasible`, so
   diagnosis runs normally and names the clause. Contradictory bounds still throw
-  `DecideInfeasibleModelException` when diagnosis is off, abandoning the half-built
-  model; under diagnosis the inverted box is kept instead.
-- **An unretained model means no diagnosis, and the operator says so.** When
+  `DecideInfeasibleModelException` for an unprefixed query, abandoning the half-built
+  model; under `DIAGNOSE` the inverted box is kept instead.
+- **An unretained model becomes an `undiagnosed` finding.** When
   `SolveModel` returns INFEASIBLE from a throw, `retained_model` is left
   default-constructed — no columns, no rows. The infeasible arm checks
-  `num_vars == 0` up front and falls to the static error rather than indexing an
-  empty model. `SolverModel::num_vars` is default-initialized to 0 for exactly this
-  reason: the check is only meaningful if "never populated" is representable.
-- **The throw lives in the operator.** `PhysicalDecide::Finalize`
+  `num_vars == 0` up front and reports one `edit_source='undiagnosed'` finding rather
+  than indexing an empty model. `SolverModel::num_vars` is default-initialized to 0
+  for exactly this reason: the check is only meaningful if "never populated" is
+  representable.
+- **The status policy lives in the operator.** `PhysicalDecide::Finalize`
   (`physical_decide.cpp`) branches on status: optimal → store the solution
   (`SUBOPTIMAL` also stores it, with a "not proven best" caveat); other
-  non-optimal → the pragma gate decides whether to diagnose or call
-  `ThrowDecideSolveError`. This is the single gated call site.
+  non-optimal → the statement's `diagnose` flag decides whether to run an engine and
+  report findings or call `ThrowDecideSolveError`. This is the single trigger.
 
-Routing and behavior are unchanged for users with no pragma. (The static error
-*wording* was later tightened — concise, one line + the smallest fix, no jargon —
-under the "user-facing output is for SQL users" principle; see `unbounded/done.md`.)
+An unprefixed query gets the concise state-only error plus the instruction to rerun
+with `DIAGNOSE`; it pays for no model retention, ray extraction, or elastic solve.
 
 ## Solver behavior (backend reference)
 
@@ -139,8 +139,9 @@ rely on these.
 
 These facts are the evidence behind the router's inf/unb branch — the ambiguous
 status is real (HiGHS MILP), the feasibility probe stays first, and a residual
-ray is reported with an explicit caveat because feasibility was not established
-(`router/README.md`).
+ray routes through the unbounded engine. If that engine cannot name a variable, its
+`undiagnosed` finding retains `state='infeasible or unbounded'` because feasibility
+was not established (`router/README.md`).
 
 - **Time-limit behavior (incumbent / bound / gap at timeout).** Probed 2026-07-02
   on constructed hard MILPs (equality market-split for the no-incumbent case; a
@@ -177,7 +178,7 @@ ray is reported with an explicit caveat because feasibility was not established
     backends now produce `TIME_LIMIT` with a readable incumbent / bound / gap.
   - **Manual interrupt API — Gurobi wired, HiGHS not.** Ctrl-C is a peer trigger into the
     slow branch on *any* armed solve (first solve included), decoupled from the time limit —
-    see `slow/done.md` ("Ctrl-C as a peer trigger"). Gurobi uses **`GRBterminate`** from a
+    see `../../01_pipeline/08_execution/slow_solves.md` ("Ctrl-C as a peer trigger"). Gurobi uses **`GRBterminate`** from a
     watcher thread (thread-safe), mapping `GRB_INTERRUPTED → TIME_LIMIT` with a
     `user_interrupted` flag for the wording. HiGHS's interrupt would need the
     `setCallback` / `startCallback` path (no thread-safe terminate), which is **not** wired,
@@ -185,7 +186,7 @@ ray is reported with an explicit caveat because feasibility was not established
     reported as a time-limit stop — the solver-agnostic fallback.
   - **Warm-start API exists on both.** Gurobi `Start` attribute; HiGHS `setSolution`.
     (The anytime objective→constraint ladder that would have used it was dropped — see
-    `slow/todo.md`.)
+    `../../01_pipeline/08_execution/slow_solves_todo.md`.)
 
 ## Constraint provenance (row → clause)
 
@@ -249,58 +250,46 @@ it represents, so the unbounded diagnosis names escaping variables.
   `VarIndexer::Get(var, row)` over all rows to produce a `flat column →
   ColumnProvenance` map. The provenance retains the variable's **instance**
   identity (entity id for entity-scoped, row for row-scoped) — the hook the
-  unbounded `affected_rows` characterization resolves to a categorical rule
+  unbounded escape characterization resolves to categorical slice findings
   set (`unbounded/done.md`). Global-block columns default to GLOBAL_AUX (unnamed)
   unless named through `SolverInput::global_variable_labels` (aggregate `<>`
   indicators, composed MIN/MAX z's — see `infeasible/done.md`).
 
 Tested in `test/common/test_decidb_variable_provenance.cpp`.
 
-## The `diagnose_decide` pragma
+## The trigger — the `DIAGNOSE` prefix
 
-Sticky session setting selecting whether a failed solve is diagnosed. Two modes:
-`auto` (default) and `off`. Under `auto`, diagnosis runs whenever the solve
-*actually* lands in a failed state an engine covers; on a successful solve it costs
-nothing. `off` suppresses diagnosis entirely and reproduces the plain static solver
-error. (The earlier per-state filter modes `infeasible`/`unbounded`/`slow` and the
-opt-in `none` default were removed: they were filters, not forces, so `auto`
-subsumes every useful case while staying silent on success.)
+Nothing starts a diagnosis except the statement prefix. There is no session setting for
+it: `diagnose_decide` and `decide_on_timeout` were deleted in batch H, together with the
+whole idea of an automatic path.
 
-- Registered as an **extension option** via `RegisterDecideDiagnosticOptions(DBConfig&)`
-  (called from `DatabaseInstance::Configure`) — no settings-codegen, no grammar
-  change. The set-callback validates the enum, so a typo fails fast at SET time.
-  Works with `PRAGMA diagnose_decide=…` and `SET diagnose_decide=…`; `RESET`
-  restores `auto`.
-- Helpers in `decide_diagnostic.cpp`: `GetDiagnoseDecideMode`,
-  `DiagnosisApplies(mode, status)` (true under `auto` for INFEASIBLE / UNBOUNDED /
-  TIME_LIMIT), `DiagnoseModeArmsDiagnosis` (true under `auto`; controls shared
-  pre-solve diagnosis prep).
-- **The gate** in `PhysicalDecide::Finalize`: read the mode before the solve,
-  pre-arm `SolveModelOptions::extract_unbounded_ray`, infeasible-bound tolerance,
-  and retained-model capture under `auto` (`off` pays nothing). On a non-optimal
-  result, `RouteSolveResult` dispatches to the UNBOUNDED / INFEASIBLE / TIME_LIMIT
-  terminal when available; the terminal builds + stashes the diagnosis and throws the
-  short pointer error, else falls through to `ThrowDecideSolveError`.
+- **Where it comes from.** `DIAGNOSE <select>` is a grammar alternative on
+  `VariableShowStmt` (`third_party/libpg_query/grammar/statements/variable_show.y`),
+  mirroring `SUMMARIZE`: one rule plus an `is_diagnose` flag on
+  `PGVariableShowSelectStmt`. The transformer turns it into a `ShowRef` with
+  `ShowType::DIAGNOSE`, so `select_with_parens`' existing `'(' VariableShowStmt ')'`
+  production makes `SELECT * FROM (DIAGNOSE …)` compose for free.
+- **How it travels.** `Binder::BindDiagnose` (`bind_showref.cpp`) binds the inner query
+  unchanged, finds the one `LogicalDecide` in the resulting plan, and sets
+  `LogicalDecide::diagnose = true`. `plan_decide.cpp` copies it to
+  `PhysicalDecide::diagnose`. It is a property of the STATEMENT, carried parser → binder
+  → logical plan → stage 08, and never read back out of a setting.
+- **What it arms.** `PhysicalDecide::FinalizeSolveResult` reads the flag once as
+  `diagnosis_armed` and pre-arms the shared diagnosis prep it gates:
+  `SolveModelOptions::extract_unbounded_ray`, `tolerate_infeasible_bounds`, and
+  retained-model capture. An unprefixed query pays for none of it.
+- **The gate helper.** `DiagnosisApplies(bool armed, SolverStatus)`
+  (`decide_diagnostic.cpp`) — true only under the prefix, and only for INFEASIBLE /
+  UNBOUNDED / INF_OR_UNBD. `DiagnoseModeArmsDiagnosis` and `GetDiagnoseDecideMode` are
+  gone with the setting they read.
+- **A query with no DECIDE clause is rejected**, at bind time, by `BindDiagnose`:
+  DIAGNOSE reports on an optimization run, and there is none.
 
-Tested in `test/decide/tests/test_query_diagnostics_pragmas.py` (both backends).
+Tested in `test/decide/tests/test_diagnose_trigger.py` (both backends).
 
-## The `decide_on_timeout` pragma
-
-Sticky session setting governing what a **time-limit** stop does — but only under
-`diagnose_decide='auto'` (`off` is a master mute: TIME_LIMIT routes to `UNDIAGNOSED` →
-plain error, so `decide_on_timeout` never fires). Three modes, registered the same way
-alongside `diagnose_decide` in `RegisterDecideDiagnosticOptions`, validated by a
-set-callback, read via `GetDecideOnTimeoutMode` (default `ask`):
-
-- `ask` (default) — print the report, then prompt to keep solving on the warm solver at
-  an interactive terminal; **falls back to `error` when stdin is not a TTY** (tests,
-  pipes, benchmarks, C-API) so it never blocks on an unanswerable prompt.
-- `error` — print the report, then error (never returns the incumbent).
-- `continue` — auto-resume each chunk until the solver finishes; Ctrl-C
-  (`ClientContext::interrupted`) breaks at the next chunk boundary.
-
-The full loop, warm-resume session, and stop delivery live in `slow/done.md`; the
-terminal wiring is in `router/done.md` ("Terminals: time_limit").
+**A slow solve is not covered here.** A time-limit stop, and Ctrl-C, are ordinary
+execution behaviour and happen with or without the prefix — see
+`../../01_pipeline/08_execution/slow_solves.md`.
 
 ## Diagnosis engine seam
 
@@ -317,10 +306,12 @@ inline branches in `PhysicalDecide::Finalize`.
   ray, maps columns through variable provenance, groups escaping instances by
   DECIDE variable, asks the callback for row/entity categorical candidates, and
   returns a `DecideDiagnostic` only when it produced named variable content.
-- **`Finalize` owns orchestration:** read mode, pre-arm unbounded ray extraction,
-  call the matching engine for the status, stash + throw only when the engine
-  returns a valid diagnosis, otherwise fall through to `ThrowDecideSolveError`.
-  The success path still clears the per-connection stash.
+- **`Finalize` owns orchestration:** read the statement's armed flag, call the matching
+  engine for the routed status, and write its findings to the statement-scoped handoff.
+  If an engine cannot produce named/actionable content, the operator writes one
+  `undiagnosed` finding instead. Only an unprefixed failure falls through to
+  `ThrowDecideSolveError`; success clears the handoff before the operator above emits
+  its `feasible` finding.
 - **Infeasible engine (I1/I2):** `DiagnoseInfeasible(const InfeasibleDiagnosisInput&)`
   carries the built `SolverModel` (the elastic transform `BuildElasticModel` reshapes
   it) plus an injected `solve_model` callback, and a `has_unhandled_user_bounds` flag
@@ -389,63 +380,54 @@ Rule 1 is wired into `_apply_reported_fix`, so every clause-edit test in
 `test_query_diagnostics_relation.py` checks it without opting in. It is the release-build
 counterpart to `assert_blamable_row`, whose `D_ASSERT` does not run in a release binary.
 
-## The `decide_diagnostics()` reporting relation
+## The reporting relation — what `DIAGNOSE` returns
 
-A structured diagnosis a state engine populates, stashed per-connection, surfaced
-as a fixed-schema relation.
+A structured diagnosis a state engine populates, handed to the operator above it, and
+rendered as a flat, fixed-schema relation. The schema and its `edit_source` vocabulary
+are the user-facing contract and live in `00_project_overview/syntax_reference.md` §8;
+this section is the mechanics.
 
-- **`DecideDiagnostic` / `DiagnosticRow` / `DecideDiagnosticState`**
-  (`src/include/duckdb/decidb/decide_diagnostic.hpp`). The state is a
-  `ClientContextState` stashed under key `decide_diagnostics`; the failing DECIDE
-  mutates it before throwing, so it survives into the next statement **on the same
-  connection**. **Lifecycle:** the stash holds *the diagnosis of the most recent
-  DECIDE failure on the connection that actually produced one — otherwise it is
-  empty.* A successful DECIDE (`OPTIMAL` in `PhysicalDecide::Finalize`) calls
-  `ClearDecideDiagnostic`, which invalidates `latest` (so `decide_diagnostics()`
-  returns 0 rows) — a stale diagnosis never lingers after the user fixes the query.
-  The same clear runs on every failure path that throws *without* stashing a new
-  diagnosis — `diagnose_decide='off'`, a status no engine covers, an unbounded solve
-  the engine can't name a variable for, an infeasible solve the elastic engine
-  declines to report on, and a `continue`-mode timeout resume that lands on a
-  definitive INFEASIBLE/UNBOUNDED — so an earlier failure's diagnosis can never be
-  misread as belonging to a later, undiagnosed one (`PhysicalDecide::FinalizeInternal`,
-  `physical_decide.cpp`). The per-connection id counter is left intact so ids stay
-  monotonic across solves.
-- **`decide_diagnostics()` table function** (registered in
-  `system_functions.cpp`, implemented in `decide_diagnostic.cpp`) with fixed schema
-  `(diagnosis_id BIGINT, state, subject_kind, subject, attribute, value)`. The
-  string columns are VARCHAR; empty string fields render as SQL NULL.
-  `diagnosis_id` is stamped at stash time from a per-connection counter and ties
-  all rows from one diagnosed failure together.
-- **Long-form EAV surface:** `subject_kind` names the entity type (`variable` for
-  unbounded, `clause`/`model` for infeasible); `subject` is the state-engine-owned identifier;
-  `attribute`/`value` carry that engine's facts. This keeps the table function
-  schema stable as new states add their own attributes.
-- **Scannable one-row-per-subject view (a `PIVOT` recipe, not a second function).** The EAV
-  shape lists one row per `attribute`, so an infeasible loosen clause spans three rows
-  (`edit_kind` / `suggested_change` / `amount`). To read it as one row per clause, pivot it —
-  the columns adapt to whichever attributes the state emitted (loosen, drop, or conflict), so a
-  single recipe covers every infeasible shape without a parallel state-specific table function
-  that would have to duplicate the deliberately-flexible schema:
-
-  ```sql
-  PIVOT (SELECT subject, attribute, value FROM decide_diagnostics() WHERE subject_kind = 'clause')
-  ON attribute USING first(value) GROUP BY subject ORDER BY subject;
-  --  subject │ amount │ edit_kind │ suggested_change
-  --  x <= 1  │ 4      │ loosen    │ x <= 5
-  ```
-- **Why a table function and not a result-schema switch:** DECIDE is a clause on
-  SELECT, and the projection binds the decision columns before the solve runs
-  (`logical_decide.cpp`, `transform_select_node.cpp`), so a runtime result-schema
-  switch is bind-time-blocked. The diagnosis is surfaced via this companion table
-  function instead.
-- **The unbounded engine populates variable rows** (`BuildUnboundedDiagnostic` — see
-  `unbounded/done.md`). It emits one `grows_toward` row for every escaping variable
-  and an `affected_rows` / `affected_entities` row only when there is instance
-  multiplicity to explain (self-describing categorical rules / total-escape / count).
-  The forced remedy (add a bound) is prescribed in the stderr summary, not a per-row
-  attribute. The unbounded characterization adds
-  three sticky extension options alongside `diagnose_decide`:
+- **`DecideDiagnostic` / `DiagnosticFinding` / `DecideDiagnosticState`**
+  (`src/include/duckdb/decidb/decide_diagnostic.hpp`). A `DecideDiagnostic` is one
+  `state` plus a vector of findings; a `DiagnosticFinding` is one row of the relation,
+  with real columns and real types (`amount` DOUBLE, `row` BIGINT, `has_amount` /
+  `has_row` for NULL).
+- **A statement-scoped handoff, not a stash to read later.** `DecideDiagnosticState` is
+  still a `ClientContextState` under key `decide_diagnostics`, but its job changed:
+  `PhysicalDecide` writes it during its `Finalize`, and `PhysicalDecideDiagnose` — the
+  operator directly above it in the same plan — consumes it in its own `Finalize` via
+  `TakeDecideDiagnostic`, which clears it on the way out. Nothing may read it twice, and
+  nothing outside the statement reads it at all. A successful solve calls
+  `ClearDecideDiagnostic`, so a `DIAGNOSE` over a query that worked finds nothing waiting
+  and reports the single `feasible` finding instead. Before batch H this was a
+  cross-statement stash that `decide_diagnostics()` read back on a later statement, with
+  the whole lifecycle problem (stale diagnoses, monotonic ids) that implies; that problem
+  is now structurally absent.
+- **`LogicalDecideDiagnose` / `PhysicalDecideDiagnose`** (`planner/operator/`,
+  `execution/operator/decide/`) are the prefix's own operator pair. The logical one
+  resolves its types from `GetDecideDiagnoseSchema` — the single definition of the
+  columns — and the physical one is a sink that swallows the query's rows (DIAGNOSE
+  reports on the run, it does not return the run's output) and a source that emits the
+  findings via `RenderDecideDiagnostic`. Both are tiny: the engines already produce typed
+  findings, so this is a reshape of where they are written, not new machinery.
+- **`decide_diagnostics()` is deleted** — the table function, its EAV bind schema
+  (`diagnosis_id, state, subject_kind, subject, attribute, value`, all VARCHAR), and its
+  registration in `system_functions.cpp`. The relation it returned needed a `PIVOT` recipe
+  to be read one-row-per-clause; the flat shape is that row directly, and it composes as
+  a subquery instead of being a second statement.
+- **Why an operator and not a result-schema switch:** DECIDE is a clause on SELECT, and
+  the projection binds the decision columns before the solve runs
+  (`logical_decide.cpp`, `transform_select_node.cpp`), so a runtime result-schema switch
+  is bind-time-blocked. The prefix declares the schema at bind time instead, which is
+  exactly what makes it a different statement rather than a different outcome of the same
+  one.
+- **The unbounded engine populates runaway findings** (`BuildUnboundedDiagnostic` — see
+  `unbounded/done.md`). One finding per escaping variable, or one per categorical slice
+  when the escape is characterized: `clause` names the variable, `edit_source` carries
+  the direction, `group` names the slice, `amount` counts it, and
+  `suggested_change` prescribes the forced remedy without inventing the cap. The
+  unbounded characterization adds
+  three sticky extension options:
   `diagnose_decide_escape_rate`, `diagnose_decide_categorical_ratio`,
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
   The infeasible engine populates clause/model rows (`BuildInfeasibleDiagnostic` —

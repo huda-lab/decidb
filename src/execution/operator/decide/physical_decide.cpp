@@ -1252,6 +1252,11 @@ public:
 
     vector<double> ilp_solution;
     VarIndexer var_indexer;  // For mapping (var_idx, row) to solution indices
+
+    //! Set when the solve failed under DIAGNOSE: the findings were handed off instead of
+    //! raised, so there is no solution to read back and this operator emits no rows. The
+    //! DIAGNOSE operator above turns the handoff into the answer.
+    bool diagnosis_only = false;
 };
 
 class DecideLocalSinkState : public LocalSinkState {
@@ -1539,63 +1544,6 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
                     limit_str.c_str(), tail.c_str());
         }
     }
-}
-
-//! Structured mirror of the checkpoint report for decide_diagnostics(): the same facts
-//! (solution quality, best-possible objective, elapsed, peak memory) as one model-level
-//! EAV block, so a timed-out solve populates the relation and points to it exactly like
-//! the unbounded / infeasible terminals do. User-facing voice only — no solver jargon.
-static DecideDiagnostic BuildTimeoutDiagnostic(const SolverResult &result, double elapsed_seconds,
-                                               bool has_objective) {
-    DecideDiagnostic diag;
-    diag.valid = true;
-    diag.state = "slow";
-    auto add = [&](const char *attr, const string &val) {
-        DiagnosticRow row;
-        row.subject_kind = "model";
-        row.attribute = attr;
-        row.value = val;
-        diag.rows.push_back(std::move(row));
-    };
-    // Summaries read after the "DECIDE optimization is slow:" headline, so the interrupt
-    // variants are phrased to stay coherent with that prefix (the stderr report already
-    // carries the primary "stopped at your request" line).
-    add("stopped_by", result.user_interrupted ? "user_interrupt" : "time_limit");
-    if (result.has_solution) {
-        diag.summary = result.user_interrupted
-                           ? "the solve was still improving when you stopped it — keep solving "
-                             "with SET decide_on_timeout='continue', or reduce the input size to "
-                             "prove the best"
-                           : "the solve hit the time limit with a usable but unproven solution — "
-                             "reduce the input size to prove it, or keep solving with "
-                             "SET decide_on_timeout='continue'";
-        add("status", "solution_found");
-        add("best_objective", StringUtil::Format("%g", result.objective_value));
-        // NaN gap = no proven bound (LP/QP timeouts, failed reads) — omit the row
-        // rather than print "nan%" or overstate an unproven incumbent as proven.
-        if (std::isfinite(result.gap)) {
-            add("within_percent_of_best", StringUtil::Format("%.2f%%", result.gap * 100.0));
-        }
-    } else {
-        diag.summary = result.user_interrupted
-                           ? "you stopped the solve before it found a solution — keep searching "
-                             "with SET decide_on_timeout='continue', or reduce the input size / "
-                             "loosen the constraints"
-                           : "the solve hit the time limit before finding a solution — reduce the "
-                             "input size or loosen the constraints, or keep searching with "
-                             "SET decide_on_timeout='continue'";
-        add("status", "no_solution");
-    }
-    // The best objective still achievable (the solver's proven bound) — only meaningful
-    // when the query actually optimizes something. A pure-feasibility DECIDE (no
-    // MAXIMIZE / MINIMIZE) has no objective, so the "bound" is a trivial 0; skip it there.
-    // Finite guard also keeps an open-relaxation sentinel out of the relation.
-    if (has_objective && std::isfinite(result.best_bound)) {
-        add("best_possible_objective", StringUtil::Format("%g", result.best_bound));
-    }
-    add("elapsed", FormatDuration(elapsed_seconds));
-    add("peak_memory", FormatMemory(PeakProcessMemoryBytes()));
-    return diag;
 }
 
 //===--------------------------------------------------------------------===//
@@ -3214,41 +3162,36 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         solver_timer.Start();
     }
 
-    // F4: read the diagnose_decide setting (auto by default; off suppresses). Under
-    // auto, arm diagnosis prep: pre-extract the unbounded ray so it is ready if the
-    // solve turns out unbounded, and retain the built model so the INFEASIBLE terminal
-    // can hand it to the elastic engine. off pays for neither, and both failure
-    // terminals are auto-only anyway (RouteSolveResult).
-    string diagnose_mode = GetDiagnoseDecideMode(context);
-    bool diagnosis_armed = DiagnoseModeArmsDiagnosis(diagnose_mode);
+    // H3: the statement's DIAGNOSE prefix, and nothing else, arms diagnosis. Under it,
+    // pre-extract the unbounded ray so it is ready if the solve turns out unbounded, and
+    // retain the built model so the INFEASIBLE terminal can hand it to the elastic
+    // engine. An unprefixed query pays for neither, and both failure terminals are
+    // prefix-only anyway (RouteSolveResult).
+    bool diagnosis_armed = diagnose;
     SolveModelOptions solve_options;
     solve_options.extract_unbounded_ray = diagnosis_armed;
     // Keep an inverted column box (col_lower > col_upper) alive through Build under
     // diagnosis so the INFEASIBLE terminal can reset it to the intrinsic domain and
-    // diagnose it (Bug 1, all-column-bound conflicts). Off mode keeps the fast throw.
+    // diagnose it (Bug 1, all-column-bound conflicts). An unprefixed query keeps the
+    // fast throw.
     solver_input.tolerate_infeasible_bounds = diagnosis_armed;
 
-    // S3/S4: slow-solve continuation. `decide_on_timeout` governs what a time-limit
-    // stop does *under diagnose auto* (off is a master mute — RouteSolveResult never
-    // routes TIME_LIMIT to its terminal when diagnosis isn't armed). `ask` needs a
-    // human, so it falls back to `error` when stdin is not a terminal (tests,
-    // benchmarks, -c pipes, C-API) — never prompt where no one can answer. Only the
-    // continue-capable modes need the warm solver retained across the timeout.
-    string on_timeout = GetDecideOnTimeoutMode(context);
+    // H5: slow-solve continuation is ordinary execution behaviour, not diagnosis, so it
+    // runs with or without the prefix. The interactive prompt needs a human, so it falls
+    // back to a plain error when stdin is not a terminal (tests, benchmarks, -c pipes,
+    // C-API) — never prompt where no one can answer. That tty test IS the rule now; there
+    // is no mode to set.
     bool stdin_is_tty = isatty(STDIN_FILENO) != 0;
-    string eff_on_timeout = (on_timeout == "ask" && !stdin_is_tty) ? "error" : on_timeout;
-    bool want_session = diagnosis_armed && eff_on_timeout != "error";
+    bool can_prompt = stdin_is_tty;
+    // The warm solver is retained only where a continuation can actually be asked for.
+    bool want_session = can_prompt;
     // The first solve chunk uses the same per-chunk budget every Continue() chunk will,
     // so elapsed climbs in even multiples (300s, 600s, ...) across the loop.
     solve_options.time_limit_seconds = ResolveDecideTimeLimit();
-    // Ctrl-C is a peer trigger into the slow branch: arm the interrupt poll on the
-    // *first* solve (decoupled from the timeout mode / retained session), so a user
-    // interrupt on any armed solve cuts it short and routes into the TIME_LIMIT
-    // terminal with the best-so-far — instead of aborting the query. `off` stays plain
-    // (no poll). Gurobi honors it mid-solve; HiGHS stays boundary-only.
-    if (diagnosis_armed) {
-        solve_options.interrupt_poll = [&context]() { return context.interrupted.load(); };
-    }
+    // Ctrl-C cuts the solve short and returns the best-so-far instead of aborting the
+    // query — also ordinary execution behaviour, so the poll is installed unconditionally.
+    // Gurobi honors it mid-solve; HiGHS stays boundary-only.
+    solve_options.interrupt_poll = [&context]() { return context.interrupted.load(); };
     SolveModelOptions diagnostic_solve_options;
     diagnostic_solve_options.time_limit_seconds =
         ResolveDecideDiagnosticTimeLimit(solve_options.time_limit_seconds);
@@ -3301,14 +3244,147 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         }
     };
 
-    // Route the solve outcome to its diagnosis terminal. RouteSolveResult is a pure
-    // classifier (status + mode → terminal); the operator owns the engine call,
-    // stash, and throw for each terminal.
-    // Set when a caveated success (an unproven incumbent returned as rows) has stashed a
-    // `state='slow'` diagnosis it wants to survive: the success epilogue's blanket
-    // ClearDecideDiagnostic must then spare it, so the quality stays queryable.
-    bool keep_slow_diagnosis = false;
-    switch (RouteSolveResult(solve_result, diagnose_mode)) {
+    // Under DIAGNOSE, a failure is the ANSWER, not an error: hand off the findings to the
+    // DIAGNOSE operator above and return no rows. Without the prefix the same failure
+    // raises, naming its state and nothing more — naming the clause *is* the elastic
+    // solve, and that only happens when the user asks for it.
+    auto report = [&](DecideDiagnostic diag) {
+        D_ASSERT(diagnosis_armed);
+        StashDecideDiagnostic(context, std::move(diag));
+        gstate.diagnosis_only = true;
+    };
+
+    // H5: a time-limit stop (or a Ctrl-C, which arrives as one) is ordinary execution
+    // behaviour and is handled here, before the router sees the result — with or without
+    // the prefix. It either delivers an incumbent, resumes to a proven optimum, or
+    // raises; it never diagnoses.
+    bool deliver_incumbent = false;
+    if (solve_result.status == SolverStatus::TIME_LIMIT) {
+        // S2/S3/S4: at each chunk boundary print the checkpoint report (what was found
+        // + how far it can still improve + elapsed/memory), then offer the choice: keep
+        // solving, or take the incumbent with its gap to best. "Keep solving" re-runs
+        // the SAME warm solver (retained_session) for another fresh chunk — the MIP
+        // search resumes, elapsed accumulates. On stop, a usable incumbent is returned
+        // as a SUCCESSFUL result (with a plain stderr caveat that it is not proven
+        // best); no incumbent falls to the plain timeout error.
+        double chunk = ResolveDecideTimeLimit();
+        double cum_elapsed = solve_wall_timer.Elapsed();
+        double cum_budget = chunk;
+
+        // Did the user stop this, or the clock? `user_interrupted` is the backend's own
+        // attribution (Gurobi cuts the solve short mid-search and says so); HiGHS has no
+        // thread-safe terminate, so its Ctrl-C is only noticed at the chunk boundary and
+        // arrives indistinguishable from a timeout. The query interrupt is set either
+        // way, so read it too — a user who pressed Ctrl-C gets the same answer on both.
+        bool stopped_by_user = solve_result.user_interrupted || context.interrupted.load();
+        if (stopped_by_user) {
+            // Ctrl-C is not a question. The user has already said stop, so there is
+            // nothing to offer: print what was found and hand back the best-so-far,
+            // with the caveat that it is not proven best. This is the one stop that
+            // does not need a terminal — the decision was made at the keyboard, not in
+            // an answer to a prompt.
+            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+            if (!solve_result.has_solution) {
+                ThrowDecideSolveError(solve_result);
+            }
+            fprintf(stderr,
+                    "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
+            context.interrupted = false;
+            deliver_incumbent = true;
+        } else if (!can_prompt) {
+            // The clock ran out and nobody is at the keyboard (tests, benchmarks, `-c`
+            // pipes, the C API), so there is no one to answer the offer. Print the
+            // checkpoint once and raise: never prompt where no one can answer.
+            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+            ThrowDecideSolveError(solve_result);
+        } else {
+            // The interrupt poll installed on the first solve persists on the retained
+            // session into every Continue() chunk, but the prompt below already stops the
+            // user at each boundary, and a watcher thread contending with the interactive
+            // getline destabilizes the prompt (found empirically) — so reset it to
+            // boundary-only here. The entry interrupt already fired *before* this loop, so a
+            // first-solve Ctrl-C still routed us in. HiGHS ignores the poll either way.
+            if (retained_session) {
+                retained_session->SetInterruptPoll({});
+            }
+
+            // Report at each boundary, then continue or stop.
+            for (;;) {
+                PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+
+                // stdin is a terminal (can_prompt guaranteed this), so it is safe to block
+                // reading the user's decision. The CLI's line editor is inactive
+                // mid-execution, so a plain getline does not fight it.
+                if (solve_result.has_solution) {
+                    fprintf(stderr, "Keep improving it?  [Enter] continue +%s  ·  s + Enter to stop and take this solution: ",
+                            FormatDuration(chunk).c_str());
+                } else {
+                    fprintf(stderr, "Keep searching?  [Enter] continue +%s  ·  s + Enter to give up: ",
+                            FormatDuration(chunk).c_str());
+                }
+                fflush(stderr);
+                bool go;
+                string line;
+                if (!std::getline(std::cin, line)) {
+                    go = false; // EOF (Ctrl-D / closed input) → stop
+                } else {
+                    StringUtil::Trim(line);
+                    go = StringUtil::Lower(line) != "s";
+                }
+                if (!go) {
+                    break;
+                }
+
+                // Resume the warm solver for another chunk (warm start is automatic — the
+                // solver never left scope).
+                Profiler chunk_timer;
+                chunk_timer.Start();
+                solve_result = retained_session->Continue(chunk);
+                chunk_timer.End();
+                cum_elapsed += chunk_timer.Elapsed();
+                cum_budget += chunk;
+
+                if (solve_result.status == SolverStatus::OPTIMAL) {
+                    break; // proven optimum — fall through to the shared success stores
+                }
+                if (solve_result.status != SolverStatus::TIME_LIMIT) {
+                    // A resume can only reach a definitive INFEASIBLE/UNBOUNDED when no
+                    // incumbent ever existed (an incumbent proves feasibility); surface it
+                    // as the plain solver error.
+                    ThrowDecideSolveError(solve_result);
+                }
+                // else: another time-limit stop — loop and re-report with fresh numbers.
+            }
+
+            // Loop exited on a stop decision or an OPTIMAL break.
+            if (solve_result.status == SolverStatus::OPTIMAL || solve_result.has_solution) {
+                if (solve_result.status != SolverStatus::OPTIMAL) {
+                    // Stopped early with a usable-but-unproven incumbent: succeed and
+                    // return it, but say plainly it is not proven best. There is no live
+                    // SQL NOTICE channel, so this rides on stderr with the checkpoint
+                    // report, which already printed the gap to best.
+                    fprintf(stderr,
+                            "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
+                    deliver_incumbent = true;
+                }
+                // If a Ctrl-C broke the loop, the interrupt is now handled (we stopped
+                // solving and have a result to return); clear it so the rows flow to the
+                // client instead of the executor aborting the query. Covers both the
+                // incumbent stop and the rare "Ctrl-C landed as the optimum was proven".
+                context.interrupted = false;
+            } else {
+                // Stopped with nothing found yet: the plain timeout error, same as the
+                // non-interactive exit above.
+                ThrowDecideSolveError(solve_result);
+            }
+        }
+    }
+
+    // Route what is left to its diagnosis terminal. RouteSolveResult is a pure
+    // classifier (status + armed → terminal); the operator owns the engine call, the
+    // statement-scoped handoff, and the throw for each terminal.
+    switch (deliver_incumbent ? DiagnosisTerminal::SOLVED
+                              : RouteSolveResult(solve_result, diagnosis_armed)) {
     case DiagnosisTerminal::SOLVED:
         if (solve_result.status == SolverStatus::SUBOPTIMAL) {
             // A feasible incumbent returned without a proof of optimality (a numerically
@@ -3344,32 +3420,24 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
             solve_result, var_indexer, var_labels, var_is_aux, diag_params, get_candidates,
         };
         DecideDiagnostic diag = DiagnoseUnbounded(diag_input);
-        if (diag.valid && !diag.rows.empty()) {
-            StashDecideDiagnostic(context, diag);
-            string extra_message;
-            if (solve_result.status == SolverStatus::INF_OR_UNBD) {
-                extra_message = "It may instead be infeasible.";
-            }
-            ThrowDecideDiagnosisReady(diag, extra_message);
+        if (diag.valid && !diag.findings.empty()) {
+            report(std::move(diag));
+            break;
         }
-        // Diagnosis was requested but produced no per-variable content. Say why it
-        // is unavailable rather than throwing the generic "enable diagnosis and
-        // re-run" advert — that advert is misleading here, since the mode is already
-        // on and re-running cannot help. An empty ray is a non-linear limitation only
-        // when the retained model is actually non-linear; otherwise use a neutral
-        // "could not identify" reason. A present ray that named nothing means only
-        // internal auxiliaries escaped.
+        // The engine ran but named no variable. Say why rather than reporting nothing:
+        // an empty ray is a non-linear limitation only when the retained model is
+        // actually non-linear; otherwise it is a neutral "could not identify". A present
+        // ray that named nothing means only internal auxiliaries escaped.
         bool has_nonlinear_terms = retained_model.has_quadratic_obj ||
                                    !retained_model.quadratic_constraints.empty() ||
                                    !retained_model.general_constraints.empty() ||
                                    !retained_model.indicator_constraints.empty();
         string reason = BuildUnboundedDiagnosisUnavailableReason(
             solve_result.diagnostic_timed_out, solve_result.ray.empty(), has_nonlinear_terms);
-        // This failure produced no diagnosis of its own; clear any stash left by an
-        // earlier failed solve so decide_diagnostics() cannot be misread as being
-        // about this query (A4).
-        ClearDecideDiagnostic(context);
-        ThrowUnboundedDiagnosisUnavailable(reason);
+        report(BuildUndiagnosedDiagnostic(
+            solve_result.status == SolverStatus::INF_OR_UNBD ? "infeasible or unbounded" : "unbounded",
+            reason));
+        break;
     }
     case DiagnosisTerminal::INFEASIBLE: {
         // A residual INF_OR_UNBD is routed here only with an empty ray; normalize it
@@ -3379,13 +3447,14 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
             terminal_result.status = SolverStatus::INFEASIBLE;
         }
         // No model was retained: SolveModel returned INFEASIBLE from a Build that threw
-        // before it finished (conflicting column bounds with diagnosis off), so
+        // before it finished (conflicting column bounds on an unprefixed statement), so
         // `retained_model` is still default-constructed — no columns, no rows. Every
         // step below indexes it by column, so bail to the static error instead. Diagnosis
         // has nothing to work from; saying so plainly beats walking an empty model.
         if (retained_model.num_vars == 0) {
-            ClearDecideDiagnostic(context);
-            ThrowDecideSolveError(terminal_result);
+            report(BuildUndiagnosedDiagnostic(
+                "infeasible", "the model could not be built, so there is nothing to diagnose."));
+            break;
         }
         vector<string> var_labels;
         vector<bool> var_is_aux;
@@ -3546,155 +3615,31 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
             },
         };
         DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
-        if (diag.valid && !diag.rows.empty()) {
-            StashDecideDiagnostic(context, diag);
-            ThrowDecideDiagnosisReady(diag);
+        if (diag.valid && !diag.findings.empty()) {
+            report(std::move(diag));
+            break;
         }
-        // The elastic engine can still decline to report when no actionable relaxation
-        // exists; keep the plain static infeasible error as the fallback. No new
-        // diagnosis was stashed, so clear any stale one from an earlier failure (A4).
-        ClearDecideDiagnostic(context);
-        if (diagnostic_solve_timed_out) {
-            string state = solve_result.status == SolverStatus::INF_OR_UNBD ? "infeasible or unbounded"
-                                                                            : "infeasible";
-            throw InvalidInputException(
-                "DECIDE optimization is " + state +
-                ": diagnosis ran out of time before it could find a least-change repair.");
-        }
-        ThrowDecideSolveError(terminal_result);
-    }
-    case DiagnosisTerminal::TIME_LIMIT: {
-        // S2/S3/S4: at each chunk boundary print the checkpoint report (what was found
-        // + how far it can still improve + elapsed/memory), then act per
-        // `decide_on_timeout`: error → stop; ask → prompt the user; continue → keep
-        // resuming automatically. "Continue" re-runs the SAME warm solver
-        // (retained_session) for another fresh chunk — the MIP search resumes, elapsed
-        // accumulates. On stop, a usable incumbent is returned as a SUCCESSFUL result
-        // (with a plain stderr caveat that it is not proven best); no incumbent falls
-        // to the existing timeout error.
-        double chunk = ResolveDecideTimeLimit();
-        double cum_elapsed = solve_wall_timer.Elapsed();
-        double cum_budget = chunk;
-
-        bool has_objective = decide_objective != nullptr || !composed_minmax_objective_terms.empty();
-
-        if (eff_on_timeout == "error") {
-            // Print the checkpoint once, then error — `error` never returns the
-            // incumbent (that is the ask/continue stop behavior below). This is also
-            // the non-TTY fallback for `ask`, so it preserves today's report-then-error
-            // behavior for tests / benchmarks / pipes. Stash the structured mirror + point
-            // to decide_diagnostics(), like the unbounded / infeasible terminals.
-            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
-            DecideDiagnostic diag = BuildTimeoutDiagnostic(solve_result, cum_elapsed, has_objective);
-            StashDecideDiagnostic(context, diag);
-            ThrowDecideDiagnosisReady(diag);
-        }
-
-        // The interrupt poll installed on the first solve persists on the retained session
-        // into every Continue() chunk, so `continue` keeps its mid-chunk Ctrl-C for free.
-        // `ask`, though, stops the user at each prompt already, and a watcher thread
-        // contending with the interactive getline destabilizes the prompt (found
-        // empirically) — so reset it to boundary-only here. The entry interrupt already
-        // fired *before* this loop, so first-solve Ctrl-C still routed us in; only within
-        // the ask loop is it boundary-only. HiGHS ignores the poll either way.
-        if (retained_session && eff_on_timeout == "ask") {
-            retained_session->SetInterruptPoll({});
-        }
-
-        // ask / continue: report at each boundary, then continue or stop.
-        for (;;) {
-            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
-
-            bool go;
-            if (eff_on_timeout == "continue") {
-                // Auto-continue until the solver finishes on its own. Ctrl-C (the
-                // query interrupt) breaks out at this checkpoint boundary — v1 has no
-                // mid-chunk interrupt (see slow/todo.md).
-                go = !context.interrupted;
-            } else {
-                // "ask": stdin is a terminal (eff_on_timeout guaranteed this), so it is
-                // safe to block reading the user's decision. The CLI's line editor is
-                // inactive mid-execution, so a plain getline does not fight it.
-                if (solve_result.has_solution) {
-                    fprintf(stderr, "Keep improving it?  [Enter] continue +%s  ·  s + Enter to stop and take this solution: ",
-                            FormatDuration(chunk).c_str());
-                } else {
-                    fprintf(stderr, "Keep searching?  [Enter] continue +%s  ·  s + Enter to give up: ",
-                            FormatDuration(chunk).c_str());
-                }
-                fflush(stderr);
-                string line;
-                if (!std::getline(std::cin, line)) {
-                    go = false; // EOF (Ctrl-D / closed input) → stop
-                } else {
-                    StringUtil::Trim(line);
-                    go = StringUtil::Lower(line) != "s";
-                }
-            }
-            if (!go) {
-                break;
-            }
-
-            // Resume the warm solver for another chunk (warm start is automatic — the
-            // solver never left scope).
-            Profiler chunk_timer;
-            chunk_timer.Start();
-            solve_result = retained_session->Continue(chunk);
-            chunk_timer.End();
-            cum_elapsed += chunk_timer.Elapsed();
-            cum_budget += chunk;
-
-            if (solve_result.status == SolverStatus::OPTIMAL) {
-                break; // proven optimum — fall through to the shared success stores
-            }
-            if (solve_result.status != SolverStatus::TIME_LIMIT) {
-                // A resume can only reach a definitive INFEASIBLE/UNBOUNDED when no
-                // incumbent ever existed (an incumbent proves feasibility); surface it
-                // as the plain solver error. No new diagnosis was stashed for this
-                // resume, so clear any stale one from an earlier failure (A4).
-                ClearDecideDiagnostic(context);
-                ThrowDecideSolveError(solve_result);
-            }
-            // else: another time-limit stop — loop and re-report with fresh numbers.
-        }
-
-        // Loop exited on a stop decision or an OPTIMAL break.
-        if (solve_result.status == SolverStatus::OPTIMAL || solve_result.has_solution) {
-            if (solve_result.status != SolverStatus::OPTIMAL) {
-                // Stopped early with a usable-but-unproven incumbent: succeed and
-                // return it, but say plainly it is not proven best. There is no live
-                // SQL NOTICE channel, so this rides on stderr with the report.
-                fprintf(stderr,
-                        "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
-                // Also stash the quality as a queryable `state='slow'` diagnosis and keep it
-                // past the success epilogue, so `SELECT * FROM decide_diagnostics()` answers
-                // "how good is the solution I got" after a caveated stop (the stderr caveat is
-                // one-shot). A proven-OPTIMAL stop skips this — nothing to caveat. A caveated
-                // success has an incumbent, so bucket-B does not run (feasibility is proven).
-                StashDecideDiagnostic(context,
-                                      BuildTimeoutDiagnostic(solve_result, cum_elapsed, has_objective));
-                keep_slow_diagnosis = true;
-            }
-            // If a Ctrl-C in continue mode broke the loop, the interrupt is now handled
-            // (we stopped solving and have a result to return); clear it so the rows
-            // flow to the client instead of the executor aborting the query. Covers both
-            // the incumbent stop and the rare "Ctrl-C landed as the optimum was proven".
-            context.interrupted = false;
-            break; // fall through to the shared success stores below
-        }
-        // Stopped with nothing found yet: stash the structured diagnosis and point to it
-        // (mirrors the error-mode exit above and the unbounded / infeasible terminals).
-        DecideDiagnostic no_incumbent_diag =
-            BuildTimeoutDiagnostic(solve_result, cum_elapsed, has_objective);
-        StashDecideDiagnostic(context, no_incumbent_diag);
-        ThrowDecideDiagnosisReady(no_incumbent_diag);
+        // The elastic engine can decline to report when no actionable relaxation exists.
+        // Say which of the two it was rather than returning an empty relation.
+        report(BuildUndiagnosedDiagnostic(
+            "infeasible",
+            diagnostic_solve_timed_out
+                ? "diagnosis ran out of time before it could find a least-change repair."
+                : "no loosening of the clauses you wrote restores feasibility."));
+        break;
     }
     case DiagnosisTerminal::UNDIAGNOSED:
-        // Mode off, or a status no engine covers yet: the plain static solver error.
-        // Clear any stash left by an earlier failed solve so decide_diagnostics()
-        // cannot be misread as being about this query (A4).
-        ClearDecideDiagnostic(context);
+        // No DIAGNOSE prefix, or a status no engine covers (ITERATION_LIMIT, OTHER).
+        // Either way the query reports its status and stops — the second solve that
+        // would name a clause only happens when the user asks for it by name.
         ThrowDecideSolveError(solve_result);
+    }
+
+    // Under DIAGNOSE a failure terminal handed off its findings instead of raising: there
+    // is no solution to read back, so produce no rows and let the DIAGNOSE operator
+    // above turn the handoff into the answer.
+    if (gstate.diagnosis_only) {
+        return SinkFinalizeType::READY;
     }
 
     // We are past the switch, so we are delivering rows (every failure terminal threw).
@@ -3707,13 +3652,9 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         context.interrupted = false;
     }
 
-    // Success: invalidate any diagnosis stashed by an earlier failed solve on this
-    // connection, so decide_diagnostics() no longer reports a now-resolved failure —
-    // unless this very solve is a caveated success that just stashed its own quality
-    // diagnosis (keep_slow_diagnosis), which the user should still be able to query.
-    if (!keep_slow_diagnosis) {
-        ClearDecideDiagnostic(context);
-    }
+    // The solve succeeded, so there is nothing wrong to report. Clear the handoff so a
+    // DIAGNOSE above this operator sees "no findings" and answers `feasible`.
+    ClearDecideDiagnostic(context);
     gstate.ilp_solution = std::move(solve_result.solution);
     // Move the indexer onto gstate now that solve is complete; readback in
     // Execute() needs it to outlive solver_input.
@@ -3765,6 +3706,12 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
                                          OperatorSourceInput &input) const {
     auto &gstate = sink_state->Cast<DecideGlobalSinkState>();
     auto &source_state = input.global_state.Cast<DecideGlobalSourceState>();
+
+    // The solve failed under DIAGNOSE: there is no assignment to read back, so this
+    // operator produces nothing and the diagnosis it handed off is the statement's answer.
+    if (gstate.diagnosis_only) {
+        return SourceResultType::FINISHED;
+    }
 
     // Scan the original buffered data into a chunk sized to match the collection;
     // `chunk` is wider (it has the appended DECIDE variable columns), so scanning

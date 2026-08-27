@@ -9,6 +9,8 @@ string ShowRef::ToString() const {
 	string result;
 	if (show_type == ShowType::SUMMARY) {
 		result += "SUMMARIZE ";
+	} else if (show_type == ShowType::DIAGNOSE) {
+		result += "DIAGNOSE ";
 	} else {
 		result += "DESCRIBE ";
 	}

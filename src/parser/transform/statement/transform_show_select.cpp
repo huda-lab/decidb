@@ -13,7 +13,13 @@ unique_ptr<QueryNode> Transformer::TransformShowSelect(duckdb_libpgquery::PGVari
 	select_node->select_list.push_back(make_uniq<StarExpression>());
 
 	auto show_ref = make_uniq<ShowRef>();
-	show_ref->show_type = stmt.is_summary ? ShowType::SUMMARY : ShowType::DESCRIBE;
+	if (stmt.is_diagnose) {
+		// DIAGNOSE <select>: the prefix is a property of the statement, carried here as
+		// its own ShowType. The binder turns it into the DECIDE diagnosis relation.
+		show_ref->show_type = ShowType::DIAGNOSE;
+	} else {
+		show_ref->show_type = stmt.is_summary ? ShowType::SUMMARY : ShowType::DESCRIBE;
+	}
 	show_ref->query = TransformSelectNode(*stmt.stmt);
 	select_node->from_table = std::move(show_ref);
 	return std::move(select_node);

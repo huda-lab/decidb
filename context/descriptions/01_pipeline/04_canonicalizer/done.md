@@ -444,9 +444,8 @@ Passing the suite is necessary but not sufficient. At the start of this work the
 tree passed 1,059 tests and all 80 golden models despite an undetected lossy-cast
 wrong answer and a reversed-subquery diagnostics defect.
 
-For diagnostics that must continue after a failing DECIDE statement, use a
-multi-statement stdin script on one connection — CLI `-c` stops at the first error
-and cannot read `decide_diagnostics()` afterward.
+To see a diagnosis, prefix the query with `DIAGNOSE` — it returns findings instead of
+raising, so a single statement is enough and nothing has to survive an error.
 
 ---
 

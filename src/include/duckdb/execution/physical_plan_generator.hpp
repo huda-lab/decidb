@@ -61,6 +61,7 @@ protected:
 	unique_ptr<PhysicalOperator> CreatePlan(LogicalCreateSecret &op);
 	unique_ptr<PhysicalOperator> CreatePlan(LogicalCrossProduct &op);
 	unique_ptr<PhysicalOperator> CreatePlan(LogicalDecide &op);
+	unique_ptr<PhysicalOperator> CreatePlan(LogicalDecideDiagnose &op);
 	unique_ptr<PhysicalOperator> CreatePlan(LogicalDelete &op);
 	unique_ptr<PhysicalOperator> CreatePlan(LogicalDelimGet &op);
 	unique_ptr<PhysicalOperator> CreatePlan(LogicalDistinct &op);
