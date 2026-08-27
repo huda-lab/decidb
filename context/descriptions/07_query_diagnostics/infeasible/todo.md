@@ -64,6 +64,26 @@ tasks remain here; this file only tracks deferred follow-ups.
   as cosmetic: the finding is correct and the qualifier keeps the clause recognizable, only
   the instance is underspecified.
 
+- **The parked residual class is root-caused and tracked as an issue (2026-08-27).**
+  `done.md`'s B3 section notes that `<>`, bilinear (McCormick) and `norm` still have encodings
+  sized from a bound the repair may want to widen. That is now traced to a documented contract
+  that is not honoured — `SolverInput::rigid_*` is "the only part of the column box a
+  structural rewrite may rely on", and no derived Big-M or envelope constant reads it. All
+  three constructs are affected, and `<>` and L0 `norm` report a **different repair per
+  backend**. Full trace, measurements, isolating proof and fix shape:
+  [`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md), "Big-M and
+  envelope constants ignore the rigid box they are contracted to use". Deferred past `v0.3.0`
+  — the fix widens every affected Big-M, so it needs a golden re-capture and a benchmark pass.
+
+- **Should elastic diagnosis be a stage-05 rewrite rather than a stage-07/08 engine?**
+  The elastic program is itself a DECIDE query, and attaching slack *before* lowering would
+  make the whole defect class above structurally unrepresentable: there would be no constant
+  baked from a bound the repair wants to move, because the repair would already be part of the
+  query when the constant is derived. The cost is that it reopens stages 07 and 08, which
+  `v0.2.0` signed off, and it replaces a working engine rather than fixing one. Not scheduled.
+  Pointing the three sites at `rigid_*` is the cheap version of the same benefit and should be
+  tried first.
+
 ---
 
 ## Suggested batches

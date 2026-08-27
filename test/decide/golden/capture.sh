@@ -9,7 +9,11 @@
 # states ABS/MIN/MAX/`<>` natively and HiGHS lowers them, so the two build
 # genuinely different models from the same SQL and each needs its own baseline.
 # `--solver` pins DECIDB_FORCE_SOLVER so a captured file always means one
-# specific backend.
+# specific backend. DECIDB_NATIVE_CONSTRUCTS is pinned to `on` for the same
+# reason: it is the A/B switch between stating a construct natively and lowering
+# it, so leaving it ambient would let `DECIDB_NATIVE_CONSTRUCTS=force` in the
+# caller's environment capture a different configuration and diff it against the
+# shipped baseline. A baseline records the model DeciDB ships, never an arm.
 #
 #   ./capture.sh --solver gurobi          # write baseline.gurobi.dump
 #   ./capture.sh --solver highs           # write baseline.highs.dump
@@ -68,6 +72,7 @@ rm -f "$out" "$out.results"
 # A query that errors is still useful signal (the error text lands in .results),
 # so a nonzero exit must not abort the capture.
 DECIDB_DUMP_MODEL="$out" DECIDB_FORCE_SOLVER="$solver" \
+    DECIDB_NATIVE_CONSTRUCTS=on \
     "$decidb" < "$here/corpus.sql" > "$out.results" 2>&1 || true
 
 if grep -q "that solver is not available" "$out.results" 2>/dev/null; then

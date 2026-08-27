@@ -43,6 +43,27 @@ validates the name itself rather than trusting `DECIDB_FORCE_SOLVER` to complain
 unrecognized name there falls through to auto-selection by design, which would record
 the host default under a name promising otherwise.
 
+## The configuration is pinned too, not just the backend
+
+`DECIDB_NATIVE_CONSTRUCTS` is the A/B switch between stating a construct natively and
+lowering it to Big-M. `capture.sh` pins it to `on` — the shipped default — for the same
+reason it pins `DECIDB_FORCE_SOLVER`: a baseline records the model DeciDB ships, never
+one arm of a comparison.
+
+Left ambient, it made `DECIDB_NATIVE_CONSTRUCTS=force make decide-test` fail before
+pytest ever ran. The check captured the forced arm and diffed it against the shipped
+baseline, so eleven dumps reported `MODEL CHANGED` — each going `num_genconstrs: 0` to
+`1`, gaining the MIN or MAX general constraint and shedding the Big-M rows and binaries
+that had encoded it. That is the switch working, not the model moving. HiGHS was
+identical throughout, because it declares no native MIN/MAX and the switch is a no-op
+there.
+
+The three queries whose *results* also differed are tied optima: `MAX(x) >= 3 ...
+MINIMIZE SUM(x)` has four equally good answers and `MAX(SUM(x)) PER grp` has two, so
+the two encodings break the tie differently while the objective is unchanged. Pinning
+the switch keeps those ties out of the baseline, where they would have frozen an
+arbitrary choice.
+
 ## Running it
 
 `make decide-test` runs `check.sh` first and **fails on any difference**, before pytest.

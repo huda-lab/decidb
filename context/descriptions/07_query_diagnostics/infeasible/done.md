@@ -868,7 +868,12 @@ deactivated arm of a disjunction, whereas a too-small one cuts off legal answers
 **Residual class, accepted not fixed.** A diagnosis is computed inside the model as it was
 built, so any encoding sized from a bound the repair wants to widen can hide a better repair.
 `<>`, bilinear (McCormick) and `norm` all have encodings of that shape and are untouched here.
-Making it structurally impossible is the parked "elastic diagnosis as a stage-05 rewrite"
+**Root-caused on 2026-08-27** — all three read the ordinary column box where
+`SolverInput::rigid_*` is the box a structural rewrite is contracted to use, so a repair caps
+at `box + 1`, and on `<>` and L0 the reported repair differs per backend. Tracked with its
+trace, measurements and fix shape in
+[`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md). Making it
+structurally impossible instead is the parked "elastic diagnosis as a stage-05 rewrite"
 question in [`todo.md`](todo.md), which reopens stages 07 and 08.
 
 **Tests** (`test_query_diagnostics_relation.py::TestRepairsTheModelCanReach`). B3's query
