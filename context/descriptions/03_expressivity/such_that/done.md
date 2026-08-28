@@ -110,7 +110,7 @@ MIN(x * v) WHEN tier_a + MIN(x * v) WHEN tier_b >= 15
 
 **Subtraction is supported.** `MAX(x*v) WHEN w - MIN(x*v) WHEN w <= 3` and `SUM(x) - MAX(y) <= 0` both work. A subtracted term carries sign `-1`, which flips the direction it is pushed and therefore its easy/hard classification: under `<=`, a subtracted `MAX` is pushed *up* (hard) while an added one is pushed down (easy). `WalkComposedLhs` threads the sign through binary and unary `-`; the physical layer was already sign-generic. A zero constant reaching a leaf is dropped, so a shape is never rejected purely on how its negation was spelled. `DecideOptimizer` still writes negations that way (`0 - inner_expr` in the ABS linearization); the canonicalizer no longer does — since C.2 `BuildAdditive` emits a unary minus for a leading negative term, because the synthesized `0` was a term to every downstream spine walker and is not a term to K3.
 
-Still rejected at bind time (separate v2 shapes): outer `WHEN`/`PER` wrappers, non-constant RHS, and equality (`=`) outer comparison. The RHS test is *foldability*, not a literal node, so a bound that canonicalization rebuilt as `(0 - 3) + 0` is accepted. See also `../maximize_minimize/done.md` for composed objectives.
+Still rejected at bind time (separate v2 shapes): outer `WHEN`/`PER` wrappers, non-constant RHS, and equality (`=`) outer comparison. `BETWEEN` is *not* in that list: it reaches the composed path as its two directional halves, so it solves — and `BETWEEN K AND K` is therefore the equality the `=` rejection points the user at. The RHS test is *foldability*, not a literal node, so a bound that canonicalization rebuilt as `(0 - 3) + 0` is accepted. See also `../maximize_minimize/done.md` for composed objectives.
 
 ---
 

@@ -207,7 +207,19 @@ Decomposing into multiple WHEN constraints fails here because the conditions ove
 
 ### Rejection of inline CASE inside DECIDE
 
-A `CASE` expression placed directly inside a DECIDE constraint or objective is rejected with a friendly user-facing error that points to the supported alternatives (postfix `WHEN`, `PER`, CTE pre-computation). The friendly message comes from `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide_binder.cpp` and fires for a CASE **inside** a reducer. A CASE elsewhere in a constraint currently falls through to the generic binder message instead — see [`todo.md`](todo.md).
+A `CASE` expression placed directly inside a DECIDE constraint or objective is rejected with a friendly user-facing error that points to the supported alternatives (postfix `WHEN`, `PER`, CTE pre-computation).
+
+There are three places that reject one, and they share **one wording**, returned by `DecideCaseUnsupportedMessage()` in `src/planner/expression_binder/decide_binder.cpp`:
+
+| Where the `CASE` sits | Rejected by |
+|---|---|
+| Inside a reducer argument (`SUM(x * CASE …)`) | `ValidateSumArgumentInternal` |
+| Anywhere else in a constraint (`x + CASE … <= 5`) | `DecideConstraintsBinder::BindExpression` |
+| Anywhere else in an objective (`SUM(x) + CASE …`) | `DecideObjectiveBinder::BindExpression` |
+
+The last two used to fall through to each binder's generic unsupported-class arm and print `(ExpressionClass::CASE)` — a C++ enum name a SQL user cannot act on, and no mention of the alternatives. A user writing a `CASE` is asking for conditional logic whichever spelling they used, so all three now give the same answer. Pinned by `test/decide/tests/test_error_case_expression.py`, which also asserts `ExpressionClass` never reaches the user.
+
+One shape keeps its own message: a bare `CASE` as the whole left-hand side of a constraint (`(CASE WHEN a>0 THEN x ELSE 0 END) <= 5`) is rejected by the LHS-shape check, which names what a constraint's left side must be. That message is already in SQL terms.
 
 ### How DECIDE `WHEN` is tokenized (`WHEN_DECIDE`)
 
@@ -215,14 +227,15 @@ The DECIDE `WHEN` keyword is lexed as a **distinct token `WHEN_DECIDE`**, separa
 
 The rewrite is suppressed inside a `CASE … END` (tracked by `decide_case_depth`), so a `CASE` written inside a DECIDE expression still parses with ordinary `WHEN` and is then rejected by the binder with the friendly error above — rather than failing with a raw parser syntax error.
 
-**Known limitation — lexically nested DECIDE clauses.** Queries can compose
-multiple DECIDE subqueries, but `in_decide_clause` is a single `bool`, not a depth
-counter. If an inner DECIDE clause is parsed while an outer DECIDE clause is still
-open, the inner `decide_clause` action can clear the flag prematurely, causing a
-subsequent outer `WHEN` to lex as ordinary `WHEN`. No focused test covers that
-shape. Supporting it robustly requires a depth counter, mirroring
-`decide_case_depth`; see
-[`../../01_pipeline/01_parser/todo.md`](../../01_pipeline/01_parser/todo.md).
+**Lexically nested DECIDE clauses.** A DECIDE subquery inside another DECIDE clause
+lexes correctly, to any depth. `in_decide_clause` was once a single `bool`, so an
+inner clause cleared it on its way out and a *subsequent outer* `WHEN` lexed as
+ordinary SQL `WHEN` and failed to parse — nesting alone worked and an outer `WHEN`
+alone worked, only the combination broke. The state is now saved and restored per
+clause (`PGDecidePushLexState` / `PGDecidePopLexState`); see
+[`../../01_pipeline/01_parser/done.md`](../../01_pipeline/01_parser/done.md) §2.
+`test/decide/tests/test_nested_decide.py` pins the combination, both spellings of
+the inner clause, and three levels of nesting.
 
 ### Summary
 

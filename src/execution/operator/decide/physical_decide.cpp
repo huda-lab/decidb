@@ -1,4 +1,5 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
+#include "duckdb/execution/executor.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
@@ -669,7 +670,7 @@ static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
 //===--------------------------------------------------------------------===//
 
 // TermFilterState is declared in physical_decide.hpp (EvaluateObjective's
-// ObjectiveEvalState return value carries it across Finalize's phase methods).
+// EvaluatedClauses return value carries it across Finalize's phase methods).
 
 // Which rows a relation-qualified reducer (`sum(D: ...)`) actually contributes.
 // The join repeats each D tuple once per matching row; §3.2.2 asks for one term per
@@ -1630,19 +1631,42 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
 
     // 2. Evaluate objective
-    ObjectiveEvalState obj_state =
+    EvaluatedClauses evaluated =
         EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+
+    // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
+    EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, entity_mappings, evaluated);
 
     //===--------------------------------------------------------------------===//
     // PHASE 3: Build and Solve ILP
     //===--------------------------------------------------------------------===//
 
+    // 3a. Assemble the model input and settle the column box. Nothing below this line
+    // touches the data again.
     VarIndexer var_indexer;
-    SolverInput solver_input = BuildSolverInput(context, gstate, num_rows, chunk_expr_cache, per_group_cache,
-                                                std::move(entity_mappings), std::move(obj_state), var_indexer,
-                                                bench, model_timer);
+    SolverInput solver_input =
+        BuildSolverInput(gstate, num_rows, std::move(entity_mappings), evaluated, var_indexer);
 
-    return FinalizeSolveResult(context, gstate, solver_input, var_indexer, bench, model_timer, solver_timer);
+    // Under DIAGNOSE, keep the model input and column space as assembly left them —
+    // before a single constant was derived. An infeasibility repair searches a WIDER box
+    // than the solved model declares, and a Big-M or a McCormick envelope is sound only
+    // for the box it came from, so the INFEASIBLE terminal formulates a second model from
+    // this instead of re-deriving nothing and inheriting the narrow one's constants. The
+    // copy is paid for only when the user asked for a diagnosis.
+    unique_ptr<ElasticFormulation> elastic;
+    if (diagnose) {
+        elastic = make_uniq<ElasticFormulation>();
+        elastic->input = solver_input;
+        elastic->var_indexer = var_indexer;
+    }
+
+    // 3b. Formulate: derive the constants and emit the rows, against the box the model
+    // declares. A pure function of what came before, which is what lets the elastic
+    // (infeasibility-repair) path run it a second time against a widened box.
+    FormulateModel(solver_input, FormulationBox::OfSolvedModel(solver_input), var_indexer, evaluated);
+
+    return FinalizeSolveResult(context, gstate, solver_input, var_indexer, evaluated, elastic.get(),
+                               bench, model_timer, solver_timer);
 }
 
 //===--------------------------------------------------------------------===//
@@ -2274,12 +2298,12 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
     }
 }
 
-PhysicalDecide::ObjectiveEvalState PhysicalDecide::EvaluateObjective(ClientContext &context,
-                                                                     DecideGlobalSinkState &gstate,
-                                                                     idx_t num_rows,
-                                                                     ChunkExprCache &chunk_expr_cache,
-                                                                     PerGroupCache &per_group_cache,
-                                                                     const vector<EntityMapping> &entity_mappings) const {
+PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext &context,
+                                                                   DecideGlobalSinkState &gstate,
+                                                                   idx_t num_rows,
+                                                                   ChunkExprCache &chunk_expr_cache,
+                                                                   PerGroupCache &per_group_cache,
+                                                                   const vector<EntityMapping> &entity_mappings) const {
     // 2. Evaluate objective
     vector<TermFilterState> obj_linear_term_filters;
     vector<TermFilterState> obj_quadratic_term_filters;
@@ -2509,30 +2533,286 @@ PhysicalDecide::ObjectiveEvalState PhysicalDecide::EvaluateObjective(ClientConte
         }
     }
 
-    ObjectiveEvalState result;
+    EvaluatedClauses result;
     result.linear_filters = std::move(obj_linear_term_filters);
     result.quadratic_filters = std::move(obj_quadratic_term_filters);
     result.bilinear_filters = std::move(obj_bilinear_filters);
     result.when_mask = std::move(objective_when_mask);
     result.has_when = objective_has_when;
+
+    // The objective's PER grouping. It is a read of the data (the PER key columns), so it
+    // belongs to this phase and not to the formulation pass — the grouping a widened
+    // variable bound produces is the same grouping. It runs last here because the
+    // "does this row carry a term at all" test below reads the filter masks settled above.
+    if (gstate.objective && !gstate.objective->per_columns.empty()) {
+        bool objective_has_local_filters = false;
+        bool objective_has_unfiltered_part = false;
+        for (auto &f : result.linear_filters) {
+            objective_has_local_filters |= f.has_filter;
+            objective_has_unfiltered_part |= !f.has_filter;
+        }
+        for (auto &f : result.quadratic_filters) {
+            objective_has_local_filters |= f.has_filter;
+            objective_has_unfiltered_part |= !f.has_filter;
+        }
+        for (auto &f : result.bilinear_filters) {
+            objective_has_local_filters |= f.has_filter;
+            objective_has_unfiltered_part |= !f.has_filter;
+        }
+
+        auto objective_row_has_local_term = [&](idx_t row) {
+            if (!objective_has_local_filters || objective_has_unfiltered_part) {
+                return true;
+            }
+            for (auto &f : result.linear_filters) {
+                if (f.has_filter && f.mask[row]) {
+                    return true;
+                }
+            }
+            for (auto &f : result.quadratic_filters) {
+                if (f.has_filter && f.mask[row]) {
+                    return true;
+                }
+            }
+            for (auto &f : result.bilinear_filters) {
+                if (f.has_filter && f.mask[row]) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        auto obj_row_is_included = [&](idx_t row) -> bool {
+            if (result.has_when && !result.when_mask[row]) return false;
+            if (!objective_row_has_local_term(row)) return false;
+            return true;
+        };
+
+        vector<string> obj_group_labels; // unused: objective groups are not diagnosed by clause key
+        LookupOrBuildPerGroupIds(per_group_cache, gstate.objective->per_columns,
+                                 chunk_expr_cache, context, gstate.data, num_rows,
+                                 /*null_excludes=*/true, obj_row_is_included,
+                                 result.objective_row_group_ids,
+                                 result.objective_num_groups, obj_group_labels);
+    }
+
     return result;
 }
 
 //===--------------------------------------------------------------------===//
-// Finalize: PHASE 3, model build -- BuildSolverInput
+// Finalize: PHASE 2, sub-phase 3 -- Evaluate composed MIN/MAX clauses
 //===--------------------------------------------------------------------===//
 
-SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGlobalSinkState &gstate,
+// Composed MIN/MAX: additive clauses mixing SUM/AVG/MIN/MAX, in a constraint
+// (`SUM(a) + MAX(b) <= K`) or in the objective. This phase evaluates the parts that
+// need a row -- each inner term's per-row coefficient, the query-wide factor on a
+// reducer, the term's WHEN mask, the constant RHS. The rows and auxiliaries they
+// become are emitted later, by FormulateModel; nothing evaluated here depends on a
+// variable bound, so a second formulation against a widened box reuses it as is.
+void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate,
                                              idx_t num_rows, ChunkExprCache &chunk_expr_cache,
-                                             PerGroupCache &per_group_cache, vector<EntityMapping> entity_mappings,
-                                             ObjectiveEvalState obj_state, VarIndexer &out_var_indexer,
-                                             bool bench, Profiler &model_timer) const {
+                                             const vector<EntityMapping> &entity_mappings,
+                                             EvaluatedClauses &evaluated) const {
+    if (composed_minmax_constraints.empty() && composed_minmax_objective_terms.empty()) {
+        return;
+    }
+    // Evaluate a DecideTerm's per-row coefficient (scaled by term.sign). `what` is
+    // "constraint" or "objective", naming the clause in any error.
+    auto EvaluateTermCoefs = [&](const DecideTerm &term, const char *what) -> vector<double> {
+        vector<double> coefs;
+        coefs.reserve(num_rows);
+        const Expression &transformed =
+            CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
+        ExpressionExecutor exec(context);
+        exec.AddExpression(transformed);
+        ColumnDataScanState scan;
+        gstate.data.InitializeScan(scan);
+        DataChunk chunk;
+        chunk.Initialize(context, gstate.data.Types());
+        while (gstate.data.Scan(scan, chunk)) {
+            DataChunk result;
+            result.Initialize(context, {transformed.return_type});
+            exec.Execute(chunk, result);
+            for (idx_t r = 0; r < chunk.size(); r++) {
+                Value val = result.data[0].GetValue(r);
+                if (val.IsNull()) {
+                    throw InvalidInputException(
+                        "Composed MIN/MAX %s: coefficient expression returned NULL.", what);
+                }
+                double d = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+                if (!std::isfinite(d)) {
+                    throw InvalidInputException(
+                        "Composed MIN/MAX %s: coefficient is not finite (NaN/Inf).", what);
+                }
+                coefs.push_back(d * term.sign);
+            }
+        }
+        return coefs;
+    };
+
+    //! A factor on a reducer is one value for the whole query by construction (the
+    //! canonicalizer rejects anything row-varying), so evaluate it once and read
+    //! row 0. It goes through the same chunk-expression transform every other
+    //! coefficient does -- a flattened scalar subquery is a column reference, and
+    //! reading it without that transform would index the chunk by a logical column
+    //! index.
+    //!
+    //! `scale` must be the expression OWNED by the term, never a copy:
+    //! CachedTransformToChunkExpression keys its cache on the Expression's address,
+    //! so a temporary would leave a dangling key that a later allocation at the
+    //! same address silently inherits.
+    auto EvaluateQueryWideScale = [&](const Expression &scale, bool divides,
+                                      const char *what) -> double {
+        const Expression &transformed =
+            CachedTransformToChunkExpression(chunk_expr_cache, scale, context);
+        ExpressionExecutor exec(context);
+        exec.AddExpression(transformed);
+        ColumnDataScanState scan;
+        gstate.data.InitializeScan(scan);
+        DataChunk chunk;
+        chunk.Initialize(context, gstate.data.Types());
+        double v = 1.0;
+        bool got = false;
+        while (!got && gstate.data.Scan(scan, chunk)) {
+            if (chunk.size() == 0) {
+                continue;
+            }
+            DataChunk result;
+            result.Initialize(context, {transformed.return_type});
+            exec.Execute(chunk, result);
+            Value val = result.data[0].GetValue(0);
+            if (val.IsNull()) {
+                throw InvalidInputException(
+                    "DECIDE: the factor on an aggregate evaluated to NULL.");
+            }
+            v = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+            if (!std::isfinite(v)) {
+                throw InvalidInputException(
+                    "DECIDE: the factor on an aggregate is not finite (NaN/Inf).");
+            }
+            got = true;
+        }
+        if (!got) {
+            return 1.0;
+        }
+        if (divides) {
+            if (v == 0.0) {
+                throw InvalidInputException(
+                    "DECIDE %s: division by zero — the factor on an aggregate "
+                    "evaluated to 0.", what);
+            }
+            return 1.0 / v;
+        }
+        return v;
+    };
+
+    // Evaluate one composed clause's terms into the stage-06 input. `what` is
+    // "constraint" or "objective"; it names the clause in every error raised here.
+    auto EvaluateComposedTerms =
+        [&](const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
+            const char *what) -> vector<ComposedMinMaxTermData> {
+        // Collect filter expressions for batch evaluation (one scan for all terms).
+        vector<const Expression *> cond_ptrs;
+        for (auto &term : terms) {
+            if (term.filter) cond_ptrs.push_back(term.filter.get());
+        }
+        auto masks = EvaluateBooleanMasks(cond_ptrs, chunk_expr_cache, context, gstate.data, num_rows);
+
+        vector<ComposedMinMaxTermData> evaluated;
+        idx_t mask_slot = 0;
+        for (auto &term : terms) {
+            ComposedMinMaxTermData ta;
+            ta.is_minmax = (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND);
+            ta.agg_name = term.agg_name;
+            ta.sign = term.sign;
+            ta.is_easy = term.is_easy;
+            if (term.scale) {
+                ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides, what);
+            }
+            if (ta.is_minmax) {
+                ta.label = StringUtil::Upper(term.agg_name) + "(" + term.inner_expr->ToString() + ")";
+            }
+            ta.inner_terms = &term.inner_terms;
+            for (auto &inner_t : term.inner_terms) {
+                ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t, what));
+            }
+            if (term.filter) {
+                ta.filter_mask = std::move(masks[mask_slot++]);
+            } else {
+                ta.filter_mask.assign(num_rows, true);
+            }
+            // Fold in the relation qualifier's de-duplication mask, exactly as the
+            // non-composed reducer paths do. Composed v1 has no outer PER, so every
+            // row is in one group and `row_group_ids` is empty. Applied uniformly:
+            // for MIN/MAX it is provably a no-op (every row of an identity carries the
+            // same value, so dropping repeats cannot move an extremum), which keeps
+            // one code path instead of a special case that has to stay in sync.
+            if (term.qualifier_scope_idx != DConstants::INVALID_INDEX) {
+                auto keep = BuildQualifierKeepMask(entity_mappings,
+                                                   term.qualifier_scope_idx, {}, num_rows);
+                for (idx_t row = 0; row < num_rows; row++) {
+                    ta.filter_mask[row] = ta.filter_mask[row] && keep[row];
+                }
+            }
+            evaluated.push_back(std::move(ta));
+        }
+
+        // Reject an empty row set before stage 06 sees the term. For MIN/MAX the
+        // auxiliary would float free (no per-row pinning), silently vacating the
+        // clause; for SUM/AVG an empty SUM contributes a vacuous 0 and an empty AVG
+        // would divide by zero. MIN/MAX first, so a clause with both reports the
+        // MIN/MAX term.
+        string ctx = "composed " + string(what);
+        for (auto &ta : evaluated) {
+            if (!ta.is_minmax) continue;
+            idx_t cnt = 0;
+            for (bool m : ta.filter_mask) if (m) cnt++;
+            RejectEmptyAggregate(cnt, ta.agg_name.c_str(), ctx.c_str());
+        }
+        for (auto &ta : evaluated) {
+            if (ta.is_minmax) continue;
+            idx_t cnt = 0;
+            for (bool m : ta.filter_mask) if (m) cnt++;
+            RejectEmptyAggregate(cnt, ta.agg_name.c_str(), ctx.c_str());
+        }
+        return evaluated;
+    };
+
+    for (auto &spec : composed_minmax_constraints) {
+        // RHS must be row-invariant in v1. Decide that by foldability rather
+        // than by matching a literal node: canonicalization rebuilds the bound
+        // side as an additive chain, so a constant arrives as `(0 - 3) + 0`
+        // just as legitimately as `-3`. IsFoldable is the same test the
+        // per-row constraint path historically used for a shared scalar RHS.
+        if (!spec.rhs_expr->IsFoldable()) {
+            throw BinderException(
+                "Composed MIN/MAX in DECIDE v1 requires a constant RHS; got '%s'.",
+                spec.rhs_expr->ToString());
+        }
+        EvaluatedClauses::ComposedConstraint clause;
+        clause.rhs = ExpressionExecutor::EvaluateScalar(context, *spec.rhs_expr)
+                         .DefaultCastAs(LogicalType::DOUBLE)
+                         .GetValue<double>();
+        clause.terms = EvaluateComposedTerms(spec.terms, "constraint");
+        evaluated.composed_constraints.push_back(std::move(clause));
+    }
+
+    if (!composed_minmax_objective_terms.empty()) {
+        evaluated.composed_objective_terms =
+            EvaluateComposedTerms(composed_minmax_objective_terms, "objective");
+    }
+}
+
+
+//===--------------------------------------------------------------------===//
+// Finalize: PHASE 3a, assembly -- BuildSolverInput
+//===--------------------------------------------------------------------===//
+
+SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows,
+                                             vector<EntityMapping> entity_mappings,
+                                             EvaluatedClauses &evaluated,
+                                             VarIndexer &out_var_indexer) const {
     idx_t num_decide_vars = decide_variables.size();
-    auto &obj_linear_term_filters = obj_state.linear_filters;
-    auto &obj_quadratic_term_filters = obj_state.quadratic_filters;
-    auto &obj_bilinear_filters = obj_state.bilinear_filters;
-    auto &objective_when_mask = obj_state.when_mask;
-    bool objective_has_when = obj_state.has_when;
 
     // Construct SolverInput
     SolverInput solver_input;
@@ -2587,13 +2867,6 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     for (auto &link : abs_maximize_links) {
         solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {link.aux_idx, link.y_idx});
     }
-    // Plain declared names, for the refusals the linearization can raise. `alias`
-    // lives on BaseExpression, so no cast is needed to read it.
-    vector<string> decide_var_names;
-    decide_var_names.reserve(decide_variables.size());
-    for (auto &v : decide_variables) {
-        decide_var_names.push_back(v->alias);
-    }
 
     // The rigid box, captured before any propagation runs and with every user-absorbed
     // direction re-opened. What is left is the intrinsic domain alone — the only part of
@@ -2623,14 +2896,162 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // Only provably-implied bounds are applied; the feasible region is unchanged.
     DecidePropagateImpliedBounds(solver_input.constraints, solver_input.lower_bounds,
                                  solver_input.upper_bounds, num_rows);
+    // Objective (linear part)
+    solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
+    solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
+    solver_input.objective_term_reductions = std::move(gstate.objective_term_reductions);
+    solver_input.sense = decide_sense;
+
+    // Quadratic objective (if present)
+    if (gstate.has_quadratic_objective) {
+        solver_input.has_quadratic_objective = true;
+        solver_input.quadratic_sign = gstate.quadratic_sign;
+        solver_input.quadratic_inner_coefficients = std::move(gstate.evaluated_quadratic_coefficients);
+        solver_input.quadratic_inner_variable_indices.resize(gstate.quadratic_variable_indices.size());
+        for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {
+            solver_input.quadratic_inner_variable_indices[i] = gstate.quadratic_variable_indices[i];
+        }
+    }
+
+    // Bilinear objective terms (non-Boolean pairs, for Q matrix off-diagonal entries)
+    if (!gstate.evaluated_bilinear_terms.empty()) {
+        for (auto &ebt : gstate.evaluated_bilinear_terms) {
+            SolverInput::BilinearObjectiveTerm bot;
+            bot.var_a = ebt.var_a;
+            bot.var_b = ebt.var_b;
+            bot.row_coefficients = std::move(ebt.row_coefficients);
+            solver_input.bilinear_objective_terms.push_back(std::move(bot));
+        }
+    }
+    // The objective's PER grouping, settled by PHASE 2 off the data. It is copied onto
+    // `SolverInput` here because every consumer below reads it there: the qualifier
+    // de-duplication, AVG scaling, and the MIN/MAX objective encoding.
+    solver_input.objective_row_group_ids = evaluated.objective_row_group_ids;
+    solver_input.objective_num_groups = evaluated.objective_num_groups;
+
+    // Relation-qualified reducers in the objective: same de-duplication as on the
+    // constraint side, applied once the objective's PER groups are settled and before
+    // AVG scaling reads the surviving-row counts.
+    if (gstate.objective) {
+        for (idx_t term_idx = 0; term_idx < gstate.objective->terms.size() &&
+                                 term_idx < evaluated.linear_filters.size();
+             term_idx++) {
+            idx_t scope_idx = gstate.objective->terms[term_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+                                   solver_input.objective_row_group_ids, num_rows,
+                                   evaluated.linear_filters[term_idx]);
+            MaskCoefficientColumn(solver_input.objective_coefficients[term_idx],
+                                  evaluated.linear_filters[term_idx].mask);
+        }
+        for (idx_t term_idx = 0; term_idx < gstate.objective->squared_terms.size() &&
+                                 term_idx < evaluated.quadratic_filters.size();
+             term_idx++) {
+            idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+                                   solver_input.objective_row_group_ids, num_rows,
+                                   evaluated.quadratic_filters[term_idx]);
+            MaskCoefficientColumn(solver_input.quadratic_inner_coefficients[term_idx],
+                                  evaluated.quadratic_filters[term_idx].mask);
+        }
+        for (idx_t term_idx = 0; term_idx < gstate.objective->bilinear_terms.size() &&
+                                 term_idx < evaluated.bilinear_filters.size();
+             term_idx++) {
+            idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
+            if (scope_idx == DConstants::INVALID_INDEX) continue;
+            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+                                   solver_input.objective_row_group_ids, num_rows,
+                                   evaluated.bilinear_filters[term_idx]);
+            MaskCoefficientColumn(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
+                                  evaluated.bilinear_filters[term_idx].mask);
+        }
+    }
+
+    for (idx_t term_idx = 0; term_idx < evaluated.linear_filters.size(); term_idx++) {
+        if (!evaluated.linear_filters[term_idx].avg_scale) {
+            continue;
+        }
+        ScaleAvgRows(solver_input.objective_coefficients[term_idx],
+                    evaluated.linear_filters[term_idx].has_filter,
+                    evaluated.linear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
+                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
+                    evaluated.has_when ? &evaluated.when_mask : nullptr);
+    }
+    for (idx_t term_idx = 0; term_idx < evaluated.quadratic_filters.size(); term_idx++) {
+        if (!evaluated.quadratic_filters[term_idx].avg_scale) {
+            continue;
+        }
+        ScaleAvgRows(solver_input.quadratic_inner_coefficients[term_idx],
+                    evaluated.quadratic_filters[term_idx].has_filter,
+                    evaluated.quadratic_filters[term_idx].mask, /*quadratic_inner=*/true, num_rows,
+                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
+                    evaluated.has_when ? &evaluated.when_mask : nullptr);
+    }
+
+    for (idx_t term_idx = 0; term_idx < evaluated.bilinear_filters.size(); term_idx++) {
+        if (!evaluated.bilinear_filters[term_idx].avg_scale) {
+            continue;
+        }
+        ScaleAvgRows(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
+                    evaluated.bilinear_filters[term_idx].has_filter,
+                    evaluated.bilinear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
+                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
+                    evaluated.has_when ? &evaluated.when_mask : nullptr);
+    }
+    // The flat column space, built ONCE and handed to every construct site below. A
+    // general or indicator constraint names flat columns, so a site that may state one
+    // natively needs the index before it can emit — which is why this is built here,
+    // ahead of linearization, rather than after it. Nothing below adds a decide
+    // variable, so the row / entity / scalar blocks are final from this point; only
+    // `solver_input.num_global_vars` keeps growing as auxiliary globals are appended,
+    // and `total_vars` is refreshed just before the solve.
+    //
+    // It is reused for: (1) the flat indices every construct site emits against,
+    // (2) the SolverModel::Build() call inside SolveModel(), and (3) gstate.var_indexer
+    // for solution readback after the solve. The owning form, so it survives past
+    // `solver_input` once that is moved onto gstate.
+    VarIndexer var_indexer = VarIndexer::Build(solver_input);
+
+    out_var_indexer = std::move(var_indexer);
+    return solver_input;
+}
+
+//===--------------------------------------------------------------------===//
+// Finalize: PHASE 3b, formulation -- FormulateModel
+//===--------------------------------------------------------------------===//
+
+void PhysicalDecide::FormulateModel(SolverInput &solver_input, const FormulationBox &box,
+                                    VarIndexer &var_indexer,
+                                    const EvaluatedClauses &evaluated) const {
+    idx_t num_rows = solver_input.num_rows;
+
+    // The flat column space is settled by assembly and is never rebuilt here: the row,
+    // entity and scalar blocks are final, and only the global block grows as auxiliaries
+    // are appended below. That is what lets a second formulation, against a different
+    // box, name exactly the same columns as the first — which the elastic path relies on
+    // to read its solution back through the same labels.
+#ifdef DEBUG
+    const idx_t formulation_entry_columns = var_indexer.global_block_start;
+#endif
+
+    // Plain declared names, for the refusals the linearization can raise. `alias`
+    // lives on BaseExpression, so no cast is needed to read it.
+    vector<string> decide_var_names;
+    decide_var_names.reserve(decide_variables.size());
+    for (auto &v : decide_variables) {
+        decide_var_names.push_back(v->alias);
+    }
 
     // Auto-M for L0 `norm(e, 0)`: the binder emitted the raw links `e <= M*z` and
     // `-e <= M*z` with a placeholder coefficient on each `__l0auto_ind_*` indicator.
     // Now that implied bounds are known, fill a tight, data-driven Big-M (mirrors
     // the <> path): zero the indicator's own coefficient, compute M from the
     // remaining (inner-expression) terms + RHS, then set the indicator coefficient
-    // to -M. The links carry a negative indicator coefficient, so implied-bound
-    // propagation above already skipped them (no contamination from the placeholder).
+    // to -M. The links carry a negative indicator coefficient, so the implied-bound
+    // propagation assembly ran already skipped them (no contamination from the
+    // placeholder). This is a constant derived from `box`, which is why it is here and
+    // not with the propagation: it has to be re-derived whenever the box changes.
     {
         unordered_set<idx_t> l0_auto;
         for (idx_t i = 0; i < decide_variables.size(); i++) {
@@ -2669,9 +3090,8 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
                 // The link is normalized to `M*z - inner >= rhs`, so the indicator
                 // coefficient is positive.
                 ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
-                double M = DecideTightPerRowBigM(ec, solver_input.lower_bounds,
-                                                 solver_input.upper_bounds, num_rows,
-                                                 decide_var_names);
+                double M = DecideTightPerRowBigM(
+                    ec, box, num_rows, decide_var_names);
                 ec.row_coefficients[z_term].AssignScalar(num_rows, M);
             }
         }
@@ -2692,20 +3112,6 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // data is this layer's job; choosing the decision was not.
     const NativeConstructPolicy native_min_max {use_native_constructs.min_max,
                                                 force_native_constructs};
-
-    // The flat column space, built ONCE and handed to every construct site below. A
-    // general or indicator constraint names flat columns, so a site that may state one
-    // natively needs the index before it can emit — which is why this is built here,
-    // ahead of linearization, rather than after it. Nothing below adds a decide
-    // variable, so the row / entity / scalar blocks are final from this point; only
-    // `solver_input.num_global_vars` keeps growing as auxiliary globals are appended,
-    // and `total_vars` is refreshed just before the solve.
-    //
-    // It is reused for: (1) the flat indices every construct site emits against,
-    // (2) the SolverModel::Build() call inside SolveModel(), and (3) gstate.var_indexer
-    // for solution readback after the solve. The owning form, so it survives past
-    // `solver_input` once that is moved onto gstate.
-    VarIndexer var_indexer = VarIndexer::Build(solver_input);
 
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from
@@ -2736,159 +3142,7 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     }
 
     // Emit the McCormick envelope for every bilinear w = b * x auxiliary.
-    LinearizeBilinear(solver_input, decide_var_names);
-
-    // Objective (linear part)
-    solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
-    solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
-    solver_input.objective_term_reductions = std::move(gstate.objective_term_reductions);
-    solver_input.sense = decide_sense;
-
-    // Quadratic objective (if present)
-    if (gstate.has_quadratic_objective) {
-        solver_input.has_quadratic_objective = true;
-        solver_input.quadratic_sign = gstate.quadratic_sign;
-        solver_input.quadratic_inner_coefficients = std::move(gstate.evaluated_quadratic_coefficients);
-        solver_input.quadratic_inner_variable_indices.resize(gstate.quadratic_variable_indices.size());
-        for (idx_t i = 0; i < gstate.quadratic_variable_indices.size(); i++) {
-            solver_input.quadratic_inner_variable_indices[i] = gstate.quadratic_variable_indices[i];
-        }
-    }
-
-    // Bilinear objective terms (non-Boolean pairs, for Q matrix off-diagonal entries)
-    if (!gstate.evaluated_bilinear_terms.empty()) {
-        for (auto &ebt : gstate.evaluated_bilinear_terms) {
-            SolverInput::BilinearObjectiveTerm bot;
-            bot.var_a = ebt.var_a;
-            bot.var_b = ebt.var_b;
-            bot.row_coefficients = std::move(ebt.row_coefficients);
-            solver_input.bilinear_objective_terms.push_back(std::move(bot));
-        }
-    }
-
-    // Evaluate PER column for objective grouping (must happen after solver_input is constructed)
-    if (gstate.objective && !gstate.objective->per_columns.empty()) {
-        bool objective_has_local_filters = false;
-        bool objective_has_unfiltered_part = false;
-        for (auto &f : obj_linear_term_filters) {
-            objective_has_local_filters |= f.has_filter;
-            objective_has_unfiltered_part |= !f.has_filter;
-        }
-        for (auto &f : obj_quadratic_term_filters) {
-            objective_has_local_filters |= f.has_filter;
-            objective_has_unfiltered_part |= !f.has_filter;
-        }
-        for (auto &f : obj_bilinear_filters) {
-            objective_has_local_filters |= f.has_filter;
-            objective_has_unfiltered_part |= !f.has_filter;
-        }
-
-        auto objective_row_has_local_term = [&](idx_t row) {
-            if (!objective_has_local_filters || objective_has_unfiltered_part) {
-                return true;
-            }
-            for (auto &f : obj_linear_term_filters) {
-                if (f.has_filter && f.mask[row]) {
-                    return true;
-                }
-            }
-            for (auto &f : obj_quadratic_term_filters) {
-                if (f.has_filter && f.mask[row]) {
-                    return true;
-                }
-            }
-            for (auto &f : obj_bilinear_filters) {
-                if (f.has_filter && f.mask[row]) {
-                    return true;
-                }
-            }
-            return false;
-        };
-
-        auto obj_row_is_included = [&](idx_t row) -> bool {
-            if (objective_has_when && !objective_when_mask[row]) return false;
-            if (!objective_row_has_local_term(row)) return false;
-            return true;
-        };
-
-        vector<string> obj_group_labels; // unused: objective groups are not diagnosed by clause key
-        LookupOrBuildPerGroupIds(per_group_cache, gstate.objective->per_columns,
-                                 chunk_expr_cache, context, gstate.data, num_rows,
-                                 /*null_excludes=*/true, obj_row_is_included,
-                                 solver_input.objective_row_group_ids,
-                                 solver_input.objective_num_groups, obj_group_labels);
-    }
-
-    // Relation-qualified reducers in the objective: same de-duplication as on the
-    // constraint side, applied once the objective's PER groups are settled and before
-    // AVG scaling reads the surviving-row counts.
-    if (gstate.objective) {
-        for (idx_t term_idx = 0; term_idx < gstate.objective->terms.size() &&
-                                 term_idx < obj_linear_term_filters.size();
-             term_idx++) {
-            idx_t scope_idx = gstate.objective->terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids, num_rows,
-                                   obj_linear_term_filters[term_idx]);
-            MaskCoefficientColumn(solver_input.objective_coefficients[term_idx],
-                                  obj_linear_term_filters[term_idx].mask);
-        }
-        for (idx_t term_idx = 0; term_idx < gstate.objective->squared_terms.size() &&
-                                 term_idx < obj_quadratic_term_filters.size();
-             term_idx++) {
-            idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids, num_rows,
-                                   obj_quadratic_term_filters[term_idx]);
-            MaskCoefficientColumn(solver_input.quadratic_inner_coefficients[term_idx],
-                                  obj_quadratic_term_filters[term_idx].mask);
-        }
-        for (idx_t term_idx = 0; term_idx < gstate.objective->bilinear_terms.size() &&
-                                 term_idx < obj_bilinear_filters.size();
-             term_idx++) {
-            idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
-            if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids, num_rows,
-                                   obj_bilinear_filters[term_idx]);
-            MaskCoefficientColumn(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
-                                  obj_bilinear_filters[term_idx].mask);
-        }
-    }
-
-    for (idx_t term_idx = 0; term_idx < obj_linear_term_filters.size(); term_idx++) {
-        if (!obj_linear_term_filters[term_idx].avg_scale) {
-            continue;
-        }
-        ScaleAvgRows(solver_input.objective_coefficients[term_idx],
-                    obj_linear_term_filters[term_idx].has_filter,
-                    obj_linear_term_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
-                    objective_has_when ? &objective_when_mask : nullptr);
-    }
-    for (idx_t term_idx = 0; term_idx < obj_quadratic_term_filters.size(); term_idx++) {
-        if (!obj_quadratic_term_filters[term_idx].avg_scale) {
-            continue;
-        }
-        ScaleAvgRows(solver_input.quadratic_inner_coefficients[term_idx],
-                    obj_quadratic_term_filters[term_idx].has_filter,
-                    obj_quadratic_term_filters[term_idx].mask, /*quadratic_inner=*/true, num_rows,
-                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
-                    objective_has_when ? &objective_when_mask : nullptr);
-    }
-
-    for (idx_t term_idx = 0; term_idx < obj_bilinear_filters.size(); term_idx++) {
-        if (!obj_bilinear_filters[term_idx].avg_scale) {
-            continue;
-        }
-        ScaleAvgRows(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
-                    obj_bilinear_filters[term_idx].has_filter,
-                    obj_bilinear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-                    solver_input.objective_row_group_ids, solver_input.objective_num_groups,
-                    objective_has_when ? &objective_when_mask : nullptr);
-    }
+    LinearizeBilinear(solver_input, box, decide_var_names);
 
     // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
     // Two paths: (A) non-PER flat MIN/MAX, (B) PER with nested OUTER(INNER(expr)).
@@ -2917,207 +3171,28 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     minmax_objective_spec.per_inner_is_easy = per_inner_is_easy;
     minmax_objective_spec.per_outer_is_easy = per_outer_is_easy;
     minmax_objective_spec.per_inner_was_avg = per_inner_was_avg;
-    minmax_objective_spec.has_when = objective_has_when;
-    minmax_objective_spec.when_mask = objective_when_mask;
+    minmax_objective_spec.has_when = evaluated.has_when;
+    minmax_objective_spec.when_mask = evaluated.when_mask;
     LinearizeMinMaxObjective(solver_input, var_indexer, minmax_objective_spec, decide_var_names,
                              native_min_max);
 
-    // ================================================================
-    // Composed MIN/MAX: additive clauses mixing SUM/AVG/MIN/MAX, in a constraint
-    // (`SUM(a) + MAX(b) <= K`) or in the objective. This layer evaluates the parts
-    // that need a row — each inner term's per-row coefficient, the query-wide factor
-    // on a reducer, the term's WHEN mask, the constant RHS — and hands the result to
-    // stage 06, which owns the auxiliary, envelope and indicator emission.
-    // ================================================================
-    if (!composed_minmax_constraints.empty() || !composed_minmax_objective_terms.empty()) {
-        // Evaluate a DecideTerm's per-row coefficient (scaled by term.sign). `what` is
-        // "constraint" or "objective", naming the clause in any error.
-        auto EvaluateTermCoefs = [&](const DecideTerm &term, const char *what) -> vector<double> {
-            vector<double> coefs;
-            coefs.reserve(num_rows);
-            const Expression &transformed =
-                CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
-            ExpressionExecutor exec(context);
-            exec.AddExpression(transformed);
-            ColumnDataScanState scan;
-            gstate.data.InitializeScan(scan);
-            DataChunk chunk;
-            chunk.Initialize(context, gstate.data.Types());
-            while (gstate.data.Scan(scan, chunk)) {
-                DataChunk result;
-                result.Initialize(context, {transformed.return_type});
-                exec.Execute(chunk, result);
-                for (idx_t r = 0; r < chunk.size(); r++) {
-                    Value val = result.data[0].GetValue(r);
-                    if (val.IsNull()) {
-                        throw InvalidInputException(
-                            "Composed MIN/MAX %s: coefficient expression returned NULL.", what);
-                    }
-                    double d = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                    if (!std::isfinite(d)) {
-                        throw InvalidInputException(
-                            "Composed MIN/MAX %s: coefficient is not finite (NaN/Inf).", what);
-                    }
-                    coefs.push_back(d * term.sign);
-                }
-            }
-            return coefs;
-        };
-
-        //! A factor on a reducer is one value for the whole query by construction (the
-        //! canonicalizer rejects anything row-varying), so evaluate it once and read
-        //! row 0. It goes through the same chunk-expression transform every other
-        //! coefficient does -- a flattened scalar subquery is a column reference, and
-        //! reading it without that transform would index the chunk by a logical column
-        //! index.
-        //!
-        //! `scale` must be the expression OWNED by the term, never a copy:
-        //! CachedTransformToChunkExpression keys its cache on the Expression's address,
-        //! so a temporary would leave a dangling key that a later allocation at the
-        //! same address silently inherits.
-        auto EvaluateQueryWideScale = [&](const Expression &scale, bool divides,
-                                          const char *what) -> double {
-            const Expression &transformed =
-                CachedTransformToChunkExpression(chunk_expr_cache, scale, context);
-            ExpressionExecutor exec(context);
-            exec.AddExpression(transformed);
-            ColumnDataScanState scan;
-            gstate.data.InitializeScan(scan);
-            DataChunk chunk;
-            chunk.Initialize(context, gstate.data.Types());
-            double v = 1.0;
-            bool got = false;
-            while (!got && gstate.data.Scan(scan, chunk)) {
-                if (chunk.size() == 0) {
-                    continue;
-                }
-                DataChunk result;
-                result.Initialize(context, {transformed.return_type});
-                exec.Execute(chunk, result);
-                Value val = result.data[0].GetValue(0);
-                if (val.IsNull()) {
-                    throw InvalidInputException(
-                        "DECIDE: the factor on an aggregate evaluated to NULL.");
-                }
-                v = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-                if (!std::isfinite(v)) {
-                    throw InvalidInputException(
-                        "DECIDE: the factor on an aggregate is not finite (NaN/Inf).");
-                }
-                got = true;
-            }
-            if (!got) {
-                return 1.0;
-            }
-            if (divides) {
-                if (v == 0.0) {
-                    throw InvalidInputException(
-                        "DECIDE %s: division by zero — the factor on an aggregate "
-                        "evaluated to 0.", what);
-                }
-                return 1.0 / v;
-            }
-            return v;
-        };
-
-        // Evaluate one composed clause's terms into the stage-06 input. `what` is
-        // "constraint" or "objective"; it names the clause in every error raised here.
-        auto EvaluateComposedTerms =
-            [&](const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
-                const char *what) -> vector<ComposedMinMaxTermData> {
-            // Collect filter expressions for batch evaluation (one scan for all terms).
-            vector<const Expression *> cond_ptrs;
-            for (auto &term : terms) {
-                if (term.filter) cond_ptrs.push_back(term.filter.get());
-            }
-            auto masks = EvaluateBooleanMasks(cond_ptrs, chunk_expr_cache, context, gstate.data, num_rows);
-
-            vector<ComposedMinMaxTermData> evaluated;
-            idx_t mask_slot = 0;
-            for (auto &term : terms) {
-                ComposedMinMaxTermData ta;
-                ta.is_minmax = (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND);
-                ta.agg_name = term.agg_name;
-                ta.sign = term.sign;
-                ta.is_easy = term.is_easy;
-                if (term.scale) {
-                    ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides, what);
-                }
-                if (ta.is_minmax) {
-                    ta.label = StringUtil::Upper(term.agg_name) + "(" + term.inner_expr->ToString() + ")";
-                }
-                ta.inner_terms = &term.inner_terms;
-                for (auto &inner_t : term.inner_terms) {
-                    ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t, what));
-                }
-                if (term.filter) {
-                    ta.filter_mask = std::move(masks[mask_slot++]);
-                } else {
-                    ta.filter_mask.assign(num_rows, true);
-                }
-                // Fold in the relation qualifier's de-duplication mask, exactly as the
-                // non-composed reducer paths do. Composed v1 has no outer PER, so every
-                // row is in one group and `row_group_ids` is empty. Applied uniformly:
-                // for MIN/MAX it is provably a no-op (every row of an identity carries the
-                // same value, so dropping repeats cannot move an extremum), which keeps
-                // one code path instead of a special case that has to stay in sync.
-                if (term.qualifier_scope_idx != DConstants::INVALID_INDEX) {
-                    auto keep = BuildQualifierKeepMask(solver_input.entity_mappings,
-                                                       term.qualifier_scope_idx, {}, num_rows);
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        ta.filter_mask[row] = ta.filter_mask[row] && keep[row];
-                    }
-                }
-                evaluated.push_back(std::move(ta));
-            }
-
-            // Reject an empty row set before stage 06 sees the term. For MIN/MAX the
-            // auxiliary would float free (no per-row pinning), silently vacating the
-            // clause; for SUM/AVG an empty SUM contributes a vacuous 0 and an empty AVG
-            // would divide by zero. MIN/MAX first, so a clause with both reports the
-            // MIN/MAX term.
-            string ctx = "composed " + string(what);
-            for (auto &ta : evaluated) {
-                if (!ta.is_minmax) continue;
-                idx_t cnt = 0;
-                for (bool m : ta.filter_mask) if (m) cnt++;
-                RejectEmptyAggregate(cnt, ta.agg_name.c_str(), ctx.c_str());
-            }
-            for (auto &ta : evaluated) {
-                if (ta.is_minmax) continue;
-                idx_t cnt = 0;
-                for (bool m : ta.filter_mask) if (m) cnt++;
-                RejectEmptyAggregate(cnt, ta.agg_name.c_str(), ctx.c_str());
-            }
-            return evaluated;
-        };
-
-        for (auto &spec : composed_minmax_constraints) {
-            // RHS must be row-invariant in v1. Decide that by foldability rather
-            // than by matching a literal node: canonicalization rebuilds the bound
-            // side as an additive chain, so a constant arrives as `(0 - 3) + 0`
-            // just as legitimately as `-3`. IsFoldable is the same test the
-            // per-row constraint path historically used for a shared scalar RHS.
-            if (!spec.rhs_expr->IsFoldable()) {
-                throw BinderException(
-                    "Composed MIN/MAX in DECIDE v1 requires a constant RHS; got '%s'.",
-                    spec.rhs_expr->ToString());
-            }
-            double rhs_val = ExpressionExecutor::EvaluateScalar(context, *spec.rhs_expr)
-                                 .DefaultCastAs(LogicalType::DOUBLE)
-                                 .GetValue<double>();
-
-            auto evaluated = EvaluateComposedTerms(spec.terms, "constraint");
-            LinearizeComposedMinMaxConstraint(solver_input, var_indexer, evaluated, rhs_val,
-                                              spec.outer_cmp, spec.source_clause_id, decide_var_names,
-                                              native_min_max);
-        }
-
-        if (!composed_minmax_objective_terms.empty()) {
-            auto evaluated = EvaluateComposedTerms(composed_minmax_objective_terms, "objective");
-            LinearizeComposedMinMaxObjective(solver_input, var_indexer, evaluated, decide_var_names,
-                                             native_min_max);
-        }
+    // Composed MIN/MAX clauses. PHASE 2 evaluated each one; stage 06 owns the auxiliary,
+    // envelope and indicator emission. The linearizer fills each MIN/MAX term's `z_idx`,
+    // so it is handed a mutable copy — the evaluated clauses stay reusable for a second
+    // formulation against a different box.
+    for (idx_t i = 0; i < evaluated.composed_constraints.size() &&
+                      i < composed_minmax_constraints.size();
+         i++) {
+        auto &spec = composed_minmax_constraints[i];
+        auto terms = evaluated.composed_constraints[i].terms;
+        LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms,
+                                          evaluated.composed_constraints[i].rhs, spec.outer_cmp,
+                                          spec.source_clause_id, decide_var_names, native_min_max);
+    }
+    if (!evaluated.composed_objective_terms.empty()) {
+        auto terms = evaluated.composed_objective_terms;
+        LinearizeComposedMinMaxObjective(solver_input, var_indexer, terms, decide_var_names,
+                                         native_min_max);
     }
 
     // Refresh total_vars: the row/entity blocks were finalized before linearization,
@@ -3133,10 +3208,220 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
     // No backend is consulted at execution time, and nothing here re-decides a
     // formulation: a pass that answered differently from the rewrites would run a model
     // on a solver it was not built for.
-    LowerDecideConstructs(solver_input, var_indexer, decide_var_names, use_native_constructs);
+    LowerDecideConstructs(solver_input, var_indexer, box, decide_var_names, use_native_constructs);
 
-    out_var_indexer = std::move(var_indexer);
-    return solver_input;
+#ifdef DEBUG
+    // No decide variable was added: only the global block grew.
+    D_ASSERT(var_indexer.global_block_start == formulation_entry_columns);
+#endif
+}
+
+
+//===--------------------------------------------------------------------===//
+// The elastic column box
+//===--------------------------------------------------------------------===//
+
+//! Widen every column direction a diagnosis is allowed to loosen, so each is enforced
+//! only by the loosenable row emitted beside it rather than by a bound that cannot move.
+//!
+//! The solved box carries three things (see `SolverInput::rigid_lower_bounds`): the
+//! intrinsic domain, user bounds stage 05 absorbed, and implied tightenings
+//! `DecidePropagateImpliedBounds` derived. The last two are each backed by a row the
+//! elastic engine may loosen, so leaving them in place would pin the loosenable row behind
+//! a bound that cannot move — the engine would report an edit that changes nothing.
+//! `rigid_*` is exactly the intrinsic domain, which is what makes the test "is this
+//! direction narrower than rigid?" the same as "is a loosenable row holding it?":
+//! propagation only ever narrows, and stage 05's absorption is re-opened in the snapshot.
+//!
+//! The widening is bounded, and it is bounded RELATIVE TO EACH COLUMN. Opening a direction
+//! all the way is not an option: an unbounded column has no finite Big-M, so a formulation
+//! against a fully open box does not lose precision, it refuses the query ("Bilinear term
+//! requires a finite upper bound on variable 'x'"). But the amount to open by has to come
+//! from the column itself and never from the model as a whole. One model-wide number
+//! couples every column to the largest value anywhere in the query — a price-weighted row
+//! drags an unrelated `x <= 5` out to 1e15, the Big-M derived from it follows, and the
+//! elastic model stops being solvable for reasons that have nothing to do with `x`.
+//! Scaling each column from its own bounds and row demands prevents an unrelated large
+//! value elsewhere in the model from inflating its constants. A row may still require a
+//! much larger widening than the column's current magnitude; that coupling is local and
+//! semantic rather than model-wide.
+static void OpenElasticColumnBox(SolverInput &input) {
+    //! Headroom every loosenable direction gets, as a multiple of the column's own
+    //! magnitude. It is the floor, not the whole answer: it covers a column whose repair
+    //! target is not visible in any row — the bound behind an `ABS(x) >= 5`, where the
+    //! rows are the construct's own links and carry no target of their own.
+    constexpr double ELASTIC_WIDENING = 10.0;
+    //! A coefficient at or below the solver's own small-value threshold is noise, and
+    //! dividing by it would manufacture a demand of 1e18 from a rounding artefact.
+    constexpr double NEGLIGIBLE_COEFFICIENT = 1e-9;
+
+    // What each column would have to reach to satisfy a row on its own. `SUM(y) >= 100`
+    // says a repair may need `y` out at 100, however small `y <= 2` looks beside it — and
+    // that is the difference between reporting one edit the user can apply and reporting
+    // two because the first could not go far enough. Divided by the coefficient, so a row
+    // measured in price-weighted units states its demand in the column's units and not in
+    // its own.
+    vector<double> row_demand(input.num_decide_vars, 0.0);
+    for (const auto &ec : input.constraints) {
+        for (idx_t r = 0; r < input.num_rows; r++) {
+            if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+                continue;
+            }
+            double rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
+            if (!std::isfinite(rhs) || rhs == 0.0) {
+                continue;
+            }
+            for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+                idx_t v = ec.variable_indices[t];
+                if (v == DConstants::INVALID_INDEX || v >= row_demand.size()) {
+                    continue;
+                }
+                double coef = std::abs(ec.row_coefficients[t].Get(r));
+                if (coef <= NEGLIGIBLE_COEFFICIENT) {
+                    continue;
+                }
+                double demand = std::abs(rhs) / coef;
+                if (std::isfinite(demand)) {
+                    row_demand[v] = std::max(row_demand[v], demand);
+                }
+            }
+        }
+    }
+
+    for (idx_t var = 0; var < input.num_decide_vars; var++) {
+        if (var >= input.rigid_lower_bounds.size() || var >= input.lower_bounds.size()) {
+            continue;
+        }
+        // A BOOLEAN's 0/1 domain is intrinsic and never widens: a "repair" that let an
+        // indicator sit at 1.4 would be a repair of the encoding, not of the query. A pin
+        // the user wrote on one is still loosenable — that direction is narrower than
+        // rigid, so the clamp lands it back on the domain edge, exactly where the
+        // re-emitted row takes over as its enforcer.
+        bool is_bool = var < input.variable_types.size() &&
+                       input.variable_types[var] == LogicalType::BOOLEAN;
+        double rigid_lower = is_bool ? std::max(input.rigid_lower_bounds[var], 0.0)
+                                     : input.rigid_lower_bounds[var];
+        double rigid_upper = is_bool ? std::min(input.rigid_upper_bounds[var], 1.0)
+                                     : input.rigid_upper_bounds[var];
+        // The column's own magnitude, from whichever of its bounds are finite. Floored at
+        // one so a column pinned at zero still has somewhere to move.
+        double magnitude = 1.0;
+        if (std::abs(input.lower_bounds[var]) < 1e20) {
+            magnitude = std::max(magnitude, std::abs(input.lower_bounds[var]));
+        }
+        if (std::abs(input.upper_bounds[var]) < 1e20) {
+            magnitude = std::max(magnitude, std::abs(input.upper_bounds[var]));
+        }
+        double room = std::max(ELASTIC_WIDENING * magnitude, row_demand[var]);
+        if (input.lower_bounds[var] > rigid_lower) {
+            input.lower_bounds[var] = std::max(rigid_lower, input.lower_bounds[var] - room);
+        }
+        if (input.upper_bounds[var] < rigid_upper) {
+            input.upper_bounds[var] = std::min(rigid_upper, input.upper_bounds[var] + room);
+        }
+    }
+}
+
+//! Decision 1a: a user constraint like `x <= 10` / `x BETWEEN a AND b` was absorbed into
+//! the column-bound arrays, not emitted as a matrix row, so it is invisible to the
+//! elastic engine. Re-emit each absorbed bound as a USER_PARAMETER slackable row,
+//! pairing the column `OpenElasticColumnBox` just widened with the row that now enforces
+//! it. The bound `x <= k` is ONE editable knob; on a multi-instance variable it fans into
+//! one row per instance under a single (synthetic) clause id and shape SHARED_SCALAR, so
+//! the elastic engine collapses them to one shared slack and reports the max overshoot
+//! (I2.a). Single-instance is the N=1 case (a size-1 block).
+//!
+//! C3: if a recorded bound cannot be re-emitted (its column is missing from the model),
+//! the elastic model is missing a user constraint — `has_unhandled_user_bounds` is set so
+//! the engine won't claim an elastic-infeasible verdict.
+static void EmitAbsorbedUserBoundRows(SolverModel &model, const VarIndexer &var_indexer,
+                                      const vector<LogicalDecide::UserBoundSpec> &user_absorbed_bounds,
+                                      bool &has_unhandled_user_bounds) {
+    // The synthetic ids must be FRESH: the elastic engine groups rows into one shared
+    // slack by `repair_group_id`, so an id already in use silently welds an absorbed
+    // bound onto an unrelated clause and reports one edit for both. They are read off the
+    // model rather than derived from a count, because no count is the id space. A regular
+    // constraint takes its index in `solver_input.constraints` and a GLOBAL one takes
+    // `constraints.size() + its own index`, so the two ranges are adjacent: starting at
+    // `constraints.size()` lands on top of the first global constraint. That collision is
+    // invisible whenever the linear specs outnumber the ids actually in use, and appears
+    // as soon as a construct is stated natively — fewer linear specs, same ids — which is
+    // how it was found. Taking the max in use cannot drift with either allocation rule.
+    idx_t synthetic_clause_id = 0;
+    for (const auto &row : model.constraints) {
+        if (row.provenance.repair_group_id != DConstants::INVALID_INDEX &&
+            row.provenance.repair_group_id + 1 > synthetic_clause_id) {
+            synthetic_clause_id = row.provenance.repair_group_id + 1;
+        }
+    }
+    for (const auto &b : user_absorbed_bounds) {
+        idx_t num_instances = var_indexer.NumInstances(b.decide_var_idx);
+        idx_t bound_clause_id = synthetic_clause_id++;
+        for (idx_t inst = 0; inst < num_instances; inst++) {
+            idx_t col = var_indexer.Get(b.decide_var_idx, inst);
+            if (col >= model.num_vars) {
+                has_unhandled_user_bounds = true;
+                continue;
+            }
+            ModelConstraint row;
+            row.indices.push_back(static_cast<int>(col));
+            row.coefficients.push_back(1.0);
+            row.sense = b.sense;
+            row.rhs = b.k;
+            row.provenance.source_clause_id = b.source_clause_id;
+            row.provenance.repair_group_id = bound_clause_id;
+            row.provenance.group_key = DConstants::INVALID_INDEX;
+            row.provenance.kind = ConstraintKind::USER_PARAMETER;
+            row.provenance.shape = ElasticShape::SHARED_SCALAR;
+            // Mirror the strict re-quote stamped by ApplyComparisonSense on the
+            // non-absorbed path, so `x < 10` reports `< 10` → `< 16`, not `<= 9`.
+            row.provenance.strict = b.strict;
+            row.provenance.typed_k = b.typed_k;
+            model.constraints.push_back(std::move(row));
+        }
+    }
+}
+
+//===--------------------------------------------------------------------===//
+// The elastic model, as a formulation
+//===--------------------------------------------------------------------===//
+
+//! Formulate a second model against the widened box.
+//!
+//! A Big-M or a McCormick envelope is sound only for the box it was derived from, so an
+//! elastic model that re-opens the box must re-derive them. That is why this runs the
+//! same PHASE 3b pass the solved model went through — `FormulateModel` is a pure
+//! function of the evaluated clauses plus a box, which is what makes running it twice
+//! meaningful rather than merely possible.
+//!
+//! Each call starts from a fresh copy of `elastic`, so no rows or auxiliaries from the
+//! solved formulation can leak into the repair formulation.
+SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elastic,
+                                                  const EvaluatedClauses &evaluated,
+                                                  bool tolerate_infeasible_bounds,
+                                                  VarIndexer &out_var_indexer,
+                                                  vector<string> &out_global_labels) const {
+    SolverInput input = elastic.input;
+    VarIndexer indexer = elastic.var_indexer;
+    input.tolerate_infeasible_bounds = tolerate_infeasible_bounds;
+
+    OpenElasticColumnBox(input);
+    FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
+
+    // Same reconciliation the solved model gets before its build: the `<>` label channel
+    // is a prefix of the global block, padded to its final length.
+    D_ASSERT(input.global_variable_labels.size() <= input.num_global_vars);
+    input.global_variable_labels.resize(input.num_global_vars);
+    out_global_labels = input.global_variable_labels;
+
+    // The decide-variable columns are settled by assembly and shared with the solved
+    // model, so a repair reads back through the same labels. Only the global block may
+    // differ, and only in length.
+    D_ASSERT(indexer.global_block_start == elastic.var_indexer.global_block_start);
+
+    SolverModel model = SolverModel::Build(input, indexer);
+    out_var_indexer = std::move(indexer);
+    return model;
 }
 
 //===--------------------------------------------------------------------===//
@@ -3145,7 +3430,9 @@ SolverInput PhysicalDecide::BuildSolverInput(ClientContext &context, DecideGloba
 
 SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
                                                      SolverInput &solver_input, VarIndexer &var_indexer,
-                                                     bool bench, Profiler &model_timer,
+                                                     const EvaluatedClauses &evaluated,
+                                                     ElasticFormulation *elastic, bool bench,
+                                                     Profiler &model_timer,
                                                      Profiler &solver_timer) const {
     idx_t num_rows = solver_input.num_rows;
 
@@ -3260,6 +3547,18 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
     // raises; it never diagnoses.
     bool deliver_incumbent = false;
     if (solve_result.status == SolverStatus::TIME_LIMIT) {
+        // Before anything is printed: did another operator in this same query already
+        // fail? A SELECT can hold several DECIDE clauses — two subqueries joined side
+        // by side, say — and when one of them throws, DuckDB stops the rest by setting
+        // the very query interrupt Ctrl-C sets (`Executor::PushError`). Every checkpoint
+        // test below reads that interrupt, so this solve would be reported as a
+        // cancellation the user never asked for, printed *above* the error that actually
+        // stopped the query, with elapsed/memory figures describing a solve that was
+        // never the problem. Say nothing and re-raise the real failure instead.
+        auto &executor = Executor::Get(context);
+        if (executor.HasError()) {
+            executor.ThrowException();
+        }
         // S2/S3/S4: at each chunk boundary print the checkpoint report (what was found
         // + how far it can still improve + elapsed/memory), then offer the choice: keep
         // solving, or take the incumbent with its gap to best. "Keep solving" re-runs
@@ -3468,153 +3767,82 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         // different solver than the one that produced the failure being diagnosed.
         SolverBackend backend = PlannedSolverBackend();
 
-        // Decision 1a: a user constraint like `x <= 10` / `x BETWEEN a AND b` was
-        // absorbed into the column-bound arrays, not emitted as a matrix row, so it
-        // is invisible to the elastic engine. Re-emit each absorbed user bound as a
-        // USER_PARAMETER slackable row on the retained model and relax the rigid
-        // column bound it produced, so the bound is enforced only by the (loosenable)
-        // row. The bound `x <= k` is ONE editable knob; on a multi-instance variable
-        // it fans into one row per instance under a single (synthetic) clause id and
-        // shape SHARED_SCALAR, so the elastic engine collapses them to one shared
-        // slack and reports the max overshoot (I2.a). Single-instance is the N=1 case
-        // (a size-1 block). Only genuine user bounds reach here — a variable's
-        // intrinsic domain (BOOLEAN 0/1, default non-negativity) is never recorded in
-        // user_absorbed_bounds (see DecideOptimizer::AbsorbVariableBounds), so it stays
-        // rigid.
-        // A BOOLEAN pin (`x <= 0`, `x >= 1`, `x = 1`) IS recorded; its column is
-        // opened only back to the intrinsic [0,1] — never past it — so the pin
-        // becomes loosenable while the 0/1 domain itself stays rigid.
-        // C3: if a recorded bound cannot be re-emitted (its column is missing from
-        // the retained model), the elastic model is missing a user constraint —
-        // flag it so the engine won't claim an elastic-infeasible verdict.
-        bool has_unhandled_user_bounds = false;
-        // The synthetic ids must be FRESH: the elastic engine groups rows into one
-        // shared slack by `repair_group_id`, so an id already in use silently welds an
-        // absorbed bound onto an unrelated clause and reports one edit for both. They
-        // are read off the model rather than derived from a count, because no count is
-        // the id space. A regular constraint takes its index in `solver_input.constraints`
-        // and a GLOBAL one takes `constraints.size() + its own index`, so the two ranges
-        // are adjacent: starting at `constraints.size()` lands on top of the first global
-        // constraint. That collision is invisible whenever the linear specs outnumber the
-        // ids actually in use, and appears as soon as a construct is stated natively —
-        // fewer linear specs, same ids — which is how it was found. Taking the max in use
-        // cannot drift with either allocation rule.
-        idx_t synthetic_clause_id = 0;
-        for (const auto &row : retained_model.constraints) {
-            if (row.provenance.repair_group_id != DConstants::INVALID_INDEX &&
-                row.provenance.repair_group_id + 1 > synthetic_clause_id) {
-                synthetic_clause_id = row.provenance.repair_group_id + 1;
-            }
-        }
-        for (const auto &b : gstate.user_absorbed_bounds) {
-            idx_t num_instances = var_indexer.NumInstances(b.decide_var_idx);
-            idx_t bound_clause_id = synthetic_clause_id++;
-            bool bound_is_bool = b.decide_var_idx < is_boolean_var.size() &&
-                                 is_boolean_var[b.decide_var_idx];
-            for (idx_t inst = 0; inst < num_instances; inst++) {
-                idx_t col = var_indexer.Get(b.decide_var_idx, inst);
-                if (col >= retained_model.num_vars) {
-                    has_unhandled_user_bounds = true;
-                    continue;
-                }
-                // Relax the rigid column bound for the direction this spec enforces,
-                // so the bound is enforced only by the loosenable row: to the model's
-                // ±infinity (1e30 / -1e30), or for a BOOLEAN to its intrinsic [0,1].
-                if (b.sense == '<' || b.sense == '=') {
-                    retained_model.col_upper[col] = bound_is_bool ? 1.0 : 1e30;
-                }
-                if (b.sense == '>' || b.sense == '=') {
-                    retained_model.col_lower[col] = bound_is_bool ? 0.0 : -1e30;
-                }
-                ModelConstraint row;
-                row.indices.push_back(static_cast<int>(col));
-                row.coefficients.push_back(1.0);
-                row.sense = b.sense;
-                row.rhs = b.k;
-                row.provenance.source_clause_id = b.source_clause_id;
-                row.provenance.repair_group_id = bound_clause_id;
-                row.provenance.group_key = DConstants::INVALID_INDEX;
-                row.provenance.kind = ConstraintKind::USER_PARAMETER;
-                row.provenance.shape = ElasticShape::SHARED_SCALAR;
-                // Mirror the strict re-quote stamped by ApplyComparisonSense on the
-                // non-absorbed path, so `x < 10` reports `< 10` → `< 16`, not `<= 9`.
-                row.provenance.strict = b.strict;
-                row.provenance.typed_k = b.typed_k;
-                retained_model.constraints.push_back(std::move(row));
-            }
-        }
-
-        // Bug 3: a single-variable user row like `x <= 2+3` is ALSO copied into the rigid
-        // column box by DecidePropagateImpliedBounds (a presolve tightening that keeps no
-        // provenance, so it is not in user_absorbed_bounds). The slackable row stays pinned
-        // behind that rigid bound. Reset every non-binary DECIDE column back to its intrinsic
-        // domain so the (loosenable) row is the sole enforcer. Implied tightenings only ever
-        // RAISE the lower above 0 or LOWER the upper below +inf (propagation never loosens),
-        // so clamping `lower>0 → 0` and `upper → +inf` reverses exactly the implied part:
-        //   - a user-bounded direction was already opened to ±1e30 by the loop above (kept);
-        //   - the intrinsic default (lower 0 / upper +inf) is unchanged;
-        //   - an implied tightening (lower>0 / upper<+inf) is reverted — its backing row
-        //     (USER_PARAMETER slackable, or STRUCTURAL still-rigid) continues to enforce it.
-        // BOOLEAN columns reset only within [0,1] so the intrinsic box stays rigid. NOTE:
-        // `is_binary[col]` is also true here (the DomainSpec fix reports BOOLEAN-domain
-        // variables as `LogicalType::BOOLEAN` to the model builder, same as `is_boolean_var`),
-        // but this checks `is_boolean_var[var]` explicitly and FIRST, ahead of the generic
-        // `is_binary` branch below. The generic branch only *skips* — correct for an
-        // optimizer-created BOOLEAN indicator (MIN/MAX z, NE), which DecidePropagateImpliedBounds
-        // never tightens — but a domain-BOOL variable (declared `x(BOOL)`, or an IN/L0
-        // indicator) CAN be tightened by it (the budget example below), and skipping would
-        // leave that stale sub-1 pin in place. Using the generic is_binary skip here for
-        // BOOLEAN-domain variables would silently reintroduce that bug.
-        for (idx_t var = 0; var < decide_variables.size(); var++) {
-            bool is_bool = var < is_boolean_var.size() && is_boolean_var[var];
-            idx_t num_instances = var_indexer.NumInstances(var);
-            for (idx_t inst = 0; inst < num_instances; inst++) {
-                idx_t col = var_indexer.Get(var, inst);
-                if (col >= retained_model.num_vars) {
-                    continue;
-                }
-                if (is_bool) {
-                    // A BOOLEAN's intrinsic domain is [0,1], but DecidePropagateImpliedBounds
-                    // can tighten it by absorbing a user row — e.g. `buy_i ≤ K/priceᵢ` from a
-                    // budget `SUM(priceᵢ·buyᵢ) ≤ K`. With a fractional upper (<1) an INTEGER
-                    // buy is silently pinned to 0, so the relaxable budget can never be
-                    // exercised and the only "fix" is gutting the other constraint. Revert to
-                    // [0,1] so the (now-slackable) row is the sole enforcer — but never open
-                    // past 1, which would unbound the variable.
-                    if (retained_model.col_lower[col] > 0.0) {
-                        retained_model.col_lower[col] = 0.0;
-                    }
-                    if (retained_model.col_upper[col] < 1.0) {
-                        retained_model.col_upper[col] = 1.0;
-                    }
-                    continue;
-                }
-                if (retained_model.is_binary[col]) {
-                    continue;
-                }
-                if (retained_model.col_lower[col] > 0.0) {
-                    retained_model.col_lower[col] = 0.0;
-                }
-                if (retained_model.col_upper[col] < 1e30) {
-                    retained_model.col_upper[col] = 1e30;
-                }
-            }
+        // Nothing was retained to formulate the repair model from. `Finalize` retains it
+        // whenever `diagnose` is set and this terminal is prefix-only, so reaching here
+        // means the two disagreed — a contract violation, not a user situation. Report
+        // rather than walk a null: a diagnosis that cannot run is still an answer.
+        if (!elastic) {
+            D_ASSERT(false);
+            report(BuildUndiagnosedDiagnostic(
+                "infeasible", "the repair model is unavailable, so there is nothing to diagnose."));
+            break;
         }
 
         bool diagnostic_solve_timed_out = terminal_result.diagnostic_timed_out;
-        InfeasibleDiagnosisInput diag_input {
-            retained_model, var_indexer, var_labels, var_is_aux,
-            solver_input.global_variable_labels, diag_params,
-            has_unhandled_user_bounds,
-            [backend, diagnostic_solve_options, &diagnostic_solve_timed_out](const SolverModel &m) {
-                SolverResult result = SolvePreparedModel(m, backend, diagnostic_solve_options);
-                if (result.status == SolverStatus::TIME_LIMIT) {
-                    diagnostic_solve_timed_out = true;
-                }
+        bool diagnostic_solver_failed = false;
+        auto solve_diagnostic_model = [backend, diagnostic_solve_options,
+                                       &diagnostic_solve_timed_out,
+                                       &diagnostic_solver_failed](const SolverModel &m) {
+            SolverResult result;
+            try {
+                result = SolvePreparedModel(m, backend, diagnostic_solve_options);
+            } catch (const Exception &) {
+                // The widened repair program is harder than the query's own. Treat a
+                // backend load/solve failure as an unavailable diagnosis, but keep this
+                // guard at the callback boundary: exceptions raised by our diagnosis
+                // logic must still surface as bugs instead of being mislabeled as a
+                // solver limitation.
+                diagnostic_solver_failed = true;
+                result.status = SolverStatus::OTHER;
                 return result;
-            },
+            }
+            if (result.status == SolverStatus::TIME_LIMIT) {
+                diagnostic_solve_timed_out = true;
+            }
+            return result;
         };
-        DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
+
+        // The repair model: formulated against the widened box rather than patched onto
+        // the solved model's matrix, so its Big-M and McCormick constants describe the box
+        // the repair actually searches instead of the narrower one the query solved in.
+        DecideDiagnostic diag;
+        SolverModel elastic_model;
+        VarIndexer elastic_indexer;
+        vector<string> elastic_global_labels;
+        try {
+            elastic_model = FormulateElasticModel(*elastic, evaluated,
+                                                  /*tolerate_infeasible_bounds=*/true,
+                                                  elastic_indexer, elastic_global_labels);
+        } catch (const InvalidInputException &ex) {
+            // The only thing the formulation raises by design: a construct the widened box
+            // cannot express. Report it rather than turning the user's DIAGNOSE into an
+            // error — or, worse, falling back to constants derived against the narrow box.
+            // Deliberately NOT a catch-all: an InternalException is a bug in this pass and
+            // has to surface as one.
+            report(BuildUndiagnosedDiagnostic(
+                "infeasible",
+                StringUtil::Format("the repair model could not be built: %s", ex.what())));
+            break;
+        }
+        bool has_unhandled_user_bounds = false;
+        EmitAbsorbedUserBoundRows(elastic_model, elastic_indexer, gstate.user_absorbed_bounds,
+                                  has_unhandled_user_bounds);
+
+        InfeasibleDiagnosisInput diag_input {
+            elastic_model,         elastic_indexer, var_labels,
+            var_is_aux,            elastic_global_labels, diag_params,
+            has_unhandled_user_bounds, solve_diagnostic_model,
+        };
+        diag = DiagnoseInfeasible(diag_input);
+        if (diagnostic_solver_failed) {
+            // A backend that cannot load or solve the repair model. That is a limit on
+            // what can be explained, not a failure of the query itself.
+            report(BuildUndiagnosedDiagnostic(
+                "infeasible",
+                "the solver could not analyse the repair model for this query, so no "
+                "least-change repair could be computed."));
+            break;
+        }
         if (diag.valid && !diag.findings.empty()) {
             report(std::move(diag));
             break;

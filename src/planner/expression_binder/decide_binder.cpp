@@ -830,6 +830,14 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 	}
 }
 
+const char *DecideCaseUnsupportedMessage() {
+	return "CASE expressions are not supported inside DECIDE constraints or "
+	       "objectives. Use postfix WHEN to gate on a row predicate "
+	       "(e.g. `SUM(x) >= 1 WHEN category = 'A'`), PER to partition by "
+	       "a column, or a CTE/subquery to pre-compute conditional values "
+	       "before the DECIDE clause.";
+}
+
 // Forward declaration — needed because ValidateQuadraticPower calls ValidateSumArgumentInternal.
 static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                         bool &has_decide_variable, string &error_msg, bool allow_quadratic = false,
@@ -1026,11 +1034,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
         return true;
     }
     case ExpressionClass::CASE:
-        error_msg = "CASE expressions are not supported inside DECIDE constraints or "
-                    "objectives. Use postfix WHEN to gate on a row predicate "
-                    "(e.g. `SUM(x) >= 1 WHEN category = 'A'`), PER to partition by "
-                    "a column, or a CTE/subquery to pre-compute conditional values "
-                    "before the DECIDE clause.";
+        error_msg = DecideCaseUnsupportedMessage();
         return false;
     default:
         error_msg = StringUtil::Format("Unsupported expression of type ExpressionClass::%s inside DECIDE SUM expression",

@@ -8,6 +8,7 @@
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/ilp_linearization.hpp"
 #include "duckdb/decidb/solver_registry.hpp"
 #include <unordered_map>
 
@@ -250,34 +251,97 @@ private:
                              ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                              const vector<EntityMapping> &entity_mappings) const;
 
-    //! Per-term filter state the objective evaluation produces and Phase 3 (qualifier
-    //! de-dup, AVG scaling, MIN/MAX objective linearization) still needs.
-    struct ObjectiveEvalState {
+    //! Everything PHASE 2 reads off the data that a later phase still needs. It carries
+    //! objective terms *and* composed-MIN/MAX constraint clauses, so it is named for the
+    //! phase that produces it rather than for one of its consumers. Nothing here depends
+    //! on a variable bound, which is what lets the formulation pass run twice against
+    //! two different boxes from the same evaluated clauses.
+    struct EvaluatedClauses {
+        //! Per-term filter state for the objective's linear / squared / bilinear terms.
         vector<TermFilterState> linear_filters, quadratic_filters, bilinear_filters;
+        //! The objective's clause-level WHEN mask.
         vector<bool> when_mask;
         bool has_when = false;
+
+        //! The objective's PER grouping, keyed by the filters above. Copied into
+        //! `SolverInput` during assembly.
+        vector<idx_t> objective_row_group_ids;
+        idx_t objective_num_groups = 0;
+
+        //! One composed MIN/MAX *constraint*, evaluated. Parallel to
+        //! `composed_minmax_constraints`; the comparison and clause id stay on the plan.
+        struct ComposedConstraint {
+            vector<ComposedMinMaxTermData> terms;
+            double rhs = 0.0;
+        };
+        vector<ComposedConstraint> composed_constraints;
+        //! The composed MIN/MAX *objective*'s terms, evaluated.
+        vector<ComposedMinMaxTermData> composed_objective_terms;
     };
 
     //! PHASE 2, sub-phase 2: evaluate the objective's coefficients onto gstate's
-    //! objective-evaluation fields.
-    ObjectiveEvalState EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                         ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                         const vector<EntityMapping> &entity_mappings) const;
+    //! objective-evaluation fields, then settle the objective's PER grouping.
+    EvaluatedClauses EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                       ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                                       const vector<EntityMapping> &entity_mappings) const;
 
-    //! PHASE 3, model build: SolverInput assembly, auto-M, linearization passes,
-    //! objective transfer, objective PER-grouping + AVG scaling, VarIndexer::Build,
-    //! MIN/MAX objective linearization, and the composed-MIN/MAX block. Everything up
-    //! to (not including) the SolveModel call.
-    SolverInput BuildSolverInput(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                 ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                 vector<EntityMapping> entity_mappings, ObjectiveEvalState obj_state,
-                                 VarIndexer &out_var_indexer, bool bench, Profiler &model_timer) const;
+    //! PHASE 2, sub-phase 3: evaluate every composed MIN/MAX clause — each inner term's
+    //! per-row coefficient, the factor peeled off a reducer, the term's WHEN mask, the
+    //! constant RHS. The rows these become are emitted later, by the formulation pass.
+    void EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                 ChunkExprCache &chunk_expr_cache,
+                                 const vector<EntityMapping> &entity_mappings,
+                                 EvaluatedClauses &evaluated) const;
+
+    //! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
+    //! types and the column box, implied-bound propagation, the objective transfer with
+    //! its qualifier de-duplication and AVG scaling, and the flat column space. Runs
+    //! once per query: it moves the evaluated data off `gstate`, and the box it settles
+    //! is the one the formulation pass below is then handed.
+    //! `evaluated` is taken mutably because this is where the objective's per-term
+    //! filter masks are *finalized*: the relation qualifier's de-duplication is folded
+    //! into them before AVG scaling reads the surviving-row counts. The formulation pass
+    //! below does not read those masks, so a second formulation is unaffected.
+    SolverInput BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows,
+                                 vector<EntityMapping> entity_mappings, EvaluatedClauses &evaluated,
+                                 VarIndexer &out_var_indexer) const;
+
+    //! PHASE 3b, formulation: turn the evaluated clauses into solver rows against `box`
+    //! — the auto-`M` refill, every linearization pass, and the lowering of whatever the
+    //! chosen backend cannot state natively.
+    //!
+    //! A pure function of its arguments: no `ClientContext`, no data scan, no expression
+    //! evaluation. That is what lets it run a second time, on a copy of `input` against a
+    //! widened box, to derive the constants an elastic (infeasibility-repair) model needs
+    //! — see `FormulateElasticModel`. Keep it that way: anything here that reads the data
+    //! instead of `input` belongs in PHASE 2.
+    void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &var_indexer,
+                        const EvaluatedClauses &evaluated) const;
+
+    //! The model input and column space as PHASE 3a left them — before a single Big-M or
+    //! McCormick constant was derived. Retained only under `DIAGNOSE`, so the INFEASIBLE
+    //! terminal can formulate a *second* model against the widened box a repair searches
+    //! in, instead of re-using constants that were derived against the narrower box the
+    //! solved model declares.
+    struct ElasticFormulation {
+        SolverInput input;
+        VarIndexer var_indexer;
+    };
 
     //! PHASE 3, solve + readback: build_var_labels, the RouteSolveResult switch and its
     //! four terminal cases, and the shared success epilogue.
     SinkFinalizeType FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
-                                         SolverInput &solver_input, VarIndexer &var_indexer, bool bench,
-                                         Profiler &model_timer, Profiler &solver_timer) const;
+                                         SolverInput &solver_input, VarIndexer &var_indexer,
+                                         const EvaluatedClauses &evaluated, ElasticFormulation *elastic,
+                                         bool bench, Profiler &model_timer, Profiler &solver_timer) const;
+
+    //! Formulate the elastic model: widen every loosenable column direction, re-derive
+    //! every constant against that box, and build the solver model from it. `elastic` is
+    //! left untouched — the copy it works on is local.
+    SolverModel FormulateElasticModel(const ElasticFormulation &elastic,
+                                      const EvaluatedClauses &evaluated,
+                                      bool tolerate_infeasible_bounds, VarIndexer &out_var_indexer,
+                                      vector<string> &out_global_labels) const;
 };
 
 } // namespace duckdb

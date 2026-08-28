@@ -64,6 +64,27 @@ subquery is row-varying by construction and the fail-safe default would reject i
 anyway. It exists so the rejection can name what the user wrote instead of
 `SUBQUERY`.
 
+### Step 2 flattens unconditionally, including inside another flattening
+
+`Binder::PlanSubqueries` normally *defers* a subquery it meets while an outer
+subquery is still being flattened: it sets `has_unplanned_dependent_joins` and
+leaves the node in place, and `RecursiveDependentJoinPlanner` finishes the job once
+the outer subquery has been peeled. Ordinary clauses tolerate that because nothing
+reads their expressions in between.
+
+A DECIDE clause does not. Step 5 runs in this same `CreatePlan`, and
+canonicalization copies the constraint tree — and `BoundSubqueryExpression::Copy()`
+throws by design. So the DECIDE block saves `is_outside_flattened`, forces it true
+across the two `PlanSubqueries` calls, and restores it. Layer 4's input contract is
+a subquery-free bound tree, so the flattening is not optional at this point.
+
+Without it, *any* subquery written inside a nested DECIDE failed with
+`Serialization Error: Cannot copy BoundSubqueryExpression` — a DECIDE nested two
+deep, but equally a plain scalar subquery used as a bound inside a single nested
+clause, or one scaling its objective. One level of nesting worked only because the
+outermost `CreatePlan` is not itself inside a flattening. Pinned by
+`test/decide/tests/test_nested_decide.py`.
+
 ---
 
 ## 3. The two post-planning entry points

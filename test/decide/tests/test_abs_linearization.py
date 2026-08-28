@@ -1260,3 +1260,202 @@ def test_abs_data_column_coefficient_may_be_negative(decidb_cli, oracle_solver):
         f"Objective mismatch: DecidB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}"
     )
+
+
+# ===========================================================================
+# Path-B (sign-indicator Big-M) composed with WHEN and PER
+#
+# The Big-M envelope that pins each `d_i` to exactly `|expr_i|` is emitted
+# unconditionally, per row. WHEN and PER act on the *aggregate* that reads those
+# auxiliaries — WHEN masks which ones enter the sum, PER partitions them into
+# group sums. The two tests below check that composition: the pinning stays
+# per-row while the aggregate is filtered or grouped.
+# ===========================================================================
+
+
+def _pin_abs_aux(oracle_solver, xname, dname, yname, target, two_m, tag):
+    """Add `d = |x - target|` to the oracle: lower envelope plus the
+    sign-indicator upper envelope that pins it (Path-B)."""
+    oracle_solver.add_variable(dname, VarType.CONTINUOUS, lb=0.0)
+    oracle_solver.add_variable(yname, VarType.BINARY)
+    oracle_solver.add_constraint(
+        {dname: 1.0, xname: -1.0}, ">=", -target, name=f"abs_pos_{tag}",
+    )
+    oracle_solver.add_constraint(
+        {dname: 1.0, xname: 1.0}, ">=", target, name=f"abs_neg_{tag}",
+    )
+    oracle_solver.add_constraint(
+        {dname: 1.0, xname: -1.0, yname: two_m}, "<=", -target + two_m,
+        name=f"abs_ub1_{tag}",
+    )
+    oracle_solver.add_constraint(
+        {dname: 1.0, xname: 1.0, yname: -two_m}, "<=", target,
+        name=f"abs_ub2_{tag}",
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.when_constraint
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
+                                                    oracle_solver, perf_tracker):
+    """`SUM(ABS(x - l_quantity)) >= K WHEN l_linenumber <= 2`.
+
+    The hard direction needs each `d_i` pinned by the sign-indicator Big-M, and
+    that pinning is per-row and unconditional; WHEN only decides which `d_i`
+    enter the aggregate. K is set just above the masked rows' dispersion at
+    `x = 0` so the bound binds, but *below* the dispersion the unmasked rows
+    would add — so an implementation that summed every `d_i` would find the
+    constraint already satisfied and leave every `x` at 0.
+    """
+    data = duckdb_conn.execute("""
+        SELECT CAST(l_linenumber AS BIGINT), CAST(l_quantity AS DOUBLE)
+        FROM lineitem WHERE l_orderkey <= 3
+    """).fetchall()
+    n = len(data)
+    masked = [i for i in range(n) if data[i][0] <= 2]
+    ub = 500.0
+    k = sum(data[i][1] for i in masked) + 100.0
+    assert k < sum(row[1] for row in data), \
+        "K must sit below the all-rows dispersion, or the mask would not matter"
+    m = ub + max(row[1] for row in data)
+
+    sql = f"""
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem WHERE l_orderkey <= 3
+        DECIDE x(REAL)
+        SUCH THAT x <= {ub}
+            AND SUM(ABS(x - l_quantity)) >= {k} WHEN l_linenumber <= 2
+        MINIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+    assert len(decidb_rows) == n, "oracle and DecidB must see the same rows"
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("abs_agg_hard_ge_when")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=ub)
+        _pin_abs_aux(oracle_solver, f"x_{i}", f"d_{i}", f"y_{i}",
+                     data[i][1], 2.0 * m, str(i))
+    oracle_solver.add_constraint(
+        {f"d_{i}": 1.0 for i in masked}, ">=", k, name="agg_hard_masked",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    masked_dev = sum(
+        abs(float(row[ci["x"]]) - float(row[ci["l_quantity"]]))
+        for row in decidb_rows if int(row[ci["l_linenumber"]]) <= 2
+    )
+    assert masked_dev >= k - 1e-3, \
+        f"masked aggregate ABS lower bound violated: {masked_dev} < {k}"
+
+    decidb_obj = sum(float(row[ci["x"]]) for row in decidb_rows)
+    assert decidb_obj > 1e-3, \
+        "every x stayed at 0 — the aggregate summed the unmasked auxiliaries too"
+    assert abs(decidb_obj - result.objective_value) <= 1e-2, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Oracle={result.objective_value:.6f}"
+    )
+
+    perf_tracker.record(
+        "abs_agg_hard_ge_when", decidb_time, build_time,
+        result.solve_time_seconds, n, n * 3, 1 + n * 4,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.per_clause
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
+                                                   perf_tracker):
+    """`SUM(ABS(x - target)) >= 50 PER grp`.
+
+    Each group carries its own hard lower bound over its own pinned auxiliaries.
+    At `x = 0` group A's dispersion is 25 and group B's is 45, so *both* groups
+    bind and each has to push one `x` past its target. The pooled reading is
+    25 + 45 = 70, already above 50, so a global-scoping bug would leave every
+    `x` at 0 and report objective 0 instead of 90.
+    """
+    data = [(1, 'A', 10.0), (2, 'A', 15.0), (3, 'B', 20.0), (4, 'B', 25.0)]
+    n = len(data)
+    ub = 100.0
+    k = 50.0
+
+    sql = f"""
+        WITH data AS (
+            SELECT 1 AS id, 'A' AS grp, 10.0 AS target UNION ALL
+            SELECT 2, 'A', 15.0 UNION ALL
+            SELECT 3, 'B', 20.0 UNION ALL
+            SELECT 4, 'B', 25.0
+        )
+        SELECT id, grp, target, x
+        FROM data
+        DECIDE x(REAL)
+        SUCH THAT x <= {ub} AND SUM(ABS(x - target)) >= {k} PER grp
+        MINIMIZE SUM(x)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+    assert len(decidb_rows) == n
+
+    m = ub + max(row[2] for row in data)
+    t_build = time.perf_counter()
+    oracle_solver.create_model("abs_agg_hard_ge_per")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.CONTINUOUS, lb=0.0, ub=ub)
+        _pin_abs_aux(oracle_solver, f"x_{i}", f"d_{i}", f"y_{i}",
+                     data[i][2], 2.0 * m, str(i))
+    for g in ("A", "B"):
+        members = [i for i in range(n) if data[i][1] == g]
+        # Every group must clear K on its own; pooling them would not.
+        assert sum(data[i][2] for i in members) < k, \
+            f"group {g} must not already clear K at x = 0"
+        oracle_solver.add_constraint(
+            {f"d_{i}": 1.0 for i in members}, ">=", k, name=f"agg_hard_{g}",
+        )
+    assert sum(row[2] for row in data) >= k, \
+        "the pooled dispersion must clear K, or the bug would not be visible"
+    oracle_solver.set_objective(
+        {f"x_{i}": 1.0 for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+    assert result.status == SolverStatus.OPTIMAL
+
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    per_group = {}
+    for row in decidb_rows:
+        g = row[ci["grp"]]
+        dev = abs(float(row[ci["x"]]) - float(row[ci["target"]]))
+        per_group[g] = per_group.get(g, 0.0) + dev
+    for g, dev in per_group.items():
+        assert dev >= k - 1e-3, \
+            f"group {g}: dispersion {dev} below the per-group bound {k}"
+
+    decidb_obj = sum(float(row[ci["x"]]) for row in decidb_rows)
+    assert abs(decidb_obj - result.objective_value) <= 1e-3, (
+        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Oracle={result.objective_value:.6f}"
+    )
+
+    perf_tracker.record(
+        "abs_agg_hard_ge_per", decidb_time, build_time,
+        result.solve_time_seconds, n, n * 3, 2 + n * 4,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )

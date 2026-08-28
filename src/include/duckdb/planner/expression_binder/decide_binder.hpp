@@ -62,6 +62,15 @@ bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<id
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
+//! The one wording for a `CASE` written anywhere in a DECIDE clause.
+//!
+//! `CASE` is rejected in three places -- inside a reducer argument, and as an
+//! unsupported expression class in each of the constraint and objective binders --
+//! and a user who writes one is asking for conditional logic whichever spelling
+//! they used. Sharing the text keeps the answer (postfix `WHEN`, `PER`, or a CTE)
+//! in front of all of them instead of leaking `ExpressionClass::CASE`.
+const char *DecideCaseUnsupportedMessage();
+
 //! Reject a user-written CAST/TRY_CAST/:: whose child contains a DECIDE variable.
 //!
 //! This must run on the parsed tree before any DECIDE rewrite or binding. After

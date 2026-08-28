@@ -208,3 +208,54 @@ class TestDiagnoseReportsOnOneOptimization:
         result = cli.execute_raw(f"DIAGNOSE {sql};")
         assert not result.stderr.strip(), result.stderr
         assert "infeasible" in result.stdout.lower()
+
+
+# A composed query where one DECIDE is still live when its sibling throws. The
+# healthy side is deliberately large enough that its solve has not finished by the
+# time the tiny infeasible side fails: with two rows it finishes first and nothing
+# is interrupted. Small enough to solve in well under a second on its own.
+_LIVE_SIBLING_WHEN_OTHER_FAILS = (
+    "SELECT a.id, a.x, b.y FROM "
+    "(SELECT i AS id, x FROM range(1, 600) t(i) DECIDE x(BOOL) "
+    " SUCH THAT SUM(x * ((i * 7919) % 1000 + 1)) <= 150000 "
+    "       AND SUM(x * ((i * 104729) % 997 + 1)) >= 90000 "
+    " MAXIMIZE SUM(x * ((i * 104729) % 997 + 1))) a JOIN "
+    "(SELECT i AS id, y FROM range(1, 600) t(i) DECIDE y(INT) "
+    " SUCH THAT y >= 5 AND y <= 1 MAXIMIZE SUM(y)) b USING (id)"
+)
+
+
+@pytest.mark.query_diagnostics
+class TestASiblingFailureIsNotACancellation:
+    """One DECIDE failing must not make its sibling report a cancellation.
+
+    DuckDB stops the remaining pipelines of a failed query by setting the same
+    query interrupt Ctrl-C sets (`Executor::PushError`). The slow-solve checkpoint
+    report reads that interrupt to tell "you stopped it" from "the clock ran out",
+    so a live sibling used to print
+
+        DECIDE stopped at your request before finding a solution yet.
+          elapsed 0.00065s · peak memory 29.3 MB
+
+    above the real error. Nobody asked it to stop, the two lines contradict each
+    other, and being first it was read first — sending the user looking for a
+    cancellation instead of the infeasible clause named underneath. The checkpoint
+    now stays silent when the executor already holds an error.
+
+    Only Gurobi reproduced it: HiGHS has no thread-safe terminate, so its solve is
+    never cut short mid-search. Both backends run here anyway — the contract is
+    that neither reports a cancellation.
+    """
+
+    @pytest.mark.error
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_no_cancellation_wording_when_a_sibling_fails(self, request, cli_fixture):
+        cli = request.getfixturevalue(cli_fixture)
+        out = _combined(cli.execute_raw(f"{_LIVE_SIBLING_WHEN_OTHER_FAILS};"))
+        assert "infeasible" in out, out[:600]
+        assert "at your request" not in out, (
+            f"A sibling's failure was reported as a cancellation:\n{out[:600]}"
+        )
+        # The elapsed/memory tail belongs to that report and describes a solve that
+        # was never the problem, so it must be gone too.
+        assert "peak memory" not in out, out[:600]

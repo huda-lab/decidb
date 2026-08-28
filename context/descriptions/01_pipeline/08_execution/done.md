@@ -10,7 +10,7 @@ flattened into terms.
 depends on the whole dataset, so it must consume its entire input before it can
 produce a row.
 
-**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~3,800 lines)
+**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~3,950 lines)
 **Header**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
 
 `Finalize` itself is a short orchestrator; the phases below are private methods
@@ -20,9 +20,17 @@ on `PhysicalDecide`, in call order:
 |---|---|
 | `BuildEntityMappings` | 1.5 — entity mappings for table-scoped variables |
 | `EvaluateConstraints` | 2, constraints — appends to `gstate.evaluated_constraints` |
-| `EvaluateObjective` | 2, objective — returns an `ObjectiveEvalState` (per-term filters, `WHEN` mask) that Phase 3 still needs |
-| `BuildSolverInput` | 3 — assembles `SolverInput`, runs the linearization passes, builds the `VarIndexer` |
+| `EvaluateObjective` | 2, objective — per-term filters, the `WHEN` mask, and the objective's `PER` grouping |
+| `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, reducer factors, `WHEN` masks, constant RHS |
+| `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
+| `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
+| `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
 | `FinalizeSolveResult` | 3 — calls `SolveModel`, routes the terminal (`SOLVED`/`UNBOUNDED`/`INFEASIBLE`/`TIME_LIMIT`), and finishes `gstate` |
+
+The three PHASE 2 methods return one `EvaluatedClauses` between them: everything read
+off the data that a later phase still needs. It is named for the phase that fills it
+rather than for one consumer, because it carries objective terms and composed-MIN/MAX
+*constraint* clauses alike.
 
 Coefficient evaluation that both the constraint and objective paths need is
 factored into shared file-scope helpers rather than duplicated per path:
@@ -42,9 +50,10 @@ separate objective-side copy.
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the absorbed variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
 | 3 | `Finalize` → `BuildEntityMappings` | Build entity mappings for table-scoped variables |
-| 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
-| 5 | `Finalize` → `BuildSolverInput` / `FinalizeSolveResult` | `SolverModel::Build` (stage 06) → `SolveModel` (stage 07) |
-| 6 | `GetData` | Project solution values back onto rows |
+| 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
+| 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
+| 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
+| 7 | `GetData` | Project solution values back onto rows |
 
 The sink state is constructed before the first `Sink` call, so step 1 sees no
 data — which is fine, because it derives nothing. Flattening already happened at
@@ -69,12 +78,41 @@ The sink state copies `op.absorbed_lower_bounds`, `op.absorbed_upper_bounds` and
   explicitly said otherwise.
 - The domain-contradiction guard below reads the box to reject a user bound that
   contradicts a variable's intrinsic domain.
-- The infeasible diagnosis re-emits each `UserBoundSpec` as a loosenable row.
+- The infeasible diagnosis re-emits each `UserBoundSpec` as a loosenable row, after
+  `OpenElasticColumnBox` has re-opened the column it was absorbed into (below).
 
 Flattening skips any comparison tagged `ABSORBED_BOUND_TAG`, so an
 absorbed bound does not also produce `num_rows` redundant per-row model rows. The
 comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
 the user wrote.
+
+### The elastic box
+
+`OpenElasticColumnBox` turns the solved model's box into the box the elastic model is
+*formulated against*: every direction a repair may loosen is widened, so each is enforced
+only by the loosenable row the diagnosis emits beside it. Both revertible layers move —
+the user bounds stage 05 absorbed, and the tightenings `DecidePropagateImpliedBounds`
+derived — which is why the test is simply "is this direction narrower than `rigid_*`?":
+propagation only ever narrows, and stage 05's absorption is already re-opened in the
+rigid snapshot. A BOOLEAN's [0,1] is intrinsic and never widens past it, so a user pin on
+one becomes loosenable while the 0/1 domain stays rigid.
+
+It works on `SolverInput`, before formulation, rather than on a built `SolverModel` —
+that is the whole point. The constants that go stale against a re-opened box (Big-M,
+McCormick) are derived by the formulation pass, so the box has to change *before* that
+pass runs, not after. `PhysicalDecide::FormulateElasticModel` widens the box on a copy of
+the retained pre-formulation input and re-runs `FormulateModel` against it, so the
+elastic model's constants describe the box it declares.
+
+**The widening is bounded, and bounded per column.** An open column has no finite Big-M, so
+a formulation against a fully re-opened box does not lose precision — it refuses the query.
+Each loosenable direction is therefore widened by a finite amount taken from that column: ten
+times its own magnitude, or whatever a row demands of it (`|rhs| / |coefficient|`), whichever
+is larger. No model-wide quantity is involved, so an unrelated large value cannot inflate
+this column's constants; a row that genuinely demands a much larger value still can. The
+reasoning, and what the looser constants cost in numerical noise, are in
+[`../../07_query_diagnostics/infeasible/done.md`](../../07_query_diagnostics/infeasible/done.md)
+"The elastic model is a formulation, not a matrix patch".
 
 ### Domain contradictions are a static error, not a diagnosis
 
@@ -464,17 +502,53 @@ every active row gets `-M` and every excluded row 0.
 Hands off to stage 06 ([`../06_model_formulation/done.md`](../06_model_formulation/done.md))
 and stage 07 ([`../07_solver/done.md`](../07_solver/done.md)). The hand-off happens
 early: `solver_input.constraints` is populated as soon as bounds are resolved, and
-the linearization passes then work on it in place. Still emitted here: the
-data-driven Big-M refill for auto-`M` links (it needs `decide_variables` to find the
-`__l0auto_ind_` names).
+the linearization passes then work on it in place.
 
 The MIN/MAX objective (flat and nested-`PER`) and the composed MIN/MAX clauses are
 emitted by stage 06, not here. What stays is the evaluation they need — a composed
 term's per-row coefficients, the query-wide factor on a reducer, its `WHEN` mask,
-the constant RHS — which is ordinary PHASE 2 work that happens to run late because
-the terms arrive on the logical operator rather than in `solver_input`. The
-evaluated terms travel to stage 06 as `ComposedMinMaxTermData`; the objective's
-shape travels as `MinMaxObjectiveSpec`.
+the constant RHS. The evaluated terms travel to stage 06 as
+`ComposedMinMaxTermData`; the objective's shape travels as `MinMaxObjectiveSpec`.
+
+### Assembly and formulation are separate passes
+
+PHASE 3 is two methods, split by *what each one reads* rather than by where it sits
+in the sequence.
+
+`BuildSolverInput` **assembles**. It moves the evaluated constraints, objective and
+links off `gstate`, resolves the variable types and the column box (the absorbed
+bounds, the `lower_bounds` sentinel, the rigid snapshot, then
+`DecidePropagateImpliedBounds`), folds each relation qualifier's de-duplication into
+the objective's filter masks, applies AVG scaling, and builds the `VarIndexer`. It
+runs exactly once per query, because it is the pass that consumes `gstate`.
+
+`FormulateModel` **formulates**, against a `FormulationBox` handed to it: the auto-`M`
+refill for L0 links, the ABS / MIN/MAX / `<>` / bilinear linearizers, the MIN/MAX and
+composed-MIN/MAX encodings, and finally `LowerDecideConstructs` for whatever the
+chosen backend cannot state natively. It touches no `ClientContext`, scans no data,
+and evaluates no expression — it is a pure function of the evaluated clauses plus a
+box.
+
+That purity is the point. A Big-M or a McCormick envelope is sound only for the box
+it was derived from, and infeasibility diagnosis re-opens that box (see "The elastic
+box" above). Because formulation is separable from evaluation, the same pass can be
+run a second time, on a copy of `SolverInput` against the widened box, to derive the
+constants an elastic model needs — without re-scanning the data to recompute
+coefficients that a widened bound cannot change. `FormulateElasticModel` is that second
+caller; see "The elastic box" above.
+
+Two boundaries carry the weight:
+
+- **Implied-bound propagation belongs to assembly, not formulation.** It derives
+  bounds *from rows*, and in an elastic model those rows are the loosenable ones, so
+  re-running it would undo the re-opening. The auto-`M` refill sits on the other side
+  of the line for the mirror-image reason: it derives a *constant* from the box, so it
+  has to be re-derived whenever the box changes.
+- **Columns are settled before formulation.** `VarIndexer::Build` runs in assembly and
+  the tail is handed the result; only the global block grows as auxiliaries are
+  appended, which a debug assertion checks. A second formulation therefore names
+  exactly the same columns as the first, which is what keeps `var_labels` and
+  solution readback valid across both.
 
 A slow-solve checkpoint report runs when a solve exceeds its budget; see
 [`slow_solves.md`](slow_solves.md).

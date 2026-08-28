@@ -45,6 +45,21 @@ and subtraction such as `MAX(...) - MIN(...) <= K`.
 `MIN/MAX + PER` (ambiguous) rejected; and composed MIN/MAX rejected for an outer
 `PER`/`WHEN` wrapper, a non-constant RHS, or equality at the outer comparison.
 
+The outer-comparison guard is pinned by
+`test_composed_minmax_outer_equality_rejected` (`= K`) and
+`test_composed_minmax_outer_not_equal_rejected` (`<> K`, over a whole-numbered
+column so the generic fractional-`<>` refusal does not fire first).
+
+### `BETWEEN` on a composed MIN/MAX is supported
+
+`BETWEEN` arrives at the composed path as its two directional halves, so both
+are ordinary supported bounds and the constraint solves. That makes
+`BETWEEN K AND K` the equality the `= K` rejection tells the user to write, and
+the `=` message names it. Pinned by
+`test_composed_minmax_between_is_supported` and
+`test_composed_minmax_equality_via_degenerate_between`, each on an instance
+where only one selection lands on the bound.
+
 ### Empty `WHEN` rejection (execution-time errors)
 
 Previously tracked as a bug in `todo.md`: empty-WHEN on hard-direction MIN/MAX

@@ -1,25 +1,23 @@
 # MIN/MAX Aggregate Test Coverage — Todo
 
-## Missing coverage
+No open coverage gaps. Shipped coverage is recorded in `done.md`.
 
-### Composed MIN/MAX follow-ups
+## Not a coverage gap: v2 expressivity still deferred
 
-Remaining v2 shapes — still rejected at bind time, still pinned by negative tests:
+These composed MIN/MAX shapes are rejected at bind time by design, and each
+rejection is pinned by a negative test — so nothing is untested here. They are
+listed only so the deferral stays visible; widening the grammar is an
+expressivity decision, not a testing one.
 
-- **Composed MIN/MAX with outer `PER`** (`MIN(...) + MIN(...) <= K PER grp`).
-  Pinned by `test_composed_minmax_per_wrapper_rejected`.
-- **Composed MIN/MAX with non-constant RHS**. Pinned by two tests —
-  `test_composed_minmax_nonconst_rhs_subquery_rejected` (clean DECIDE-specific
-  error: `Composed MIN/MAX in DECIDE v1 requires a constant RHS`) and
-  `test_composed_minmax_nonconst_rhs_column_rejected` (the same dedicated
-  rejection after bare data-column bounds became legal generally).
-- **Composed MIN/MAX with outer `WHEN`**. Pinned by
-  `test_composed_minmax_outer_when_rejected` — the rejection path is the
-  expression-vs-aggregate-local WHEN guard (distinct from the PER-pin's
-  outer-WHEN/PER guard).
-- **Composed MIN/MAX with outer equality** (`SUM(...) + MAX(...) = K`). The
-  additive composed path currently accepts only directional comparisons. The
-  rejection is not yet pinned by a focused test.
+- **Outer `PER`** (`MIN(...) + MIN(...) <= K PER grp`) —
+  `test_composed_minmax_per_wrapper_rejected`.
+- **Non-constant RHS** — `test_composed_minmax_nonconst_rhs_subquery_rejected`
+  and `test_composed_minmax_nonconst_rhs_column_rejected`.
+- **Outer `WHEN`** — `test_composed_minmax_outer_when_rejected`, which trips the
+  expression-vs-aggregate-local WHEN guard rather than the outer WHEN/PER one.
+- **Outer equality** (`SUM(...) + MAX(...) = K`) —
+  `test_composed_minmax_outer_equality_rejected`. `BETWEEN K AND K` expresses
+  the same bound and is accepted; see `done.md`.
 
 ## Cross-references
 

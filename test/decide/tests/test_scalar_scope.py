@@ -693,3 +693,133 @@ def test_unbounded_scalar_reports_a_single_instance(decidb_cli):
         "a query-wide decision has no row subset to count"
     assert rows[0]["group"] == "NULL", \
         "a query-wide decision has no slice to name"
+
+
+# ---------------------------------------------------------------------------
+# Test 12: The scalar's coefficient through the two reducer desugarings
+# ---------------------------------------------------------------------------
+#
+# `norm(e, 1)` desugars to `SUM(ABS(e))` and a quadratic objective desugars to
+# `SUM(POWER(e, 2))`. Both put the scalar inside a reducer body mixed with
+# row-varying data, so both have to pick up the same per-row weighting the plain
+# `SUM(data * cap)` path was verified to use in
+# `test_scalar_times_data_inside_reducer_is_weighted_by_row_data`. The desugaring
+# makes that plausible; these two tests make it checked.
+
+@pytest.mark.correctness
+def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn,
+                                                oracle_solver, perf_tracker):
+    """`norm(l_linenumber * cap - 3, 1) <= 85` means `SUM_i |d_i*cap - 3| <= 85`.
+
+    The bound is chosen so the three readings of the scalar's coefficient give
+    three different answers, which is what makes the test discriminating:
+
+      - per-row, data-weighted (correct)      -> cap = 1
+      - one collapsed ABS over the totals     -> cap = 2  (|SUM(d)*cap - 3n|)
+      - the data multiplier dropped           -> cap = 6  (n*|cap - 3|)
+
+    The oracle rebuilds the L1 norm row by row from the same input data, with one
+    ABS auxiliary per row, so nothing about DecidB's desugaring is assumed.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, cap
+        FROM lineitem
+        WHERE l_orderkey <= 20
+        DECIDE scalar cap(INT)
+        SUCH THAT norm(l_linenumber * cap - 3, 1) <= 85
+        MAXIMIZE cap
+    """
+    rows, cols = decidb_cli.execute(sql)
+    cap_values = {int(r[cols.index("cap")]) for r in rows}
+    assert len(cap_values) == 1, f"cap must be one value, got {cap_values}"
+    cap_value = cap_values.pop()
+
+    data = [r[0] for r in duckdb_conn.execute("""
+        SELECT CAST(l_linenumber AS BIGINT) FROM lineitem WHERE l_orderkey <= 20
+    """).fetchall()]
+    assert len(data) == len(rows), "oracle and DecidB must see the same rows"
+
+    oracle_solver.create_model("scalar_in_norm_l1")
+    oracle_solver.add_variable("cap", VarType.INTEGER, lb=0.0, ub=100.0)
+    abs_sum = {}
+    for i, d in enumerate(data):
+        ai = f"a_{i}"
+        oracle_solver.add_variable(ai, VarType.CONTINUOUS, lb=0.0)
+        # a_i >= +(d*cap - 3) and a_i >= -(d*cap - 3), i.e. a_i >= |d*cap - 3|.
+        oracle_solver.add_constraint({"cap": float(d), ai: -1.0}, "<=", 3.0,
+                                     name=f"abs_pos_{i}")
+        oracle_solver.add_constraint({"cap": -float(d), ai: -1.0}, "<=", -3.0,
+                                     name=f"abs_neg_{i}")
+        abs_sum[ai] = 1.0
+    oracle_solver.add_constraint(abs_sum, "<=", 85.0, name="l1_norm")
+    oracle_solver.set_objective({"cap": 1.0}, ObjSense.MAXIMIZE)
+    oracle_cap = oracle_solver.solve().objective_value
+
+    # The fixture is only meaningful if the wrong readings would show.
+    n, total = len(data), sum(data)
+    collapsed = max(c for c in range(101) if abs(total * c - 3 * n) <= 85)
+    unweighted = max(c for c in range(101) if n * abs(c - 3) <= 85)
+    assert oracle_cap != collapsed and oracle_cap != unweighted, \
+        "fixture no longer separates the correct weighting from the misreadings"
+
+    assert abs(cap_value - oracle_cap) < 1e-4, \
+        f"cap mismatch: DecidB={cap_value}, Oracle={oracle_cap}"
+    assert sum(abs(d * cap_value - 3) for d in data) <= 85, "L1 norm bound violated"
+
+
+@pytest.mark.quadratic
+@pytest.mark.correctness
+def test_scalar_inside_quadratic_objective_is_weighted_per_row(decidb_cli, duckdb_conn,
+                                                               oracle_solver,
+                                                               perf_tracker):
+    """`MINIMIZE SUM(POWER(l_linenumber * cap - 4, 2))` weights cap^2 by SUM(d^2)
+    and cap by SUM(d), not by the row count.
+
+    `cap` is REAL so the optimum is the continuous least-squares point
+    `4*SUM(d)/SUM(d^2)`, an interior value no misreading lands on by accident:
+    dropping the data multiplier would put the optimum at 4. Declaring it REAL
+    also keeps the model a plain QP, so this runs on both backends rather than
+    needing Gurobi's MIQP.
+
+    The oracle accumulates the expansion `(d*cap - 4)^2 = d^2*cap^2 - 8d*cap + 16`
+    one row at a time from the input data.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, cap
+        FROM lineitem
+        WHERE l_orderkey <= 20
+        DECIDE scalar cap(REAL)
+        SUCH THAT cap >= 0 AND cap <= 10
+        MINIMIZE SUM(POWER(l_linenumber * cap - 4, 2))
+    """
+    rows, cols = decidb_cli.execute(sql)
+    cap_values = {float(r[cols.index("cap")]) for r in rows}
+    assert len(cap_values) == 1, f"cap must be one value, got {cap_values}"
+    cap_value = cap_values.pop()
+
+    data = [r[0] for r in duckdb_conn.execute("""
+        SELECT CAST(l_linenumber AS BIGINT) FROM lineitem WHERE l_orderkey <= 20
+    """).fetchall()]
+    assert len(data) == len(rows), "oracle and DecidB must see the same rows"
+
+    oracle_solver.create_model("scalar_in_quadratic_objective")
+    oracle_solver.add_variable("cap", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+    quad, linear, constant = {("cap", "cap"): 0.0}, {"cap": 0.0}, 0.0
+    for d in data:
+        quad[("cap", "cap")] += float(d) * float(d)
+        linear["cap"] += -8.0 * float(d)
+        constant += 16.0
+    oracle_solver.set_quadratic_objective(linear, quad, ObjSense.MINIMIZE,
+                                          constant=constant)
+    oracle_result = oracle_solver.solve()
+
+    assert abs(cap_value - 4.0) > 0.5, \
+        "cap landed on the row-count-weighted optimum; the data weight was lost"
+
+    oracle_cap = oracle_result.variable_values["cap"]
+    assert abs(cap_value - oracle_cap) < 1e-4, \
+        f"cap mismatch: DecidB={cap_value}, Oracle={oracle_cap}"
+
+    decidb_obj = sum((float(d) * cap_value - 4.0) ** 2 for d in data)
+    assert abs(decidb_obj - oracle_result.objective_value) < 1e-3, \
+        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_result.objective_value}"

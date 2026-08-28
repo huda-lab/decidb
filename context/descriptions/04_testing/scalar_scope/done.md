@@ -49,6 +49,23 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
   rewrite appends auxiliaries to the global block, which sits immediately above
   the scalar block in `VarIndexer`'s four-block layout — these are the cases
   where a misplaced block boundary would surface.
+- **The scalar's coefficient survives both reducer desugarings**, oracle-verified.
+  `norm(e, 1)` becomes `SUM(ABS(e))` and a quadratic objective becomes
+  `SUM(POWER(e, 2))`, so both put the scalar inside a reducer body mixed with
+  row-varying data and both must pick up the same per-row weighting the plain
+  `SUM(data * cap)` path uses.
+  - `test_scalar_inside_norm_is_weighted_per_row` —
+    `norm(l_linenumber * cap - 3, 1) <= 85`. The bound is chosen so the three
+    readings of the coefficient give three different answers: per-row and
+    data-weighted (correct, `cap = 1`), one collapsed ABS over the totals
+    (`cap = 2`), and the data multiplier dropped (`cap = 6`). The test asserts
+    the fixture still separates them, so it fails loudly if the data shifts.
+  - `test_scalar_inside_quadratic_objective_is_weighted_per_row` —
+    `MINIMIZE SUM(POWER(l_linenumber * cap - 4, 2))` with `cap` REAL, so the
+    optimum is the continuous least-squares point `4*SUM(d)/SUM(d^2)` rather
+    than an integer a misreading could hit by accident; dropping the data
+    multiplier would put it at 4. REAL also keeps the model a plain QP, so this
+    runs on both backends instead of needing Gurobi's MIQP.
 - **A scalar on the RHS of a reduced constraint is supported**, with and without
   `PER` (`test_scalar_as_aggregate_rhs`,
   `test_scalar_as_aggregate_rhs_with_per`). Canonicalization moves the scalar to
@@ -77,3 +94,5 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
 | scalar | unbounded diagnostics report | ✓ |
 | scalar | reduced-constraint RHS | ✓ |
 | scalar | `PER` | ✓ |
+| scalar | `norm(...)` (L1, desugars to `SUM(ABS(...))`) | ✓ |
+| scalar | quadratic objective (`SUM(POWER(...))`) | ✓ |

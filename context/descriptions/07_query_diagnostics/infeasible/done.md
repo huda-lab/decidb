@@ -768,7 +768,9 @@ ride that tolerance (a clean `10` arriving as `10.000001`), so stage-2 amounts a
 objective are snapped by `SnapDiagnosticValue` — snap to the nearest integer when within a
 relative tolerance of one (recovering integer bounds at **any** magnitude; significant-figure
 rounding used to mangle `1234567890` into `1234570001`), else trim to a fixed absolute
-precision. The stage-1 read is exact and is **not** snapped.
+precision. Separately, both stage reads use one-directional, per-edit precision cleanup for
+noise introduced by the widened formulation; only stage 2 receives the additional budget-row
+snap described here.
 
 **Objective value plumbing.** `SolverResult` carries `objective_value`, populated on
 `OPTIMAL` by both backends in the model's own sense (`gurobi_solver.cpp` via
@@ -865,16 +867,116 @@ deactivated arm of a disjunction, whereas a too-small one cuts off legal answers
   The native arm derives no Big-M from the family, so an open end costs it nothing but a looser
   root relaxation on a query that cannot solve anyway.
 
-**Residual class, accepted not fixed.** A diagnosis is computed inside the model as it was
-built, so any encoding sized from a bound the repair wants to widen can hide a better repair.
-`<>`, bilinear (McCormick) and `norm` all have encodings of that shape and are untouched here.
-**Root-caused on 2026-08-27** — all three read the ordinary column box where
-`SolverInput::rigid_*` is the box a structural rewrite is contracted to use, so a repair caps
-at `box + 1`, and on `<>` and L0 the reported repair differs per backend. Tracked with its
-trace, measurements and fix shape in
-[`../../06_issues/code_quality/todo.md`](../../06_issues/code_quality/todo.md).
+**The elastic model is a formulation, not a matrix patch.** A diagnosis used to be computed
+inside the model as it was built, so any encoding sized from a bound the repair wanted to
+widen could hide a better repair. `<>`, bilinear (McCormick) and `norm` all have encodings of
+that shape. Root-caused 2026-08-27, fixed 2026-08-28.
 
-**Tests** (`test_query_diagnostics_relation.py::TestRepairsTheModelCanReach`). B3's query
+The old path took the *solved* `SolverModel`, re-opened its column box, and appended slack
+columns. Its Big-M and McCormick constants stayed as derived against the pre-opening box, so
+they capped the repair at the bound it was supposed to widen — `x <= 5` repaired to `x <= 6`
+on the Big-M paths, and never at all under McCormick, which caps the product at the stale
+`x_U`. `<>` was clean on Gurobi only because Gurobi states it natively and derives no Big-M,
+so the reported repair depended on which solver was installed.
+
+The elastic model is now **formulated**, not patched: `PhysicalDecide::FormulateElasticModel`
+takes the model input and column space as PHASE 3a left them — retained under `DIAGNOSE`
+only, before a single constant was derived — widens the box, and runs the same PHASE 3b pass
+(`FormulateModel`) the solved model went through. Every constant is re-derived against the
+box the repair actually searches. See
+[`../../01_pipeline/08_execution/done.md`](../../01_pipeline/08_execution/done.md) §6 for why
+that pass can run twice at all.
+
+**The widening is bounded, and bounded per column.** Opening a direction all the way is not
+an option: an unbounded column has no finite Big-M, so a formulation against a fully open box
+does not lose precision — it *refuses the query* (`Bilinear term requires a finite upper bound
+on variable 'x'`). So each loosenable direction is widened by a finite amount, and that amount
+comes from the column itself:
+
+- **ten times the column's own magnitude**, as a floor. This covers a column whose repair
+  target appears in no row — the bound behind an `ABS(x) >= 5`, where the rows are the
+  construct's own links and carry no target of their own.
+- **whatever a row demands of it**: `|rhs| / |coefficient|`, the value the column would have
+  to reach to satisfy that row single-handed. `SUM(y) >= 100` says a repair may need `y` out
+  at 100 however small `y <= 2` looks beside it, and that is the difference between one edit
+  the user can apply and two because the first could not reach far enough. Dividing by the
+  coefficient is what makes a price-weighted row state its demand in the column's units
+  rather than its own.
+
+Per column is the whole point, and it was learned the hard way. An earlier version derived one
+widening for the model and applied it everywhere, with a doubling loop to grow it when it
+bound the search. Every number in the elastic model was then coupled to the largest number
+anywhere in the query: a price-weighted row dragged an unrelated `x <= 5` out to 1e15, the
+Big-M followed, and HiGHS stopped being able to load the model for reasons that had nothing to
+do with `x`. Three separate defects came out of that one coupling before it was replaced.
+Scaling each column from its own bounds and row demands prevents unrelated columns from
+inflating its constants. A row can still demand a value far beyond the current box — that
+larger widening is semantic and local to the column. The calculation needs no search,
+doubling, or model-wide radius.
+
+The repair slacks themselves are uncapped. They need no ceiling: what a repair can actually
+reach is bounded by the widened column box, which is a hard constraint the solver cannot
+exceed, so a slack has nothing to gain by running past it.
+
+**What the widening costs.** A wider box means looser Big-M constants and a worse-conditioned
+elastic model, so the slack a backend returns carries rounding noise: Gurobi's own feasibility
+tolerance shows up as a spurious `x <= 1` → `x <= 1.000001` edit, and an exact `4.5` comes back
+as `4.499999`, which reported verbatim is a repair one part in a million *short* of working.
+Both are cleaned up in the readback.
+
+The floor that separates a real edit from rounding is **absolute** — a few multiples of the
+backend tolerance — and deliberately not relative to anything. Two relative floors were tried
+and both are wrong, in opposite directions:
+
+- taken from the *model's* scale, it erases every small edit in a model that contains one
+  large-coefficient row, and answers "no loosening restores feasibility" about a query one
+  `x <= 7` away from solving;
+- taken from the *largest edit in the same repair*, it erases the `x <= 0.001` half of a
+  repair whose other half is `y <= 20000` — and the surviving half alone does not restore
+  feasibility, so the user is handed a repair that does not work.
+
+The asymmetry decides it: an extra hairline edit is cosmetic, a dropped one is a broken
+repair, so the floor errs toward reporting. (Both were symptoms of the model-wide widening
+that has since been replaced; the absolute floor is what is correct independently of it.)
+
+Rounding a reported amount is separate. It *is* relative — to that amount's own magnitude,
+so an edit of 2 and an edit of 30,000 in one model are each trusted to about six figures of
+themselves — and it is **one-directional**: it may tidy `4.499999` up to `4.5`, never
+`4.333333…` down to `4.33333`. A loosening reported one tick short is not a repair; the user
+pastes `x <= 3.33333`, the sum lands on 9.99999 against a `>= 10` floor, and the query is
+still infeasible. Over-repairing by one part in a million is invisible.
+
+**A backend that cannot analyse the repair model says so.** The elastic program is
+deliberately harder than the query's own — a widened box means looser Big-M constants — and
+HiGHS in particular gives up on some MIPs it would otherwise take, or refuses to load a model
+whose tier weights produced a sub-tolerance coefficient (`../../06_issues/bugs/todo.md`).
+That is a limit on what can be *explained*, not a failure of the query, so the solver callback
+catches DuckDB exceptions from the backend call and the terminal reports an `undiagnosed`
+finding. The guard is at that callback boundary: exceptions from the diagnosis logic still
+surface as bugs. The formulation pass above likewise keeps its narrow catch.
+
+The solved model is untouched by all of this — the golden dumps are byte-identical — because
+the second formulation runs on a copy.
+
+**The sweep** (`test_diagnosis_repair_sweep.py`). One invariant, swept across four
+magnitudes and twenty clause shapes rather than argued case by case: an infeasible query
+under `DIAGNOSE` comes back with either a repair that makes it solve, or an explicit
+"could not analyse" — never a crash, never silence, never a repair that leaves the query
+infeasible. It exists because hand-picked cases kept missing whole classes; every defect it
+caught was in the arithmetic *around* the repair rather than in the repair itself, and every
+one of them produced advice that looked reasonable and did not work.
+
+**Tests** (`test_query_diagnostics_relation.py::TestRepairsTheModelCanReach`). The five cases
+of the retained-constants table — two controls with no encoding at all, then a lowered `<>`,
+an L0 `norm` and a McCormick product — are asserted three ways. `assert_backends_agree` across
+Gurobi native, Gurobi lowered and HiGHS catches a constant that only one formulation bakes.
+The promised payoff is oracled against a real re-solve of the edited query. And each case
+carries a **witness**: a single edit, verified by its own solve, that restores feasibility on
+its own; the diagnosis must not promise less than the witness delivers. The witness is the
+only one of the three that covers the McCormick row, because both backends lower a product
+the same way and so were wrong by the same amount while agreeing with each other.
+
+**B3's own tests.** B3's query
 across three arms via `assert_backends_agree` — B2's helper, and this is the caller it was
 written for; the lowered arm is exercised **on Gurobi** so the comparison is of the two
 formulations rather than of two solvers that happen to differ. The reported repair is checked

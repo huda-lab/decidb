@@ -132,6 +132,9 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 			return ExpressionBinder::BindExpression(expr_ptr, depth);
 		}
 		break;
+	case ExpressionClass::CASE:
+		// Shares the constraint binder's wording; see DecideCaseUnsupportedMessage.
+		return BindResult(BinderException::Unsupported(expr, DecideCaseUnsupportedMessage()));
 	default:
         break;
 	}

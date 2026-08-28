@@ -228,11 +228,11 @@ static const char *DescribeBigMConstruct(const EvaluatedConstraint &ec) {
     return "MIN/MAX";
 }
 
-double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
-                             const vector<double> &lower_bounds,
-                             const vector<double> &upper_bounds,
+double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box,
                              idx_t num_rows,
                              const vector<string> &var_names) {
+    const vector<double> &lower_bounds = box.lower;
+    const vector<double> &upper_bounds = box.upper;
     bool has_unbounded = false;
     double M = 0.0;
     for (idx_t r = 0; r < num_rows; r++) {
@@ -1382,13 +1382,13 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 //! what `SolverModel::Build` will expand into `col_lower` / `col_upper`, and must:
 //! a Big-M derived from a wider box than the model declares would be slack, and one
 //! derived from a narrower box would cut the feasible region.
-static void FlatColumnBox(const SolverInput &input, const VarIndexer &indexer, int col,
-                          double &lo, double &hi) {
+static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
+                          const VarIndexer &indexer, int col, double &lo, double &hi) {
     idx_t c = static_cast<idx_t>(col);
     if (c >= indexer.global_block_start) {
         idx_t g = c - indexer.global_block_start;
-        lo = input.global_lower_bounds[g];
-        hi = input.global_upper_bounds[g];
+        lo = box.global_lower[g];
+        hi = box.global_upper[g];
         if (input.global_variable_types[g] == LogicalType::BOOLEAN) {
             lo = MaxValue<double>(lo, 0.0);
             hi = MinValue<double>(hi, 1.0);
@@ -1400,8 +1400,8 @@ static void FlatColumnBox(const SolverInput &input, const VarIndexer &indexer, i
     // The same asymmetry the model builder applies: the lower bound is authoritative
     // (stage 08 already resolved it, negatives included), the upper is intersected with
     // the type ceiling.
-    lo = input.lower_bounds[v];
-    hi = input.upper_bounds[v];
+    lo = box.lower[v];
+    hi = box.upper[v];
     if (input.variable_types[v] == LogicalType::BOOLEAN) {
         hi = MinValue<double>(hi, 1.0);
     }
@@ -1411,7 +1411,8 @@ static void FlatColumnBox(const SolverInput &input, const VarIndexer &indexer, i
 //! asks for the maximum (a `<=` row), otherwise the minimum (a `>=` row). Returns false
 //! and names the offending column when the box that end depends on is open — there is no
 //! Big-M then, and the query is refused rather than given a constant.
-static bool FlatRowReach(const SolverInput &input, const VarIndexer &indexer,
+static bool FlatRowReach(const SolverInput &input, const FormulationBox &box,
+                         const VarIndexer &indexer,
                          const vector<int> &indices, const vector<double> &coefficients,
                          bool hi_end, double &reach, idx_t &blame_col) {
     reach = 0.0;
@@ -1421,7 +1422,7 @@ static bool FlatRowReach(const SolverInput &input, const VarIndexer &indexer,
             continue;
         }
         double lo, hi;
-        FlatColumnBox(input, indexer, indices[k], lo, hi);
+        FlatColumnBox(input, box, indexer, indices[k], lo, hi);
         // A negative coefficient swaps which end of the box feeds which end of the term,
         // so the sign has to be respected before an end is blamed.
         double end = (c > 0.0) == hi_end ? hi : lo;
@@ -1435,6 +1436,7 @@ static bool FlatRowReach(const SolverInput &input, const VarIndexer &indexer,
 }
 
 void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
+                           const FormulationBox &box,
                            const vector<string> &var_names,
                            const SolverConstructSupport &constructs) {
     if (constructs.not_equal || input.indicator_constraints.empty()) {
@@ -1450,7 +1452,7 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
         bool hi_end = row.sense == '<';
         double reach = 0.0;
         idx_t blame_col = DConstants::INVALID_INDEX;
-        if (!FlatRowReach(input, indexer, row.indices, row.coefficients, hi_end, reach,
+        if (!FlatRowReach(input, box, indexer, row.indices, row.coefficients, hi_end, reach,
                           blame_col)) {
             // No finite M exists over an open box. Refuse, naming a column the user can
             // bound — which is what `OwnerOf` is for: this layer works in flat columns
@@ -1486,7 +1488,8 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
 // Bilinear products and ABS
 //===--------------------------------------------------------------------===//
 
-void LinearizeBilinear(SolverInput &input, const vector<string> &var_names) {
+void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
+                       const vector<string> &var_names) {
     const idx_t num_rows = input.num_rows;
 
     // For (w = b * x) with b Boolean and x in [L, U] the exact linearization is:
@@ -1501,8 +1504,8 @@ void LinearizeBilinear(SolverInput &input, const vector<string> &var_names) {
     // full four corners and widen w's own lower bound so the product can take the
     // negative value of x when b=1.
     for (auto &link : input.bilinear_links) {
-        double U = input.upper_bounds[link.other_var_idx];
-        double L = input.lower_bounds[link.other_var_idx];
+        double U = box.upper[link.other_var_idx];
+        double L = box.lower[link.other_var_idx];
         if (U >= 1e20) {
             throw InvalidInputException(
                 "Bilinear term requires a finite upper bound on variable '%s'. "
@@ -1557,6 +1560,12 @@ void LinearizeBilinear(SolverInput &input, const vector<string> &var_names) {
         // ec4: lower corner `w >= L*b`, only needed when x can be negative. Also
         // widen the aux's own lower bound so w may equal the negative x at b=1.
         if (L < 0.0) {
+            // A write to the box, not a read of it: this DECLARES the auxiliary's column
+            // (w must be able to hold a negative x), so it belongs on `input` rather than
+            // on the derived-constant box above. The two coincide today because `box` is
+            // the solved model's own box; they stop coinciding as soon as a second
+            // formulation runs against a widened box, and this line must still land on
+            // the column the model declares.
             input.lower_bounds[link.aux_idx] = std::min(input.lower_bounds[link.aux_idx], L);
             EvaluatedConstraint ec4;
             ec4.variable_indices = {link.aux_idx, link.bool_var_idx};

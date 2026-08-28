@@ -78,6 +78,17 @@ solution-found and no-solution shapes); everything else (closeness, elapsed, pea
 identical. HiGHS never sets the flag, so its boundary-only interrupt keeps the time-limit
 wording.
 
+**A sibling's failure is neither.** A SELECT can hold several DECIDE clauses — two
+subqueries joined side by side — and when one throws, DuckDB stops the remaining
+pipelines by setting the very query interrupt Ctrl-C sets (`Executor::PushError`). Both
+tests above read that interrupt, so a live sibling would report a cancellation nobody
+asked for, printed *above* the error that actually stopped the query and carrying
+elapsed/memory figures for a solve that was never the problem. So the very first thing
+the `TIME_LIMIT` block does is ask `Executor::HasError()`: when the executor already
+holds an error, nothing is printed and that error is re-raised. Only Gurobi ever
+reproduced this — HiGHS has no thread-safe terminate, so its solve is never cut short
+mid-search.
+
 Details:
 
 - **Voice.** Obeys the user-output rule — no "incumbent"/"gap"/"bound" solver words.
@@ -241,3 +252,9 @@ yet) reports the interrupt and errors, delivering no rows. HiGHS is asserted
 **boundary-only** (probed 2026-07-04): a mid-first-solve SIGINT is reported as a
 time-limit stop (never "stopped at your request") yet still delivers the incumbent at the
 boundary — the solver-agnostic fallback.
+
+Sibling failure (`test_diagnose_trigger.py::TestASiblingFailureIsNotACancellation`,
+both backends): a composed query joins a live 599-row knapsack to a tiny infeasible
+DECIDE, and asserts the output names the infeasible clause with no "at your request"
+wording and no elapsed/peak-memory tail. The healthy side is sized deliberately — with
+two rows it finishes before its sibling fails and nothing is ever interrupted.

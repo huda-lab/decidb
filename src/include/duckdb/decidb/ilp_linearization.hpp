@@ -53,9 +53,11 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
 //! true range exceeds silently cuts the feasible region rather than failing. The
 //! refusal names a column to bound, and it is the same refusal `LinearizeAbsMaximize`
 //! has always made. `var_names` supplies that name.
-double DecideTightPerRowBigM(const EvaluatedConstraint &ec,
-                             const vector<double> &lower_bounds,
-                             const vector<double> &upper_bounds,
+//!
+//! `box` is the box the returned constant is valid for, and it is the caller's job to
+//! pass the one the constant will be used against — see `FormulationBox`. Widening a
+//! column after this returns does not make the constant conservative; it makes it a cap.
+double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box,
                              idx_t num_rows,
                              const vector<string> &var_names);
 
@@ -176,7 +178,10 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
 //! HERE and only here: a construct the backend states needs no constant to dominate it,
 //! so whether a contributing variable is bounded is a question about the lowering and not
 //! about the query.
+//! `box` is the box the emitted Big-Ms are valid for — the same explicit-box contract
+//! `DecideTightPerRowBigM` carries, in the flat column coordinates this pass works in.
 void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
+                           const FormulationBox &box,
                            const vector<string> &var_names,
                            const SolverConstructSupport &constructs);
 
@@ -185,7 +190,15 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
 //! to the plain structural `w <= x`, so three rows suffice; for `x < 0` all four
 //! corners are emitted and `w`'s lower bound is widened so the product can reach the
 //! negative value. Requires a finite upper bound on `x` and names it if missing.
-void LinearizeBilinear(SolverInput &input, const vector<string> &var_names);
+//!
+//! The envelope is an EXACT linearization of the product over `box`, not a dominating
+//! constant: on a box wider than `box` it cuts valid points, and on a narrower one it is
+//! slack. So unlike a Big-M it is wrong in both directions once the box moves, which is
+//! why the box is named rather than read from `input`. `input` is still written (the
+//! auxiliary's own column is widened for a negative `x`), and that write is a column
+//! declaration rather than a derived constant.
+void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
+                       const vector<string> &var_names);
 
 //! Phase 1 of the ABS auxiliary formulation, and it runs before EVERY other
 //! linearizer. For each `abs_maximize_links` entry it derives the largest |inner| any

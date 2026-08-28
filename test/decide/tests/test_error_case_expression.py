@@ -139,3 +139,41 @@ class TestCaseExpressionRejection:
             MAXIMIZE SUM(x * s_acctbal)
         """
         decidb_cli.assert_error(sql, match=self._FRIENDLY)
+
+    def test_case_outside_a_reducer_shares_the_friendly_message(self, decidb_cli):
+        """A CASE written outside any reducer used to miss the friendly arm.
+
+        Every case above puts the CASE inside SUM/AVG/MIN/MAX, which routes
+        through `ValidateSumArgument`. A CASE sitting directly in the
+        constraint fell through to the constraint binder's unsupported-class
+        arm instead and printed `(ExpressionClass::CASE)` — a C++ enum name a
+        SQL user cannot act on. Both spellings now share one message.
+        """
+        sql = """
+            SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
+            DECIDE x(INT)
+            SUCH THAT x + CASE WHEN s_nationkey = 1 THEN 1 ELSE 2 END <= 5
+            MAXIMIZE SUM(x)
+        """
+        decidb_cli.assert_error(sql, match=self._FRIENDLY)
+        result = decidb_cli.execute_raw(sql)
+        combined = result.stderr + result.stdout
+        assert "ExpressionClass" not in combined, (
+            f"Internal enum name leaked to the user: {combined[:600]}"
+        )
+
+    def test_case_outside_a_reducer_in_the_objective(self, decidb_cli):
+        """The objective binder has its own unsupported-class arm, so it needs
+        its own pin."""
+        sql = """
+            SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
+            DECIDE x(BOOL)
+            SUCH THAT SUM(x) <= 3
+            MAXIMIZE SUM(x * s_acctbal) + CASE WHEN 1 = 1 THEN 1 ELSE 2 END
+        """
+        decidb_cli.assert_error(sql, match=self._FRIENDLY)
+        result = decidb_cli.execute_raw(sql)
+        combined = result.stderr + result.stdout
+        assert "ExpressionClass" not in combined, (
+            f"Internal enum name leaked to the user: {combined[:600]}"
+        )

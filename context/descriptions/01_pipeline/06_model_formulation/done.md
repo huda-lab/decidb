@@ -379,6 +379,40 @@ The pass is a single sweep, not a fixpoint: a bound derived for one variable is
 not fed back to tighten others in the same pass. That is sound and only leaves
 tightness on the table for chained implications.
 
+### The formulation box
+
+Every constant this stage derives — a Big-M, a McCormick envelope — is valid only
+against a specific column box. `FormulationBox` (`solver_input.hpp`) names that
+dependency, and each constant-deriving entry point takes it explicitly:
+`DecideTightPerRowBigM()`, `LowerDecideConstructs()` (through `FlatRowReach` /
+`FlatColumnBox`), and `LinearizeBilinear()`. `FormulationBox::OfSolvedModel(input)` is
+the box the solved model declares.
+
+The three used to read `SolverInput::lower_bounds` / `upper_bounds` directly, which made
+"which box is this constant valid for?" a question about call order rather than one the
+call site answers. It matters because the box does move: an infeasibility diagnosis
+re-opens every user-absorbed and implied bound (`OpenElasticColumnBox`, stage 08) and
+then runs against a strictly larger box than the retained constants assume.
+
+Three cases, kept distinct:
+
+| Reads | Who | Why |
+| --- | --- | --- |
+| `rigid_*` | `ClassifyNEConstraint`, `DecideRowSignedRange` | decides *structure* (is a disjunct dead), so the verdict must not turn on a bound a repair may lift |
+| `FormulationBox` | the three constant-deriving sites above | a constant belongs to the box it was derived from |
+| `lower_bounds` / `upper_bounds` | column declarations (e.g. widening a bilinear auxiliary for a negative `x`) | a write to the box, not a reading of it |
+
+A constant may **not** read `rigid_*`. That box is open wherever the user supplied the
+only finite bound, and these sites refuse rather than guess when a box is open, so the
+query would be rejected while asking for the bound the user already wrote.
+
+Passing the box explicitly changes no constant on the solved path — that call site passes
+`OfSolvedModel`, which is what the sites read before. What it buys is a second formulation
+against a *different* box, which is how an infeasibility diagnosis gets constants valid for
+the widened box a repair searches instead of inheriting the solved model's. See
+[`../../07_query_diagnostics/infeasible/done.md`](../../07_query_diagnostics/infeasible/done.md)
+"The elastic model is a formulation, not a matrix patch".
+
 ### Big-M constants
 
 `DecideTightPerRowBigM()` returns the maximum over active rows of the row's

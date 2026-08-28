@@ -1498,6 +1498,91 @@ def test_composed_minmax_outer_when_rejected(decidb_cli):
     """, match=r"Cannot combine expression-level WHEN with aggregate-local WHEN")
 
 
+@pytest.mark.min_max
+@pytest.mark.error_binder
+def test_composed_minmax_outer_equality_rejected(decidb_cli):
+    """`SUM(...) + MAX(...) = K` is rejected: the composed path only pushes each
+    MIN/MAX term in one direction, and an equality demands both at once.
+
+    The message has to carry the workaround, because `BETWEEN K AND K` *is*
+    accepted (it arrives as the two directional halves) and is the smallest edit
+    from the query the user wrote.
+    """
+    decidb_cli.assert_error("""
+        SELECT id, v FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
+        DECIDE x(BOOL)
+        SUCH THAT (SUM(x * v) + MAX(x * v)) = 12
+        MAXIMIZE SUM(x * v)
+    """, match=r"does not support '='.*BETWEEN K AND K")
+
+
+@pytest.mark.min_max
+@pytest.mark.error_binder
+def test_composed_minmax_outer_not_equal_rejected(decidb_cli):
+    """`SUM(...) + MAX(...) <> K` shares the equality rejection's guard.
+
+    `v` is whole-numbered so the generic `<>` fractional-type refusal does not
+    fire first — this reaches the composed-comparison guard, which is the one
+    being pinned. Unlike `=`, there is no BETWEEN rewrite, so the message stays
+    the plain list of supported comparisons.
+    """
+    decidb_cli.assert_error("""
+        SELECT id, v FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
+        DECIDE x(BOOL)
+        SUCH THAT (SUM(x * v) + MAX(x * v)) <> 12
+        MAXIMIZE SUM(x * v)
+    """, match=r"supports only the <, <=, >, >= and BETWEEN comparisons")
+
+
+@pytest.mark.min_max
+@pytest.mark.cons_between
+@pytest.mark.correctness
+def test_composed_minmax_between_is_supported(decidb_cli):
+    """`(SUM(x*v) + MAX(x*v)) BETWEEN 5 AND 12` solves.
+
+    BETWEEN is two directional comparisons by the time the composed path sees
+    it, so both halves are ordinary supported bounds. Pinned because the
+    equality rejection's message advertises this shape as the workaround.
+
+    v = [10, 5]. Totals of `SUM + MAX`: {} -> 0, {1} -> 20, {2} -> 10,
+    {1,2} -> 25. Only `{2}` lands in [5, 12], so the optimum is v = 5 with
+    x = (0, 1) — an interior choice, not the greedy `MAXIMIZE` pick.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
+        DECIDE x(BOOL)
+        SUCH THAT (SUM(x * v) + MAX(x * v)) BETWEEN 5 AND 12
+        MAXIMIZE SUM(x * v)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
+    assert chosen == [5.0], f"expected only v=5 selected, got {chosen}"
+    total = sum(chosen) + max(chosen)
+    assert 5 - 1e-6 <= total <= 12 + 1e-6, f"BETWEEN bound violated: {total}"
+
+
+@pytest.mark.min_max
+@pytest.mark.cons_between
+@pytest.mark.correctness
+def test_composed_minmax_equality_via_degenerate_between(decidb_cli):
+    """`BETWEEN K AND K` is the equality the rejection above points users at, and
+    it pins the composed sum to exactly K.
+
+    v = [10, 5, 7]; reachable `SUM + MAX` totals are 0, 20, 10, 14, 25, 27, 19,
+    32. K = 19 is reached only by `{2, 3}`, so the answer is forced.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1, 10, true), (2, 5, true), (3, 7, true)) t(id, v, w)
+        DECIDE x(BOOL)
+        SUCH THAT (SUM(x * v) + MAX(x * v)) BETWEEN 19 AND 19
+        MAXIMIZE SUM(x * v)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    chosen = sorted(float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1)
+    assert chosen == [5.0, 7.0], f"expected v in {{5, 7}}, got {chosen}"
+    assert abs(sum(chosen) + max(chosen) - 19.0) < 1e-6
+
+
 # ----- Composed MIN/MAX in objectives -----
 
 

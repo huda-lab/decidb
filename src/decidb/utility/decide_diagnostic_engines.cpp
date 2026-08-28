@@ -49,6 +49,43 @@ double SnapDiagnosticValue(double v) {
 	return std::round(v * 1e6) / 1e6;
 }
 
+//! Round a repair amount to the precision the elastic model can actually resolve.
+//!
+//! Formulating against a widened box costs conditioning: a slack whose exact value is
+//! `4.5` comes back as `4.499999`, and a repair reported one part in a million SHORT is
+//! not a repair at all — the user pastes `ABS(x*0.5) >= 0.500001` and the query is still
+//! infeasible. Round to the last decimal that is meaningful at this value's OWN
+//! magnitude. Relative, never absolute: an edit of 2 and an edit of 30000 in the same
+//! model are each trustworthy to about six figures of themselves, and a grid taken from
+//! the model's largest number would erase the small one entirely.
+static double SnapToPrecision(double v) {
+	if (v == 0.0 || !std::isfinite(v)) {
+		return v;
+	}
+	double mag = std::fabs(v);
+	double grid = 1e-6 * mag;
+	double decimals = std::floor(-std::log10(grid));
+	if (!std::isfinite(decimals) || decimals < 0.0 || decimals > 15.0) {
+		return v;
+	}
+	double scale = std::pow(10.0, decimals);
+	if (!std::isfinite(scale) || scale <= 0.0) {
+		return v;
+	}
+	double ticks = std::round(mag * scale);
+	// Never round DOWN. Rounding is allowed to tidy `4.499999` into `4.5`, but it must
+	// not turn `4.333333…` into `4.33333`: a loosening reported one tick short of what
+	// the solver found is not a repair at all — the user pastes `x <= 3.33333`, the sum
+	// lands on 9.99999 against a `>= 10` floor, and the query is still infeasible. When
+	// the tidy value would fall below what was measured, take the next tick up instead.
+	// Over-repairing by one part in a million is invisible; under-repairing is a bug.
+	if (ticks / scale < mag) {
+		ticks += 1.0;
+	}
+	double snapped = ticks / scale;
+	return v < 0.0 ? -snapped : snapped;
+}
+
 //! User-facing name of a flat solver column: its provenance label (user variable
 //! name or aux source expression), falling back to a positional name.
 string ColLabel(const vector<ColumnProvenance> &cols, int col) {
@@ -651,9 +688,11 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	elastic.nonconvex_quadratic = false;
 	elastic.maximize = false;
 
-	// Append a REAL, non-negative, uncapped slack column (sᵢ≥0 REAL even for
-	// integer RHS — decision 4). The repair objective coefficient is attached later
-	// by the active lexicographic tier.
+	// Append a REAL, non-negative, uncapped slack column (sᵢ≥0 REAL even for integer
+	// RHS — decision 4). No ceiling is needed: what a repair can actually reach is
+	// bounded by the widened COLUMN box, which is a hard constraint the solver cannot
+	// exceed, so a slack has nothing to gain by running past it. The repair objective
+	// coefficient is attached later by the active lexicographic tier.
 	auto add_slack = [&]() -> idx_t {
 		idx_t c = elastic.num_vars;
 		elastic.col_lower.push_back(0.0);
@@ -972,7 +1011,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 }
 
 //! Read the slack support of a solved elastic model into the user-facing edit list.
-//! Every block whose slack exceeds DIAGNOSTIC_RAY_EPSILON is an edit; the amount is the
+//! Every block whose slack clears the noise floor is an edit; the amount is the
 //! slack value (`=` reports the net s⁺ − s⁻). A data-RHS clause (`x <= col`) has no
 //! single literal to loosen, so it reads back per the `slack_scope` policy (T3): "query"
 //! folds it into one virtual offset `x <= col + delta`; "expanded" exposes each per-row
@@ -1002,11 +1041,35 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		} else {
 			amount = solution[sl.pos_col];
 		}
-		if (std::fabs(amount) <= DIAGNOSTIC_RAY_EPSILON) {
+		// What counts as an edit rather than a backend's own rounding. A widened box is
+		// worse conditioned than the model it came from, so a solver can return its
+		// feasibility tolerance as a slack and turn it into a straight-faced
+		// `x <= 1` → `x <= 1.000001`. The floor that removes it is ABSOLUTE and small — a
+		// few multiples of the backend tolerance itself.
+		//
+		// It must not be relative to anything. A floor taken from the model's scale erases
+		// every small edit in a model that happens to contain one large-coefficient row;
+		// a floor taken from the largest edit in the same repair erases the `x <= 0.001`
+		// half of a repair whose other half is `y <= 20000`. Both were measured, and both
+		// are worse than the noise they remove: an extra hairline edit is cosmetic, while a
+		// dropped one makes the reported repair not work when the user applies it. When in
+		// doubt this reports the edit.
+		double edit_floor = 1e-5;
+		if (std::fabs(amount) <= edit_floor) {
 			continue;
 		}
-		// I3: snap the stage-2 read to absorb the budget cushion's sub-display noise; the
-		// stage-1 read is exact (no budget constraint) and passes through untouched.
+		// Round away the conditioning noise a widened box costs. Applied to every read,
+		// stage 1 included: this noise comes from the model's constants, not from the
+		// budget freeze the I3 snap below cleans up.
+		{
+			amount = SnapToPrecision(amount);
+			if (std::fabs(amount) <= edit_floor) {
+				continue;
+			}
+		}
+		// I3: snap the stage-2 read again to absorb the budget cushion's sub-display noise.
+		// The precision cleanup above applies to both stages because it comes from the
+		// widened formulation itself, not from the stage-2 budget row.
 		if (snap) {
 			amount = SnapDiagnosticValue(amount);
 			if (std::fabs(amount) <= DIAGNOSTIC_RAY_EPSILON) {

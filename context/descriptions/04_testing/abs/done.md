@@ -24,6 +24,20 @@ classification.
   `SUM(ABS) >= K`, `MIN(ABS) >= K`, `MAX(ABS) >= K`, `BETWEEN`, and ABS on both
   sides of a comparison. The stress corpus C33–C37 supplies an additional model-shape
   smoke check.
+- **Hard direction composed with WHEN and PER** (oracle-verified in
+  `test_abs_linearization.py`): the sign-indicator envelope that pins each `d_i`
+  is per-row and unconditional, while WHEN and PER act on the aggregate that
+  reads those auxiliaries.
+  - `test_abs_constraint_aggregate_hard_ge_with_when` —
+    `SUM(ABS(x - l_quantity)) >= K WHEN l_linenumber <= 2`. K sits above the
+    masked rows' dispersion at `x = 0` but below the all-rows dispersion, so an
+    implementation that summed every `d_i` would leave the constraint already
+    satisfied and every `x` at 0. The test asserts a non-zero objective for
+    exactly that reason.
+  - `test_abs_constraint_aggregate_hard_ge_with_per` —
+    `SUM(ABS(x - target)) >= 50 PER grp`. Both groups bind on their own
+    (dispersions 25 and 45 at `x = 0`) while the pooled 70 would not, so a
+    global-scoping bug reports objective 0 instead of 90.
 
 ## Feature interactions covered
 
@@ -41,3 +55,5 @@ classification.
 | ABS (aggregate constraint) | PER (per-group aux partitioning) | ✓ |
 | ABS (per-row constraint, hard direction `>=`/`=`/BETWEEN) | Big-M sign-indicator | ✓ (oracle + stress C33–C37) |
 | ABS (aggregate constraint, hard direction `SUM(ABS)>=K` / `MIN(ABS)>=K` / `MAX(ABS)>=K`) | Big-M on each aux | ✓ (oracle + stress C35–C36) |
+| ABS (aggregate constraint, hard direction) | WHEN (mask over Path-B-pinned auxes) | ✓ |
+| ABS (aggregate constraint, hard direction) | PER (per-group sums over Path-B-pinned auxes) | ✓ |

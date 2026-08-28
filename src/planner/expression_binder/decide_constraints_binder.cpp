@@ -483,6 +483,11 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
         return BindConjunction(expr_ptr, depth);
     case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+    case ExpressionClass::CASE:
+        // Same answer as a CASE inside a reducer, which ValidateSumArgument rejects
+        // with this text: without this branch the generic message below leaks
+        // `ExpressionClass::CASE`, which is not something a SQL user can act on.
+        return BindResult(BinderException::Unsupported(expr, DecideCaseUnsupportedMessage()));
     default:
         break;
     }

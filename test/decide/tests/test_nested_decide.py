@@ -18,6 +18,11 @@ Covers:
   - Nesting with no outer ``WHEN`` still behaves as before
   - Ordinary ``CASE WHEN`` after a nested clause still lexes as SQL
   - The duplicate-DECIDE guard is not tripped by a nested declaration
+  - Three levels of DECIDE nesting, oracle verified
+  - A plain scalar subquery inside a nested clause's constraint and objective
+
+The second group has a different cause -- subquery flattening rather than the
+lexer -- documented above that group below.
 """
 
 import pytest
@@ -162,3 +167,107 @@ def test_a_real_duplicate_decide_is_still_rejected(decidb_cli):
         """,
         match=r"(?i)DECIDE appears twice",
     )
+
+
+# --- Subqueries written *inside* a nested DECIDE ---------------------------
+#
+# A second regression, with a different cause. ``PlanSubqueries`` normally defers
+# a subquery it meets while an outer subquery is still being flattened; the
+# deferred work is finished later by ``RecursiveDependentJoinPlanner``. Ordinary
+# clauses tolerate that because nothing reads their expressions in between. A
+# DECIDE clause does not: canonicalization runs in the same ``CreatePlan`` and
+# copies the constraint tree, and a still-unplanned subquery cannot be copied.
+# Every query below therefore used to fail with
+# ``Serialization Error: Cannot copy BoundSubqueryExpression``.
+#
+# See ``01_pipeline/03_logical_plan/done.md`` → DECIDE subquery flattening.
+
+_TWO_ROWS = "(VALUES (1), (2)) u(uid)"
+
+# Innermost of three DECIDE levels: two integers capped at 4 → 8.
+_LEVEL_3 = (
+    f"SELECT SUM(z) FROM {_TWO_ROWS} "
+    "DECIDE z(INT) SUCH THAT z >= 0 AND z <= 4 MAXIMIZE SUM(z)"
+)
+# Middle level: budgeted by level 3, then reduced in its own SELECT list so each
+# level reports a different number and a mix-up cannot pass unnoticed.
+_LEVEL_2 = (
+    f"SELECT SUM(y) - 3 FROM {_TWO_ROWS} "
+    f"DECIDE y(INT) SUCH THAT y >= 0 AND SUM(y) <= ({_LEVEL_3}) MAXIMIZE SUM(y)"
+)
+
+
+def _oracle_chain(oracle_solver, levels) -> float:
+    """Solve a chain of two-variable maximizations independently, outermost last.
+
+    ``levels`` is one ``(upper_bound, cap, adjust)`` triple per level from the
+    inside out. Each level maximizes the sum of two integers bounded by
+    ``upper_bound``; ``cap`` is ``None`` for no sum constraint, the string
+    ``"budget"`` to reuse the previous level's result, or an explicit number. The
+    level then passes ``result + adjust`` outward, mirroring what its SELECT list
+    reports.
+    """
+    carried = None
+    for level, (ub, cap, adjust) in enumerate(levels):
+        oracle_solver.create_model(f"chain_{level}")
+        obj = {}
+        for i in (1, 2):
+            oracle_solver.add_variable(f"v{level}_{i}", VarType.INTEGER, lb=0.0, ub=ub)
+            obj[f"v{level}_{i}"] = 1.0
+        if cap is not None:
+            bound = carried if cap == "budget" else cap
+            oracle_solver.add_constraint(obj, "<=", bound, name=f"cap_{level}")
+        oracle_solver.set_objective(obj, ObjSense.MAXIMIZE)
+        carried = oracle_solver.solve().objective_value + adjust
+    return carried
+
+
+@pytest.mark.correctness
+@pytest.mark.sql_subquery
+def test_three_levels_of_decide_nesting(decidb_cli, oracle_solver, perf_tracker):
+    """A DECIDE subquery inside a DECIDE subquery. Two levels always planned; the
+    third is the level whose subquery was still unplanned at canonicalization."""
+    rows, _ = decidb_cli.execute(_outer(_LEVEL_2, trailing_when=False))
+    assert len(rows) == 2
+    # Level 3 caps at 4 each (8), level 2 carries 8 - 3 = 5, level 1 is budgeted
+    # by that with a slack cap of 9 each.
+    expected = _oracle_chain(
+        oracle_solver,
+        [(4.0, None, -3.0), (1e6, "budget", 0.0), (9.0, "budget", 0.0)],
+    )
+    assert abs(_objective(rows) - expected) < 1e-6, \
+        f"DecidB={_objective(rows)}, Oracle={expected}"
+
+
+@pytest.mark.correctness
+@pytest.mark.sql_subquery
+def test_plain_subquery_inside_a_nested_decide_constraint(decidb_cli, oracle_solver, perf_tracker):
+    """The same failure without a third DECIDE: an ordinary scalar subquery used as
+    a bound inside the *inner* clause is enough to trigger it."""
+    inner = (
+        f"SELECT SUM(y) FROM {_TWO_ROWS} DECIDE y(INT) SUCH THAT y >= 0 "
+        "AND SUM(y) <= (SELECT MAX(cap) FROM (VALUES (7)) c(cap)) MAXIMIZE SUM(y)"
+    )
+    rows, _ = decidb_cli.execute(_outer(inner, trailing_when=False))
+    assert len(rows) == 2
+    expected = _oracle_chain(oracle_solver, [(1e6, 7.0, 0.0), (9.0, "budget", 0.0)])
+    assert abs(_objective(rows) - expected) < 1e-6, \
+        f"DecidB={_objective(rows)}, Oracle={expected}"
+
+
+@pytest.mark.correctness
+@pytest.mark.sql_subquery
+def test_plain_subquery_inside_a_nested_decide_objective(decidb_cli, oracle_solver, perf_tracker):
+    """The objective passes through the same canonicalization boundary, so a
+    subquery scaling the inner objective has to be flattened there too."""
+    inner = (
+        f"SELECT SUM(y) FROM {_TWO_ROWS} DECIDE y(INT) SUCH THAT y >= 0 AND y <= 3 "
+        "MAXIMIZE SUM(y) * (SELECT MAX(k) FROM (VALUES (2)) s(k))"
+    )
+    rows, _ = decidb_cli.execute(_outer(inner, trailing_when=False))
+    assert len(rows) == 2
+    # Scaling a maximization by a positive constant does not move its argmax, so
+    # the inner clause still reports 6 and budgets the outer one at 6.
+    expected = _oracle_chain(oracle_solver, [(3.0, None, 0.0), (9.0, "budget", 0.0)])
+    assert abs(_objective(rows) - expected) < 1e-6, \
+        f"DecidB={_objective(rows)}, Oracle={expected}"

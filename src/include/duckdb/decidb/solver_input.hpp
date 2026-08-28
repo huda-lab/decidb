@@ -450,9 +450,21 @@ struct SolverInput {
     //! and would misstate the query under repair.
     //!
     //! A rewrite that changes what a constraint means depending on a bound must
-    //! therefore read these, not the box above. A Big-M constant may read either: it
-    //! only has to dominate, and a loosened bound makes it conservative rather than
-    //! wrong. Size = num_decide_vars.
+    //! therefore read these, not the box above — the `<>` range classifier
+    //! (`ClassifyNEConstraint`, `DecideRowSignedRange`) is the case in point: it decides
+    //! whether a disjunct is dead, and that verdict must not turn on a bound a repair
+    //! may lift.
+    //!
+    //! A *constant* — a Big-M, a McCormick envelope — is a third case that is neither of
+    //! these, and reading it as one or the other is how this went wrong. It may not read
+    //! the rigid box: that box is open wherever the user supplied the only finite bound,
+    //! and no finite constant dominates an open column, so the query would be refused
+    //! rather than encoded. Nor is it safe against a widened box, as an earlier version
+    //! of this comment claimed ("a loosened bound makes it conservative rather than
+    //! wrong") — that holds only while the box stays put. Under diagnosis the box is
+    //! re-opened *after* the constant is baked, and the stale constant then caps the
+    //! repair the engine is allowed to find. A constant belongs to the box it was
+    //! derived from; see `FormulationBox` below. Size = num_decide_vars.
     vector<double> rigid_lower_bounds;
     vector<double> rigid_upper_bounds;
 
@@ -609,6 +621,40 @@ struct SolverInput {
     //! as a least-change edit instead of dying with the static "conflicting bounds" error.
     //! Off by default: the fast build-time infeasible throw is kept for non-diagnosis solves.
     bool tolerate_infeasible_bounds = false;
+};
+
+//! The column box a derived constant is valid against.
+//!
+//! A Big-M or a McCormick envelope bakes a bound into a constraint's *structure*, so it
+//! is sound only for the box it was derived from: widen that box afterwards and the
+//! constant silently caps the model at the old bound. Nothing in the model records which
+//! box a constant assumed, which is why the three constant-deriving sites used to reach
+//! into `SolverInput::lower_bounds` ambiently — a box they happened to share with the
+//! solved model by coincidence of call order, not by contract.
+//!
+//! This names that dependency. Every site that derives such a constant takes the box
+//! explicitly, so "which box is this constant valid for?" has an answer at the call site.
+//!
+//! `OfSolvedModel(input)` is the box the solved model declares — the intrinsic domain,
+//! user bounds absorbed by stage 05, and implied tightenings. It is exactly what those
+//! sites read before, so threading it through changes no constant.
+//!
+//! `OfSolvedModel` is also how the SECOND formulation names its box. A diagnosis widens
+//! the absorbed bounds and re-runs `PhysicalDecide::FormulateModel` on a copy of the
+//! input, so every constant is derived against the box the repair actually searches
+//! rather than inherited from the narrower one. That widening is bounded on purpose: no
+//! finite Big-M dominates an open column, so a fully re-opened box does not lose
+//! precision, it refuses the query.
+struct FormulationBox {
+    const vector<double> &lower;        //!< per decide variable, indexed as `SolverInput::lower_bounds`
+    const vector<double> &upper;
+    const vector<double> &global_lower; //!< per global variable
+    const vector<double> &global_upper;
+
+    static FormulationBox OfSolvedModel(const SolverInput &input) {
+        return {input.lower_bounds, input.upper_bounds, input.global_lower_bounds,
+                input.global_upper_bounds};
+    }
 };
 
 } // namespace duckdb

@@ -87,8 +87,21 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             }
         }
 
+        // Flatten now, even when this select node is itself being planned inside an
+        // outer subquery's flattening. Ordinary clauses tolerate PlanSubqueries'
+        // `is_outside_flattened` deferral because nothing reads their expressions
+        // again until RecursiveDependentJoinPlanner has peeled the outer subquery.
+        // A DECIDE clause does: canonicalization runs a few lines below, in this same
+        // CreatePlan, and copies the constraint tree -- and copying a
+        // BoundSubqueryExpression throws. Deferring here therefore fails any subquery
+        // written inside a nested DECIDE, whether that subquery is itself a DECIDE or
+        // a plain SELECT. Layer 4's input contract is a subquery-free bound tree, so
+        // the flattening is not optional at this point.
+        const bool outer_flatten_state = is_outside_flattened;
+        is_outside_flattened = true;
         PlanSubqueries(statement.decide_constraints, root);
         PlanSubqueries(statement.decide_objective, root);
+        is_outside_flattened = outer_flatten_state;
 
         // Read back what every scalar subquery became. The table-index sets give the
         // strict canonicalizer its planning-time evidence. The expression tags carry

@@ -2262,6 +2262,175 @@ class TestRepairsTheModelCanReach:
             }
         assert_backends_agree(by_backend, "ABS over a boxed decision")
 
+    #: Each case carries a WITNESS repair: a single edit, verified by a real solve, that
+    #: restores feasibility on its own. It is not the expected answer — it is a floor. A
+    #: diagnosis is allowed to offer a different repair, but not one that pays less than a
+    #: repair anyone could have found by hand, because "here is a smaller edit that gets
+    #: you further" is the whole product.
+    #:
+    #: The five cases of the retained-constants table. Three rows, `x` boxed to [0, 5],
+    #: and a clause whose repair needs that box to move. The first two are controls with
+    #: no Big-M and no envelope at all; the last three each go through a construct whose
+    #: constant is derived from the box — a lowered `<>`, an L0 `norm`, a McCormick
+    #: product — and so each is a way for the repair to be capped at the box it was
+    #: supposed to widen. `contrib` is projected so the promised payoff can be oracled
+    #: against a real re-solve instead of a hand-computed number.
+    _WIDENING_CASES = {
+        "control, one box width": (
+            "SELECT id, x AS contrib FROM (VALUES (1),(2),(3)) t(id) "
+            "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 30 "
+            "MAXIMIZE SUM(x)", {}, ("x <= 5", "x <= 10"),
+        ),
+        "control, three box widths": (
+            "SELECT id, x AS contrib FROM (VALUES (1),(2),(3)) t(id) "
+            "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 60 "
+            "MAXIMIZE SUM(x)", {}, ("x <= 5", "x <= 20"),
+        ),
+        "through a <> disjunction": (
+            "SELECT id, x AS contrib FROM (VALUES (1),(2),(3)) t(id) "
+            "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND x <> 3 AND SUM(x) >= 60 "
+            "MAXIMIZE SUM(x)", {}, ("x <= 5", "x <= 20"),
+        ),
+        "through an L0 norm": (
+            "SELECT id, x AS contrib FROM (VALUES (1),(2),(3)) t(id) "
+            "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND norm(x, 0) <= 2 "
+            "AND SUM(x) >= 30 MAXIMIZE SUM(x)",
+            {"NORM(x, 0) <= 2": "norm(x, 0) <= 2"}, ("x <= 5", "x <= 15"),
+        ),
+        "through a McCormick envelope": (
+            "SELECT id, c * b * x AS contrib FROM (VALUES (1,1.0),(2,1.0),(3,1.0)) t(id,c) "
+            "DECIDE b(BOOL), x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(b * x) >= 30 "
+            "MAXIMIZE SUM(c * b * x)", {}, ("x <= 5", "x <= 10"),
+        ),
+    }
+
+    @pytest.mark.parametrize("case", sorted(_WIDENING_CASES))
+    def test_widening_advice_does_not_depend_on_the_backend(
+        self, request, case, decidb_cli_gurobi, decidb_cli_highs
+    ):
+        """The sharpest available oracle for a stale constant: whether the two hosts
+        agree. A constant baked at the unrepaired box caps the repair, and the two
+        backends do not bake the same ones — Gurobi states `<>` natively and derives no
+        Big-M for it, HiGHS lowers it and derives one — so a capped repair shows up as
+        the same query being told two different things. Deriving the constants against
+        the box the repair actually searches is what makes the two answers one."""
+        sql, _, _ = self._WIDENING_CASES[case]
+        arms = {
+            "gurobi (native)": decidb_cli_gurobi,
+            "gurobi (lowered)": decidb_cli_gurobi.with_env(
+                {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+            "highs": decidb_cli_highs,
+        }
+        by_backend = {}
+        for label, runner in arms.items():
+            rows = _rows(_diagnose(runner, sql))
+            by_backend[label] = {
+                "edits": _clause_edits(rows),
+                "achievable_objective": _attrs(rows, "model", "NULL").get(
+                    "achievable_objective"),
+            }
+        assert_backends_agree(by_backend, f"a repair that widens the box — {case}")
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize("case", sorted(_WIDENING_CASES))
+    def test_the_widened_payoff_survives_a_re_solve(self, request, case, cli_fixture):
+        """The promised payoff has to be one the repaired query actually delivers.
+
+        This is what a stale constant gets wrong quietly: the repair it offers is valid
+        (applying it does make the query solve), so only the number is off — the engine
+        reports what the capped model could reach rather than what the widened one can.
+        Re-solving the edited query is the only check that catches that, and it needs no
+        hand-computed answer."""
+        sql, subject_to_sql, _ = self._WIDENING_CASES[case]
+        cli = request.getfixturevalue(cli_fixture)
+        rows = _rows(_diagnose(cli, sql))
+        reported = _attrs(rows, "model", "NULL")["achievable_objective"]
+        fixed_sql = _apply_reported_fix(cli, sql, rows, subject_to_sql)
+        solved = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert float(reported) == pytest.approx(
+            sum(float(r["contrib"]) for r in solved)), (
+            f"promised {reported} for:\n{fixed_sql}\n{solved}")
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize("case", sorted(_WIDENING_CASES))
+    def test_the_repair_is_not_beaten_by_a_witness(self, request, case, cli_fixture):
+        """A repair capped at the box it was meant to widen is still a VALID repair —
+        apply it and the query solves — so nothing about the edited query catches it.
+        What catches it is a second repair that anyone could write down, solved for real:
+        if that one reaches further, the diagnosis left value on the table and reported a
+        payoff smaller than the query can actually deliver.
+
+        This is the only check here that covers the McCormick row. Both backends lower a
+        product the same way, so both were wrong by the same amount and agreed with each
+        other while doing it."""
+        sql, _, (before, after) = self._WIDENING_CASES[case]
+        cli = request.getfixturevalue(cli_fixture)
+
+        assert before in sql, f"witness edit {before!r} is not in:\n{sql}"
+        witness_sql = sql.replace(before, after, 1)
+        witness = cli.execute_script(".mode csv\n" + witness_sql + ";\n")
+        witness_rows = list(csv.DictReader(io.StringIO(witness.stdout)))
+        assert witness_rows, (
+            f"the witness repair does not solve, so it cannot bound anything:\n"
+            f"{witness_sql}\n{witness.stderr}")
+        witness_objective = sum(float(r["contrib"]) for r in witness_rows)
+
+        rows = _rows(_diagnose(cli, sql))
+        reported = float(_attrs(rows, "model", "NULL")["achievable_objective"])
+        assert reported >= witness_objective - 1e-6 * max(1.0, abs(witness_objective)), (
+            f"the diagnosis promises {reported}, but `{before}` → `{after}` alone reaches "
+            f"{witness_objective}:\n{sql}\n{rows}")
+
+    #: One large-coefficient row beside a small repairable one. The repair is `x <= 7`,
+    #: an edit of 2, while the model's own scale is ~1e8 — so any noise floor taken from
+    #: the model rather than from the repair erases it.
+    _SMALL_EDIT_SQL = (
+        "SELECT id, x AS contrib FROM (VALUES (1,1000000.0),(2,1000000.0),(3,1000000.0)) t(id,big) "
+        "DECIDE x(INT) SUCH THAT x >= 0 AND x <= 5 AND SUM(big * x) <= 100000000 "
+        "AND SUM(x) >= 20 MAXIMIZE SUM(x)"
+    )
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_small_edit_survives_beside_a_large_coefficient_row(self, request, cli_fixture):
+        """Widening the box costs conditioning, so the readback has to tell a backend's
+        rounding noise from a real edit. It must do that relative to the REPAIR and never
+        relative to the model: here the repair is two units and the model's scale is a
+        hundred million, and a floor derived from the latter reports "no loosening
+        restores feasibility" about a query that is one `x <= 7` away from solving."""
+        cli = request.getfixturevalue(cli_fixture)
+        rows = _rows(_diagnose(cli, self._SMALL_EDIT_SQL))
+        edits = _clause_edits(rows)
+        assert edits, f"the repair was filtered away as noise:\n{rows}"
+        reported = float(_attrs(rows, "model", "NULL")["achievable_objective"])
+        fixed_sql = _apply_reported_fix(cli, self._SMALL_EDIT_SQL, rows)
+        solved = list(csv.DictReader(io.StringIO(
+            cli.execute_script(".mode csv\n" + fixed_sql + ";\n").stdout)))
+        assert reported == pytest.approx(sum(float(r["contrib"]) for r in solved))
+
+    #: Two independent conflicts in one query, four orders of magnitude apart. Both halves
+    #: have to be reported: applying one without the other leaves the query infeasible.
+    _MIXED_SCALE_SQL = (
+        "SELECT id, x, y FROM (VALUES (1)) t(id) DECIDE x(REAL), y(REAL) "
+        "SUCH THAT x <= 0.001 AND x >= 0.002 AND y <= 1 AND y >= 20000 "
+        "MAXIMIZE SUM(x + y)"
+    )
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_a_repair_spanning_four_orders_of_magnitude_keeps_both_halves(
+        self, request, cli_fixture
+    ):
+        """The noise floor that separates a real edit from a backend's rounding has to be
+        absolute. Measured against the largest edit in the same repair, the `x <= 0.001`
+        half of this one is five orders of magnitude down and gets read as noise — and the
+        `y` edit alone does not restore feasibility, so the user is handed a repair that
+        does not work. `_apply_reported_fix` re-solves, which is what catches it."""
+        cli = request.getfixturevalue(cli_fixture)
+        rows = _rows(_diagnose(cli, self._MIXED_SCALE_SQL))
+        subjects = sorted(e["subject"] for e in _clause_edits(rows))
+        assert subjects == ["x <= 0.001", "y <= 1"], rows
+        _apply_reported_fix(cli, self._MIXED_SCALE_SQL, rows)
+
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_the_reported_repair_is_the_one_worth_more(self, request, cli_fixture):
         """Of the two equally small repairs, the reported one is the better repair —
