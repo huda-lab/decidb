@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/solver_registry.hpp
+// duckdb/decidb/solver/solver_registry.hpp
 //
 // The set of solver backends DeciDB can run, and the handle the rest of the
 // pipeline passes around to name one of them.
@@ -11,7 +11,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/decidb/solver_capabilities.hpp"
+#include "duckdb/decidb/solver/solver_capabilities.hpp"
 
 namespace duckdb {
 

@@ -1,7 +1,7 @@
 #include "catch.hpp"
 
-#include "duckdb/decidb/decide_diagnostic_engines.hpp"
-#include "duckdb/decidb/ilp_solver.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp"
+#include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb.hpp"
 
 using namespace duckdb;

@@ -1,6 +1,6 @@
 #include "catch.hpp"
 
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 
 #include <set>
 

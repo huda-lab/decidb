@@ -1,8 +1,8 @@
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"

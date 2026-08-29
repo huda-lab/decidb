@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/diagnostic_solves.hpp
+// duckdb/decidb/solver/probe_models.hpp
 //
 // Helpers for diagnostic re-solves over prepared SolverModel objects.
 //
@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
 
 namespace duckdb {
 

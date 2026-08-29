@@ -1,4 +1,4 @@
-#include "duckdb/decidb/ilp_linearization.hpp"
+#include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/common/exception.hpp"
 
 #include <algorithm>

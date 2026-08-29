@@ -1,8 +1,8 @@
 #pragma once
 
-#include "duckdb/decidb/solver_capabilities.hpp"
-#include "duckdb/decidb/solver_input.hpp"
-#include "duckdb/decidb/solver_result.hpp"
+#include "duckdb/decidb/solver/solver_capabilities.hpp"
+#include "duckdb/decidb/solver/solver_input.hpp"
+#include "duckdb/decidb/solver/solver_result.hpp"
 
 namespace duckdb {
 

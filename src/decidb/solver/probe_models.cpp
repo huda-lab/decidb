@@ -1,6 +1,6 @@
-#include "duckdb/decidb/diagnostic_solves.hpp"
+#include "duckdb/decidb/solver/probe_models.hpp"
 
-#include "duckdb/decidb/diagnostic_constants.hpp"
+#include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
 
 #include <utility>
 

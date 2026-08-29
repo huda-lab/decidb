@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/solver_input.hpp
+// duckdb/decidb/solver/solver_input.hpp
 //
 // Solver-agnostic input structs for the DECIDE optimization formulation.
 // These are built by physical_decide.cpp and consumed by the solver facade.
@@ -14,7 +14,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
-#include "duckdb/decidb/solver_capabilities.hpp"
+#include "duckdb/decidb/solver/solver_capabilities.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/planner/expression.hpp"
 

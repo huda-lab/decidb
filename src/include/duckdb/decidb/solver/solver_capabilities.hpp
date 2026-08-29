@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/solver_capabilities.hpp
+// duckdb/decidb/solver/solver_capabilities.hpp
 //
 // What one solver backend can be asked to do. Read by the stages ABOVE the
 // solver facade — never by the backend itself, which knows its own answers.

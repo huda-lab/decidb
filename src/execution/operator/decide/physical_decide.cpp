@@ -15,13 +15,13 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
-#include "duckdb/decidb/ilp_solver.hpp"
-#include "duckdb/decidb/ilp_model.hpp"
-#include "duckdb/decidb/ilp_linearization.hpp"
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/solver/ilp_solver.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
+#include "duckdb/decidb/formulation/ilp_linearization.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/decidb/decide_diagnostic_engines.hpp"
-#include "duckdb/decidb/decide_router.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp"
+#include "duckdb/decidb/diagnostics/decide_router.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -37,7 +37,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
-#include "duckdb/decidb/solver_config.hpp"
+#include "duckdb/decidb/solver/solver_config.hpp"
 #include <sys/resource.h>
 #include <unistd.h>  // isatty / STDIN_FILENO — interactive-terminal check for the slow-solve prompt
 #include <iostream>  // std::cin / std::getline — read the continuation decision at a time-limit stop

@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/ilp_linearization.hpp
+// duckdb/decidb/formulation/ilp_linearization.hpp
 //
 // Stage 06 — linearization of the evaluated decision problem.
 //
@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
 #include <cmath>

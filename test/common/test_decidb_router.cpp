@@ -1,6 +1,6 @@
 #include "catch.hpp"
 
-#include "duckdb/decidb/decide_router.hpp"
+#include "duckdb/decidb/diagnostics/decide_router.hpp"
 
 #include <utility>
 

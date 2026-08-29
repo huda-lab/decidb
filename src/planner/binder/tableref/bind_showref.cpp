@@ -10,7 +10,7 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/decide/logical_decide_diagnose.hpp"
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 
 namespace duckdb {

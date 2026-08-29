@@ -1,7 +1,7 @@
 #include "catch.hpp"
 
-#include "duckdb/decidb/diagnostic_solves.hpp"
-#include "duckdb/decidb/ilp_solver.hpp"
+#include "duckdb/decidb/solver/probe_models.hpp"
+#include "duckdb/decidb/solver/ilp_solver.hpp"
 
 #include <cmath>
 #include <utility>

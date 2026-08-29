@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/decide_diagnostic_engines.hpp
+// duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp
 //
 // Diagnosis engine orchestration for DECIDE failure states. Engines are kept
 // outside PhysicalDecide so new states can attach without growing the operator.
@@ -10,8 +10,8 @@
 
 #pragma once
 
-#include "duckdb/decidb/decide_diagnostic.hpp"
-#include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
 
 #include <functional>
 #include <set>

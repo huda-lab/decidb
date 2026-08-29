@@ -20,7 +20,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 
 namespace duckdb {

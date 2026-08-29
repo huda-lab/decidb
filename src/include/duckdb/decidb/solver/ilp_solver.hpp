@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/ilp_solver.hpp
+// duckdb/decidb/solver/ilp_solver.hpp
 //
 // Single entry point for optimization solving. Builds a SolverModel from
 // SolverInput, selects the best available backend (Gurobi > HiGHS), and
@@ -11,11 +11,11 @@
 
 #pragma once
 
-#include "duckdb/decidb/solver_input.hpp"
-#include "duckdb/decidb/ilp_model.hpp"
-#include "duckdb/decidb/solver_registry.hpp"
-#include "duckdb/decidb/solver_result.hpp"
-#include "duckdb/decidb/solver_session.hpp"
+#include "duckdb/decidb/solver/solver_input.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
+#include "duckdb/decidb/solver/solver_registry.hpp"
+#include "duckdb/decidb/solver/solver_result.hpp"
+#include "duckdb/decidb/solver/solver_session.hpp"
 
 namespace duckdb {
 

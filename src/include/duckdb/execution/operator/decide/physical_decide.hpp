@@ -7,9 +7,9 @@
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
-#include "duckdb/decidb/ilp_model.hpp"
-#include "duckdb/decidb/ilp_linearization.hpp"
-#include "duckdb/decidb/solver_registry.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
+#include "duckdb/decidb/formulation/ilp_linearization.hpp"
+#include "duckdb/decidb/solver/solver_registry.hpp"
 #include <unordered_map>
 
 namespace duckdb {

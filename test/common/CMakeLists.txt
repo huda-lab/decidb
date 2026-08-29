@@ -6,7 +6,7 @@ add_library_unity(
   test_decidb_canonical_verifier.cpp
   test_decidb_constraint_provenance.cpp
   test_decidb_diagnostic_engines.cpp
-  test_decidb_diagnostic_solves.cpp
+  test_decidb_probe_models.cpp
   test_decidb_escape_characterization.cpp
   test_decidb_plan_serialization.cpp
   test_decidb_router.cpp

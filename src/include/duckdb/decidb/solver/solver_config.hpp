@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/solver_config.hpp
+// duckdb/decidb/solver/solver_config.hpp
 //
 // Solver-agnostic run-time configuration shared by every DECIDE solve, applied
 // identically across both backends (Gurobi / HiGHS). Centralizing it here is the

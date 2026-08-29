@@ -1,6 +1,6 @@
 #include "duckdb/planner/operator/decide/logical_decide_diagnose.hpp"
 
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 
 namespace duckdb {
 

@@ -9,8 +9,8 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/decidb/solver_capabilities.hpp"
-#include "duckdb/decidb/solver_result.hpp"
+#include "duckdb/decidb/solver/solver_capabilities.hpp"
+#include "duckdb/decidb/solver/solver_result.hpp"
 
 namespace duckdb {
 

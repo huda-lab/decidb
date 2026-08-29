@@ -1,4 +1,4 @@
-#include "duckdb/decidb/ilp_model.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/common/exception.hpp"
 
 #include <algorithm>

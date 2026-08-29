@@ -1,10 +1,10 @@
-#include "duckdb/decidb/solver_registry.hpp"
+#include "duckdb/decidb/solver/solver_registry.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
-#include "duckdb/decidb/solver_session.hpp"
+#include "duckdb/decidb/solver/solver_session.hpp"
 
 #include <cstdlib>
 

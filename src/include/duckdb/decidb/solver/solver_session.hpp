@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/solver_session.hpp
+// duckdb/decidb/solver/solver_session.hpp
 //
 // A persistent, resumable solver handle. Where SolvePreparedModel is a single
 // shot (build → solve → discard), a SolverSession keeps the live backend solver
@@ -21,7 +21,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/decidb/solver_result.hpp"
+#include "duckdb/decidb/solver/solver_result.hpp"
 
 #include <functional>
 

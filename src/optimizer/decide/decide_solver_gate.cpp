@@ -4,8 +4,8 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/decidb/ilp_solver.hpp"
-#include "duckdb/decidb/solver_registry.hpp"
+#include "duckdb/decidb/solver/ilp_solver.hpp"
+#include "duckdb/decidb/solver/solver_registry.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {

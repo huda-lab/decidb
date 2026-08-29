@@ -1,8 +1,8 @@
 #include "catch.hpp"
 
-#include "duckdb/decidb/ilp_solver.hpp"
+#include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/decidb/solver_registry.hpp"
+#include "duckdb/decidb/solver/solver_registry.hpp"
 
 #include <cstdlib>
 #include <string>

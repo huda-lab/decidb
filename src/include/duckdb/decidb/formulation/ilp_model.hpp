@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/ilp_model.hpp
+// duckdb/decidb/formulation/ilp_model.hpp
 //
 // Solver-agnostic optimization model representation. Built once from
 // SolverInput, consumed by any solver backend (HiGHS, Gurobi, etc.).
@@ -12,8 +12,8 @@
 #pragma once
 
 #include "duckdb/common/exception.hpp"
-#include "duckdb/decidb/solver_capabilities.hpp"
-#include "duckdb/decidb/solver_input.hpp"
+#include "duckdb/decidb/solver/solver_capabilities.hpp"
+#include "duckdb/decidb/solver/solver_input.hpp"
 
 #include <cmath>
 

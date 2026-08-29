@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/decide_router.hpp
+// duckdb/decidb/diagnostics/decide_router.hpp
 //
 // The query-diagnostics router: the single post-solve dispatch spine. It is a
 // pure classifier — given the solve result and whether the statement carried the
@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include "duckdb/decidb/solver_result.hpp"
+#include "duckdb/decidb/solver/solver_result.hpp"
 
 namespace duckdb {
 

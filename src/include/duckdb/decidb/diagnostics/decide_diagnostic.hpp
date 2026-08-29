@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/decide_diagnostic.hpp
+// duckdb/decidb/diagnostics/decide_diagnostic.hpp
 //
 // The shared, structured diagnostic reporting surface. A state engine (unbounded or
 // infeasible) populates a DecideDiagnostic, the DECIDE operator places it in a
@@ -15,7 +15,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/decidb/solver_result.hpp"
+#include "duckdb/decidb/solver/solver_result.hpp"
 #include "duckdb/main/client_context_state.hpp"
 
 #include <set>

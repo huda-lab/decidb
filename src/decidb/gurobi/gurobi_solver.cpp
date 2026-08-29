@@ -1,9 +1,9 @@
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
-#include "duckdb/decidb/ilp_model.hpp"
-#include "duckdb/decidb/solver_session.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
+#include "duckdb/decidb/solver/solver_session.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/gurobi/gurobi_loader.hpp"
-#include "duckdb/decidb/diagnostic_constants.hpp"
+#include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
 
 #include <atomic>
 #include <cstdlib>

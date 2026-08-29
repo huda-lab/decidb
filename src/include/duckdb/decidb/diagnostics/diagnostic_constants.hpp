@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/diagnostic_constants.hpp
+// duckdb/decidb/diagnostics/diagnostic_constants.hpp
 //
 // Shared numeric thresholds for the diagnostic re-solve / unbounded-ray path.
 // These were previously redefined per-file; they must agree for the box-LP

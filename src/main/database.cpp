@@ -1,7 +1,7 @@
 #include "duckdb/main/database.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/virtual_file_system.hpp"
 #include "duckdb/execution/index/index_type_set.hpp"
 #include "duckdb/execution/operator/helper/physical_set.hpp"

@@ -5,7 +5,7 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/decidb/ilp_solver.hpp"
+#include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"

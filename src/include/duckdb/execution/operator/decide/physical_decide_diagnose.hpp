@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 
 namespace duckdb {

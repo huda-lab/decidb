@@ -1,8 +1,8 @@
-#include "duckdb/decidb/decide_diagnostic_engines.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp"
 
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/enums/decide.hpp"
-#include "duckdb/decidb/diagnostic_constants.hpp"
+#include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
 
 #include <cmath>
 #include <cstdio>

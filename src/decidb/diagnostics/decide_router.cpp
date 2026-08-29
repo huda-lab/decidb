@@ -8,9 +8,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "duckdb/decidb/decide_router.hpp"
+#include "duckdb/decidb/diagnostics/decide_router.hpp"
 
-#include "duckdb/decidb/decide_diagnostic.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 
 namespace duckdb {
 

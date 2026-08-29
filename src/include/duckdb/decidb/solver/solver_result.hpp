@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/solver_result.hpp
+// duckdb/decidb/solver/solver_result.hpp
 //
 // Structured result returned by the solver backends and the SolveModel facade.
 // Carries the solver status (so callers can branch on the outcome instead of
