@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   decide_binder.cpp
   decide_constraints_binder.cpp
+  decide_declarations_binder.cpp
   decide_degree.cpp
   decide_objective_binder.cpp)
 set(ALL_OBJECT_FILES
