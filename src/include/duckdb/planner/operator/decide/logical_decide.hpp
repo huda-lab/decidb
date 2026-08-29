@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/planner/operator/logical_decide.hpp
+// duckdb/planner/operator/decide/logical_decide.hpp
 //
 //
 //===----------------------------------------------------------------------===//

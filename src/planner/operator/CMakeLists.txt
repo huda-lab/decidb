@@ -1,3 +1,5 @@
+add_subdirectory(decide)
+
 add_library_unity(
   duckdb_planner_operator
   OBJECT
@@ -12,8 +14,6 @@ add_library_unity(
   logical_create_table.cpp
   logical_cross_product.cpp
   logical_cteref.cpp
-  logical_decide.cpp
-  logical_decide_diagnose.cpp
   logical_delete.cpp
   logical_delim_get.cpp
   logical_dependent_join.cpp

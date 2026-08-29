@@ -1,4 +1,4 @@
-#include "duckdb/optimizer/decide_optimizer.hpp"
+#include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 
@@ -6,7 +6,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/optimizer/decide_solver_gate.hpp"
+#include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -19,7 +19,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 

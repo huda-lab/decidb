@@ -9,7 +9,7 @@
 #include "duckdb/planner/operator/logical_create_index.hpp"
 #include "duckdb/planner/operator/logical_extension_operator.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 

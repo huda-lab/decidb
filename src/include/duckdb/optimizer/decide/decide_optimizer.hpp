@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/optimizer/decide_optimizer.hpp
+// duckdb/optimizer/decide/decide_optimizer.hpp
 //
 //
 //===----------------------------------------------------------------------===//
@@ -9,7 +9,7 @@
 #pragma once
 
 #include "duckdb/planner/logical_operator.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 

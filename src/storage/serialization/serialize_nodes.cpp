@@ -36,7 +36,7 @@
 #include "duckdb/parser/parsed_data/exported_table_data.hpp"
 #include "duckdb/common/column_index.hpp"
 #include "duckdb/common/enums/decide.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
 
 namespace duckdb {

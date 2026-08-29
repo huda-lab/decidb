@@ -1,6 +1,6 @@
 #include "duckdb/execution/operator/decide/physical_decide_diagnose.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
-#include "duckdb/planner/operator/logical_decide_diagnose.hpp"
+#include "duckdb/planner/operator/decide/logical_decide_diagnose.hpp"
 
 namespace duckdb {
 

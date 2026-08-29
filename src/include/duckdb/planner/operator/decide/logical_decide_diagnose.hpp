@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/planner/operator/logical_decide_diagnose.hpp
+// duckdb/planner/operator/decide/logical_decide_diagnose.hpp
 //
 //
 //===----------------------------------------------------------------------===//

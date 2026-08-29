@@ -1,4 +1,4 @@
-#include "duckdb/optimizer/decide_solver_gate.hpp"
+#include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 
 #include <algorithm>
 
@@ -6,7 +6,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/decidb/solver_registry.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 

@@ -1,5 +1,5 @@
 // src/planner/operator/logical_decide.cpp
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"

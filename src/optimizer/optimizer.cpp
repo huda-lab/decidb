@@ -33,7 +33,7 @@
 #include "duckdb/optimizer/topn_optimizer.hpp"
 #include "duckdb/optimizer/unnest_rewriter.hpp"
 #include "duckdb/optimizer/late_materialization.hpp"
-#include "duckdb/optimizer/decide_optimizer.hpp"
+#include "duckdb/optimizer/decide/decide_optimizer.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"

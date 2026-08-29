@@ -1,4 +1,4 @@
-#include "duckdb/optimizer/decide_linear_form.hpp"
+#include "duckdb/optimizer/decide/decide_linear_form.hpp"
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -16,7 +16,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 #include <functional>
 #include <unordered_map>

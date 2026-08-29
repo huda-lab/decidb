@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/optimizer/decide_solver_gate.hpp
+// duckdb/optimizer/decide/decide_solver_gate.hpp
 //
 // Stage 05's solver decisions, in the order they are made: which backend runs
 // this query, which constructs are left for it to state natively, and — once the

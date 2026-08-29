@@ -11,7 +11,7 @@
 #include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp" // Required for NotImplementedException
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 

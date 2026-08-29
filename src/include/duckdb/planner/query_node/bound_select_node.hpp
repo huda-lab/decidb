@@ -17,7 +17,7 @@
 #include "duckdb/planner/expression_binder/select_bind_state.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 

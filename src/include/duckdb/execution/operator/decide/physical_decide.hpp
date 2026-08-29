@@ -4,7 +4,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/planner/expression.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/decidb/ilp_model.hpp"

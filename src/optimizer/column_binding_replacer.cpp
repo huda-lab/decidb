@@ -1,7 +1,7 @@
 #include "duckdb/optimizer/column_binding_replacer.hpp"
 
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 

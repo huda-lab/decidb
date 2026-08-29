@@ -6,7 +6,7 @@
 #include "duckdb/common/serializer/memory_stream.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
-#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 using namespace duckdb;
 
