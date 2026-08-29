@@ -58,10 +58,8 @@ struct VarIndexer {
     vector<idx_t> scalar_slot_var;  //!< position within the scalar block → var_idx
     vector<idx_t> entity_block_var; //!< entity-scoped var_idx, ascending by base
 
-    //! Pointer to entity mappings (not owned — caller ensures lifetime)
-    const vector<EntityMapping> *entity_mappings_ref = nullptr;
-    //! Owned copy of entity mappings (used when VarIndexer must outlive its source)
-    vector<EntityMapping> entity_mappings_owned;
+    //! Owned entity mappings. The indexer can therefore outlive its SolverInput.
+    vector<EntityMapping> entity_mappings;
 
     //! Get the flat solver variable index for a given decide variable at a given row.
     //! A scalar variable ignores `row` — every row resolves to the same column.
@@ -72,8 +70,7 @@ struct VarIndexer {
         case DecideVarScope::SCALAR:
             return scalar_var_index[var_idx];
         default: {
-            auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
-            auto &mapping = mappings[var_entity_mapping_idx[var_idx]];
+            auto &mapping = entity_mappings[var_entity_mapping_idx[var_idx]];
             idx_t entity_id = mapping.row_to_entity[row];
             return entity_var_base[var_idx] + entity_id;
         }
@@ -103,8 +100,7 @@ struct VarIndexer {
         case DecideVarScope::SCALAR:
             return 1;
         default: {
-            auto &mappings = entity_mappings_ref ? *entity_mappings_ref : entity_mappings_owned;
-            return mappings[var_entity_mapping_idx[var_idx]].num_entities;
+            return entity_mappings[var_entity_mapping_idx[var_idx]].num_entities;
         }
         }
     }
@@ -118,14 +114,9 @@ struct VarIndexer {
     //! NAME; without this it could only say "some variable is unbounded".
     idx_t OwnerOf(idx_t col) const;
 
-    //! Build a VarIndexer that OWNS a copy of entity_mappings.
+    //! Build a VarIndexer that owns a copy of entity_mappings.
     //! Safe to use after the SolverInput is destroyed (e.g., stored on gstate for readback).
     static VarIndexer Build(const SolverInput &input);
-
-    //! Build a VarIndexer that REFERENCES entity_mappings without copying.
-    //! Caller must ensure the SolverInput outlives this VarIndexer.
-    //! Used for temporary indexers (pre_indexer, model builder).
-    static VarIndexer BuildRef(const SolverInput &input);
 };
 
 class DecideInfeasibleModelException : public Exception {

@@ -25,6 +25,10 @@ struct ConstraintSourceInfo {
 	//! Canonical user-facing pieces after canonicalization.
 	string canonical_lhs;
 	string canonical_rhs;
+	//! The comparison operator after canonicalization. Stored beside the two sides
+	//! because canonicalization may flip it when it moves a term across the relation,
+	//! and a plan that shows the canonical layer has to show the flipped operator too.
+	string canonical_cmp;
 	string qualifier;
 	ConstraintSourceRhsKind rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
 	//! The clause as WRITTEN, captured before canonicalization moved anything.
@@ -44,6 +48,21 @@ struct ConstraintSourceInfo {
 	//! Empty when the source and canonical forms agree, which is the common case.
 	string source_lhs;
 	string source_rhs;
+
+	//! The clause exactly as WRITTEN, recorded unconditionally for plan display.
+	//!
+	//! `source_lhs`/`source_rhs` above answer a narrower question -- "should a repair
+	//! quote the written form instead of the canonical one?" -- so they are populated
+	//! only for the one rewrite a user cannot recognize, and cleared again when the
+	//! two forms agree. EXPLAIN needs the opposite: the written spelling for EVERY
+	//! clause, so a plan can show what became of it. Rendered once in
+	//! `InitializeConstraintSourceInfo` and assigned to both, since it is one
+	//! spelling serving two readers rather than two concepts.
+	string written_lhs;
+	string written_rhs;
+	//! The comparison operator as written (`<=`, `>=`, `=`, `<>`). Kept beside the
+	//! two sides because canonicalization may flip it along with them.
+	string written_cmp;
 };
 
 } // namespace duckdb

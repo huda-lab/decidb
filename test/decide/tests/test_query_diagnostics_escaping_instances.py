@@ -13,6 +13,9 @@ Cases are constructed so the escaping slice is known by construction, and the co
 slice are asserted directly. Runs under both backends.
 """
 
+import csv
+import io
+
 import pytest
 
 from solver.types import ObjSense, SolverStatus, VarType
@@ -30,6 +33,17 @@ def _diagnose(cli, decide_sql, setup="", extra_pragmas=""):
 
 def _rows(result):
     return _diagnose_relation.rows(result)
+
+
+def _remedy(rows, variable):
+    """The prescribed `suggested_change`, which every finding for a variable shares."""
+    changes = {
+        r["suggested_change"]
+        for r in rows
+        if r["clause"] == variable and (r["edit_source"] or "").startswith("runaway_")
+    }
+    assert len(changes) == 1, f"remedy for {variable} is not single-valued: {changes}"
+    return changes.pop()
 
 
 def _escape(rows, variable):
@@ -313,3 +327,242 @@ class TestEscapingInstances:
         result = cli.execute_raw(f"PRAGMA {pragma}={value};")
         combined = (result.stderr + result.stdout).lower()
         assert message in combined
+
+
+# The same six rows reached two ways. Rows 4-6 are uncapped and escape; `region` is
+# SELECT-only while `id` is named by the DECIDE clause.
+_SIX_ROWS = "('A',1,1),('A',2,2),('A',3,3),('B',4,4),('B',5,5),('B',6,6)"
+_SAME_ROWS_DECIDE = (
+    "SELECT region, buy FROM {source} "
+    "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id <= 3 "
+    "MAXIMIZE SUM(buy * w)"
+)
+
+
+_TABLE_SETUP = (
+    "CREATE TEMP TABLE items(region VARCHAR, id INTEGER, w INTEGER);\n"
+    f"INSERT INTO items VALUES {_SIX_ROWS};\n"
+)
+
+
+@pytest.mark.query_diagnostics
+class TestEscapeColumnNaming:
+    """A characterized slice names the column the user wrote, whatever the rows came from."""
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_values_and_table_agree(self, request, cli_fixture):
+        """The same rows as a VALUES list and as a table give identical findings.
+
+        The two used to disagree twice over. A derived table's columns reached the
+        diagnosis under the binder's positional `col0` / `col1` placeholders, because a
+        `t(a, b, c)` alias list is recorded on the BindContext binding and never reaches
+        the plan. A real table's columns arrived unnamed and were dropped, because the
+        name back-fill only ran for a projection and a scan sits under DECIDE instead.
+        Names now come from the BindContext itself, which is what resolved them."""
+        cli = request.getfixturevalue(cli_fixture)
+        from_values = _rows(
+            _diagnose(
+                cli,
+                _SAME_ROWS_DECIDE.format(
+                    source=f"(VALUES {_SIX_ROWS}) t(region, id, w)"
+                ),
+            )
+        )
+        from_table = _rows(
+            _diagnose(cli, _SAME_ROWS_DECIDE.format(source="items"), setup=_TABLE_SETUP)
+        )
+        assert _escape(from_values, "buy") == _escape(from_table, "buy")
+        assert _remedy(from_values, "buy") == _remedy(from_table, "buy")
+        # `region` is only ever in the SELECT list, yet it is the rule that explains the
+        # escape and the one that scopes the remedy — it has to survive both routes.
+        assert (3, 3, "row", "region = 'B'") in _escape(from_values, "buy")
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_no_positional_column_names(self, request, cli_fixture):
+        """No finding may name a `colN` the user never typed."""
+        cli = request.getfixturevalue(cli_fixture)
+        rows = _rows(
+            _diagnose(
+                cli,
+                _SAME_ROWS_DECIDE.format(
+                    source=f"(VALUES {_SIX_ROWS}) t(region, id, w)"
+                ),
+            )
+        )
+        named = [slice_ for _, _, _, slice_ in _escape(rows, "buy") if slice_]
+        assert named, "expected at least one characterized slice"
+        assert not [s for s in named if s.startswith("col")], named
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_column_names_survive_a_prepared_statement(self, request, cli_fixture):
+        """Names must survive plan serialization.
+
+        They ride on `LogicalDecide`, whose serializer is hand-written: a field without
+        its matching Serialize/Deserialize pair compiles, passes every test that does not
+        prepare a statement, and silently drops on replay — the diagnosis would quietly
+        fall back to unnamed slices. Executing the prepared statement twice replays the
+        deserialized plan."""
+        cli = request.getfixturevalue(cli_fixture)
+        decide_sql = _SAME_ROWS_DECIDE.format(source="items")
+        script = (
+            ".mode csv\n"
+            f"{_TABLE_SETUP}"
+            f"PREPARE p AS DIAGNOSE {decide_sql};\n"
+            "EXECUTE p;\n"
+            "EXECUTE p;\n"
+        )
+        rows = _rows(cli.execute_script(script))
+        named = [
+            r["group"] for r in rows if r.get("group") not in (None, "", "NULL")
+        ]
+        assert named, f"prepared replay lost every slice name: {rows}"
+        assert "region = 'B'" in named, named
+
+
+@pytest.mark.query_diagnostics
+class TestEquivalentSlicesCollapse:
+    """Columns that pick out exactly the same escaping rows state one fact, not many."""
+
+    # 3 rows, 4 columns; the two cap='0' rows escape. `colour` partitions them exactly
+    # as `cap` does, and `tag` exactly as `w` does — pure coincidence on an input this
+    # narrow. `cap` and `w` are the columns the DECIDE clause names.
+    _NARROW = (
+        "SELECT tag, colour, buy FROM "
+        "(VALUES ('a','red',5,1),('b','blue',0,2),('c','blue',0,3)) t(tag, colour, cap, w) "
+        "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN cap > 0 "
+        "MAXIMIZE SUM(buy * w)"
+    )
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_narrow_input_collapses_to_query_columns(self, request, cli_fixture):
+        """Equivalent slices collapse, and the DECIDE-clause column is the survivor."""
+        cli = request.getfixturevalue(cli_fixture)
+        found = _escape(_rows(_diagnose(cli, self._NARROW)), "buy")
+        assert found == [
+            (2, 2, "row", "cap = '0'"),
+            (1, 1, "row", "w = '2'"),
+            (1, 1, "row", "w = '3'"),
+        ]
+        # colour/tag describe the very same rows, so they are the coincidences dropped.
+        slices = " ".join(slice_ for _, _, _, slice_ in found)
+        assert "colour" not in slices and "tag" not in slices
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_distinct_slices_are_not_truncated(self, request, cli_fixture):
+        """Collapsing equivalents must not cap the relation: distinct slices all stay.
+
+        100 rows, and the escaping half splits into three different channel values, so
+        three findings covering three different row sets must all survive."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, buy FROM ("
+            "SELECT i AS id, CASE WHEN i % 10 = 0 THEN 'export' "
+            "WHEN i % 10 = 1 THEN 'transit' WHEN i % 10 = 2 THEN 'bonded' "
+            "ELSE 'domestic' END AS channel, i * 1.0 AS margin FROM range(1, 101) t(i)) "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN channel = 'domestic' "
+            "MAXIMIZE SUM(buy * margin)"
+        )
+        found = _escape(_rows(_diagnose(cli, sql)), "buy")
+        assert sorted(found) == [
+            (10, 10, "row", "channel = 'bonded'"),
+            (10, 10, "row", "channel = 'export'"),
+            (10, 10, "row", "channel = 'transit'"),
+        ]
+
+
+@pytest.mark.query_diagnostics
+class TestScopedRemedy:
+    """When the rules account for every escaping row, the cap is scoped to those rows."""
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_full_coverage_scopes_the_cap(self, request, cli_fixture):
+        """One rule covering every escaper renders as a `WHEN`-scoped conjunct."""
+        cli = request.getfixturevalue(cli_fixture)
+        rows = _rows(
+            _diagnose(cli, _SAME_ROWS_DECIDE.format(source="items"), setup=_TABLE_SETUP)
+        )
+        assert _remedy(rows, "buy") == "buy <= <cap> WHEN region = 'B'"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_multiple_rules_render_as_a_disjunction(self, request, cli_fixture):
+        """Several covering rules render as the disjunction they form.
+
+        The brackets are load-bearing: DeciQL's `WHEN` takes a bare comparison or a
+        parenthesized condition, so an unbracketed `OR` would not parse back."""
+        cli = request.getfixturevalue(cli_fixture)
+        setup = (
+            "CREATE TEMP TABLE regions(region VARCHAR, id INTEGER, w INTEGER);\n"
+            "INSERT INTO regions VALUES ('A',1,1),('A',2,2),('B',4,4),('B',5,5),('C',6,6);\n"
+        )
+        sql = (
+            "SELECT region, buy FROM regions "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN region = 'A' "
+            "MAXIMIZE SUM(buy * w)"
+        )
+        assert (
+            _remedy(_rows(_diagnose(cli, sql, setup=setup)), "buy")
+            == "buy <= <cap> WHEN (region = 'B' OR region = 'C')"
+        )
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_partial_coverage_keeps_the_global_cap(self, request, cli_fixture):
+        """An escaper outside every rule keeps the global form.
+
+        100 rows: the 20 'export' rows escape as a clean rule, and row 7 escapes from
+        inside a large domestic group no rule characterizes. Scoping to the rules would
+        leave row 7 free, so the cap must stay global."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, buy FROM ("
+            "SELECT i AS id, CASE WHEN i % 5 = 0 THEN 'export' ELSE 'domestic' END AS channel, "
+            "i * 1.0 AS margin FROM range(1, 101) t(i)) "
+            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN (channel = 'domestic' AND id <> 7) "
+            "MAXIMIZE SUM(buy * margin)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert _escape(rows, "buy") == [(20, 20, "row", "channel = 'export'")]
+        assert _remedy(rows, "buy") == "buy <= <cap>"
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_scoped_remedy_pasted_back_bounds_the_query(
+        self, request, cli_fixture, oracle_solver
+    ):
+        """The reported remedy, pasted in with a real cap, makes the query solvable —
+        and only the escaping rows are capped."""
+        cli = request.getfixturevalue(cli_fixture)
+        remedy = _remedy(
+            _rows(_diagnose(cli, _SAME_ROWS_DECIDE.format(source="items"), setup=_TABLE_SETUP)),
+            "buy",
+        )
+        assert "WHEN" in remedy, remedy
+
+        fixed = (
+            "SELECT region, buy FROM items DECIDE buy(REAL) "
+            f"SUCH THAT buy <= 100 WHEN id <= 3 AND {remedy.replace('<cap>', '7')} "
+            "MAXIMIZE SUM(buy * w)"
+        )
+        result = cli.execute_script(f".mode csv\n{_TABLE_SETUP}{fixed};\n")
+        combined = result.stdout + result.stderr
+        assert "unbounded" not in combined.lower(), combined
+
+        # An independent solve of the repaired program: rows 1-3 capped at 100 by the
+        # original clause, rows 4-6 at 7 by the pasted remedy.
+        oracle_solver.create_model("scoped_remedy_paste_back")
+        objective = {}
+        for i in range(1, 7):
+            name = f"buy_{i}"
+            oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0)
+            oracle_solver.add_constraint(
+                {name: 1.0}, "<=", 100.0 if i <= 3 else 7.0, name=f"cap_{i}"
+            )
+            objective[name] = float(i)
+        oracle_solver.set_objective(objective, ObjSense.MAXIMIZE)
+        expected = oracle_solver.solve()
+        assert expected.status == SolverStatus.OPTIMAL, expected.status
+
+        values = sorted(
+            float(r["buy"]) for r in csv.DictReader(io.StringIO(result.stdout))
+        )
+        assert values == sorted(
+            expected.variable_values[f"buy_{i}"] for i in range(1, 7)
+        )

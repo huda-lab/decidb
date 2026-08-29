@@ -88,6 +88,12 @@ struct EscapeRule {
 	string value;
 	idx_t escaping = 0; //!< a
 	idx_t total = 0;    //!< b (group size, counted in instances)
+	//! True when this rule is part of a set that accounts for EVERY escaping instance
+	//! of the variable, each rule of it escaping wholly (rate 1.0). Only then can the
+	//! prescribed cap be scoped to the escaping rows instead of the whole relation:
+	//! a rule missing an escaper elsewhere would leave the program unbounded. Set
+	//! together on the whole covering set, or on nothing.
+	bool covers_scope = false;
 };
 
 //! A categorical column's grouping over a variable's instances, fed to
@@ -97,6 +103,9 @@ struct ColumnGrouping {
 	vector<idx_t> instance_to_group; //!< size = total_instances; group id per
 	                                 //!< instance (INVALID_INDEX = excluded)
 	vector<string> group_value;      //!< size = num_groups; value label per group
+	//! True when the DECIDE clause references this column. Only used to break a tie
+	//! between columns that describe exactly the same escaping instances.
+	bool clause_referenced = false;
 };
 
 //! Direction in which an unbounded decision variable escapes. Keep this typed across

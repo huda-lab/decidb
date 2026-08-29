@@ -91,13 +91,44 @@ The diagnosis surfaces through the flat relation `DIAGNOSE` returns (full schema
     state | clause | suggested_change | amount | total | scope | edit_source | group | row
 
 For an unbounded finding, `state='unbounded'`; `clause` is the escaping variable;
-`suggested_change` is the forced remedy (`ship <= <cap>`) without an invented cap;
+`suggested_change` is the forced remedy (`ship <= <cap>`) without an invented cap,
+scoped to the escaping rows when that is sound (below);
 `edit_source` is `runaway_+inf` or `runaway_-inf`; `amount` is the number of escaping
 scope-instances; `total` is the applicable whole-variable or categorical-slice count;
 `scope` is `row` or `entity`; and `group` is the categorical slice when one is reported.
 Thus `amount / total` reconstructs the escape rate that admitted a slice. `row` is NULL
 for unbounded findings. A single-instance or auxiliary/name-only finding omits the
 count, denominator, and scope when they would add no information.
+
+### Scoping the prescribed cap
+
+A global `ship <= <cap>` also restricts rows that were never running away, and it leaves
+the user to turn a scoped characterization back into a conditional edit by hand. When the
+reported rules **account for every escaping instance**, the remedy is instead rendered as
+a `SUCH THAT` conjunct the user can paste as written:
+
+    ship <= <cap> WHEN region = 'B'
+    ship <= <cap> WHEN (region = 'B' OR region = 'C')
+
+The brackets are load-bearing: DeciQL's `WHEN` takes a bare comparison or a parenthesized
+condition, and an unbracketed `OR` is a parse error.
+
+Two conditions gate it, both decided in `CharacterizeEscape` and carried to the formatter
+on `EscapeRule::covers_scope` (the flattened finding fields cannot recover them):
+
+- every escaping instance falls under some reported rule, and
+- each rule used escapes **wholly** (rate 1.0), so the cap adds no restriction to a row
+  that was already bounded.
+
+Anything short of full coverage keeps the global form. The asymmetry is deliberate:
+capping extra rows is merely over-restrictive, but missing one escaper would leave the
+query unbounded and the prescribed edit would not work. The covering set is chosen
+greedily, widest rule first, so the pasted condition stays short — one `region = 'B'`
+covering three rows rather than three `id = …` equalities covering one each. The report
+order cannot serve here, because it ranks by rate and every eligible rule ties at 1.0.
+
+This stays inside the load-bearing limit ("names a variable, not a guilty clause",
+below): it is a scoped *addition*, never a claim that some clause's `WHEN` was too narrow.
 
 Before Batch H the escape was one prose EAV cell (`a of b rows where c = 'v'`) and
 the remedy lived in an stderr summary. The flat relation carries each component in its
@@ -151,6 +182,12 @@ characterizer distinguishes three cases:
   Every group meeting the threshold becomes its own finding with
   `group = "c = 'v'"` and `amount = a`, strongest first. Rules are an independent
   **union** across columns/values; conjunction rules are not produced.
+  Rules describing *exactly the same* escaping instances are one fact spelled several
+  ways — on a narrow input almost any column correlates with the escape by coincidence —
+  so they collapse to a single representative: a column the DECIDE clause references
+  wins over one that only rides along in the SELECT, and among equals the leftmost
+  column wins. Rules covering *different* instance sets are different facts and are all
+  retained; the relation is never capped or truncated.
 - **Fallback**: a scattered escape that no categorical group characterizes reports
   its escaping count in `amount` with `group = NULL`; single-instance and auxiliary
   name-only cases omit the count.
@@ -169,16 +206,45 @@ tested). Column names are resolved at physical-plan time (`plan_decide.cpp`) in 
 passes, both keyed to chunk indices that survive column pruning. First, names are
 harvested from the DECIDE clause's own `BoundReferenceExpression`s (WHEN / PER /
 objective / constraint / entity-key columns). Second, any still-unnamed slot is
-**back-filled from the child projection's user-written names** — a column referenced
-only in the outer SELECT (never in the clause) is named from the child projection
-expression when the name is a user-written identifier: an explicit `AS name` alias, or
-a bare source-column reference. A computed projection expression with no alias carries
-only a generated name (its `ToString`), which is deliberately dropped — a categorical
-candidate over such a still-unnamed column is **suppressed** rather than labeled with a
-machine name the user never typed (`build_row_grouping` returns false on an empty name),
-and the variable falls back to the bare count. The projection back-fill is captured
-before `CreatePlan` (like `child_bindings`) because `CreatePlan` moves the projection's
-`expressions` vector out.
+**back-filled from the names the binder resolved**. Those live on `LogicalDecide`
+(`source_column_table_index` / `source_column_index` / `source_column_names`), captured in
+`plan_select_node.cpp` by walking `BindContext::GetBindingsList()` — the same table name
+resolution itself used. Every source kind is therefore covered uniformly: a base table's
+catalog names, a `t(a, b, c)` alias list over `(VALUES ...)`, a subquery's or a CTE's
+output names.
+
+Reading names off the plan instead cannot work, and both ways of trying it failed
+differently. An alias list is recorded on the binding and never reaches the plan, whose
+projection carries the binder's positional `col0` / `col1` placeholders; and a scan — the
+ordinary `FROM <table>` case — has no projection to read at all. The visible symptom was
+that the same rows characterized differently through a `VALUES` list than through a table.
+
+Two details are load-bearing:
+
+- **Scan bindings are not output positions.** Projection pushdown makes a `LogicalGet`'s
+  bindings index `column_ids`, so a surviving column must be mapped back to its table
+  ordinal before the lookup, exactly as `LogicalGet::ResolveTypes` walks them. Getting it
+  wrong silently mislabels one column as another rather than failing.
+- **The binder answers "what is this column called", not "did the user write that".** A
+  projection expression with no alias is recorded under its own `ToString`, so an
+  unaliased computed column would be labelled `CASE WHEN ((i <= 25)) THEN ('A') ELSE 'B'
+  END`. The plan still holds the expression, so the structural gate stays in
+  `plan_decide.cpp` — a projection column is nameable only when it carries an explicit
+  `AS name` or is a bare column reference — while the spelling comes from the binder.
+
+A categorical candidate over a still-unnamed column is **suppressed** rather than labeled
+with a machine name the user never typed (`BuildRowGrouping` returns false on an empty
+name), and the variable falls back to the bare count.
+
+The map is serialized with the operator. `LogicalDecide`'s serializer is hand-written, so
+the three vectors carry explicit property ids (246-248); without them the names would
+compile, pass every test that does not prepare a statement, and silently drop on replay.
+`test_column_names_survive_a_prepared_statement` pins that.
+
+Alongside the names, `plan_decide.cpp` records **which columns the DECIDE clause itself
+references** (`PhysicalDecide::input_column_in_clause`, set by the same first-pass
+harvest). That is the signal the rule collapse above uses to prefer an explaining column
+over a coincidental one.
 
 **Pragma knobs** (extension options, `decide_diagnostic.cpp`):
 `diagnose_decide_escape_rate` (default 0.8), `diagnose_decide_categorical_ratio`

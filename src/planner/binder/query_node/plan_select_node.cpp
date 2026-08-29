@@ -156,6 +156,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // because it must see the flattened form PlanSubqueries just produced.
         // Everything the optimizer emits later is canonicalized by
         // LogicalDecide::AddConstraint. Those two are the only call sites.
+        string written_objective;
+        string canonical_objective;
         {
             DecideCanonicalizer canonicalizer(context, statement.decide_index,
                                                statement.variable_scopes,
@@ -173,9 +175,22 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             // boundary. It carries no relation to orient, which is the only part of
             // the constraint contract that does not apply to it.
             if (statement.decide_objective) {
+                // The objective's counterpart to InitializeConstraintSourceInfo /
+                // FinalizeConstraintSourceInfo: written on the way in, canonical on the
+                // way out, captured around the one call that can change it. There is
+                // exactly one objective, so these are two strings rather than a registry.
+                written_objective = RenderDecideObjective(*statement.decide_objective,
+                                                          statement.decide_source_fragments,
+                                                          statement.entity_scopes);
                 statement.decide_objective = canonicalizer.CanonicalizeObjective(
                     *statement.decide_objective, statement.objective_constant_offset);
                 canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
+                canonical_objective = RenderDecideObjective(*statement.decide_objective,
+                                                            statement.decide_source_fragments,
+                                                            statement.entity_scopes);
+                if (canonical_objective == written_objective) {
+                    canonical_objective.clear();
+                }
             }
         }
 
@@ -193,7 +208,22 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         decide_op->entity_scopes = std::move(statement.entity_scopes);
         decide_op->variable_scopes = std::move(statement.variable_scopes);
         decide_op->constraint_sources = std::move(statement.decide_constraint_sources);
+        decide_op->written_objective = std::move(written_objective);
+        decide_op->canonical_objective = std::move(canonical_objective);
         decide_op->source_fragments = std::move(statement.decide_source_fragments);
+        // Capture the user's column names off the BindContext, which is still live here
+        // and is the authority name resolution itself used. Every source kind is covered
+        // uniformly: a base table's catalog names, a `t(a, b, c)` alias list over
+        // `(VALUES ...)`, a subquery's or a CTE's output names. Taken here rather than at
+        // physical-plan time because the binding — and with it the only copy of an alias
+        // list — is gone by then, leaving the plan's positional `col0` placeholders.
+        for (auto &binding : bind_context.GetBindingsList()) {
+            for (idx_t i = 0; i < binding->names.size(); i++) {
+                decide_op->source_column_table_index.push_back(binding->index);
+                decide_op->source_column_index.push_back(i);
+                decide_op->source_column_names.push_back(binding->names[i]);
+            }
+        }
         decide_op->entity_key_expressions = std::move(statement.entity_key_expressions);
         // ne_clause_labels, ABS aux vars, and MIN/MAX indicator links +
         // objective types are created by DecideOptimizer (runs after plan creation)

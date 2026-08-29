@@ -24,6 +24,28 @@ already in place are sufficient. A round-trip test would need a comparison that
 fails on a *missing* field rather than comparing only the fields it knows about —
 otherwise it reproduces the bug it is meant to catch.
 
+**Considered and rejected (2026-08-29)**: a field-by-field round-trip test does not
+close this. Adding a field means remembering to add it to the test as well, which is
+the same act of remembering the bug depends on — the guard fails exactly when the code
+does. Comparing serialized bytes across a round trip is no better: a dropped field is
+absent from both sides and the comparison passes. There is no cheap assertion that
+fails on its own for a field nobody wrote code for.
+
+What would actually close it is removing the hand-written serializer: drop
+`"custom_implementation": true` and let DuckDB generate both directions, so a new field
+is covered by construction. That needs every struct currently flattened into parallel
+vectors (entity scopes, bilinear links, ABS maximize links, the source registry) to
+become serializable in its own right. That is the real fix and it is a project, not a
+test.
+
+Until then the mitigation is per-field and deliberate: any new field ships with a test
+that exercises it through a prepared statement. `source_column_names` and its two index
+vectors (property ids 246-248, added 2026-08-29 for unbounded escape characterization)
+were the first done this way — see
+`test_query_diagnostics_escaping_instances.py::test_column_names_survive_a_prepared_statement`.
+That is a genuine test of behavior rather than a guard needing maintenance, but it
+scales by discipline, not by construction, which is why this item stays open.
+
 **Test**: a prepared statement over each metadata-bearing shape (entity scopes,
 composed MIN/MAX, bilinear links, ABS maximize links, source registry) executed
 twice.

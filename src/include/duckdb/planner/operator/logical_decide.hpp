@@ -66,11 +66,36 @@ public:
     //! Stable source display registry, indexed by source_clause_id.
     vector<ConstraintSourceInfo> constraint_sources;
 
+    //! The objective as WRITTEN and as CANONICALIZED, the objective's counterpart to
+    //! `constraint_sources`. The objective is one side of a comparison with no relation
+    //! to orient, so it needs no registry -- there is exactly one of it -- but a plan
+    //! that shows what became of a constraint owes the same account of the objective.
+    //! Both are captured in Binder::CreatePlan around the single CanonicalizeObjective
+    //! call. `canonical_objective` is empty when canonicalization changed nothing.
+    string written_objective;
+    string canonical_objective;
+
     //! The user's written spelling of every cast and scalar subquery in the DECIDE
     //! clause, indexed by source fragment id. Binding rewrites both beyond recognition,
     //! so RenderDecideSource replays them from here whenever a plan or a diagnosis
     //! shows the user their own clause.
     vector<string> source_fragments;
+
+    //! The user's own name for every column reachable from the DECIDE input, captured
+    //! from the BindContext where name resolution happens. This is the ONLY place the
+    //! user's spelling exists for a source that has no catalog entry: a `t(a, b, c)`
+    //! alias list over `(VALUES ...)`, a subquery, or a CTE is recorded on the binding
+    //! and never reaches the plan, whose projection carries the binder's positional
+    //! `col0` / `col1` placeholders instead. The unbounded diagnosis uses it to label a
+    //! categorical slice with a name the user actually wrote.
+    //!
+    //! Held as three parallel vectors — the table index and column index of the binding,
+    //! and the name — because ColumnBinding is not serializable and this operator's
+    //! serializer is hand-written (see Serialize/Deserialize; every struct here is
+    //! flattened the same way).
+    vector<idx_t> source_column_table_index;
+    vector<idx_t> source_column_index;
+    vector<string> source_column_names;
 
     // The optimization sense (MINIMIZE or MAXIMIZE)
     DecideSense decide_sense;

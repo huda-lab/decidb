@@ -161,6 +161,94 @@ static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
 	return *raw;
 }
 
+//! The pieces a failed extraction needs in order to name what was NULL: the expression
+//! as the user wrote it, and the input chunk it was evaluated against.
+//!
+//! The tree handed to the ExpressionExecutor is no use for this. `TransformToChunkExpression`
+//! rewrites every BoundColumnRefExpression into a positional BoundReferenceExpression, so
+//! by evaluation time the names are gone. The ORIGINAL tree still carries them, and its
+//! leaves still carry the same `binding.column_index` the transform used, which is exactly
+//! the chunk column to test. Keeping the original beside the chunk is therefore enough to
+//! turn "something was NULL" into "this column was NULL".
+struct NullSourceContext {
+	const Expression *source_expr = nullptr;
+	const DataChunk *input_chunk = nullptr;
+};
+
+//! Names the columns inside `expr` that are NULL on chunk row `row`, skipping duplicates.
+//! Reached only when an extraction has already failed, so it reads values one at a time
+//! rather than making every successful scan carry per-leaf bookkeeping.
+static void CollectNullColumnsAtRow(const Expression &expr, const DataChunk &chunk, idx_t row,
+                                    vector<string> &out) {
+	// Both leaf spellings appear here. A coefficient reaches execution already lowered to
+	// positional BoundReferenceExpressions in the common case, and it is only their retained
+	// alias that makes the message readable; a BoundColumnRefExpression survives on the paths
+	// that never went through that lowering. The two carry the chunk column in different
+	// fields, so each is read from its own, and a leaf with no name to print is left to the
+	// caller's expression-quoting fallback rather than reported as `#3`.
+	idx_t col = DConstants::INVALID_INDEX;
+	string name;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = expr.Cast<BoundColumnRefExpression>();
+		col = colref.binding.column_index;
+		name = colref.GetAlias();
+	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		auto &ref = expr.Cast<BoundReferenceExpression>();
+		col = ref.index;
+		name = ref.GetAlias();
+	} else {
+		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+			CollectNullColumnsAtRow(child, chunk, row, out);
+		});
+		return;
+	}
+	if (name.empty() || col >= chunk.ColumnCount() || !chunk.data[col].GetValue(row).IsNull()) {
+		return;
+	}
+	for (auto &seen : out) {
+		if (seen == name) {
+			return;
+		}
+	}
+	out.push_back(std::move(name));
+}
+
+//! The NULL message, in the terms the user wrote the query in: name the column that is
+//! NULL, and give the two ways out — impute a value, or drop the row.
+//!
+//! A NULL that no column explains is possible (`NULLIF`, a TRY_CAST that failed): there
+//! is no column to name then, so the expression is quoted instead. The advice is the same
+//! either way, which is why the two branches differ only in what they point at.
+static string DescribeNullSource(const NullSourceContext *ctx, idx_t row) {
+	vector<string> null_columns;
+	if (ctx && ctx->source_expr && ctx->input_chunk) {
+		CollectNullColumnsAtRow(*ctx->source_expr, *ctx->input_chunk, row, null_columns);
+	}
+	if (null_columns.empty()) {
+		string what = (ctx && ctx->source_expr) ? ctx->source_expr->ToString() : string();
+		if (what.empty()) {
+			return "DECIDE: a value used in the optimization is NULL. Impute it with COALESCE(), "
+			       "or filter those rows out with a WHERE clause.";
+		}
+		return StringUtil::Format("DECIDE: %s is NULL. Impute it with COALESCE(), or filter those "
+		                          "rows out with a WHERE clause.", what);
+	}
+	if (null_columns.size() == 1) {
+		return StringUtil::Format("DECIDE: column \"%s\" is NULL. Impute it with COALESCE(%s, 0) "
+		                          "or filter those rows out with a WHERE clause.", null_columns[0],
+		                          null_columns[0]);
+	}
+	string names;
+	for (idx_t i = 0; i < null_columns.size(); i++) {
+		if (i > 0) {
+			names += (i + 1 == null_columns.size()) ? " and " : ", ";
+		}
+		names += "\"" + null_columns[i] + "\"";
+	}
+	return StringUtil::Format("DECIDE: columns %s are NULL. Impute them with COALESCE(), or filter "
+	                          "those rows out with a WHERE clause.", names);
+}
+
 //! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
 //! Throws InvalidInputException on NULL or non-finite values, citing `err_context`.
 //! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
@@ -175,7 +263,8 @@ static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
 //! coefficient has no such reading, so every other caller stays strict.
 static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
                                 vector<double> &out, const char *err_context,
-                                bool allow_infinite = false) {
+                                bool allow_infinite = false,
+                                const NullSourceContext *null_ctx = nullptr) {
 	if (count == 0) {
 		return;
 	}
@@ -193,11 +282,7 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
 	for (idx_t i = 0; i < count; i++) {
 		idx_t idx = format.sel->get_index(i);
 		if (!format.validity.RowIsValid(idx)) {
-			throw InvalidInputException(
-				"DECIDE %s returned NULL at row %llu. "
-				"NULL values are not allowed in optimization expressions. "
-				"Use COALESCE() to handle NULLs or filter them with WHERE clause.",
-				err_context, out.size());
+			throw InvalidInputException(DescribeNullSource(null_ctx, i));
 		}
 		double dv = data[idx];
 		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
@@ -873,9 +958,10 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
             // NaN stays refused, here and in the per-row extraction that reads
             // this value back, so `MAX(cap) - MIN(cap)` over infinities is
             // still caught.
+            NullSourceContext null_ctx {agg.children[0].get(), &in_chunk};
             ExtractDoubleColumn(out_chunk.data[0], in_chunk.size(), 1.0, values,
                                 "constraint right-hand side aggregate",
-                                /*allow_infinite=*/true);
+                                /*allow_infinite=*/true, &null_ctx);
         }
     }
 
@@ -969,8 +1055,9 @@ static vector<EvaluatedConstraint::BilinearTerm> EvaluateBilinearTerms(
             for (idx_t j = 0; j < bl_route.size(); j++) {
                 idx_t term_idx = bl_route[j];
                 auto &col = ebts[term_idx].row_coefficients.MutableDense();
+                NullSourceContext null_ctx {terms[term_idx].coefficient.get(), &bl_chunk};
                 ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(), terms[term_idx].sign, col,
-                                    coefficient_err_label);
+                                    coefficient_err_label, /*allow_infinite=*/false, &null_ctx);
                 ebts[term_idx].row_coefficients.SyncSize();
             }
         }
@@ -1111,32 +1198,22 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		// Render through the same tagged-expression walker as constraints so
 		// WHEN/PER wrappers print as postfix suffixes (e.g. "SUM(x) WHEN c")
 		// rather than the raw internal tag or a generic conjunction form.
-		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
+		string sense_prefix = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
 		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs);
-		for (idx_t i = 0; i < objective_strs.size(); i++) {
-			if (i > 0) {
-				obj_info += "\n";
-			}
-			obj_info += objective_strs[i];
-		}
-		result["Objective"] = obj_info;
+		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
+		                                                  objective_strs);
 	} else {
 		result["Objective"] = "FEASIBILITY";
 	}
 
-	if (decide_constraints) {
-		vector<string> constraint_strs;
-		CollectDecideExpressionStrings(*decide_constraints, source_fragments, entity_scopes, constraint_strs,
-		                               &constraint_sources);
-		string constraints_info;
-		for (idx_t i = 0; i < constraint_strs.size(); i++) {
-			if (i > 0) {
-				constraints_info += "\n";
-			}
-			constraints_info += constraint_strs[i];
-		}
-		result["Constraints"] = constraints_info;
+	// Same layered grouping as the logical node -- one renderer, so the two plans agree.
+	if (decide_constraints || !constraint_sources.empty()) {
+		vector<string> unattributed;
+		auto layers = CollectDecideClauseLayers(decide_constraints.get(), composed_minmax_constraints,
+		                                        source_fragments, entity_scopes, constraint_sources,
+		                                        unattributed);
+		result["Constraints"] = RenderDecideClauseLayers(layers, unattributed);
 	}
 
 	SetEstimatedCardinality(result, estimated_cardinality);
@@ -1312,6 +1389,7 @@ struct UnboundedCandidateProvider {
 	vector<LogicalType> types;
 	const DecideDiagParams &params;
 	const vector<string> &input_column_names;
+	const vector<bool> &input_column_in_clause;
 	const VarIndexer &var_indexer;
 	const vector<EntityScopeInfo> &entity_scopes;
 	const vector<EntityMapping> &entity_mappings;
@@ -1348,6 +1426,7 @@ struct UnboundedCandidateProvider {
 			return false;
 		}
 		out.column = input_column_names[ci];
+		out.clause_referenced = ci < input_column_in_clause.size() && input_column_in_clause[ci];
 		out.instance_to_group = std::move(row_to_group); // row-indexed
 		out.group_value.resize(num_groups);
 		for (idx_t g = 0; g < num_groups && g < rep_keys[0].size(); g++) {
@@ -1376,6 +1455,7 @@ struct UnboundedCandidateProvider {
 	bool LiftRowGroupingToEntities(const ColumnGrouping &rowcg, const EntityMapping &mapping, idx_t num_entities,
 	                               ColumnGrouping &out) {
 		out.column = rowcg.column;
+		out.clause_referenced = rowcg.clause_referenced;
 		out.group_value = rowcg.group_value;
 		out.instance_to_group.assign(num_entities, DConstants::INVALID_INDEX);
 		vector<bool> seen(num_entities, false);
@@ -1447,17 +1527,17 @@ struct UnboundedCandidateProvider {
 
 //! Assemble the unbounded engine's `get_candidates` callback. Resolves the live
 //! entity mappings (the Finalize-local mappings have been moved into the solver
-//! input by now, so var_indexer owns/references them) and returns a stateful
+//! input by now, so var_indexer owns them) and returns a stateful
 //! provider wrapped as the engine's std::function input.
 static std::function<vector<ColumnGrouping>(idx_t, idx_t)>
 BuildUnboundedCandidateProvider(ClientContext &context, ColumnDataCollection &data, vector<LogicalType> types,
                                 const DecideDiagParams &params, const vector<string> &input_column_names,
-                                const VarIndexer &var_indexer, const vector<EntityScopeInfo> &entity_scopes,
-                                idx_t num_rows) {
-	const vector<EntityMapping> &live_entity_mappings =
-	    var_indexer.entity_mappings_ref ? *var_indexer.entity_mappings_ref : var_indexer.entity_mappings_owned;
-	return UnboundedCandidateProvider {context,    data,           std::move(types), params, input_column_names,
-	                                   var_indexer, entity_scopes,  live_entity_mappings, num_rows};
+                                const vector<bool> &input_column_in_clause, const VarIndexer &var_indexer,
+                                const vector<EntityScopeInfo> &entity_scopes, idx_t num_rows) {
+	return UnboundedCandidateProvider {context,           data,          std::move(types),
+	                                   params,            input_column_names, input_column_in_clause,
+	                                   var_indexer,       entity_scopes, var_indexer.entity_mappings,
+	                                   num_rows};
 }
 
 //===--------------------------------------------------------------------===//
@@ -1817,10 +1897,12 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             coef_executor.Execute(chunk, coef_results);
             for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
                 auto &col = eval_const.row_coefficients[term_idx].MutableDense();
+                NullSourceContext null_ctx {constraint->lhs_terms[term_idx].coefficient.get(), &chunk};
                 ExtractDoubleColumn(coef_results.data[term_idx], chunk.size(),
                                     constraint->lhs_terms[term_idx].sign,
                                     col,
-                                    "constraint coefficient");
+                                    "constraint coefficient",
+                                    /*allow_infinite=*/false, &null_ctx);
                 eval_const.row_coefficients[term_idx].SyncSize();
             }
         }
@@ -2109,8 +2191,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 // ization rebuilds `x + v <= K` as `x <= K - v`, so an infinite K that
                 // was absorbed as a column bound in its bare spelling must stay legal
                 // in its rebuilt one. `inf - inf` still yields NaN and is still refused.
+                NullSourceContext null_ctx {constraint->rhs_expr.get(), eval_chunk};
                 ExtractDoubleColumn(rhs_result.data[0], scan_chunk.size(), 1.0, rhs_col,
-                                    "constraint right-hand side", /*allow_infinite=*/true);
+                                    "constraint right-hand side", /*allow_infinite=*/true,
+                                    &null_ctx);
                 eval_const.rhs_values.SyncSize();
                 scanned += scan_chunk.size();
             }
@@ -2264,10 +2348,13 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                         q_executor.Execute(qchunk, q_results);
                         for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
                             auto &col = eqg.row_coefficients[inner_idx].MutableDense();
+                            NullSourceContext null_ctx {qg.inner_terms[inner_idx].coefficient.get(),
+                                                        &qchunk};
                             ExtractDoubleColumn(q_results.data[inner_idx], qchunk.size(),
                                                 qg.inner_terms[inner_idx].sign,
                                                 col,
-                                                "quadratic constraint coefficient");
+                                                "quadratic constraint coefficient",
+                                                /*allow_infinite=*/false, &null_ctx);
                             eqg.row_coefficients[inner_idx].SyncSize();
                         }
                     }
@@ -2434,9 +2521,12 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                     idx_t term_idx = route[j].second;
                     auto &out = (*b.out_coeffs)[term_idx].MutableDense();
                     int term_sign = (*b.src_terms)[term_idx].sign;
+                    NullSourceContext null_ctx {(*b.src_terms)[term_idx].coefficient.get(),
+                                                &obj_chunk};
                     ExtractDoubleColumn(obj_results.data[j], obj_chunk.size(),
                                         static_cast<double>(term_sign), out,
-                                        "objective coefficient");
+                                        "objective coefficient",
+                                        /*allow_infinite=*/false, &null_ctx);
                     (*b.out_coeffs)[term_idx].SyncSize();
                 }
             }
@@ -3713,7 +3803,8 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         auto diag_params = GetDecideDiagnosticParams(context);
         auto get_candidates =
             BuildUnboundedCandidateProvider(context, gstate.data, gstate.data.Types(), diag_params,
-                                            input_column_names, var_indexer, entity_scopes, num_rows);
+                                            input_column_names, input_column_in_clause, var_indexer,
+                                            entity_scopes, num_rows);
 
         UnboundedDiagnosisInput diag_input {
             solve_result, var_indexer, var_labels, var_is_aux, diag_params, get_candidates,
@@ -3925,6 +4016,44 @@ public:
     }
 };
 
+//! A solved value on its way into an integer output column.
+//!
+//! The solver works in doubles, so what comes back is not bounded by the column's type.
+//! A declared bound is not the limit either: `SUM(x) <= 5000000000` bounds no single
+//! decision, so nothing earlier in the pipeline can promise the value fits. Casting an
+//! out-of-range double to a narrower integer is undefined in C++ and saturates on the
+//! platforms we build, which would present the type's limit as the answer — a number
+//! that violates the query's own constraints, reported with no error and no diagnostic.
+//! Refuse it by name instead.
+//!
+//! `INT` decisions are BIGINT (see the type mapping in BindSelectNode), so the reachable
+//! limit here is a double's exact-integer range rather than the column's: past 2^53 a
+//! double no longer counts consecutively, and no wider integer type recovers a value the
+//! solver never distinguished. That makes the refusal honest rather than a missing
+//! widening. `BOOL` decisions and boolean auxiliaries stay INTEGER and cannot reach it.
+static int64_t DecideSolutionToInteger(double solution_value, const LogicalType &var_type,
+                                       const string &var_name) {
+    double rounded = std::round(solution_value);
+    // Both ends spelled out rather than a symmetric magnitude: int32's range is not
+    // symmetric, and `-2147483648` is a value the column can hold.
+    double lo = var_type == LogicalType::INTEGER
+                    ? static_cast<double>(NumericLimits<int32_t>::Minimum())
+                    : -9007199254740992.0; // -2^53
+    double hi = var_type == LogicalType::INTEGER
+                    ? static_cast<double>(NumericLimits<int32_t>::Maximum())
+                    : 9007199254740992.0; // 2^53
+    // Negated so a NaN — which compares false against everything — is refused rather
+    // than passed through to the cast this exists to protect.
+    if (!(rounded >= lo && rounded <= hi)) {
+        throw InvalidInputException(
+            "DECIDE variable '%s' solves to %s, which is beyond the range DeciDB can "
+            "return as a whole number. Tighten the bound on '%s', or declare it "
+            "'%s(REAL)' to read the value approximately.",
+            var_name, StringUtil::Format("%.0f", rounded), var_name, var_name);
+    }
+    return static_cast<int64_t>(rounded);
+}
+
 unique_ptr<GlobalSourceState> PhysicalDecide::GetGlobalSourceState(ClientContext &context) const {
     auto &sink = sink_state->Cast<DecideGlobalSinkState>();
     return make_uniq_base<GlobalSourceState, DecideGlobalSourceState>(*this, sink);
@@ -3988,8 +4117,8 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
                     if (solution_idx < gstate.ilp_solution.size()) {
                         solution_value = gstate.ilp_solution[solution_idx];
                     }
-                    int32_t int_value = static_cast<int32_t>(std::round(solution_value));
-                    output_data[row_in_chunk] = int_value;
+                    output_data[row_in_chunk] = static_cast<int32_t>(
+                        DecideSolutionToInteger(solution_value, var_type, decide_var.GetName()));
                 }
             } else { // BIGINT
                 auto output_data = FlatVector::GetData<int64_t>(output_vector);
@@ -4002,8 +4131,8 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
                     if (solution_idx < gstate.ilp_solution.size()) {
                         solution_value = gstate.ilp_solution[solution_idx];
                     }
-                    int64_t int_value = static_cast<int64_t>(std::round(solution_value));
-                    output_data[row_in_chunk] = int_value;
+                    output_data[row_in_chunk] =
+                        DecideSolutionToInteger(solution_value, var_type, decide_var.GetName());
                 }
             }
 

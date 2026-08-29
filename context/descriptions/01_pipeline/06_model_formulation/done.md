@@ -48,15 +48,16 @@ Three accessors matter:
   row-scoped, entity ids for entity-scoped, the single column for a scalar.
 - **`NumInstances(var_idx)`** — how many instances that variable has.
 
-Two constructors:
+Construction and ownership:
 
-- **`VarIndexer::Build()`** — owning; copies entity mappings so the indexer can
-  outlive the `SolverInput`. This is the production form: built once early in
+- **`VarIndexer::Build()`** copies entity mappings so the indexer owns every part of
+  its lookup state and can outlive the `SolverInput`. It is built once early in
   `Finalize`, threaded through `SolveModel` and `Build`, then moved onto
   `gstate.var_indexer` for readback in `GetData`. `total_vars` is refreshed just
   before the solve, once every auxiliary global has been appended.
-- **`VarIndexer::BuildRef()`** — non-owning; stores a `const` pointer to the input's
-  entity mappings. No production callers; retained for tests.
+
+There is no non-owning constructor. Focused tests use the same owning path as
+production, so entity-mapping lifetime has one contract everywhere.
 
 ---
 

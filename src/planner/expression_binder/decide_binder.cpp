@@ -1014,7 +1014,17 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		return false;
 	}
 	case ExpressionClass::OPERATOR: {
-		error_msg = StringUtil::Format("Unexpected operator expression inside DECIDE SUM expression: %s", expr.ToString());
+		// COALESCE/IFNULL and other parsed operator nodes are ordinary per-row
+		// coefficients when every child is data-only. Keep the same boundary as
+		// unsupported FunctionExpression operators above: DuckDB evaluates the
+		// opaque data expression, while DECIDE only models expressions that touch a
+		// decision variable.
+		if (!ExpressionContainsDecideVariable(expr, variables)) {
+			return true;
+		}
+		error_msg = StringUtil::Format(
+		    "Unsupported operator expression over a DECIDE variable inside DECIDE SUM expression: %s",
+		    expr.ToString());
 		return false;
 	}
 	case ExpressionClass::CAST: {

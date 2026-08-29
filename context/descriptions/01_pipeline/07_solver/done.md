@@ -380,6 +380,68 @@ change the objective's units — it inflates cross terms relative to squares and
 turns a PSD Q indefinite. Getting this wrong is silent: the solver returns a
 confident answer to a different problem.
 
+### The coefficient window
+
+HiGHS enforces a magnitude window on every constraint-matrix entry inside `passModel`,
+at both ends and with different consequences. An entry at or below `small_matrix_value`
+(1e-9) is **deleted from the matrix** and `passModel` returns `kWarning`; an entry at or
+above `large_matrix_value` (1e15) makes it return `kError`. Gurobi has no such window.
+
+Both edges are reachable from ordinary SQL, and neither is a malformed query. A per-unit
+rate of 1e-9 is data. The heavy end is reached by coefficients DeciDB generates itself —
+the Big-M closing `<>`, `MIN` and `MAX` is the decision's own span, so
+`x(REAL) SUCH THAT x <= 4e15 AND MAX(x) >= 3` puts a 4e15 entry in the matrix while every
+number the user typed is in range. The infeasible engine reaches the low end the same way:
+its scale-normalized tier-1 weights are `ref / rms(Aᵢ)`, so a row with 1e9-scale
+coefficients earns a 1e-9 weight, and that weight becomes a matrix entry in the stage-2
+budget row.
+
+**Each out-of-window row is therefore multiplied through by its own power of two, bounds
+included, before the matrix is packed into CSR.** Scaling a row by a positive constant is
+the one rewrite that leaves a constraint's meaning exactly intact — `1e-9x₁ + 1e-9x₂ ≥ 1`
+and `x₁ + x₂ ≥ 1e9` have identical solution sets — so it cannot change an answer. Rounding
+a sub-tolerance entry to zero, which is what HiGHS itself does, can: drop both
+coefficients of that same row and it becomes `0 ≥ 1`, turning a feasible query infeasible.
+The factor is a power of two so that `ldexp` is exact in binary floating point and
+introduces no drift; both backends still solve bit-identical constraints. HiGHS's own
+internal scaling picks powers of two for the same reason.
+
+A row already inside the window is left exactly as it is rather than re-centred, so this
+changes nothing about the models that loaded correctly before it existed. An
+out-of-window row is centred in the window rather than shifted just far enough to clear
+the edge — a coefficient sitting a hair above the drop threshold is inside the window but
+still badly conditioned.
+
+A row's bound has a window of its own, and the same scaling serves it. HiGHS reads
+|bound| >= `infinite_bound` (1e20) as ±infinity, which on one side of a row is an error
+and on the other silently drops the constraint. So a row is scaled when *either* its
+coefficients or its finite bound is out of range — `SUM(x) >= 1e25` against `x <= 5` is
+scaled down until HiGHS can hold the limit, and answers INFEASIBLE like Gurobi instead of
+dying at `passModel` — and the scaling is capped so a bound that was representable stays
+representable. A rescue that deletes a row would be the same silent model change the
+dropped coefficient was.
+
+Two rows cannot be placed inside the window at all, and both are refused in SQL terms
+naming the clause as the user wrote it, rather than reaching HiGHS: one whose own
+coefficients span more than the window's ~24 orders of magnitude, and one whose bound
+would have to cross `infinite_bound` to get the coefficients in. Scaling gets an extreme
+row *loaded*; it does not make it well-conditioned. A Big-M of 4e15 is numerically
+untrustworthy on any solver, which is a separate concern from whether the API accepts it.
+
+The bound is read from the clause's own `rhs`, never inferred from the packed range row.
+The sense decides which side of `row_lower` / `row_upper` carries the limit, and the open
+side holds HiGHS's ±1e30 "no bound here" sentinel — so a user limit of 1e40, or of 1e30
+exactly, cannot be told from that sentinel by magnitude. Reading it from the clause is
+what keeps a real limit from being mistaken for "no bound" and passed through to the
+internal error this exists to prevent.
+
+`passModel` and `passHessian` therefore throw only on `kError`, never on `kWarning` — the
+same split `RunAndReadback` makes at `run()`. `kWarning` is HiGHS reporting a condition it
+expects the caller to proceed through: a dropped sub-tolerance entry, or an inconsistent
+bound pair left in place so the solve can deduce infeasibility from it. Treating those as
+fatal turned an ordinary query into an `InternalException` with a stack trace, and made a
+query's success depend on which solver happened to be installed.
+
 Logging is off (`log_to_console = false`). The session sets `time_limit` per chunk
 rather than once at load, which is what makes `Continue()` work: HiGHS resumes its
 MIP search on a repeat `run()`.

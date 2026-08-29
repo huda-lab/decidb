@@ -102,6 +102,12 @@ so this is opt-in and nothing existing changes meaning.
   §3.2.2's carve-out: it is row-invariant, so it contributes the same value to every tuple
   regardless of which relation owns it (`SUM(D: opening_cost * cap)`). It is refused only
   when it is the *whole* body (`SUM(D: cap)`), by the general row-invariance rule above.
+- **EXPLAIN prints the qualifier.** `RenderAggregate` reads the qualified-reducer tag off
+  the aggregate's alias and prefixes the body with the scope's `table_alias`, so
+  `SUM(D: opening_cost * open)` and `SUM(opening_cost * open)` are distinguishable in a
+  plan. Unlike `WHEN` and `PER`, which the clause walker unwraps into postfix suffixes, the
+  qualifier sits *on* the aggregate rather than above it, so it is rendered by the
+  aggregate's own case rather than appended as a suffix.
 - **A row-scoped decision inside a qualified reducer is rejected, and stays rejected**
   (settled 2026-08-26). A row-scoped `y(INT)` is a different variable on every
   join-result row, so collapsing a depot's rows down to one would keep an arbitrary one

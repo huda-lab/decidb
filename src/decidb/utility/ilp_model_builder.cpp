@@ -31,9 +31,7 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
     return offset;
 }
 
-// Shared logic for Build and BuildRef — populates all fields except entity data source
-static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
-                                   const vector<EntityMapping> &entity_mappings) {
+static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
     idx.num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
 
@@ -69,11 +67,11 @@ static void BuildVarIndexerCommon(VarIndexer &idx, const SolverInput &input,
             continue;
         }
         idx_t scope_idx = input.variable_scopes[v].entity_scope_idx;
-        D_ASSERT(scope_idx < entity_mappings.size());
+        D_ASSERT(scope_idx < idx.entity_mappings.size());
         idx.var_entity_mapping_idx[v] = scope_idx;
         idx.entity_var_base[v] = idx.entity_block_start + entity_offset;
         idx.entity_block_var.push_back(v);
-        entity_offset += entity_mappings[scope_idx].num_entities;
+        entity_offset += idx.entity_mappings[scope_idx].num_entities;
     }
 
     // Scalar block: exactly one column per query-wide variable, independent of num_rows
@@ -118,17 +116,8 @@ idx_t VarIndexer::OwnerOf(idx_t col) const {
 VarIndexer VarIndexer::Build(const SolverInput &input) {
     VarIndexer idx;
     // Own a copy so this VarIndexer can outlive the SolverInput
-    idx.entity_mappings_owned = input.entity_mappings;
-    idx.entity_mappings_ref = nullptr;
-    BuildVarIndexerCommon(idx, input, idx.entity_mappings_owned);
-    return idx;
-}
-
-VarIndexer VarIndexer::BuildRef(const SolverInput &input) {
-    VarIndexer idx;
-    // Reference without copying — caller must ensure SolverInput outlives this VarIndexer
-    idx.entity_mappings_ref = &input.entity_mappings;
-    BuildVarIndexerCommon(idx, input, input.entity_mappings);
+    idx.entity_mappings = input.entity_mappings;
+    BuildVarIndexer(idx, input);
     return idx;
 }
 
@@ -1036,10 +1025,20 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
                 double rhs = eval_const.rhs_values[row] - rhs_adjustment;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
-                // F2 site 3: per-row.
+                // F2 site 3: per-row. The group label is stamped here for the same reason
+                // the aggregate sites stamp it: a diagnosis over a grouped clause has to
+                // name the group its failure sits in, not just the clause. It matters most
+                // for a hard MIN/MAX whose bound is out of every row's reach — the rewrite
+                // re-emits that group as ordinary per-row rows, so this is the only site
+                // that sees it (see ilp_linearization.cpp, the NO_SOLUTION branch).
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
+                string row_group_label =
+                    row_group_key != DConstants::INVALID_INDEX &&
+                            row_group_key < eval_const.group_labels.size()
+                        ? eval_const.group_labels[row_group_key]
+                        : string();
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
-                                          string(), rhs_adjustment);
+                                          row_group_label, rhs_adjustment);
                 PushNormalizedConstraint(std::move(constr));
             }
         }

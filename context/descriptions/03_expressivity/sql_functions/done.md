@@ -469,8 +469,10 @@ SUCH THAT SUM(((id * 7) % 97) * x) <= 3   -- OK: `(id*7)%97` is a per-row coeffi
 MAXIMIZE SUM(((id * 7) % 97) * x)         -- OK: same, in an objective
 SUCH THAT SUM(mod(id, 5) * x) <= 3        -- OK: named function, data-only coefficient
 MAXIMIZE SUM(floor(price) * x)            -- OK: same, in an objective
+SUCH THAT SUM(COALESCE(weight, 0) * x) <= 3 -- OK: operator node, data-only coefficient
 SUCH THAT SUM((x % 97)) <= 3              -- rejected: `%` wraps a decision variable
 SUCH THAT SUM(mod(x, 5)) <= 3             -- rejected: function wraps a decision variable
+SUCH THAT SUM(COALESCE(x, 0)) <= 3        -- rejected: operator wraps a decision variable
 ```
 
 This is the same "fold data-only subterms" idea already applied to `x + cost` and `x / col`, generalized to operators *and* named scalar functions outside the modelled set.
@@ -481,7 +483,7 @@ This is the same "fold data-only subterms" idea already applied to `x + cost` an
 - Bind-time: `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide_binder.cpp` returns success (instead of an error) when `ExpressionContainsDecideVariable` is false — both in the unsupported-operator arm and in the unsupported-named-function arm.
 - Downstream: a data-only subterm is simply an atom nothing opens. The canonicalizer treats it as one term, and physical coefficient evaluation runs it through DuckDB's own `ExpressionExecutor` — so any scalar function DuckDB can evaluate works as a coefficient without DECIDE needing to model it.
 
-**Tests**: `test/decide/tests/test_error_unsupported_operator.py` — operator forms (`test_modulo_data_coefficient_matches_oracle`, `test_modulo_data_coefficient_in_constraint_runs`), function forms (`test_mod_function_data_coefficient_matches_oracle` oracle-verified, `test_floor_function_data_coefficient_in_constraint`), and the `TestUnsupportedOperatorOverVariableRejection` cases pinning that a variable-bearing `%` or `mod()` still errors without a stack trace.
+**Tests**: `test/decide/tests/test_error_unsupported_operator.py` — operator forms (`test_modulo_data_coefficient_matches_oracle`, `test_modulo_data_coefficient_in_constraint_runs`), function forms (`test_mod_function_data_coefficient_matches_oracle` oracle-verified, `test_floor_function_data_coefficient_in_constraint`), and the `TestUnsupportedOperatorOverVariableRejection` cases pinning that a variable-bearing `%` or `mod()` still errors without a stack trace. `test/decide/tests/test_null_coalesce_reducer.py` covers the `COALESCE`/`IFNULL` operator node in reducer constraints and objectives and keeps its decision-bearing form rejected.
 
 ### Per-row linear LHS (`+ const`, `- col`, `/ const`, unary `-`)
 

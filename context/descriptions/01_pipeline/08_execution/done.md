@@ -594,8 +594,8 @@ branch is on the variable's **output `LogicalType`**, not on how it was declared
 
 | Output type | C++ type | Projection | Reached by |
 |---|---|---|---|
-| `INTEGER` | `int32_t` | `round(value)` | `x(INT)` **and `x(BOOL)`** |
-| `BIGINT` | `int64_t` | `round(value)` | — |
+| `INTEGER` | `int32_t` | `round(value)`, range-checked | `x(BOOL)` and INTEGER auxiliaries |
+| `BIGINT` | `int64_t` | `round(value)`, range-checked | `x(INT)` |
 | `BOOLEAN` | `bool` | `value >= 0.5` | optimizer-created BOOLEAN auxiliaries |
 | `DOUBLE` | `double` | direct, no rounding | `x(REAL)` |
 | default | `int64_t` | as BIGINT | — |
@@ -605,6 +605,22 @@ A declared `x(BOOL)` therefore comes back as `int32` `0`/`1`, not as SQL `true`/
 DuckDB-facing type stays `INTEGER` so it can appear in arithmetic. The `BOOLEAN`
 row is reached only by auxiliaries the optimizer declares with that type
 outright.
+
+**The integer rows are checked, not cast** (`DecideSolutionToInteger`). A solved
+value is not bounded by the column's type: the solver works in doubles, and the
+bound that actually pins a variable may be a column read at execution or an
+aggregate row that bounds no single variable. So no earlier layer can promise the
+value fits, and an unchecked cast of an out-of-range double is undefined in C++ —
+it saturates on the platforms we build, which would present the type's limit as
+the answer and return a row violating the query's own constraints. This is the
+one place that can know, so it refuses by name instead.
+
+`x(INT)` is `BIGINT` for the same reason: a 32-bit result column would truncate
+optima that are ordinary (`SUM(x) <= 5000000000`), and `BIGINT` is what DuckDB
+itself returns for generated integers. The limit that remains is the double's
+rather than the column's — past `2^53` a double no longer counts consecutively,
+so the solver never distinguished the value and no wider integer type recovers
+it. `x(BOOL)` stays `INTEGER`: a `0`/`1` domain cannot reach either limit.
 
 Each output vector is `FLAT_VECTOR`, written through `FlatVector::GetData<T>()`.
 

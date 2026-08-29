@@ -172,6 +172,54 @@ A data-only *aggregate* RHS (`SUM(x*val) <= SUM(val)`, distinct from a subquery)
 
 ---
 
+## NULL Values in Constraint and Objective Expressions
+
+A NULL reaching any number the solver needs is an error, not a zero. This covers
+every value DECIDE evaluates from data: constraint coefficients, objective
+coefficients, quadratic and bilinear coefficients, constraint right-hand sides,
+and the input to a reducer used as a bound.
+
+**Why an error rather than SQL's `SUM()` behaviour.** SQL's `SUM()` skips NULLs,
+so treating a NULL coefficient as 0 looks like the natural extension. It is not,
+for three reasons.
+
+- A NULL coefficient is nearly always a data-quality problem. Coercing it to 0
+  silently optimizes a different problem than the one written, and the answer
+  looks perfectly ordinary — there is no later point at which the substitution
+  becomes visible.
+- Coefficients and bounds would need different rules. A NULL coefficient read as
+  0 means "this row contributes nothing", which is at least arguable. A NULL
+  bound read as 0 turns `SUM(x) <= budget` into `SUM(x) <= 0`, which forbids
+  everything and reports the query infeasible for a reason the user cannot see.
+- It would not actually match SQL. `AVG(expr) op K` is evaluated as
+  `SUM(expr) op K*N` with `N` the row count, while SQL's `AVG` drops NULL rows
+  from the count as well as the sum. Matching SQL would mean adjusting `N` per
+  group, so "just follow `SUM()`" does not describe a single coherent rule.
+
+**What the error says.** It names the column that is NULL and the two ways out:
+
+```
+DECIDE: column "weight" is NULL. Impute it with COALESCE(weight, 0) or filter
+those rows out with a WHERE clause.
+```
+
+`COALESCE` and its `IFNULL` alias are accepted inline wherever a data value is
+used, including the common reducer form `SUM(keep * COALESCE(weight, 0))` and
+the corresponding objective. The imputation must be decision-free:
+`COALESCE(keep, 0)` is rejected because `keep` is controlled by the solver.
+
+The column is identified on the error path by walking the coefficient expression
+for its leaf references and testing each against the failing row, so a NULL
+inside a compound coefficient such as `SUM(x * (weight / capacity))` still names
+`weight` rather than the whole expression. Where several are NULL on the same row
+all are named. A NULL that no column explains — one an operation produced — has
+no name to give, so the expression is quoted instead.
+
+No row number is reported. The fix is applied to the column, not to a row, and a
+scan ordinal is not something the user can look up in their own data.
+
+---
+
 ## Code Pointers
 
 - **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp`
@@ -185,3 +233,6 @@ A data-only *aggregate* RHS (`SUM(x*val) <= SUM(val)`, distinct from a subquery)
   - `DecideBinder::BindExpression()` — validates scalar-only, no DECIDE variable references, then delegates to `ExpressionBinder::BindExpression`
   - Correlated subquery RHS validation at execution: `src/decidb/utility/ilp_model_builder.cpp`, `SolverModel::Build()`
 - **Execution** (constraint matrix construction): `src/execution/operator/decide/physical_decide.cpp`
+  - `ExtractDoubleColumn()` — the single NULL / non-finite gate every evaluated coefficient and bound passes through
+  - `CollectNullColumnsAtRow()` / `DescribeNullSource()` — name the NULL column on the error path
+- **Tests**: `test/decide/tests/test_null_coalesce_reducer.py` — inline reducer imputation in constraints and objectives, the `IFNULL` alias, oracle agreement, and decision-bearing rejection

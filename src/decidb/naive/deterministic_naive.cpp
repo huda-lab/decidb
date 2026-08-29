@@ -3,9 +3,12 @@
 #include "duckdb/decidb/solver_session.hpp"
 #include "duckdb/decidb/diagnostic_constants.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "Highs.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace duckdb {
 
@@ -37,13 +40,11 @@ const SolverCapabilities &DeterministicNaive::Capabilities() {
 
 namespace {
 
-//! Render an unreachable row as the user wrote it (`SUM(x) >= inf PER g`) from the
-//! provenance the model already carries, so the refusal below reads in SQL terms rather
-//! than as a matrix row. Empty when the row has no source clause to quote; the caller
-//! then falls back to a clause-free message. The bound is always ±inf here — that is what
-//! makes the row unreachable — so there is no number to format, and the strict-`<` δ
-//! offset that `ConstraintProvenance::typed_k` exists for cannot apply.
-string DescribeUnreachableRow(const SolverModel &model, const ModelConstraint &constr) {
+//! Render a model row as the user wrote it (`SUM(x) >= 100 PER g`) from the provenance
+//! the model already carries, so a refusal below reads in SQL terms rather than as a
+//! matrix row. `rhs_text` is the bound as the caller wants it spelled. Empty when the row
+//! has no source clause to quote; the caller then falls back to a clause-free message.
+string DescribeRowClause(const SolverModel &model, const ModelConstraint &constr, const string &rhs_text) {
     auto source_id = constr.provenance.source_clause_id;
     if (source_id == DConstants::INVALID_INDEX || source_id >= model.constraint_sources.size()) {
         return string();
@@ -53,11 +54,187 @@ string DescribeUnreachableRow(const SolverModel &model, const ModelConstraint &c
         return string();
     }
     const char *sense = constr.sense == '<' ? "<=" : (constr.sense == '>' ? ">=" : "=");
-    string label = source.canonical_lhs + " " + sense + " " + (constr.rhs > 0.0 ? "inf" : "-inf");
+    string label = source.canonical_lhs + " " + sense + " " + rhs_text;
     if (!source.qualifier.empty()) {
         label += " " + source.qualifier;
     }
     return label;
+}
+
+//! The `DescribeRowClause` spelling for the unreachable-bound refusal below. The bound is
+//! always ±inf there — that is what makes the row unreachable — so there is no number to
+//! format, and the strict-`<` δ offset that `ConstraintProvenance::typed_k` exists for
+//! cannot apply.
+string DescribeUnreachableRow(const SolverModel &model, const ModelConstraint &constr) {
+    return DescribeRowClause(model, constr, constr.rhs > 0.0 ? "inf" : "-inf");
+}
+
+//===--------------------------------------------------------------------===//
+// HiGHS's coefficient window, and the row scaling that keeps our models inside it
+//===--------------------------------------------------------------------===//
+
+// `passModel` enforces a magnitude window on every constraint-matrix entry, at both ends
+// and with different consequences:
+//   * |v| <= `small_matrix_value` (1e-9): the entry is DELETED from the matrix and
+//     `passModel` returns kWarning. The model HiGHS then solves is not the one we built.
+//   * |v| >= `large_matrix_value` (1e15): `passModel` returns kError.
+// Both edges are reachable from ordinary SQL, and neither is a malformed query. A
+// per-unit rate of 1e-9 is data. The heavy end is reached by coefficients DeciDB itself
+// generates — the Big-M closing `<>` / MIN / MAX is the decision's own span, so
+// `x(REAL) SUCH THAT x <= 4e15 AND MAX(x) >= 3` puts a 4e15 entry in the matrix while
+// every number the user typed is in range. Gurobi loads both ends without complaint, so
+// left alone this decides whether a query works by which solver happens to be installed.
+constexpr double HIGHS_SMALL_MATRIX_VALUE = 1e-9;
+constexpr double HIGHS_LARGE_MATRIX_VALUE = 1e15;
+// |bound| >= `infinite_bound` (1e20) is read by HiGHS as ±infinity, which on the finite
+// side of a row is an error rather than a bound. Scaling carries the bound along with the
+// row, so this is what caps how far a row may be scaled up.
+constexpr double HIGHS_INFINITE_BOUND = 1e20;
+//! Why a row could not be placed inside the window, so the refusal can say which.
+enum class RowScaleResult { OK, SPREAD_TOO_WIDE, BOUND_TOO_LARGE };
+
+//! Choose a power of two to multiply one row through by so its coefficients land inside
+//! HiGHS's window. Scaling a row by a positive constant is the one rewrite that leaves a
+//! constraint's meaning exactly intact — `1e-9x₁ + 1e-9x₂ >= 1` and `x₁ + x₂ >= 1e9` have
+//! identical solution sets — so unlike rounding a sub-tolerance entry to zero it cannot
+//! change an answer. (Rounding can: drop both coefficients of that same row and it becomes
+//! `0 >= 1`, turning a feasible query infeasible.) A POWER OF TWO specifically, because
+//! `ldexp` is then exact in binary floating point and introduces no drift, so both
+//! backends still solve bit-identical constraints. HiGHS's own internal scaling picks
+//! powers of two for the same reason.
+//!
+//! `lo` / `hi` are the row's smallest and largest |coefficient|; `bound` is the largest
+//! |finite row bound|. A row is scaled when either its coefficients or that bound is out
+//! of range — a limit at or above `infinite_bound` needs the row scaled DOWN even though
+//! its coefficients are fine, which is how `SUM(x) >= 1e25` becomes a row HiGHS can load
+//! and answer instead of dying at `passModel`. Rows inside both
+//! windows return exponent 0 and are left untouched rather than re-centred, so this
+//! changes nothing about the models that load today.
+RowScaleResult ChooseHighsRowScale(double lo, double hi, double bound, int &exponent) {
+    exponent = 0;
+    if (lo > HIGHS_SMALL_MATRIX_VALUE && hi < HIGHS_LARGE_MATRIX_VALUE && bound < HIGHS_INFINITE_BOUND) {
+        return RowScaleResult::OK;
+    }
+    // Smallest k with 2^k·lo > small; largest k with 2^k·hi < large. Both thresholds are
+    // exclusive on the side HiGHS rejects (it drops at <= small and errors at >= large).
+    int k_min = static_cast<int>(std::floor(std::log2(HIGHS_SMALL_MATRIX_VALUE / lo))) + 1;
+    int k_max = static_cast<int>(std::ceil(std::log2(HIGHS_LARGE_MATRIX_VALUE / hi))) - 1;
+    if (k_min > k_max) {
+        // The row's own coefficients span more than the window's ~24 orders of magnitude.
+        // No single factor can hold both ends, and rescaling is all we are allowed to do.
+        return RowScaleResult::SPREAD_TOO_WIDE;
+    }
+    if (bound > 0.0) {
+        int k_bound = static_cast<int>(std::ceil(std::log2(HIGHS_INFINITE_BOUND / bound))) - 1;
+        if (k_min > k_bound) {
+            // The coefficients fit, but only by scaling the row up so far that its bound
+            // crosses into HiGHS's infinity and stops being a bound at all.
+            return RowScaleResult::BOUND_TOO_LARGE;
+        }
+        k_max = std::min(k_max, k_bound);
+    }
+    // Centre the row in the window rather than shifting it just far enough to clear the
+    // edge: a coefficient sitting a hair above the drop threshold is inside the window but
+    // still badly conditioned.
+    double window_centre = 0.5 * (std::log2(HIGHS_SMALL_MATRIX_VALUE) + std::log2(HIGHS_LARGE_MATRIX_VALUE));
+    double row_centre = 0.5 * (std::log2(lo) + std::log2(hi));
+    int k = static_cast<int>(std::lround(window_centre - row_centre));
+    exponent = std::min(std::max(k, k_min), k_max);
+    return RowScaleResult::OK;
+}
+
+[[noreturn]] void ThrowUnscalableRow(const SolverModel &model, const ModelConstraint &constr, RowScaleResult why,
+                                     double lo, double hi) {
+    string clause = DescribeRowClause(model, constr, StringUtil::Format("%g", constr.rhs));
+    string where = clause.empty() ? string("A constraint in this query")
+                                  : StringUtil::Format("Constraint `%s`", clause);
+    if (why == RowScaleResult::BOUND_TOO_LARGE) {
+        throw InvalidInputException(
+            "%s sets a limit of %g that HiGHS cannot hold alongside coefficients as small "
+            "as %g. Use a smaller limit, or express the column and its limit in the same "
+            "unit; Gurobi loads this range as written.",
+            where, constr.rhs, lo);
+    }
+    throw InvalidInputException(
+        "%s mixes numbers too far apart in size for HiGHS to load: coefficients run from %g "
+        "to %g in one constraint. Express the columns in the same unit, or install Gurobi, "
+        "which loads this range.",
+        where, lo, hi);
+}
+
+//! Multiply each out-of-window row of the constraint matrix through by its own power of
+//! two, bounds included. Applied to the COO matrix before it is packed into CSR, so the
+//! scaled values are what reaches `passModel`.
+void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_rows, vector<double> &a_vals,
+                              vector<double> &row_lower, vector<double> &row_upper) {
+    idx_t num_rows = row_lower.size();
+    vector<double> lo(num_rows, std::numeric_limits<double>::infinity());
+    vector<double> hi(num_rows, 0.0);
+    for (idx_t i = 0; i < a_vals.size(); i++) {
+        double v = std::fabs(a_vals[i]);
+        if (v == 0.0) {
+            // The model builder strips exact zeros; one that slips through carries no
+            // information, so HiGHS dropping it silently is correct and it must not drag
+            // the row's `lo` to zero.
+            continue;
+        }
+        idx_t r = static_cast<idx_t>(a_rows[i]);
+        lo[r] = std::min(lo[r], v);
+        hi[r] = std::max(hi[r], v);
+    }
+
+    vector<int> exponent(num_rows, 0);
+    bool any = false;
+    for (idx_t r = 0; r < num_rows; r++) {
+        if (hi[r] == 0.0) {
+            continue; // empty row: nothing to scale
+        }
+        // The row's bound moves with the row, so it both constrains how far the row may
+        // be scaled and, when it is already unrepresentable, forces a scaling of its own.
+        // The requirement is the same in either direction: a finite bound must end up with
+        // |b| < `infinite_bound`. HiGHS reads anything at or above that as ±infinity, which
+        // on one side of a row is an error and on the other silently drops the constraint
+        // — a rescue that deletes a row is the model change this exists to prevent.
+        //
+        // The bound is read from the CLAUSE, not from the packed range row: the row's open
+        // side holds HiGHS's ±1e30 "no bound here" sentinel, and a user limit of 1e40 is
+        // indistinguishable from that sentinel by magnitude alone. The sense says which
+        // side is which, exactly as the loop that packed them did. A non-finite rhs is the
+        // vacuous infinity `IsUnreachableBound` deliberately lets through — HiGHS reads it
+        // as no bound at all, and it is not a number to scale.
+        const auto &constr = model.constraints[r];
+        double bound = std::isfinite(constr.rhs) ? std::fabs(constr.rhs) : 0.0;
+        RowScaleResult why = ChooseHighsRowScale(lo[r], hi[r], bound, exponent[r]);
+        if (why != RowScaleResult::OK) {
+            ThrowUnscalableRow(model, constr, why, lo[r], hi[r]);
+        }
+        any = any || exponent[r] != 0;
+    }
+    if (!any) {
+        return;
+    }
+
+    for (idx_t i = 0; i < a_vals.size(); i++) {
+        int k = exponent[static_cast<idx_t>(a_rows[i])];
+        if (k != 0) {
+            a_vals[i] = std::ldexp(a_vals[i], k);
+        }
+    }
+    for (idx_t r = 0; r < num_rows; r++) {
+        const auto &constr = model.constraints[r];
+        if (exponent[r] == 0 || !std::isfinite(constr.rhs)) {
+            continue;
+        }
+        double scaled = std::ldexp(constr.rhs, exponent[r]);
+        if (constr.sense == '>') {
+            row_lower[r] = scaled;
+        } else if (constr.sense == '<') {
+            row_upper[r] = scaled;
+        } else {
+            row_lower[r] = scaled;
+            row_upper[r] = scaled;
+        }
+    }
 }
 
 //! Resumable HiGHS handle. Load() builds the model into the `highs` object once
@@ -175,6 +352,11 @@ void HighsSession::Load(const SolverModel &model) {
         constraint_idx++;
     }
 
+    // Bring every row inside HiGHS's coefficient window before the matrix is packed.
+    // Each out-of-window row is multiplied through by its own power of two, bounds
+    // included, which leaves the constraint — and therefore the answer — exactly intact.
+    ScaleRowsIntoHighsWindow(model, a_rows, a_vals, row_lower, row_upper);
+
     idx_t num_constraints = static_cast<idx_t>(row_lower.size());
 
     //===--------------------------------------------------------------------===//
@@ -224,7 +406,17 @@ void HighsSession::Load(const SolverModel &model) {
     }
 
     HighsStatus status = highs.passModel(lp);
-    if (status != HighsStatus::kOk) {
+    // `passModel` returns kWarning for conditions it expects the caller to proceed
+    // through — a matrix entry dropped for being sub-tolerance, an inconsistent bound
+    // pair left in place so the solve can deduce infeasibility from it. Treating those as
+    // fatal turned an ordinary query into an internal error with a stack trace. Throw only
+    // on a genuine kError, the same split `RunAndReadback` already makes at `run()`.
+    //
+    // The dropped-coefficient case should no longer arrive here at all: every row is
+    // scaled into the window above, and the model builder strips exact zeros, so there is
+    // nothing left below the threshold to drop. Proceeding is still the right response if
+    // one appears.
+    if (status == HighsStatus::kError) {
         throw InternalException("Failed to pass model to HiGHS: status %d", (int)status);
     }
 
@@ -288,7 +480,11 @@ void HighsSession::Load(const SolverModel &model) {
         status = highs.passHessian((HighsInt)total_vars, (HighsInt)num_nz,
                                    (HighsInt)HessianFormat::kTriangular,
                                    q_start.data(), q_index.data(), q_value.data());
-        if (status != HighsStatus::kOk) {
+        // Same kWarning/kError split as `passModel` above: `assessHessian` drops
+        // sub-tolerance entries of the normalised Hessian and warns, which is a report
+        // rather than a failure. Row scaling does not reach here — it rewrites constraint
+        // rows, and the Hessian is the objective.
+        if (status == HighsStatus::kError) {
             throw InternalException("Failed to pass quadratic objective (Hessian) to HiGHS: status %d",
                                     (int)status);
         }

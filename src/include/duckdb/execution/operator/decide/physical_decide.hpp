@@ -78,6 +78,11 @@ public:
     //! Stable source display registry copied from LogicalDecide.
     vector<ConstraintSourceInfo> constraint_sources;
 
+    //! The objective as written and as canonicalized, copied from LogicalDecide so the
+    //! physical plan renders the same layers the logical one does.
+    string written_objective;
+    string canonical_objective;
+
     //! The user's written spelling of every cast and scalar subquery in the DECIDE
     //! clause, copied from LogicalDecide. RenderDecideSource replays it so EXPLAIN
     //! and the diagnosis labels quote the clause the user typed.
@@ -163,6 +168,14 @@ public:
     //! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Used by
     //! the unbounded diagnosis to label escaping categorical groups (affected_rows).
     vector<string> input_column_names;
+
+    //! Positionally aligned with `input_column_names`: true when the DECIDE clause
+    //! itself references the column (WHEN / PER / constraint / objective), false when
+    //! it only rides along in the outer SELECT. The unbounded characterization uses it
+    //! to pick a representative when several columns describe the same escaping rows:
+    //! a column the user put in the clause explains the escape, one that merely
+    //! correlates with it is a coincidence.
+    vector<bool> input_column_in_clause;
 
     //! The `DIAGNOSE` prefix the user wrote, carried down from LogicalDecide::diagnose.
     //! It is the ONLY thing that arms the diagnosis engines. When true a failed solve

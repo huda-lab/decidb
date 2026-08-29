@@ -132,6 +132,15 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 			return ExpressionBinder::BindExpression(expr_ptr, depth);
 		}
 		break;
+	case ExpressionClass::OPERATOR:
+		// The aggregate classifier already validated this reducer body before
+		// BindAggregate descends into it. A nested operator here is therefore a
+		// decision-free coefficient such as COALESCE(weight, 0); bind it with
+		// DuckDB's ordinary operator binder, matching the constraint binder.
+		if (!is_top_expression) {
+			return ExpressionBinder::BindExpression(expr_ptr, depth);
+		}
+		break;
 	case ExpressionClass::CASE:
 		// Shares the constraint binder's wording; see DecideCaseUnsupportedMessage.
 		return BindResult(BinderException::Unsupported(expr, DecideCaseUnsupportedMessage()));

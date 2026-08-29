@@ -185,7 +185,7 @@ SolverModel MakeNotEqualModel() {
 TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	SECTION("unbounded engine names variable and uses injected grouping") {
 		SolverInput input = MakeRowScopedInput(3);
-		VarIndexer indexer = VarIndexer::BuildRef(input);
+		VarIndexer indexer = VarIndexer::Build(input);
 
 		SolverResult result;
 		result.status = SolverStatus::UNBOUNDED;
@@ -220,7 +220,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.findings.size() == 1);
 		CHECK(diag.findings[0].clause == "x");
 		CHECK(diag.findings[0].edit_source == "runaway_+inf");
-		CHECK(diag.findings[0].suggested_change == "x <= <cap>");
+		// The one rule accounts for every escaping instance and its whole group escapes,
+		// so the cap is scoped to those rows rather than capping the domestic row too.
+		CHECK(diag.findings[0].suggested_change == "x <= <cap> WHEN channel = 'export'");
 		CHECK(diag.findings[0].group == "channel = 'export'");
 		REQUIRE(diag.findings[0].has_amount);
 		CHECK(diag.findings[0].amount == 2.0);
@@ -231,7 +233,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 	SECTION("unbounded engine preserves negative ray direction") {
 		SolverInput input = MakeRowScopedInput(1);
-		VarIndexer indexer = VarIndexer::BuildRef(input);
+		VarIndexer indexer = VarIndexer::Build(input);
 
 		SolverResult result;
 		result.status = SolverStatus::UNBOUNDED;
@@ -262,7 +264,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		input.global_lower_bounds = {0.0};
 		input.global_upper_bounds = {1e30};
 		input.global_obj_coeffs = {0.0};
-		VarIndexer indexer = VarIndexer::BuildRef(input);
+		VarIndexer indexer = VarIndexer::Build(input);
 		indexer.total_vars = indexer.global_block_start + input.num_global_vars;
 
 		SolverResult result;
@@ -284,9 +286,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	}
 
 	// I1: the elastic engine runs a real stage-1 solve (bundled HiGHS) and reports
-	// the least-change fix. `input` outlives `indexer` (BuildRef references it).
+	// the least-change fix.
 	SolverInput input = MakeRowScopedInput(1);
-	VarIndexer indexer = VarIndexer::BuildRef(input);
+	VarIndexer indexer = VarIndexer::Build(input);
 	duckdb::vector<string> labels {"x"};
 	duckdb::vector<bool> is_aux {false};
 	DecideDiagParams params;
@@ -476,7 +478,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// 7). One shared knob → the fix is the MAX overshoot (7), a single edit.
 		// Independent slacks would report 3 and 7 (sum 10) and two edits.
 		SolverInput row_input = MakeRowScopedInput(2);
-		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
+		VarIndexer row_indexer = VarIndexer::Build(row_input);
 		duckdb::vector<string> row_labels {"x"};
 		duckdb::vector<bool> row_aux {false};
 		SolverModel model = MakeModel(2, {
@@ -583,7 +585,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// so its rows fold into one shared slack = a single virtual query offset
 		// `x <= cap + delta` (delta = max overshoot). The rhs_label names the column.
 		SolverInput row_input = MakeRowScopedInput(2);
-		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
+		VarIndexer row_indexer = VarIndexer::Build(row_input);
 		duckdb::vector<string> row_labels {"x"};
 		duckdb::vector<bool> row_aux {false};
 		SolverModel model = MakeModel(2, {
@@ -613,7 +615,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// T3 expanded mode: the data rows stay per-row, so each conflicting row is a
 		// separate `expanded_row` edit carrying its exact overshoot (3 and 7).
 		SolverInput row_input = MakeRowScopedInput(2);
-		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
+		VarIndexer row_indexer = VarIndexer::Build(row_input);
 		duckdb::vector<string> row_labels {"x"};
 		duckdb::vector<bool> row_aux {false};
 		SolverModel model = MakeModel(2, {
@@ -686,7 +688,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		// I2.d: a pure AVG aggregate stores coefficients pre-scaled by 1/N (avg_scaled),
 		// so the label collapses back to `AVG(x)` and the slack is reported in AVG units.
 		SolverInput row_input = MakeRowScopedInput(2);
-		VarIndexer row_indexer = VarIndexer::BuildRef(row_input);
+		VarIndexer row_indexer = VarIndexer::Build(row_input);
 		duckdb::vector<string> row_labels {"x"};
 		duckdb::vector<bool> row_aux {false};
 		SolverModel m;
@@ -774,7 +776,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	input2.num_rows = 1;
 	input2.num_decide_vars = 2;
 	input2.variable_types = {LogicalType::DOUBLE, LogicalType::DOUBLE};
-	VarIndexer indexer2 = VarIndexer::BuildRef(input2);
+	VarIndexer indexer2 = VarIndexer::Build(input2);
 	duckdb::vector<string> labels2 {"x", "y"};
 	duckdb::vector<bool> is_aux2 {false, false};
 
@@ -832,6 +834,12 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(AmountOf(diag, "x <= 0") == "5");
 		CHECK(Find(diag, "").edit_source == "unbounded_after_fix");
 		CHECK(!Find(diag, "").has_amount);
+		// The remedy has to say what to bound. "Bound the objective" is not actionable —
+		// an objective is an expression, not a knob — so it points at the terms in it.
+		// Deliberately no solver vocabulary ("no finite optimum", "unbounded ray").
+		string after_fix = Find(diag, "").suggested_change;
+		CHECK(after_fix.find("terms") != string::npos);
+		CHECK(after_fix.find("optimum") == string::npos);
 	}
 
 	SECTION("the stash crosses one statement and is consumed once") {
@@ -973,7 +981,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	ne_input.num_rows = 1;
 	ne_input.num_decide_vars = 2;
 	ne_input.variable_types = {LogicalType::DOUBLE, LogicalType::BOOLEAN};
-	VarIndexer ne_indexer = VarIndexer::BuildRef(ne_input);
+	VarIndexer ne_indexer = VarIndexer::Build(ne_input);
 	duckdb::vector<string> ne_labels {"x", "(x <> 3)"};
 	duckdb::vector<bool> ne_aux {false, true};
 
@@ -1046,7 +1054,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		agg_input.global_upper_bounds = {1.0};
 		agg_input.global_obj_coeffs = {0.0};
 		agg_input.global_variable_labels = {"(SUM(x) <> 3)"}; // names global col 1
-		VarIndexer agg_indexer = VarIndexer::BuildRef(agg_input);
+		VarIndexer agg_indexer = VarIndexer::Build(agg_input);
 		agg_indexer.total_vars = agg_indexer.global_block_start + agg_input.num_global_vars;
 		duckdb::vector<string> agg_labels {"x"};
 		duckdb::vector<bool> agg_aux {false};

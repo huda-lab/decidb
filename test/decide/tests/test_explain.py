@@ -645,3 +645,197 @@ def test_explain_logical_per(decidb_cli):
     assert _shows(
         out, "Constraints:", "SUM(x)", "<=", "5", "PER", "s_nationkey"
     ), _plan_text(out)
+
+
+# ===================================================================
+# Layered constraint rendering: as written → canonical → rewritten
+# ===================================================================
+#
+# A DECIDE clause is read three times on its way to a solver: as the user wrote
+# it, as canonicalization shaped it (decisions left, bound right), and as the
+# optimizer formulated it. EXPLAIN used to print only the last of those, so a
+# clause that became a Big-M encoding, an auxiliary variable, or nothing at all
+# looked exactly like one that passed through untouched.
+#
+# The grouping is: the written clause on its own line, an indented ``≡`` line
+# when canonicalization moved something, then indented ``↳`` lines for the rows
+# the solver receives. A clause nothing touched stays a single line.
+
+_CANONICAL_MARK = "≡"
+_REWRITTEN_MARK = "↳"
+
+
+def _packed(out: str) -> str:
+    """Plan text with box glyphs and all whitespace removed.
+
+    The box wraps a long value mid-token at a fixed column, so an assertion that
+    a marker introduces a particular row cannot be written against lines.
+    """
+    return "".join(_unbox(out).split())
+
+
+@pytest.mark.explain
+def test_untouched_clause_stays_one_line(decidb_cli):
+    """Nothing moved and nothing was rewritten, so there is nothing to subordinate."""
+    sql = """
+        SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x * l_quantity) <= 100
+        MAXIMIZE SUM(x)
+    """
+    out = _explain(decidb_cli, sql)
+    assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
+    packed = _packed(out)
+    assert _CANONICAL_MARK not in packed, _plan_text(out)
+    assert _REWRITTEN_MARK not in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+@pytest.mark.cons_aggregate
+def test_abs_clause_shows_the_rows_it_became(decidb_cli):
+    """One written clause, three solver rows, all grouped under it.
+
+    ``ABS`` linearizes into an auxiliary variable plus a lower envelope. Before
+    the layers those rows were loose lines naming ``__abs_aux_0__`` with no
+    account of where the auxiliary came from.
+    """
+    sql = """
+        SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(INT)
+        SUCH THAT ABS(x - 20) <= 5
+        MAXIMIZE SUM(x)
+    """
+    out = _explain(decidb_cli, sql)
+    packed = _packed(out)
+    # The clause the user wrote heads the group.
+    assert "ABS(x-20)<=5" in packed, _plan_text(out)
+    # Every generated row is subordinated, and the auxiliary never floats free.
+    assert packed.count("__abs_aux_0__") >= 2, _plan_text(out)
+    assert packed.count(_REWRITTEN_MARK) >= 2, _plan_text(out)
+    # Nothing was attributed to no clause at all.
+    assert "addedbyformulation" not in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+@pytest.mark.avg_rewrite
+def test_avg_rewrite_is_shown_not_substituted(decidb_cli):
+    """AVG becomes SUM with scaled coefficients — a different-looking constraint.
+
+    Printing only the rewritten form made ``AVG(x) >= 10`` read as
+    ``SUM(x) >= 10``, which is not what the user wrote and not what it means.
+    """
+    sql = """
+        SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(INT)
+        SUCH THAT AVG(x) >= 10
+        MAXIMIZE SUM(x)
+    """
+    out = _explain(decidb_cli, sql)
+    packed = _packed(out)
+    assert "AVG(x)>=10" in packed, _plan_text(out)
+    assert _REWRITTEN_MARK + "SUM(x)>=10" in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+@pytest.mark.min_max
+def test_composed_minmax_clause_does_not_vanish(decidb_cli):
+    """The optimizer lifts this clause out of the tree entirely.
+
+    It leaves a TRUE placeholder behind, so EXPLAIN printed a bare ``true`` and
+    the clause disappeared. The written form now stands, with an account of the
+    auxiliary its MIN/MAX term became.
+    """
+    sql = """
+        SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(INT)
+        SUCH THAT MAX(x) + SUM(x) <= 100
+        MAXIMIZE SUM(x)
+    """
+    out = _explain(decidb_cli, sql)
+    packed = _packed(out)
+    assert "MAX(x)+SUM(x)<=100" in packed, _plan_text(out)
+    assert "true" not in packed.lower().replace("truncated", ""), _plan_text(out)
+    assert "auxiliaryvariable" in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+def test_objective_layers_render_too(decidb_cli):
+    """The objective shares the renderer, so it gets the same account."""
+    sql = """
+        SELECT l_orderkey, l_quantity, x FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(BOOL)
+        SUCH THAT SUM(x) <= 5
+        MAXIMIZE AVG(x * l_quantity)
+    """
+    out = _explain(decidb_cli, sql)
+    packed = _packed(out)
+    assert "MAXIMIZEAVG(" in packed, _plan_text(out)
+    assert _REWRITTEN_MARK in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+def test_layers_survive_a_prepared_statement(decidb_cli):
+    """The written and canonical layers are hand-serialized, so replay is the risk.
+
+    ``LogicalDecide`` writes its own serializer; a field added to the header but
+    not to both serializer halves compiles, passes every test that does not use a
+    prepared statement, and drops silently on replay.
+    """
+    decidb_cli.execute_raw("pragma explain_output='optimized_only'")
+    out = decidb_cli.execute_script(
+        "PREPARE lp AS SELECT l_orderkey, l_quantity, x FROM lineitem"
+        " WHERE l_orderkey < 100 DECIDE x(INT)"
+        " SUCH THAT AVG(x) >= 10 MAXIMIZE SUM(x);\n"
+        "EXPLAIN EXECUTE lp;\n"
+    ).stdout
+    packed = _packed(out)
+    assert "AVG(x)>=10" in packed, _plan_text(out)
+    assert _REWRITTEN_MARK + "SUM(x)>=10" in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+@pytest.mark.cons_in
+def test_in_clause_renders_without_binder_casts(decidb_cli):
+    """An `IN` is an opaque marker, not a comparison — but it renders like everything else.
+
+    Without a `COMPARE_IN` case the renderer fell through to `ToString()`, the one
+    path that spells out the casts the binder inserted, so a plan whose every
+    other clause was cast-free printed `x IN (CAST(10 AS BIGINT), ...)`.
+    """
+    sql = """
+        SELECT l_orderkey, x FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(INT)
+        SUCH THAT x IN (10, 20, 30)
+        MAXIMIZE SUM(x)
+    """
+    out = _explain(decidb_cli, sql)
+    packed = _packed(out)
+    assert "xIN(10,20,30)" in packed, _plan_text(out)
+    assert "CAST(" not in packed, _plan_text(out)
+    assert "BIGINT" not in packed, _plan_text(out)
+
+
+@pytest.mark.explain
+@pytest.mark.cons_multi
+def test_a_lifted_clause_keeps_its_written_position(decidb_cli):
+    """Clause order is written order, including for clauses lifted out of the tree.
+
+    `IN` and composed MIN/MAX are both removed from the constraint tree and their
+    rows appended at the end. Each leaves a TRUE placeholder behind, and the
+    placeholder carries the clause id — otherwise the tree, which is the only
+    record of written order, cannot say where the clause stood and it sorts last.
+    """
+    sql = """
+        SELECT l_orderkey, x FROM lineitem WHERE l_orderkey < 100
+        DECIDE x(INT)
+        SUCH THAT x IN (10, 20, 30) AND MAX(x) + SUM(x) <= 500 AND SUM(x) >= 30
+        MAXIMIZE SUM(x)
+    """
+    out = _explain(decidb_cli, sql)
+    packed = _packed(out)
+    positions = [
+        packed.index("xIN(10,20,30)"),
+        packed.index("MAX(x)+SUM(x)<=500"),
+        packed.index("SUM(x)>=30"),
+    ]
+    assert positions == sorted(positions), _plan_text(out)

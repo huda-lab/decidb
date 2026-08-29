@@ -166,7 +166,7 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 
 	SECTION("SolveModel attaches rays only when requested") {
 		SolverInput default_input = MakeUnboundedTwoVariableInput();
-		VarIndexer default_indexer = VarIndexer::BuildRef(default_input);
+		VarIndexer default_indexer = VarIndexer::Build(default_input);
 
 		SolverResult default_result =
 		    SolveModel(default_input, default_indexer, SelectSolverBackend(), SolveModelOptions());
@@ -174,7 +174,7 @@ TEST_CASE("DeciDB query diagnostics unbounded ray fallback", "[decidb][query_dia
 		CHECK(default_result.ray.empty());
 
 		SolverInput diagnostic_input = MakeUnboundedTwoVariableInput();
-		VarIndexer diagnostic_indexer = VarIndexer::BuildRef(diagnostic_input);
+		VarIndexer diagnostic_indexer = VarIndexer::Build(diagnostic_input);
 		SolveModelOptions options;
 		options.extract_unbounded_ray = true;
 

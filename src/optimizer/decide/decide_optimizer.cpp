@@ -124,6 +124,14 @@ static void MarkFormulationConstraint(Expression &expr, const string &source_ali
 	CopySourceClauseTag(source_alias, expr);
 }
 
+//! The user clause a rewrite is currently standing inside. A comparison carrying a
+//! source id starts a new one; every other node inherits its parent's. This is what lets
+//! a row emitted deep inside a clause still name the clause it came from.
+static string DescendSourceAlias(const Expression &expr, const string &inherited) {
+	idx_t source_id;
+	return TryParseSourceClauseTag(expr.GetAlias(), source_id) ? expr.GetAlias() : inherited;
+}
+
 static const BoundColumnRefExpression *FindDecideColumn(const Expression &expr, idx_t decide_index) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &col = expr.Cast<BoundColumnRefExpression>();
@@ -167,8 +175,17 @@ static bool IsWhenWrapper(const Expression &expr) {
 	       expr.Cast<BoundConjunctionExpression>().children.size() == 2;
 }
 
-static unique_ptr<Expression> MakeTrueExpression() {
-	return make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+//! A TRUE placeholder standing where a lifted clause used to be.
+//!
+//! `source_alias` is the alias of the clause it replaces. Carrying the clause id onto
+//! the placeholder is what lets EXPLAIN keep the clause in the position it was written:
+//! the constraint tree is the only record of written order, and a lifted clause that
+//! left an anonymous `true` behind was indistinguishable from a clause that never
+//! existed, so it sorted to the end of the plan.
+static unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string()) {
+	auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+	CopySourceClauseTag(source_alias, *placeholder);
+	return placeholder;
 }
 
 void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
@@ -271,7 +288,8 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			auto &wrapper = expr->Cast<BoundConjunctionExpression>();
 			rewrite(wrapper.children[0], wrapper.children[1].get(), source_alias);
 			if (wrapper.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-			    wrapper.children[0]->Cast<BoundConstantExpression>().value.GetValue<bool>()) expr = MakeTrueExpression();
+			    wrapper.children[0]->Cast<BoundConstantExpression>().value.GetValue<bool>())
+				expr = MakeTrueExpression(wrapper.children[0]->GetAlias());
 			return;
 		}
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
@@ -291,13 +309,13 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			    ((a == 0.0 && b == 1.0) || (a == 1.0 && b == 0.0))) {
 				emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 				                                   in.children[0]->Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(0))), when, local_source);
-				expr = MakeTrueExpression();
+				expr = MakeTrueExpression(local_source);
 				return;
 			}
 		}
 		if (k == 1) {
 			emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, in.children[0]->Copy(), in.children[1]->Copy()), when, local_source);
-			expr = MakeTrueExpression();
+			expr = MakeTrueExpression(local_source);
 			return;
 		}
 		vector<unique_ptr<Expression>> indicators;
@@ -333,7 +351,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, in.children[0]->Copy(),
 			                                         make_uniq<BoundConstantExpression>(Value::DOUBLE(min_value))), when, local_source);
 		}
-		expr = MakeTrueExpression();
+		expr = MakeTrueExpression(local_source);
 	};
 	rewrite(decide.decide_constraints, nullptr, string());
 	for (auto &constraint : generated) AppendConstraint(decide, std::move(constraint));
@@ -1032,8 +1050,9 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 
 	decide.composed_minmax_constraints.push_back(std::move(spec));
 
-	// Replace the comparison with a TRUE placeholder so the normal constraint path is a no-op.
-	expr = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+	// Replace the comparison with a TRUE placeholder so the normal constraint path is a
+	// no-op. It carries the clause id so the plan still knows where the clause was written.
+	expr = MakeTrueExpression(comp.GetAlias());
 }
 
 void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
@@ -1541,11 +1560,11 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// the ABS node originated in the objective (vs. a constraint).
 	vector<AbsPairInfo> abs_pairs;
 	if (decide.decide_constraints) {
-		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs, /*in_objective=*/false);
+		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs, /*in_objective=*/false, string());
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceAbs(objective, decide, abs_pairs, /*in_objective=*/true);
+		FindAndReplaceAbs(objective, decide, abs_pairs, /*in_objective=*/true, string());
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 
@@ -1623,11 +1642,15 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			// arm allocates.
 			c1->alias = string(ABS_UB_POS_TAG_PREFIX) + to_string(pair.aux_idx) + "__";
 			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(pair.aux_idx) + "__";
+			// The linearizer finds these by substring, so the clause id rides alongside
+			// rather than replacing the marker.
+			CopySourceClauseTag(pair.source_alias, *c1);
+			CopySourceClauseTag(pair.source_alias, *c2);
 
 			decide.abs_maximize_links.push_back({pair.aux_idx, y_idx});
 		} else {
-			c1->alias = STRUCTURAL_CONSTRAINT_TAG;
-			c2->alias = STRUCTURAL_CONSTRAINT_TAG;
+			MarkFormulationConstraint(*c1, pair.source_alias);
+			MarkFormulationConstraint(*c2, pair.source_alias);
 		}
 
 		AppendConstraint(decide, std::move(c1));
@@ -1636,10 +1659,12 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                        vector<AbsPairInfo> &abs_pairs, bool in_objective) {
+                                        vector<AbsPairInfo> &abs_pairs, bool in_objective,
+                                        const string &source_alias) {
 	if (!expr) {
 		return;
 	}
+	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr->Cast<BoundFunctionExpression>();
@@ -1679,7 +1704,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				bool needs_bigm = HasDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
 
 				// Stash the bound inner expression for constraint generation
-				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), in_objective, needs_bigm});
+				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), in_objective, clause_alias, needs_bigm});
 
 				// Replace ABS(inner) with aux var reference
 				expr = make_uniq<BoundColumnRefExpression>(
@@ -1692,7 +1717,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceAbs(child, decide, abs_pairs, in_objective);
+		FindAndReplaceAbs(child, decide, abs_pairs, in_objective, clause_alias);
 	});
 }
 
@@ -1704,11 +1729,11 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	vector<LogicalDecide::BilinearLink> links;
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceBilinear(objective, decide, links);
+		FindAndReplaceBilinear(objective, decide, links, string());
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 	if (decide.decide_constraints) {
-		FindAndReplaceBilinear(decide.decide_constraints, decide, links);
+		FindAndReplaceBilinear(decide.decide_constraints, decide, links, string());
 	}
 	decide.bilinear_links = std::move(links);
 }
@@ -1793,8 +1818,10 @@ bool DecideOptimizer::ExtractMultiplicativeCoefficient(const Expression &expr, i
 }
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                              vector<LogicalDecide::BilinearLink> &links) {
+                                              vector<LogicalDecide::BilinearLink> &links,
+                                              const string &source_alias) {
 	if (!expr) return;
+	auto clause_alias = DescendSourceAlias(*expr, source_alias);
 
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr->Cast<BoundFunctionExpression>();
@@ -1843,7 +1870,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					// Non-Boolean × Non-Boolean: leave for Q matrix (Phase 2)
 					// Still recurse into children for nested bilinear
 					ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-						FindAndReplaceBilinear(child, decide, links);
+						FindAndReplaceBilinear(child, decide, links, clause_alias);
 					});
 					return;
 				}
@@ -1922,7 +1949,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
 					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
 					    make_uniq<BoundColumnRefExpression>(b1_ref.alias, b1_ref.return_type, b1_ref.binding));
-					c1->alias = STRUCTURAL_CONSTRAINT_TAG;
+					MarkFormulationConstraint(*c1, clause_alias);
 					AppendConstraint(decide, std::move(c1));
 
 					// w <= b2
@@ -1930,7 +1957,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
 					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
 					    make_uniq<BoundColumnRefExpression>(b2_ref.alias, b2_ref.return_type, b2_ref.binding));
-					c2->alias = STRUCTURAL_CONSTRAINT_TAG;
+					MarkFormulationConstraint(*c2, clause_alias);
 					AppendConstraint(decide, std::move(c2));
 
 					// w >= b1 + b2 - 1  (i.e., b1 + b2 - w <= 1)
@@ -1946,7 +1973,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
 					    std::move(b1_plus_b2_minus_w),
 					    make_uniq<BoundConstantExpression>(Value::INTEGER(1)));
-					c3->alias = STRUCTURAL_CONSTRAINT_TAG;
+					MarkFormulationConstraint(*c3, clause_alias);
 					AppendConstraint(decide, std::move(c3));
 				} else {
 					// Bool × Non-Bool McCormick: w <= x (structural, at plan time)
@@ -2012,7 +2039,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceBilinear(child, decide, links);
+		FindAndReplaceBilinear(child, decide, links, clause_alias);
 	});
 }
 

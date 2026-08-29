@@ -146,8 +146,10 @@ private:
 
 	//! Helper: recursively find bilinear products in expression tree, replace Boolean cases
 	//! with auxiliary variable references, and collect metadata.
+	//! `source_alias` is the alias of the enclosing user comparison, so the rows this
+	//! emits can point back at the clause that produced them.
 	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                            vector<LogicalDecide::BilinearLink> &links);
+	                            vector<LogicalDecide::BilinearLink> &links, const string &source_alias);
 
 	//! Helper: walk a multiplication chain shaped as `coeff * ... * decide_var * ... * coeff`
 	//! around the decide variable with index `var_idx`, and combine all non-variable factors
@@ -162,6 +164,10 @@ private:
 		idx_t aux_idx;
 		unique_ptr<Expression> inner_expr;
 		bool in_objective;   // true = ABS came from the objective, false = from a constraint
+		//! Alias of the user comparison this ABS was written in, so the envelope rows
+		//! it generates carry the clause id back to EXPLAIN and diagnostics. Empty for
+		//! an ABS in the objective, which is not inside a comparison.
+		string source_alias;
 		bool needs_bigm;     // true = aux needs Big-M upper envelope (constraint
 		                     //        hard-direction or MAXIMIZE+objective). When
 		                     //        false aux pins to |inner| naturally via
@@ -172,7 +178,7 @@ private:
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
 	//! replace with auxiliary variable references, and collect AbsPairInfo entries.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                       vector<AbsPairInfo> &abs_pairs, bool in_objective);
+	                       vector<AbsPairInfo> &abs_pairs, bool in_objective, const string &source_alias);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

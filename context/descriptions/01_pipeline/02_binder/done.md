@@ -57,9 +57,23 @@ physical-plan creation.
 
 | Declaration | `var_types[i]` | `is_boolean_var[i]` |
 |---|---|---|
-| `x(INT)` | `LogicalType::INTEGER` | false |
+| `x(INT)` | `LogicalType::BIGINT` | false |
 | `x(BOOL)` | `LogicalType::INTEGER` | **true** |
 | `x(REAL)` | `LogicalType::DOUBLE` | false |
+
+`INT` is **`BIGINT`, not `INTEGER`**. This is the only layer that fixes the width
+of a decision's result column, and it must choose one wide enough for any value
+the solve can legitimately reach — which is not something a bound can tell it. A
+decision's real limit may arrive as a column read at execution (`x <= cap`), or as
+an aggregate row that bounds no single variable at all (`SUM(x) <= 5000000000`),
+so there is nothing here to inspect and range-check. Picking a 32-bit column
+instead pushed the failure to readback, where the excess was silently truncated
+and the type's limit returned as the answer. `BIGINT` also matches what DuckDB
+returns for generated integers (`range()`). `BOOL` stays `INTEGER`: its domain is
+`0`/`1`, so it cannot overflow, and widening it would move a result column type
+for no gain. Readback still range-checks both (stage 08, `Type-specific
+projection`) — a double stops counting consecutively past `2^53`, which no
+integer width fixes.
 
 `BOOL` is a *domain*, not a storage type. **No `x >= 0` or `x <= 1` constraint is
 ever synthesized.** `is_boolean_var` carries the `[0,1]` box from here through

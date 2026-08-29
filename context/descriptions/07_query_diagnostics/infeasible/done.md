@@ -499,9 +499,17 @@ all carried on `ConstraintProvenance` (no change to PER solve logic):
   exactly `out_group_labels.size()`, so labels stay aligned with the dense ordinals).
   `FormatPerGroupKey` joins composite columns with `, `; NULL renders `"NULL"` and an actual
   empty-string key renders `"''"` so it is not confused with "ungrouped." Threaded through
-  `EvaluatedConstraint::group_labels` → stamped on `provenance.group_label` at the aggregate-PER
-  emission sites (`ilp_model_builder.cpp`). In expanded mode the diagnosis copies it into the
-  finding's `group` column while leaving `clause` in the user's original spelling. This avoids
+  `EvaluatedConstraint::group_labels` → stamped on `provenance.group_label` at **every**
+  emission site in `ilp_model_builder.cpp`: the aggregate-PER sites, and the per-row site
+  (F2 site 3), which used to stamp the group *key* but pass an empty label. That gap was
+  visible on a hard MIN/MAX whose bound no row in a group can reach: the rewrite drops the
+  MIN/MAX marking and re-emits that group as ordinary per-row rows
+  (`ilp_linearization.cpp`, the `NO_SOLUTION` branch), so the per-row site is the only one
+  that ever sees it, and `CollectUnreachableClauses` reported the clause with no group.
+  A grouped failure now names the group it sits in (`MIN(x) <= -inf PER g`, group `0`)
+  rather than sending the user through every group. In expanded mode the diagnosis copies
+  it into the finding's `group` column while leaving `clause` in the user's original
+  spelling. This avoids
   relying on relation row order to associate `suggested_change`/`amount` with a group and avoids
   appending implementation-only `[group: ...]` text to the clause.
 - **`is_aggregate`** — set from `eval_const.lhs_is_aggregate` at the aggregate emission sites;
@@ -684,12 +692,12 @@ fix (`HasLoosenEdit || HasRemoval`). `BuildStage2Model` freezes the solved tier 
 remove-only `<>` clauses, stage 2 (2a) can therefore re-optimize the DROP set under the
 minimum-cardinality removal budget and report the objective-best equally minimal DROP set.
 
-**Stage-2b rank tie-break (solver-agnostic determinism, all repair kinds).** When the repair
+**Stage-2b rank tie-break (best-effort preference, all repair kinds).** When the repair
 choice is *indifferent* between two equally-minimal repairs — two DROP sets, or an LP that can
 put the same loosening on either of two clauses (or split it fractionally across both where
-one edit suffices) — the solver picks arbitrarily, and Gurobi and HiGHS can name **different**
-clauses. `BuildTieBreakModel` removes that ambiguity with one extra pass over every repair
-knob: when a stage-2a objective exists, freeze it at its optimum with a one-sided row (`obj ≥
+one edit suffices) — the solver may pick arbitrarily. `BuildTieBreakModel` makes common ties
+stable with one extra pass over every repair knob: when a stage-2a objective exists, freeze it
+at its optimum with a one-sided row (`obj ≥
 Z*` for MAXIMIZE / `≤ Z*` for MINIMIZE — the rhs is **exact**, no tolerance cushion: any eps of
 objective room is monetized by the rank objective, which would shave eps of repair onto a
 lower-ranked slack and split the edit; the stage-2a point attains `Z*` to machine precision,
@@ -699,17 +707,27 @@ its tier coefficient (editable slacks: the T1 scale weight) times its 1-based ra
 ascending in emission order (`removals` by indicator column; `slacks` by row — matrix rows in
 declaration order, then re-emitted absorbed bounds, whose original declaration position is not
 recorded). The tier budget rows carried into the model pin each tier's total, so the pass only
-reselects *which* clauses carry the repair — concentrating it on the lowest-ranked clause is
-the unique optimum, and both backends report the same edit. On the **no-objective path** (no
+reselects *which* clauses carry the repair and prefers lower-ranked clauses. On the
+**no-objective path** (no
 user objective, or a data-only repair that skips stage 2) the same pass runs directly on the
 budget-frozen stage-1 model with no freeze row; its solution is re-read with `snap=false` like
 the stage-1 read. The stage-2a achievable objective `Z*` is what gets reported (the tie-break's
 own objective is just the ranking sum). The pass is skipped — keeping the prior result — when
 no tier owns `≥ 2` knobs (budgets pin cross-tier trades, so no naming tie is possible) or, on
 the freeze path, when the objective is quadratic (freezing it would need a quadratic row; an
-exact tie there is rarer still). Residual: two *different* min-cardinality sets with an equal
-rank-sum (only possible at cardinality `≥ 2`) can still tie, since linear ranks are not a total
-order over sets; the common single-drop and single-loosen ties are fully deterministic.
+exact tie there is rarer still).
+
+**Accepted repair-tie policy (2026-08-29).** `DIAGNOSE` promises one repair that is optimal
+under the lexicographic tier budgets above and, when stage 2 succeeds, the best achievable user
+objective under those budgets. It does **not** promise a canonical repair-set identity when
+multiple sets have the same tier budgets and achievable objective. Equal-rank multi-edit sets,
+quadratic-objective ties, and ties involving absorbed bounds may therefore name different but
+equally good repairs across solver backends. This is accepted behavior: source order has no
+semantic priority, and a total order would add metadata, serialization risk, and diagnostic
+re-solves without improving repair quality. Stage 2b remains a useful preference for common
+single-edit ties, not a cross-backend API guarantee. Tests for unresolved exact ties should
+assert feasibility after applying the repair, tier-budget optimality, and achievable-objective
+equality rather than requiring the same clause identity from every backend.
 
 **Pragma.** `diagnose_decide_removal_bigm` (DOUBLE, default `0` = auto-derive, `>= 0`,
 `decide_diagnostic.cpp`) threads through `DecideDiagParams::removal_bigm` into
@@ -791,6 +809,20 @@ direction (`UNBOUNDED` / `INF_OR_UNBD`), there is no finite optimum: the engine 
 stage-1 edit (still valid) and emits an `edit_source='unbounded_after_fix'` finding. It does
 **not** hand off to the unbounded engine — the edit is the actionable part, and composing two
 diagnoses would muddy the message.
+
+This is the **final contract**, not a placeholder. The alternative — hunting for a
+different repair that leaves the objective finite — would break the promise that stage 1
+returns the *smallest* edit, and no such repair need exist. So the answer is two edits,
+and the finding says so plainly:
+
+> this fix satisfies your constraints, but the objective can then grow without limit —
+> bound the terms in it too
+
+The remedy names the **terms in** the objective rather than "the objective", because an
+objective is an expression, not a knob the user can bound directly; what they can bound
+are the decisions inside it. Solver vocabulary ("no finite optimum") is deliberately out.
+The finding still names no clause — the ray cannot finger a guilty one, which is the same
+limit the unbounded engine records.
 
 **Tests.** C++ (`test_decidb_diagnostic_engines.cpp`): a non-unique-minimizer 2-var case
 (caps `x ≤ 0`, `y ≤ 0` feeding rigid `x + y ≥ 10`, `MAXIMIZE x`) reports the x-cap edit and

@@ -601,7 +601,17 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                 variable_scopes.push_back(DecideVarScopeInfo::Row());
             }
             var_names.push_back(name);
-            var_types.push_back(type_marker == "real_variable" ? LogicalType::DOUBLE : LogicalType::INTEGER);
+            // An `INT` decision is BIGINT, not INTEGER. Nothing bounds a decision to
+            // int32: the solver works in doubles, and an optimum driven by an aggregate
+            // row (`SUM(x) <= 5000000000`) has no per-variable bound to inspect here.
+            // A narrower column would truncate that answer on readback and hand back a
+            // number violating the query's own constraints. BIGINT also matches what
+            // DuckDB itself returns for generated integers (`range()`). `BOOL` stays
+            // INTEGER — its domain is 0/1, so it cannot overflow, and widening it would
+            // change an output column type for no gain.
+            var_types.push_back(type_marker == "real_variable"   ? LogicalType::DOUBLE
+                                : type_marker == "bool_variable" ? LogicalType::INTEGER
+                                                                 : LogicalType::BIGINT);
             is_boolean_var.push_back(type_marker == "bool_variable");
         }
         

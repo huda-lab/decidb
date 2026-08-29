@@ -34,7 +34,7 @@ TEST_CASE("DeciDB F6 variable provenance", "[decidb][query_diagnostics][provenan
 	SECTION("row-scoped user + aux columns resolve to name / expression") {
 		// 2 rows, 3 decide vars: x (user), y (user), aux (ABS(x + y)); 1 global var.
 		SolverInput input = MakeRowScopedInput(2, 3, 1);
-		VarIndexer indexer = VarIndexer::BuildRef(input);
+		VarIndexer indexer = VarIndexer::Build(input);
 
 		duckdb::vector<string> labels = {"x", "y", "ABS(x + y)"};
 		duckdb::vector<bool> is_aux = {false, false, true};
@@ -74,7 +74,7 @@ TEST_CASE("DeciDB F6 variable provenance", "[decidb][query_diagnostics][provenan
 	SECTION("each linearization aux kind resolves to its user expression") {
 		// One column per aux kind: ABS / MAX / product / <>. 1 row keeps it flat.
 		SolverInput input = MakeRowScopedInput(1, 4, 0);
-		VarIndexer indexer = VarIndexer::BuildRef(input);
+		VarIndexer indexer = VarIndexer::Build(input);
 
 		duckdb::vector<string> labels = {"ABS(x)", "MAX(q)", "(b * x)", "(a <> b)"};
 		duckdb::vector<bool> is_aux = {true, true, true, true};
@@ -98,7 +98,7 @@ TEST_CASE("DeciDB F6 variable provenance", "[decidb][query_diagnostics][provenan
 		input.entity_mappings.push_back(mapping);
 		input.variable_scopes = {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Entity(0)};
 
-		VarIndexer indexer = VarIndexer::BuildRef(input);
+		VarIndexer indexer = VarIndexer::Build(input);
 		duckdb::vector<string> labels = {"x", "cap"};
 		duckdb::vector<bool> is_aux = {false, false};
 		auto prov = BuildColumnProvenance(indexer, labels, is_aux);

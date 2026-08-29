@@ -69,6 +69,12 @@ parser error.
   - `x(INT)`: $x \in \{0, 1, 2, ...\}$ by default
   - `x(BOOL)`: $x \in \{0, 1\}$ (automatically adds bounds constraints)
   - `x(REAL)`: $x \in [0, \infty)$ by default (continuous)
+- **Result column types**: `INT` returns `BIGINT`, `BOOL` returns `INTEGER`
+  (`0`/`1`), `REAL` returns `DOUBLE`. `INT` is 64-bit because nothing holds a
+  decision to a narrower range — the bound that pins a variable may be a column,
+  or an aggregate row that bounds no single variable — so a 32-bit column would
+  truncate a legitimate optimum. A whole-number answer beyond a double's exact
+  range ($2^{53}$) is refused by name rather than rounded.
 - **Default lower bound is 0** for `INT` and `REAL`. This is a
   *default*, not a floor: a variable becomes **signed** (may take negative
   values) when the query gives it an explicit negative lower bound —
@@ -192,6 +198,7 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
   - `x * x * x`: **ERROR** (triple+ products not supported).
 - **Quadratic constraints**: `POWER(linear_expr, 2)` / `expr ** 2` / `(expr)*(expr)` in constraints enables QCQP. Gurobi only. Composes with WHEN, PER. See Section 3.1 below.
 - **Subqueries**: Scalar subqueries (both uncorrelated and correlated) are allowed on the RHS of constraints. Correlated subqueries are decorrelated into joins, producing per-row values. For aggregate constraints, the subquery RHS must evaluate to the same scalar for all rows. Subqueries cannot reference DECIDE variables.
+- **NULL**: A NULL in any value the solver reads is an error, never a zero — coefficients, bounds, and reducer inputs alike. The message names the offending column and asks for explicit `COALESCE()` imputation or a `WHERE` filter. A data-only imputation may be written inline anywhere the value is used, including inside a reducer (`SUM(x * COALESCE(weight, 0))`). Rationale in [`../03_expressivity/such_that/done.md`](../03_expressivity/such_that/done.md). This is distinct from `WHEN` and `PER`, where a NULL excludes the row rather than failing the query.
 
 ### 3.1 Quadratic Constraints (QCQP)
 
@@ -527,7 +534,7 @@ slice's size; otherwise it is the variable's total row- or entity-instance count
 | `rigid_conflict`       | loosening the clauses you wrote cannot restore feasibility        |
 | `runaway_+inf` / `-inf`| a decision growing without bound, and which way                   |
 | `achievable_objective` | what the objective reaches once the edits are applied             |
-| `unbounded_after_fix`  | the repaired problem has no finite optimum                        |
+| `unbounded_after_fix`  | the fix works, but the objective can then grow without limit      |
 | `undiagnosed`          | the state is known but no engine could name a cause               |
 
 Because it is a relation, it can be selected from and filtered:

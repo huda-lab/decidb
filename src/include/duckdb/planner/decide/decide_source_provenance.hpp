@@ -54,8 +54,64 @@ string RenderDecideSource(const Expression &expr, const vector<string> &fragment
 //! `sources`, when supplied, lets a comparison that canonicalization rewrote print as
 //! the user wrote it instead of as the algebra stage 04 produced. Optional so callers
 //! without the registry keep the plain canonical rendering.
+//! `out_source_ids`, when supplied, receives the source_clause_id behind each emitted
+//! string -- DConstants::INVALID_INDEX for a row no clause claims. This is what lets a
+//! caller group the post-optimizer rows under the clause they came from.
 void CollectDecideExpressionStrings(const Expression &expr, const vector<string> &fragments,
                                     const vector<EntityScopeInfo> &entity_scopes, vector<string> &out,
-                                    const vector<ConstraintSourceInfo> *sources = nullptr);
+                                    const vector<ConstraintSourceInfo> *sources = nullptr,
+                                    vector<idx_t> *out_source_ids = nullptr);
+
+//! Render a whole objective tree as one display string.
+//!
+//! Not RenderDecideSource: an objective carrying a WHEN wrapper is a tagged conjunction,
+//! which the leaf renderer spells `SUM(x) AND cond` rather than the postfix
+//! `SUM(x) WHEN cond` the user wrote. Only the clause walker unwraps those tags, so the
+//! objective's snapshots go through it too.
+string RenderDecideObjective(const Expression &expr, const vector<string> &fragments,
+                             const vector<EntityScopeInfo> &entity_scopes);
+
+//! One user clause, rendered at each layer that says something different about it.
+//!
+//! A DECIDE clause is read three times on its way to a solver: as the user wrote it, as
+//! canonicalization shaped it (decisions left, bound right), and as the optimizer
+//! formulated it. EXPLAIN printed only the last of those, so a clause that became a
+//! Big-M encoding, an auxiliary variable, or nothing at all looked the same as one that
+//! passed through untouched. These three fields keep the layers apart so a plan can show
+//! what became of each clause.
+struct DecideClauseLayers {
+	//! The clause as written, WHEN/PER qualifiers included. Always set.
+	string written;
+	//! The canonical form. Empty when it reads the same as `written`, which is the
+	//! common case -- canonicalization only shows up when it had to move a decision
+	//! across the comparison.
+	string canonical;
+	//! The rows the solver actually receives. Empty when they read the same as the
+	//! layer above; more than one entry when a formulation expanded one clause into
+	//! several rows.
+	vector<string> rewritten;
+};
+
+//! Split the post-optimizer constraint tree into per-clause layers.
+//!
+//! Association runs on `source_clause_id`, which the binder stamps on every written
+//! comparison and the optimizer copies onto the rows it emits. The mapping is not
+//! one-to-one in either direction and the result tolerates both: a linearized clause
+//! owns several rows, a clause the optimizer extracted into `composed_minmax_constraints`
+//! owns none in the tree, and a row carrying no id at all is returned in `unattributed`.
+vector<DecideClauseLayers> CollectDecideClauseLayers(
+    optional_ptr<const Expression> constraints,
+    const vector<LogicalDecide::ComposedMinMaxConstraint> &composed_minmax_constraints,
+    const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
+    const vector<ConstraintSourceInfo> &sources, vector<string> &unattributed);
+
+//! Format clause layers as the indented block EXPLAIN prints, one clause per group.
+string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers,
+                                const vector<string> &unattributed);
+
+//! Format the objective's layers the same way. `written` and `canonical` come from
+//! LogicalDecide's two objective snapshots; `rewritten` is the post-optimizer render.
+string RenderDecideObjectiveLayers(const string &sense_prefix, const string &written,
+                                   const string &canonical, const vector<string> &rewritten);
 
 } // namespace duckdb

@@ -30,7 +30,29 @@ non-positive / unparseable values are ignored). Gurobi applies it as the `TimeLi
 parameter (`gurobi_solver.cpp`); HiGHS applies it as the `time_limit` option
 (`deterministic_naive.cpp`).
 
-## Timeout produces a diagnosable result (S0 + S1)
+## Settled timeout policy
+
+A time limit reports only what the backend established before the clock stopped. Two
+tempting inferences are deliberately not part of the contract:
+
+- **No automatic diagnosis.** A timeout with no incumbent proves neither feasibility
+  nor infeasibility. DeciDB does not launch the elastic infeasibility engine to classify
+  it, even under `DIAGNOSE`: that would start a different, potentially harder solve and
+  could make an infeasibility claim only if the repair model itself reached a proof.
+  The original warm solver is retained so the user can continue the search instead.
+- **No guessed unboundedness.** A large incumbent objective, a large optimality
+  percentage, or rapid progress is not a solver-neutral certificate of unboundedness.
+  DeciDB applies no runaway threshold and suggests no missing variable bound from a
+  `TIME_LIMIT` result, which carries no ray. It reports the incumbent exactly as the
+  backend returned it: the feasible values and objective, any finite certified gap,
+  and the fact that the solution is not proven best. Unbounded guidance begins only
+  after the backend proves `UNBOUNDED` (or the existing disambiguation establishes it).
+
+These are final policy decisions, not deferred diagnostic work. Timeout remains
+ordinary execution behavior; the diagnosis engines run only for their proven failure
+terminals.
+
+## Timeout produces a structured result (S0 + S1)
 
 Both backends now return `SolverStatus::TIME_LIMIT` on a limit-stop and populate the
 incumbent fields on `SolverResult`:

@@ -141,33 +141,24 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	// WHEN/PER wrappers print as postfix suffixes (e.g. "SUM(x) WHEN c") rather than
 	// the generic conjunction form "(SUM(x) AND c)".
 	if (decide_objective) {
-		string obj_info = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
+		string sense_prefix = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
 		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs);
-		for (idx_t i = 0; i < objective_strs.size(); i++) {
-			if (i > 0) {
-				obj_info += "\n";
-			}
-			obj_info += objective_strs[i];
-		}
-		result["Objective"] = obj_info;
+		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
+		                                                  objective_strs);
 	} else {
 		result["Objective"] = "FEASIBILITY";
 	}
 
-	// Constraints: walk the AND-tree and collect individual constraints
-	if (decide_constraints) {
-		vector<string> constraint_strs;
-		CollectDecideExpressionStrings(*decide_constraints, source_fragments, entity_scopes, constraint_strs,
-		                               &constraint_sources);
-		string constraints_info;
-		for (idx_t i = 0; i < constraint_strs.size(); i++) {
-			if (i > 0) {
-				constraints_info += "\n";
-			}
-			constraints_info += constraint_strs[i];
-		}
-		result["Constraints"] = constraints_info;
+	// Constraints: one group per user clause -- as written, then the canonical reading
+	// when canonicalization moved something, then the rows the solver receives when they
+	// differ. A clause nothing touched stays a single line.
+	if (decide_constraints || !constraint_sources.empty()) {
+		vector<string> unattributed;
+		auto layers = CollectDecideClauseLayers(decide_constraints.get(), composed_minmax_constraints,
+		                                        source_fragments, entity_scopes, constraint_sources,
+		                                        unattributed);
+		result["Constraints"] = RenderDecideClauseLayers(layers, unattributed);
 	}
 
 	SetParamsEstimatedCardinality(result);
@@ -180,7 +171,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 // only definition. entity_scopes (vector<EntityScopeInfo>) and
 // variable_scopes (vector<DecideVarScopeInfo>) are structs the generator's
 // direct member-mapping can't express, so they're flattened into parallel
-// primitive vectors on the wire; ids 200-238 (below) are the single
+// primitive vectors on the wire; ids 200-245 (below) are the single
 // authoritative registry of this operator's serialized fields.
 void LogicalDecide::Serialize(Serializer &serializer) const {
 	LogicalOperator::Serialize(serializer);
@@ -273,17 +264,36 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	vector<string> source_rhs;
 	vector<string> source_qualifiers;
 	vector<uint8_t> source_rhs_kinds;
+	vector<string> source_written_lhs;
+	vector<string> source_written_rhs;
+	vector<string> source_written_cmp;
+	vector<string> source_canonical_cmp;
 	for (auto &source : constraint_sources) {
 		source_lhs.push_back(source.canonical_lhs);
 		source_rhs.push_back(source.canonical_rhs);
 		source_qualifiers.push_back(source.qualifier);
 		source_rhs_kinds.push_back(static_cast<uint8_t>(source.rhs_kind));
+		source_written_lhs.push_back(source.written_lhs);
+		source_written_rhs.push_back(source.written_rhs);
+		source_written_cmp.push_back(source.written_cmp);
+		source_canonical_cmp.push_back(source.canonical_cmp);
 	}
 	serializer.WritePropertyWithDefault<vector<string>>(234, "constraint_source_lhs", source_lhs);
 	serializer.WritePropertyWithDefault<vector<string>>(235, "constraint_source_rhs", source_rhs);
 	serializer.WritePropertyWithDefault<vector<string>>(236, "constraint_source_qualifiers", source_qualifiers);
 	serializer.WritePropertyWithDefault<vector<uint8_t>>(237, "constraint_source_rhs_kinds", source_rhs_kinds);
+	serializer.WritePropertyWithDefault<vector<string>>(240, "constraint_source_written_lhs", source_written_lhs);
+	serializer.WritePropertyWithDefault<vector<string>>(241, "constraint_source_written_rhs", source_written_rhs);
+	serializer.WritePropertyWithDefault<vector<string>>(242, "constraint_source_written_cmp", source_written_cmp);
+	serializer.WritePropertyWithDefault<vector<string>>(243, "constraint_source_canonical_cmp", source_canonical_cmp);
+	serializer.WritePropertyWithDefault<string>(244, "written_objective", written_objective);
+	serializer.WritePropertyWithDefault<string>(245, "canonical_objective", canonical_objective);
 	serializer.WritePropertyWithDefault<vector<string>>(238, "source_fragments", source_fragments);
+	// User-written source column names, as three parallel vectors (see the header).
+	serializer.WritePropertyWithDefault<vector<idx_t>>(246, "source_column_table_index",
+	                                                   source_column_table_index);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(247, "source_column_index", source_column_index);
+	serializer.WritePropertyWithDefault<vector<string>>(248, "source_column_names", source_column_names);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -408,6 +418,14 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<vector<string>>(235, "constraint_source_rhs", source_rhs);
 	deserializer.ReadPropertyWithDefault<vector<string>>(236, "constraint_source_qualifiers", source_qualifiers);
 	deserializer.ReadPropertyWithDefault<vector<uint8_t>>(237, "constraint_source_rhs_kinds", source_rhs_kinds);
+	vector<string> source_written_lhs;
+	vector<string> source_written_rhs;
+	vector<string> source_written_cmp;
+	deserializer.ReadPropertyWithDefault<vector<string>>(240, "constraint_source_written_lhs", source_written_lhs);
+	deserializer.ReadPropertyWithDefault<vector<string>>(241, "constraint_source_written_rhs", source_written_rhs);
+	deserializer.ReadPropertyWithDefault<vector<string>>(242, "constraint_source_written_cmp", source_written_cmp);
+	vector<string> source_canonical_cmp;
+	deserializer.ReadPropertyWithDefault<vector<string>>(243, "constraint_source_canonical_cmp", source_canonical_cmp);
 	if (!source_lhs.empty()) {
 		idx_t count = source_lhs.size();
 		if (source_rhs.size() != count || source_qualifiers.size() != count || source_rhs_kinds.size() != count) {
@@ -422,10 +440,32 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 			info.canonical_rhs = std::move(source_rhs[i]);
 			info.qualifier = std::move(source_qualifiers[i]);
 			info.rhs_kind = static_cast<ConstraintSourceRhsKind>(source_rhs_kinds[i]);
+			// Written spelling arrived with 240-242; a plan serialized before they
+			// existed simply has no written layer and renders the canonical one.
+			if (i < source_written_lhs.size()) {
+				info.written_lhs = std::move(source_written_lhs[i]);
+			}
+			if (i < source_written_rhs.size()) {
+				info.written_rhs = std::move(source_written_rhs[i]);
+			}
+			if (i < source_written_cmp.size()) {
+				info.written_cmp = std::move(source_written_cmp[i]);
+			}
+			if (i < source_canonical_cmp.size()) {
+				info.canonical_cmp = std::move(source_canonical_cmp[i]);
+			}
 			result->constraint_sources.push_back(std::move(info));
 		}
 	}
 	deserializer.ReadPropertyWithDefault<vector<string>>(238, "source_fragments", result->source_fragments);
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(246, "source_column_table_index",
+	                                                    result->source_column_table_index);
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(247, "source_column_index",
+	                                                    result->source_column_index);
+	deserializer.ReadPropertyWithDefault<vector<string>>(248, "source_column_names",
+	                                                     result->source_column_names);
+	deserializer.ReadPropertyWithDefault<string>(244, "written_objective", result->written_objective);
+	deserializer.ReadPropertyWithDefault<string>(245, "canonical_objective", result->canonical_objective);
 	return std::move(result);
 }
 

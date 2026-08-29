@@ -3,6 +3,7 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/optimizer/decide_linear_form.hpp"
@@ -68,16 +69,74 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // a bare source-column reference. A computed projection expression with no alias
     // carries only a generated name (its ToString), which we deliberately drop so the
     // diagnosis never prints a label the user never typed.
-    vector<string> child_userwritten_names(child_bindings.size(), string());
+    // Resolve each child column to the name the USER wrote for it, using the map the
+    // binder captured from its BindContext (LogicalDecide::source_column_*). That is the
+    // same table name resolution itself used, so every source kind is covered uniformly:
+    // a base table's catalog names, a `t(a, b, c)` alias list over `(VALUES ...)`, a
+    // subquery's or a CTE's output names. Reading names off the plan instead cannot work
+    // — an alias list is recorded on the binding and never reaches the plan, whose
+    // projection carries the binder's positional `col0` / `col1` placeholders.
+    //
+    // Captured BEFORE CreatePlan for the same reason as `child_bindings`: several
+    // operators move their contents out during planning.
+    //
+    // The map is keyed by the binding's own column ordinal. For most operators that is
+    // the output position, so the child binding can be used directly. A scan is the
+    // exception: projection pushdown makes its bindings index `column_ids`, so the
+    // surviving columns must be mapped back to their table ordinals first, exactly as
+    // LogicalGet::ResolveTypes walks them. Getting this wrong silently mislabels one
+    // column as another rather than failing.
+    vector<idx_t> binding_column_index(child_bindings.size(), DConstants::INVALID_INDEX);
+    for (idx_t i = 0; i < child_bindings.size(); i++) {
+        binding_column_index[i] = child_bindings[i].column_index;
+    }
+    if (op.children[0]->type == LogicalOperatorType::LOGICAL_GET) {
+        auto &child_get = op.children[0]->Cast<LogicalGet>();
+        auto &column_ids = child_get.GetColumnIds();
+        for (idx_t i = 0; i < binding_column_index.size(); i++) {
+            idx_t slot = i;
+            if (!child_get.projection_ids.empty()) {
+                if (i >= child_get.projection_ids.size()) {
+                    break; // projected_input columns from a table-in-out child
+                }
+                slot = child_get.projection_ids[i];
+            }
+            if (slot >= column_ids.size() || column_ids[slot].IsRowIdColumn()) {
+                binding_column_index[i] = DConstants::INVALID_INDEX; // synthetic, unnamed
+                continue;
+            }
+            binding_column_index[i] = column_ids[slot].GetPrimaryIndex();
+        }
+    }
+    // Which columns may be named at all. The binder's map answers "what is this column
+    // called", not "did the user write that name": a projection expression with no alias
+    // is recorded under its own `ToString`, so an unaliased computed column would be
+    // labelled `CASE WHEN ((i <= 25)) THEN ('A') ELSE 'B' END`. The plan is the right
+    // place to judge that — it still holds the expression — so the structural gate stays
+    // here while the spelling comes from the binder. A column under any other operator
+    // (a scan, most of all) has no such expression and is always eligible.
+    vector<bool> nameable(child_bindings.size(), true);
     if (op.children[0]->type == LogicalOperatorType::LOGICAL_PROJECTION) {
         auto &child_proj = op.children[0]->Cast<LogicalProjection>();
-        for (idx_t i = 0; i < child_proj.expressions.size() && i < child_userwritten_names.size();
-             i++) {
+        for (idx_t i = 0; i < nameable.size(); i++) {
+            if (i >= child_proj.expressions.size()) {
+                break;
+            }
             auto &expr = *child_proj.expressions[i];
-            if (expr.HasAlias()) {
-                child_userwritten_names[i] = expr.GetAlias();
-            } else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                child_userwritten_names[i] = expr.Cast<BoundColumnRefExpression>().GetName();
+            nameable[i] = expr.HasAlias() ||
+                          expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
+        }
+    }
+    vector<string> child_userwritten_names(child_bindings.size(), string());
+    for (idx_t i = 0; i < child_bindings.size(); i++) {
+        if (!nameable[i] || binding_column_index[i] == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        for (idx_t n = 0; n < op.source_column_names.size(); n++) {
+            if (op.source_column_table_index[n] == child_bindings[i].table_index &&
+                op.source_column_index[n] == binding_column_index[i]) {
+                child_userwritten_names[i] = op.source_column_names[n];
+                break;
             }
         }
     }
@@ -99,6 +158,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->abs_maximize_links = std::move(op.abs_maximize_links);
     decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
     decide_op->constraint_sources = std::move(op.constraint_sources);
+    decide_op->written_objective = std::move(op.written_objective);
+    decide_op->canonical_objective = std::move(op.canonical_objective);
     decide_op->source_fragments = std::move(op.source_fragments);
     decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
     decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
@@ -152,12 +213,17 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // left blank on purpose: the unbounded diagnosis suppresses categorical rules over
     // unnamed columns rather than inventing a positional `colN` the user never typed.
     decide_op->input_column_names.assign(child_bindings.size(), string());
+    decide_op->input_column_in_clause.assign(child_bindings.size(), false);
     std::function<void(const Expression &)> harvest = [&](const Expression &e) {
         if (e.GetExpressionClass() == ExpressionClass::BOUND_REF) {
             auto &r = e.Cast<BoundReferenceExpression>();
-            if (r.index < decide_op->input_column_names.size() &&
-                decide_op->input_column_names[r.index].empty()) {
-                decide_op->input_column_names[r.index] = r.GetName();
+            if (r.index < decide_op->input_column_names.size()) {
+                // Reached from the DECIDE clause, so it explains rather than correlates
+                // — recorded even when an earlier reference already supplied the name.
+                decide_op->input_column_in_clause[r.index] = true;
+                if (decide_op->input_column_names[r.index].empty()) {
+                    decide_op->input_column_names[r.index] = r.GetName();
+                }
             }
         }
         ExpressionIterator::EnumerateChildren(e, harvest);

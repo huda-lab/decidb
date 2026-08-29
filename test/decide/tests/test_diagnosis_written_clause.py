@@ -95,8 +95,14 @@ def test_a_data_only_bound_is_untouched(decidb_cli):
 
 @pytest.mark.explain
 @pytest.mark.cons_between
-def test_explain_shows_the_written_clause(decidb_cli):
-    """EXPLAIN reads the same registry, so it stops printing the algebra too."""
+def test_explain_leads_with_the_written_clause(decidb_cli):
+    """EXPLAIN reads the same registry, so the written clause is what it leads with.
+
+    A plan shows the layers a clause passed through, so unlike a diagnosis it does not
+    suppress the canonical algebra — it subordinates it. ``ship <= capacity * open`` is
+    the clause; ``ship - capacity * open <= 0`` is an indented ``≡`` continuation of it.
+    What must never happen is the algebra standing alone as though the user wrote it.
+    """
     plan = decidb_cli.execute_raw(f"""
         EXPLAIN SELECT routeID, ship, open
         FROM {_DEPOTS} JOIN {_ROUTES} USING (depotID)
@@ -104,5 +110,11 @@ def test_explain_shows_the_written_clause(decidb_cli):
         SUCH THAT ship BETWEEN 0 AND capacity * open
         MINIMIZE SUM(ship)
     """).stdout
-    assert "ship <= capacity * open" in plan, plan
-    assert "ship - capacity * open" not in plan, plan
+    # The box wraps mid-token at a fixed column, so no assertion may depend on where
+    # the line breaks fall.
+    packed = "".join(plan.split())
+    assert "ship<=capacity*open" in packed, plan
+    # The algebra appears, but only ever under the canonical marker.
+    assert "ship-capacity*open" in packed, plan
+    assert "≡ship-capacity*open" in packed, plan
+    assert packed.count("ship-capacity*open") == packed.count("≡ship-capacity*open"), plan

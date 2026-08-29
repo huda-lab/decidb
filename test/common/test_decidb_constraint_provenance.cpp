@@ -47,7 +47,7 @@ EvaluatedConstraint MakePerRow(idx_t var, idx_t num_rows, double rhs) {
 }
 
 SolverModel BuildModel(SolverInput &input) {
-	VarIndexer indexer = VarIndexer::BuildRef(input);
+	VarIndexer indexer = VarIndexer::Build(input);
 	return SolverModel::Build(input, indexer);
 }
 

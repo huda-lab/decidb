@@ -185,8 +185,10 @@ was not established (`router/README.md`).
     so HiGHS stays boundary-only: a mid-solve Ctrl-C is seen only at the chunk boundary and
     reported as a time-limit stop — the solver-agnostic fallback.
   - **Warm-start API exists on both.** Gurobi `Start` attribute; HiGHS `setSolution`.
-    (The anytime objective→constraint ladder that would have used it was dropped — see
-    `../../01_pipeline/08_execution/slow_solves_todo.md`.)
+    The anytime objective→constraint ladder that would have used it was dropped. At a
+    timeout DeciDB resumes the original warm solve; it does not launch the elastic engine
+    as a feasibility classifier or infer unboundedness from incumbent progress. See
+    `../../01_pipeline/08_execution/slow_solves.md` ("Settled timeout policy").
 
 ## Constraint provenance (row → clause)
 

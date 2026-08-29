@@ -1938,6 +1938,37 @@ class TestUnreachableBound:
         assert not [r for r in rows if r["attribute"] == "elastic_infeasible"], rows
 
     @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
+    def test_grouped_unreachable_bound_names_the_failing_group(self, request, cli_fixture):
+        """A per-group failure has to say WHICH group failed, not just which clause.
+
+        `MIN(x) <= MAX(cap) PER g` is out of reach in group 0 only (cap -inf) and
+        satisfiable in group 1. The clause alone sends the user looking through every
+        group. The label was being dropped: a hard MIN/MAX whose bound no row can reach
+        is re-emitted as ordinary per-row rows, and that emission site stamped the group
+        key but passed an empty group label."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "WITH data AS ("
+            "SELECT 0 AS g, -1e1000::DOUBLE AS cap UNION ALL "
+            "SELECT 0, -1e1000::DOUBLE UNION ALL "
+            "SELECT 1, 3.0 UNION ALL "
+            "SELECT 1, 1.0) "
+            "SELECT g, x FROM data DECIDE x(INT) "
+            "SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g "
+            "MAXIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert {r["state"] for r in rows} == {"infeasible"}
+        # The clause reads as the user wrote it, and the group is its own attribute
+        # rather than a suffix baked into the clause text.
+        assert _attrs(rows, "clause", "MIN(x) <= -inf PER g") == {
+            "unreachable_bound": "true",
+            "group": "0",
+        }
+        # Group 1 is satisfiable and must not be implicated.
+        assert not [r for r in rows if r["value"] == "1" and r["attribute"] == "group"], rows
+
+    @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
     def test_one_clause_over_many_rows_is_reported_once(self, request, cli_fixture):
         """The clause fans into one model row per relation row, all rendering the same
         text. The user wrote one clause and must read one finding."""
