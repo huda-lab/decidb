@@ -1,7 +1,6 @@
 #include "duckdb/optimizer/decide_optimizer.hpp"
 
 #include "duckdb/decidb/decide_cast_policy.hpp"
-#include "duckdb/decidb/ilp_solver.hpp"
 
 #include <cstdlib>
 #include "duckdb/common/enums/decide.hpp"

@@ -8,7 +8,6 @@
 #include "duckdb/decidb/ilp_solver.hpp"
 #include "duckdb/optimizer/decide_linear_form.hpp"
 #include "duckdb/optimizer/decide_solver_gate.hpp"
-#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 

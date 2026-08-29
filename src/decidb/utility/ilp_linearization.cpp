@@ -268,30 +268,6 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
     return M + 1.0;
 }
 
-//! Does the lowering have a Big-M for this clause at all?
-//!
-//! The same walk `DecideTightPerRowBigM` makes, minus its refusals, because this is a
-//! ROUTING question rather than an encoding one: a clause with no derivable M is exactly
-//! the clause the native arm exists to answer, and asking by catching an exception would
-//! make the normal case pay for the rare one. The non-finite BOUND check is deliberately
-//! not repeated — `ClassifyMinMaxGroups` settles an infinite bound by direction on both
-//! arms, before either gets here.
-bool MinMaxBigMDerivable(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
-                         const vector<double> &upper_bounds, idx_t num_rows) {
-    bool has_unbounded = false;
-    for (idx_t r = 0; r < num_rows; r++) {
-        if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-            continue;
-        }
-        DecideRowTermRange(ec.variable_indices, ec.row_coefficients, r, lower_bounds,
-                           upper_bounds, has_unbounded);
-        if (has_unbounded) {
-            return false;
-        }
-    }
-    return true;
-}
-
 //! What an infinite bound means for a hard MIN/MAX constraint.
 enum class MinMaxBoundKind : uint8_t {
     LINEARIZE,  //!< finite bound: needs the indicator + Big-M rewrite

@@ -15,7 +15,6 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/main/materialized_query_result.hpp"
 
 namespace duckdb {
 
@@ -511,7 +510,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		DecideExpression reducer_result;
-		if (ClassifyReducerCall(func, /*allow_bilinear=*/true, reducer_result, error_msg)) {
+		if (ClassifyReducerCall(func, reducer_result, error_msg)) {
 			return reducer_result;
 		}
 		if (ContainsDecideAggregate(expr)) {

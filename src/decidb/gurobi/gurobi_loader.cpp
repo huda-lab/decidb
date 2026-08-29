@@ -397,10 +397,6 @@ bool GurobiLoader::Load() {
 	return g_loaded;
 }
 
-bool GurobiLoader::IsLoaded() {
-	return g_loaded;
-}
-
 const GurobiAPI &GurobiLoader::API() {
 	return g_api;
 }

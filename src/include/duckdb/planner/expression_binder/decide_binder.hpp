@@ -58,7 +58,7 @@ struct DecideQualifierContext {
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
-                         bool allow_quadratic = false, bool allow_bilinear = false);
+                         bool allow_quadratic = false);
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
@@ -206,11 +206,7 @@ protected:
     //! returns false for any other function name so the caller falls through to its
     //! own remaining classification (the two binders diverge there — a SUCH THAT
     //! left-hand side and a MAXIMIZE/MINIMIZE objective accept different shapes).
-    //! `allow_bilinear` stays a parameter rather than a hardcoded default: a bilinear
-    //! reducer argument is accepted in a constraint and rejected in an objective, on
-    //! purpose.
-    bool ClassifyReducerCall(FunctionExpression &func, bool allow_bilinear, DecideExpression &result,
-                             string &error_msg);
+    bool ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg);
 
     //! Shared PER-wrapper assembly between `DecideConstraintsBinder` and
     //! `DecideObjectiveBinder`: `func.children[0]` is the inner constraint/objective

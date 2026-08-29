@@ -134,10 +134,7 @@ public:
 	//! Attempt to load the Gurobi shared library. Thread-safe, runs once.
 	static bool Load();
 
-	//! Was Load() successful?
-	static bool IsLoaded();
-
-	//! Get the function pointer table (only valid when IsLoaded() == true).
+	//! Get the function pointer table (only valid when Load() returned true).
 	static const GurobiAPI &API();
 };
 

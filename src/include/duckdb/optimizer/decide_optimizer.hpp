@@ -10,7 +10,6 @@
 
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
 
 namespace duckdb {
 

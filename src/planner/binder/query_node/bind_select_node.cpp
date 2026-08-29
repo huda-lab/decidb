@@ -2,7 +2,6 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
-#include "duckdb/function/aggregate/distributive_function_utils.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
@@ -17,15 +16,12 @@
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
-#include "duckdb/parser/tableref/basetableref.hpp"
-#include "duckdb/parser/tableref/joinref.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_expanded_expression.hpp"
 #include "duckdb/planner/expression_binder/column_alias_binder.hpp"
-#include "duckdb/planner/expression_binder/constant_binder.hpp"
 #include "duckdb/planner/expression_binder/group_binder.hpp"
 #include "duckdb/planner/expression_binder/having_binder.hpp"
 #include "duckdb/planner/expression_binder/order_binder.hpp"
@@ -415,22 +411,6 @@ void Binder::BindWhereStarExpression(unique_ptr<ParsedExpression> &expr) {
 	}
 }
 
-// Check if a parsed expression references any DECIDE variable.
-static bool ReferencesDecideVariable(ParsedExpression &expr,
-                                     const case_insensitive_map_t<idx_t> &variables) {
-	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-		auto &colref = expr.Cast<ColumnRefExpression>();
-		return variables.count(colref.GetColumnName()) > 0;
-	}
-	bool found = false;
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](unique_ptr<ParsedExpression> &child) {
-		if (!found && child) {
-			found = ReferencesDecideVariable(*child, variables);
-		}
-	});
-	return found;
-}
-
 // ABS linearization is now fully handled by DecideOptimizer::RewriteAbs (post-binding).
 // The binder binds ABS as a normal BoundFunctionExpression; the optimizer detects it,
 // creates auxiliary REAL variables, and generates linearization constraints.
@@ -514,7 +494,7 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         for (const auto& expr_ptr : statement.decide_variables) {
             string name;
             string table_name;  // empty for row-scoped variables
-            string type_marker = "integer_variable";  // Default type
+            string type_marker;
 
             // Handle typed variable declarations (ComparisonExpression from "x IS INTEGER")
             if (expr_ptr->GetExpressionClass() == ExpressionClass::COMPARISON) {
@@ -536,13 +516,6 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
                     if (const_expr.value.type() == LogicalType::VARCHAR) {
                         type_marker = const_expr.value.ToString();
                     }
-                }
-            } else if (expr_ptr->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
-                // Plain variable name without type (backward compatibility)
-                const auto& colref = expr_ptr->Cast<duckdb::ColumnRefExpression>();
-                name = colref.GetColumnName();
-                if (colref.IsQualified()) {
-                    table_name = colref.GetTableName();
                 }
             } else {
                 throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration.");
@@ -677,13 +650,6 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
         idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
 
         if (statement.decide_constraints) {
-            // A data-only reducer on the right used to be hoisted left here
-            // (`SUM(x*val) <= SUM(val)` -> `SUM(x*val) - SUM(val) <= 0`), because the
-            // right side could not reduce one. It can now (B.5's
-            // EvaluateRhsReducerPerGroup), and the canonicalizer classifies every
-            // decision-free term RIGHT (B.4), so the hoist would only build a tree
-            // that gets undone one stage later. Deleted 2026-08-10; see
-            // the canonicalization refactor.
             // Reject scalar functions like sqrt(x), exp(x), floor(x) wrapping a
             // DECIDE variable, before anything downstream has to interpret them.
             ValidateDecideNoNonLinearScalar(context, *statement.decide_constraints, decide_variable_names);

@@ -2,7 +2,6 @@
 #include "duckdb/planner/expression_binder/decide_degree.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/common/enums/decide.hpp"
@@ -840,8 +839,7 @@ const char *DecideCaseUnsupportedMessage() {
 
 // Forward declaration — needed because ValidateQuadraticPower calls ValidateSumArgumentInternal.
 static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
-                                        bool &has_decide_variable, string &error_msg, bool allow_quadratic = false,
-                                        bool allow_bilinear = false);
+                                        bool &has_decide_variable, string &error_msg, bool allow_quadratic = false);
 
 // Shared validation for POWER(expr, 2) and expr ** 2 patterns.
 // Returns true if the pattern is a valid quadratic form; sets has_decide_variable.
@@ -888,7 +886,7 @@ static bool ValidateQuadraticPower(vector<unique_ptr<ParsedExpression>> &childre
 
 static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                         bool &has_decide_variable, string &error_msg,
-                                        bool allow_quadratic, bool allow_bilinear) {
+                                        bool allow_quadratic) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::COLUMN_REF: {
         if (IsVariableExpression(expr, variables)) {
@@ -964,7 +962,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 		}
 		if (func_name_lower == "-") {
 			for (auto &child : func.children) {
-				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic, allow_bilinear)) {
+				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic)) {
 					return false;
 				}
 			}
@@ -986,11 +984,11 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			}
 			return ValidateSumArgumentInternal(*func.children[0], variables,
 			                                   has_decide_variable, error_msg,
-			                                   allow_quadratic, allow_bilinear);
+			                                   allow_quadratic);
 		}
 		if (func_name_lower == "*" || func_name_lower == "+") {
 			for (auto &child : func.children) {
-				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic, allow_bilinear)) {
+				if (!ValidateSumArgumentInternal(*child, variables, has_decide_variable, error_msg, allow_quadratic)) {
 					return false;
 				}
 			}
@@ -1029,7 +1027,7 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 	}
 	case ExpressionClass::CAST: {
 		auto &cast = expr.Cast<CastExpression>();
-		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg, allow_quadratic, allow_bilinear);
+		return ValidateSumArgumentInternal(*cast.child, variables, has_decide_variable, error_msg, allow_quadratic);
 	}
     case ExpressionClass::SUBQUERY: {
         auto &subquery = expr.Cast<SubqueryExpression>();
@@ -1054,9 +1052,9 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 }
 
 bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables, string &error_msg,
-                         bool allow_quadratic, bool allow_bilinear) {
+                         bool allow_quadratic) {
 	bool has_decide_variable = false;
-	if (!ValidateSumArgumentInternal(expr, variables, has_decide_variable, error_msg, allow_quadratic, allow_bilinear)) {
+	if (!ValidateSumArgumentInternal(expr, variables, has_decide_variable, error_msg, allow_quadratic)) {
 		return false;
 	}
 	if (!has_decide_variable) {
@@ -1109,12 +1107,11 @@ bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const 
 	return invariant;
 }
 
-bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, bool allow_bilinear, DecideExpression &result,
-                                       string &error_msg) {
+bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg) {
 	auto fname = StringUtil::Lower(func.function_name);
 	if (fname == "norm") {
-		if (func.children.empty() || !ValidateSumArgument(*func.children.front(), variables, error_msg,
-		                                                   /*allow_quadratic=*/true, allow_bilinear)) {
+		if (func.children.empty() ||
+		    !ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true)) {
 			error_msg += ", found '" + func.ToString() + "'";
 			result = DecideExpression::INVALID;
 		} else {
@@ -1130,8 +1127,7 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, bool allow_bili
 			    "use %s on its own",
 			    body_text, StringUtil::Upper(fname), body_text, body_text);
 			result = DecideExpression::INVALID;
-		} else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true,
-		                                allow_bilinear)) {
+		} else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true)) {
 			error_msg += ", found '" + func.ToString() + "'";
 			result = DecideExpression::INVALID;
 		} else {

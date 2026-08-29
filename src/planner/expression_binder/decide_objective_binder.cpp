@@ -1,8 +1,5 @@
 #include "duckdb/planner/expression_binder/decide_objective_binder.hpp"
-#include "duckdb/parser/expression/cast_expression.hpp"
-#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 
@@ -28,7 +25,6 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
 	}
 	auto &expr = *expr_ptr;
-    // DebugPrintParsed("BindObjective.input", expr);
     string error_msg;
 	switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF:
@@ -111,16 +107,11 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	        result->alias = WHEN_CONSTRAINT_TAG;
 	        return BindResult(std::move(result));
 	    }
-	    // DebugPrintParsed("BindObjective.input", expr);
 	        if (is_top_expression && GetExpressionType(expr, error_msg) == DecideExpression::INVALID) {
 	            return BindResult(BinderException::Unsupported(expr, error_msg));
 	        }
 	        is_top_expression = false;
-	        auto result = BindFunction(expr_ptr, depth);
-            if (result.HasError()) {
-                return result;
-            }
-            return result;
+	        return BindFunction(expr_ptr, depth);
 	}
     case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
@@ -159,7 +150,7 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
 		DecideExpression reducer_result;
-		if (ClassifyReducerCall(func, /*allow_bilinear=*/false, reducer_result, error_msg)) {
+		if (ClassifyReducerCall(func, reducer_result, error_msg)) {
 			return reducer_result;
 		}
         // Non-aggregate outer function. Only additive/scalar composition of
