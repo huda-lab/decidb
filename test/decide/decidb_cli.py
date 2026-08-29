@@ -15,7 +15,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 
 
@@ -35,14 +34,14 @@ def _extract_status(stderr: str) -> str | None:
 
 
 #: Environment variable that turns DuckDB's plan round-trip self-check on for every
-#: query this wrapper runs. See ``_verify_serializer_init_file``.
+#: query this wrapper runs. See ``_verify_serializer_args``.
 _VERIFY_SERIALIZER_ENV = "DECIDB_VERIFY_SERIALIZER"
 
-_verify_init_path: str | None = None
+_MODEL_DUMP_BEGIN = "=== DECIDB MODEL DUMP ==="
+_MODEL_DUMP_END = "=== END MODEL DUMP ==="
 
-
-def _verify_serializer_init_file() -> str:
-    """Path to a CLI init script that enables ``PRAGMA verify_serializer``.
+def _verify_serializer_args() -> list[str]:
+    """CLI arguments that enable ``PRAGMA verify_serializer`` without output.
 
     With the pragma on, DuckDB serializes each bound plan, deserializes it, and runs
     the *copy* — so a plan field that never reaches the wire shows up as a wrong
@@ -50,19 +49,34 @@ def _verify_serializer_init_file() -> str:
     does not have to be maintained per field: it costs nothing to keep correct,
     because the existing suite is the assertion.
 
-    Delivered via ``-init`` rather than by prefixing the SQL, so no caller has to cope
-    with an extra result set. ``.once /dev/null`` swallows the pragma's own output,
-    which would otherwise land in front of every ``execute_raw`` / ``execute_script``
-    result. Written once per process into a temp file that outlives the interpreter's
-    exit only as OS garbage.
+    Delivered as startup commands rather than by prefixing the SQL, so no caller has
+    to cope with an extra result set. A temporary output redirect swallows the pragma's
+    own output, which would otherwise land in front of every ``execute_raw`` /
+    ``execute_script`` result. PTY-driven interactive continuation is the deliberate
+    exception; DuckDB's materializing verifier cannot pause to read terminal input.
     """
-    global _verify_init_path
-    if _verify_init_path is None:
-        fd, path = tempfile.mkstemp(prefix="decidb_verify_serializer_", suffix=".sql")
-        with os.fdopen(fd, "w") as f:
-            f.write(".once /dev/null\nPRAGMA verify_serializer;\n")
-        _verify_init_path = path
-    return _verify_init_path
+    return [
+        "-cmd", ".output /dev/null",
+        "-cmd", "PRAGMA verify_serializer;",
+        "-cmd", ".output stdout",
+    ]
+
+
+def _last_complete_model_dump(text: str) -> str:
+    """Return one model when DuckDB verification builds the query repeatedly.
+
+    Verification paths may append complete, equivalent models to
+    ``DECIDB_DUMP_MODEL``. Model-shape tests inspect one build, not the verifier's
+    copies.
+    """
+    end = text.rfind(_MODEL_DUMP_END)
+    if end == -1:
+        return text
+    begin = text.rfind(_MODEL_DUMP_BEGIN, 0, end)
+    if begin == -1:
+        return text
+    end += len(_MODEL_DUMP_END)
+    return text[begin:end] + ("\n" if text.endswith("\n") else "")
 
 
 class DecidBCliError(Exception):
@@ -135,7 +149,7 @@ class DecidBCli:
         """The CLI invocation, with the round-trip self-check attached when asked for."""
         argv = [self.exe, self.db, "-readonly"]
         if self.verify_serializer:
-            argv += ["-init", _verify_serializer_init_file()]
+            argv += _verify_serializer_args()
         return argv + list(args)
 
     def _subprocess_env(self, *, status_markers: bool = False) -> dict[str, str] | None:
@@ -228,7 +242,7 @@ class DecidBCli:
             raise DecidBCliError("\n".join(errors))
         if not Path(path).exists():
             raise AssertionError(f"query emitted no model:\n{sql}")
-        return Path(path).read_text()
+        return _last_complete_model_dump(Path(path).read_text())
 
     def execute_raw(
         self, sql: str, *, timeout: float = 120
@@ -283,8 +297,13 @@ class DecidBCli:
 
         master_fd, slave_fd = pty.openpty()
         try:
+            # DuckDB's verification wrapper materializes a query result and is not
+            # compatible with a physical operator pausing that execution to read from
+            # the controlling terminal. Other non-interactive tests exercise the same
+            # plan fields under the suite-wide serializer guard.
+            argv = [self.exe, self.db, "-readonly"]
             proc = subprocess.Popen(
-                self._argv("-c", sql),
+                argv + ["-c", sql],
                 stdin=slave_fd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

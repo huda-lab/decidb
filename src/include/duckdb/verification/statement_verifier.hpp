@@ -63,6 +63,11 @@ public:
 		return true;
 	}
 
+	//! Whether this verifier needs a separate query execution and result comparison.
+	virtual bool ShouldExecute() const {
+		return true;
+	}
+
 	virtual bool DisableOptimizer() const {
 		return false;
 	}

@@ -119,9 +119,7 @@ def test_native_replaces_rows_with_a_general_constraint(decidb_cli_gurobi):
     def dump_of(env):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "model.dump")
-            decidb_cli_gurobi.with_env({**env, "DECIDB_DUMP_MODEL": path}).execute(sql)
-            with open(path) as f:
-                return f.read()
+            return decidb_cli_gurobi.with_env(env).dump_model(sql, path)
 
     native = dump_of({})
     lowered = dump_of({"DECIDB_NATIVE_CONSTRUCTS": "off"})
@@ -293,9 +291,7 @@ def test_minmax_prefers_the_lowering_when_a_big_m_exists(decidb_cli_gurobi):
     def dump_of(env):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "model.dump")
-            decidb_cli_gurobi.with_env({**env, "DECIDB_DUMP_MODEL": path}).execute(sql)
-            with open(path) as f:
-                return f.read()
+            return decidb_cli_gurobi.with_env(env).dump_model(sql, path)
 
     # `on` is the shipping policy spelled out. Pinned rather than left unset so the
     # assertion still means the default when the whole suite runs under an ambient

@@ -1,6 +1,11 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 
+#include "duckdb/common/serializer/binary_deserializer.hpp"
+#include "duckdb/common/serializer/binary_serializer.hpp"
+#include "duckdb/common/serializer/memory_stream.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/statement/select_statement.hpp"
 #include "duckdb/planner/operator/logical_decide.hpp"
 
 using namespace duckdb;
@@ -57,7 +62,74 @@ duckdb::unique_ptr<LogicalOperator> RoundTrip(Connection &con, LogicalOperator &
 	return copied;
 }
 
+//! Parse exactly one SELECT-shaped statement. DIAGNOSE is represented as a SELECT
+//! over ShowRef too, so it intentionally belongs here.
+duckdb::unique_ptr<SelectStatement> ParseSelect(const string &sql) {
+	Parser parser;
+	parser.ParseQuery(sql);
+	REQUIRE(parser.statements.size() == 1);
+	REQUIRE(parser.statements[0]->type == StatementType::SELECT_STATEMENT);
+	return unique_ptr_cast<SQLStatement, SelectStatement>(std::move(parser.statements[0]));
+}
+
+//! Parsed-statement serialization is separate from bound logical-plan serialization.
+//! Exercise its generated wire format directly so a lost parser-only DECIDE tag cannot
+//! hide behind ParsedExpression::Equals (which does not consider every display flag).
+duckdb::unique_ptr<SelectStatement> RoundTripStatement(const SelectStatement &statement) {
+	Allocator allocator;
+	MemoryStream stream(allocator);
+	BinarySerializer::Serialize(statement, stream);
+	stream.Rewind();
+	return BinaryDeserializer::Deserialize<SelectStatement>(stream);
+}
+
 } // namespace
+
+TEST_CASE("Parsed DECIDE statements survive ToString and binary round trips", "[decidb]") {
+	const duckdb::vector<string> queries = {
+	    // All public type markers, including several declarations.
+	    "SELECT a, x, y, flag FROM t "
+	    "DECIDE x(INT), y(REAL), flag(BOOL) "
+	    "SUCH THAT x >= 0 AND y <= 2.5 AND flag IN (0, 1)",
+	    // Table and scalar scopes, and the split clause order. ToString canonicalizes
+	    // both accepted orders to the single block after FROM.
+	    "SELECT ship, cap DECIDE D.ship(BOOL), scalar cap(REAL) FROM data D "
+	    "SUCH THAT ship <= cap AND cap >= 0 MINIMIZE cap - SUM(ship)",
+	    // Whole-constraint WHEN plus multi-column PER.
+	    "SELECT a, b, x FROM t DECIDE x(INT) "
+	    "SUCH THAT SUM(x) <= 2 WHEN (a > 0) PER (a, t.b) AND x BETWEEN 0 AND 2",
+	    // Aggregate-local WHEN and one- and many-relation qualified reducers.
+	    "SELECT a, b, x FROM data D CROSS JOIN other T DECIDE D.x(INT) "
+	    "SUCH THAT SUM(D: x) WHEN (a > 0) + AVG(D, T: x) <= 10 "
+	    "MAXIMIZE SUM(D: x) WHEN (b = 2)",
+	    // Objective WHEN + PER, nested aggregates, and NORM.
+	    "SELECT a, b, x FROM t DECIDE x(REAL) "
+	    "SUCH THAT norm(x - a, 1) <= (SELECT 3) "
+	    "MAXIMIZE MAX(SUM(x)) WHEN (a = 1) PER (a, b)",
+	    // Quoted identifiers and the statement-level DIAGNOSE wrapper.
+	    "DIAGNOSE SELECT \"from\", \"Choice\", \"limit\" FROM data AS \"select\" "
+	    "DECIDE \"select\".\"Choice\"(BOOL), scalar \"limit\"(INT) "
+	    "SUCH THAT \"Choice\" <= \"limit\" AND \"limit\" <= 1",
+	};
+
+	for (auto &query : queries) {
+		INFO(query);
+		auto original = ParseSelect(query);
+		auto rendered = original->ToString();
+		INFO(rendered);
+
+		auto reparsed = ParseSelect(rendered);
+		REQUIRE(original->Equals(*reparsed));
+		// A canonical rendering is stable, not merely parseable once.
+		REQUIRE(reparsed->ToString() == rendered);
+
+		auto deserialized = RoundTripStatement(*original);
+		REQUIRE(original->Equals(*deserialized));
+		// This pins FunctionExpression::is_operator and every private DECIDE tag:
+		// losing one changes the rendered SQL even where Equals remains permissive.
+		REQUIRE(deserialized->ToString() == rendered);
+	}
+}
 
 TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	DuckDB db(nullptr);
@@ -89,8 +161,7 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	REQUIRE(after->entity_scopes[0].source_table_indices == before->entity_scopes[0].source_table_indices);
 	REQUIRE(after->entity_scopes[0].entity_key_column_types.size() ==
 	        before->entity_scopes[0].entity_key_column_types.size());
-	REQUIRE(after->entity_scopes[0].entity_key_bindings.size() ==
-	        before->entity_scopes[0].entity_key_bindings.size());
+	REQUIRE(after->entity_scopes[0].entity_key_bindings.size() == before->entity_scopes[0].entity_key_bindings.size());
 	REQUIRE(after->entity_scopes[0].scoped_variable_indices == before->entity_scopes[0].scoped_variable_indices);
 	REQUIRE(after->entity_key_expressions.size() == before->entity_key_expressions.size());
 	REQUIRE(!after->entity_key_expressions.empty());

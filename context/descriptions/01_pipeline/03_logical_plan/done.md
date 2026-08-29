@@ -284,13 +284,15 @@ DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/t
 ```
 
 `DECIDB_VERIFY_SERIALIZER=1` makes `test/decide/decidb_cli.py` attach the pragma to
-every query it runs, via `-init` so no caller sees an extra result set.
+every non-interactive query it runs through shell startup commands, with the pragma's
+own result redirected away. Parsed DECIDE statements now reparse from `ToString()`;
+see [`../01_parser/done.md`](../01_parser/done.md) §5. The parsed verifier does not run
+a second solver execution, because equally optimal assignments need not have identical
+rows. The two PTY-driven continuation cases are likewise outside DuckDB's materializing
+verifier. Model-dump assertions select one complete build when verifier paths append
+equivalent copies.
 
-**This is blocked, and the blocker is not here.** Enabling the pragma also enables
-DuckDB's re-parse verifier, and a DECIDE statement's `ToString()` does not produce
-parseable SQL — see
-[`../01_parser/todo.md`](../01_parser/todo.md). The switch is wired and the plan
-round trip itself is correct; the suite cannot run under it until that is fixed.
+The guarded suite passes 1,602 tests with no skips.
 
 ---
 

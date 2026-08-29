@@ -1,6 +1,12 @@
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/expression_util.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/comparison_expression.hpp"
+#include "duckdb/parser/expression/conjunction_expression.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 
@@ -11,7 +17,96 @@ SelectNode::SelectNode()
 }
 
 bool SelectNode::HasDecideClause() const {
-    return !decide_variables.empty();
+	return !decide_variables.empty();
+}
+
+//! Reverse the parser-only comparison marker used for a typed DECIDE declaration.
+//! The generic expression renderer would expose the marker as
+//! `(x = 'integer_variable')`, which is neither public nor parseable DECIDE syntax.
+static string DecideVariableToString(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::COMPARISON) {
+		throw InternalException("DECIDE variable declaration is not a typed comparison marker");
+	}
+	auto &comparison = expr.Cast<ComparisonExpression>();
+	if (comparison.type != ExpressionType::COMPARE_EQUAL ||
+	    comparison.left->GetExpressionClass() != ExpressionClass::COLUMN_REF ||
+	    comparison.right->GetExpressionClass() != ExpressionClass::CONSTANT) {
+		throw InternalException("DECIDE variable declaration has an invalid parsed shape");
+	}
+	auto &constant = comparison.right->Cast<ConstantExpression>();
+	if (constant.value.type() != LogicalType::VARCHAR) {
+		throw InternalException("DECIDE variable declaration has a non-string type marker");
+	}
+
+	auto marker = constant.value.GetValue<string>();
+	bool scalar = StringUtil::StartsWith(marker, "scalar_");
+	if (scalar) {
+		marker = marker.substr(7);
+	}
+	string type;
+	if (marker == DECIDE_VARIABLE_TYPES[0]) {
+		type = "REAL";
+	} else if (marker == DECIDE_VARIABLE_TYPES[1]) {
+		type = "INT";
+	} else if (marker == DECIDE_VARIABLE_TYPES[2]) {
+		type = "BOOL";
+	} else {
+		throw InternalException("Unknown DECIDE variable type marker '%s'", marker);
+	}
+	return string(scalar ? "scalar " : "") + comparison.left->ToString() + "(" + type + ")";
+}
+
+static bool IsDecidePostfix(const ParsedExpression &expr, const char *tag) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &function = expr.Cast<FunctionExpression>();
+	return function.is_operator && function.function_name == tag;
+}
+
+//! Render the two postfix wrappers that may surround a complete constraint or
+//! objective. Their children render recursively, so `WHEN ... PER ...` retains the
+//! order represented by the parsed tree.
+static string DecidePostfixToString(const ParsedExpression &expr) {
+	if (IsDecidePostfix(expr, WHEN_CONSTRAINT_TAG)) {
+		auto &function = expr.Cast<FunctionExpression>();
+		if (function.children.size() != 2) {
+			throw InternalException("DECIDE WHEN marker has %s children, expected 2", function.children.size());
+		}
+		return DecidePostfixToString(*function.children[0]) + " WHEN " + function.children[1]->ToString();
+	}
+	if (IsDecidePostfix(expr, PER_CONSTRAINT_TAG)) {
+		auto &function = expr.Cast<FunctionExpression>();
+		if (function.children.size() < 2) {
+			throw InternalException("DECIDE PER marker has %s children, expected at least 2", function.children.size());
+		}
+		string result = DecidePostfixToString(*function.children[0]) + " PER ";
+		bool parenthesize = function.children.size() > 2;
+		if (parenthesize) {
+			result += "(";
+		}
+		for (idx_t i = 1; i < function.children.size(); i++) {
+			if (i > 1) {
+				result += ", ";
+			}
+			result += function.children[i]->ToString();
+		}
+		return result + (parenthesize ? ")" : "");
+	}
+	return expr.ToString();
+}
+
+//! A top-level AND is the DECIDE constraint list, not an ordinary parenthesized SQL
+//! conjunction. Keeping DuckDB's generic outer parentheses makes a following WHEN or
+//! PER unparseable, so emit the list in the grammar's own form.
+static string DecideConstraintsToString(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::CONJUNCTION ||
+	    expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+		return DecidePostfixToString(expr);
+	}
+	auto &conjunction = expr.Cast<ConjunctionExpression>();
+	return StringUtil::Join(conjunction.children, conjunction.children.size(), " AND ",
+	                        [](const unique_ptr<ParsedExpression> &child) { return DecidePostfixToString(*child); });
 }
 
 string SelectNode::ToString() const {
@@ -55,24 +150,24 @@ string SelectNode::ToString() const {
 	if (where_clause) {
 		result += " WHERE " + where_clause->ToString();
 	}
-    if (HasDecideClause()) {
-        result += " DECIDE ";
-    	for (idx_t i = 0; i < decide_variables.size(); i++) {
-    		if (i > 0) {
-    			result += ", ";
-    		}
-            result += decide_variables[i]->ToString();
-        }
-        result += " SUCH THAT " + decide_constraints->ToString();
-        if (decide_objective) {
-            if (decide_sense == DecideSense::MAXIMIZE) {
-                result += " MAXIMIZE ";
-            } else if (decide_sense == DecideSense::MINIMIZE) {
-                result += " MINIMIZE ";
-            }
-            result += decide_objective->ToString();
-        }
-    }
+	if (HasDecideClause()) {
+		result += " DECIDE ";
+		for (idx_t i = 0; i < decide_variables.size(); i++) {
+			if (i > 0) {
+				result += ", ";
+			}
+			result += DecideVariableToString(*decide_variables[i]);
+		}
+		result += " SUCH THAT " + DecideConstraintsToString(*decide_constraints);
+		if (decide_objective) {
+			if (decide_sense == DecideSense::MAXIMIZE) {
+				result += " MAXIMIZE ";
+			} else if (decide_sense == DecideSense::MINIMIZE) {
+				result += " MINIMIZE ";
+			}
+			result += DecidePostfixToString(*decide_objective);
+		}
+	}
 	if (!groups.grouping_sets.empty()) {
 		result += " GROUP BY ";
 		// if we are dealing with multiple grouping sets, we have to add a few additional brackets
@@ -148,18 +243,18 @@ bool SelectNode::Equals(const QueryNode *other_p) const {
 	if (!TableRef::Equals(from_table, other.from_table)) {
 		return false;
 	}
-    // decidb's DECIDE
+	// decidb's DECIDE
 	if (!ParsedExpression::ListEquals(decide_variables, other.decide_variables)) {
 		return false;
 	}
 	if (!ParsedExpression::Equals(decide_constraints, other.decide_constraints)) {
 		return false;
 	}
-    if (HasDecideClause() && other.HasDecideClause()) {
-        if (decide_sense != other.decide_sense) {
-            return false;
-        }
-    }
+	if (HasDecideClause() && other.HasDecideClause()) {
+		if (decide_sense != other.decide_sense) {
+			return false;
+		}
+	}
 	if (!ParsedExpression::Equals(decide_objective, other.decide_objective)) {
 		return false;
 	}
@@ -194,15 +289,15 @@ unique_ptr<QueryNode> SelectNode::Copy() const {
 		result->select_list.push_back(child->Copy());
 	}
 	result->from_table = from_table ? from_table->Copy() : nullptr;
-    // decidb's decide
+	// decidb's decide
 	for (auto &child : decide_variables) {
 		result->decide_variables.push_back(child->Copy());
 	}
-    result->decide_constraints = decide_constraints ? decide_constraints->Copy() : nullptr;
-    if (!decide_variables.empty()) {
-        result->decide_sense = decide_sense;
-    }
-    result->decide_objective = decide_objective ? decide_objective->Copy() : nullptr;
+	result->decide_constraints = decide_constraints ? decide_constraints->Copy() : nullptr;
+	if (!decide_variables.empty()) {
+		result->decide_sense = decide_sense;
+	}
+	result->decide_objective = decide_objective ? decide_objective->Copy() : nullptr;
 	result->where_clause = where_clause ? where_clause->Copy() : nullptr;
 	// groups
 	for (auto &group : groups.group_expressions) {

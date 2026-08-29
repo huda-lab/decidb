@@ -1,6 +1,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 
 #include <utility>
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hash.hpp"
@@ -34,7 +35,91 @@ FunctionExpression::FunctionExpression(const string &function_name, vector<uniqu
                          std::move(order_bys), distinct, is_operator, export_state_p) {
 }
 
+//! A relation-qualified reducer is represented by a parser-only operator whose first
+//! child is the real aggregate and whose remaining children are relation names. Render
+//! the aggregate's complete DuckDB function surface, inserting the qualifier before
+//! its arguments, rather than exposing the private marker as a function call.
+static string QualifiedReducerToString(const FunctionExpression &wrapper) {
+	if (wrapper.children.size() < 2 || wrapper.children[0]->GetExpressionClass() != ExpressionClass::FUNCTION) {
+		throw InternalException("DECIDE qualified-reducer marker has an invalid parsed shape");
+	}
+	auto &aggregate = wrapper.children[0]->Cast<FunctionExpression>();
+	string result;
+	if (!aggregate.catalog.empty()) {
+		result += KeywordHelper::WriteOptionallyQuoted(aggregate.catalog) + ".";
+	}
+	if (!aggregate.schema.empty()) {
+		result += KeywordHelper::WriteOptionallyQuoted(aggregate.schema) + ".";
+	}
+	result += KeywordHelper::WriteOptionallyQuoted(aggregate.function_name) + "(";
+	for (idx_t i = 1; i < wrapper.children.size(); i++) {
+		if (i > 1) {
+			result += ", ";
+		}
+		result += wrapper.children[i]->ToString();
+	}
+	result += ": ";
+	if (aggregate.distinct) {
+		result += "DISTINCT ";
+	}
+	for (idx_t i = 0; i < aggregate.children.size(); i++) {
+		if (i > 0) {
+			result += ", ";
+		}
+		auto &child = aggregate.children[i];
+		result += child->GetAlias().empty()
+		              ? child->ToString()
+		              : StringUtil::Format("%s := %s", SQLIdentifier(child->GetAlias()), child->ToString());
+	}
+	if (aggregate.order_bys && !aggregate.order_bys->orders.empty()) {
+		if (aggregate.children.empty()) {
+			result += ") WITHIN GROUP (";
+		}
+		result += " ORDER BY ";
+		for (idx_t i = 0; i < aggregate.order_bys->orders.size(); i++) {
+			if (i > 0) {
+				result += ", ";
+			}
+			result += aggregate.order_bys->orders[i].ToString();
+		}
+	}
+	result += ")";
+	if (aggregate.filter) {
+		result += " FILTER (WHERE " + aggregate.filter->ToString() + ")";
+	}
+	if (aggregate.export_state) {
+		result += " EXPORT_STATE";
+	}
+	return result;
+}
+
 string FunctionExpression::ToString() const {
+	if (is_operator && function_name == WHEN_CONSTRAINT_TAG) {
+		if (children.size() != 2) {
+			throw InternalException("DECIDE WHEN marker has %s children, expected 2", children.size());
+		}
+		return children[0]->ToString() + " WHEN " + children[1]->ToString();
+	}
+	if (is_operator && function_name == PER_CONSTRAINT_TAG) {
+		if (children.size() < 2) {
+			throw InternalException("DECIDE PER marker has %s children, expected at least 2", children.size());
+		}
+		string result = children[0]->ToString() + " PER ";
+		bool parenthesize = children.size() > 2;
+		if (parenthesize) {
+			result += "(";
+		}
+		for (idx_t i = 1; i < children.size(); i++) {
+			if (i > 1) {
+				result += ", ";
+			}
+			result += children[i]->ToString();
+		}
+		return result + (parenthesize ? ")" : "");
+	}
+	if (is_operator && function_name == QUALIFIED_REDUCER_TAG) {
+		return QualifiedReducerToString(*this);
+	}
 	return ToString<FunctionExpression, ParsedExpression>(*this, catalog, schema, function_name, is_operator, distinct,
 	                                                      filter.get(), order_bys.get(), export_state, true);
 }

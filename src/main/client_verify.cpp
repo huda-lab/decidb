@@ -106,6 +106,9 @@ ErrorData ClientContext::VerifyQuery(ClientContextLock &lock, const string &quer
 	}
 	// Execute the verifiers
 	for (auto &verifier : statement_verifiers) {
+		if (!verifier->ShouldExecute()) {
+			continue;
+		}
 		bool failed = verifier->Run(*this, query,
 		                            [&](const string &q, unique_ptr<SQLStatement> s,
 		                                optional_ptr<case_insensitive_map_t<BoundParameterData>> params) {
@@ -177,6 +180,9 @@ ErrorData ClientContext::VerifyQuery(ClientContextLock &lock, const string &quer
 	// Now compare the results
 	// The results of all runs should be identical
 	for (auto &verifier : statement_verifiers) {
+		if (!verifier->ShouldExecute()) {
+			continue;
+		}
 		auto result = original->CompareResults(*verifier);
 		if (!result.empty()) {
 			return ErrorData(result);

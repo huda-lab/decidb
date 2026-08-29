@@ -196,7 +196,58 @@ formulation after types, scopes, and DuckDB coercions are known.
 
 ---
 
-## 5. What this stage does not do
+## 5. Statement rendering and parsed serialization
+
+The parsed tree stores DECIDE syntax as private structure: a variable declaration is
+a comparison against a type-marker string, and `WHEN`, `PER`, and a
+relation-qualified reducer are tagged `FunctionExpression`s. Those encodings are for
+the parser and binder, not SQL users.
+
+`SelectNode::ToString()` reverses the encoding. It emits `x(INT)`, `T.x(BOOL)` and
+`scalar x(REAL)`, renders the top-level constraint list without generic SQL
+parentheses that the DECIDE grammar cannot accept, and restores objective direction.
+`FunctionExpression::ToString()` restores `WHEN`, `PER` and `SUM(D, T: expression)`
+where those tags can occur inside a larger expression. Ordinary parsed functions keep
+DuckDB's generic renderer. `SelectNode::decide_sense` defaults to `FEASIBILITY`, so
+generated parsed-statement serialization also has a defined value for ordinary
+non-DECIDE selects.
+
+This is a structural round trip, not source-text preservation: DuckDB may normalize
+case, quotes, parentheses, or the accepted split clause order. The contract is:
+
+```text
+SQL -> parsed SelectStatement -> ToString SQL -> equal parsed SelectStatement
+```
+
+Parsed-statement binary serialization is exercised separately from logical-plan
+serialization. The regression matrix in
+`test/common/test_decidb_plan_serialization.cpp` covers all variable types and scopes,
+both clause orders, `WHEN`, one- and multi-column `PER`, qualified reducers, `NORM`,
+`IN`, nested aggregates, scalar subqueries, quoted identifiers and `DIAGNOSE`. It
+checks reparsed equality, stable rendering, and binary `SelectStatement` round trips.
+
+DuckDB's parsed verifier creates and reparses the rendered statement. For a statement
+containing DECIDE, that is the end of this verifier: it does not execute a second
+solve and compare rows. Two solves may choose different equally optimal assignments,
+and an interactive continuation cannot be replayed as a materialized verification
+run. The original execution still uses `PRAGMA verify_serializer`; its bound logical
+plan is replaced by the binary-deserialized copy before optimization and execution.
+Non-DECIDE queries retain DuckDB's existing parsed-result comparison.
+
+The suite guard is:
+
+```bash
+DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/tests
+```
+
+The CLI harness suppresses the pragma's own result, reduces repeated model-dump builds
+to one complete dump for shape assertions, and leaves the two PTY-driven interactive
+continuation cases outside the materializing verifier. The guarded release run passes
+1,602 tests with no skips.
+
+---
+
+## 6. What this stage does not do
 
 - Decide which side of a comparison a term sits on, or flip a relation.
 - Fold a factor into a reducer. `K * AGG(e)` → `AGG(K * e)` used to happen here
@@ -212,7 +263,7 @@ formulation after types, scopes, and DuckDB coercions are known.
 
 ---
 
-## 6. Source map
+## 7. Source map
 
 | Concern | Location |
 |---|---|
@@ -224,4 +275,6 @@ formulation after types, scopes, and DuckDB coercions are known.
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |
 | `WHEN`/`PER` tag construction | `src/parser/transform/expression/transform_operator.cpp` |
+| DECIDE statement rendering | `src/parser/query_node/select_node.cpp`, `src/parser/expression/function_expression.cpp` |
+| Parsed reparse verifier boundary | `src/verification/parsed_statement_verifier.cpp`, `src/main/client_verify.cpp` |
 | Parse-error hint | `src/decidb/utility/decide_parse_hints.cpp` |

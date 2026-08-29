@@ -43,11 +43,11 @@ public:
 	AggregateHandling aggregate_handling;
 	//! The SAMPLE clause
 	unique_ptr<SampleOptions> sample;
-    // decidb's DECIDE
-    vector<unique_ptr<ParsedExpression>> decide_variables;
-    unique_ptr<ParsedExpression> decide_constraints;
-    DecideSense decide_sense;
-    unique_ptr<ParsedExpression> decide_objective;
+	// decidb's DECIDE
+	vector<unique_ptr<ParsedExpression>> decide_variables;
+	unique_ptr<ParsedExpression> decide_constraints;
+	DecideSense decide_sense = DecideSense::FEASIBILITY;
+	unique_ptr<ParsedExpression> decide_objective;
 
 	const vector<unique_ptr<ParsedExpression>> &GetSelectList() const override {
 		return select_list;
@@ -69,7 +69,7 @@ public:
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<QueryNode> Deserialize(Deserializer &deserializer);
 
-    bool HasDecideClause() const;
+	bool HasDecideClause() const;
 };
 
 } // namespace duckdb
