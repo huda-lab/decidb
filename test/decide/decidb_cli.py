@@ -15,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -31,6 +32,37 @@ def _extract_status(stderr: str) -> str | None:
         if line.startswith(_STATUS_MARKER_PREFIX):
             return line[len(_STATUS_MARKER_PREFIX):].strip()
     return None
+
+
+#: Environment variable that turns DuckDB's plan round-trip self-check on for every
+#: query this wrapper runs. See ``_verify_serializer_init_file``.
+_VERIFY_SERIALIZER_ENV = "DECIDB_VERIFY_SERIALIZER"
+
+_verify_init_path: str | None = None
+
+
+def _verify_serializer_init_file() -> str:
+    """Path to a CLI init script that enables ``PRAGMA verify_serializer``.
+
+    With the pragma on, DuckDB serializes each bound plan, deserializes it, and runs
+    the *copy* — so a plan field that never reaches the wire shows up as a wrong
+    answer in whatever test happens to depend on it. That is the only guard here that
+    does not have to be maintained per field: it costs nothing to keep correct,
+    because the existing suite is the assertion.
+
+    Delivered via ``-init`` rather than by prefixing the SQL, so no caller has to cope
+    with an extra result set. ``.once /dev/null`` swallows the pragma's own output,
+    which would otherwise land in front of every ``execute_raw`` / ``execute_script``
+    result. Written once per process into a temp file that outlives the interpreter's
+    exit only as OS garbage.
+    """
+    global _verify_init_path
+    if _verify_init_path is None:
+        fd, path = tempfile.mkstemp(prefix="decidb_verify_serializer_", suffix=".sql")
+        with os.fdopen(fd, "w") as f:
+            f.write(".once /dev/null\nPRAGMA verify_serializer;\n")
+        _verify_init_path = path
+    return _verify_init_path
 
 
 class DecidBCliError(Exception):
@@ -65,11 +97,21 @@ class DecidBCli:
     """
 
     def __init__(
-        self, exe_path: str, db_path: str, env: dict[str, str] | None = None
+        self,
+        exe_path: str,
+        db_path: str,
+        env: dict[str, str] | None = None,
+        verify_serializer: bool | None = None,
     ) -> None:
         self.exe = exe_path
         self.db = db_path
         self.env = env
+        #: ``None`` means "follow the environment"; a bool pins it for this wrapper.
+        self.verify_serializer = (
+            os.environ.get(_VERIFY_SERIALIZER_ENV) == "1"
+            if verify_serializer is None
+            else verify_serializer
+        )
 
     def with_env(self, extra: dict[str, str]) -> "DecidBCli":
         """A copy of this wrapper with ``extra`` overlaid on its env.
@@ -77,7 +119,24 @@ class DecidBCli:
         Lets a test add a one-off variable (e.g. ``DECIDB_DUMP_MODEL``) to a
         session-scoped fixture without mutating the fixture other tests share.
         """
-        return DecidBCli(self.exe, self.db, env={**(self.env or {}), **extra})
+        return DecidBCli(self.exe, self.db, env={**(self.env or {}), **extra},
+                         verify_serializer=self.verify_serializer)
+
+    def with_verify_serializer(self) -> "DecidBCli":
+        """A copy of this wrapper that round-trips every bound plan through
+        serialization, whatever the environment says.
+
+        Used by tests asserting that a plan field survives the round trip, so they
+        hold with the suite-wide switch off.
+        """
+        return DecidBCli(self.exe, self.db, env=self.env, verify_serializer=True)
+
+    def _argv(self, *args: str) -> list[str]:
+        """The CLI invocation, with the round-trip self-check attached when asked for."""
+        argv = [self.exe, self.db, "-readonly"]
+        if self.verify_serializer:
+            argv += ["-init", _verify_serializer_init_file()]
+        return argv + list(args)
 
     def _subprocess_env(self, *, status_markers: bool = False) -> dict[str, str] | None:
         # `status_markers` asks DeciDB for machine-readable terminal lines. Only
@@ -106,7 +165,7 @@ class DecidBCli:
             If the CLI writes anything to stderr (error messages).
         """
         proc = subprocess.run(
-            [self.exe, self.db, "-readonly", "-json", "-c", sql],
+            self._argv("-json", "-c", sql),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -155,7 +214,7 @@ class DecidBCli:
         """
         env = {**os.environ, **(self.env or {}), "DECIDB_DUMP_MODEL": str(path)}
         proc = subprocess.run(
-            [self.exe, self.db, "-readonly", "-c", sql],
+            self._argv("-c", sql),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -176,7 +235,7 @@ class DecidBCli:
     ) -> subprocess.CompletedProcess:
         """Run a SQL query and return the raw ``CompletedProcess``."""
         return subprocess.run(
-            [self.exe, self.db, "-readonly", "-c", sql],
+            self._argv("-c", sql),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -195,7 +254,7 @@ class DecidBCli:
         connection.
         """
         return subprocess.run(
-            [self.exe, self.db, "-readonly"],
+            self._argv(),
             input=sql,
             capture_output=True,
             text=True,
@@ -225,7 +284,7 @@ class DecidBCli:
         master_fd, slave_fd = pty.openpty()
         try:
             proc = subprocess.Popen(
-                [self.exe, self.db, "-readonly", "-c", sql],
+                self._argv("-c", sql),
                 stdin=slave_fd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

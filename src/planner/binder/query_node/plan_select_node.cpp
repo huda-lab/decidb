@@ -219,9 +219,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // list — is gone by then, leaving the plan's positional `col0` placeholders.
         for (auto &binding : bind_context.GetBindingsList()) {
             for (idx_t i = 0; i < binding->names.size(); i++) {
-                decide_op->source_column_table_index.push_back(binding->index);
-                decide_op->source_column_index.push_back(i);
-                decide_op->source_column_names.push_back(binding->names[i]);
+                decide_op->source_columns.push_back({ColumnBinding(binding->index, i), binding->names[i]});
             }
         }
         decide_op->entity_key_expressions = std::move(statement.entity_key_expressions);

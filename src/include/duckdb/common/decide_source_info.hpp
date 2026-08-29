@@ -11,6 +11,9 @@
 
 namespace duckdb {
 
+class Serializer;
+class Deserializer;
+
 //! How diagnostics should render the right-hand side of a source constraint.
 enum class ConstraintSourceRhsKind : uint8_t {
 	//! No directly editable symbolic RHS. Diagnostics quote its evaluated value.
@@ -63,6 +66,10 @@ struct ConstraintSourceInfo {
 	//! The comparison operator as written (`<=`, `>=`, `=`, `<>`). Kept beside the
 	//! two sides because canonicalization may flip it along with them.
 	string written_cmp;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static ConstraintSourceInfo Deserialize(Deserializer &deserializer);
 };
 
 } // namespace duckdb

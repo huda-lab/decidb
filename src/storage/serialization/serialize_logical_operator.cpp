@@ -79,6 +79,9 @@ unique_ptr<LogicalOperator> LogicalOperator::Deserialize(Deserializer &deseriali
 	case LogicalOperatorType::LOGICAL_DECIDE:
 		result = LogicalDecide::Deserialize(deserializer);
 		break;
+	case LogicalOperatorType::LOGICAL_DECIDE_DIAGNOSE:
+		result = LogicalDecideDiagnose::Deserialize(deserializer);
+		break;
 	case LogicalOperatorType::LOGICAL_DELETE:
 		result = LogicalDelete::Deserialize(deserializer);
 		break;
@@ -361,6 +364,60 @@ void LogicalCrossProduct::Serialize(Serializer &serializer) const {
 
 unique_ptr<LogicalOperator> LogicalCrossProduct::Deserialize(Deserializer &deserializer) {
 	auto result = duckdb::unique_ptr<LogicalCrossProduct>(new LogicalCrossProduct());
+	return std::move(result);
+}
+
+void LogicalDecide::Serialize(Serializer &serializer) const {
+	LogicalOperator::Serialize(serializer);
+	serializer.WritePropertyWithDefault<idx_t>(200, "decide_index", decide_index);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", decide_variables);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", decide_constraints);
+	serializer.WriteProperty<DecideSense>(203, "decide_sense", decide_sense);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", decide_objective);
+	serializer.WritePropertyWithDefault<bool>(205, "diagnose", diagnose);
+	serializer.WritePropertyWithDefault<idx_t>(206, "num_auxiliary_vars", num_auxiliary_vars);
+	serializer.WritePropertyWithDefault<vector<bool>>(207, "is_boolean_var", is_boolean_var);
+	serializer.WriteProperty<double>(208, "objective_constant_offset", objective_constant_offset);
+	serializer.WritePropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", variable_scopes);
+	serializer.WritePropertyWithDefault<vector<EntityScopeInfo>>(210, "entity_scopes", entity_scopes);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(211, "entity_key_expressions", entity_key_expressions);
+	serializer.WritePropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", constraint_sources);
+	serializer.WritePropertyWithDefault<string>(213, "written_objective", written_objective);
+	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", canonical_objective);
+	serializer.WritePropertyWithDefault<vector<string>>(215, "source_fragments", source_fragments);
+	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", source_columns);
+}
+
+unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
+	auto result = duckdb::unique_ptr<LogicalDecide>(new LogicalDecide());
+	deserializer.ReadPropertyWithDefault<idx_t>(200, "decide_index", result->decide_index);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", result->decide_variables);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", result->decide_constraints);
+	deserializer.ReadProperty<DecideSense>(203, "decide_sense", result->decide_sense);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", result->decide_objective);
+	deserializer.ReadPropertyWithDefault<bool>(205, "diagnose", result->diagnose);
+	deserializer.ReadPropertyWithDefault<idx_t>(206, "num_auxiliary_vars", result->num_auxiliary_vars);
+	deserializer.ReadPropertyWithDefault<vector<bool>>(207, "is_boolean_var", result->is_boolean_var);
+	deserializer.ReadProperty<double>(208, "objective_constant_offset", result->objective_constant_offset);
+	deserializer.ReadPropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", result->variable_scopes);
+	deserializer.ReadPropertyWithDefault<vector<EntityScopeInfo>>(210, "entity_scopes", result->entity_scopes);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(211, "entity_key_expressions", result->entity_key_expressions);
+	deserializer.ReadPropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", result->constraint_sources);
+	deserializer.ReadPropertyWithDefault<string>(213, "written_objective", result->written_objective);
+	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->canonical_objective);
+	deserializer.ReadPropertyWithDefault<vector<string>>(215, "source_fragments", result->source_fragments);
+	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->source_columns);
+	return std::move(result);
+}
+
+void LogicalDecideDiagnose::Serialize(Serializer &serializer) const {
+	LogicalOperator::Serialize(serializer);
+	serializer.WritePropertyWithDefault<idx_t>(200, "table_index", table_index);
+}
+
+unique_ptr<LogicalOperator> LogicalDecideDiagnose::Deserialize(Deserializer &deserializer) {
+	auto result = duckdb::unique_ptr<LogicalDecideDiagnose>(new LogicalDecideDiagnose());
+	deserializer.ReadPropertyWithDefault<idx_t>(200, "table_index", result->table_index);
 	return std::move(result);
 }
 

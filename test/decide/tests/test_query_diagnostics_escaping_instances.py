@@ -395,13 +395,15 @@ class TestEscapeColumnNaming:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_column_names_survive_a_prepared_statement(self, request, cli_fixture):
-        """Names must survive plan serialization.
+        """Names must survive a prepared statement's replay.
 
-        They ride on `LogicalDecide`, whose serializer is hand-written: a field without
-        its matching Serialize/Deserialize pair compiles, passes every test that does not
-        prepare a statement, and silently drops on replay — the diagnosis would quietly
-        fall back to unnamed slices. Executing the prepared statement twice replays the
-        deserialized plan."""
+        This is cache/reuse coverage, not serialization coverage: `EXECUTE` reuses the
+        cached PHYSICAL plan, and the rebind path re-plans from a parse-tree copy, so no
+        logical plan is ever serialized here. Running it twice proves the diagnosis still
+        receives its `DecideSourceColumnName` records on the second, replayed execution.
+
+        The serialization round trip is covered in C++, where it can be driven directly:
+        `test/common/test_decidb_plan_serialization.cpp`."""
         cli = request.getfixturevalue(cli_fixture)
         decide_sql = _SAME_ROWS_DECIDE.format(source="items")
         script = (

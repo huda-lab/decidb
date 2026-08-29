@@ -13,6 +13,9 @@
 
 namespace duckdb {
 
+class Serializer;
+class Deserializer;
+
 enum class DecideSense : uint8_t {
     MAXIMIZE = 0,
     MINIMIZE = 1,
@@ -65,6 +68,10 @@ struct DecideVarScopeInfo {
     bool IsScalar() const {
         return scope == DecideVarScope::SCALAR;
     }
+
+    //! Generated from `storage/serialization/nodes.json`.
+    void Serialize(Serializer &serializer) const;
+    static DecideVarScopeInfo Deserialize(Deserializer &deserializer);
 };
 
 //! Type of aggregate used in MIN/MAX objective linearization

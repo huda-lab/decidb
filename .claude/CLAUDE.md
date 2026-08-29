@@ -83,6 +83,20 @@ The executable is `build/release/decidb`. DECIDE tests live under
 test/decide/.venv/bin/python3 -m pytest <test-or-directory>
 ```
 
+Plan serialization is checked by a switch that is **off by default**, so run it
+periodically rather than only when touching `LogicalDecide`. It round-trips each
+bound plan through serialization and runs the copy, so a plan field that never
+reaches the wire shows up as a wrong answer in whatever test depends on it:
+
+```bash
+DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/tests
+```
+
+*Currently blocked* — the pragma also enables DuckDB's re-parse verifier, which a
+DECIDE statement fails for an unrelated reason. See
+`context/descriptions/01_pipeline/01_parser/todo.md`, and delete this note when it
+closes.
+
 Grammar changes under `third_party/libpg_query/grammar/` require:
 
 ```bash

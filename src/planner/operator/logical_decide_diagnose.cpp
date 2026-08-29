@@ -8,6 +8,10 @@ LogicalDecideDiagnose::LogicalDecideDiagnose(idx_t table_index)
     : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE_DIAGNOSE), table_index(table_index) {
 }
 
+LogicalDecideDiagnose::LogicalDecideDiagnose()
+    : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE_DIAGNOSE), table_index(DConstants::INVALID_INDEX) {
+}
+
 vector<ColumnBinding> LogicalDecideDiagnose::GetColumnBindings() {
 	return GenerateColumnBindings(table_index, types.size());
 }

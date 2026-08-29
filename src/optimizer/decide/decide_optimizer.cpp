@@ -61,6 +61,13 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 		timer.Start();
 	}
 
+	// From here on this plan carries formulation state chosen for THIS host's solver,
+	// which is not portable and so is not serialized. Setting the flag before the first
+	// rewrite is what makes LogicalDecide::SupportSerialization() stop reporting true,
+	// so the post-optimizer PRAGMA verify_serializer round trip skips the node instead
+	// of silently replacing the plan with a copy missing everything below.
+	decide.optimized = true;
+
 	// Choose the solver, and with it the formulation, BEFORE any rewrite runs. Every
 	// pass below decides how to express a construct, and the right answer depends on
 	// what the backend can take natively — so both have to be settled first, and settled

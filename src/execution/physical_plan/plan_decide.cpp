@@ -132,10 +132,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         if (!nameable[i] || binding_column_index[i] == DConstants::INVALID_INDEX) {
             continue;
         }
-        for (idx_t n = 0; n < op.source_column_names.size(); n++) {
-            if (op.source_column_table_index[n] == child_bindings[i].table_index &&
-                op.source_column_index[n] == binding_column_index[i]) {
-                child_userwritten_names[i] = op.source_column_names[n];
+        for (const auto &source_column : op.source_columns) {
+            if (source_column.binding.table_index == child_bindings[i].table_index &&
+                source_column.binding.column_index == binding_column_index[i]) {
+                child_userwritten_names[i] = source_column.name;
                 break;
             }
         }

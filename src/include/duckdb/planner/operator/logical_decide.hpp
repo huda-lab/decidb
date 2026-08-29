@@ -41,6 +41,24 @@ struct EntityScopeInfo {
     vector<ColumnBinding> entity_key_bindings;
     //! Which decide_variables indices are scoped to this table
     vector<idx_t> scoped_variable_indices;
+
+    //! Generated from `storage/serialization/nodes.json`. `entity_key_physical_indices`
+    //! is deliberately absent: it is resolved at physical planning, after the only point
+    //! a plan is ever serialized, so it is always empty on the wire.
+    void Serialize(Serializer &serializer) const;
+    static EntityScopeInfo Deserialize(Deserializer &deserializer);
+};
+
+//! A source column's logical identity and the name the user wrote for it.
+//! Keeping these together makes it impossible for the binding/name association to
+//! drift through mismatched parallel vectors.
+struct DecideSourceColumnName {
+    ColumnBinding binding;
+    string name;
+
+    //! Generated from `storage/serialization/nodes.json`.
+    void Serialize(Serializer &serializer) const;
+    static DecideSourceColumnName Deserialize(Deserializer &deserializer);
 };
 
 class LogicalDecide : public LogicalOperator {
@@ -89,13 +107,9 @@ public:
     //! `col0` / `col1` placeholders instead. The unbounded diagnosis uses it to label a
     //! categorical slice with a name the user actually wrote.
     //!
-    //! Held as three parallel vectors — the table index and column index of the binding,
-    //! and the name — because ColumnBinding is not serializable and this operator's
-    //! serializer is hand-written (see Serialize/Deserialize; every struct here is
-    //! flattened the same way).
-    vector<idx_t> source_column_table_index;
-    vector<idx_t> source_column_index;
-    vector<string> source_column_names;
+    //! Each entry keeps the logical binding and its name together. The generated
+    //! serializer carries the record directly.
+    vector<DecideSourceColumnName> source_columns;
 
     // The optimization sense (MINIMIZE or MAXIMIZE)
     DecideSense decide_sense;
@@ -330,6 +344,20 @@ public:
     //! final pass fills it, and moved into PhysicalDecide at physical planning.
     DecidePreparedModel prepared;
 
+    //! True once DecideOptimizer has started rewriting this node.
+    //!
+    //! It is what makes the serialization contract enforceable: the wire format carries
+    //! the BOUND plan — what the binder and the canonicalizer produced — and nothing
+    //! this flag guards. Stage 05's output is a formulation chosen from the constructs
+    //! THIS HOST's solver declares, which is the same reason `solver_backend_name` and
+    //! `use_native_constructs` below are not serialized either. An optimized DECIDE plan
+    //! is not portable by construction, so it declines to be copied rather than
+    //! arriving somewhere else as a formulation that host cannot honor.
+    //!
+    //! Not serialized: anything deserialized is a bound plan, so false is the only
+    //! value a fresh node can have.
+    bool optimized = false;
+
 public:
     //! Add a constraint to the SUCH THAT tree, canonicalizing it on the way in.
     //! This is the ONLY way a constraint may enter LogicalDecide after planning,
@@ -374,8 +402,15 @@ public:
     string GetName() const override;
     InsertionOrderPreservingMap<string> ParamsToString() const override;
 
+    //! Serialization is defined by `storage/serialization/logical_operator.json` and
+    //! generated into `serialize_logical_operator.cpp`; there is no hand-written copy.
     void Serialize(Serializer &serializer) const override;
     static unique_ptr<LogicalOperator> Deserialize(Deserializer &deserializer);
+
+    //! Bound plans only — see `optimized` above.
+    bool SupportSerialization() const override {
+        return !optimized;
+    }
     
 protected:
     // The table indices that this operator produces

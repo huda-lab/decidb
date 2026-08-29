@@ -1051,5 +1051,136 @@
       }
     ],
     "pointer_type": "none"
+  },
+  {
+    "class": "DecideVarScopeInfo",
+    "includes": [
+      "duckdb/common/enums/decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "scope",
+        "type": "DecideVarScope"
+      },
+      {
+        "id": 101,
+        "name": "entity_scope_idx",
+        "type": "idx_t"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "EntityScopeInfo",
+    "includes": [
+      "duckdb/planner/operator/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "table_alias",
+        "type": "string"
+      },
+      {
+        "id": 101,
+        "name": "source_table_indices",
+        "type": "vector<idx_t>"
+      },
+      {
+        "id": 102,
+        "name": "entity_key_column_types",
+        "type": "vector<LogicalType>"
+      },
+      {
+        "id": 103,
+        "name": "entity_key_bindings",
+        "type": "vector<ColumnBinding>"
+      },
+      {
+        "id": 104,
+        "name": "scoped_variable_indices",
+        "type": "vector<idx_t>"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideSourceColumnName",
+    "includes": [
+      "duckdb/planner/operator/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "binding",
+        "type": "ColumnBinding"
+      },
+      {
+        "id": 101,
+        "name": "name",
+        "type": "string"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "ConstraintSourceInfo",
+    "includes": [
+      "duckdb/common/decide_source_info.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "canonical_lhs",
+        "type": "string"
+      },
+      {
+        "id": 101,
+        "name": "canonical_rhs",
+        "type": "string"
+      },
+      {
+        "id": 102,
+        "name": "canonical_cmp",
+        "type": "string"
+      },
+      {
+        "id": 103,
+        "name": "qualifier",
+        "type": "string"
+      },
+      {
+        "id": 104,
+        "name": "rhs_kind",
+        "type": "ConstraintSourceRhsKind"
+      },
+      {
+        "id": 105,
+        "name": "source_lhs",
+        "type": "string"
+      },
+      {
+        "id": 106,
+        "name": "source_rhs",
+        "type": "string"
+      },
+      {
+        "id": 107,
+        "name": "written_lhs",
+        "type": "string"
+      },
+      {
+        "id": 108,
+        "name": "written_rhs",
+        "type": "string"
+      },
+      {
+        "id": 109,
+        "name": "written_cmp",
+        "type": "string"
+      }
+    ],
+    "pointer_type": "none"
   }
 ]

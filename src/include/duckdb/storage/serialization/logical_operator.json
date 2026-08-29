@@ -948,6 +948,104 @@
     "class": "LogicalDecide",
     "base": "LogicalOperator",
     "enum": ["LOGICAL_DECIDE"],
-    "custom_implementation": true
+    "members": [
+      {
+        "id": 200,
+        "name": "decide_index",
+        "type": "idx_t"
+      },
+      {
+        "id": 201,
+        "name": "decide_variables",
+        "type": "vector<Expression*>"
+      },
+      {
+        "id": 202,
+        "name": "decide_constraints",
+        "type": "Expression*"
+      },
+      {
+        "id": 203,
+        "name": "decide_sense",
+        "type": "DecideSense"
+      },
+      {
+        "id": 204,
+        "name": "decide_objective",
+        "type": "Expression*"
+      },
+      {
+        "id": 205,
+        "name": "diagnose",
+        "type": "bool"
+      },
+      {
+        "id": 206,
+        "name": "num_auxiliary_vars",
+        "type": "idx_t"
+      },
+      {
+        "id": 207,
+        "name": "is_boolean_var",
+        "type": "vector<bool>"
+      },
+      {
+        "id": 208,
+        "name": "objective_constant_offset",
+        "type": "double"
+      },
+      {
+        "id": 209,
+        "name": "variable_scopes",
+        "type": "vector<DecideVarScopeInfo>"
+      },
+      {
+        "id": 210,
+        "name": "entity_scopes",
+        "type": "vector<EntityScopeInfo>"
+      },
+      {
+        "id": 211,
+        "name": "entity_key_expressions",
+        "type": "vector<Expression*>"
+      },
+      {
+        "id": 212,
+        "name": "constraint_sources",
+        "type": "vector<ConstraintSourceInfo>"
+      },
+      {
+        "id": 213,
+        "name": "written_objective",
+        "type": "string"
+      },
+      {
+        "id": 214,
+        "name": "canonical_objective",
+        "type": "string"
+      },
+      {
+        "id": 215,
+        "name": "source_fragments",
+        "type": "vector<string>"
+      },
+      {
+        "id": 216,
+        "name": "source_columns",
+        "type": "vector<DecideSourceColumnName>"
+      }
+    ]
+  },
+  {
+    "class": "LogicalDecideDiagnose",
+    "base": "LogicalOperator",
+    "enum": ["LOGICAL_DECIDE_DIAGNOSE"],
+    "members": [
+      {
+        "id": 200,
+        "name": "table_index",
+        "type": "idx_t"
+      }
+    ]
   }
 ]

@@ -35,6 +35,9 @@
 #include "duckdb/parser/qualified_name.hpp"
 #include "duckdb/parser/parsed_data/exported_table_data.hpp"
 #include "duckdb/common/column_index.hpp"
+#include "duckdb/common/enums/decide.hpp"
+#include "duckdb/planner/operator/logical_decide.hpp"
+#include "duckdb/common/decide_source_info.hpp"
 
 namespace duckdb {
 
@@ -402,6 +405,76 @@ void CommonTableExpressionMap::Serialize(Serializer &serializer) const {
 CommonTableExpressionMap CommonTableExpressionMap::Deserialize(Deserializer &deserializer) {
 	CommonTableExpressionMap result;
 	deserializer.ReadPropertyWithDefault<InsertionOrderPreservingMap<unique_ptr<CommonTableExpressionInfo>>>(100, "map", result.map);
+	return result;
+}
+
+void ConstraintSourceInfo::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<string>(100, "canonical_lhs", canonical_lhs);
+	serializer.WritePropertyWithDefault<string>(101, "canonical_rhs", canonical_rhs);
+	serializer.WritePropertyWithDefault<string>(102, "canonical_cmp", canonical_cmp);
+	serializer.WritePropertyWithDefault<string>(103, "qualifier", qualifier);
+	serializer.WriteProperty<ConstraintSourceRhsKind>(104, "rhs_kind", rhs_kind);
+	serializer.WritePropertyWithDefault<string>(105, "source_lhs", source_lhs);
+	serializer.WritePropertyWithDefault<string>(106, "source_rhs", source_rhs);
+	serializer.WritePropertyWithDefault<string>(107, "written_lhs", written_lhs);
+	serializer.WritePropertyWithDefault<string>(108, "written_rhs", written_rhs);
+	serializer.WritePropertyWithDefault<string>(109, "written_cmp", written_cmp);
+}
+
+ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserializer) {
+	ConstraintSourceInfo result;
+	deserializer.ReadPropertyWithDefault<string>(100, "canonical_lhs", result.canonical_lhs);
+	deserializer.ReadPropertyWithDefault<string>(101, "canonical_rhs", result.canonical_rhs);
+	deserializer.ReadPropertyWithDefault<string>(102, "canonical_cmp", result.canonical_cmp);
+	deserializer.ReadPropertyWithDefault<string>(103, "qualifier", result.qualifier);
+	deserializer.ReadProperty<ConstraintSourceRhsKind>(104, "rhs_kind", result.rhs_kind);
+	deserializer.ReadPropertyWithDefault<string>(105, "source_lhs", result.source_lhs);
+	deserializer.ReadPropertyWithDefault<string>(106, "source_rhs", result.source_rhs);
+	deserializer.ReadPropertyWithDefault<string>(107, "written_lhs", result.written_lhs);
+	deserializer.ReadPropertyWithDefault<string>(108, "written_rhs", result.written_rhs);
+	deserializer.ReadPropertyWithDefault<string>(109, "written_cmp", result.written_cmp);
+	return result;
+}
+
+void DecideSourceColumnName::Serialize(Serializer &serializer) const {
+	serializer.WriteProperty<ColumnBinding>(100, "binding", binding);
+	serializer.WritePropertyWithDefault<string>(101, "name", name);
+}
+
+DecideSourceColumnName DecideSourceColumnName::Deserialize(Deserializer &deserializer) {
+	DecideSourceColumnName result;
+	deserializer.ReadProperty<ColumnBinding>(100, "binding", result.binding);
+	deserializer.ReadPropertyWithDefault<string>(101, "name", result.name);
+	return result;
+}
+
+void DecideVarScopeInfo::Serialize(Serializer &serializer) const {
+	serializer.WriteProperty<DecideVarScope>(100, "scope", scope);
+	serializer.WritePropertyWithDefault<idx_t>(101, "entity_scope_idx", entity_scope_idx);
+}
+
+DecideVarScopeInfo DecideVarScopeInfo::Deserialize(Deserializer &deserializer) {
+	DecideVarScopeInfo result;
+	deserializer.ReadProperty<DecideVarScope>(100, "scope", result.scope);
+	deserializer.ReadPropertyWithDefault<idx_t>(101, "entity_scope_idx", result.entity_scope_idx);
+	return result;
+}
+
+void EntityScopeInfo::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<string>(100, "table_alias", table_alias);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(101, "source_table_indices", source_table_indices);
+	serializer.WritePropertyWithDefault<vector<LogicalType>>(102, "entity_key_column_types", entity_key_column_types);
+	serializer.WritePropertyWithDefault<vector<ColumnBinding>>(103, "entity_key_bindings", entity_key_bindings);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", scoped_variable_indices);
+}
+
+EntityScopeInfo EntityScopeInfo::Deserialize(Deserializer &deserializer) {
+	EntityScopeInfo result;
+	deserializer.ReadPropertyWithDefault<string>(100, "table_alias", result.table_alias);
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(101, "source_table_indices", result.source_table_indices);
+	deserializer.ReadPropertyWithDefault<vector<LogicalType>>(102, "entity_key_column_types", result.entity_key_column_types);
+	deserializer.ReadPropertyWithDefault<vector<ColumnBinding>>(103, "entity_key_bindings", result.entity_key_bindings);
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", result.scoped_variable_indices);
 	return result;
 }
 

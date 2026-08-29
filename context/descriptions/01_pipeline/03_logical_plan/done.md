@@ -127,7 +127,12 @@ Grouped by who writes it:
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
 `abs_maximize_links`, `aux_var_expressions`, `composed_minmax_constraints`,
 `composed_minmax_objective_terms`, `flat_objective_agg` /
-`flat_objective_is_easy`, and the five `per_*` objective fields.
+`flat_objective_is_easy`, the five `per_*` objective fields, the absorbed variable
+box, and the prepared linear form.
+
+`optimized` marks the boundary between the first two groups and the third. It is
+set before the optimizer's first rewrite and is what takes this plan off the wire —
+see §5.
 
 ### The solver is named, not held
 
@@ -223,19 +228,69 @@ binding fact, and the parser cannot see it (the clause may sit inside a subquery
 
 ## 5. Serialization
 
-`Serialize` / `Deserialize` are hand-maintained (the operator is marked
-`"custom_implementation": true`), which means **every new field needs a matching
-pair of lines**. Property ids run 200-236 and are append-only.
+`LogicalDecide` and `LogicalDecideDiagnose` are serialized by DuckDB's generator.
+The field list lives in `storage/serialization/logical_operator.json`; the structs
+it names — `EntityScopeInfo`, `DecideVarScopeInfo`, `ConstraintSourceInfo`,
+`DecideSourceColumnName` — have their own entries in `nodes.json`, and both
+directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
+no hand-written copy. Adding a field means adding one JSON entry, not two mirrored
+lines in two functions that can drift apart.
 
-Structs are flattened into parallel vectors rather than serialized as structs:
-`bilinear_links` becomes three `vector<idx_t>`; `abs_maximize_links` becomes two;
-`entity_scopes` becomes eight (`scope_aliases`, `scope_table_indices`,
-`scope_binding_counts`, `scope_binding_tables`, `scope_binding_cols`,
-`scope_var_counts`, `scope_var_indices`, plus the count); `variable_scopes`
-becomes two (`variable_entity_scope`, `variable_scope_kinds`); the source registry
-becomes three (`constraint_source_lhs`, `..._rhs`, `..._qualifiers`).
+Nothing is flattened into parallel vectors. `entity_key_bindings` is serialized as
+`vector<ColumnBinding>`, using the `ColumnBinding` entry `nodes.json` already had.
+Source-column display metadata is likewise a `vector<DecideSourceColumnName>`:
+each record keeps a `ColumnBinding` and its user-written name together from binding,
+through serialization, to physical planning.
 
-This exists so prepared statements can be cached and replayed.
+### The wire carries bound plans only
+
+The format carries what the binder and the canonicalizer produced. Everything
+`DecideOptimizer` writes stays off it: `LogicalDecide::optimized` is set before the
+first rewrite runs, and `SupportSerialization()` reports false from that point on.
+
+That is a claim about portability, not about cost. Stage 05 chooses a formulation
+from the constructs **this host's** solver declares — the same reason
+`solver_backend_name` and `use_native_constructs` are not serialized (§4). An
+optimized DECIDE plan is an answer computed for one machine, so it declines to be
+copied rather than arriving somewhere else as a formulation that machine cannot
+honor. The composed MIN/MAX terms, the absorbed variable box and the prepared
+linear form are all rebuilt from the canonical tree by the optimizer, in
+milliseconds, wherever the plan lands.
+
+`Planner::VerifyPlan` runs twice — on the bound plan (`planner.cpp:84`) and again
+after every optimizer (`optimizer.cpp:305`). The first round-trips DECIDE; the
+second asks `OperatorSupportsSerialization` and is told no, so it returns without
+touching the plan. `LogicalOperator::Copy` asks the same question and raises rather
+than handing back a truncated plan.
+
+### The property ids are a sequence, not a lookup
+
+`BinaryDeserializer::OnPropertyBegin` requires the *next* field in the stream to
+equal the id being read. The ids are a running checkpoint that the two sides are
+still in step, not keys that can be sought. Write order and read order must match
+exactly — which is why they are generated from one list, and why an id may be
+renumbered freely: a serialized logical plan lives for microseconds inside one
+process and is never persisted, so there is no older layout to stay readable for.
+
+### What exercises it
+
+`PRAGMA verify_serializer` round-trips the bound plan and **replaces the live plan
+with the copy**, so a field that never reaches the wire becomes a wrong answer
+rather than a silent omission. Run over the existing suite, that is a guard nobody
+has to maintain per field:
+
+```bash
+DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/tests
+```
+
+`DECIDB_VERIFY_SERIALIZER=1` makes `test/decide/decidb_cli.py` attach the pragma to
+every query it runs, via `-init` so no caller sees an extra result set.
+
+**This is blocked, and the blocker is not here.** Enabling the pragma also enables
+DuckDB's re-parse verifier, and a DECIDE statement's `ToString()` does not produce
+parseable SQL — see
+[`../01_parser/todo.md`](../01_parser/todo.md). The switch is wired and the plan
+round trip itself is correct; the suite cannot run under it until that is fixed.
 
 ---
 

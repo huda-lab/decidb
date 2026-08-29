@@ -207,11 +207,12 @@ passes, both keyed to chunk indices that survive column pruning. First, names ar
 harvested from the DECIDE clause's own `BoundReferenceExpression`s (WHEN / PER /
 objective / constraint / entity-key columns). Second, any still-unnamed slot is
 **back-filled from the names the binder resolved**. Those live on `LogicalDecide`
-(`source_column_table_index` / `source_column_index` / `source_column_names`), captured in
-`plan_select_node.cpp` by walking `BindContext::GetBindingsList()` — the same table name
-resolution itself used. Every source kind is therefore covered uniformly: a base table's
-catalog names, a `t(a, b, c)` alias list over `(VALUES ...)`, a subquery's or a CTE's
-output names.
+as `source_columns`, a vector whose `DecideSourceColumnName` records keep each
+`ColumnBinding` and user-written name together. It is captured in
+`plan_select_node.cpp` by walking `BindContext::GetBindingsList()` — the same table
+name resolution itself used. Every source kind is therefore covered uniformly: a
+base table's catalog names, a `t(a, b, c)` alias list over `(VALUES ...)`, a
+subquery's or a CTE's output names.
 
 Reading names off the plan instead cannot work, and both ways of trying it failed
 differently. An alias list is recorded on the binding and never reaches the plan, whose

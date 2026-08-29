@@ -27,6 +27,8 @@ public:
 
 public:
 	explicit LogicalDecideDiagnose(idx_t table_index);
+	//! For deserialization only.
+	LogicalDecideDiagnose();
 
 	//! Table index the diagnosis columns are bound under.
 	idx_t table_index;
@@ -35,6 +37,10 @@ public:
 	vector<ColumnBinding> GetColumnBindings() override;
 	void ResolveTypes() override;
 	string GetName() const override;
+
+	//! Generated from `storage/serialization/logical_operator.json`.
+	void Serialize(Serializer &serializer) const override;
+	static unique_ptr<LogicalOperator> Deserialize(Deserializer &deserializer);
 
 protected:
 	vector<idx_t> GetTableIndex() const override;

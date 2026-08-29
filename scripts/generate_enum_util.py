@@ -6,8 +6,11 @@ import glob
 
 os.chdir(os.path.dirname(__file__))
 
-# Dont generate serialization for these enums
-blacklist = ["RegexOptions", "Flags", "ContainerType", "Type"]
+# Dont generate serialization for these enums.
+# "Kind" (CoefficientColumn::Kind), "Clause" and "Placement" (DecideCanonicalizer::)
+# are nested inside a class, which the generated `duckdb::<Name>` forward declaration
+# cannot name -- see the note at the top of the generated header.
+blacklist = ["RegexOptions", "Flags", "ContainerType", "Type", "Kind", "Clause", "Placement"]
 
 enum_util_header_file = os.path.join("..", "src", "include", "duckdb", "common", "enum_util.hpp")
 enum_util_source_file = os.path.join("..", "src", "common", "enum_util.cpp")

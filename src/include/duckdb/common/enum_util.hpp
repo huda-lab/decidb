@@ -82,6 +82,8 @@ enum class CSVState : uint8_t;
 
 enum class CTEMaterialize : uint8_t;
 
+enum class CanonicalConstraintClass : uint8_t;
+
 enum class CatalogLookupBehavior : uint8_t;
 
 enum class CatalogType : uint8_t;
@@ -90,9 +92,13 @@ enum class CheckpointAbort : uint8_t;
 
 enum class ChunkInfoType : uint8_t;
 
+enum class ClauseEditKind : uint8_t;
+
 enum class ColumnDataAllocatorType : uint8_t;
 
 enum class ColumnDataScanProperties : uint8_t;
+
+enum class ColumnKind : uint8_t;
 
 enum class ColumnSegmentType : uint8_t;
 
@@ -103,6 +109,10 @@ enum class CompressionType : uint8_t;
 enum class CompressionValidity : uint8_t;
 
 enum class ConflictManagerMode : uint8_t;
+
+enum class ConstraintKind : uint8_t;
+
+enum class ConstraintSourceRhsKind : uint8_t;
 
 enum class ConstraintType : uint8_t;
 
@@ -124,6 +134,8 @@ enum class DecideExpression : uint8_t;
 
 enum class DecideSense : uint8_t;
 
+enum class DecideVarScope : uint8_t;
+
 enum class DefaultOrderByNullType : uint8_t;
 
 enum class DependencyEntryType : uint8_t;
@@ -134,7 +146,11 @@ enum class DestroyBufferUpon : uint8_t;
 
 enum class DistinctType : uint8_t;
 
+enum class ElasticShape : uint8_t;
+
 enum class ErrorType : uint16_t;
+
+enum class EscapeDirection : uint8_t;
 
 enum class ExceptionFormatValueType : uint8_t;
 
@@ -188,6 +204,8 @@ enum class FunctionStability : uint8_t;
 
 enum class GateStatus : uint8_t;
 
+enum class GeneralConstraintKind : uint8_t;
+
 enum class HLLStorageType : uint8_t;
 
 enum class IndexAppendMode : uint8_t;
@@ -205,6 +223,8 @@ enum class JoinType : uint8_t;
 enum class KeywordCategory : uint8_t;
 
 enum class LimitNodeType : uint8_t;
+
+enum class LinearTermReduction : uint8_t;
 
 enum class LoadType : uint8_t;
 
@@ -235,6 +255,8 @@ enum class MultiFileReaderColumnMappingMode : uint8_t;
 enum class NType : uint8_t;
 
 enum class NewLineIdentifier : uint8_t;
+
+enum class ObjectiveAggregateType : uint8_t;
 
 enum class OnConflictAction : uint8_t;
 
@@ -471,6 +493,9 @@ template<>
 const char* EnumUtil::ToChars<CTEMaterialize>(CTEMaterialize value);
 
 template<>
+const char* EnumUtil::ToChars<CanonicalConstraintClass>(CanonicalConstraintClass value);
+
+template<>
 const char* EnumUtil::ToChars<CatalogLookupBehavior>(CatalogLookupBehavior value);
 
 template<>
@@ -483,10 +508,16 @@ template<>
 const char* EnumUtil::ToChars<ChunkInfoType>(ChunkInfoType value);
 
 template<>
+const char* EnumUtil::ToChars<ClauseEditKind>(ClauseEditKind value);
+
+template<>
 const char* EnumUtil::ToChars<ColumnDataAllocatorType>(ColumnDataAllocatorType value);
 
 template<>
 const char* EnumUtil::ToChars<ColumnDataScanProperties>(ColumnDataScanProperties value);
+
+template<>
+const char* EnumUtil::ToChars<ColumnKind>(ColumnKind value);
 
 template<>
 const char* EnumUtil::ToChars<ColumnSegmentType>(ColumnSegmentType value);
@@ -502,6 +533,12 @@ const char* EnumUtil::ToChars<CompressionValidity>(CompressionValidity value);
 
 template<>
 const char* EnumUtil::ToChars<ConflictManagerMode>(ConflictManagerMode value);
+
+template<>
+const char* EnumUtil::ToChars<ConstraintKind>(ConstraintKind value);
+
+template<>
+const char* EnumUtil::ToChars<ConstraintSourceRhsKind>(ConstraintSourceRhsKind value);
 
 template<>
 const char* EnumUtil::ToChars<ConstraintType>(ConstraintType value);
@@ -534,6 +571,9 @@ template<>
 const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
 
 template<>
+const char* EnumUtil::ToChars<DecideVarScope>(DecideVarScope value);
+
+template<>
 const char* EnumUtil::ToChars<DefaultOrderByNullType>(DefaultOrderByNullType value);
 
 template<>
@@ -549,7 +589,13 @@ template<>
 const char* EnumUtil::ToChars<DistinctType>(DistinctType value);
 
 template<>
+const char* EnumUtil::ToChars<ElasticShape>(ElasticShape value);
+
+template<>
 const char* EnumUtil::ToChars<ErrorType>(ErrorType value);
+
+template<>
+const char* EnumUtil::ToChars<EscapeDirection>(EscapeDirection value);
 
 template<>
 const char* EnumUtil::ToChars<ExceptionFormatValueType>(ExceptionFormatValueType value);
@@ -630,6 +676,9 @@ template<>
 const char* EnumUtil::ToChars<GateStatus>(GateStatus value);
 
 template<>
+const char* EnumUtil::ToChars<GeneralConstraintKind>(GeneralConstraintKind value);
+
+template<>
 const char* EnumUtil::ToChars<HLLStorageType>(HLLStorageType value);
 
 template<>
@@ -655,6 +704,9 @@ const char* EnumUtil::ToChars<KeywordCategory>(KeywordCategory value);
 
 template<>
 const char* EnumUtil::ToChars<LimitNodeType>(LimitNodeType value);
+
+template<>
+const char* EnumUtil::ToChars<LinearTermReduction>(LinearTermReduction value);
 
 template<>
 const char* EnumUtil::ToChars<LoadType>(LoadType value);
@@ -700,6 +752,9 @@ const char* EnumUtil::ToChars<NType>(NType value);
 
 template<>
 const char* EnumUtil::ToChars<NewLineIdentifier>(NewLineIdentifier value);
+
+template<>
+const char* EnumUtil::ToChars<ObjectiveAggregateType>(ObjectiveAggregateType value);
 
 template<>
 const char* EnumUtil::ToChars<OnConflictAction>(OnConflictAction value);
@@ -1015,6 +1070,9 @@ template<>
 CTEMaterialize EnumUtil::FromString<CTEMaterialize>(const char *value);
 
 template<>
+CanonicalConstraintClass EnumUtil::FromString<CanonicalConstraintClass>(const char *value);
+
+template<>
 CatalogLookupBehavior EnumUtil::FromString<CatalogLookupBehavior>(const char *value);
 
 template<>
@@ -1027,10 +1085,16 @@ template<>
 ChunkInfoType EnumUtil::FromString<ChunkInfoType>(const char *value);
 
 template<>
+ClauseEditKind EnumUtil::FromString<ClauseEditKind>(const char *value);
+
+template<>
 ColumnDataAllocatorType EnumUtil::FromString<ColumnDataAllocatorType>(const char *value);
 
 template<>
 ColumnDataScanProperties EnumUtil::FromString<ColumnDataScanProperties>(const char *value);
+
+template<>
+ColumnKind EnumUtil::FromString<ColumnKind>(const char *value);
 
 template<>
 ColumnSegmentType EnumUtil::FromString<ColumnSegmentType>(const char *value);
@@ -1046,6 +1110,12 @@ CompressionValidity EnumUtil::FromString<CompressionValidity>(const char *value)
 
 template<>
 ConflictManagerMode EnumUtil::FromString<ConflictManagerMode>(const char *value);
+
+template<>
+ConstraintKind EnumUtil::FromString<ConstraintKind>(const char *value);
+
+template<>
+ConstraintSourceRhsKind EnumUtil::FromString<ConstraintSourceRhsKind>(const char *value);
 
 template<>
 ConstraintType EnumUtil::FromString<ConstraintType>(const char *value);
@@ -1078,6 +1148,9 @@ template<>
 DecideSense EnumUtil::FromString<DecideSense>(const char *value);
 
 template<>
+DecideVarScope EnumUtil::FromString<DecideVarScope>(const char *value);
+
+template<>
 DefaultOrderByNullType EnumUtil::FromString<DefaultOrderByNullType>(const char *value);
 
 template<>
@@ -1093,7 +1166,13 @@ template<>
 DistinctType EnumUtil::FromString<DistinctType>(const char *value);
 
 template<>
+ElasticShape EnumUtil::FromString<ElasticShape>(const char *value);
+
+template<>
 ErrorType EnumUtil::FromString<ErrorType>(const char *value);
+
+template<>
+EscapeDirection EnumUtil::FromString<EscapeDirection>(const char *value);
 
 template<>
 ExceptionFormatValueType EnumUtil::FromString<ExceptionFormatValueType>(const char *value);
@@ -1174,6 +1253,9 @@ template<>
 GateStatus EnumUtil::FromString<GateStatus>(const char *value);
 
 template<>
+GeneralConstraintKind EnumUtil::FromString<GeneralConstraintKind>(const char *value);
+
+template<>
 HLLStorageType EnumUtil::FromString<HLLStorageType>(const char *value);
 
 template<>
@@ -1199,6 +1281,9 @@ KeywordCategory EnumUtil::FromString<KeywordCategory>(const char *value);
 
 template<>
 LimitNodeType EnumUtil::FromString<LimitNodeType>(const char *value);
+
+template<>
+LinearTermReduction EnumUtil::FromString<LinearTermReduction>(const char *value);
 
 template<>
 LoadType EnumUtil::FromString<LoadType>(const char *value);
@@ -1244,6 +1329,9 @@ NType EnumUtil::FromString<NType>(const char *value);
 
 template<>
 NewLineIdentifier EnumUtil::FromString<NewLineIdentifier>(const char *value);
+
+template<>
+ObjectiveAggregateType EnumUtil::FromString<ObjectiveAggregateType>(const char *value);
 
 template<>
 OnConflictAction EnumUtil::FromString<OnConflictAction>(const char *value);

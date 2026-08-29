@@ -214,7 +214,29 @@ vector<idx_t> LogicalOperator::GetTableIndex() const {
 	return vector<idx_t> {};
 }
 
+//! The first operator in the subtree that has opted out of serialization, or nullptr.
+static optional_ptr<const LogicalOperator> FindUnserializable(const LogicalOperator &op) {
+	if (!op.SupportSerialization()) {
+		return &op;
+	}
+	for (auto &child : op.children) {
+		if (auto found = FindUnserializable(*child)) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
 unique_ptr<LogicalOperator> LogicalOperator::Copy(ClientContext &context) const {
+	// An operator that has opted out of serialization would otherwise be copied by
+	// writing whatever subset of itself it can express, which is a truncated plan
+	// rather than a copy. Ask first, the same way Planner::VerifyPlan does, and name
+	// the node that said no rather than the root we happened to be called on.
+	if (auto unserializable = FindUnserializable(*this)) {
+		throw NotImplementedException("Logical Operator Copy requires the logical operator and all of its children to "
+		                              "be serializable: %s does not support serialization",
+		                              LogicalOperatorToString(unserializable->type));
+	}
 	MemoryStream stream(Allocator::Get(context));
 	SerializationOptions options;
 	options.serialization_compatibility = SerializationCompatibility::Latest();
