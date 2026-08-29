@@ -79,4 +79,4 @@ For linear objectives, the objective function is compiled into the `c` vector of
 - **Nested aggregate PER objective rewrite/classification**: `src/optimizer/decide/decide_optimizer.cpp`
   - `RewriteMinMaxObjective()` detects `OUTER(INNER(expr)) PER col`, sets `per_inner_*` / `per_outer_*` metadata, and rewrites inner `MIN/MAX/AVG` to `SUM`
   - Rejects flat `MIN(...) PER col` / `MAX(...) PER col` as ambiguous (requires nested aggregate form)
-- **Solver input**: `src/include/duckdb/decidb/solver/solver_input.hpp`
+- **Solver input**: `src/include/duckdb/decidb/formulation/solver_input.hpp`

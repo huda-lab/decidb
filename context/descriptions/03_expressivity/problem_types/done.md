@@ -359,7 +359,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 - **Solver dispatch**: `src/decidb/solver/ilp_solver.cpp`
   - `SolverModel::Build()` constructs the formulation; `SolveModel()` dispatches to Gurobi (if available) or HiGHS
 
-- **Solver input (Q matrix storage)**: `src/include/duckdb/decidb/solver/solver_input.hpp`
+- **Solver input (Q matrix storage)**: `src/include/duckdb/decidb/formulation/solver_input.hpp`
   - `quadratic_inner_coefficients`, `quadratic_inner_variable_indices`, `has_quadratic_objective`
 
 - **SUM argument validation (QP + bilinear syntax)**: `src/planner/expression_binder/decide/decide_binder.cpp`

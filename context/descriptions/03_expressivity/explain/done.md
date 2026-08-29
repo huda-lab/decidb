@@ -169,10 +169,14 @@ stable across stage 05: `AddConstraint` appends rows and `RewriteComposedMinMax`
 removes a clause from the tree entirely, so layer 3 is not a line-for-line image
 of layer 2 and positional matching would drift. The binder stamps a
 `source_clause_id` on every written comparison, and the optimizer copies it onto
-the rows it emits (`MarkFormulationConstraint`, `CopySourceClauseTag`), including
-through the ABS and McCormick rewrites, which carry the enclosing clause's alias
-down their recursion. The mapping is not one-to-one in either direction and the
-renderer tolerates both:
+the rows it emits (`MarkFormulationConstraint`, `CopyClauseProvenanceTags`). Every
+rewrite that emits rows carries the enclosing clause's alias down its recursion
+through the one shared helper, `DescendSourceAlias`: a node adopts an alias only
+when it parses as a source-clause or removal-group tag, and otherwise inherits its
+parent's, so no rewrite can attach a row to an alias that is not a clause id.
+
+The mapping is not one-to-one in either direction and the renderer tolerates
+both:
 
 - **One clause, many rows** — a linearized clause owns every row it generated.
 - **One clause, no rows** — a composed MIN/MAX clause was lifted out of the tree
@@ -244,6 +248,6 @@ and the `N Rows` in `EXPLAIN ANALYZE` match the scan's cardinality.
 | Source fragments carried to both nodes | `LogicalDecide::source_fragments`, `PhysicalDecide::source_fragments` |
 | The three-layer record | `ConstraintSourceInfo` in `src/include/duckdb/common/decide_source_info.hpp` |
 | Layering and formatting | `CollectDecideClauseLayers` / `RenderDecideClauseLayers` / `RenderDecideObjectiveLayers` |
-| Clause id carried onto emitted rows | `MarkFormulationConstraint`, `CopySourceClauseTag`, `DescendSourceAlias` in `src/optimizer/decide/decide_optimizer.cpp` (shared via `decide_optimizer_internal.hpp`) |
+| Clause id carried onto emitted rows | `MarkFormulationConstraint`, `CopyClauseProvenanceTags`, `DescendSourceAlias` in `src/optimizer/decide/decide_optimizer.cpp` (shared via `decide_optimizer_internal.hpp`) |
 | Objective snapshots captured | `src/planner/binder/query_node/plan_select_node.cpp`, around `CanonicalizeObjective` |
 | Tests | `test/decide/tests/test_explain.py` — 35 cases over TPC-H, including `test_explain_renders_user_casts_only`, `test_explain_objective_when_postfix`, and the layered-rendering group; plus `test_diagnosis_written_clause.py::test_explain_leads_with_the_written_clause` |

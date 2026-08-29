@@ -30,7 +30,7 @@ which has to be refused either way. Neither earns a new problem class.
   quadratic constraints; HiGHS exposes LP, MIP and QP only. A Gurobi-only class is
   consistent with how DeciDB already ships quadratic constraints, non-convex QP
   and MIQP: add a flag to `SolverModelClass`
-  (`src/include/duckdb/decidb/solver/solver_capabilities.hpp`) and let
+  (`src/include/duckdb/common/decide_solver_capabilities.hpp`) and let
   `RequireDecideSolverSupport` refuse at plan time with a named gap. Waiting on a
   HiGHS-expressible reformulation is not required by any existing contract.
 

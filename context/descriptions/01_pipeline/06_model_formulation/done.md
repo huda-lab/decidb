@@ -18,7 +18,7 @@ SQL-expression canonicalization and knows nothing about any backend.
 - `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` — the helpers
   those files share
 - `src/include/duckdb/decidb/formulation/ilp_model.hpp` — `VarIndexer`, `SolverModel`, provenance
-- `src/include/duckdb/decidb/solver/solver_input.hpp` — the input contract
+- `src/include/duckdb/decidb/formulation/solver_input.hpp` — the input contract
 
 `Build()` takes `SolverInput` by **non-const** reference so raw global constraints
 can be moved rather than copied, plus a pre-built `VarIndexer` threaded in from
@@ -928,7 +928,7 @@ columns still name a decide variable in that message.
 | McCormick and ABS rows | `src/decidb/formulation/linearization_bilinear_abs.cpp` |
 | Helpers shared across those files | `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` |
 | `MinMaxObjectiveSpec`, `ComposedMinMaxTermData` — what stage 08 hands over | `src/include/duckdb/decidb/formulation/ilp_linearization.hpp` |
-| `BilinearLinkSpec`, `AbsMaximizeLinkSpec` — the formulation tags | `src/include/duckdb/decidb/solver/solver_input.hpp` |
+| `BilinearLinkSpec`, `AbsMaximizeLinkSpec` — the formulation tags | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |
-| `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver/solver_input.hpp` |
+| `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | Golden model corpus (the characterization oracle) | `test/decide/golden/` |

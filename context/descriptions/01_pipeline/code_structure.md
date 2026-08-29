@@ -13,59 +13,80 @@ Stage numbers refer to [`README.md`](README.md).
 |---|---|---|
 | `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScopeInfo`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
 | `common/decide_source_info.hpp` | 03 | `ConstraintSourceInfo` — the source display registry entry |
+| `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverCapabilities`, `SolverConstructSupport`, `SolverModelClass` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parse_hints.hpp` | 01 | `MaybeAppendDecideWhenHint` |
 | `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, degree, `ValidateDecideNoExplicitDecisionCasts` |
 | `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
+| `planner/expression_binder/decide/decide_declarations_binder.hpp` | 02 | `DecideDeclarationsBinder` — the whole DECIDE clause: declarations, scopes, then `SUCH THAT` and the objective |
+| `planner/expression_binder/decide/decide_degree.hpp` | 02 | `DecideDegree`, `DecideExpressionDegree` — the one definition of polynomial degree, and which degree-2 shape produced it |
 | `planner/operator/decide/logical_decide.hpp` | 03 | `LogicalDecide`, `EntityScopeInfo`, every metadata field |
+| `planner/operator/decide/logical_decide_diagnose.hpp` | 03 | `LogicalDecideDiagnose` — the `DIAGNOSE <select>` plan node and the shape of the relation it returns |
 | `planner/decide/decide_canonicalizer.hpp` | 04 | The canonical contract, in code |
+| `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the WHEN/PER wrapper predicates and the constraint-position walk every stage shares |
 | `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
-| `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity` |
+| `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity`, `GetBareDecideColumnRef` |
+| `planner/decide/decide_prepared_model.hpp` | 05/08 | The prepared linear form — stage 05's flattened terms, stage 08's coefficients |
 | `optimizer/decide/decide_optimizer.hpp` | 05 | The rewrite passes |
+| `optimizer/decide/decide_linear_form.hpp` | 05 | Flattening into `decide.prepared`; the last DECIDE optimization pass |
+| `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |
+| `optimizer/decide/decide_optimizer_internal.hpp` | 05 | Helpers shared by the `decide_rewrite_*.cpp` passes; internal to `src/optimizer/decide/` |
 | `execution/operator/decide/physical_decide.hpp` | 08 | `PhysicalDecide`, `Term`, `DecideConstraint`, `Objective` |
-| `decidb/solver/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn`, `EntityMapping` |
+| `decidb/formulation/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn`, `EntityMapping` |
 | `decidb/formulation/ilp_model.hpp` | 06 | `VarIndexer`, `SolverModel`, `ModelConstraint`, `ConstraintProvenance`, `SparseCoeffAccumulator` |
+| `decidb/formulation/ilp_linearization.hpp` | 06 | `LowerDecideConstructs` and the Big-M derivations: a tagged constraint becomes solver rows |
+| `decidb/formulation/ilp_linearization_internal.hpp` | 06 | Helpers shared by the `linearization_*.cpp` passes; internal to `src/decidb/formulation/` |
 | `decidb/solver/ilp_solver.hpp` | 07 | `SolveModel` facade, `SolverBackend`, `SolveModelOptions` |
 | `decidb/solver/solver_result.hpp` | 07 | `SolverStatus`, `SolverResult`, `ThrowDecideSolveError` |
 | `decidb/solver/solver_session.hpp` | 07 | `SolverSession` — warm continuation |
 | `decidb/solver/solver_config.hpp` | 07 | Time limits, primary and diagnostic |
+| `decidb/solver/solver_registry.hpp` | 07 | `SolverBackend` handle, `SolverRegistry` — the one place a backend is named |
+| `decidb/solver/probe_models.hpp` | 07 | Zero-objective and ray-fallback probe models for diagnostic re-solves |
 | `decidb/gurobi/gurobi_solver.hpp`, `gurobi_loader.hpp` | 07 | Gurobi backend and dynamic loading |
-| `decidb/diagnostics/decide_diagnostic.hpp`, `decide_diagnostic_engines.hpp`, `decide_diagnostic_render.hpp`, `decide_router.hpp` | — | Query diagnostics; see `../07_query_diagnostics/` |
+| `decidb/naive/deterministic_naive.hpp` | 07 | HiGHS backend — vendored, statically linked, the capability floor |
+| `decidb/diagnostics/decide_diagnostic.hpp`, `decide_diagnostic_engines.hpp`, `decide_diagnostic_render.hpp`, `decide_router.hpp`, `diagnostic_constants.hpp` | — | Query diagnostics; see `../07_query_diagnostics/` |
 
 ### Sources (`src/`)
 
-| Path | Stage | Lines | Contents |
-|---|---|---|---|
-| `parser/decide/decide_parse_hints.cpp` | 01 | ~65 | DECIDE-aware parse-error hint |
-| `planner/expression_binder/decide/decide_binder.cpp` | 02 | ~1,020 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
-| `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | ~550 | `SUCH THAT` |
-| `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | ~240 | Objective |
-| `planner/binder/query_node/bind_select_node.cpp` | 02 | — | DECIDE declarations, scopes, and scoped-variable spelling. No formulation runs here |
-| `planner/binder/query_node/plan_select_node.cpp` | 03/04 | ~290 | Subquery flattening, correlation provenance, the user canonicalization call |
-| `planner/operator/decide/logical_decide.cpp` | 03 | ~415 | `AddConstraint`, `SetObjective`, EXPLAIN strings, serialization |
-| `planner/decide/decide_canonicalizer.cpp` | 04 | ~985 | The one shape boundary |
-| `planner/decide/decide_source_provenance.cpp` | 03 | ~250 | Source display capture and rendering |
-| `planner/decide/decide_cast_policy.cpp` | 04 | ~60 | Cast unwrapping |
-| `optimizer/decide/decide_optimizer.cpp` | 05 | ~210 | The eight-pass dispatcher and the helpers the passes share |
-| `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | ~320 | `norm` and DECIDE-variable `IN` |
-| `optimizer/decide/decide_rewrite_notequal_avg.cpp` | 05 | ~175 | `<>` indicators and AVG→SUM |
-| `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ~450 | ABS Big-M tagging and linearization |
-| `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | ~805 | MIN/MAX, plain and composed |
-| `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | ~365 | Bilinear McCormick |
-| `optimizer/decide/decide_bound_absorption.cpp` | 05 | ~280 | Literal bounds folded into column boxes |
-| `execution/column_binding_resolver.cpp` | 03 | — | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
-| `execution/physical_plan/plan_decide.cpp` | 03/08 | ~170 | Logical → physical, entity key indices, verification |
-| `execution/operator/decide/physical_decide.cpp` | 08 | ~7,400 | Extraction, materialization, evaluation, emission, readback |
-| `decidb/formulation/ilp_model_builder.cpp` | 06 | ~1,400 | `SolverModel::Build` |
-| `decidb/formulation/ilp_linearization.cpp` | 06 | ~200 | `LowerDecideConstructs`, global-auxiliary allocation |
-| `decidb/formulation/linearization_bigm.cpp` | 06 | ~395 | Big-M sizing and the per-row range walks |
-| `decidb/formulation/linearization_minmax.cpp` | 06 | ~1,195 | MIN/MAX: constraints, links, objectives, composed |
-| `decidb/formulation/linearization_not_equal.cpp` | 06 | ~580 | `<>` collapse and Big-M disjunction |
-| `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | ~555 | McCormick and ABS rows |
-| `decidb/solver/ilp_solver.cpp` | 07 | ~395 | Dispatch, INF_OR_UNBD probe, ray attachment |
-| `decidb/gurobi/gurobi_solver.cpp`, `gurobi_loader.cpp` | 07 | ~830 | Gurobi backend |
-| `decidb/naive/deterministic_naive.cpp` | 07 | — | HiGHS backend |
-| `decidb/diagnostics/decide_diagnostic*.cpp`, `decide_router.cpp` | — | ~2,100 | Diagnostics |
+| Path | Stage | Contents |
+|---|---|---|
+| `parser/decide/decide_parse_hints.cpp` | 01 | DECIDE-aware parse-error hint |
+| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
+| `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
+| `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective |
+| `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations, scopes, scoped-variable spelling, and the `SUCH THAT` / objective binds |
+| `planner/expression_binder/decide/decide_degree.cpp` | 02 | The degree walk, `DecideExpressionDegree`, and the constraint-degree validator |
+| `planner/binder/query_node/bind_select_node.cpp` | 02 | Generic SELECT binding. Its DECIDE branch is one `DecideDeclarationsBinder::BindDeclarations()` call |
+| `planner/binder/query_node/plan_select_node.cpp` | 03/04 | Subquery flattening, correlation provenance, the user canonicalization call |
+| `planner/operator/decide/logical_decide.cpp` | 03 | `AddConstraint`, `SetObjective`, EXPLAIN strings, serialization |
+| `planner/operator/decide/logical_decide_diagnose.cpp` | 03 | The DIAGNOSE node: EXPLAIN strings and serialization |
+| `planner/decide/decide_canonicalizer.cpp` | 04 | The one shape boundary |
+| `planner/decide/decide_source_provenance.cpp` | 03 | Source display capture and rendering |
+| `planner/decide/decide_cast_policy.cpp` | 04 | Cast unwrapping |
+| `optimizer/decide/decide_optimizer.cpp` | 05 | The eight-pass dispatcher and the helpers the passes share |
+| `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | `norm` and DECIDE-variable `IN` |
+| `optimizer/decide/decide_rewrite_notequal_avg.cpp` | 05 | `<>` indicators and AVG→SUM |
+| `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ABS Big-M tagging and linearization |
+| `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | MIN/MAX, plain and composed |
+| `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | Bilinear McCormick |
+| `optimizer/decide/decide_bound_absorption.cpp` | 05 | Literal bounds folded into column boxes |
+| `optimizer/decide/decide_linear_form.cpp` | 05 | Flattens every constraint and the objective into `decide.prepared`; must run last |
+| `optimizer/decide/decide_solver_gate.cpp` | 05 | `ChooseDecideSolver`, `DeriveDecideModelClass`, `RequireDecideSolverSupport` |
+| `execution/column_binding_resolver.cpp` | 03 | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
+| `execution/physical_plan/plan_decide.cpp` | 03/08 | Logical → physical, entity key indices, verification |
+| `execution/operator/decide/physical_decide.cpp` | 08 | Extraction, materialization, evaluation, emission, readback |
+| `decidb/formulation/ilp_model_builder.cpp` | 06 | `SolverModel::Build` |
+| `decidb/formulation/ilp_linearization.cpp` | 06 | `LowerDecideConstructs`, global-auxiliary allocation |
+| `decidb/formulation/linearization_bigm.cpp` | 06 | Big-M sizing and the per-row range walks |
+| `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: constraints, links, objectives, composed |
+| `decidb/formulation/linearization_not_equal.cpp` | 06 | `<>` collapse and Big-M disjunction |
+| `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | McCormick and ABS rows |
+| `decidb/solver/ilp_solver.cpp` | 07 | Dispatch, INF_OR_UNBD probe, ray attachment |
+| `decidb/solver/solver_registry.cpp` | 07 | `REGISTERED_BACKENDS` — the one table naming every backend |
+| `decidb/solver/probe_models.cpp` | 07 | Probe models for the diagnostic re-solve and ray-extraction paths |
+| `decidb/gurobi/gurobi_solver.cpp`, `gurobi_loader.cpp` | 07 | Gurobi backend |
+| `decidb/naive/deterministic_naive.cpp` | 07 | HiGHS backend |
+| `decidb/diagnostics/decide_diagnostic*.cpp`, `decide_router.cpp` | — | Diagnostics |
 
 ### Grammar (`third_party/libpg_query/`)
 
@@ -184,6 +205,26 @@ classDiagram
 - **`Decompose()` / `PeelScale()` / `BuildAdditive()`** — shared by both clauses.
 - **`ClassifyCanonicalComparison()`** — `PER_ROW` / `AGGREGATE` / `INVALID`.
 - **`VerifyCanonical()` / `VerifyCanonicalObjective()`** — non-mutating, throwing.
+
+### `src/include/duckdb/planner/decide/decide_constraint_walk.hpp` — stage 04
+Header-only, and the one place that answers "which children of this node are
+constraints". A bound constraint tree is AND-conjunctions plus WHEN/PER wrappers,
+and a wrapper's trailing children are metadata — the WHEN condition, the PER
+grouping columns — so descending into them would read `WHEN c` as another
+constraint.
+- **`IsWhenConstraintWrapper()` / `IsPerConstraintWrapper()` / `IsConstraintWrapper()`
+  / `IsConstraintChild()`** — the predicates. Every site that walks a bound
+  constraint tree asks these, including the few that deliberately act differently
+  on the answer: bound absorption refuses to descend into a WHEN, and the MIN/MAX
+  rewrite strips a PER as it goes. They bring their own descent, not their own
+  definition of a wrapper, so a new wrapper kind is a one-line change here.
+- **`VisitConstraintTree()`** — parents before children, skipping metadata, with a
+  visitor that can stop the walk. Const and mutating overloads. Neither hands out
+  the owning `unique_ptr`: a pass that reseats a node is deciding tree shape and
+  belongs at stage 04's boundary, not inside a traversal.
+- **`ForEachConstraintLeaf()`** — one call per model row (a comparison, a bound
+  `IN`, a bare boolean decision, a placeholder from an earlier rewrite). The shape
+  most consumers want.
 
 ### `src/planner/operator/decide/logical_decide.cpp` — stage 03
 - **`AddConstraint()` / `SetObjective()`** — the only post-planning entry points.

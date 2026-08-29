@@ -10,7 +10,7 @@ normalizes the outcome. It never inspects SQL plans or DECIDE query semantics.
 - `src/decidb/gurobi/gurobi_solver.cpp`, `src/decidb/gurobi/gurobi_loader.cpp` — Gurobi (C API)
 - `src/decidb/naive/deterministic_naive.cpp` — HiGHS (C++ API)
 - `src/include/duckdb/decidb/solver/solver_registry.hpp` — the backend handle and the registry
-- `src/include/duckdb/decidb/solver/solver_capabilities.hpp` — what upstream stages may assume
+- `src/include/duckdb/common/decide_solver_capabilities.hpp` — what upstream stages may assume
 - `src/include/duckdb/decidb/solver/solver_result.hpp` — the normalized outcome
 - `src/include/duckdb/decidb/solver/solver_session.hpp` — the warm-continuation handle
 - `src/include/duckdb/decidb/solver/solver_config.hpp` — time limits
@@ -75,7 +75,7 @@ is what makes selection total.
 
 ### Capabilities
 
-`solver_capabilities.hpp` declares the backend differences an **upstream** stage has to
+`common/decide_solver_capabilities.hpp` declares the backend differences an **upstream** stage has to
 branch on. That is the membership rule: a difference only the backend itself acts on
 stays a virtual on `SolverSession` with a safe default — `SetInterruptPoll` is the
 reference case.
@@ -137,9 +137,12 @@ unbounded contributors that the Big-M lowering must refuse. Revisit only with ne
 evidence.
 
 Which construct flag gates a given `GeneralConstraintKind` is one table,
-`DeclaresGeneralConstraint`, kept beside that enum in `solver_input.hpp` — so adding a
-kind adds a row rather than another `?:` at a call site, and a kind added without a flag
-reads as undeclared and trips a loud internal error.
+`DeclaresGeneralConstraint`, kept beside that enum in `solver_input.hpp` — so a kind
+added without a flag reads as undeclared and trips a loud internal error. That table is
+the check that a general constraint reaching a backend was declared by it, not the
+routing table for the capability set as a whole: a site that decides to go native is
+rewriting one known construct and reads its flag directly, and `not_equal` and
+`bilinear` have no `GeneralConstraintKind` to look up.
 
 ### Selection
 
@@ -492,8 +495,8 @@ evaluation, or model building is required.
 |---|---|
 | Backend selection, `SolveModel`, disambiguation | `src/decidb/solver/ilp_solver.cpp` |
 | Backend table | `src/decidb/solver/solver_registry.cpp`, `src/include/duckdb/decidb/solver/solver_registry.hpp` |
-| Capability types, model-class gap, convexity predicate | `src/include/duckdb/decidb/solver/solver_capabilities.hpp` |
-| `GeneralConstraintKind` → construct flag table | `src/include/duckdb/decidb/solver/solver_input.hpp` |
+| Capability types, model-class gap, convexity predicate | `src/include/duckdb/common/decide_solver_capabilities.hpp` |
+| `GeneralConstraintKind` → construct flag table | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | Normalized outcome and default error text | `src/include/duckdb/decidb/solver/solver_result.hpp` |
 | Session contract | `src/include/duckdb/decidb/solver/solver_session.hpp` |
 | Time limits | `src/include/duckdb/decidb/solver/solver_config.hpp` |

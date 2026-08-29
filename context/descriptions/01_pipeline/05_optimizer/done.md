@@ -285,7 +285,12 @@ L0 emits its existing Boolean indicator and exact forward/reverse links.
 
 A bound `x IN (...)` stays a native `COMPARE_IN` marker until this pass. It then
 uses the existing singleton, Boolean-domain, or cardinality/linking formulation,
-copying an expression-level `WHEN` to every generated row. These helper rows are
+copying an expression-level `WHEN` to every generated row. The two size
+optimisations that need to read the domain values — the `{0,1}` Boolean shortcut
+and the `x >= min(domain)` tightening on the general encoding — evaluate each
+value with the cast policy's folder, so a written-out expression such as
+`x IN (1-3, 2)` qualifies exactly like the literal `x IN (-2, 2)` does. Neither
+affects correctness: the indicator encoding is exact with or without them. These helper rows are
 structural for today’s infeasibility repair: they must never be independently
 loosened. Atomic source-level DROP repair is recorded in `todo.md`.
 

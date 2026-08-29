@@ -92,11 +92,6 @@ reaches the wire shows up as a wrong answer in whatever test depends on it:
 DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/tests
 ```
 
-*Currently blocked* — the pragma also enables DuckDB's re-parse verifier, which a
-DECIDE statement fails for an unrelated reason. See
-`context/descriptions/01_pipeline/01_parser/todo.md`, and delete this note when it
-closes.
-
 Grammar changes under `third_party/libpg_query/grammar/` require:
 
 ```bash
@@ -112,4 +107,4 @@ the current implementation; do not use either as a historical checklist.
 ## User Interaction rules
 
 - Communicate with the user using simple intutive language. Avoid jargon but if you have to include jargon define it first.
-- Remeber this is a large codebase. The user may have forgotten about some implementations. Use your judgement to provide refreshers when you think its needed.
+- Remember this is a large codebase. The user may have forgotten about some implementations. Use your judgement to provide refreshers when you think its needed.

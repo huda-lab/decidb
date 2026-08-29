@@ -112,7 +112,7 @@ The number of generated constraints equals `|distinct_values| x |PER_constraints
 
 - `src/include/duckdb/common/enums/decide.hpp` — `PER_CONSTRAINT_TAG`
 - `src/include/duckdb/execution/operator/decide/physical_decide.hpp` — `DecideConstraint::per_columns`
-- `src/include/duckdb/decidb/solver/solver_input.hpp` — `row_group_ids` replaces `row_mask`
+- `src/include/duckdb/decidb/formulation/solver_input.hpp` — `row_group_ids` replaces `row_mask`
 - `third_party/libpg_query/` — grammar rules, keyword, enum
 - `src/parser/transform/expression/transform_operator.cpp` — transformer
 - `src/planner/expression_binder/decide/decide_constraints_binder.cpp` and

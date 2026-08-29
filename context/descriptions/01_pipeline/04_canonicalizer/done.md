@@ -113,7 +113,7 @@ a rendering job rather than a re-plumbing job.
 
 | ID | Rule |
 |---|---|
-| **C0** | Ordinary `AND` conjunctions recurse into every child. A `WHEN` or `PER` wrapper recurses into child 0 only; its condition or grouping columns are copied unchanged. Non-comparison leaves are copied unchanged. |
+| **C0** | Ordinary `AND` conjunctions recurse into every child. A `WHEN` or `PER` wrapper recurses into child 0 only; its condition or grouping columns are copied unchanged. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
@@ -205,6 +205,13 @@ cast is widening does not answer whether the user wrote it, which is why the
 earlier resolution-based predicate was insufficient. `BindOp` also adds fresh
 reconciliation casts while rebuilding, so decision-aware cast descent is required
 for the pass to remain a fixed point at all.
+
+`GetBareDecideColumnRef(expr, decide_index)` sits on top of rule 3: it answers
+"is this whole expression one bare decision variable?" for the walkers that need a
+coefficient-free term (bilinear operand detection, linear-form factor
+classification, the IN marker's target). Those walkers each used to strip casts
+their own way; keeping the question here keeps rule 3 the only place cast descent
+is decided.
 
 `StripCastsForIdentity` is separate and may be used only where values are never
 read — resolving the binding beneath a cast, for instance. Casts in ordinary SQL,

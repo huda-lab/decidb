@@ -299,7 +299,7 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
   - `Objective::per_columns`: Same for objectives.
   - `Term::filter`, `BilinearConstraintTerm::filter`, `DecideConstraint::QuadraticGroup::filter`, and `Objective::BilinearTerm::filter`: Optional aggregate-local WHEN filters carried to coefficient evaluation.
 
-- **Evaluated constraint**: `src/include/duckdb/decidb/solver/solver_input.hpp`
+- **Evaluated constraint**: `src/include/duckdb/decidb/formulation/solver_input.hpp`
   - `EvaluatedConstraint::row_group_ids`: Per-row group assignment (`INVALID_INDEX` = excluded).
   - `EvaluatedConstraint::num_groups`: `0` = ungrouped fast path, `1` = WHEN-only, `>1` = PER groups.
 

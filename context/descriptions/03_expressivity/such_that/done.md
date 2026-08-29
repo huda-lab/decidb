@@ -43,7 +43,7 @@ counts. The rule and the message are the same on both backends.
 
   Enforced at `src/execution/operator/decide/physical_decide.cpp` (per-row guard inside the NE expansion loop; per-group guard inside the deferred-aggregate expansion before the `z_idx` allocation). Tolerance for the integer test is `1e-9`.
 
-**Per-row NE indicator column storage.** When a per-row `<>` constraint is filtered by `WHEN` or grouped by `PER`, the disjunction's indicator column carries `-M` only on rows that pass the filter and `0` everywhere else — typically a small fraction of `num_rows`. The column is stored as `CoefficientColumn::SparseMasked` (a sorted list of active row indices plus a single shared value), not as a Dense `vector<double>` of mostly-zero entries. The unfiltered case stays a `Scalar` broadcast of `-M`. Defined in `src/include/duckdb/decidb/solver/solver_input.hpp`; read paths in `src/decidb/formulation/ilp_model_builder.cpp` go through `Get(row)` and observe the same zero-skip semantics as Dense.
+**Per-row NE indicator column storage.** When a per-row `<>` constraint is filtered by `WHEN` or grouped by `PER`, the disjunction's indicator column carries `-M` only on rows that pass the filter and `0` everywhere else — typically a small fraction of `num_rows`. The column is stored as `CoefficientColumn::SparseMasked` (a sorted list of active row indices plus a single shared value), not as a Dense `vector<double>` of mostly-zero entries. The unfiltered case stays a `Scalar` broadcast of `-M`. Defined in `src/include/duckdb/decidb/formulation/solver_input.hpp`; read paths in `src/decidb/formulation/ilp_model_builder.cpp` go through `Get(row)` and observe the same zero-skip semantics as Dense.
 
 ---
 
