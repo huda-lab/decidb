@@ -2,6 +2,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/function/aggregate/distributive_function_utils.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
