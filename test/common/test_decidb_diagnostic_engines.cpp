@@ -175,8 +175,18 @@ SolverModel MakeNotEqualModel() {
 		c.rhs = sense == '<' ? 2.0 : -10.0;
 		c.provenance.kind = ConstraintKind::USER_MECHANISM;
 		c.provenance.indicator_col = 1;
+		c.provenance.source_clause_id = 0;
+		c.provenance.removal_group_id = 0;
 		m.constraints.push_back(std::move(c));
 	}
+	ConstraintSourceInfo source;
+	source.canonical_lhs = "x";
+	source.canonical_rhs = "3";
+	source.canonical_cmp = "<>";
+	source.written_lhs = "x";
+	source.written_rhs = "3";
+	source.written_cmp = "<>";
+	m.constraint_sources.push_back(std::move(source));
 	return m;
 }
 
@@ -517,7 +527,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(q.slacks[0].rows == duckdb::vector<idx_t> {0, 1, 2, 3});
 		CHECK(q.slacks[0].tier == ElasticRepairTier::EDITABLE_LOOSEN);
 		// expanded: one slack per group. 4 vars + 2 slacks.
-		ElasticModel e = BuildElasticModel(model, 0.0, "expanded");
+		ElasticModel e = BuildElasticModel(model, "expanded");
 		CHECK(e.model.num_vars == 6);
 		REQUIRE(e.slacks.size() == 2);
 		CHECK(e.slacks[0].rows == duckdb::vector<idx_t> {0, 1});
@@ -542,7 +552,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(q.slacks[0].weight == 1.0);
 		CHECK(q.model.obj_coeffs[q.slacks[0].pos_col] == 0.0);
 		// expanded: independent size-1 blocks.
-		ElasticModel e = BuildElasticModel(model, 0.0, "expanded");
+		ElasticModel e = BuildElasticModel(model, "expanded");
 		REQUIRE(e.slacks.size() == 2);
 		CHECK(e.slacks[0].rows == duckdb::vector<idx_t> {0});
 		CHECK(e.slacks[1].rows == duckdb::vector<idx_t> {1});
@@ -937,42 +947,69 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		      "the runaway is an internal helper variable.");
 	}
 
-	// I4 — the L0 / removal dial. A remove-only `<>` cannot be loosened; instead the
-	// elastic transform gives its disjunction pair one binary `w` that, set to 1, drops
-	// the clause. The removal tier minimizes Σw before data/editable tiers.
-	SECTION("BuildElasticModel adds a binary removal indicator for a `<>` clause") {
-		// The two USER_MECHANISM rows share indicator_col 1; they get no slack but a
-		// single binary w wired ±M₂ by sense (auto M₂ = the disjunction Big-M = 14).
+	// Atomic solver-neutral DROP: removable rows never receive elastic slacks and the
+	// exact candidate model omits every descendant carrying the selected group id.
+	SECTION("atomic removal omits the whole `<>` group without adding a Big-M switch") {
 		SolverModel model = MakeNotEqualModel();
 		ElasticModel elastic = BuildElasticModel(model);
+		CHECK(elastic.slacks.empty());
+		CHECK(elastic.model.num_vars == model.num_vars);
+		CHECK(elastic.model.constraints.size() == 2);
 
-		CHECK(elastic.slacks.empty()); // nothing loosenable
-		REQUIRE(elastic.removals.size() == 1);
-		const auto &rem = elastic.removals[0];
-		CHECK(rem.rows == duckdb::vector<idx_t> {0, 1});
-		CHECK(rem.indicator_col == 1);
-		// One binary column appended (w = col 2); its objective coefficient is set only
-		// during the removal-tier pass.
-		CHECK(elastic.model.num_vars == 3);
-		CHECK(rem.w_col == 2);
-		CHECK(elastic.model.is_binary[2]);
-		CHECK(elastic.model.is_integer[2]);
-		CHECK(elastic.model.col_lower[2] == 0.0);
-		CHECK(elastic.model.col_upper[2] == 1.0);
-		CHECK(elastic.model.obj_coeffs[2] == 0.0);
-		// w neutralizes each row with the disjunction Big-M, sign by sense.
-		CHECK(CoeffOn(elastic.model.constraints[0], 2) == -14.0); // `<` row
-		CHECK(CoeffOn(elastic.model.constraints[1], 2) == 14.0);  // `>` row
+		SolverModel dropped = DropRemovalGroups(model, std::set<idx_t> {0});
+		CHECK(dropped.num_vars == model.num_vars);
+		CHECK(dropped.constraints.empty());
 	}
 
-	SECTION("removal Big-M honors the pragma override") {
-		// diagnose_decide_removal_bigm replaces the auto M₂ with a flat value.
+	SECTION("atomic removal reaches every solver constraint representation") {
+		SolverModel model;
+		model.num_vars = 2;
+		model.col_lower = {0.0, 0.0};
+		model.col_upper = {1.0, 1.0};
+		model.is_integer = {false, true};
+		model.is_binary = {false, true};
+		model.obj_coeffs = {0.0, 0.0};
+
+		ModelConstraint linear;
+		linear.provenance.removal_group_id = 7;
+		model.constraints.push_back(linear);
+		model.constraints.push_back(ModelConstraint()); // retained control row
+
+		SolverModel::QuadraticConstraint quadratic;
+		quadratic.provenance.removal_group_id = 7;
+		model.quadratic_constraints.push_back(quadratic);
+		model.quadratic_constraints.push_back(SolverModel::QuadraticConstraint());
+
+		SolverModel::IndicatorConstraint indicator;
+		indicator.provenance.removal_group_id = 7;
+		model.indicator_constraints.push_back(indicator);
+		model.indicator_constraints.push_back(SolverModel::IndicatorConstraint());
+
+		SolverModel::GeneralConstraint general;
+		general.provenance.removal_group_id = 7;
+		model.general_constraints.push_back(general);
+		model.general_constraints.push_back(SolverModel::GeneralConstraint());
+
+		SolverModel dropped = DropRemovalGroups(model, std::set<idx_t> {7});
+		CHECK(dropped.constraints.size() == 1);
+		CHECK(dropped.quadratic_constraints.size() == 1);
+		CHECK(dropped.indicator_constraints.size() == 1);
+		CHECK(dropped.general_constraints.size() == 1);
+	}
+
+	SECTION("atomic removal recomputes stale build-proven infeasibility") {
 		SolverModel model = MakeNotEqualModel();
-		ElasticModel elastic = BuildElasticModel(model, /*removal_bigm=*/99.0);
-		REQUIRE(elastic.removals.size() == 1);
-		idx_t w = elastic.removals[0].w_col;
-		CHECK(CoeffOn(elastic.model.constraints[0], w) == -99.0);
-		CHECK(CoeffOn(elastic.model.constraints[1], w) == 99.0);
+		model.constraints.clear();
+		ModelConstraint impossible;
+		impossible.sense = '<';
+		impossible.rhs = -1.0;
+		impossible.provenance.source_clause_id = 0;
+		impossible.provenance.removal_group_id = 0;
+		model.constraints.push_back(std::move(impossible));
+		model.build_proven_infeasible = true;
+		SolverModel dropped = DropRemovalGroups(model, std::set<idx_t> {0});
+		CHECK(dropped.constraints.empty());
+		CHECK(!dropped.build_proven_infeasible);
 	}
 
 	// A labeled 2-var (x DOUBLE, `<>` indicator BOOLEAN) layout so the dropped clause
@@ -1004,9 +1041,9 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
-		CHECK(Find(diag, "(x <> 3)").edit_source == "remove_only");
-		CHECK(Find(diag, "(x <> 3)").suggested_change == "remove this clause");
-		CHECK(!Find(diag, "(x <> 3)").has_amount);
+		CHECK(Find(diag, "x <> 3").edit_source == "remove_only");
+		CHECK(Find(diag, "x <> 3").suggested_change == "remove this clause");
+		CHECK(!Find(diag, "x <> 3").has_amount);
 	}
 
 	SECTION("prefer-loosen: a loosenable knob is chosen over dropping a `<>`") {
@@ -1036,7 +1073,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 
 		REQUIRE(diag.valid);
 		CHECK(Find(diag, "x <= 3").suggested_change == "x <= 4");
-		CHECK(Find(diag, "(x <> 3)").edit_source.empty()); // not dropped
+		CHECK(Find(diag, "x <> 3").edit_source.empty()); // not dropped
 	}
 
 	// I4 follow-up — aggregate `<>` (`SUM(x) <> K`). The disjunction binary is a
@@ -1060,6 +1097,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		duckdb::vector<bool> agg_aux {false};
 
 		SolverModel model = MakeNotEqualModel(); // col 1 = disjunction binary, indicator_col = 1
+		model.constraint_sources[0].canonical_lhs = "SUM(x)";
+		model.constraint_sources[0].written_lhs = "SUM(x)";
 		for (char sense : {'<', '>'}) {          // pin x == 3 (the forbidden value)
 			ModelConstraint pin;
 			pin.indices = {0};
@@ -1076,6 +1115,6 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		REQUIRE(diag.valid);
 		CHECK(diag.state == "infeasible");
 		// Without the label channel this subject would be empty (nameless drop).
-		CHECK(Find(diag, "(SUM(x) <> 3)").edit_source == "remove_only");
+		CHECK(Find(diag, "SUM(x) <> 3").edit_source == "remove_only");
 	}
 }

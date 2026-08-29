@@ -148,6 +148,8 @@ struct ConstraintProvenance {
     idx_t source_clause_id = DConstants::INVALID_INDEX;
     //! Elastic grouping identity. DConstants::INVALID_INDEX for rigid/source-less rows.
     idx_t repair_group_id = DConstants::INVALID_INDEX;
+    //! Atomic DROP identity. All rows and native constructs sharing it are omitted together.
+    idx_t removal_group_id = DConstants::INVALID_INDEX;
     //! PER/WHEN group id at emission (or the row id for per-row clauses).
     //! DConstants::INVALID_INDEX when the clause is ungrouped.
     idx_t group_key = DConstants::INVALID_INDEX;
@@ -172,12 +174,9 @@ struct ConstraintProvenance {
     //! means the row's RHS is the user's literal already. Distinct from `strict`/`typed_k`,
     //! which re-quote a δ the *binder* baked in; both are resolved by `DisplayRhs`.
     double rhs_mechanism_offset = 0.0;
-    //! Flat solver column of the `<>` disjunction binary this row belongs to (I4).
-    //! Set at the `<>` mechanism sites — per-row (row-scoped indicator column) and
-    //! aggregate (global-block z, propagated from SolverInput::RawConstraint) — so it
-    //! doubles as the removal marker (`!= INVALID` ⇒ remove-only row) and the grouping
-    //! key (rows sharing one indicator = one `<>` instance). Also sources the removal
-    //! Big-M (|row coeff on this column|) and the user-facing label. INVALID otherwise.
+    //! Flat solver column of the `<>` disjunction binary this row belongs to.
+    //! Describes the formulation itself; atomic DROP identity lives independently in
+    //! `removal_group_id`, and display identity in `source_clause_id`.
     idx_t indicator_col = DConstants::INVALID_INDEX;
     //! Printable PER key of this row's group (`'a'`, or `EU, 2024` for a composite key).
     //! Empty when the clause is ungrouped or not PER-grouped. Lets infeasible diagnosis
@@ -399,8 +398,8 @@ struct ColumnProvenance {
 //!   global_var_labels[g] — clause text for global var g (e.g. an aggregate `<>`
 //!                          indicator "(SUM(x) <> K)"), empty for unnamed globals.
 //!                          Surfaces a label on the otherwise-unnamed global block
-//!                          so the infeasible removal dial can name a dropped
-//!                          aggregate `<>`. Parallel to SolverInput::global_variable_types.
+//!                          so diagnostics and model inspection can name an aggregate
+//!                          `<>`. Parallel to SolverInput::global_variable_types.
 vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
                                                const vector<string> &var_labels,
                                                const vector<bool> &var_is_aux,

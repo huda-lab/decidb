@@ -150,10 +150,9 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
 //! `aux_var_expressions` supplies the clause text stage 05 recorded for the indicator, so
 //! a dropped aggregate `<>` can be named in a repair.
 //!
-//! Both halves carry the clause's `indicator_col` on the row, so the infeasible removal
-//! dial groups them into one droppable `<>`. That is why `<>` is stated as a conditional
-//! ROW rather than as a general constraint, which carries no row for diagnosis to reach —
-//! and dropping the clause is the only repair a `<>` has.
+//! Both halves carry the clause's `indicator_col` as formulation provenance, while the
+//! independent `removal_group_id` groups every descendant into one droppable `<>`.
+//! Dropping the source clause is the only repair a `<>` has.
 //!
 //! Refuses a left-hand side that is not integer-valued — the ±1 band is only exact
 //! on the integer lattice — and silently drops a comparison whose bound no integer
@@ -199,6 +198,10 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
 //! declaration rather than a derived constant.
 void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
                        const vector<string> &var_names);
+
+//! Declare each McCormick auxiliary's box before ABS/MIN/MAX descendants inspect it.
+void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box,
+                                   const vector<string> &var_names);
 
 //! Phase 1 of the ABS auxiliary formulation, and it runs before EVERY other
 //! linearizer. For each `abs_maximize_links` entry it derives the largest |inner| any
@@ -458,6 +461,8 @@ struct ExtremumLinkSpec {
     //! objective's linking rows are structural throughout.
     ConstraintKind envelope_kind = ConstraintKind::STRUCTURAL;
     ConstraintKind closing_kind = ConstraintKind::STRUCTURAL;
+    idx_t source_clause_id = DConstants::INVALID_INDEX;
+    idx_t removal_group_id = DConstants::INVALID_INDEX;
 };
 
 //! Emit one extremum link, in whichever form the policy and the spec call for. This is
@@ -545,6 +550,7 @@ struct ComposedMinMaxTermData {
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
                                        ExpressionType outer_cmp, idx_t source_clause_id,
+                                       idx_t removal_group_id,
                                        const vector<string> &var_names, NativeConstructPolicy native_min_max);
 
 //! Encode a composed MIN/MAX *objective*: the same auxiliary layer, but the composition is

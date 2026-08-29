@@ -1248,6 +1248,7 @@ private:
 			constraint->comparison_type = comp.type;
 			constraint->rhs_expr = comp.right->Copy();
 			TryParseSourceClauseTag(comp.GetAlias(), constraint->source_clause_id);
+			TryParseRemovalGroupTag(comp.GetAlias(), constraint->removal_group_id);
 
 			// Parse not-equal indicator tag if present
 			string payload;

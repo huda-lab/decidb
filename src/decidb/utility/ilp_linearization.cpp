@@ -744,6 +744,7 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             outer.rhs_label = ec.rhs_is_shared_scalar ? string() : ec.rhs_label;
             outer.source_clause_id = ec.source_clause_id;
             outer.repair_group_id = ec.repair_group_id;
+            outer.removal_group_id = ec.removal_group_id;
             outer.group_key = ec.row_group_ids.empty() ? DConstants::INVALID_INDEX : g;
             outer.qualifier = ec.qualifier;
             outer.is_aggregate = true;
@@ -1004,6 +1005,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
             rc.shape = ElasticShape::PER_ROW_DATA;
             rc.source_clause_id = ec.source_clause_id;
             rc.repair_group_id = ec.repair_group_id;
+            rc.removal_group_id = ec.removal_group_id;
             rc.indicator_col = z_col;
             rc.group_key = has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX;
             // The folded LHS constant, so a report quotes the user's `K` and not the
@@ -1323,6 +1325,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                     rc.kind = ConstraintKind::USER_MECHANISM;
                     rc.source_clause_id = ec.source_clause_id;
                     rc.repair_group_id = ec.repair_group_id;
+                    rc.removal_group_id = ec.removal_group_id;
                     rc.indicator_col = z_idx;
                     rc.group_key = has_groups ? g : DConstants::INVALID_INDEX;
                     rc.qualifier = ec.qualifier;
@@ -1488,6 +1491,22 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
 // Bilinear products and ABS
 //===--------------------------------------------------------------------===//
 
+void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box,
+                                   const vector<string> &var_names) {
+    for (const auto &link : input.bilinear_links) {
+        double U = box.upper[link.other_var_idx];
+        double L = box.lower[link.other_var_idx];
+        if (U >= 1e20) {
+            throw InvalidInputException(
+                "Bilinear term requires a finite upper bound on variable '%s'. "
+                "Add a constraint like '%s <= <bound>' to provide one.",
+                var_names[link.other_var_idx], var_names[link.other_var_idx]);
+        }
+        input.lower_bounds[link.aux_idx] = std::min(0.0, L);
+        input.upper_bounds[link.aux_idx] = std::max(0.0, U);
+    }
+}
+
 void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
                        const vector<string> &var_names) {
     const idx_t num_rows = input.num_rows;
@@ -1506,12 +1525,7 @@ void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
     for (auto &link : input.bilinear_links) {
         double U = box.upper[link.other_var_idx];
         double L = box.lower[link.other_var_idx];
-        if (U >= 1e20) {
-            throw InvalidInputException(
-                "Bilinear term requires a finite upper bound on variable '%s'. "
-                "Add a constraint like '%s <= <bound>' to provide one.",
-                var_names[link.other_var_idx], var_names[link.other_var_idx]);
-        }
+        D_ASSERT(U < 1e20); // derived and validated before ABS descendants read the aux box
 
         // ec1: w <= U * b  (i.e., w - U*b <= 0)
         EvaluatedConstraint ec1;
@@ -1522,6 +1536,8 @@ void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
         ec1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
         ec1.lhs_is_aggregate = false;
         ec1.kind = ConstraintKind::STRUCTURAL;
+        ec1.source_clause_id = link.source_clause_id;
+        ec1.removal_group_id = link.removal_group_id;
         input.constraints.push_back(std::move(ec1));
 
         // ec2: w >= x - U*(1-b) = x - U + U*b
@@ -1535,6 +1551,8 @@ void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
         ec2.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
         ec2.lhs_is_aggregate = false;
         ec2.kind = ConstraintKind::STRUCTURAL;
+        ec2.source_clause_id = link.source_clause_id;
+        ec2.removal_group_id = link.removal_group_id;
         input.constraints.push_back(std::move(ec2));
 
         // ec3: upper corner. L >= 0 → plain `w <= x`; L < 0 → `w <= x - L*(1-b)`,
@@ -1555,6 +1573,8 @@ void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
         ec3.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
         ec3.lhs_is_aggregate = false;
         ec3.kind = ConstraintKind::STRUCTURAL;
+        ec3.source_clause_id = link.source_clause_id;
+        ec3.removal_group_id = link.removal_group_id;
         input.constraints.push_back(std::move(ec3));
 
         // ec4: lower corner `w >= L*b`, only needed when x can be negative. Also
@@ -1575,6 +1595,8 @@ void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
             ec4.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
             ec4.lhs_is_aggregate = false;
             ec4.kind = ConstraintKind::STRUCTURAL;
+            ec4.source_clause_id = link.source_clause_id;
+            ec4.removal_group_id = link.removal_group_id;
             input.constraints.push_back(std::move(ec4));
         }
     }
@@ -1841,6 +1863,9 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub1.group_labels = c1.group_labels;
         ec_ub1.qualifier = c1.qualifier;
         ec_ub1.kind = ConstraintKind::STRUCTURAL;
+        ec_ub1.source_clause_id = c1.source_clause_id;
+        ec_ub1.repair_group_id = c1.repair_group_id;
+        ec_ub1.removal_group_id = c1.removal_group_id;
         input.constraints.push_back(std::move(ec_ub1));
 
         // C_ub2: same as C2 but add y_idx with coeff -2M, flip to <=, rhs unchanged
@@ -1857,6 +1882,9 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub2.group_labels = c2.group_labels;
         ec_ub2.qualifier = c2.qualifier;
         ec_ub2.kind = ConstraintKind::STRUCTURAL;
+        ec_ub2.source_clause_id = c2.source_clause_id;
+        ec_ub2.repair_group_id = c2.repair_group_id;
+        ec_ub2.removal_group_id = c2.removal_group_id;
         input.constraints.push_back(std::move(ec_ub2));
     }
 }
@@ -1967,6 +1995,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
                 link_row.kind = ConstraintKind::STRUCTURAL;
                 link_row.source_clause_id = c1.source_clause_id;
                 link_row.repair_group_id = c1.repair_group_id;
+                link_row.removal_group_id = c1.removal_group_id;
                 input.global_constraints.push_back(std::move(link_row));
             }
 
@@ -1976,6 +2005,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             gc.argument_columns.push_back(static_cast<int>(t_idx));
             gc.source_clause_id = c1.source_clause_id;
             gc.repair_group_id = c1.repair_group_id;
+            gc.removal_group_id = c1.removal_group_id;
             input.general_constraints.push_back(std::move(gc));
         }
     }
@@ -2011,7 +2041,8 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
 //! `member.link` holds `(result - expr)`, so a renaming reads as the single coefficient
 //! `-1`.
 static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer,
-                                  const ExtremumMember &member, const string &label) {
+                                  const ExtremumMember &member, const string &label,
+                                  idx_t source_clause_id, idx_t removal_group_id) {
     int sole_column = -1;
     double sole_coefficient = 0.0;
     idx_t surviving = 0;
@@ -2034,6 +2065,8 @@ static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer,
     pin.sense = '=';
     pin.rhs = member.link.constant;
     pin.kind = ConstraintKind::STRUCTURAL;
+    pin.source_clause_id = source_clause_id;
+    pin.removal_group_id = removal_group_id;
     input.global_constraints.push_back(std::move(pin));
     return (int)t_idx;
 }
@@ -2060,6 +2093,8 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
             rc.sense = sense;
             rc.rhs = member.link.constant;
             rc.kind = spec.envelope_kind;
+            rc.source_clause_id = spec.source_clause_id;
+            rc.removal_group_id = spec.removal_group_id;
             input.global_constraints.push_back(std::move(rc));
         }
     }
@@ -2075,12 +2110,15 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
         vector<int> args;
         args.reserve(members.size());
         for (auto &member : members) {
-            args.push_back(ExtremumArgumentColumn(input, indexer, member, spec.label));
+            args.push_back(ExtremumArgumentColumn(input, indexer, member, spec.label,
+                                                  spec.source_clause_id, spec.removal_group_id));
         }
         GeneralConstraintSpec gc;
         gc.kind = spec.is_max ? GeneralConstraintKind::MAX : GeneralConstraintKind::MIN;
         gc.result_column = result_col;
         gc.argument_columns = std::move(args);
+        gc.source_clause_id = spec.source_clause_id;
+        gc.removal_group_id = spec.removal_group_id;
         input.general_constraints.push_back(std::move(gc));
         return;
     }
@@ -2110,11 +2148,15 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
         rc.sense = sense;
         rc.rhs = m_coeff + member.link.constant;
         rc.kind = spec.closing_kind;
+        rc.source_clause_id = spec.source_clause_id;
+        rc.removal_group_id = spec.removal_group_id;
         input.global_constraints.push_back(std::move(rc));
     }
     sum_y.sense = '>';
     sum_y.rhs = 1.0;
     sum_y.kind = spec.closing_kind;
+    sum_y.source_clause_id = spec.source_clause_id;
+    sum_y.removal_group_id = spec.removal_group_id;
     input.global_constraints.push_back(std::move(sum_y));
 }
 
@@ -2618,6 +2660,7 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
 //! flags on the spec rather than as a separate emitter.
 static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &indexer,
                                           vector<ComposedMinMaxTermData> &terms,
+                                          idx_t source_clause_id, idx_t removal_group_id,
                                           const vector<string> &var_names,
                                           NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
@@ -2670,6 +2713,8 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
         spec.closing_big_m = spec.closing_underivable ? 0.0 : term_range[i].Span();
         spec.blame_var = term_range[i].unbounded_var;
         spec.label = ta.label;
+        spec.source_clause_id = source_clause_id;
+        spec.removal_group_id = removal_group_id;
         // Mechanism, matching the hard MIN/MAX path above. The closing rows encode
         // `z = MIN/MAX(members)`; their slack loosens that *definition*, not the user's
         // bound, and the two differ by whatever coefficient `z` carries in the outer
@@ -2700,9 +2745,11 @@ static idx_t ComposedAvgDivisor(const ComposedMinMaxTermData &ta, idx_t num_rows
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
                                        ExpressionType outer_cmp, idx_t source_clause_id,
+                                       idx_t removal_group_id,
                                        const vector<string> &var_names, NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
-    EmitComposedMinMaxAuxiliaries(input, indexer, terms, var_names, native_min_max);
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms, source_clause_id, removal_group_id,
+                                  var_names, native_min_max);
 
     // Build the outer composed RawConstraint
     std::unordered_map<int, double> outer_accum;
@@ -2761,6 +2808,7 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
     outer.kind = ConstraintKind::USER_PARAMETER;
     outer.shape = ElasticShape::SHARED_SCALAR;
     outer.source_clause_id = source_clause_id;
+    outer.removal_group_id = removal_group_id;
     outer.repair_group_id = input.constraints.size() + input.global_constraints.size();
     input.global_constraints.push_back(std::move(outer));
 }
@@ -2775,7 +2823,8 @@ void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &inde
     input.objective_coefficients.clear();
     input.objective_variable_indices.clear();
 
-    EmitComposedMinMaxAuxiliaries(input, indexer, terms, var_names, native_min_max);
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms, DConstants::INVALID_INDEX,
+                                  DConstants::INVALID_INDEX, var_names, native_min_max);
 
     // Populate objective coefficients. For MIN/MAX terms, the obj coef on z_k
     // is ta.sign (i.e., sign×1.0); set via global_obj_coeffs. For SUM/AVG

@@ -572,6 +572,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 	};
 	for (const auto &row : model.constraints) {
 		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
+		    row.provenance.removal_group_id != DConstants::INVALID_INDEX ||
 		    !IsUnreachableBound(row.sense, row.rhs)) {
 			continue;
 		}
@@ -579,6 +580,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 	}
 	for (const auto &row : model.quadratic_constraints) {
 		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
+		    row.provenance.removal_group_id != DConstants::INVALID_INDEX ||
 		    !IsUnreachableBound(row.sense, row.rhs)) {
 			continue;
 		}
@@ -664,8 +666,47 @@ DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
 	return BuildUnboundedDiagnostic(escapes);
 }
 
-ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
-                               const string &slack_scope) {
+template <class T>
+static void DropTaggedEntries(vector<T> &entries, const std::set<idx_t> &dropped) {
+	vector<T> retained;
+	retained.reserve(entries.size());
+	for (auto &entry : entries) {
+		auto group_id = entry.provenance.removal_group_id;
+		if (group_id == DConstants::INVALID_INDEX || dropped.find(group_id) == dropped.end()) {
+			retained.push_back(std::move(entry));
+		}
+	}
+	entries = std::move(retained);
+}
+
+SolverModel DropRemovalGroups(const SolverModel &base, const std::set<idx_t> &removal_group_ids) {
+	SolverModel result = base;
+	DropTaggedEntries(result.constraints, removal_group_ids);
+	DropTaggedEntries(result.quadratic_constraints, removal_group_ids);
+	DropTaggedEntries(result.indicator_constraints, removal_group_ids);
+	DropTaggedEntries(result.general_constraints, removal_group_ids);
+
+	// Build-time infeasibility is cached on the whole model, so dropping the constant
+	// row that proved it must clear the stale flag. Recompute from exactly the retained
+	// coefficient-free linear rows using the builder's own tolerance and rules.
+	result.build_proven_infeasible = false;
+	constexpr double EPS = 1e-9;
+	for (const auto &row : result.constraints) {
+		if (!row.indices.empty()) {
+			continue;
+		}
+		bool violated = row.sense == '<' ? row.rhs < -EPS
+		                : row.sense == '>' ? row.rhs > EPS
+		                                   : std::fabs(row.rhs) > EPS;
+		if (violated) {
+			result.build_proven_infeasible = true;
+			break;
+		}
+	}
+	return result;
+}
+
+ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scope) {
 	ElasticModel out;
 	out.model = base;
 	SolverModel &elastic = out.model;
@@ -767,7 +808,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		const auto &row = elastic.constraints[r];
 		assert_blamable_row(row.provenance);
 		lin_norm[r] = rms_norm(row.coefficients);
-		if (IsRelaxableForElastic(row.provenance.kind) && !is_data_offset(row.provenance)) {
+		if (row.provenance.removal_group_id == DConstants::INVALID_INDEX &&
+		    IsRelaxableForElastic(row.provenance.kind) && !is_data_offset(row.provenance)) {
 			consider_ref(lin_norm[r]);
 		}
 	}
@@ -775,7 +817,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		const auto &qc = elastic.quadratic_constraints[qr];
 		assert_blamable_row(qc.provenance);
 		qc_norm[qr] = rms_norm(qc.linear_coefficients);
-		if (IsRelaxableForElastic(qc.provenance.kind)) {
+		if (qc.provenance.removal_group_id == DConstants::INVALID_INDEX &&
+		    IsRelaxableForElastic(qc.provenance.kind)) {
 			consider_ref(qc_norm[qr]);
 		}
 	}
@@ -835,7 +878,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	std::map<std::pair<idx_t, idx_t>, vector<idx_t>> blocks;
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
 		const auto &row = elastic.constraints[r];
-		if (!IsRelaxableForElastic(row.provenance.kind) || !folds(row.provenance)) {
+		if (row.provenance.removal_group_id != DConstants::INVALID_INDEX ||
+		    !IsRelaxableForElastic(row.provenance.kind) || !folds(row.provenance)) {
 			continue;
 		}
 		blocks[block_key(row.provenance)].push_back(r);
@@ -846,7 +890,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	// other relaxable row gets its own size-1 block.
 	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
 		const auto &row = elastic.constraints[r];
-		if (!IsRelaxableForElastic(row.provenance.kind)) {
+		if (row.provenance.removal_group_id != DConstants::INVALID_INDEX ||
+		    !IsRelaxableForElastic(row.provenance.kind)) {
 			continue;
 		}
 		if (folds(row.provenance)) {
@@ -888,7 +933,8 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 	// indexes `quadratic_constraints`. Solver-gated to Gurobi (HiGHS skips QCQP).
 	for (idx_t qr = 0; qr < elastic.quadratic_constraints.size(); qr++) {
 		auto &qc = elastic.quadratic_constraints[qr];
-		if (!IsRelaxableForElastic(qc.provenance.kind)) {
+		if (qc.provenance.removal_group_id != DConstants::INVALID_INDEX ||
+		    !IsRelaxableForElastic(qc.provenance.kind)) {
 			continue;
 		}
 		// A quadratic constraint is always reported as a LOOSEN edit (the conflict
@@ -908,105 +954,6 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 		                      /*quadratic=*/true});
 	}
 
-	// I4: the removal dial. A remove-only `<>` cannot be loosened — its two Big-M
-	// disjunction rows (USER_MECHANISM, so the loosening passes above skipped them)
-	// share one `indicator_col`. Group them by it and add ONE binary `w` per `<>`,
-	// wired into each row with a ±M₂ coefficient (sign by sense, like a slack) so
-	// w=1 makes both rows vacuous — the clause is dropped. The removal tier minimizes
-	// Σw before any data/editable tier, so dropping is a last resort without a fixed
-	// cross-tier weight. M₂ defaults to the clause's own disjunction Big-M (|row coeff
-	// on indicator_col|, provably enough to neutralize either side), overridable.
-	//
-	// A `<>` the backend expressed natively has no Big-M rows at all — it is two
-	// indicator constraints instead. Those still carry a ROW (that is why `<>` is
-	// expressed as indicator constraints and not as a general constraint, which
-	// carries none), so the same dial reaches them: `w` wired into an implied row makes
-	// that row vacuous whenever the implication fires, which is exactly what dropping
-	// the clause means. Indicator rows are addressed by `constraints.size() + i` so one
-	// group can hold both encodings without the loop below caring which it has.
-	// The two encodings store the same four things in different structs, so the dial
-	// addresses a row through this view rather than knowing which list it came from.
-	struct RemovableRow {
-		vector<int> *indices;
-		vector<double> *coefficients;
-		char sense;
-		double rhs;
-		const vector<double> *col_lower;
-		const vector<double> *col_upper;
-	};
-	auto row_at = [&elastic](idx_t r) -> RemovableRow {
-		if (r < elastic.constraints.size()) {
-			auto &row = elastic.constraints[r];
-			return {&row.indices, &row.coefficients, row.sense, row.rhs, &elastic.col_lower,
-			        &elastic.col_upper};
-		}
-		auto &row = elastic.indicator_constraints[r - elastic.constraints.size()];
-		return {&row.indices, &row.coefficients, row.sense, row.rhs, &elastic.col_lower,
-		        &elastic.col_upper};
-	};
-	std::map<idx_t, vector<idx_t>> rem_groups;
-	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
-		idx_t ind = elastic.constraints[r].provenance.indicator_col;
-		if (ind != DConstants::INVALID_INDEX) {
-			rem_groups[ind].push_back(r);
-		}
-	}
-	for (idx_t i = 0; i < elastic.indicator_constraints.size(); i++) {
-		idx_t ind = elastic.indicator_constraints[i].provenance.indicator_col;
-		if (ind != DConstants::INVALID_INDEX) {
-			rem_groups[ind].push_back(elastic.constraints.size() + i);
-		}
-	}
-	for (auto &kv : rem_groups) {
-		idx_t indicator_col = kv.first;
-		const vector<idx_t> &grp = kv.second;
-		// M₂: honor the pragma override, else derive from the disjunction Big-M.
-		double m2 = removal_bigm;
-		if (!(m2 > 0.0)) {
-			for (idx_t r : grp) {
-				auto row = row_at(r);
-				for (idx_t k = 0; k < row.indices->size(); k++) {
-					if (static_cast<idx_t>((*row.indices)[k]) == indicator_col) {
-						m2 = std::max(m2, std::fabs((*row.coefficients)[k]));
-					}
-				}
-			}
-		}
-		// A `<>` whose range collapsed to a plain inequality carries the same
-		// provenance but holds no indicator term to read an M from, so derive one from
-		// the row itself: enough to dominate the row's reachable span plus its bound is
-		// enough to make it vacuous, which is all the removal dial needs. Without this
-		// the group would get a coefficient of 0 and w=1 would neutralize nothing —
-		// a removal offered in the diagnosis but inert in the model.
-		if (!(m2 > 0.0)) {
-			for (idx_t r : grp) {
-				auto row = row_at(r);
-				double span = std::fabs(row.rhs) + 1.0;
-				for (idx_t k = 0; k < row.indices->size(); k++) {
-					idx_t col = static_cast<idx_t>((*row.indices)[k]);
-					span += std::fabs((*row.coefficients)[k]) *
-					        std::max(std::fabs((*row.col_lower)[col]), std::fabs((*row.col_upper)[col]));
-				}
-				m2 = std::max(m2, span);
-			}
-		}
-		// One binary removal indicator w ∈ {0,1}.
-		idx_t w_col = elastic.num_vars;
-		elastic.col_lower.push_back(0.0);
-		elastic.col_upper.push_back(1.0);
-		elastic.is_integer.push_back(true);
-		elastic.is_binary.push_back(true);
-		elastic.obj_coeffs.push_back(0.0);
-		elastic.num_vars++;
-		// Wire ±M₂·w into each disjunction row (same sign convention as a slack).
-		for (idx_t r : grp) {
-			auto row = row_at(r);
-			row.indices->push_back(static_cast<int>(w_col));
-			row.coefficients->push_back(row.sense == '>' ? m2 : -m2);
-		}
-		out.removals.push_back({grp, w_col, indicator_col});
-	}
-
 	return out;
 }
 
@@ -1018,7 +965,6 @@ ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm,
 //! slack. Clauses are labelled from the ORIGINAL row (`orig`, before slacks were
 //! appended). Pure in `solution`, so it runs against either the stage-1 or stage-2 solve.
 static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
-                                           const vector<RemovalRef> &removals,
                                            const vector<double> &solution,
                                            const SolverModel &orig_model,
                                            const vector<ColumnProvenance> &columns, bool snap,
@@ -1163,52 +1109,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		edits.push_back(std::move(e));
 	}
 
-	// I4: a removal indicator at 1 means its remove-only `<>` was dropped. The clause
-	// label comes from the indicator column's provenance ("(x <> 3)", recorded at
-	// rewrite time via F6). The set {w = 1} is the minimum-cardinality removal set.
-	// A single written `<>` that expands per row has one indicator (hence one removal)
-	// per row, all sharing the same clause label; dedupe by label so the relation
-	// carries one DROP per user clause, not one per row.
-	std::set<string> dropped_labels;
-	for (const auto &r : removals) {
-		if (solution[r.w_col] > 0.5) {
-			const string &label = columns[r.indicator_col].label;
-			if (!dropped_labels.insert(label).second) {
-				continue;
-			}
-			ClauseEdit e;
-			e.kind = ClauseEditKind::DROP;
-			e.label = label;
-			e.edit_source = "remove_only";
-			edits.push_back(std::move(e));
-		}
-	}
 	return edits;
-}
-
-//! True iff `edits` contains at least one DROP (a dropped remove-only `<>`). Gates the
-//! I3 stage-2 re-solve alongside HasLoosenEdit: a removal is an actionable fix, so the
-//! achievable objective after dropping is worth reporting.
-static bool HasRemoval(const vector<ClauseEdit> &edits) {
-	for (const auto &e : edits) {
-		if (e.kind == ClauseEditKind::DROP) {
-			return true;
-		}
-	}
-	return false;
-}
-
-//! True iff `edits` contains at least one actionable (editable) LOOSEN edit, as opposed
-//! to only data-RHS conflict summaries. Gates the I3 stage-2 re-solve: with no editable
-//! knob there is nothing to maximize the objective over, so an achievable-objective
-//! number would be misleading.
-static bool HasLoosenEdit(const vector<ClauseEdit> &edits) {
-	for (const auto &e : edits) {
-		if (e.kind == ClauseEditKind::LOOSEN) {
-			return true;
-		}
-	}
-	return false;
 }
 
 //! True iff the model carries a real objective to re-solve. With no objective there is
@@ -1244,7 +1145,7 @@ static double SlackTierCoefficient(const BlockSlackRef &sl, ElasticRepairTier ti
 }
 
 static bool AppendTierTerms(ModelConstraint &row, const vector<BlockSlackRef> &slacks,
-                            const vector<RemovalRef> &removals, ElasticRepairTier tier) {
+                            ElasticRepairTier tier) {
 	for (const auto &sl : slacks) {
 		double coeff = SlackTierCoefficient(sl, tier);
 		if (coeff == 0.0) {
@@ -1257,22 +1158,12 @@ static bool AppendTierTerms(ModelConstraint &row, const vector<BlockSlackRef> &s
 			row.coefficients.push_back(coeff);
 		}
 	}
-	if (tier == ElasticRepairTier::REMOVAL) {
-		for (const auto &r : removals) {
-			row.indices.push_back(static_cast<int>(r.w_col));
-			row.coefficients.push_back(1.0);
-		}
-	}
 	return !row.indices.empty();
 }
 
 //! True iff `tier` owns at least one repair knob. An empty tier contributes nothing to the
 //! lexicographic ladder, so its pass is skipped entirely (no solve, no budget row).
-static bool TierHasTerms(const vector<BlockSlackRef> &slacks, const vector<RemovalRef> &removals,
-                         ElasticRepairTier tier) {
-	if (tier == ElasticRepairTier::REMOVAL) {
-		return !removals.empty();
-	}
+static bool TierHasTerms(const vector<BlockSlackRef> &slacks, ElasticRepairTier tier) {
 	for (const auto &sl : slacks) {
 		if (sl.tier == tier) {
 			return true;
@@ -1282,7 +1173,7 @@ static bool TierHasTerms(const vector<BlockSlackRef> &slacks, const vector<Remov
 }
 
 static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &slacks,
-                             const vector<RemovalRef> &removals, ElasticRepairTier tier) {
+                             ElasticRepairTier tier) {
 	for (auto &c : model.obj_coeffs) {
 		c = 0.0;
 	}
@@ -1294,7 +1185,7 @@ static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &sl
 	model.maximize = false;
 
 	ModelConstraint objective_terms;
-	if (!AppendTierTerms(objective_terms, slacks, removals, tier)) {
+	if (!AppendTierTerms(objective_terms, slacks, tier)) {
 		return;
 	}
 	for (idx_t i = 0; i < objective_terms.indices.size(); i++) {
@@ -1304,7 +1195,7 @@ static void SetTierObjective(SolverModel &model, const vector<BlockSlackRef> &sl
 }
 
 static double ComputeTierValue(const vector<double> &solution, const vector<BlockSlackRef> &slacks,
-                               const vector<RemovalRef> &removals, ElasticRepairTier tier) {
+                               ElasticRepairTier tier) {
 	double value = 0.0;
 	for (const auto &sl : slacks) {
 		double coeff = SlackTierCoefficient(sl, tier);
@@ -1316,28 +1207,23 @@ static double ComputeTierValue(const vector<double> &solution, const vector<Bloc
 			value += coeff * solution[sl.neg_col];
 		}
 	}
-	if (tier == ElasticRepairTier::REMOVAL) {
-		for (const auto &r : removals) {
-			value += solution[r.w_col];
-		}
-	}
 	return std::max(0.0, value);
 }
 
 static TierBudget MakeTierBudget(const vector<double> &solution, const vector<BlockSlackRef> &slacks,
-                                 const vector<RemovalRef> &removals, ElasticRepairTier tier) {
+                                 ElasticRepairTier tier) {
 	ModelConstraint terms;
-	bool active = AppendTierTerms(terms, slacks, removals, tier);
-	return {tier, active ? ComputeTierValue(solution, slacks, removals, tier) : 0.0, active};
+	bool active = AppendTierTerms(terms, slacks, tier);
+	return {tier, active ? ComputeTierValue(solution, slacks, tier) : 0.0, active};
 }
 
 static void AddTierBudgetRow(SolverModel &model, const vector<BlockSlackRef> &slacks,
-                             const vector<RemovalRef> &removals, const TierBudget &budget) {
+                             const TierBudget &budget) {
 	if (!budget.active) {
 		return;
 	}
 	ModelConstraint row;
-	if (!AppendTierTerms(row, slacks, removals, budget.tier)) {
+	if (!AppendTierTerms(row, slacks, budget.tier)) {
 		return;
 	}
 	row.sense = '<';
@@ -1350,7 +1236,6 @@ static void AddTierBudgetRow(SolverModel &model, const vector<BlockSlackRef> &sl
 //! wired), cap each solved lexicographic repair tier at its optimum, and restore the
 //! user's original objective so the re-solve optimizes among all minimal repairs.
 static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<BlockSlackRef> &slacks,
-                                    const vector<RemovalRef> &removals,
                                     const SolverModel &original, const vector<TierBudget> &budgets) {
 	SolverModel stage2 = elastic;
 
@@ -1358,7 +1243,7 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 	// For remove-only `<>` clauses this keeps R <= R* while letting stage 2 choose
 	// the objective-best equally minimal DROP set.
 	for (const auto &budget : budgets) {
-		AddTierBudgetRow(stage2, slacks, removals, budget);
+		AddTierBudgetRow(stage2, slacks, budget);
 	}
 
 	// Restore the user's original objective. The slack columns (appended past the
@@ -1397,14 +1282,13 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 //! solve) otherwise. `freeze_objective` is false on the no-objective path, where there is
 //! nothing to preserve but a repair tie is just as solver-arbitrary.
 static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef> &slacks,
-                               const vector<RemovalRef> &removals, bool freeze_objective,
-                               double objective_value) {
+                               bool freeze_objective, double objective_value) {
 	idx_t editable_knobs = 0;
 	idx_t data_knobs = 0;
 	for (const auto &sl : slacks) {
 		(sl.tier == ElasticRepairTier::DATA_OFFSET ? data_knobs : editable_knobs)++;
 	}
-	if (removals.size() < 2 && editable_knobs < 2 && data_knobs < 2) {
+	if (editable_knobs < 2 && data_knobs < 2) {
 		return false;
 	}
 	if (freeze_objective) {
@@ -1441,9 +1325,6 @@ static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef
 	for (auto &c : tiebreak.obj_coeffs) {
 		c = 0.0;
 	}
-	for (idx_t i = 0; i < removals.size(); i++) {
-		tiebreak.obj_coeffs[removals[i].w_col] = static_cast<double>(i + 1);
-	}
 	for (idx_t i = 0; i < slacks.size(); i++) {
 		const auto &sl = slacks[i];
 		double coeff = SlackTierCoefficient(sl, sl.tier) * static_cast<double>(i + 1);
@@ -1456,158 +1337,288 @@ static bool BuildTieBreakModel(SolverModel &tiebreak, const vector<BlockSlackRef
 	return true;
 }
 
+namespace {
+
+struct RemovalGroupInfo {
+	idx_t id = DConstants::INVALID_INDEX;
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	string qualifier;
+};
+
+static vector<RemovalGroupInfo> CollectRemovalGroups(const SolverModel &model) {
+	std::map<idx_t, RemovalGroupInfo> by_group;
+	auto record = [&](const ConstraintProvenance &prov) {
+		if (prov.removal_group_id == DConstants::INVALID_INDEX) {
+			return;
+		}
+		auto entry = by_group.emplace(
+		    prov.removal_group_id,
+		    RemovalGroupInfo {prov.removal_group_id, prov.source_clause_id, prov.qualifier});
+		if (!entry.second) {
+			if (entry.first->second.source_clause_id == DConstants::INVALID_INDEX) {
+				entry.first->second.source_clause_id = prov.source_clause_id;
+			}
+			if (entry.first->second.qualifier.empty()) {
+				entry.first->second.qualifier = prov.qualifier;
+			}
+		}
+	};
+	for (const auto &row : model.constraints) record(row.provenance);
+	for (const auto &row : model.quadratic_constraints) record(row.provenance);
+	for (const auto &row : model.indicator_constraints) record(row.provenance);
+	for (const auto &row : model.general_constraints) record(row.provenance);
+	vector<RemovalGroupInfo> result;
+	for (const auto &entry : by_group) {
+		result.push_back(entry.second);
+	}
+	return result;
+}
+
+static ClauseEdit MakeDropEdit(const SolverModel &model, const RemovalGroupInfo &group) {
+	ClauseEdit edit;
+	edit.kind = ClauseEditKind::DROP;
+	edit.edit_source = "remove_only";
+	if (group.source_clause_id < model.constraint_sources.size()) {
+		const auto &source = model.constraint_sources[group.source_clause_id];
+		const string &lhs = source.written_lhs.empty() ? source.canonical_lhs : source.written_lhs;
+		const string &rhs = source.written_rhs.empty() ? source.canonical_rhs : source.written_rhs;
+		const string &cmp = source.written_cmp.empty() ? source.canonical_cmp : source.written_cmp;
+		edit.label = cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
+		const string &qualifier = source.qualifier.empty() ? group.qualifier : source.qualifier;
+		if (!qualifier.empty()) {
+			edit.label += " " + qualifier;
+		}
+	} else {
+		edit.label = "constraint " + to_string(group.id);
+	}
+	return edit;
+}
+
+enum class CandidateStatus : uint8_t { FEASIBLE, INFEASIBLE, ABORT };
+
+struct RemovalCandidate {
+	CandidateStatus status = CandidateStatus::ABORT;
+	vector<ClauseEdit> edits;
+	double data_cost = 0.0;
+	double editable_cost = 0.0;
+	bool objective_unbounded = false;
+	bool has_objective = false;
+	double objective_value = 0.0;
+	vector<idx_t> signature;
+};
+
+static double BudgetValue(const vector<TierBudget> &budgets, ElasticRepairTier tier) {
+	for (const auto &budget : budgets) {
+		if (budget.tier == tier) {
+			return budget.value;
+		}
+	}
+	return 0.0;
+}
+
+static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &input,
+	                                            const vector<ColumnProvenance> &columns,
+	                                            const vector<RemovalGroupInfo> &all_groups,
+	                                            const vector<idx_t> &selected_indices) {
+	RemovalCandidate result;
+	std::set<idx_t> dropped_ids;
+	for (idx_t index : selected_indices) {
+		dropped_ids.insert(all_groups[index].id);
+		result.signature.push_back(all_groups[index].id);
+	}
+	SolverModel candidate_model = DropRemovalGroups(input.model, dropped_ids);
+	ElasticModel elastic = BuildElasticModel(candidate_model, input.params.slack_scope);
+	const auto &slacks = elastic.slacks;
+
+	SolverModel stage1_model = elastic.model;
+	vector<TierBudget> budgets;
+	SolverResult stage1;
+	bool solved = false;
+	const ElasticRepairTier tier_order[] = {
+	    ElasticRepairTier::DATA_OFFSET,
+	    ElasticRepairTier::EDITABLE_LOOSEN,
+	};
+	for (auto tier : tier_order) {
+		if (!TierHasTerms(slacks, tier)) {
+			continue;
+		}
+		SetTierObjective(stage1_model, slacks, tier);
+		SolverResult pass = input.solve_model(stage1_model);
+		if (pass.status == SolverStatus::INFEASIBLE) {
+			result.status = input.has_unhandled_user_bounds ? CandidateStatus::ABORT
+			                                                : CandidateStatus::INFEASIBLE;
+			return result;
+		}
+		if (pass.status != SolverStatus::OPTIMAL || pass.solution.empty()) {
+			return result;
+		}
+		TierBudget budget = MakeTierBudget(pass.solution, slacks, tier);
+		AddTierBudgetRow(stage1_model, slacks, budget);
+		budgets.push_back(budget);
+		stage1 = std::move(pass);
+		solved = true;
+	}
+	if (!solved) {
+		SolverResult pass = input.solve_model(stage1_model);
+		if (pass.status == SolverStatus::INFEASIBLE) {
+			result.status = input.has_unhandled_user_bounds ? CandidateStatus::ABORT
+			                                                : CandidateStatus::INFEASIBLE;
+			return result;
+		}
+		if (pass.status != SolverStatus::OPTIMAL || pass.solution.empty()) {
+			return result;
+		}
+		stage1 = std::move(pass);
+	}
+
+	result.data_cost = BudgetValue(budgets, ElasticRepairTier::DATA_OFFSET);
+	result.editable_cost = BudgetValue(budgets, ElasticRepairTier::EDITABLE_LOOSEN);
+	vector<double> repair_solution = stage1.solution;
+	result.has_objective = HasObjective(candidate_model);
+	if (result.has_objective) {
+		SolverModel stage2_model = BuildStage2Model(elastic.model, slacks, candidate_model, budgets);
+		SolverResult stage2 = input.solve_model(stage2_model);
+		if (stage2.status == SolverStatus::OPTIMAL && !stage2.solution.empty()) {
+			result.objective_value = stage2.objective_value;
+			repair_solution = std::move(stage2.solution);
+			SolverModel tiebreak_model = stage2_model;
+			if (BuildTieBreakModel(tiebreak_model, slacks, /*freeze_objective=*/true,
+			                       result.objective_value)) {
+				SolverResult tiebreak = input.solve_model(tiebreak_model);
+				if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
+					return result;
+				}
+				repair_solution = std::move(tiebreak.solution);
+			}
+		} else if (stage2.status == SolverStatus::UNBOUNDED) {
+			result.objective_unbounded = true;
+			SolverModel tiebreak_model = stage1_model;
+			if (BuildTieBreakModel(tiebreak_model, slacks, /*freeze_objective=*/false, 0.0)) {
+				SolverResult tiebreak = input.solve_model(tiebreak_model);
+				if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
+					return result;
+				}
+				repair_solution = std::move(tiebreak.solution);
+			}
+		} else {
+			// INF_OR_UNBD, timeout, suboptimal, and backend errors are not comparable
+			// candidates. Never return a partial diagnosis from a partially searched layer.
+			return result;
+		}
+	} else {
+		SolverModel tiebreak_model = stage1_model;
+		if (BuildTieBreakModel(tiebreak_model, slacks, /*freeze_objective=*/false, 0.0)) {
+			SolverResult tiebreak = input.solve_model(tiebreak_model);
+			if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
+				return result;
+			}
+			repair_solution = std::move(tiebreak.solution);
+		}
+	}
+
+	result.edits = ReadElasticEdits(slacks, repair_solution, candidate_model, columns,
+	                                /*snap=*/result.has_objective && !result.objective_unbounded,
+	                                input.params.slack_scope);
+	for (idx_t index : selected_indices) {
+		result.edits.push_back(MakeDropEdit(input.model, all_groups[index]));
+	}
+	result.status = CandidateStatus::FEASIBLE;
+	return result;
+}
+
+static int CompareDisplayed(double lhs, double rhs) {
+	double a = SnapDiagnosticValue(lhs);
+	double b = SnapDiagnosticValue(rhs);
+	return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+static bool BetterCandidate(const RemovalCandidate &lhs, const RemovalCandidate &rhs, bool maximize) {
+	int cmp = CompareDisplayed(lhs.data_cost, rhs.data_cost);
+	if (cmp != 0) return cmp < 0;
+	cmp = CompareDisplayed(lhs.editable_cost, rhs.editable_cost);
+	if (cmp != 0) return cmp < 0;
+	if (lhs.objective_unbounded != rhs.objective_unbounded) return lhs.objective_unbounded;
+	if (!lhs.objective_unbounded && lhs.has_objective && rhs.has_objective) {
+		cmp = CompareDisplayed(lhs.objective_value, rhs.objective_value);
+		if (cmp != 0) return maximize ? cmp > 0 : cmp < 0;
+	}
+	return std::lexicographical_compare(lhs.signature.begin(), lhs.signature.end(),
+	                                    rhs.signature.begin(), rhs.signature.end());
+}
+
+static bool EnumerateCombinations(
+    idx_t n, idx_t choose, idx_t start, vector<idx_t> &current,
+    const std::function<bool(const vector<idx_t> &)> &visit) {
+	if (current.size() == choose) {
+		return visit(current);
+	}
+	idx_t needed = choose - current.size();
+	for (idx_t i = start; i + needed <= n; i++) {
+		current.push_back(i);
+		if (!EnumerateCombinations(n, choose, i + 1, current, visit)) {
+			return false;
+		}
+		current.pop_back();
+	}
+	return true;
+}
+
+} // namespace
+
 DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
-	// Build the elastic program — give every relaxable user constraint a non-negative
-	// slack that lets its RHS stretch, and every remove-only `<>` a drop switch. Stage 1
-	// then solves the repair objective lexicographically: minimize removals, then data
-	// offsets, then editable loosening.
 	if (!input.solve_model) {
 		return DecideDiagnostic();
 	}
-
-	// Label the model's columns once: the unreachable-bound scan below and the elastic
-	// readback further down both name clauses over the same user-facing column names.
 	vector<ColumnProvenance> columns =
 	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
 	                          input.global_variable_labels);
-
-	// A bound no assignment can reach (`x >= inf`) is infeasible on its own, and the
-	// elastic engine structurally cannot say so: `wire()` puts the slack on the LHS
-	// (`Ax − s ≤ b`), so `b` is never touched and no finite `s` repairs the row. Left to
-	// the solve it either saturates the slack at the 1e30 sentinel and hands back the
-	// user's own text as the "fix", or returns elastic-infeasible and names nothing.
-	// Recognize it here instead, before the elastic model exists — the finding is the
-	// clause, and there is no edit to offer.
 	auto unreachable = CollectUnreachableClauses(input.model, columns);
 	if (!unreachable.empty()) {
 		return BuildUnreachableBoundDiagnostic(unreachable);
 	}
 
-	ElasticModel elastic =
-	    BuildElasticModel(input.model, input.params.removal_bigm, input.params.slack_scope);
-	const vector<BlockSlackRef> &slacks = elastic.slacks;
-
-	// Nothing actionable: fall through to the static error (the user's only constraints
-	// are rigid structural rows we never edit). I4: a model with removable `<>` rows but
-	// no loosenable slacks is still actionable — only bail when BOTH are empty.
-	if (slacks.empty() && elastic.removals.empty()) {
+	vector<RemovalGroupInfo> groups = CollectRemovalGroups(input.model);
+	if (groups.empty() && BuildElasticModel(input.model, input.params.slack_scope).slacks.empty()) {
 		return DecideDiagnostic();
 	}
-
-	SolverModel stage1_model = elastic.model;
-	vector<TierBudget> budgets;
-	SolverResult stage1;
-	const ElasticRepairTier tier_order[] = {
-	    ElasticRepairTier::REMOVAL,
-	    ElasticRepairTier::DATA_OFFSET,
-	    ElasticRepairTier::EDITABLE_LOOSEN,
-	};
-	for (auto tier : tier_order) {
-		// Skip a tier with no repair knobs: an empty pass would solve a zero-objective
-		// feasibility problem whose result we discard. At least one tier is always
-		// populated (we returned early when both slacks and removals are empty), so the
-		// first surviving pass still detects an elastic-infeasible conflict.
-		if (!TierHasTerms(slacks, elastic.removals, tier)) {
-			continue;
-		}
-		SetTierObjective(stage1_model, slacks, elastic.removals, tier);
-		SolverResult pass = input.solve_model(stage1_model);
-
-		if (pass.status == SolverStatus::INFEASIBLE) {
-			// The elastic program is itself infeasible: the conflict reaches rigid rows.
-			// Only claim that when every user constraint was actually made relaxable — if
-			// the operator punted a multi-instance bound (I2 scope), stay honest and fall
-			// through to the static error rather than wrongly declaring it unfixable.
-			if (input.has_unhandled_user_bounds) {
-				return DecideDiagnostic();
+	for (idx_t cardinality = 0; cardinality <= groups.size(); cardinality++) {
+		vector<idx_t> current;
+		bool found = false;
+		bool aborted = false;
+		RemovalCandidate best;
+		EnumerateCombinations(groups.size(), cardinality, 0, current,
+		                      [&](const vector<idx_t> &selection) {
+			RemovalCandidate candidate = SolveRemovalCandidate(input, columns, groups, selection);
+			if (candidate.status == CandidateStatus::ABORT) {
+				aborted = true;
+				return false;
 			}
-			return BuildElasticInfeasibleDiagnostic();
-		}
-		if (pass.status != SolverStatus::OPTIMAL || pass.solution.empty()) {
+			if (candidate.status == CandidateStatus::INFEASIBLE) {
+				return true;
+			}
+			if (!found || BetterCandidate(candidate, best, input.model.maximize)) {
+				best = std::move(candidate);
+				found = true;
+			}
+			return true;
+		});
+		if (aborted) {
 			return DecideDiagnostic();
 		}
-
-		TierBudget budget = MakeTierBudget(pass.solution, slacks, elastic.removals, tier);
-		AddTierBudgetRow(stage1_model, slacks, elastic.removals, budget);
-		budgets.push_back(budget);
-		stage1 = std::move(pass);
-	}
-
-	// Read the final lexicographic pass's repair support. Label clauses over user-facing
-	// column names (global_variable_labels names aggregate `<>` indicators so a dropped
-	// one is named).
-	vector<ClauseEdit> edits = ReadElasticEdits(slacks, elastic.removals, stage1.solution,
-	                                            input.model, columns, /*snap=*/false,
-	                                            input.params.slack_scope);
-
-	if (edits.empty()) {
-		return DecideDiagnostic();
-	}
-
-	// I3 — stage-2 freeze-budget re-solve. Only when there is a real objective and a
-	// reported repair. Among ALL lexicographically minimal fixes (tier budgets frozen),
-	// re-solve the user's objective and report the best one — the stage-2 slacks become
-	// the edit so the edit and the objective agree.
-	if (HasObjective(input.model) && (HasLoosenEdit(edits) || HasRemoval(edits))) {
-		SolverModel stage2_model = BuildStage2Model(elastic.model, slacks, elastic.removals,
-		                                            input.model, budgets);
-		SolverResult stage2 = input.solve_model(stage2_model);
-
-		if (stage2.status == SolverStatus::OPTIMAL && !stage2.solution.empty()) {
-			// The objective-maximizing minimal fix and the objective it achieves.
-			double achievable = stage2.objective_value;
-			vector<double> repair_solution = std::move(stage2.solution);
-
-			// Stage-2b: when the objective ties between equally-minimal repairs (DROP sets
-			// or loosen edits), reselect the repair by source order so both backends name
-			// the same clause. Keep the stage-2a achievable objective for reporting (the
-			// tie-break's own objective is just the rank-weighted repair sum). Falls back
-			// to the stage-2a repair on skip or non-optimal.
-			SolverModel tiebreak_model = stage2_model;
-			if (BuildTieBreakModel(tiebreak_model, slacks, elastic.removals,
-			                       /*freeze_objective=*/true, achievable)) {
-				SolverResult tiebreak = input.solve_model(tiebreak_model);
-				if (tiebreak.status == SolverStatus::OPTIMAL && !tiebreak.solution.empty()) {
-					repair_solution = std::move(tiebreak.solution);
-				}
-			}
-
-			edits = ReadElasticEdits(slacks, elastic.removals, repair_solution, input.model, columns,
-			                         /*snap=*/true, input.params.slack_scope);
-			if (edits.empty()) {
-				return DecideDiagnostic();
-			}
-			return BuildInfeasibleDiagnostic(edits, FormatNum(SnapDiagnosticValue(achievable)));
+		if (!found) {
+			continue;
 		}
-		if (stage2.status == SolverStatus::UNBOUNDED || stage2.status == SolverStatus::INF_OR_UNBD) {
-			// The minimal fix is valid but the relaxed problem has no finite optimum.
-			// Keep the stage-1 edit and say so.
-			return BuildInfeasibleDiagnostic(edits, /*achievable_objective=*/"",
-			                                 /*unbounded_after_fix=*/true);
+		if (best.edits.empty()) {
+			return DecideDiagnostic();
 		}
-		// Defensive: the stage-1 point satisfies the budget by construction, so stage 2
-		// is feasible. On any other status fall back to the stage-1 edit, no objective.
-	} else {
-		// No stage 2 (no objective, or a data-only repair): a tie between equally-minimal
-		// repairs is still solver-arbitrary, so run the same source-order tie-break
-		// directly on the budget-frozen stage-1 model (every active tier's budget row was
-		// appended as the lexicographic ladder ran). Falls back to the stage-1 edit on
-		// skip or non-optimal.
-		SolverModel tiebreak_model = stage1_model;
-		if (BuildTieBreakModel(tiebreak_model, slacks, elastic.removals,
-		                       /*freeze_objective=*/false, 0.0)) {
-			SolverResult tiebreak = input.solve_model(tiebreak_model);
-			if (tiebreak.status == SolverStatus::OPTIMAL && !tiebreak.solution.empty()) {
-				vector<ClauseEdit> tie_edits =
-				    ReadElasticEdits(slacks, elastic.removals, tiebreak.solution, input.model,
-				                     columns, /*snap=*/false, input.params.slack_scope);
-				if (!tie_edits.empty()) {
-					edits = std::move(tie_edits);
-				}
-			}
+		if (best.objective_unbounded) {
+			return BuildInfeasibleDiagnostic(best.edits, "", /*unbounded_after_fix=*/true);
 		}
+		return BuildInfeasibleDiagnostic(
+		    best.edits,
+		    best.has_objective ? FormatNum(SnapDiagnosticValue(best.objective_value)) : string());
 	}
-	return BuildInfeasibleDiagnostic(edits);
+	return input.has_unhandled_user_bounds ? DecideDiagnostic() : BuildElasticInfeasibleDiagnostic();
 }
 
 } // namespace duckdb

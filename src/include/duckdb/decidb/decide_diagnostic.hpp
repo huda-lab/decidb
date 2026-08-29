@@ -130,9 +130,6 @@ struct DecideDiagParams {
 	double escape_rate = 0.8;       //!< report groups with rate ≥ this
 	double categorical_ratio = 0.1; //!< column is categorical if distinct ≤ ratio×N
 	idx_t min_categories = 20;       //!< …or ≤ this absolute floor (small tables)
-	//! Big-M (M₂) used by the infeasible engine to neutralize a dropped `<>` (I4).
-	//! 0 = auto-derive per clause from its existing disjunction Big-M (the usual case).
-	double removal_bigm = 0.0;
 	//! Infeasible slack-scope policy (T3). "query" (default): one slack per SQL-level
 	//! knob — a data-backed RHS (`x <= col`) reports a virtual query offset
 	//! (`x <= col + delta`) plus a conflict profile row. "expanded": one slack per emitted
@@ -301,7 +298,7 @@ DecideDiagnostic TakeDecideDiagnostic(ClientContext &context);
 //===----------------------------------------------------------------------===//
 
 //! Register the sticky DECIDE session settings: the unbounded-characterization knobs,
-//! the infeasible slack scope and removal Big-M, and the L0 tolerance. Called once at
+//! the infeasible slack scope and the L0 tolerance. Called once at
 //! DBConfig setup; each set-callback validates its value so a typo fails fast at SET
 //! time.
 void RegisterDecideDiagnosticOptions(DBConfig &config);

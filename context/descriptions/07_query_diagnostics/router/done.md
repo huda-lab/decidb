@@ -105,7 +105,7 @@ solve callback), and calls `DiagnoseInfeasible`. A valid diagnosis is reported a
 findings; a helper-solve timeout or a declined diagnosis reports an `undiagnosed` finding
 saying which it was. A residual `INF_OR_UNBD` (empty ray) is normalized to `INFEASIBLE`
 here first. The engine itself — the elastic program,
-per-shape slack placement, removal dial, and stage-2 achievable objective — is
+per-shape slack placement, exact atomic DROP, and stage-2 achievable objective — is
 documented in `infeasible/done.md`.
 
 ## Not a terminal: the time limit

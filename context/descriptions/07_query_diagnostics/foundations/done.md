@@ -445,10 +445,8 @@ this section is the mechanics.
   `diagnose_decide_min_categories` (all in `RegisterDecideDiagnosticOptions`).
   The infeasible engine populates clause/model rows (`BuildInfeasibleDiagnostic` —
   see `infeasible/done.md`) for loosen/drop edits and achievable-objective
-  metadata. It adds two more options: `diagnose_decide_removal_bigm` (DOUBLE,
-  default `0` = auto-derive, `>= 0`) — the Big-M used to neutralize a dropped `<>`
-  in the I4 removal dial, threaded via `DecideDiagParams::removal_bigm`; and
-  `diagnose_decide_infeasible_slack_scope` (VARCHAR, `query` default / `expanded`)
+  metadata. It adds `diagnose_decide_infeasible_slack_scope` (VARCHAR, `query`
+  default / `expanded`)
   — the T3 slack-scope policy selecting a folded SQL-level edit vs. the per-row /
   per-group profile, threaded via `DecideDiagParams::slack_scope` (see
   `infeasible/done.md`).

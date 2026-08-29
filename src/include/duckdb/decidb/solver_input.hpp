@@ -272,6 +272,8 @@ struct EvaluatedConstraint {
     //! Stable user-clause identity retained when one cast comparison expands to
     //! multiple boundary rows.
     idx_t source_clause_id = DConstants::INVALID_INDEX;
+    //! Atomic DROP identity. Every descendant row with the same id is omitted together.
+    idx_t removal_group_id = DConstants::INVALID_INDEX;
     //! Elastic grouping identity. Kept separate because one source comparison can
     //! produce multiple independently repairable rows/directions.
     idx_t repair_group_id = DConstants::INVALID_INDEX;
@@ -349,6 +351,8 @@ struct BilinearLinkSpec {
     idx_t aux_idx;       //!< auxiliary variable w
     idx_t bool_var_idx;  //!< Boolean variable b
     idx_t other_var_idx; //!< non-Boolean variable x
+    idx_t source_clause_id = DConstants::INVALID_INDEX;
+    idx_t removal_group_id = DConstants::INVALID_INDEX;
 };
 
 //! Links an ABS auxiliary to its binary sign indicator. Stage 05 emits the two
@@ -426,6 +430,7 @@ struct GeneralConstraintSpec {
     //! has to be nameable.
     idx_t source_clause_id = DConstants::INVALID_INDEX;
     idx_t repair_group_id = DConstants::INVALID_INDEX;
+    idx_t removal_group_id = DConstants::INVALID_INDEX;
 };
 
 //! Input for the deterministic solver
@@ -530,8 +535,8 @@ struct SolverInput {
     //! free continuous column from creeping back in as the accidental default.
     vector<bool> global_bounds_unbounded;
     //! Parallel to `global_variable_types`. Clause text for a `<>` indicator
-    //! global (e.g. "(SUM(x) <> 5)"), so the infeasible removal dial can name a
-    //! dropped aggregate `<>`; empty for every other global aux (MIN/MAX,
+    //! global (e.g. "(SUM(x) <> 5)"), so diagnostics can name an aggregate
+    //! `<>`; empty for every other global aux (MIN/MAX,
     //! McCormick, …). Surfaced via BuildColumnProvenance onto the global column.
     vector<string> global_variable_labels;
 
@@ -546,9 +551,10 @@ struct SolverInput {
         ElasticShape shape = ElasticShape::UNSET;
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t repair_group_id = DConstants::INVALID_INDEX;
+        idx_t removal_group_id = DConstants::INVALID_INDEX;
         //! Flat column of the `<>` disjunction binary this row belongs to (mirrors
-        //! ConstraintProvenance::indicator_col). Set at the `<>` sites so the infeasible
-        //! removal dial groups the rows of one clause; INVALID otherwise.
+        //! ConstraintProvenance::indicator_col). This describes the disjunction;
+        //! `removal_group_id` independently groups all descendants for DROP.
         idx_t indicator_col = DConstants::INVALID_INDEX;
         //! PER/WHEN group id, its printable key, the reducer qualifier text, and whether
         //! the clause's LHS was an aggregate — the display half of the provenance every
@@ -578,9 +584,8 @@ struct SolverInput {
     //! constraints the pair goes down as written; on one that does not,
     //! `LowerDecideConstructs` turns each half into an ordinary matrix row with a Big-M
     //! that switches it. Holding the row itself — rather than a description of one — is
-    //! what makes that lowering a rewrite of one field, and what keeps infeasible
-    //! diagnosis reaching the clause either way: the removal dial walks these alongside
-    //! the matrix rows.
+    //! what makes that lowering a rewrite of one field. Exact grouped omission filters
+    //! these alongside matrix rows, quadratic rows, and native general constraints.
     struct IndicatorConstraintSpec {
         int binary_column = -1;
         int binary_value = 1;
@@ -597,7 +602,7 @@ struct SolverInput {
 
     //! Diagnosis text of each `<>` clause (`SUM(x) <> 0`), indexed by
     //! `EvaluatedConstraint::ne_clause_idx`. Names the disjunction binary, so the
-    //! infeasible removal dial can label the edit that drops the clause.
+    //! diagnostics and model inspection can label the clause.
     vector<string> ne_clause_labels;
 
     //! Constructs left native for the backend, in flat columns. Emitted at stage 08

@@ -183,17 +183,22 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<idx_t>(205, "num_auxiliary_vars", num_auxiliary_vars);
 	serializer.WritePropertyWithDefault<vector<string>>(207, "ne_clause_labels", ne_clause_labels);
 	serializer.WritePropertyWithDefault<vector<string>>(208, "minmax_clause_labels", minmax_clause_labels);
-	// Serialize bilinear_links as three parallel vectors (aux_idx, bool_var_idx, other_var_idx)
+	// Serialize bilinear_links as parallel vectors. Provenance belongs to the link because
+	// its McCormick rows do not exist until execution-time bounds are known.
 	{
-		vector<idx_t> bl_aux, bl_bool, bl_other;
+		vector<idx_t> bl_aux, bl_bool, bl_other, bl_source, bl_removal;
 		for (auto &link : bilinear_links) {
 			bl_aux.push_back(link.aux_idx);
 			bl_bool.push_back(link.bool_var_idx);
 			bl_other.push_back(link.other_var_idx);
+			bl_source.push_back(link.source_clause_id);
+			bl_removal.push_back(link.removal_group_id);
 		}
 		serializer.WritePropertyWithDefault<vector<idx_t>>(225, "bilinear_link_aux", bl_aux);
 		serializer.WritePropertyWithDefault<vector<idx_t>>(226, "bilinear_link_bool", bl_bool);
 		serializer.WritePropertyWithDefault<vector<idx_t>>(227, "bilinear_link_other", bl_other);
+		serializer.WritePropertyWithDefault<vector<idx_t>>(249, "bilinear_link_source", bl_source);
+		serializer.WritePropertyWithDefault<vector<idx_t>>(250, "bilinear_link_removal", bl_removal);
 	}
 	serializer.WritePropertyWithDefault<vector<bool>>(228, "is_boolean_var", is_boolean_var);
 	serializer.WritePropertyWithDefault<double>(229, "objective_constant_offset", objective_constant_offset);
@@ -306,17 +311,26 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<idx_t>(205, "num_auxiliary_vars", result->num_auxiliary_vars);
 	deserializer.ReadPropertyWithDefault<vector<string>>(207, "ne_clause_labels", result->ne_clause_labels);
 	deserializer.ReadPropertyWithDefault<vector<string>>(208, "minmax_clause_labels", result->minmax_clause_labels);
-	// Deserialize bilinear_links from three parallel vectors
+	// Deserialize bilinear_links from parallel vectors. Older plans omit provenance.
 	{
-		vector<idx_t> bl_aux, bl_bool, bl_other;
+		vector<idx_t> bl_aux, bl_bool, bl_other, bl_source, bl_removal;
 		deserializer.ReadPropertyWithDefault<vector<idx_t>>(225, "bilinear_link_aux", bl_aux);
 		deserializer.ReadPropertyWithDefault<vector<idx_t>>(226, "bilinear_link_bool", bl_bool);
 		deserializer.ReadPropertyWithDefault<vector<idx_t>>(227, "bilinear_link_other", bl_other);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(249, "bilinear_link_source", bl_source);
+		deserializer.ReadPropertyWithDefault<vector<idx_t>>(250, "bilinear_link_removal", bl_removal);
+		D_ASSERT(bl_aux.size() == bl_bool.size() && bl_aux.size() == bl_other.size());
 		for (idx_t i = 0; i < bl_aux.size(); i++) {
 			LogicalDecide::BilinearLink link;
 			link.aux_idx = bl_aux[i];
 			link.bool_var_idx = bl_bool[i];
 			link.other_var_idx = bl_other[i];
+			if (i < bl_source.size()) {
+				link.source_clause_id = bl_source[i];
+			}
+			if (i < bl_removal.size()) {
+				link.removal_group_id = bl_removal[i];
+			}
 			result->bilinear_links.push_back(link);
 		}
 	}

@@ -272,12 +272,21 @@ static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery_
 //! one-to-many rewrites but is never used to group elastic slacks.
 static constexpr const char *SOURCE_CLAUSE_TAG_PREFIX = "__source_clause_";
 
+//! Source-level identity for clauses that diagnostics may only remove atomically.
+//! Unlike source_clause_id (display provenance) and repair_group_id (elastic slack
+//! grouping), this id means every generated row carrying it is one indivisible DROP.
+static constexpr const char *REMOVAL_GROUP_TAG_PREFIX = "__removal_group_";
+
 //! Parsed-source fragment identity for casts and scalar subqueries whose spelling
 //! cannot be reconstructed after binding/PlanSubqueries.
 static constexpr const char *SOURCE_FRAGMENT_TAG_PREFIX = "__source_fragment_";
 
 inline string MakeSourceClauseTag(idx_t source_clause_id) {
 	return string(SOURCE_CLAUSE_TAG_PREFIX) + to_string(source_clause_id) + "__";
+}
+
+inline string MakeRemovalGroupTag(idx_t removal_group_id) {
+	return string(REMOVAL_GROUP_TAG_PREFIX) + to_string(removal_group_id) + "__";
 }
 
 inline string MakeSourceFragmentTag(idx_t fragment_id) {
@@ -295,6 +304,10 @@ inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, id
 
 inline bool TryParseSourceClauseTag(const string &alias, idx_t &source_clause_id) {
 	return TryParseDecideIndexTag(alias, SOURCE_CLAUSE_TAG_PREFIX, source_clause_id);
+}
+
+inline bool TryParseRemovalGroupTag(const string &alias, idx_t &removal_group_id) {
+	return TryParseDecideIndexTag(alias, REMOVAL_GROUP_TAG_PREFIX, removal_group_id);
 }
 
 inline bool TryParseSourceFragmentTag(const string &alias, idx_t &fragment_id) {

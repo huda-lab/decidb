@@ -72,7 +72,11 @@ class TestDiagnoseIsTheOnlyTrigger:
         """`diagnose_decide` and `decide_on_timeout` decided *whether* the engine ran.
         The prefix does that now, so both are unknown settings."""
         cli = request.getfixturevalue(cli_fixture)
-        for pragma in ("diagnose_decide='auto'", "decide_on_timeout='error'"):
+        for pragma in (
+            "diagnose_decide='auto'",
+            "decide_on_timeout='error'",
+            "diagnose_decide_removal_bigm=1e7",
+        ):
             out = _combined(cli.execute_raw(f"PRAGMA {pragma};"))
             assert "unrecognized configuration parameter" in out, pragma
 
@@ -86,7 +90,6 @@ class TestDiagnoseIsTheOnlyTrigger:
             "diagnose_decide_escape_rate=0.5",
             "diagnose_decide_categorical_ratio=0.25",
             "diagnose_decide_min_categories=10",
-            "diagnose_decide_removal_bigm=1e7",
             "decide_l0_tolerance=1e-3",
         ):
             out = _combined(cli.execute_raw(f"PRAGMA {pragma}; SELECT 1 AS ok;"))

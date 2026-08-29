@@ -86,6 +86,8 @@ struct DecideConstraint {
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 	//! Stable origin in LogicalDecide::constraint_sources.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	//! Atomic DROP identity, independent of display and elastic grouping provenance.
+	idx_t removal_group_id = DConstants::INVALID_INDEX;
 
 	// Bilinear terms in constraint (non-Boolean pairs left by optimizer)
 	vector<BilinearConstraintTerm> bilinear_terms;

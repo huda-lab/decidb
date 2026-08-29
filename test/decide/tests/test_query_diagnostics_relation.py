@@ -1378,8 +1378,8 @@ class TestDiagnosticsRelation:
             _resolve_objective(cli, sql, [drop_sql], ["x"]))
 
     @pytest.mark.parametrize("objective, expected_drop, drop_sql, expected_objective", [
-        ("MINIMIZE SUM(x)", "sum(x) <> 0", "SUM(x) <> 0", "0"),
-        ("MAXIMIZE SUM(x)", "sum(x) <> 1", "SUM(x) <> 1", "1"),
+        ("MINIMIZE SUM(x)", "SUM(x) <> 0", "SUM(x) <> 0", "0"),
+        ("MAXIMIZE SUM(x)", "SUM(x) <> 1", "SUM(x) <> 1", "1"),
     ])
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_aggregate_ne_must_drop_is_named_and_objective_best(
@@ -1478,26 +1478,131 @@ class TestDiagnosticsRelation:
             _resolve_objective(cli, sql, expected_drops, ["x", "y"]))
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_removal_bigm_pragma_override_and_validation(self, request, cli_fixture):
-        """The removal Big-M is pragma-tunable with an auto default: a positive override
-        yields the same drop on the must-drop query, and a negative value is rejected at
-        SET time."""
+    @pytest.mark.parametrize("domain", ["(2)", "(2, 3)"])
+    @pytest.mark.parametrize("when", ["", " WHEN id = 1"])
+    def test_infeasible_in_formulation_is_one_atomic_drop(
+        self, request, cli_fixture, domain, when
+    ):
+        """Singleton, multi-value, negative, and WHEN-wrapped IN formulations are
+        source-level remove-only groups. Cardinality/linking/absorbed-floor rows never
+        surface separately and always disappear together."""
+        cli = request.getfixturevalue(cli_fixture)
+        clause = f"b IN {domain}{when}"
+        sql = (
+            "SELECT id, b FROM (VALUES (1)) t(id) DECIDE b(BOOL) "
+            f"SUCH THAT SUM(b) >= 0 AND {clause} MAXIMIZE SUM(b)"
+        )
+        result = _diagnose(cli, sql)
+        assert not _errors(result), result.stderr
+        rows = _rows(result)
+        edits = _clause_edits(rows)
+        assert edits == [{"subject": clause, "edit_kind": "drop"}], rows
+        fixed_sql = _apply_reported_fix(cli, sql, rows)
+        assert float(_attrs(rows, "model", "NULL")["achievable_objective"]) == pytest.approx(
+            _resolve_objective(cli, fixed_sql, [], ["b"])
+        )
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_negative_in_group_participates_in_atomic_choice(self, request, cli_fixture):
+        """A negative IN formulation (including its absorbed floor) is one candidate.
+        Against a disjoint positive IN, MAXIMIZE selects dropping the negative clause."""
+        cli = request.getfixturevalue(cli_fixture)
+        negative = "x IN (-2, -3)"
+        sql = (
+            "SELECT x FROM (VALUES (1)) t(id) DECIDE x(INT) "
+            f"SUCH THAT {negative} AND x IN (1, 2) MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        assert not _errors(result), result.stderr
+        rows = _rows(result)
+        assert _clause_edits(rows) == [{"subject": negative, "edit_kind": "drop"}], rows
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "clause",
+        [
+            "norm(b, 0, 10) >= 2",
+            "norm(b, 0) = 2",
+            "norm(b, 0, 10) <= -1",
+        ],
+    )
+    def test_infeasible_l0_formulation_is_one_atomic_drop(
+        self, request, cli_fixture, clause
+    ):
+        """Explicit/auto L0 and <=/>=/= outer comparisons drop the source clause,
+        never one indicator/link/envelope row and never a LOOSEN amount."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT x <> 0 AND x <> 1 MINIMIZE SUM(x)"
+            "SELECT b FROM (VALUES (1)) t(id) DECIDE b(BOOL) "
+            f"SUCH THAT SUM(b) >= 0 AND {clause} MAXIMIZE SUM(b)"
         )
-        # A positive override still produces exactly one drop.
-        override = _diagnose_relation.run(
-            cli, sql, pragmas="PRAGMA diagnose_decide_removal_bigm=1e7;\n"
-        )
-        rows = _rows(override)
-        drops = [r for r in rows if r["attribute"] == "edit_kind" and r["value"] == "drop"]
-        assert len(drops) == 1, rows
+        result = _diagnose(cli, sql)
+        assert not _errors(result), result.stderr
+        rows = _rows(result)
+        edits = _clause_edits(rows)
+        assert len(edits) == 1, rows
+        assert edits[0]["edit_kind"] == "drop"
+        assert "NORM" in edits[0]["subject"].upper()
+        assert "amount" not in edits[0]
+        _apply_reported_fix(cli, sql, rows, {edits[0]["subject"]: clause})
 
-        # A negative value is rejected at SET time.
-        bad = cli.execute_script("PRAGMA diagnose_decide_removal_bigm=-1;\nSELECT 1;\n")
-        assert "removal_bigm" in bad.stderr.lower()
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_objective_l0_is_not_removable(self, request, cli_fixture):
+        """An L0 marker in the objective is not a constraint repair group."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT b FROM (VALUES (1)) t(id) DECIDE b(BOOL) "
+            "SUCH THAT b <= 0 AND SUM(b) >= 1 MAXIMIZE norm(b, 0, 10)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert not [e for e in _clause_edits(rows) if e["edit_kind"] == "drop"], rows
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_l0_removal_survives_composed_minmax_extraction(self, request, cli_fixture):
+        """A comparison containing L0 keeps one DROP identity when composed MIN/MAX
+        extraction replaces the source tree with an execution-time auxiliary block."""
+        cli = request.getfixturevalue(cli_fixture)
+        clause = "norm(b, 0, 10) + MAX(x) >= 3"
+        sql = (
+            "SELECT b, x FROM (VALUES (1)) t(id) DECIDE b(BOOL), x(BOOL) "
+            f"SUCH THAT {clause} MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+        assert not _errors(result), result.stderr
+        rows = _rows(result)
+        edits = _clause_edits(rows)
+        assert len(edits) == 1, rows
+        assert edits[0]["edit_kind"] == "drop"
+        assert "NORM" in edits[0]["subject"].upper()
+        assert "MAX" in edits[0]["subject"].upper()
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_prepared_l0_bilinear_removal_metadata_survives_replay(
+        self, request, cli_fixture
+    ):
+        """The serialized BilinearLink keeps source/removal provenance for the
+        execution-time McCormick descendants inside an L0 group."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT b, x FROM (VALUES (1)) t(id) DECIDE b(BOOL), x(INT) "
+            "SUCH THAT x <= 1 AND norm(b * x, 0, 10) >= 2 MAXIMIZE SUM(x)"
+        )
+        out = cli.execute_script(
+            ".mode csv\n"
+            f"PREPARE atomic_drop AS DIAGNOSE {sql};\n"
+            "EXECUTE atomic_drop;\n"
+            "EXECUTE atomic_drop;\n"
+        )
+        assert not _errors(out), out.stderr
+        assert out.stdout.count("remove this clause") == 2, out.stdout
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_removal_bigm_pragma_is_gone(self, request, cli_fixture):
+        """Exact grouped omission has no diagnostic Big-M to tune."""
+        cli = request.getfixturevalue(cli_fixture)
+        out = cli.execute_script("PRAGMA diagnose_decide_removal_bigm=1e7;\nSELECT 1;\n")
+        assert "unrecognized configuration parameter" in out.stderr.lower()
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_slack_scope_pragma_validation(self, request, cli_fixture):

@@ -704,13 +704,11 @@ one `EvaluatedConstraint` across every row, so a mixed verdict would mean splitt
 up to three constraints with complementary row masks; instead the verdict must be unanimous
 across active rows, and a mixed one keeps the disjunction unsplit.
 
-A collapsed row **still allocates its binary**, appearing in no row. That column is what
-carries the clause's text and what groups the clause's rows for the remove-only `<>`
-repair, so diagnosis reads the same whichever shape a clause received — it must still be
-offered as a `<>` to drop rather than as a bound the user can nudge. The removal engine
-falls back to a range-derived `M₂` when it finds no indicator coefficient to read one
-from; without that fallback the group would get a coefficient of 0 and the removal would
-be offered but inert. A row dropped as a tautology allocates nothing at all.
+A collapsed row **still allocates its binary**, appearing in no row, because the ordinary
+formulation keeps the same column layout across equivalent `<>` shapes. Atomic DROP no
+longer depends on that column: the source comparison's `removal_group_id` is propagated to
+every emitted descendant and the diagnostic candidate physically omits the whole group.
+A row dropped as a tautology allocates nothing at all.
 
 **Aggregate spellings expand per group.** They need one binary per group rather than per
 row, and their LHS is the group's rows summed onto one row, so `ExpandAggregateNotEqual`
@@ -848,16 +846,14 @@ no Big-M, and they carry the clause provenance the elastic engine reads.
 ### Indicator constraints — a row, conditioned
 
 `SolverModel::indicator_constraints` is the second native list, and it exists because
-`<>` needs something general constraints cannot give: a **row**.
+`<>` is naturally a conditional **row**, not a result-column relationship.
 
-A `<>` clause has no row of its own. Its two disjunction rows *are* the clause, both
-`USER_MECHANISM`, and dropping them is the only repair infeasible diagnosis can offer
-for it. Expressed as a general constraint the clause would vanish from the matrix
-entirely and become undiagnosable. A conditional row — `binary == value` implies this
-row — keeps the row, so the removal dial wires its `w` into the implied row exactly as
-it does into a matrix row, and the diagnosis is unchanged. That is why the two lists are
-separate rather than one list with a kind: the difference is not vocabulary, it is
-whether a row exists.
+A `<>` clause has no scalar row of its own. Its two disjunction rows *are* the clause, both
+`USER_MECHANISM`; a conditional row — `binary == value` implies this row — states that
+semantic form directly. Exact grouped removal filters the indicator representation with
+the same `removal_group_id` used for matrix, quadratic, and native-general constraints.
+That is why the two native lists remain separate: one relates columns, the other conditions
+a row.
 
 `SolverInput::IndicatorConstraintSpec` therefore **holds a `RawConstraint`** rather than
 restating its fields. A conditional row and the matrix row it lowers to are the same row

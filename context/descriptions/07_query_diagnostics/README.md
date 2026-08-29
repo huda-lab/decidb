@@ -67,13 +67,10 @@ too-open one.
 - **Solver-agnostic** — everything works on Gurobi and HiGHS. We build the
   elastic model in our own model builder so both backends solve it natively;
   Gurobi `feasRelax` is an *accelerator*, never a dependency.
-- **A native construct must still be reachable** — when a backend expresses a construct
-  itself, the rows it would have produced are gone, and so is anything diagnosis could
-  slacken. That is why `<>` is stated with *indicator constraints* rather than a general
-  constraint: an indicator constraint still carries a row, so the remove-only dial wires
-  its binary into the implied row exactly as into a matrix row and the diagnosis is
-  unchanged. ABS and MIN/MAX lose only structural rows — the user's own clause row
-  survives either way — so the choice only bites where the clause *is* its encoding.
+- **A native construct must still be reachable** — every matrix, quadratic, indicator,
+  and native-general descendant of a drop-only source clause carries the same
+  `removal_group_id`. Diagnosis removes that complete group before solving a candidate,
+  so native and lowered formulations have the same repair semantics.
 - **A repair the model cannot represent is a repair the diagnosis cannot offer** — the
   cost of the bullet above, stated plainly. The rows a lowering emits are sized from the
   decision box *as the query states it*, and the elastic engine repairs by **widening**

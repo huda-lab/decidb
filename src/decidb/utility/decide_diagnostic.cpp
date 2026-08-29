@@ -43,14 +43,6 @@ static void MinCategoriesSetCallback(ClientContext &context, SetScope scope, Val
 	}
 }
 
-static void RemovalBigMSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
-	double v = parameter.GetValue<double>();
-	if (!(v >= 0.0)) {
-		throw InvalidInputException(
-		    "diagnose_decide_removal_bigm must be >= 0 (0 = auto); got " + parameter.ToString() + ".");
-	}
-}
-
 static bool IsValidSlackScope(const string &scope) {
 	return scope == "query" || scope == "expanded";
 }
@@ -101,13 +93,6 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "Unbounded diagnosis: absolute floor on the categorical distinct-value cap, so small "
 	    "tables still qualify when ratio × num_rows rounds below a few. Default 20.",
 	    LogicalType::BIGINT, Value::BIGINT(20), MinCategoriesSetCallback);
-	// Infeasible diagnosis: removal Big-M for dropping a `<>` (I4 L0 / removal dial).
-	config.AddExtensionOption(
-	    "diagnose_decide_removal_bigm",
-	    "Infeasible diagnosis: the Big-M used to neutralize a dropped `<>` constraint when "
-	    "diagnosing which clause to remove. 0 (default) auto-derives a sufficient value per "
-	    "clause from its existing formulation; set a positive value only to override. >= 0.",
-	    LogicalType::DOUBLE, Value::DOUBLE(0.0), RemovalBigMSetCallback);
 	config.AddExtensionOption(
 	    "diagnose_decide_infeasible_slack_scope",
 	    "Infeasible diagnosis: slack granularity. query (default): one edit per SQL-level knob "
@@ -150,10 +135,6 @@ DecideDiagParams GetDecideDiagnosticParams(ClientContext &context) {
 	if (context.TryGetCurrentSetting("diagnose_decide_min_categories", value) && !value.IsNull()) {
 		auto v = value.GetValue<int64_t>();
 		params.min_categories = v < 1 ? 1 : (idx_t)v;
-	}
-	if (context.TryGetCurrentSetting("diagnose_decide_removal_bigm", value) && !value.IsNull()) {
-		double v = value.GetValue<double>();
-		params.removal_bigm = v < 0.0 ? 0.0 : v;
 	}
 	if (context.TryGetCurrentSetting("diagnose_decide_infeasible_slack_scope", value) && !value.IsNull()) {
 		// The set-callback validates/normalizes; default to "query" defensively on any

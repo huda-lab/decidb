@@ -529,7 +529,7 @@ slice's size; otherwise it is the variable's total row- or entity-instance count
 | `virtual_offset`       | a synthetic offset over a data-backed RHS (`x <= col + delta`)    |
 | `expanded_row`         | one emitted row's own overshoot (`expanded` slack scope)          |
 | `expanded_group`       | one `PER` group's own overshoot (`expanded` slack scope)          |
-| `remove_only`          | a `<>` that cannot be loosened, only deleted                      |
+| `remove_only`          | a clause that cannot be loosened, only deleted (`<>`, `IN`, L0)   |
 | `unreachable_bound`    | a bound no assignment can reach (`x >= inf`)                      |
 | `rigid_conflict`       | loosening the clauses you wrote cannot restore feasibility        |
 | `runaway_+inf` / `-inf`| a decision growing without bound, and which way                   |
@@ -577,7 +577,6 @@ them starts or suppresses it.
 | `diagnose_decide_escape_rate`               | report a categorical slice when its within-group escape rate is at least this (default 0.8).      |
 | `diagnose_decide_categorical_ratio`         | treat a column as categorical when distinct values ≤ ratio × rows (default 0.1).                  |
 | `diagnose_decide_min_categories`            | absolute floor on that cap, so small tables still qualify (default 20).                           |
-| `diagnose_decide_removal_bigm`              | override the Big-M used to neutralize a dropped `<>` (0 = auto-derive).                           |
 
 ### 8.5 A slow solve is not a diagnosis
 

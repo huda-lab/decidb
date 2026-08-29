@@ -47,6 +47,9 @@ public:
 private:
 	//! Apply all DECIDE optimization passes to a LogicalDecide node
 	void OptimizeDecide(LogicalDecide &decide);
+	//! Before any one-to-many rewrite, assign written-order identities to source clauses
+	//! whose formulations may only be removed as an atomic diagnostic repair.
+	void TagAtomicRemovalGroups(LogicalDecide &decide);
 
 	//! Lower NORM markers before ABS/MINMAX sees their generated expressions.
 	void RewriteNorm(LogicalDecide &decide);

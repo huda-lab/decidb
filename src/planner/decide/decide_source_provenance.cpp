@@ -18,6 +18,15 @@
 
 namespace duckdb {
 
+//! Spell a comparison the way DECIDE documents it. `ExpressionTypeToOperator` renders
+//! not-equal as `!=`, but every other user-facing DECIDE surface -- the syntax
+//! reference, `ne_clause_labels`, the binder's own messages -- writes `<>`. A repair
+//! quotes this text straight back as SQL the user is meant to recognize, so the one
+//! spelling wins here too.
+static string DecideComparisonOperator(ExpressionType type) {
+	return type == ExpressionType::COMPARE_NOTEQUAL ? "<>" : ExpressionTypeToOperator(type);
+}
+
 void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments) {
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) {
 		TagDecideSourceFragments(child, fragments);
@@ -154,7 +163,7 @@ static string RenderSource(const Expression &expr, const vector<string> &fragmen
 		return RenderSource(*expr.Cast<BoundCastExpression>().child, fragments, entity_scopes);
 	case ExpressionClass::BOUND_COMPARISON: {
 		auto &cmp = expr.Cast<BoundComparisonExpression>();
-		return RenderSource(*cmp.left, fragments, entity_scopes) + " " + ExpressionTypeToOperator(cmp.type) + " " +
+		return RenderSource(*cmp.left, fragments, entity_scopes) + " " + DecideComparisonOperator(cmp.type) + " " +
 		       RenderSource(*cmp.right, fragments, entity_scopes);
 	}
 	case ExpressionClass::BOUND_CONJUNCTION: {
@@ -316,7 +325,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       ConstraintSourceInfo info;
 		                       info.written_lhs = RenderSource(*cmp.left, fragments, entity_scopes);
 		                       info.written_rhs = RenderSource(*cmp.right, fragments, entity_scopes);
-		                       info.written_cmp = ExpressionTypeToOperator(cmp.type);
+		                       info.written_cmp = DecideComparisonOperator(cmp.type);
 		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
 		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
 			                       info.source_lhs = info.written_lhs;
@@ -366,7 +375,7 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 		                       auto &info = sources[source_id];
 		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, entity_scopes);
 		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, entity_scopes);
-		                       info.canonical_cmp = ExpressionTypeToOperator(cmp.type);
+		                       info.canonical_cmp = DecideComparisonOperator(cmp.type);
 		                       info.qualifier = qualifier;
 		                       // The written spelling is only worth carrying when it differs
 		                       // from the canonical one. Two cases retire it here. When both
@@ -472,7 +481,7 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 			if (!info.source_lhs.empty()) {
 				auto &cmp = expr.Cast<BoundComparisonExpression>();
 				PushClause(out, out_source_ids,
-				           info.source_lhs + " " + ExpressionTypeToOperator(cmp.type) + " " + info.source_rhs,
+				           info.source_lhs + " " + DecideComparisonOperator(cmp.type) + " " + info.source_rhs,
 				           leaf_source_id);
 				return;
 			}

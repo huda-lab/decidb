@@ -115,20 +115,19 @@ included.
 I1 fills the seam: on an infeasible solve under `DIAGNOSE`, `DiagnoseInfeasible` builds and
 solves a **second** optimization — the *elastic program* — whose optimum is the
 least-change fix. Each relaxable user constraint gets a non-negative slack that lets its
-RHS stretch; `<>` clauses get binary removal switches. Stage 1 solves the repair in
-lexicographic passes: first minimize removal cardinality, then data-RHS virtual offsets, then
-editable source-literal loosening. A tier with no repair knobs is skipped (no solve) — the
-common editable-only conflict runs a single pass. The final positive repair support names the
-constraints to edit and the slack/switch values are the amounts.
+RHS stretch. Drop-only source clauses are handled outside the elastic program: the engine
+enumerates source-level removal groups by cardinality and physically omits a candidate set
+before elasticizing the retained model. Within one cardinality layer, data-RHS offsets and
+then editable source-literal loosening are minimized lexicographically.
 
 ```
-stage 1R:  R* = min Σ wᵢ                         (remove-only <> switches)
-stage 1D:  D* = min Σ s_data       subject to R ≤ R*
-stage 1E:  E* = min Σ αᵢ s_edit    subject to R ≤ R*, D ≤ D*
+outer:     min |G|                                (omitted source groups)
+stage 1D:  D* = min Σ s_data       for fixed G
+stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
 
            Aᵢ x ≤ bᵢ + sᵢ ,  sᵢ ≥ 0              (relaxable rows + bounds)
-           structural / mechanism rows rigid unless covered by a removal switch
-           →  final repair support names the edits; s*ᵢ / w*ᵢ are the amounts
+           structural / mechanism rows rigid unless their whole group is omitted
+           →  final support names LOOSEN edits; G names amount-less DROP edits
 ```
 
 **Operator / engine split.** The engine is solver-agnostic and free of DuckDB
@@ -201,7 +200,7 @@ flag stays `false` in practice and remains as a defensive guard. Likewise, when 
 relaxable rows at all, the engine returns invalid and the operator reports `undiagnosed`.
 
 **Scope.** The achievable-objective re-solve (**I3**, "stage-2 achievable objective
-(freeze-budget)" below), the L0/removal dial (**I4**, `<>` remove-only), lean
+(freeze-budget)" below), atomic grouped removal (**I4**), lean
 reporting (**I5**), and all per-shape slack placement and unit
 conversion (**I2.a–I2.e**, "per-shape slack placement" below) are shipped.
 
@@ -222,7 +221,7 @@ answers two different user questions with the same engine:
 
 **Mechanism (one folding rule, two block keys).** The policy lives entirely in
 `BuildElasticModel` + `ReadElasticEdits` (`decide_diagnostic_engines.cpp`); the operator and
-the rest of the engine are unchanged. `BuildElasticModel(base, removal_bigm, slack_scope)`:
+the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
 
 - **`folds()`** — a `SHARED_SCALAR` knob always folds; a `PER_ROW_DATA` row folds **only in
   query mode** (in expanded mode its rows stay independent, one slack each).
@@ -596,41 +595,20 @@ reported as their canonical absorbed form; AVG/strict re-quote (single-row SUM k
 `SUM(x) > 10`, including strict quadratic); quadratic and McCormick gated to Gurobi; `<>` and
 McCormick rows stay rigid.
 
-## Elastic engine: L0 / removal dial (`<>` removal)
+## Elastic engine: exact atomic DROP
 
-I4 adds the **removal dial** for clauses that cannot be *loosened*, only *removed* — the
-flagship case is `<>` (not-equal). A `x <> 3` compiles to two rigid `USER_MECHANISM` Big-M
-disjunction rows (`x − M·z ≤ K−1`, `x − M·z ≥ K+1−M`) sharing one binary disjunction
-selector `z`; there is no scalar RHS to stretch, so the loosening passes skip them. I4 lets
-the engine *drop* such a clause and reports it as a `DROP` edit ("Remove `x <> 3`").
+I4 handles clauses that cannot be meaningfully loosened: `<>`, `IN (...)`, and every
+constraint-side comparison containing an L0 `norm`. The optimizer assigns one
+written-order `removal_group_id` to the source comparison before any rewrite. Objective-side
+L0 is deliberately excluded. Every descendant row or native construct copies that identity,
+including IN cardinality/link rows, absorbed-bound re-emission, ABS/McCormick descendants,
+composed MIN/MAX extraction, and backend lowering.
 
-**Scope.** Removal applies to both **per-row `<>`** (`x <> 3`) and **aggregate `<>`**
-(`SUM(x) <> K`). `STRUCTURAL` rows (McCormick links) stay rigid — a definition row cannot be
-meaningfully dropped. The two `<>` shapes differ only in *where* the disjunction binary and
-its label live (per-row = row-scoped column labeled via `var_labels`; aggregate =
-global-block column labeled via the `global_variable_labels` channel — see below); the
-removal mechanic, weighting, and reporting are identical.
-
-**Marker = `ConstraintProvenance::indicator_col`** (`ilp_model.hpp`). A flat-column field set
-at the two `<>` mechanism sites (per-row *and* aggregate), so it does triple duty: it marks a
-row as removable (`!= INVALID`), groups the disjunction pair (rows sharing one `z` = one `<>`
-instance), and sources both the removal Big-M and the label.
-Both spellings set it the same way, because both are now emitted in flat columns by
-`LinearizeNotEqual` (`ilp_linearization.cpp`, stage 06):
-- **Per-row.** One global binary `z` per emitted instance, stamped onto both halves of that
-  row's disjunction — and onto the single row a *collapsed* `<>` becomes, which is what keeps
-  a collapsed clause offered as a `<>` to drop rather than as a bound to nudge.
-- **Aggregate.** One global binary `z` per group, stamped on that group's two rows over the
-  group's summed LHS.
-
-The rows reach the model either as `SolverInput::RawConstraint`s or, where the backend states
-the condition itself, as `IndicatorConstraintSpec`s — which *hold* a `RawConstraint`, so the
-provenance is the same record and not a second copy of the same fields. `ilp_model_builder.cpp`
-propagates `indicator_col` from both lists, so a conditional row groups exactly like a matrix
-row.
-
-The previously-INVALID clause_id of these rows is untouched, so no existing clause-id consumer
-is disturbed.
+`source_clause_id`, `repair_group_id`, and `removal_group_id` are separate namespaces:
+display identity does not decide elastic sharing, and neither decides atomic omission.
+Removable descendants remain rigid and receive no slack. A candidate DROP physically filters
+all matching linear, quadratic, indicator, and native-general constraints from a copied
+`SolverModel`; column declarations and the ordinary solve model are unchanged.
 
 **Label channel for global-block columns (aggregate `<>`, composed MIN/MAX).** A per-row `<>`
 indicator is a decide-var column, so `BuildColumnProvenance` already names it from `var_labels`.
@@ -653,44 +631,33 @@ column by forgetting to pad first. The `resize(num_global_vars)` still standing 
 `SolveModel` is therefore a no-op kept as a belt-and-braces assertion of that invariant.
 `BuildColumnProvenance` takes the vector as an optional argument and writes the labels
 onto the global-block columns; the infeasible engine forwards it through
-`InfeasibleDiagnosisInput::global_variable_labels`. The DROP edit then reads
-`columns[indicator_col].label` uniformly for both shapes.
+`InfeasibleDiagnosisInput::global_variable_labels`. DROP labels now come from the source
+registry keyed by `source_clause_id`, with the preserved WHEN/PER qualifier.
 
-**Mechanic (all-or-nothing binary, no separate gate row).** Because `<>` removal is binary,
-`BuildElasticModel` (`decide_diagnostic_engines.cpp`), after the loosening + quadratic
-passes, groups relaxable rows by `indicator_col` and adds **one binary `w` per `<>`**, wired
-into each disjunction row with a `±M₂` coefficient (sign by sense, reusing the slack
-convention: `<` → `−M₂`, `>` → `+M₂`). `w = 1` makes both rows vacuous — the clause is
-dropped. **M₂** defaults to the clause's own disjunction Big-M (`|row coeff on indicator_col|`,
-provably enough to neutralize whichever side `z` selects), overridable by the
-`diagnose_decide_removal_bigm` pragma. The wiring is recorded in a `RemovalRef {rows, w_col,
-indicator_col}` on `ElasticModel`.
+Because that registry is the single source of clause text, it also owns the operator
+spelling. `DecideComparisonOperator` (`decide_source_provenance.cpp`) renders
+`COMPARE_NOTEQUAL` as `<>` rather than DuckDB's default `!=`, so every DECIDE clause
+renderer — written and canonical text, DROP and LOOSEN subjects, EXPLAIN — quotes the
+operator the syntax reference documents and the user typed. Without it a `<>` clause came
+back as `x != 1`, matching neither the query nor the `SUM(x) <> 0` spelling
+`ne_clause_labels` had always used.
 
-**Removal tier (B1/T2).** `w` has no baked-in objective coefficient in the elastic model. Stage
-1 first minimizes `R = Σ wᵢ`, so the support `{i : wᵢ = 1}` is a minimum-cardinality removal
-set before the engine considers data offsets or editable slack. The next passes freeze
-`R = R*`, minimize data offsets `D`, freeze `D = D*`, and finally minimize editable loosening
-`E`. So dropping a `<>` is a last resort without a fixed Big-M-style objective weight.
+**Exact search and ranking.** Groups are enumerated lazily by increasing cardinality. Every
+candidate at the first feasible cardinality is solved; a timeout, `INF_OR_UNBD`, suboptimal
+result, or backend error aborts the layer rather than returning a partial minimum. Candidates
+then compare data-offset cost, editable-loosen cost, objective outcome (a proven unbounded
+objective outranks a finite one), and source order. Display-rounded values are used for the
+user-visible cost/objective comparisons. The original objective is solved only after repair
+budgets are frozen.
 
-**Reading + reporting.** `ReadElasticEdits` reads each `RemovalRef`: `w > 0.5` emits a
-`ClauseEdit{kind = DROP, label = columns[indicator_col].label}` (the F6 `x <> 3` string).
-The F6 label is built by `DiagnosisComparand` (`decide_optimizer.cpp`), which unwraps the
-implicit `CAST` the binder inserts around a literal and drops the outer parens, so the clause
-reads `x <> 1`, not `(x <> CAST(1 AS INTEGER))`. `BuildInfeasibleDiagnostic` renders a DROP as
-one finding with `clause='x <> 3'`, `suggested_change='remove this clause'`, and
-`edit_source='remove_only'`; `amount`, `group`, and `row` are NULL unless the finding has
-expanded identity. A single written `<>` that expands per row has one indicator
-(hence one `RemovalRef`) per row, all sharing the same clause label; `ReadElasticEdits`
-**dedupes DROP edits by label** (a `std::set<string>` of already-emitted labels) so the
-relation carries one DROP per user clause, not one per row. The
-`DiagnoseInfeasible` empty-guard now bails only when **both** slacks and removals are empty,
-so a removal-only model is still diagnosed.
+**Reading + reporting.** Each selected source group produces exactly one
+`ClauseEdit{kind=DROP, edit_source='remove_only'}` with `suggested_change='remove this
+clause'`. DROP has no amount and never exposes an internal cardinality, indicator, ABS,
+McCormick, or extremum row. There is no diagnostic removal Big-M and no removal setting.
 
-**Stage-2 composition (I3).** Stage 2 runs when there is an objective **and** an actionable
-fix (`HasLoosenEdit || HasRemoval`). `BuildStage2Model` freezes the solved tier budgets
-`R ≤ R*`, `D ≤ D*`, and `E ≤ E*`, but does **not** pin individual repair variables. For
-remove-only `<>` clauses, stage 2 (2a) can therefore re-optimize the DROP set under the
-minimum-cardinality removal budget and report the objective-best equally minimal DROP set.
+**Stage-2 composition (I3).** For each fixed omitted group set, stage 2 freezes `D ≤ D*`
+and `E ≤ E*`, restores the user's objective, and computes the achievable result. DROP-set
+selection therefore compares objective outcomes only after cardinality and repair costs.
 
 **Stage-2b rank tie-break (best-effort preference, all repair kinds).** When the repair
 choice is *indifferent* between two equally-minimal repairs — two DROP sets, or an LP that can
@@ -702,11 +669,9 @@ Z*` for MAXIMIZE / `≤ Z*` for MINIMIZE — the rhs is **exact**, no tolerance 
 objective room is monetized by the rank objective, which would shave eps of repair onto a
 lower-ranked slack and split the edit; the stage-2a point attains `Z*` to machine precision,
 and a rounding pathology just makes the pass non-optimal, keeping the stage-2a repair). Then
-minimize the rank-weighted repair sum: each removal `w` gets its 1-based rank, each slack gets
-its tier coefficient (editable slacks: the T1 scale weight) times its 1-based rank, ranks
-ascending in emission order (`removals` by indicator column; `slacks` by row — matrix rows in
-declaration order, then re-emitted absorbed bounds, whose original declaration position is not
-recorded). The tier budget rows carried into the model pin each tier's total, so the pass only
+minimize the rank-weighted slack sum: each slack gets its tier coefficient (editable slacks:
+the T1 scale weight) times its 1-based rank, with ranks ascending in emission order. The tier
+budget rows carried into the model pin each tier's total, so the pass only
 reselects *which* clauses carry the repair and prefers lower-ranked clauses. On the
 **no-objective path** (no
 user objective, or a data-only repair that skips stage 2) the same pass runs directly on the
@@ -729,13 +694,10 @@ single-edit ties, not a cross-backend API guarantee. Tests for unresolved exact 
 assert feasibility after applying the repair, tier-budget optimality, and achievable-objective
 equality rather than requiring the same clause identity from every backend.
 
-**Pragma.** `diagnose_decide_removal_bigm` (DOUBLE, default `0` = auto-derive, `>= 0`,
-`decide_diagnostic.cpp`) threads through `DecideDiagParams::removal_bigm` into
-`BuildElasticModel`.
-
-**Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): a `<>` pair gets one binary
-`w` wired `−M₂`/`+M₂` with zero baked-in objective coefficient and a `RemovalRef`; the pragma
-override replaces M₂; a pinned-`<>` must-drop reports `edit_kind='drop'`; a loosenable
+**Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`) proves removable rows receive
+no elastic slack, physical omission reaches linear/quadratic/indicator/native-general
+representations, and stale build-proven infeasibility is recomputed. A pinned-`<>` must-drop
+reports `edit_kind='drop'`; a loosenable
 conflict prefers the LOOSEN and never drops; an **aggregate `<>`** whose disjunction binary is
 a global-block column is named via the `global_variable_labels` channel (not `var_labels`) and
 reported as a drop. Python differential (`test_query_diagnostics_relation.py`, both backends):
@@ -747,14 +709,16 @@ reported objective differential-checked against an independent re-solve of the f
 per variable (a minimum-cardinality-2 set, differential-checked); an **objective-indifferent
 tie** (`x <> 0 AND x <> 1 AND y ≤ 5 MAXIMIZE SUM(y)`, where the objective only touches the free
 `y`) drops the earliest-declared `x <> 0` on **both** backends — the solver-agnostic tie-break
-guarantee; `x <> 5 AND 5 ≤ x ≤ 5` prefers loosening; the pragma override produces the same drop
-and a negative value is rejected at SET time.
+guarantee; `x <> 5 AND 5 ≤ x ≤ 5` prefers loosening. IN (singleton, multi-value, negative,
+and WHEN-wrapped) and L0 (explicit/auto, directional/equality, composed MIN/MAX, and prepared
+bilinear replay) each report one source-level DROP on both backends; objective L0 is excluded,
+and the removed setting is rejected.
 
 ## Elastic engine: stage-2 achievable objective (freeze-budget)
 
 I3 reports the **achievable objective** the user gets after the minimal fix — and the
-specific edit that achieves it. Stage 1 (above) finds the lexicographically least repair
-budgets `(R*, D*, E*)`, but when that minimum is non-unique it returns an **arbitrary**
+specific edit that achieves it. For each fixed DROP candidate, stage 1 (above) finds the
+lexicographically least repair budgets `(D*, E*)`, but when that minimum is non-unique it returns an **arbitrary**
 minimizer whose edit need not be the one best for the user's objective. Stage 2 is a final
 lexicographic tier: among all fixes within those repair budgets, pick the one that maximizes
 the user's original objective, and report **that** edit so the edit and the objective agree.
@@ -762,8 +726,8 @@ the user's original objective, and report **that** edit so the edit and the obje
 **Method (freeze the budget, not the amounts).** `BuildStage2Model`
 (`decide_diagnostic_engines.cpp`) starts from the stage-1 elastic model (slacks already
 wired) and:
-- adds rigid **budget rows** for every active stage-1 tier: `R ≤ R*` over removal columns,
-  `D ≤ D*` over data-offset slack columns, and `E ≤ E*` over editable slack columns using the
+- adds rigid **budget rows** for every active stage-1 tier: `D ≤ D*` over data-offset slack
+  columns and `E ≤ E*` over editable slack columns using the
   same `ref / rms(Aᵢ)` coefficients as the editable pass. Equality blocks count both
   directional slacks (`s⁺ + s⁻`). The caps are exact stage-1 tier optima; the backend
   feasibility tolerance supplies the only cushion that keeps the re-solve feasible.
@@ -772,12 +736,11 @@ wired) and:
   slack columns set to zero objective weight so the reported objective is exactly `cᵀx` over
   the user's variables. Stage 1 had zeroed and dropped the objective; stage 2 needs it back.
 
-`DiagnoseInfeasible` runs stage 2 only when there is a **real objective** (`HasObjective`)
-**and** a `LOOSEN` or `DROP` edit (`HasLoosenEdit || HasRemoval`): a constant objective has
-nothing to report, so it falls back to the stage-1 edit list unchanged. A data-RHS clause is
-now an actionable `LOOSEN` (a query-mode virtual offset or an expanded per-row edit), so it
-*does* exercise stage 2 and reports an achievable objective — the former data-only carve-out
-(when data reported a non-actionable conflict) is gone.
+`DiagnoseInfeasible` runs stage 2 for every feasible candidate carrying a real objective
+(`HasObjective`). A constant objective has nothing to report, so the candidate keeps its
+stage-1 edit list unchanged. A data-RHS clause is an actionable `LOOSEN` (a query-mode virtual
+offset or an expanded per-row edit), so it also exercises stage 2 and reports an achievable
+objective.
 
 **Reading the result.** On `OPTIMAL`, the stage-2 slacks are re-read into the edit list
 (`ReadElasticEdits`, the shared stage-1/stage-2 reader) and the objective value is reported.

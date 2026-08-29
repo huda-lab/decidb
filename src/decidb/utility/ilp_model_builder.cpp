@@ -203,6 +203,7 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
                                       const string &group_label = string(), double lhs_offset = 0.0) {
     provenance.source_clause_id = eval_const.source_clause_id;
     provenance.repair_group_id = repair_group_id;
+    provenance.removal_group_id = eval_const.removal_group_id;
     provenance.kind = eval_const.kind;
     // A literal RHS is one editable knob shared across every row/group this clause
     // emits (paper §5); a data-derived RHS repairs as a symbolic offset instead.
@@ -217,6 +218,11 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
     }
     if (!group_label.empty()) {
         provenance.group_label = group_label;
+    }
+    if (eval_const.removal_group_id != DConstants::INVALID_INDEX) {
+        // DROP names the whole source clause, including a WHEN/PER wrapper, even when
+        // the formulation row itself is per-row rather than aggregate-shaped.
+        provenance.qualifier = eval_const.qualifier;
     }
 }
 
@@ -1286,6 +1292,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         constr.provenance.shape = raw.shape;
         constr.provenance.source_clause_id = raw.source_clause_id;
         constr.provenance.repair_group_id = raw.repair_group_id;
+        constr.provenance.removal_group_id = raw.removal_group_id;
         // I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
         // removal dial groups the two global rows just like a per-row `<>`.
         constr.provenance.indicator_col = raw.indicator_col;
@@ -1319,6 +1326,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         ic.provenance.shape = spec.row.shape;
         ic.provenance.source_clause_id = spec.row.source_clause_id;
         ic.provenance.repair_group_id = spec.row.repair_group_id;
+        ic.provenance.removal_group_id = spec.row.removal_group_id;
         ic.provenance.indicator_col = spec.row.indicator_col;
         ic.provenance.group_key = spec.row.group_key;
         ic.provenance.group_label = spec.row.group_label;
@@ -1338,6 +1346,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         gc.provenance.kind = ConstraintKind::STRUCTURAL;
         gc.provenance.source_clause_id = spec.source_clause_id;
         gc.provenance.repair_group_id = spec.repair_group_id;
+        gc.provenance.removal_group_id = spec.removal_group_id;
         model.general_constraints.push_back(std::move(gc));
     }
 

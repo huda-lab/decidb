@@ -1265,6 +1265,32 @@ public:
                            ? 0.0
                            : absorbed_lower_bounds[var];
             double U = absorbed_upper_bounds[var];
+            bool has_removable_bound = false;
+            for (const auto &bound : user_absorbed_bounds) {
+                has_removable_bound = has_removable_bound ||
+                                      (bound.decide_var_idx == var &&
+                                       bound.removal_group_id != DConstants::INVALID_INDEX);
+            }
+            if (has_removable_bound) {
+                // A singleton/negative IN lowering can be absorbed into the box. It is
+                // not an independently written bound, and exact diagnosis may omit its
+                // whole source clause, so it must not trigger the pre-solve static bound
+                // error. Reconstruct the box from intrinsic domain plus only retained
+                // (non-removable) bounds; the actual primary solve still receives the
+                // full box and therefore still proves the original query infeasible.
+                double retained_l = is_bool ? 0.0 : ABSORBED_LOWER_UNSET;
+                double retained_u = is_bool ? 1.0 : 1e30;
+                for (const auto &bound : user_absorbed_bounds) {
+                    if (bound.decide_var_idx != var ||
+                        bound.removal_group_id != DConstants::INVALID_INDEX) {
+                        continue;
+                    }
+                    if (bound.sense != '<') retained_l = std::max(retained_l, bound.k);
+                    if (bound.sense != '>') retained_u = std::min(retained_u, bound.k);
+                }
+                L = retained_l <= ABSORBED_LOWER_UNSET ? 0.0 : retained_l;
+                U = retained_u;
+            }
             const string vname = op.decide_variables[var]->GetName();
             const char *domain = is_bool ? "BOOLEAN (0 or 1)" : "non-negative (>= 0)";
             if (U < 0.0 && L >= 0.0) {
@@ -1764,6 +1790,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         eval_const.comparison_type = constraint->comparison_type;
         eval_const.source_clause_id = constraint->source_clause_id;
         eval_const.repair_group_id = c;
+        eval_const.removal_group_id = constraint->removal_group_id;
         // Preserve whether the original LHS was an aggregate (e.g., SUM(...))
         eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
         eval_const.minmax_clause_idx = constraint->minmax_clause_idx;
@@ -2951,8 +2978,9 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.minmax_clause_labels = minmax_clause_labels;
     solver_input.ne_clause_labels = ne_clause_labels;
     for (auto &link : bilinear_links) {
-        solver_input.bilinear_links.push_back(
-            BilinearLinkSpec {link.aux_idx, link.bool_var_idx, link.other_var_idx});
+        solver_input.bilinear_links.push_back(BilinearLinkSpec {
+            link.aux_idx, link.bool_var_idx, link.other_var_idx,
+            link.source_clause_id, link.removal_group_id});
     }
     for (auto &link : abs_maximize_links) {
         solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {link.aux_idx, link.y_idx});
@@ -3203,6 +3231,19 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     const NativeConstructPolicy native_min_max {use_native_constructs.min_max,
                                                 force_native_constructs};
 
+	// A bilinear auxiliary may itself sit inside ABS (notably the reverse link of an
+	// L0 norm). Temporarily expose its exact product box while descendant constructs
+	// derive their own ranges. Restore the declared column box before McCormick emission
+	// so ordinary solve models keep their existing, row-enforced auxiliary bounds.
+	vector<pair<idx_t, pair<double, double>>> bilinear_declared_boxes;
+	bilinear_declared_boxes.reserve(solver_input.bilinear_links.size());
+	for (const auto &link : solver_input.bilinear_links) {
+		bilinear_declared_boxes.push_back(
+		    {link.aux_idx, {solver_input.lower_bounds[link.aux_idx],
+		                    solver_input.upper_bounds[link.aux_idx]}});
+	}
+	DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names);
+
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from
     // column boxes — run them first and an outer MIN/MAX or `<>` over ABS(...) sees an
@@ -3232,6 +3273,10 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     }
 
     // Emit the McCormick envelope for every bilinear w = b * x auxiliary.
+	for (const auto &saved : bilinear_declared_boxes) {
+		solver_input.lower_bounds[saved.first] = saved.second.first;
+		solver_input.upper_bounds[saved.first] = saved.second.second;
+	}
     LinearizeBilinear(solver_input, box, decide_var_names);
 
     // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
@@ -3277,7 +3322,8 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
         auto terms = evaluated.composed_constraints[i].terms;
         LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms,
                                           evaluated.composed_constraints[i].rhs, spec.outer_cmp,
-                                          spec.source_clause_id, decide_var_names, native_min_max);
+                                          spec.source_clause_id, spec.removal_group_id,
+                                          decide_var_names, native_min_max);
     }
     if (!evaluated.composed_objective_terms.empty()) {
         auto terms = evaluated.composed_objective_terms;
@@ -3460,6 +3506,7 @@ static void EmitAbsorbedUserBoundRows(SolverModel &model, const VarIndexer &var_
             row.rhs = b.k;
             row.provenance.source_clause_id = b.source_clause_id;
             row.provenance.repair_group_id = bound_clause_id;
+            row.provenance.removal_group_id = b.removal_group_id;
             row.provenance.group_key = DConstants::INVALID_INDEX;
             row.provenance.kind = ConstraintKind::USER_PARAMETER;
             row.provenance.shape = ElasticShape::SHARED_SCALAR;

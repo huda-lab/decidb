@@ -14,6 +14,7 @@
 #include "duckdb/decidb/ilp_model.hpp"
 
 #include <functional>
+#include <set>
 
 namespace duckdb {
 
@@ -41,8 +42,8 @@ struct InfeasibleDiagnosisInput {
 	const vector<string> &var_labels;
 	const vector<bool> &var_is_aux;
 	//! Clause text for global-block columns (aggregate `<>` indicators), parallel
-	//! to the global block; empty for unnamed globals. Lets the removal dial name a
-	//! dropped aggregate `<>`. Forwarded into BuildColumnProvenance.
+	//! to the global block; empty for unnamed globals. Lets diagnostics name an
+	//! aggregate `<>`. Forwarded into BuildColumnProvenance.
 	const vector<string> &global_variable_labels;
 	const DecideDiagParams &params;
 
@@ -63,7 +64,6 @@ struct InfeasibleDiagnosisInput {
 };
 
 enum class ElasticRepairTier {
-	REMOVAL,
 	DATA_OFFSET,
 	EDITABLE_LOOSEN
 };
@@ -88,44 +88,31 @@ struct BlockSlackRef {
 	bool quadratic = false;
 };
 
-//! A binary removal indicator wired into the rows of one remove-only `<>` clause
-//! (I4). `<>` cannot be loosened — only dropped — so a single binary `w` is wired
-//! into both Big-M disjunction rows with a ±M₂ coefficient (sign by sense): w=1
-//! makes both rows vacuous (the clause is dropped). The pair is identified by a
-//! shared `indicator_col` (the `<>` disjunction binary). The lexicographic stage-1
-//! repair objective minimizes the removal tier first, so removal stays a last resort
-//! without a Big-M-style objective weight.
-struct RemovalRef {
-	vector<idx_t> rows;        //!< Rows of this `<>` disjunction (the pair sharing the indicator).
-	idx_t w_col;               //!< The binary removal column in the elastic model.
-	idx_t indicator_col;       //!< The `<>` disjunction binary — sources the label (resolved later).
-};
-
 //! The elastic program built from a base model: the transformed SolverModel (user
-//! objective zeroed, slacks/removal switches appended) plus the repair-knob wiring needed
+//! objective zeroed, slacks appended) plus the repair-knob wiring needed
 //! to read the result back. Pure function of the base model — the structural test
 //! seam for the elastic transform.
 struct ElasticModel {
 	SolverModel model;
 	vector<BlockSlackRef> slacks;
-	vector<RemovalRef> removals; //!< Remove-only `<>` clauses (I4); empty when none.
 };
 
 //! Build the elastic program from a base model: zero the user objective, drop the
 //! quadratic objective, and add a non-negative REAL slack to every relaxable row
 //! (SHARED_SCALAR blocks share one slack across their rows; others get one each).
-//! Rigid STRUCTURAL rows are untouched; remove-only `<>` rows (USER_MECHANISM with a
-//! valid `indicator_col`) instead get a binary removal indicator (I4). `removal_bigm`
-//! is the M₂ used to neutralize a dropped `<>` (0 = auto-derive per clause from its
-//! existing disjunction Big-M).
+//! Rigid STRUCTURAL rows are untouched. Rows carrying `removal_group_id` are also
+//! untouched: exact DROP search physically omits the entire group before this transform.
 //!
 //! `slack_scope` (T3) governs how a data-backed RHS (`x <= col`, PER_ROW_DATA) is
 //! slacked: "query" (default) folds a clause's data rows into ONE shared slack (the
 //! amount is the max overshoot = a single virtual query offset `x <= col + delta`);
 //! "expanded" leaves them as independent per-row slacks so the readback can expose the
 //! per-row conflict profile. SHARED_SCALAR knobs fold in both modes.
-ElasticModel BuildElasticModel(const SolverModel &base, double removal_bigm = 0.0,
-                               const string &slack_scope = "query");
+ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scope = "query");
+
+//! Return an exact model copy with every row/native construct in `removal_group_ids`
+//! physically omitted, then recompute build-time infeasibility from retained rows.
+SolverModel DropRemovalGroups(const SolverModel &base, const std::set<idx_t> &removal_group_ids);
 
 //! Build the infeasible diagnosis (the elastic least-change fix): build the elastic
 //! program (BuildElasticModel), solve it via the injected callback, and read the

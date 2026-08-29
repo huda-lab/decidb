@@ -142,6 +142,8 @@ public:
         idx_t aux_idx;        // Index of auxiliary variable w
         idx_t bool_var_idx;   // Index of the Boolean variable b
         idx_t other_var_idx;  // Index of the non-Boolean variable x
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
+        idx_t removal_group_id = DConstants::INVALID_INDEX;
     };
     vector<BilinearLink> bilinear_links;
 
@@ -204,6 +206,7 @@ public:
         unique_ptr<Expression> rhs_expr;      // RHS expression (typically scalar constant)
         ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >)
         idx_t source_clause_id = DConstants::INVALID_INDEX;
+        idx_t removal_group_id = DConstants::INVALID_INDEX;
     };
     vector<ComposedMinMaxConstraint> composed_minmax_constraints;
 
@@ -228,6 +231,7 @@ public:
         bool strict = false;
         double typed_k = 0.0;
         idx_t source_clause_id = DConstants::INVALID_INDEX;
+        idx_t removal_group_id = DConstants::INVALID_INDEX;
     };
 
     //! Sentinel for "no explicit lower bound was written". Not 0, so that an explicit

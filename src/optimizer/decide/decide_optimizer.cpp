@@ -68,6 +68,7 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	// ::use_native_constructs → PhysicalDecide) all the way to the solve and to any
 	// diagnostic re-solve, so nothing downstream ever decides a second time.
 	ChooseDecideSolver(decide);
+	TagAtomicRemovalGroups(decide);
 
 	RewriteNorm(decide);
 	RewriteInDomain(decide);
@@ -107,13 +108,16 @@ static bool TryParseNormMarker(const string &alias, string &payload) {
 	return true;
 }
 
-static void CopySourceClauseTag(const string &from_alias, Expression &to) {
+static void CopyClauseProvenanceTags(const string &from_alias, Expression &to) {
 	idx_t source_id;
-	if (!TryParseSourceClauseTag(from_alias, source_id)) {
-		return;
-	}
 	auto alias = to.GetAlias();
-	AddDecideTag(alias, MakeSourceClauseTag(source_id));
+	if (TryParseSourceClauseTag(from_alias, source_id)) {
+		AddDecideTag(alias, MakeSourceClauseTag(source_id));
+	}
+	idx_t removal_id;
+	if (TryParseRemovalGroupTag(from_alias, removal_id)) {
+		AddDecideTag(alias, MakeRemovalGroupTag(removal_id));
+	}
 	to.SetAlias(std::move(alias));
 }
 
@@ -121,15 +125,70 @@ static void MarkFormulationConstraint(Expression &expr, const string &source_ali
 	auto alias = expr.GetAlias();
 	AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
 	expr.SetAlias(std::move(alias));
-	CopySourceClauseTag(source_alias, expr);
+	CopyClauseProvenanceTags(source_alias, expr);
 }
 
 //! The user clause a rewrite is currently standing inside. A comparison carrying a
 //! source id starts a new one; every other node inherits its parent's. This is what lets
 //! a row emitted deep inside a clause still name the clause it came from.
 static string DescendSourceAlias(const Expression &expr, const string &inherited) {
-	idx_t source_id;
-	return TryParseSourceClauseTag(expr.GetAlias(), source_id) ? expr.GetAlias() : inherited;
+	idx_t provenance_id;
+	return TryParseSourceClauseTag(expr.GetAlias(), provenance_id) ||
+	               TryParseRemovalGroupTag(expr.GetAlias(), provenance_id)
+	           ? expr.GetAlias()
+	           : inherited;
+}
+
+//! A norm payload is `1`, `2`, `inf`, `0_auto`, or `0_<double>`, so the `0_` prefix
+//! selects exactly the L0 counts and nothing else.
+static bool ContainsL0NormMarker(const Expression &expr) {
+	string payload;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	    TryParseNormMarker(expr.GetAlias(), payload) && payload.rfind("0_", 0) == 0) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found && ContainsL0NormMarker(child)) {
+			found = true;
+		}
+	});
+	return found;
+}
+
+void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
+	if (!decide.decide_constraints) {
+		return;
+	}
+	idx_t next_group = 0;
+	std::function<void(Expression &)> walk = [&](Expression &expr) {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			auto &conj = expr.Cast<BoundConjunctionExpression>();
+			if (HasDecideTag(conj.GetAlias(), WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.GetAlias())) {
+				if (!conj.children.empty()) {
+					walk(*conj.children[0]);
+				}
+				return;
+			}
+			for (auto &child : conj.children) {
+				walk(*child);
+			}
+			return;
+		}
+
+		bool removable = false;
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			removable = expr.type == ExpressionType::COMPARE_NOTEQUAL || ContainsL0NormMarker(expr);
+		} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
+			removable = expr.type == ExpressionType::COMPARE_IN;
+		}
+		if (removable) {
+			auto alias = expr.GetAlias();
+			AddDecideTag(alias, MakeRemovalGroupTag(next_group++));
+			expr.SetAlias(std::move(alias));
+		}
+	};
+	walk(*decide.decide_constraints);
 }
 
 static const BoundColumnRefExpression *FindDecideColumn(const Expression &expr, idx_t decide_index) {
@@ -184,7 +243,7 @@ static bool IsWhenWrapper(const Expression &expr) {
 //! existed, so it sorted to the end of the plan.
 static unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string()) {
 	auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-	CopySourceClauseTag(source_alias, *placeholder);
+	CopyClauseProvenanceTags(source_alias, *placeholder);
 	return placeholder;
 }
 
@@ -1044,6 +1103,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	spec.outer_cmp = cmp_type;
 	spec.rhs_expr = comp.right->Copy();
 	TryParseSourceClauseTag(comp.GetAlias(), spec.source_clause_id);
+	TryParseRemovalGroupTag(comp.GetAlias(), spec.removal_group_id);
 
 	WalkComposedLhs(optimizer.context, *comp.left, /*sign=*/1, decide.decide_index, outer_push_down,
 	                spec.terms);
@@ -1644,8 +1704,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			c2->alias = string(ABS_UB_NEG_TAG_PREFIX) + to_string(pair.aux_idx) + "__";
 			// The linearizer finds these by substring, so the clause id rides alongside
 			// rather than replacing the marker.
-			CopySourceClauseTag(pair.source_alias, *c1);
-			CopySourceClauseTag(pair.source_alias, *c2);
+			CopyClauseProvenanceTags(pair.source_alias, *c1);
+			CopyClauseProvenanceTags(pair.source_alias, *c2);
 
 			decide.abs_maximize_links.push_back({pair.aux_idx, y_idx});
 		} else {
@@ -2003,6 +2063,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					link.aux_idx = aux_idx;
 					link.bool_var_idx = bool_var_idx;
 					link.other_var_idx = other_var_idx;
+					TryParseSourceClauseTag(clause_alias, link.source_clause_id);
+					TryParseRemovalGroupTag(clause_alias, link.removal_group_id);
 					links.push_back(link);
 				}
 
@@ -2083,7 +2145,8 @@ struct AbsorptionTarget {
 	//! Tighten one side of the box and record the bound, in the one order that is always
 	//! correct: tighten unconditionally (a BOOLEAN restatement is a harmless no-op against
 	//! the intrinsic box), record only when ShouldRecord agrees.
-	void Absorb(char sense, double k, bool strict, double typed_k, idx_t source_clause_id) const {
+	void Absorb(char sense, double k, bool strict, double typed_k, idx_t source_clause_id,
+	            idx_t removal_group_id) const {
 		auto &lower = decide->absorbed_lower_bounds[var_idx];
 		auto &upper = decide->absorbed_upper_bounds[var_idx];
 		if (sense != '>') {
@@ -2093,7 +2156,8 @@ struct AbsorptionTarget {
 			lower = std::max(lower, k); // '>' and '='
 		}
 		if (ShouldRecord(sense, k)) {
-			decide->user_absorbed_bounds.push_back({var_idx, sense, k, strict, typed_k, source_clause_id});
+			decide->user_absorbed_bounds.push_back(
+			    {var_idx, sense, k, strict, typed_k, source_clause_id, removal_group_id});
 		}
 	}
 };
@@ -2146,6 +2210,8 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		auto &comp = expr.Cast<BoundComparisonExpression>();
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
+		idx_t removal_group_id = DConstants::INVALID_INDEX;
+		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 
 		AbsorptionTarget target;
 		if (!TryMatchAbsorptionTarget(*comp.left, decide, target)) {
@@ -2173,24 +2239,24 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		bool absorbed = true;
 		switch (comp.type) {
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			target.Absorb('<', k, false, 0.0, source_clause_id);
+			target.Absorb('<', k, false, 0.0, source_clause_id, removal_group_id);
 			break;
 		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			target.Absorb('>', k, false, 0.0, source_clause_id);
+			target.Absorb('>', k, false, 0.0, source_clause_id, removal_group_id);
 			break;
 		case ExpressionType::COMPARE_EQUAL:
-			target.Absorb('=', k, false, 0.0, source_clause_id);
+			target.Absorb('=', k, false, 0.0, source_clause_id, removal_group_id);
 			break;
 		case ExpressionType::COMPARE_LESSTHAN:
 			absorbed = target.is_integer;
 			if (absorbed) {
-				target.Absorb('<', k - 1.0, true, k, source_clause_id);
+				target.Absorb('<', k - 1.0, true, k, source_clause_id, removal_group_id);
 			}
 			break;
 		case ExpressionType::COMPARE_GREATERTHAN:
 			absorbed = target.is_integer;
 			if (absorbed) {
-				target.Absorb('>', k + 1.0, true, k, source_clause_id);
+				target.Absorb('>', k + 1.0, true, k, source_clause_id, removal_group_id);
 			}
 			break;
 		default:
@@ -2227,12 +2293,14 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		double lo = ExtractBound(*between.lower);
 		if (!std::isnan(lo)) {
 			bool strict = !between.lower_inclusive && target.is_integer;
-			target.Absorb('>', strict ? lo + 1.0 : lo, strict, lo, DConstants::INVALID_INDEX);
+			target.Absorb('>', strict ? lo + 1.0 : lo, strict, lo, DConstants::INVALID_INDEX,
+			              DConstants::INVALID_INDEX);
 		}
 		double hi = ExtractBound(*between.upper);
 		if (!std::isnan(hi)) {
 			bool strict = !between.upper_inclusive && target.is_integer;
-			target.Absorb('<', strict ? hi - 1.0 : hi, strict, hi, DConstants::INVALID_INDEX);
+			target.Absorb('<', strict ? hi - 1.0 : hi, strict, hi, DConstants::INVALID_INDEX,
+			              DConstants::INVALID_INDEX);
 		}
 		break;
 	}
