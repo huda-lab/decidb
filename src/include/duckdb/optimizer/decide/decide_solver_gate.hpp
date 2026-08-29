@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "duckdb/decidb/solver/solver_capabilities.hpp"
+#include "duckdb/common/decide_solver_capabilities.hpp"
 
 namespace duckdb {
 

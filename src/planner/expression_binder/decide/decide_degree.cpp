@@ -11,6 +11,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 
 #include <cmath>
 #include <unordered_set>
@@ -157,8 +158,7 @@ static DegreeWalk WalkDegree(const Expression &expr, idx_t decide_index) {
 		// and those may not reference a decision at all. An untagged conjunction is a
 		// boolean, which is not an arithmetic term and carries no degree.
 		auto &conj = expr.Cast<const BoundConjunctionExpression>();
-		if ((HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.alias)) &&
-		    !conj.children.empty()) {
+		if (IsConstraintWrapper(conj) && !conj.children.empty()) {
 			return WalkDegree(*conj.children[0], decide_index);
 		}
 		return result;
@@ -259,35 +259,18 @@ static void ValidateSideDegree(const Expression &expr, idx_t decide_index) {
 void ValidateDecideConstraintDegree(const Expression &expr, idx_t decide_index) {
 	// Constraint position only, and by the same descent the integrality gate uses: a
 	// comparison nested inside an operand is a boolean value, not a model row.
-	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::BOUND_CONJUNCTION: {
-		auto &conj = expr.Cast<const BoundConjunctionExpression>();
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.alias)) {
-			// children[0] is the constraint; the rest are the condition / PER columns,
-			// which may not reference a decision at all.
-			if (!conj.children.empty()) {
-				ValidateDecideConstraintDegree(*conj.children[0], decide_index);
-			}
+	ForEachConstraintLeaf(expr, [&](const Expression &node) {
+		// A per-row constraint that is not a comparison (a bound `IN` operator, a bare
+		// boolean decision) is degree 1 by construction and has nothing to check.
+		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
 		}
-		for (const auto &child : conj.children) {
-			ValidateDecideConstraintDegree(*child, decide_index);
-		}
-		return;
-	}
-	case ExpressionClass::BOUND_COMPARISON: {
-		auto &comp = expr.Cast<const BoundComparisonExpression>();
+		auto &comp = node.Cast<const BoundComparisonExpression>();
 		// Both sides: canonicalization has not run, so `5 > x*y*z` is as likely a
 		// spelling as `x*y*z < 5`.
 		ValidateSideDegree(*comp.left, decide_index);
 		ValidateSideDegree(*comp.right, decide_index);
-		return;
-	}
-	default:
-		// A per-row constraint that is not a comparison (a bound `IN` operator, a bare
-		// boolean decision) is degree 1 by construction and has nothing to check.
-		return;
-	}
+	});
 }
 
 void ValidateDecideObjectiveDegree(const Expression &expr, idx_t decide_index) {

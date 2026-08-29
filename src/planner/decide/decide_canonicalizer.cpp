@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -38,38 +39,6 @@ static bool CanonicalTreesEqual(const Expression &left, const Expression &right)
 	}
 	for (idx_t i = 0; i < left_children.size(); i++) {
 		if (!CanonicalTreesEqual(*left_children[i], *right_children[i])) {
-			return false;
-		}
-	}
-	return true;
-}
-
-static bool IsWhenConstraintWrapper(const BoundConjunctionExpression &conjunction) {
-	return HasDecideTag(conjunction.GetAlias(), WHEN_CONSTRAINT_TAG);
-}
-
-static bool IsConstraintWrapper(const BoundConjunctionExpression &conjunction) {
-	return IsPerConstraintTag(conjunction.GetAlias()) || IsWhenConstraintWrapper(conjunction);
-}
-
-static bool IsConstraintChild(const BoundConjunctionExpression &conjunction, idx_t child_index) {
-	return !IsConstraintWrapper(conjunction) || child_index == 0;
-}
-
-//! Visit only nodes that belong to the constraint tree. WHEN conditions and PER
-//! grouping columns are metadata children, so every read-only canonical pass shares
-//! this boundary instead of reimplementing wrapper traversal.
-template <class VISITOR>
-static bool VisitCanonicalTree(const Expression &expression, VISITOR &visitor) {
-	if (!visitor(expression)) {
-		return false;
-	}
-	if (expression.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-		return true;
-	}
-	auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-	for (idx_t i = 0; i < conjunction.children.size(); i++) {
-		if (IsConstraintChild(conjunction, i) && !VisitCanonicalTree(*conjunction.children[i], visitor)) {
 			return false;
 		}
 	}
@@ -752,7 +721,7 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalTree(const Expres
 		first = false;
 		return true;
 	};
-	return VisitCanonicalTree(constraints, classify) && !first ? result : CanonicalConstraintClass::INVALID;
+	return VisitConstraintTree(constraints, classify) && !first ? result : CanonicalConstraintClass::INVALID;
 }
 
 void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const {
@@ -806,7 +775,7 @@ void DecideCanonicalizer::ValidateCanonicalTree(const Expression &constraints) c
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-			if (IsPerConstraintTag(conjunction.GetAlias()) &&
+			if (IsPerConstraintWrapper(conjunction) &&
 			    (conjunction.children.empty() ||
 			     ClassifyCanonicalTree(*conjunction.children[0]) != CanonicalConstraintClass::AGGREGATE)) {
 				throw BinderException(
@@ -816,7 +785,7 @@ void DecideCanonicalizer::ValidateCanonicalTree(const Expression &constraints) c
 		}
 		return true;
 	};
-	VisitCanonicalTree(constraints, validate);
+	VisitConstraintTree(constraints, validate);
 }
 
 void DecideCanonicalizer::VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const {
@@ -870,7 +839,7 @@ void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) con
 			CanonicalInvariantFailure("C0", "WHEN wrapper must contain one constraint and one condition",
 			                          expression);
 		}
-		if (IsPerConstraintTag(conjunction.GetAlias())) {
+		if (IsPerConstraintWrapper(conjunction)) {
 			if (conjunction.children.size() < 2) {
 				CanonicalInvariantFailure("C0", "PER wrapper must contain a constraint and grouping column",
 				                          expression);
@@ -882,7 +851,7 @@ void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) con
 		}
 		return true;
 	};
-	VisitCanonicalTree(constraints, verify);
+	VisitConstraintTree(constraints, verify);
 }
 
 void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objective) const {

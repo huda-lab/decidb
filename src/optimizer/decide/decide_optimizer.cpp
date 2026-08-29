@@ -20,6 +20,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -169,34 +170,19 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 		return;
 	}
 	idx_t next_group = 0;
-	std::function<void(Expression &)> walk = [&](Expression &expr) {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conj = expr.Cast<BoundConjunctionExpression>();
-			if (HasDecideTag(conj.GetAlias(), WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.GetAlias())) {
-				if (!conj.children.empty()) {
-					walk(*conj.children[0]);
-				}
-				return;
-			}
-			for (auto &child : conj.children) {
-				walk(*child);
-			}
-			return;
-		}
-
+	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
 		bool removable = false;
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			removable = expr.type == ExpressionType::COMPARE_NOTEQUAL || ContainsL0NormMarker(expr);
-		} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
-			removable = expr.type == ExpressionType::COMPARE_IN;
+		if (node.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			removable = node.type == ExpressionType::COMPARE_NOTEQUAL || ContainsL0NormMarker(node);
+		} else if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
+			removable = node.type == ExpressionType::COMPARE_IN;
 		}
 		if (removable) {
-			auto alias = expr.GetAlias();
+			auto alias = node.GetAlias();
 			AddDecideTag(alias, MakeRemovalGroupTag(next_group++));
-			expr.SetAlias(std::move(alias));
+			node.SetAlias(std::move(alias));
 		}
-	};
-	walk(*decide.decide_constraints);
+	});
 }
 
 void DecideOptimizer::AppendConstraint(LogicalDecide &decide, unique_ptr<Expression> constraint) {
@@ -205,6 +191,58 @@ void DecideOptimizer::AppendConstraint(LogicalDecide &decide, unique_ptr<Express
 	// natural for them (`aux >= inner`, `aux >= 0 - inner`, ...); LogicalDecide
 	// puts it into canonical form on the way in.
 	decide.AddConstraint(optimizer.context, std::move(constraint));
+}
+
+// ---------------------------------------------------------------------------
+// Plan-time constant folding
+// ---------------------------------------------------------------------------
+//
+// Why an unresolved scale factor costs performance rather than correctness, and
+// where the factor is finally applied, is written up in decide_rewrite_minmax.cpp --
+// MIN/MAX is the only construct whose linearization the sign actually changes.
+
+//! A TRUE placeholder standing where a lifted clause used to be.
+//!
+//! `source_alias` is the alias of the clause it replaces. Carrying the clause id onto
+//! the placeholder is what lets EXPLAIN keep the clause in the position it was written:
+//! the constraint tree is the only record of written order, and a lifted clause that
+//! left an anonymous `true` behind was indistinguishable from a clause that never
+//! existed, so it sorted to the end of the plan.
+unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const string &source_alias) {
+	auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+	CopyClauseProvenanceTags(source_alias, *placeholder);
+	return placeholder;
+}
+
+bool decide_rewrite::TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &expr, double &out) {
+	try {
+		return TryEvaluateFoldableDouble(context, expr, out);
+	} catch (...) {
+		return false;
+	}
+}
+
+//! The sign a factor contributes: +1, -1, or 0 when it is not known until the query
+//! runs. Any foldable numeric expression is decidable here; a scalar subquery is not.
+//!
+//! Nothing depends on this for correctness -- it selects between an exact cheap
+//! linearization and an exact expensive one. 0 must therefore be treated as "assume
+//! the expensive one", never as an error.
+int decide_rewrite::ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides) {
+	if (!scale) {
+		return 1;
+	}
+	double d;
+	if (!TryEvaluateFoldableDoubleNoThrow(context, *scale, d)) {
+		return 0;
+	}
+	if (d == 0.0) {
+		// A zero factor annihilates the term. Dividing by it is an error the
+		// evaluator will raise; multiplying by it makes the sign irrelevant, and
+		// "positive" keeps the cheap path (every coefficient is zero either way).
+		return divides ? 0 : 1;
+	}
+	return d < 0.0 ? -1 : 1;
 }
 
 } // namespace duckdb

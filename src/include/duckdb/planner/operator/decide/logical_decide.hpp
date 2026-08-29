@@ -11,7 +11,7 @@
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
-#include "duckdb/decidb/solver/solver_capabilities.hpp"
+#include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
 namespace duckdb {

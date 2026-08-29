@@ -18,14 +18,10 @@
 
 namespace duckdb {
 
-// ABS linearization is now fully handled by DecideOptimizer::RewriteAbs (post-binding).
-// The binder binds ABS as a normal BoundFunctionExpression; the optimizer detects it,
-// creates auxiliary REAL variables, and generates linearization constraints.
-
-// MIN/MAX constraint and objective rewriting is now fully handled by
-// DecideOptimizer::RewriteMinMax (post-binding). The binder binds MIN/MAX as normal
-// BoundAggregateExpression nodes; the optimizer classifies easy/hard, creates
-// indicator variables, and rewrites to SUM.
+// ABS, MIN/MAX and `<>` bind here as ordinary expressions -- a BoundFunctionExpression,
+// a BoundAggregateExpression, a BoundComparisonExpression. Choosing a mathematical
+// formulation for them is layer 5's job (`src/optimizer/decide/`), which is what lets
+// this layer resolve names and types without also deciding how a construct is encoded.
 
 // Rewrite qualified `Table.var` ColumnRefs into bare `var` ColumnRefs when
 // `Table.var` matches a registered table-scoped DECIDE variable. After this
@@ -59,9 +55,6 @@ static void RewriteScopedVarRefs(unique_ptr<ParsedExpression> &expr,
 		RewriteScopedVarRefs(child, variables);
 	});
 }
-
-// NOTE: RewriteNotEqual has been moved to DecideOptimizer (src/optimizer/decide/decide_optimizer.cpp).
-// It now operates on BoundExpressions post-binding instead of ParsedExpressions pre-binding.
 
 DecideDeclarationsBinder::DecideDeclarationsBinder(Binder &binder, ClientContext &context)
     : binder(binder), context(context) {
@@ -232,12 +225,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // DuckDB-facing type is BOOLEAN (MIN/MAX, NE) or INTEGER (IN/L0, which need
         // INTEGER to participate in the parsed arithmetic that links them). No
         // constraint-tree bounds to generate here.
-
-        // MIN/MAX objective rewrite is handled by DecideOptimizer::RewriteMinMaxObjective (post-binding).
-        // MIN/MAX aggregates pass through normalization and binding as normal functions.
-
-        // ABS linearization is now fully handled by DecideOptimizer::RewriteAbs (post-binding).
-        // ABS(expr) passes through normalization and binding as a normal function.
         idx_t num_auxiliary_vars = var_names.size() - num_user_vars;
 
         if (statement.decide_constraints) {

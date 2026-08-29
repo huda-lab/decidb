@@ -9,7 +9,6 @@
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/common/exception.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
@@ -128,7 +127,6 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
         }
     return true;
 }
-
 
 //! The family one group of a MIN/MAX constraint reduces over, in flat columns: one
 //! member per active row, each holding that row's inner expression negated (the shape

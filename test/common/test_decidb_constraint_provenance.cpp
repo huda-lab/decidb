@@ -1,7 +1,7 @@
 #include "catch.hpp"
 
 #include "duckdb/decidb/formulation/ilp_model.hpp"
-#include "duckdb/decidb/solver/solver_input.hpp"
+#include "duckdb/decidb/formulation/solver_input.hpp"
 
 #include <utility>
 

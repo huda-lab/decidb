@@ -27,6 +27,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -208,63 +209,50 @@ static void CollectAbsWithSign(ClientContext &context, Expression &expr, int sig
 }
 
 static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx_t decide_index) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		// WHEN/PER wrappers: child[0] is the inner constraint; recurse into it.
-		// The WHEN/PER filter only affects which rows participate in the
-		// aggregate; aux pinning is unconditional per row, so the wrapper
-		// doesn't change classification.
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.alias)) {
-			if (!conj.children.empty()) {
-				ClassifyAbsConstraints(context, *conj.children[0], decide_index);
+	// A WHEN/PER filter only affects which rows participate in the aggregate, and aux
+	// pinning is unconditional per row, so a wrapper does not change classification --
+	// the ordinary constraint-position descent is exactly right here.
+	ForEachConstraintLeaf(expr, [&](Expression &node) {
+		if (node.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			auto &comp = node.Cast<BoundComparisonExpression>();
+			bool lhs_has_abs = ContainsAbsOverDecideVar(*comp.left, decide_index);
+			bool rhs_has_abs = ContainsAbsOverDecideVar(*comp.right, decide_index);
+			if (!lhs_has_abs && !rhs_has_abs) {
+				return;
 			}
-			return;
-		}
-		for (auto &child : conj.children) {
-			ClassifyAbsConstraints(context, *child, decide_index);
-		}
-		return;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		auto &comp = expr.Cast<BoundComparisonExpression>();
-		bool lhs_has_abs = ContainsAbsOverDecideVar(*comp.left, decide_index);
-		bool rhs_has_abs = ContainsAbsOverDecideVar(*comp.right, decide_index);
-		if (!lhs_has_abs && !rhs_has_abs) {
-			return;
-		}
-		auto t = comp.type;
-		// Read the constraint as `E <op> 0` with `E = LHS - RHS`: every ABS is then
-		// a single signed term of one expression, and "does this comparison push the
-		// aux down?" is a question about that term's sign rather than about which
-		// side of the relation it happens to be written on. That distinction is
-		// invisible before canonicalization -- which never moved a term across the
-		// relation until it ran ahead of this pass -- and load-bearing after it.
-		int pinning_sign;
-		if (t == ExpressionType::COMPARE_LESSTHAN || t == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-			pinning_sign = 1; // E bounded above: a positive term is pushed down
-		} else if (t == ExpressionType::COMPARE_GREATERTHAN ||
-		           t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-			pinning_sign = -1; // E bounded below: a negative term is pushed down
-		} else {
-			pinning_sign = 0; // equality, <>: pin nothing, exactly as before
-		}
+			auto t = comp.type;
+			// Read the constraint as `E <op> 0` with `E = LHS - RHS`: every ABS is then
+			// a single signed term of one expression, and "does this comparison push the
+			// aux down?" is a question about that term's sign rather than about which
+			// side of the relation it happens to be written on. That distinction is
+			// invisible before canonicalization -- which never moved a term across the
+			// relation until it ran ahead of this pass -- and load-bearing after it.
+			int pinning_sign;
+			if (t == ExpressionType::COMPARE_LESSTHAN || t == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+				pinning_sign = 1; // E bounded above: a positive term is pushed down
+			} else if (t == ExpressionType::COMPARE_GREATERTHAN ||
+			           t == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+				pinning_sign = -1; // E bounded below: a negative term is pushed down
+			} else {
+				pinning_sign = 0; // equality, <>: pin nothing, exactly as before
+			}
 
-		vector<std::pair<Expression *, int>> signed_abs;
-		CollectAbsWithSign(context, *comp.left, 1, decide_index, signed_abs);
-		CollectAbsWithSign(context, *comp.right, -1, decide_index, signed_abs);
-		for (auto &entry : signed_abs) {
-			if (pinning_sign == 0 || entry.second != pinning_sign) {
-				TagAbsForBigM(*entry.first, decide_index);
+			vector<std::pair<Expression *, int>> signed_abs;
+			CollectAbsWithSign(context, *comp.left, 1, decide_index, signed_abs);
+			CollectAbsWithSign(context, *comp.right, -1, decide_index, signed_abs);
+			for (auto &entry : signed_abs) {
+				if (pinning_sign == 0 || entry.second != pinning_sign) {
+					TagAbsForBigM(*entry.first, decide_index);
+				}
 			}
+			return;
 		}
-		return;
-	}
-	// Other top-level shapes (BETWEEN, IN, equality, <>, conjunctions handled
-	// above): no per-side direction analysis available — tag every ABS in the
-	// subtree for Big-M to be safe.
-	if (ContainsAbsOverDecideVar(expr, decide_index)) {
-		TagAbsForBigM(expr, decide_index);
-	}
+		// Other top-level shapes (BETWEEN, IN, equality, <>): no per-side direction
+		// analysis available — tag every ABS in the subtree for Big-M to be safe.
+		if (ContainsAbsOverDecideVar(node, decide_index)) {
+			TagAbsForBigM(node, decide_index);
+		}
+	});
 }
 
 void decide_rewrite::TagAbsConstraintsForBigM(ClientContext &context, LogicalDecide &decide) {

@@ -81,6 +81,7 @@
 namespace duckdb {
 
 class ClientContext;
+class BoundColumnRefExpression;
 
 //! True when `expr` references a variable from the LogicalDecide binding.
 bool BoundExpressionReferencesDecide(const Expression &expr, idx_t decide_index);
@@ -92,6 +93,15 @@ bool BoundExpressionReferencesDecide(const Expression &expr, idx_t decide_index)
 //! walk.
 const Expression *UnwrapDecideCasts(const Expression &expr, idx_t decide_index);
 Expression *UnwrapDecideCasts(Expression &expr, idx_t decide_index);
+
+//! The single decision variable `expr` names, or nullptr when it names anything else.
+//!
+//! "Anything else" includes a product, a sum, a data column, and a decision buried
+//! under arithmetic: this asks whether the WHOLE expression is one bare variable, so
+//! a caller can treat it as a coefficient-free term. Only the cast wrappers
+//! UnwrapDecideCasts admits are looked through, which is what keeps the answer a
+//! cast-policy decision rather than each walker's own.
+const BoundColumnRefExpression *GetBareDecideColumnRef(const Expression &expr, idx_t decide_index);
 
 //! Strip EVERY outer cast, numeric or not, to reach the node's IDENTITY.
 //!

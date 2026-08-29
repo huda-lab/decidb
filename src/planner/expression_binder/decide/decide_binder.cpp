@@ -26,6 +26,7 @@
 #include <cmath>
 
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 
 namespace duckdb {
 
@@ -768,29 +769,19 @@ static bool FindFractionalOperand(const Expression &expr, bool allow_avg_hoist,
 void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index) {
 	// Constraint position only, and by the same reasoning as the parsed-tree validator:
 	// a comparison nested inside an operand is a boolean value, not a model row.
-	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::BOUND_CONJUNCTION: {
-		auto &conj = expr.Cast<const BoundConjunctionExpression>();
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.alias)) {
-			if (!conj.children.empty()) {
-				ValidateDecideIntegralComparisonOperands(*conj.children[0], decide_index);
-			}
+	// ForEachConstraintLeaf owns that descent; this is only the check.
+	ForEachConstraintLeaf(expr, [&](const Expression &node) {
+		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
 		}
-		for (const auto &child : conj.children) {
-			ValidateDecideIntegralComparisonOperands(*child, decide_index);
-		}
-		return;
-	}
-	case ExpressionClass::BOUND_COMPARISON: {
-		auto type = expr.GetExpressionType();
+		auto type = node.GetExpressionType();
 		bool is_strict =
 		    type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
 		bool is_not_equal = type == ExpressionType::COMPARE_NOTEQUAL;
 		if (!is_strict && !is_not_equal) {
 			return;
 		}
-		auto &comp = expr.Cast<const BoundComparisonExpression>();
+		auto &comp = node.Cast<const BoundComparisonExpression>();
 		// Only a side that carries decisions is a compared quantity; the other is the
 		// bound, and a fractional bound is a tautology rather than an error.
 		bool left_is_compared = SideReferencesDecision(*comp.left, decide_index);
@@ -823,10 +814,7 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 		    "Comparison '%s' is not supported here: '%s' has type %s and can take fractional "
 		    "values, and %s. Compare with %s instead.",
 		    op, bad.name, bad.type.ToString(), why, alternative);
-	}
-	default:
-		return;
-	}
+	});
 }
 
 const char *DecideCaseUnsupportedMessage() {

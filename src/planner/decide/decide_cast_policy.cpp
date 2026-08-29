@@ -38,6 +38,15 @@ Expression *UnwrapDecideCasts(Expression &expr, idx_t decide_index) {
 	return current;
 }
 
+const BoundColumnRefExpression *GetBareDecideColumnRef(const Expression &expr, idx_t decide_index) {
+	const Expression *current = UnwrapDecideCasts(expr, decide_index);
+	if (current->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		return nullptr;
+	}
+	auto &colref = current->Cast<BoundColumnRefExpression>();
+	return colref.binding.table_index == decide_index ? &colref : nullptr;
+}
+
 const Expression *StripCastsForIdentity(const Expression &expr) {
 	const Expression *current = &expr;
 	while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST) {

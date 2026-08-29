@@ -1,10 +1,19 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/solver/solver_capabilities.hpp
+// duckdb/common/decide_solver_capabilities.hpp
 //
 // What one solver backend can be asked to do. Read by the stages ABOVE the
 // solver facade — never by the backend itself, which knows its own answers.
+//
+// It lives in `common/` rather than in `decidb/solver/` for exactly that reason.
+// Stage 07's backends ANSWER these types, but stages 03, 05, 06 and 08 all READ
+// them: the plan carries a SolverConstructSupport, stage 05 branches on it to pick
+// a formulation, and stage 06 checks a built model's class against it. A contract
+// answered by one stage and read by four does not belong inside the answering
+// stage's directory — filed there, every reader looks like it is reaching into the
+// backend's internals. Nothing here names a backend, and nothing here depends on
+// one: the constructs are DECIDE's, the model classes are mathematical.
 //
 //===----------------------------------------------------------------------===//
 

@@ -1,11 +1,16 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/solver/solver_input.hpp
+// duckdb/decidb/formulation/solver_input.hpp
 //
 // Solver-agnostic input structs for the DECIDE optimization formulation.
-// These are built by physical_decide.cpp and consumed by the solver facade.
 // Supports LP, MILP, and convex QP/MIQP objectives.
+//
+// This is stage 06's input contract, not stage 07's: execution (stage 08) fills it
+// with evaluated coefficients, the lowering passes in this directory rewrite it, and
+// `SolverModel::Build` turns it into the model a backend actually sees. It lives
+// beside `ilp_model.hpp` for that reason -- a backend never reads a `SolverInput`,
+// only the `SolverModel` built from one.
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,7 +19,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
-#include "duckdb/decidb/solver/solver_capabilities.hpp"
+#include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/planner/expression.hpp"
 
@@ -392,12 +397,19 @@ enum class GeneralConstraintKind : uint8_t {
 };
 
 //! Which construct flag a backend must declare before it may be handed a general
-//! constraint of this kind. The ONE place a kind turns into a capability question:
-//! adding a kind adds a row to the table below, not another `?:` at a call site. MIN
-//! and MAX share a row because they share one flag and one Gurobi symbol pair.
+//! constraint of this kind. MIN and MAX share a row because they share one flag and
+//! one Gurobi symbol pair.
+//!
+//! This is the check that a general constraint reaching a backend was declared by
+//! that backend, not the routing table for the whole capability set. The sites that
+//! DECIDE to go native read their flag directly, because they are rewriting one
+//! construct and know which one (`decide_rewrite_abs.cpp`, `physical_decide.cpp`),
+//! and two of the four construct flags — `not_equal` and `bilinear` — have no
+//! GeneralConstraintKind at all: the first is an indicator constraint, the second a
+//! native product. So the table covers the general-constraint subset and says so.
 //!
 //! Lives beside the enum rather than beside SolverConstructSupport so a kind added
-//! here without a flag cannot be missed. Such a kind reads as UNDECLARED, which every
+//! here without a flag cannot be missed. Such a kind reads as UNDECLARED, which the
 //! caller turns into a loud internal error rather than a silent wrong lowering.
 inline bool DeclaresGeneralConstraint(const SolverConstructSupport &constructs, GeneralConstraintKind kind) {
     struct KindFlag {

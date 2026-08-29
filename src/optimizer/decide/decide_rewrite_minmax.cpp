@@ -27,6 +27,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -35,6 +36,32 @@
 namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
+
+// ---------------------------------------------------------------------------
+// A factor sitting on a reducer
+// ---------------------------------------------------------------------------
+//
+// The canonicalizer peels a factor OUTWARD off a reducer (`2 * SUM(x*p)`) and
+// converges every spelling onto one. It stays outside from there: nothing pushes
+// it back into the reducer's body.
+//
+// WHY IT STAYS OUTSIDE. `MIN`/`MAX` are order statistics, not linear functionals.
+// They commute with a POSITIVE factor only -- `MAX(-2x)` is `-2*MIN(x)`, not
+// `-2*MAX(x)` -- so pushing a factor in requires knowing its sign, and a scalar
+// subquery's sign is not known until the query runs. Leaving the factor outside
+// makes the sign irrelevant to CORRECTNESS: it only selects which linearization is
+// cheaper. An unknown sign then costs performance instead of failing.
+//
+// (A previous version of this pass did fold, swapping MIN/MAX for a negative
+// factor. It was exact, but it made the sign load-bearing for correctness and so
+// had nothing to fall back on when the sign was unknown.)
+//
+// Where the factor is finally applied depends on the term:
+//   SUM/AVG   -- multiplied into the per-row coefficients
+//               (`PhysicalDecide::ApplyScaleToExtracted`)
+//   MIN/MAX   -- multiplied into the auxiliary's contribution
+//               (`ComposedMinMaxTerm::scale`), or distributed over the per-row
+//               form when the constraint linearizes the easy way.
 
 // ---------------------------------------------------------------------------
 // Composed MIN/MAX constraints (additive LHS mixing SUM/AVG/MIN/MAX terms)
@@ -206,7 +233,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	// Walk through AND conjunctions and WHEN/PER wrappers (no composed MIN/MAX inside WHEN/PER in v1).
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr->Cast<BoundConjunctionExpression>();
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.alias)) {
+		if (IsConstraintWrapper(conj)) {
 			// If the wrapped constraint is composed MIN/MAX, reject in v1.
 			if (!conj.children.empty()) {
 				auto &inner = *conj.children[0];
@@ -314,7 +341,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	// Reject composed MIN/MAX in objectives with outer PER or WHEN (v1 scope).
 	if (obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj.Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintTag(conj.alias) || HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG)) {
+		if (IsConstraintWrapper(conj)) {
 			// If the wrapped objective is composed, reject.
 			if (!conj.children.empty()) {
 				auto &inner = *conj.children[0];
@@ -403,14 +430,16 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	// Handle WHEN/PER wrappers
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr->Cast<BoundConjunctionExpression>();
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG)) {
+		if (IsWhenConstraintWrapper(conj)) {
 			// Recurse into the wrapped constraint (child[0])
 			if (!conj.children.empty()) {
 				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy);
 			}
 			return;
 		}
-		if (IsPerConstraintTag(conj.alias)) {
+		// Keeps its own descent: the easy case REPLACES this wrapper with its own child,
+		// which needs the owning unique_ptr that a shared traversal does not hand out.
+		if (IsPerConstraintWrapper(conj)) {
 			// Recurse into the wrapped constraint (child[0])
 			if (!conj.children.empty()) {
 				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy);
@@ -660,7 +689,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	// Unwrap PER wrapper (outermost layer)
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintTag(conj.alias) && !conj.children.empty()) {
+		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
 			has_per = true;
 			obj_owner = &conj.children[0];
 			obj_expr = conj.children[0].get();
@@ -670,7 +699,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	// Unwrap WHEN wrapper (inside PER, if present)
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && !conj.children.empty()) {
+		if (IsWhenConstraintWrapper(conj) && !conj.children.empty()) {
 			obj_owner = &conj.children[0];
 			obj_expr = conj.children[0].get();
 		}

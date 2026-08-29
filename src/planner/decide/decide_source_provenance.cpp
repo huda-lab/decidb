@@ -13,6 +13,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 
 #include <cstring>
 
@@ -134,21 +135,12 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const vector<
 
 template <class CALLBACK>
 static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if ((IsPerConstraintTag(conj.GetAlias()) || HasDecideTag(conj.GetAlias(), WHEN_CONSTRAINT_TAG)) &&
-		    !conj.children.empty()) {
-			VisitSourceInOperators(*conj.children[0], callback);
-			return;
+	ForEachConstraintLeaf(expr, [&](Expression &node) {
+		if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
+		    node.type == ExpressionType::COMPARE_IN) {
+			callback(node);
 		}
-		for (auto &child : conj.children) {
-			VisitSourceInOperators(*child, callback);
-		}
-		return;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR && expr.type == ExpressionType::COMPARE_IN) {
-		callback(expr);
-	}
+	});
 }
 
 static string RenderSource(const Expression &expr, const vector<string> &fragments,
@@ -246,7 +238,7 @@ static void VisitSourceComparisons(Expression &expr, const vector<string> &fragm
 	                               CALLBACK &&callback) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintTag(conj.GetAlias()) && !conj.children.empty()) {
+		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
 			if (render_qualifiers) {
 				qualifier = AppendQualifier(std::move(qualifier), PerQualifier(conj, fragments, entity_scopes));
 			}
@@ -254,7 +246,7 @@ static void VisitSourceComparisons(Expression &expr, const vector<string> &fragm
 			                       std::move(qualifier), callback);
 			return;
 		}
-		if (HasDecideTag(conj.GetAlias(), WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
+		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
 			if (render_qualifiers) {
 				qualifier = AppendQualifier("WHEN " + RenderSource(*conj.children[1], fragments, entity_scopes),
 				                            qualifier);
@@ -434,7 +426,7 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		// PER wrapper: child[0] is the constraint, children[1..N] are the PER key columns.
-		if (IsPerConstraintTag(conj.GetAlias()) && conj.children.size() >= 2) {
+		if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
 			string suffix = " " + PerQualifier(conj, fragments, entity_scopes);
 			vector<string> inner;
 			vector<idx_t> inner_ids;
@@ -446,7 +438,7 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 			return;
 		}
 		// WHEN wrapper: child[0] is the constraint, child[1] is the condition.
-		if (HasDecideTag(conj.GetAlias(), WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
+		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
 			string suffix = " WHEN " + RenderSource(*conj.children[1], fragments, entity_scopes);
 			vector<string> inner;
 			vector<idx_t> inner_ids;

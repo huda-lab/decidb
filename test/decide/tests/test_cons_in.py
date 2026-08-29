@@ -308,6 +308,125 @@ def test_in_negative_domain_lowers_floor(
 
 @pytest.mark.cons_in
 @pytest.mark.var_integer
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_in_arithmetic_domain_lowers_floor(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """x IN (0 - 5, 3, 7) — a domain value written as arithmetic still lowers the floor.
+
+    Same shape as ``test_in_negative_domain_lowers_floor``, but the negative value
+    is spelled ``0 - 5`` instead of ``-5``. Nothing folds it before the rewrite runs
+    (EXPLAIN still shows ``0 - 5`` at the DECIDE node), so the rewrite has to evaluate
+    the expression itself to see the minimum is negative. If it only recognises bare
+    literals, no floor row is emitted, x stays >= 0, and the solver quietly answers 3.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x(INT)
+        SUCH THAT x IN (0 - 5, 3, 7)
+        MINIMIZE SUM(x * l_quantity)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
+    n = len(data)
+
+    t_build = time.perf_counter()
+    vnames = _build_in_domain_model(
+        oracle_solver, "in_arithmetic_domain_lowers_floor", data, [-5, 3, 7],
+        big_M=7.0, lb=-5.0,
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
+        assert row[x_idx] in (-5, 3, 7), f"x escaped the domain: x={row[x_idx]}"
+        assert row[x_idx] == -5, (
+            f"an arithmetic domain value must lower the floor the same way a "
+            f"literal does: x={row[x_idx]}"
+        )
+
+    cmp = compare_solutions(
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
+    )
+    perf_tracker.record(
+        "in_arithmetic_domain_lowers_floor", decidb_time, build_time,
+        result.solve_time_seconds, n, n * 4, 0, result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.cons_in
+@pytest.mark.var_integer
+@pytest.mark.obj_minimize
+@pytest.mark.correctness
+def test_in_cast_domain_floor_uses_cast_value(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """x IN (CAST(-5.6 AS INTEGER), 3) — the floor must use the post-cast value.
+
+    The cast makes the real domain value -6, not -5.6. The linking constraint uses
+    the cast expression, so the domain itself is right either way; the floor is what
+    can go wrong. A floor read from the pre-cast -5.6 sits above -6 and cuts the only
+    negative domain value out of the model, leaving the solver to answer 3.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x(INT)
+        SUCH THAT x IN (CAST(-5.6 AS INTEGER), 3)
+        MINIMIZE SUM(x * l_quantity)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
+    n = len(data)
+
+    t_build = time.perf_counter()
+    vnames = _build_in_domain_model(
+        oracle_solver, "in_cast_domain_floor_uses_cast_value", data, [-6, 3],
+        big_M=3.0, lb=-6.0,
+    )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    x_idx = decidb_cols.index("x")
+    for row in decidb_rows:
+        assert row[x_idx] in (-6, 3), f"x escaped the domain: x={row[x_idx]}"
+        assert row[x_idx] == -6, (
+            f"the floor must be read after the cast, so -6 stays reachable: "
+            f"x={row[x_idx]}"
+        )
+
+    cmp = compare_solutions(
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
+    )
+    perf_tracker.record(
+        "in_cast_domain_floor_uses_cast_value", decidb_time, build_time,
+        result.solve_time_seconds, n, n * 3, 0, result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.cons_in
+@pytest.mark.var_integer
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_in_maximize_picks_largest(

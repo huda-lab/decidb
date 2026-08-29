@@ -27,6 +27,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -54,44 +55,29 @@ static string DiagnosisComparand(const Expression &expr) {
 }
 
 void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &decide) {
-	// Handle WHEN/PER wrappers: BoundConjunctionExpression with alias tag
-	// Recurse into child[0] (the actual constraint)
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(conj.alias)) {
-			// child[0] is the wrapped constraint
-			if (!conj.children.empty()) {
-				FindNotEqualConstraints(*conj.children[0], decide);
-			}
+	ForEachConstraintLeaf(expr, [&](Expression &node) {
+		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
 		}
-		// Regular AND conjunction — recurse into all children
-		for (auto &child : conj.children) {
-			FindNotEqualConstraints(*child, decide);
+		auto &comp = node.Cast<BoundComparisonExpression>();
+		if (comp.type != ExpressionType::COMPARE_NOTEQUAL) {
+			return;
 		}
-		return;
-	}
-
-	// Found a not-equal comparison — create an indicator variable
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		auto &comp = expr.Cast<BoundComparisonExpression>();
-		if (comp.type == ExpressionType::COMPARE_NOTEQUAL) {
-			// No indicator variable. Whether a `<>` even HAS a disjunction to switch is a
-			// question about evaluated data — a range that lies wholly on one side of `K`
-			// collapses to a plain inequality — and an aggregate spelling needs one binary
-			// per GROUP rather than per row. Neither is knowable here, so allocating a
-			// row-scoped binary per data row now meant allocating one for every clause
-			// that turned out to need none.
-			//
-			// What stage 05 owns is the marking: which clause this is, and the text to
-			// call it in a diagnosis. The clause index rides the tag; stage 06 allocates
-			// the binaries for the disjunctions it actually emits, and labels them here.
-			idx_t clause_idx = decide.ne_clause_labels.size();
-			decide.ne_clause_labels.push_back(DiagnosisComparand(*comp.left) + " <> " +
-			                                  DiagnosisComparand(*comp.right));
-			AddDecideTag(comp.alias, string(NE_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "__");
-		}
-	}
+		// No indicator variable. Whether a `<>` even HAS a disjunction to switch is a
+		// question about evaluated data — a range that lies wholly on one side of `K`
+		// collapses to a plain inequality — and an aggregate spelling needs one binary
+		// per GROUP rather than per row. Neither is knowable here, so allocating a
+		// row-scoped binary per data row now meant allocating one for every clause
+		// that turned out to need none.
+		//
+		// What stage 05 owns is the marking: which clause this is, and the text to
+		// call it in a diagnosis. The clause index rides the tag; stage 06 allocates
+		// the binaries for the disjunctions it actually emits, and labels them here.
+		idx_t clause_idx = decide.ne_clause_labels.size();
+		decide.ne_clause_labels.push_back(DiagnosisComparand(*comp.left) + " <> " +
+		                                  DiagnosisComparand(*comp.right));
+		AddDecideTag(comp.alias, string(NE_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "__");
+	});
 }
 
 // ---------------------------------------------------------------------------

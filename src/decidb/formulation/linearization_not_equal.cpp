@@ -11,8 +11,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
-#include <unordered_map>
 #include "duckdb/decidb/formulation/ilp_linearization_internal.hpp"
 
 namespace duckdb {

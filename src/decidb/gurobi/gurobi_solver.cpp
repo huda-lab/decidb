@@ -330,6 +330,41 @@ void GurobiSession::Load(const SolverModel &ilp) {
     }
 }
 
+//! What an incumbent readback found. Both flags are false when Gurobi is holding no
+//! feasible solution at all.
+struct GurobiIncumbent {
+    //! SolCount > 0: Gurobi has a feasible incumbent, so its incumbent attributes are
+    //! real numbers rather than the ±1e100 "nothing here" sentinels it returns anyway.
+    //! This alone does not make the result usable: row delivery also needs the vector.
+    bool exists = false;
+    //! The solution vector itself was read back into `result.solution`.
+    bool vector_read = false;
+};
+
+//! Read the incumbent Gurobi is holding into `result`: its objective value and its
+//! solution vector, both gated on SolCount. Shared by every non-optimal status that
+//! still returns rows -- a time-limit or interrupt stop and a SUBOPTIMAL finish --
+//! which differ only in what they require of the answer, not in how they read it.
+static GurobiIncumbent ReadIncumbent(const GurobiAPI &api, void *model, idx_t total_vars,
+                                     SolverResult &result) {
+    GurobiIncumbent found;
+    int sol_count = 0;
+    if (api.getintattr(model, GRB_INT_ATTR_SOLCOUNT, &sol_count) != 0 || sol_count <= 0) {
+        return found;
+    }
+    found.exists = true;
+    double obj_val = 0.0;
+    if (api.getdblattr(model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
+        result.objective_value = obj_val;
+    }
+    vector<double> incumbent(total_vars);
+    if (api.getdblattrarray(model, GRB_DBL_ATTR_X, 0, (int)total_vars, incumbent.data()) == 0) {
+        result.solution = std::move(incumbent);
+        found.vector_read = true;
+    }
+    return found;
+}
+
 SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
     auto &api = GurobiLoader::API();
 
@@ -406,10 +441,10 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
 
     // Soundness: never relabel a non-OPTIMAL termination to OPTIMAL. A
     // suboptimal-but-feasible incumbent at TIME_LIMIT / ITER_LIMIT / etc. is
-    // not a proof of optimality; returning it as if it were would silently
-    // mislead the caller. Instead we map the raw status to a SolverStatus and
-    // return it (no solution); the operator either surfaces the default error for an
-    // unprefixed statement or routes it to diagnosis under DIAGNOSE.
+    // not a proof of optimality; returning it as if it were optimal would silently
+    // mislead the caller. Instead we map the raw status to a SolverStatus and attach
+    // an incumbent only for statuses whose contract supports one. The operator then
+    // decides whether to deliver it with a caveat or surface the status as an error.
     if (status != GRB_OPTIMAL) {
         SolverResult result;
         result.raw_status = status;
@@ -441,17 +476,12 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
                 std::isfinite(obj_bound) && std::fabs(obj_bound) < EFFECTIVE_INFINITY) {
                 result.best_bound = obj_bound;
             }
-            // Incumbent reads (objective / gap / solution vector) are only valid
-            // when Gurobi found at least one feasible solution; with SolCount == 0
-            // ObjVal/MIPGap succeed but return the -1e100 / 1e100 sentinels, so
-            // gate every incumbent read on SolCount.
-            int sol_count = 0;
-            if (api.getintattr(guard.model, GRB_INT_ATTR_SOLCOUNT, &sol_count) == 0 && sol_count > 0) {
+            // A stop-with-best-so-far is usable only when the solution vector itself
+            // was read. SolCount and ObjVal without X describe an incumbent Gurobi has,
+            // but not one DECIDE can safely turn into output rows.
+            auto incumbent = ReadIncumbent(api, guard.model, total_vars, result);
+            if (incumbent.vector_read) {
                 result.has_solution = true;
-                double obj_val = 0.0;
-                if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
-                    result.objective_value = obj_val;
-                }
                 // MIPGap is unavailable on LP/QP models (the read fails) and is
                 // the 1e100 sentinel when no bound exists yet; keep NaN in both
                 // cases so the report omits the closeness claim instead of
@@ -461,11 +491,9 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
                     std::isfinite(mip_gap) && mip_gap < EFFECTIVE_INFINITY) {
                     result.gap = mip_gap;
                 }
-                vector<double> incumbent(total_vars);
-                if (api.getdblattrarray(guard.model, GRB_DBL_ATTR_X, 0, (int)total_vars,
-                                        incumbent.data()) == 0) {
-                    result.solution = std::move(incumbent);
-                }
+            } else if (incumbent.exists) {
+                // Do not leave an objective behind for a solution we cannot deliver.
+                result.objective_value = 0.0;
             }
             break;
         }
@@ -480,19 +508,13 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
             // caveat. Guard on SolCount and a successful vector read: if no usable
             // incumbent exists (should not happen for SUBOPTIMAL), fall back to the
             // generic error path so we never route an empty solution to success.
-            int sol_count = 0;
-            vector<double> incumbent(total_vars);
-            if (api.getintattr(guard.model, GRB_INT_ATTR_SOLCOUNT, &sol_count) == 0 && sol_count > 0 &&
-                api.getdblattrarray(guard.model, GRB_DBL_ATTR_X, 0, (int)total_vars,
-                                    incumbent.data()) == 0) {
+            if (ReadIncumbent(api, guard.model, total_vars, result).vector_read) {
                 result.status = SolverStatus::SUBOPTIMAL;
                 result.has_solution = true;
-                result.solution = std::move(incumbent);
-                double obj_val = 0.0;
-                if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJVAL, &obj_val) == 0) {
-                    result.objective_value = obj_val;
-                }
             } else {
+                // Drop an objective the readback may have set: without the vector
+                // behind it there is no solution to report it against.
+                result.objective_value = 0.0;
                 result.status = SolverStatus::OTHER;
             }
             break;

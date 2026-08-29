@@ -16,6 +16,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 #include <functional>
@@ -1159,7 +1160,7 @@ private:
 		case ExpressionClass::BOUND_CONJUNCTION: {
 			auto &conj = expr.Cast<BoundConjunctionExpression>();
 			// DecidB: PER wrapper — outermost layer
-			if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
+			if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
 				// child[0] = the constraint (possibly WHEN-wrapped)
 				// children[1..N] = the PER column expressions
 				vector<unique_ptr<Expression>> per_cols;
@@ -1170,7 +1171,7 @@ private:
 				break;
 			}
 			// DecidB: Check if this is a WHEN constraint wrapper
-			if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
+			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
 				// child[0] = the actual constraint, child[1] = the WHEN condition
 				AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(), std::move(per_columns));
 				break;
@@ -1534,7 +1535,7 @@ private:
 		vector<unique_ptr<Expression>> per_cols;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
+			if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
 				for (idx_t i = 1; i < conj.children.size(); i++) {
 					per_cols.push_back(conj.children[i]->Copy());
 				}
@@ -1546,7 +1547,7 @@ private:
 		unique_ptr<Expression> when_cond;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
+			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
 				when_cond = conj.children[1]->Copy();
 				// Unwrap to get the actual objective expression
 				expr = UnwrapDecideCasts(*conj.children[0], decide_index);

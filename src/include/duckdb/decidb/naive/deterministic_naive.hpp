@@ -1,7 +1,7 @@
 #pragma once
 
-#include "duckdb/decidb/solver/solver_capabilities.hpp"
-#include "duckdb/decidb/solver/solver_input.hpp"
+#include "duckdb/common/decide_solver_capabilities.hpp"
+#include "duckdb/decidb/formulation/solver_input.hpp"
 #include "duckdb/decidb/solver/solver_result.hpp"
 
 namespace duckdb {

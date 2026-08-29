@@ -27,6 +27,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -120,13 +121,15 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		// PER: only the constraint (child 0) carries bounds; the grouping columns do not.
-		if (IsPerConstraintTag(conj.alias) && conj.children.size() >= 2) {
+		if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
 			AbsorbBoundsInExpression(*conj.children[0], decide);
 			break;
 		}
 		// WHEN: conditional per-row constraints must NOT contribute to a global bound.
-		// `x <= 0 WHEN c` does not mean `x <= 0` everywhere.
-		if (HasDecideTag(conj.alias, WHEN_CONSTRAINT_TAG) && conj.children.size() == 2) {
+		// `x <= 0 WHEN c` does not mean `x <= 0` everywhere. This is why the pass keeps
+		// its own descent rather than using ForEachConstraintLeaf -- it asks the shared
+		// predicate what a wrapper is, then deliberately answers differently.
+		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
 			break;
 		}
 		for (auto &child : conj.children) {

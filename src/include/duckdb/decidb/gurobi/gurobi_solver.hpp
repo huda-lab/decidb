@@ -9,7 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/decidb/solver/solver_capabilities.hpp"
+#include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/decidb/solver/solver_result.hpp"
 
 namespace duckdb {

@@ -54,22 +54,12 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 }
 
 //! Identify whether a bound expression is a single DECIDE variable reference
-//! and return its index. Unwraps CAST nodes (DuckDB inserts implicit casts
-//! when operand types differ, e.g. INTEGER * DOUBLE).
-//! Returns INVALID_INDEX if not a single variable.
+//! and return its index; INVALID_INDEX if it is not one. The casts DuckDB inserts
+//! when operand types differ (e.g. INTEGER * DOUBLE) are looked through by the cast
+//! policy, which owns that decision -- this pass does not make it again.
 static idx_t GetSingleDecideVarIdx(const Expression &expr, idx_t decide_index) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &colref = expr.Cast<BoundColumnRefExpression>();
-		if (colref.binding.table_index == decide_index) {
-			return colref.binding.column_index;
-		}
-	}
-	// Unwrap CAST nodes
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		auto &cast = expr.Cast<BoundCastExpression>();
-		return GetSingleDecideVarIdx(*cast.child, decide_index);
-	}
-	return DConstants::INVALID_INDEX;
+	auto *colref = GetBareDecideColumnRef(expr, decide_index);
+	return colref ? colref->binding.column_index : DConstants::INVALID_INDEX;
 }
 
 //! Recursively find all DECIDE variable indices referenced in an expression

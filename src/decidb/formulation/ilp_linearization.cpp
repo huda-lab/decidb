@@ -1,11 +1,15 @@
+//===----------------------------------------------------------------------===//
+//                         DecidB
+//
+// src/decidb/formulation/ilp_linearization.cpp
+//
+// The lowering entry point and the global-auxiliary allocators every pass shares.
+// The passes themselves live in the linearization_*.cpp siblings.
+//
+//===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization_internal.hpp"
-
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <unordered_map>
 
 namespace duckdb {
 
@@ -84,7 +88,6 @@ void decide_linearize::PinGlobalAux(SolverInput &input, const VarIndexer &indexe
     input.global_lower_bounds[local] = value;
     input.global_upper_bounds[local] = value;
 }
-
 
 //===--------------------------------------------------------------------===//
 // Lowering: constructs the chosen backend cannot state
