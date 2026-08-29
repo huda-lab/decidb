@@ -19,7 +19,7 @@
 #include "duckdb/decidb/ilp_model.hpp"
 #include "duckdb/decidb/ilp_linearization.hpp"
 #include "duckdb/decidb/decide_diagnostic.hpp"
-#include "duckdb/decidb/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/decidb/decide_diagnostic_engines.hpp"
 #include "duckdb/decidb/decide_router.hpp"
 #include "duckdb/common/enums/decide.hpp"

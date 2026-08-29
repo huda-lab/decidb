@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DuckDB / DeciDB
 //
-// duckdb/decidb/utility/decide_parse_hints.hpp
+// duckdb/parser/decide/decide_parse_hints.hpp
 //
 // Post-parse error augmentation for DECIDE clauses. Objective WHEN accepts one
 // comparison between atomic operands; constraint-local WHEN stays narrow so it

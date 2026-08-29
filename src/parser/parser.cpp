@@ -15,7 +15,7 @@
 #include "parser/parser.hpp"
 #include "postgres_parser.hpp"
 
-#include "duckdb/decidb/utility/decide_parse_hints.hpp"
+#include "duckdb/parser/decide/decide_parse_hints.hpp"
 
 namespace duckdb {
 

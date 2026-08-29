@@ -2,7 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
-#include "duckdb/decidb/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"

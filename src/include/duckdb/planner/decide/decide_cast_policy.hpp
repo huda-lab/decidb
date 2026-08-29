@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// duckdb/decidb/decide_cast_policy.hpp
+// duckdb/planner/decide/decide_cast_policy.hpp
 //
 // The single answer to "what does a cast mean over a decision variable?"
 //===----------------------------------------------------------------------===//
