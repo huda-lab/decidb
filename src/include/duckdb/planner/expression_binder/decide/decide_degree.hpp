@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
-// duckdb/planner/expression_binder/decide_degree.hpp
+// duckdb/planner/expression_binder/decide/decide_degree.hpp
 //
 //
 //===----------------------------------------------------------------------===//

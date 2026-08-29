@@ -1,5 +1,5 @@
-#include "duckdb/planner/expression_binder/decide_binder.hpp"
-#include "duckdb/planner/expression_binder/decide_degree.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"

@@ -1,4 +1,4 @@
-#include "duckdb/planner/expression_binder/decide_degree.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp"

@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
-// duckdb/planner/expression_binder/decide_binder.hpp
+// duckdb/planner/expression_binder/decide/decide_binder.hpp
 //
 //
 //===----------------------------------------------------------------------===//

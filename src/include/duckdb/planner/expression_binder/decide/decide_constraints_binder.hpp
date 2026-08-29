@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
-// duckdb/planner/expression_binder/decide_constraints_binder.hpp
+// duckdb/planner/expression_binder/decide/decide_constraints_binder.hpp
 //
 //
 //===----------------------------------------------------------------------===//
@@ -9,7 +9,7 @@
 #pragma once
 
 #include "duckdb/planner/expression_binder.hpp"
-#include "duckdb/planner/expression_binder/decide_binder.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
 #include "duckdb/common/enums/decide.hpp"
 
 namespace duckdb {

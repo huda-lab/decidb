@@ -1,3 +1,5 @@
+add_subdirectory(decide)
+
 add_library_unity(
   duckdb_expression_binders
   OBJECT
@@ -7,10 +9,6 @@ add_library_unity(
   check_binder.cpp
   column_alias_binder.cpp
   constant_binder.cpp
-  decide_binder.cpp
-  decide_constraints_binder.cpp
-  decide_degree.cpp
-  decide_objective_binder.cpp
   group_binder.cpp
   having_binder.cpp
   lateral_binder.cpp
