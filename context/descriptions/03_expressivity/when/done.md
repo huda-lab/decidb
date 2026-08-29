@@ -69,7 +69,7 @@ An empty aggregate has no well-defined value; check your WHEN clause.
 **Code pointers**:
 - Guard helper: `RejectEmptyAggregate` in `src/execution/operator/decide/physical_decide.cpp`.
 - Four insertion sites: constraint `row_group_ids` build (after the WHEN/PER unified evaluation), objective WHEN/per-term filter application, composed MIN/MAX constraint `z_k` loop, composed MIN/MAX objective `z_k` loop.
-- Easy-direction tag: `MINMAX_EASY_REWRITE_TAG` in `src/include/duckdb/common/enums/decide.hpp`, set during `RewriteMinMaxInConstraint` in `src/optimizer/decide/decide_optimizer.cpp`, detected at physical plan construction to set `DecideConstraint.was_minmax_easy`.
+- Easy-direction tag: `MINMAX_EASY_REWRITE_TAG` in `src/include/duckdb/common/enums/decide.hpp`, set during `RewriteMinMaxInConstraint` in `src/optimizer/decide/decide_rewrite_minmax.cpp`, detected at physical plan construction to set `DecideConstraint.was_minmax_easy`.
 
 ---
 

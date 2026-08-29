@@ -309,7 +309,7 @@ SUCH THAT MAX(x * cost) <= 50 WHEN category = 'electronics'
 MINIMIZE MAX(x * deviation) WHEN active = 1
 ```
 
-**Code**: nothing rewrites a MIN/MAX before binding — a reducer is one atomic term to the canonicalizer, which never opens it, so a multi-term `inner` is safe by construction. (An earlier parsed-level representation encoded `MIN`/`MAX` as a `MARKER * inner` product, which algebraic expansion then distributed across a multi-term inner and scrambled; that is why a multi-term inner under a nested `SUM(...) PER` used to be rejected at bind time. Nothing distributes anything at that level now.) Post-bind, `DecideOptimizer::RewriteMinMaxConstraints`/`RewriteMinMaxInConstraint` (`decide_optimizer.cpp`) walk the bound expression tree to classify each MIN/MAX as easy/hard and emit the Big-M indicator scaffolding. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) whitelist MIN/MAX alongside SUM and AVG. At execution time, `physical_decide.cpp` generates the appropriate per-row constraints, Big-M indicator constraints, and global auxiliary variables. Global variable and constraint support is provided by `solver_input.hpp` and `ilp_model_builder.cpp`.
+**Code**: nothing rewrites a MIN/MAX before binding — a reducer is one atomic term to the canonicalizer, which never opens it, so a multi-term `inner` is safe by construction. (An earlier parsed-level representation encoded `MIN`/`MAX` as a `MARKER * inner` product, which algebraic expansion then distributed across a multi-term inner and scrambled; that is why a multi-term inner under a nested `SUM(...) PER` used to be rejected at bind time. Nothing distributes anything at that level now.) Post-bind, `DecideOptimizer::RewriteMinMaxConstraints`/`RewriteMinMaxInConstraint` (`decide_rewrite_minmax.cpp`) walk the bound expression tree to classify each MIN/MAX as easy/hard and emit the Big-M indicator scaffolding. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) whitelist MIN/MAX alongside SUM and AVG. At execution time, `physical_decide.cpp` generates the appropriate per-row constraints, Big-M indicator constraints, and global auxiliary variables. Global variable and constraint support is provided by `solver_input.hpp` and `ilp_model_builder.cpp`.
 
 ---
 
@@ -378,7 +378,7 @@ backend still gets, and the two reach the same optimum wherever both can run. Se
 
 Combined with the lower envelope, these force `d = |expr|` exactly regardless of constraint direction. `M` is computed at execution time from the bounds of variables in `expr` — when Path B is used, **every DECIDE variable referenced inside `ABS(expr)` must have a finite bound, either declared or inferred** by implied-bound propagation (e.g. `SUM(x) = K` implies `x <= K`; see `../../01_pipeline/05_optimizer/done.md`). Only when no bound can be derived is the query rejected. (Path A queries don't need bounds because the constraint itself bounds `d`.)
 
-The classifier (`TagAbsConstraintsForBigM` in `decide_optimizer.cpp`, via `CollectAbsWithSign`) walks the constraint tree once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. WHEN/PER wrappers don't change classification — the per-row Big-M envelope is unconditional, and the WHEN/PER filter only affects which rows participate in the outer aggregate or constraint.
+The classifier (`TagAbsConstraintsForBigM` in `decide_rewrite_abs.cpp`, via `CollectAbsWithSign`) walks the constraint tree once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. WHEN/PER wrappers don't change classification — the per-row Big-M envelope is unconditional, and the WHEN/PER filter only affects which rows participate in the outer aggregate or constraint.
 
 ### ABS in MINIMIZE objectives (lower-envelope)
 
@@ -411,8 +411,8 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 `ABS()` without decision variables (e.g., `ABS(col1 - col2)`) is left as regular SQL — no rewrite occurs.
 
 **Code**:
-- Constraint classifier: `TagAbsConstraintsForBigM` in `decide_optimizer.cpp` runs before `RewriteAbs`. Walks the constraint tree; for each comparison, `CollectAbsWithSign` gathers every ABS occurrence with the sign it carries in `LHS - RHS`, classifies each as Path A (sign pushes `d` down) or Path B (it does not), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
-- Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_optimizer.cpp`. Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to `AbsPairInfo`. Phase 2 emits the lower envelope unconditionally. For each pair where `needs_bigm || (in_objective && MAXIMIZE)`, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX` (payload: the **auxiliary's** index) and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The `y` binary is allocated **only when the query is being lowered** (`!decide.use_native_constructs.abs`); a backend that states `aux = |t|` natively emits no Big-M, so there is nothing for a sign indicator to switch and `y_idx` stays `INVALID_INDEX`. `y` is row-scoped, so allocating it on the native arm cost one dead binary per data row. The link vector is named `abs_maximize_links` for historical reasons but covers both Big-M users (objective MAXIMIZE and constraint hard-direction).
+- Constraint classifier: `TagAbsConstraintsForBigM` in `decide_rewrite_abs.cpp` runs before `RewriteAbs`. Walks the constraint tree; for each comparison, `CollectAbsWithSign` gathers every ABS occurrence with the sign it carries in `LHS - RHS`, classifies each as Path A (sign pushes `d` down) or Path B (it does not), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
+- Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_rewrite_abs.cpp`. Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to `AbsPairInfo`. Phase 2 emits the lower envelope unconditionally. For each pair where `needs_bigm || (in_objective && MAXIMIZE)`, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX` (payload: the **auxiliary's** index) and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The `y` binary is allocated **only when the query is being lowered** (`!decide.use_native_constructs.abs`); a backend that states `aux = |t|` natively emits no Big-M, so there is nothing for a sign indicator to switch and `y_idx` stays `INVALID_INDEX`. `y` is row-scoped, so allocating it on the native arm cost one dead binary per data row. The link vector is named `abs_maximize_links` for historical reasons but covers both Big-M users (objective MAXIMIZE and constraint hard-direction).
 - Tag constants: `ABS_UB_POS_TAG_PREFIX`, `ABS_UB_NEG_TAG_PREFIX`, `ABS_NEEDS_BIGM_TAG` in `decide.hpp`.
 - Tag parsing in `AnalyzeConstraint` (`decide_linear_form.cpp`) sets `DecideConstraint::abs_aux_idx`/`abs_is_pos_bound` (the field keys on the auxiliary because only the lowering arm has a `y`); execution copies them onward: these are copied to `EvaluatedConstraint`; the Big-M finalization block (after the bilinear block) iterates `abs_maximize_links`, computes M from variable bounds, and emits two derived `EvaluatedConstraint`s (C_ub1 and C_ub2) per ABS term. The error message at finite-bound check is generic (covers both objective-MAXIMIZE and constraint hard-direction triggers).
 - Transfer: `plan_decide.cpp` moves `abs_maximize_links` from logical to physical operator.
@@ -522,7 +522,7 @@ SUCH THAT SUM(x) = 5
 
 **Complexity**: Adds 1 binary variable and 2 constraints per `<>`. The Big-M value M is computed from variable bounds at execution time. Loose bounds produce weaker LP relaxations.
 
-**Code**: Auxiliary indicator variable created by `DecideOptimizer::RewriteNotEqual` in `decide_optimizer.cpp`; Big-M constraints generated at execution time in `physical_decide.cpp` (`Finalize()`), where data bounds are available.
+**Code**: Auxiliary indicator variable created by `DecideOptimizer::RewriteNotEqual` in `decide_rewrite_notequal_avg.cpp`; Big-M constraints generated at execution time in `physical_decide.cpp` (`Finalize()`), where data bounds are available.
 
 ### BETWEEN ... AND ...
 
@@ -552,7 +552,7 @@ SUCH THAT x IN (0, 1, 3)                -- decision variable domain restriction
 - `x IN (0, 1)` on BOOL → trivially satisfied, no rewrite
 - `x IN (v)` single value → rewritten to `x = v`
 
-**Code**: `decide_optimizer.cpp` (`DecideOptimizer::RewriteInDomain`), run on the bound tree. IN on aggregates (e.g., `SUM(x) IN (...)`) remains unsupported.
+**Code**: `decide_rewrite_norm_in.cpp` (`DecideOptimizer::RewriteInDomain`), run on the bound tree. IN on aggregates (e.g., `SUM(x) IN (...)`) remains unsupported.
 
 ---
 
@@ -622,7 +622,7 @@ after binding means types, scopes and casts are already resolved.
   exact (`z = 0 ⇒ expr = 0`) so "zero" rows read back as clean `0`; the trade-off is
   a small **dead zone** — a value *forced* into `(0, tol)` has no valid `z` and is
   reported infeasible (pathological, and genuinely tolerance-ambiguous).
-  Code: `decide_optimizer.cpp` (`DecideOptimizer::RewriteNorm`); the tolerance setting lives in
+  Code: `decide_rewrite_norm_in.cpp` (`DecideOptimizer::RewriteNorm`); the tolerance setting lives in
   `decide_diagnostic.cpp` (`L0ToleranceSetCallback` / `GetDecideL0Tolerance`).
 - **Big-M source.** `norm(expr, 0)` uses a placeholder `M` on the forward links
   (indicator `__l0auto_ind_*`) and the physical operator fills a tight per-problem

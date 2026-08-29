@@ -244,6 +244,6 @@ and the `N Rows` in `EXPLAIN ANALYZE` match the scan's cardinality.
 | Source fragments carried to both nodes | `LogicalDecide::source_fragments`, `PhysicalDecide::source_fragments` |
 | The three-layer record | `ConstraintSourceInfo` in `src/include/duckdb/common/decide_source_info.hpp` |
 | Layering and formatting | `CollectDecideClauseLayers` / `RenderDecideClauseLayers` / `RenderDecideObjectiveLayers` |
-| Clause id carried onto emitted rows | `MarkFormulationConstraint`, `CopySourceClauseTag`, `DescendSourceAlias` in `src/optimizer/decide/decide_optimizer.cpp` |
+| Clause id carried onto emitted rows | `MarkFormulationConstraint`, `CopySourceClauseTag`, `DescendSourceAlias` in `src/optimizer/decide/decide_optimizer.cpp` (shared via `decide_optimizer_internal.hpp`) |
 | Objective snapshots captured | `src/planner/binder/query_node/plan_select_node.cpp`, around `CanonicalizeObjective` |
 | Tests | `test/decide/tests/test_explain.py` — 35 cases over TPC-H, including `test_explain_renders_user_casts_only`, `test_explain_objective_when_postfix`, and the layered-rendering group; plus `test_diagnosis_written_clause.py::test_explain_leads_with_the_written_clause` |

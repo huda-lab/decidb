@@ -46,7 +46,13 @@ Stage numbers refer to [`README.md`](README.md).
 | `planner/decide/decide_canonicalizer.cpp` | 04 | ~985 | The one shape boundary |
 | `planner/decide/decide_source_provenance.cpp` | 03 | ~250 | Source display capture and rendering |
 | `planner/decide/decide_cast_policy.cpp` | 04 | ~60 | Cast unwrapping |
-| `optimizer/decide/decide_optimizer.cpp` | 05 | ~2,364 | All eight rewrite passes |
+| `optimizer/decide/decide_optimizer.cpp` | 05 | ~210 | The eight-pass dispatcher and the helpers the passes share |
+| `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | ~320 | `norm` and DECIDE-variable `IN` |
+| `optimizer/decide/decide_rewrite_notequal_avg.cpp` | 05 | ~175 | `<>` indicators and AVG→SUM |
+| `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ~450 | ABS Big-M tagging and linearization |
+| `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | ~805 | MIN/MAX, plain and composed |
+| `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | ~365 | Bilinear McCormick |
+| `optimizer/decide/decide_bound_absorption.cpp` | 05 | ~280 | Literal bounds folded into column boxes |
 | `execution/column_binding_resolver.cpp` | 03 | — | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | ~170 | Logical → physical, entity key indices, verification |
 | `execution/operator/decide/physical_decide.cpp` | 08 | ~7,400 | Extraction, materialization, evaluation, emission, readback |
@@ -189,7 +195,10 @@ classDiagram
   per-clause display registry, indexed by `source_clause_id`.
 
 ### `src/optimizer/decide/decide_optimizer.cpp` — stage 05
-- **`OptimizeDecide()`** — the eight-pass sequence.
+- **`OptimizeDecide()`** — the eight-pass sequence. Each pass body lives in a
+  `decide_rewrite_*.cpp` sibling (or `decide_bound_absorption.cpp`); this file keeps
+  the dispatcher, `AppendConstraint`, and the helpers the passes share, declared in
+  `decide_optimizer_internal.hpp`.
 
 ### `src/execution/operator/decide/physical_decide.cpp` — stage 08
 - **`GetGlobalSinkState()`** — constructs the sink state, which absorbs bounds and

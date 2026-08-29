@@ -8,9 +8,15 @@ decides shape, parses SQL, executes relations, or calls a solver.
 
 **Key source files**
 
-- `src/optimizer/decide/decide_optimizer.cpp` (~2,364 lines) — the rewrites
+- `src/optimizer/decide/decide_optimizer.cpp` (~210 lines) — the pass dispatcher
+  and the helpers the passes share; each pass body lives in a sibling file:
+  `decide_rewrite_norm_in.cpp`, `decide_rewrite_notequal_avg.cpp`,
+  `decide_rewrite_abs.cpp`, `decide_rewrite_minmax.cpp`,
+  `decide_rewrite_bilinear.cpp`, `decide_bound_absorption.cpp`
 - `src/optimizer/decide/decide_linear_form.cpp` (~1,600 lines) — the flattening
 - `src/include/duckdb/optimizer/decide/decide_optimizer.hpp`
+- `src/include/duckdb/optimizer/decide/decide_optimizer_internal.hpp` — helpers
+  shared across the pass files
 - `src/include/duckdb/optimizer/decide/decide_linear_form.hpp`
 - `src/include/duckdb/planner/decide/decide_prepared_model.hpp` — the form itself,
   owned by stage 03 because `LogicalDecide` is what carries it across the boundary
@@ -558,7 +564,13 @@ stage 07.
 
 | Concern | Location |
 |---|---|
-| The rewrites | `src/optimizer/decide/decide_optimizer.cpp` |
+| The pass dispatcher and shared helpers | `src/optimizer/decide/decide_optimizer.cpp`, `decide_optimizer_internal.hpp` |
+| `norm` / `IN` | `src/optimizer/decide/decide_rewrite_norm_in.cpp` |
+| `<>` / AVG→SUM | `src/optimizer/decide/decide_rewrite_notequal_avg.cpp` |
+| ABS | `src/optimizer/decide/decide_rewrite_abs.cpp` |
+| MIN/MAX, plain and composed | `src/optimizer/decide/decide_rewrite_minmax.cpp` |
+| Bilinear McCormick | `src/optimizer/decide/decide_rewrite_bilinear.cpp` |
+| Bound absorption | `src/optimizer/decide/decide_bound_absorption.cpp` |
 | Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |
 | Backend selection and the model-class gate | `src/optimizer/decide/decide_solver_gate.cpp` |
 | Pass inventory and helper contracts | `src/include/duckdb/optimizer/decide/decide_optimizer.hpp` |

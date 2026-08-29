@@ -99,7 +99,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 
 1. **Binder** (`decide_binder.cpp`): Relaxed validation to allow `decide_count == 2` products when `allow_quadratic` or `allow_bilinear` is true. Triple products (`a * b * c`) rejected. `allow_bilinear` parameter added for constraints (separate from `allow_quadratic` to prevent POWER in constraints).
 
-3. **Optimizer** (`decide_optimizer.cpp`): `RewriteBilinear()` pass runs after `RewriteAbs`, before `RewriteMinMax`. Walks both objective and constraint expressions:
+3. **Optimizer** (`decide_rewrite_bilinear.cpp`): `RewriteBilinear()` pass runs after `RewriteAbs`, before `RewriteMinMax`. Walks both objective and constraint expressions:
    - Detects `*` nodes where both children reference different decide variables
    - Skips identical expressions (existing QP path)
    - For Bool x Bool: AND-linearization with 3 structural constraints, BOOL auxiliary
@@ -140,7 +140,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 - **Binder validation**: `src/planner/expression_binder/decide/decide_binder.cpp` — `ValidateSumArgumentInternal()`, `allow_bilinear` parameter
 - **Constraint binder**: `src/planner/expression_binder/decide/decide_constraints_binder.cpp` — passes `allow_bilinear=true`
 - **Canonicalization**: a bilinear product is one atomic term. `DecideCanonicalizer` decides the constraint's shape and the objective's spine without ever opening the product, in both clauses identically — see `../../01_pipeline/04_canonicalizer/done.md` §3.3. Distribution over a sum happens later, at physical extraction (`TryDistributeMultiplyOverAdd`)
-- **Optimizer rewrite**: `src/optimizer/decide/decide_optimizer.cpp` — `RewriteBilinear()`, `FindAndReplaceBilinear()`
+- **Optimizer rewrite**: `src/optimizer/decide/decide_rewrite_bilinear.cpp` — `RewriteBilinear()`, `FindAndReplaceBilinear()`
 - **Boolean type tracking**: `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — `is_boolean_var`
 - **Bilinear link struct**: `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — `BilinearLink`
 - **Physical execution**: `src/execution/operator/decide/physical_decide.cpp` — `ExtractLinearAndBilinearTerms()`, `ExtractConstraintTerms()`, `ClassifyNormalizedProduct()`, `BuildCoefficientFromFactors()`, McCormick Big-M generation
@@ -151,7 +151,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 
 ### McCormick auxiliary type preserves integer-valuedness
 
-Inside `FindAndReplaceBilinear` (`src/optimizer/decide/decide_optimizer.cpp:1766`), the McCormick auxiliary `w = b * x` is declared `LogicalType::INTEGER` whenever the non-Boolean factor is integer-typed (Bool × Integer → integer-valued product) and `DOUBLE` otherwise. This is load-bearing for the strict-inequality / NE guard at `src/decidb/formulation/ilp_model_builder.cpp:332` (`IsEvalConstraintLhsIntegerValued`), which inspects the declared type of every LHS auxiliary to decide whether the integer-step rewrite (`< K → <= K-1`, `<> K` disjunction) is safe. Marking Bool × Integer auxiliaries as DOUBLE would silently disable that rewrite and push otherwise-valid strict-inequality constraints into the rejection path. Covered implicitly by `test/decide/tests/test_cons_comparison.py::test_bilinear_bool_int_strict_oracle`; update both sites together if the McCormick auxiliary classification is ever revisited.
+Inside `FindAndReplaceBilinear` (`src/optimizer/decide/decide_rewrite_bilinear.cpp`), the McCormick auxiliary `w = b * x` is declared `LogicalType::INTEGER` whenever the non-Boolean factor is integer-typed (Bool × Integer → integer-valued product) and `DOUBLE` otherwise. This is load-bearing for the strict-inequality / NE guard at `src/decidb/formulation/ilp_model_builder.cpp:332` (`IsEvalConstraintLhsIntegerValued`), which inspects the declared type of every LHS auxiliary to decide whether the integer-step rewrite (`< K → <= K-1`, `<> K` disjunction) is safe. Marking Bool × Integer auxiliaries as DOUBLE would silently disable that rewrite and push otherwise-valid strict-inequality constraints into the rejection path. Covered implicitly by `test/decide/tests/test_cons_comparison.py::test_bilinear_bool_int_strict_oracle`; update both sites together if the McCormick auxiliary classification is ever revisited.
 
 ---
 

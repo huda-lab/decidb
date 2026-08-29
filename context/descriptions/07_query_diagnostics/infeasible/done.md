@@ -253,7 +253,7 @@ group, same clause text, with the key in `group`.
 
 **easy-MAX + PER is one global cap, correctly.** `MAX(x) <= K PER g` is mathematically
 `x <= K` for **every** row, so the optimizer's easy-MIN/MAX rewrite strips the (vacuous) PER
-wrapper (`decide_optimizer.cpp`, `RewriteMinMaxInConstraint`) and the cap is absorbed as one
+wrapper (`decide_rewrite_minmax.cpp`, `RewriteMinMaxInConstraint`) and the cap is absorbed as one
 uniform column bound. There is genuinely no per-group *cap* to break out — the diagnosis
 reports the single global edit (`x <= K` → `x <= K + max overshoot`) in **both** modes, which
 is exactly right. (This resolves the former "easy-MAX+PER collapses" note: it was not a bug,
