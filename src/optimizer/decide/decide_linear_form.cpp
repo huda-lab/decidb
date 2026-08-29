@@ -307,11 +307,11 @@ private:
 	}
 
 	bool TryGetBareDecideFactor(const Expression &expr, idx_t &var_idx) const {
-		const Expression *cur = UnwrapDecideCasts(expr, decide_index);
-		if (cur->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		auto *colref = GetBareDecideColumnRef(expr, decide_index);
+		if (!colref) {
 			return false;
 		}
-		var_idx = FindDecideVariable(*cur);
+		var_idx = FindDecideVariable(*colref);
 		return var_idx != DConstants::INVALID_INDEX;
 	}
 
@@ -498,7 +498,8 @@ private:
 		return expr.Copy();
 	}
 
-	//! Result of DetectQuadraticPattern. `inner_linear_expr` is a non-owning
+	//! Result of DetectQuadraticPattern, shared by objective and constraint
+	//! term extraction. `inner_linear_expr` is a non-owning
 	//! pointer into the tree rooted at the caller's expression (valid only
 	//! while that tree is alive). `sign` carries the scalar multiplier from
 	//! negation and constant-times-quadratic patterns (e.g. `-POWER(x,2)` → -1,
@@ -1066,75 +1067,23 @@ private:
 				ExtractConstraintTerms(*func.children[0], constr, -sign, filter);
 				return;
 			}
-			// Helper: try to detect POWER(expr, 2), POW(expr, 2), expr ** 2,
-			// or (expr)*(expr) self-product. Returns the inner expression on success.
-			auto TryDetectConstraintQuadratic = [&](const Expression *test_expr) -> const Expression * {
-				test_expr = UnwrapDecideCasts(*test_expr, decide_index);
-				if (test_expr->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) return nullptr;
-				auto &qf = test_expr->Cast<BoundFunctionExpression>();
-				string qname = StringUtil::Lower(qf.function.name);
-				// POWER/POW/** with exponent 2
-				if ((qname == "power" || qname == "pow" || qname == "**") && qf.children.size() == 2) {
-					double exponent;
-					if (TryEvaluateFoldableDouble(context, *qf.children[1], exponent)) {
-						if (exponent == 2.0) {
-							const Expression *inner = UnwrapDecideCasts(*qf.children[0], decide_index);
-							if (FindDecideVariable(*inner) != DConstants::INVALID_INDEX) {
-								AssertSquaredInnerIsLinear(*inner, "POWER(..., 2)");
-								return inner;
-							}
-						}
-					}
+			// POWER(e,2) / POW / ** / (e)*(e), on its own or scaled by a constant.
+			// The shared detector folds that scalar into `pattern.sign`; fold it into
+			// the group's sign here. (Its unary-minus arm never fires from this call
+			// site -- the `-` cases above already peeled the negation into `sign`.)
+			auto quad_pattern = DetectQuadraticPattern(expr);
+			if (quad_pattern.inner_linear_expr) {
+				DecideConstraint::QuadraticGroup qg;
+				qg.sign = static_cast<double>(sign) * quad_pattern.sign;
+				if (filter) {
+					qg.filter = filter->Copy();
 				}
-				// Self-product: (expr)*(expr) with identical sides
-				if (qname == "*" && qf.children.size() == 2 &&
-				    Expression::Equals(*qf.children[0], *qf.children[1]) &&
-				    FindDecideVariable(*qf.children[0]) != DConstants::INVALID_INDEX) {
-					const Expression *inner = UnwrapDecideCasts(*qf.children[0], decide_index);
-					AssertSquaredInnerIsLinear(*inner, "self-product (expr) * (expr)");
-					return inner;
-				}
-				return nullptr;
-			};
-
-			// Direct POWER/self-product detection
-			{
-				const Expression *inner = TryDetectConstraintQuadratic(&func);
-				if (inner) {
-					DecideConstraint::QuadraticGroup qg;
-					qg.sign = static_cast<double>(sign);
-					if (filter) {
-						qg.filter = filter->Copy();
-					}
-					ExtractTerms(*inner, qg.inner_terms);
-					constr.quadratic_groups.push_back(std::move(qg));
-					constr.has_quadratic = true;
-					return;
-				}
+				ExtractTerms(*quad_pattern.inner_linear_expr, qg.inner_terms);
+				constr.quadratic_groups.push_back(std::move(qg));
+				constr.has_quadratic = true;
+				return;
 			}
 			if (fname == "*") {
-				// Scaled quadratic: const * POWER(expr, 2) or POWER(expr, 2) * const
-				if (func.children.size() == 2) {
-					for (idx_t side = 0; side < 2; side++) {
-						double cval;
-						if (TryEvaluateFoldableDouble(context, *func.children[side], cval)) {
-							if (cval != 0.0) {
-								const Expression *inner = TryDetectConstraintQuadratic(func.children[1 - side].get());
-								if (inner) {
-									DecideConstraint::QuadraticGroup qg;
-									qg.sign = static_cast<double>(sign) * cval;
-									if (filter) {
-										qg.filter = filter->Copy();
-									}
-									ExtractTerms(*inner, qg.inner_terms);
-									constr.quadratic_groups.push_back(std::move(qg));
-									constr.has_quadratic = true;
-									return;
-								}
-							}
-						}
-					}
-				}
 				// Distribution must come BEFORE ClassifyNormalizedProduct, since
 				// the classifier throws on additive factors instead of returning
 				// false. Shapes like `K * (1 - pick)` reach here from MIN/MAX
