@@ -10,7 +10,13 @@ SQL-expression canonicalization and knows nothing about any backend.
 **Key source files**
 
 - `src/decidb/formulation/ilp_model_builder.cpp` — `SolverModel::Build()`
-- `src/decidb/formulation/ilp_linearization.cpp` — Big-M constants, hard MIN/MAX rows
+- `src/decidb/formulation/ilp_linearization.cpp` — global-auxiliary allocation and
+  `LowerDecideConstructs`, the entry point; the passes themselves live alongside it in
+  `linearization_bigm.cpp` (Big-M constants and the per-row range walks),
+  `linearization_minmax.cpp`, `linearization_not_equal.cpp` and
+  `linearization_bilinear_abs.cpp`
+- `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` — the helpers
+  those files share
 - `src/include/duckdb/decidb/formulation/ilp_model.hpp` — `VarIndexer`, `SolverModel`, provenance
 - `src/include/duckdb/decidb/solver/solver_input.hpp` — the input contract
 
@@ -350,7 +356,7 @@ the column, rather than at the solver where it cannot.
 
 ## 9. Linearization
 
-`src/decidb/formulation/ilp_linearization.cpp` holds the half of a formulation that
+The `src/decidb/formulation/` linearization files hold the half of a formulation that
 only becomes writable once coefficients are numbers. Stage 05 decides *which*
 encoding a construct gets and records it as a tag on the constraint; this unit
 turns the tag into rows. Everything in it is a pure function of `SolverInput`
@@ -915,7 +921,12 @@ columns still name a decide variable in that message.
 | Concern | Location |
 |---|---|
 | `SolverModel::Build`, all constraint paths, Q construction | `src/decidb/formulation/ilp_model_builder.cpp` |
-| Implied bounds, Big-M constants, MIN/MAX (constraint, objective, composed), `<>`, McCormick, ABS rows | `src/decidb/formulation/ilp_linearization.cpp` |
+| `LowerDecideConstructs`, global-auxiliary allocation, flat column boxes | `src/decidb/formulation/ilp_linearization.cpp` |
+| Implied bounds, Big-M constants, per-row range walks | `src/decidb/formulation/linearization_bigm.cpp` |
+| MIN/MAX — constraint, objective, extremum links, composed | `src/decidb/formulation/linearization_minmax.cpp` |
+| `<>` collapse classification and Big-M disjunction | `src/decidb/formulation/linearization_not_equal.cpp` |
+| McCormick and ABS rows | `src/decidb/formulation/linearization_bilinear_abs.cpp` |
+| Helpers shared across those files | `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` |
 | `MinMaxObjectiveSpec`, `ComposedMinMaxTermData` — what stage 08 hands over | `src/include/duckdb/decidb/formulation/ilp_linearization.hpp` |
 | `BilinearLinkSpec`, `AbsMaximizeLinkSpec` — the formulation tags | `src/include/duckdb/decidb/solver/solver_input.hpp` |
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |

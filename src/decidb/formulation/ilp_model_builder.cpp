@@ -159,7 +159,9 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
         return;
     }
     if (!offsets.empty()) {
-        // Already built; reuse.
+        // Already built; reuse. Both call sites pass freshly-cleared vectors, so this
+        // looks unreachable today — it is kept as the contract for a caller that wants
+        // to build the CSR once and reuse it across constraints.
         return;
     }
     offsets.assign(num_groups + 1, 0);

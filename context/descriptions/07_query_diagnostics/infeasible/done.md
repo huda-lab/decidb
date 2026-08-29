@@ -503,7 +503,7 @@ all carried on `ConstraintProvenance` (no change to PER solve logic):
   (F2 site 3), which used to stamp the group *key* but pass an empty label. That gap was
   visible on a hard MIN/MAX whose bound no row in a group can reach: the rewrite drops the
   MIN/MAX marking and re-emits that group as ordinary per-row rows
-  (`ilp_linearization.cpp`, the `NO_SOLUTION` branch), so the per-row site is the only one
+  (`linearization_minmax.cpp`, the `NO_SOLUTION` branch), so the per-row site is the only one
   that ever sees it, and `CollectUnreachableClauses` reported the clause with no group.
   A grouped failure now names the group it sits in (`MIN(x) <= -inf PER g`, group `0`)
   rather than sending the user through every group. In expanded mode the diagnosis copies
@@ -804,7 +804,7 @@ loosen repairs.
 
 Stage 2 above picks the best repair **among those the elastic model can express**, and that
 qualifier used to cost the user real advice. Every Big-M and every derived column ceiling in
-`ilp_linearization.cpp` is sized from the decision box as the query states it — correct for
+the `linearization_*.cpp` files is sized from the decision box as the query states it — correct for
 the solve, wrong for the diagnosis that follows an infeasible one, because the repair the
 engine is looking for is precisely a **widening** of that box. A ceiling baked in at the old
 width makes the widened repair unrepresentable, and stage 2 then reports whatever else it can
@@ -839,7 +839,7 @@ on both backends across this change. A looser M is valid in any case; it only sl
 deactivated arm of a disjunction, whereas a too-small one cuts off legal answers.
 
 **Where it lands.**
-- **ABS** — `DemandedAuxReach` (`ilp_linearization.cpp`) returns the largest value any clause
+- **ABS** — `DemandedAuxReach` (`linearization_bilinear_abs.cpp`) returns the largest value any clause
   requires the auxiliary to hold, and `DeriveAbsAuxiliaryBounds` takes `max(box reach, demand)`
   before setting `link.abs_range` and the auxiliary's ceiling. Both consumers follow: the
   ceiling, and the `2M` envelope `LinearizeAbsMaximize` emits off `abs_range`. The demand is

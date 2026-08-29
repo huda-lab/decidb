@@ -57,6 +57,11 @@ Stage numbers refer to [`README.md`](README.md).
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | ~170 | Logical → physical, entity key indices, verification |
 | `execution/operator/decide/physical_decide.cpp` | 08 | ~7,400 | Extraction, materialization, evaluation, emission, readback |
 | `decidb/formulation/ilp_model_builder.cpp` | 06 | ~1,400 | `SolverModel::Build` |
+| `decidb/formulation/ilp_linearization.cpp` | 06 | ~200 | `LowerDecideConstructs`, global-auxiliary allocation |
+| `decidb/formulation/linearization_bigm.cpp` | 06 | ~395 | Big-M sizing and the per-row range walks |
+| `decidb/formulation/linearization_minmax.cpp` | 06 | ~1,195 | MIN/MAX: constraints, links, objectives, composed |
+| `decidb/formulation/linearization_not_equal.cpp` | 06 | ~580 | `<>` collapse and Big-M disjunction |
+| `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | ~555 | McCormick and ABS rows |
 | `decidb/solver/ilp_solver.cpp` | 07 | ~395 | Dispatch, INF_OR_UNBD probe, ray attachment |
 | `decidb/gurobi/gurobi_solver.cpp`, `gurobi_loader.cpp` | 07 | ~830 | Gurobi backend |
 | `decidb/naive/deterministic_naive.cpp` | 07 | — | HiGHS backend |
