@@ -4,7 +4,6 @@
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
-#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
@@ -56,57 +55,21 @@ static string DecideVariableToString(const ParsedExpression &expr) {
 	return string(scalar ? "scalar " : "") + comparison.left->ToString() + "(" + type + ")";
 }
 
-static bool IsDecidePostfix(const ParsedExpression &expr, const char *tag) {
-	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
-		return false;
-	}
-	auto &function = expr.Cast<FunctionExpression>();
-	return function.is_operator && function.function_name == tag;
-}
-
-//! Render the two postfix wrappers that may surround a complete constraint or
-//! objective. Their children render recursively, so `WHEN ... PER ...` retains the
-//! order represented by the parsed tree.
-static string DecidePostfixToString(const ParsedExpression &expr) {
-	if (IsDecidePostfix(expr, WHEN_CONSTRAINT_TAG)) {
-		auto &function = expr.Cast<FunctionExpression>();
-		if (function.children.size() != 2) {
-			throw InternalException("DECIDE WHEN marker has %s children, expected 2", function.children.size());
-		}
-		return DecidePostfixToString(*function.children[0]) + " WHEN " + function.children[1]->ToString();
-	}
-	if (IsDecidePostfix(expr, PER_CONSTRAINT_TAG)) {
-		auto &function = expr.Cast<FunctionExpression>();
-		if (function.children.size() < 2) {
-			throw InternalException("DECIDE PER marker has %s children, expected at least 2", function.children.size());
-		}
-		string result = DecidePostfixToString(*function.children[0]) + " PER ";
-		bool parenthesize = function.children.size() > 2;
-		if (parenthesize) {
-			result += "(";
-		}
-		for (idx_t i = 1; i < function.children.size(); i++) {
-			if (i > 1) {
-				result += ", ";
-			}
-			result += function.children[i]->ToString();
-		}
-		return result + (parenthesize ? ")" : "");
-	}
-	return expr.ToString();
-}
-
 //! A top-level AND is the DECIDE constraint list, not an ordinary parenthesized SQL
 //! conjunction. Keeping DuckDB's generic outer parentheses makes a following WHEN or
 //! PER unparseable, so emit the list in the grammar's own form.
+//!
+//! Each clause renders through the ordinary `ParsedExpression::ToString()`, which is
+//! where the WHEN and PER postfix wrappers are spelled back out --
+//! `FunctionExpression::ToString()` recognizes their operator tags itself.
 static string DecideConstraintsToString(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::CONJUNCTION ||
 	    expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-		return DecidePostfixToString(expr);
+		return expr.ToString();
 	}
 	auto &conjunction = expr.Cast<ConjunctionExpression>();
 	return StringUtil::Join(conjunction.children, conjunction.children.size(), " AND ",
-	                        [](const unique_ptr<ParsedExpression> &child) { return DecidePostfixToString(*child); });
+	                        [](const unique_ptr<ParsedExpression> &child) { return child->ToString(); });
 }
 
 string SelectNode::ToString() const {
@@ -165,7 +128,7 @@ string SelectNode::ToString() const {
 			} else if (decide_sense == DecideSense::MINIMIZE) {
 				result += " MINIMIZE ";
 			}
-			result += DecidePostfixToString(*decide_objective);
+			result += decide_objective->ToString();
 		}
 	}
 	if (!groups.grouping_sets.empty()) {
