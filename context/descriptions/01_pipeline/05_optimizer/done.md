@@ -8,10 +8,10 @@ decides shape, parses SQL, executes relations, or calls a solver.
 
 **Key source files**
 
-- `src/optimizer/decide/decide_optimizer.cpp` (~2,200 lines) — the rewrites
+- `src/optimizer/decide/decide_optimizer.cpp` (~2,364 lines) — the rewrites
 - `src/optimizer/decide/decide_linear_form.cpp` (~1,600 lines) — the flattening
-- `src/include/duckdb/optimizer/decide_optimizer.hpp`
-- `src/include/duckdb/optimizer/decide_linear_form.hpp`
+- `src/include/duckdb/optimizer/decide/decide_optimizer.hpp`
+- `src/include/duckdb/optimizer/decide/decide_linear_form.hpp`
 - `src/include/duckdb/planner/decide/decide_prepared_model.hpp` — the form itself,
   owned by stage 03 because `LogicalDecide` is what carries it across the boundary
 
@@ -561,10 +561,10 @@ stage 07.
 | The rewrites | `src/optimizer/decide/decide_optimizer.cpp` |
 | Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |
 | Backend selection and the model-class gate | `src/optimizer/decide/decide_solver_gate.cpp` |
-| Pass inventory and helper contracts | `src/include/duckdb/optimizer/decide_optimizer.hpp` |
+| Pass inventory and helper contracts | `src/include/duckdb/optimizer/decide/decide_optimizer.hpp` |
 | The prepared form's structures | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
 | Where flattening is triggered | `src/execution/physical_plan/plan_decide.cpp` |
-| Metadata the passes write | `src/include/duckdb/planner/operator/logical_decide.hpp` |
-| Canonicalizing entry points | `src/planner/operator/logical_decide.cpp` |
+| Metadata the passes write | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
+| Canonicalizing entry points | `src/planner/operator/decide/logical_decide.cpp` |
 | Per-function user-facing semantics | `../../03_expressivity/sql_functions/done.md` |
 | Bilinear semantics | `../../03_expressivity/bilinear/done.md` |

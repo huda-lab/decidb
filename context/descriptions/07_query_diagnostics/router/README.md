@@ -46,7 +46,7 @@ A time limit is not on this list. It is handled before the router runs — see
 ## Why a ray is the right disambiguator for inf/unb
 
 `check ray` reuses the portable box-LP ray extraction already built for the
-unbounded engine (`BuildUnboundedRayFallbackModel`, `diagnostic_solves.cpp`), so it
+unbounded engine (`BuildUnboundedRayFallbackModel`, `probe_models.cpp`), so it
 is **solver-agnostic** by construction — no dependence on Gurobi-only status APIs.
 A found ray is a sound witness that an improving recession direction exists; the
 absence of one means the openness the presolve feared isn't there, so the failure

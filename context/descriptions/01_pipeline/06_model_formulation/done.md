@@ -9,10 +9,10 @@ SQL-expression canonicalization and knows nothing about any backend.
 
 **Key source files**
 
-- `src/decidb/utility/ilp_model_builder.cpp` — `SolverModel::Build()`
-- `src/decidb/utility/ilp_linearization.cpp` — Big-M constants, hard MIN/MAX rows
-- `src/include/duckdb/decidb/ilp_model.hpp` — `VarIndexer`, `SolverModel`, provenance
-- `src/include/duckdb/decidb/solver_input.hpp` — the input contract
+- `src/decidb/formulation/ilp_model_builder.cpp` — `SolverModel::Build()`
+- `src/decidb/formulation/ilp_linearization.cpp` — Big-M constants, hard MIN/MAX rows
+- `src/include/duckdb/decidb/formulation/ilp_model.hpp` — `VarIndexer`, `SolverModel`, provenance
+- `src/include/duckdb/decidb/solver/solver_input.hpp` — the input contract
 
 `Build()` takes `SolverInput` by **non-const** reference so raw global constraints
 can be moved rather than copied, plus a pre-built `VarIndexer` threaded in from
@@ -350,7 +350,7 @@ the column, rather than at the solver where it cannot.
 
 ## 9. Linearization
 
-`src/decidb/utility/ilp_linearization.cpp` holds the half of a formulation that
+`src/decidb/formulation/ilp_linearization.cpp` holds the half of a formulation that
 only becomes writable once coefficients are numbers. Stage 05 decides *which*
 encoding a construct gets and records it as a tag on the constraint; this unit
 turns the tag into rows. Everything in it is a pure function of `SolverInput`
@@ -914,10 +914,10 @@ columns still name a decide variable in that message.
 
 | Concern | Location |
 |---|---|
-| `SolverModel::Build`, all constraint paths, Q construction | `src/decidb/utility/ilp_model_builder.cpp` |
-| Implied bounds, Big-M constants, MIN/MAX (constraint, objective, composed), `<>`, McCormick, ABS rows | `src/decidb/utility/ilp_linearization.cpp` |
-| `MinMaxObjectiveSpec`, `ComposedMinMaxTermData` — what stage 08 hands over | `src/include/duckdb/decidb/ilp_linearization.hpp` |
-| `BilinearLinkSpec`, `AbsMaximizeLinkSpec` — the formulation tags | `src/include/duckdb/decidb/solver_input.hpp` |
-| `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/ilp_model.hpp` |
-| `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver_input.hpp` |
+| `SolverModel::Build`, all constraint paths, Q construction | `src/decidb/formulation/ilp_model_builder.cpp` |
+| Implied bounds, Big-M constants, MIN/MAX (constraint, objective, composed), `<>`, McCormick, ABS rows | `src/decidb/formulation/ilp_linearization.cpp` |
+| `MinMaxObjectiveSpec`, `ComposedMinMaxTermData` — what stage 08 hands over | `src/include/duckdb/decidb/formulation/ilp_linearization.hpp` |
+| `BilinearLinkSpec`, `AbsMaximizeLinkSpec` — the formulation tags | `src/include/duckdb/decidb/solver/solver_input.hpp` |
+| `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |
+| `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver/solver_input.hpp` |
 | Golden model corpus (the characterization oracle) | `test/decide/golden/` |

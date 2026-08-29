@@ -47,7 +47,7 @@ For each changed area, read the corresponding documentation to understand the fe
 - `src/planner/expression_binder/` → read `context/descriptions/01_pipeline/02_binder/done.md`
 - `src/decidb/parsed/` or `third_party/libpg_query/` → read `context/descriptions/01_pipeline/01_parser/done.md`
 - `src/planner/decide/` → read `context/descriptions/01_pipeline/04_canonicalizer/done.md`
-- `src/planner/operator/logical_decide.cpp` → read `context/descriptions/01_pipeline/03_logical_plan/done.md`
+- `src/planner/operator/decide/logical_decide.cpp` → read `context/descriptions/01_pipeline/03_logical_plan/done.md`
 - `src/include/duckdb/decidb/` → read corresponding pipeline docs
 - `test/decide/` → read test file(s) to understand what's being tested
 
@@ -59,7 +59,7 @@ Classify every changed file into one of these groups:
 - **Canonicalizer** — `decide_canonicalizer.cpp`, `decide_source_provenance.cpp`
 - **Optimizer** — `decide_optimizer.cpp`
 - **Model/Solver** — `ilp_model_builder.cpp`, `ilp_solver.cpp`
-- **Execution** — `physical_decide.cpp`, solver backends (`src/decidb/gurobi/`, `src/decidb/naive/`, `src/decidb/utility/`)
+- **Execution** — `physical_decide.cpp`, solver backends (`src/decidb/gurobi/`, `src/decidb/naive/`, `src/decidb/{formulation,solver,diagnostics}/`)
 - **Headers/Data Structures** — `.hpp` files
 - **Tests** — `test/decide/`
 - **Docs** — `context/descriptions/`, `CLAUDE.md`

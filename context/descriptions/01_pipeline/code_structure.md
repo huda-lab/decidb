@@ -13,48 +13,48 @@ Stage numbers refer to [`README.md`](README.md).
 |---|---|---|
 | `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScopeInfo`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
 | `common/decide_source_info.hpp` | 03 | `ConstraintSourceInfo` — the source display registry entry |
-| `decidb/utility/decide_parse_hints.hpp` | 01 | `MaybeAppendDecideWhenHint` |
-| `planner/expression_binder/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, degree, `ValidateDecideNoExplicitDecisionCasts` |
-| `planner/expression_binder/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
-| `planner/expression_binder/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
-| `planner/operator/logical_decide.hpp` | 03 | `LogicalDecide`, `EntityScopeInfo`, every metadata field |
+| `parser/decide/decide_parse_hints.hpp` | 01 | `MaybeAppendDecideWhenHint` |
+| `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, degree, `ValidateDecideNoExplicitDecisionCasts` |
+| `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
+| `planner/expression_binder/decide/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
+| `planner/operator/decide/logical_decide.hpp` | 03 | `LogicalDecide`, `EntityScopeInfo`, every metadata field |
 | `planner/decide/decide_canonicalizer.hpp` | 04 | The canonical contract, in code |
 | `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
-| `decidb/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity` |
-| `optimizer/decide_optimizer.hpp` | 05 | The rewrite passes |
+| `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity` |
+| `optimizer/decide/decide_optimizer.hpp` | 05 | The rewrite passes |
 | `execution/operator/decide/physical_decide.hpp` | 08 | `PhysicalDecide`, `Term`, `DecideConstraint`, `Objective` |
-| `decidb/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn`, `EntityMapping` |
-| `decidb/ilp_model.hpp` | 06 | `VarIndexer`, `SolverModel`, `ModelConstraint`, `ConstraintProvenance`, `SparseCoeffAccumulator` |
-| `decidb/ilp_solver.hpp` | 07 | `SolveModel` facade, `SolverBackend`, `SolveModelOptions` |
-| `decidb/solver_result.hpp` | 07 | `SolverStatus`, `SolverResult`, `ThrowDecideSolveError` |
-| `decidb/solver_session.hpp` | 07 | `SolverSession` — warm continuation |
-| `decidb/solver_config.hpp` | 07 | Time limits, primary and diagnostic |
+| `decidb/solver/solver_input.hpp` | 06/08 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn`, `EntityMapping` |
+| `decidb/formulation/ilp_model.hpp` | 06 | `VarIndexer`, `SolverModel`, `ModelConstraint`, `ConstraintProvenance`, `SparseCoeffAccumulator` |
+| `decidb/solver/ilp_solver.hpp` | 07 | `SolveModel` facade, `SolverBackend`, `SolveModelOptions` |
+| `decidb/solver/solver_result.hpp` | 07 | `SolverStatus`, `SolverResult`, `ThrowDecideSolveError` |
+| `decidb/solver/solver_session.hpp` | 07 | `SolverSession` — warm continuation |
+| `decidb/solver/solver_config.hpp` | 07 | Time limits, primary and diagnostic |
 | `decidb/gurobi/gurobi_solver.hpp`, `gurobi_loader.hpp` | 07 | Gurobi backend and dynamic loading |
-| `decidb/decide_diagnostic.hpp`, `decide_diagnostic_engines.hpp`, `decide_router.hpp` | — | Query diagnostics; see `../07_query_diagnostics/` |
+| `decidb/diagnostics/decide_diagnostic.hpp`, `decide_diagnostic_engines.hpp`, `decide_router.hpp` | — | Query diagnostics; see `../07_query_diagnostics/` |
 
 ### Sources (`src/`)
 
 | Path | Stage | Lines | Contents |
 |---|---|---|---|
-| `decidb/utility/decide_parse_hints.cpp` | 01 | ~65 | DECIDE-aware parse-error hint |
-| `planner/expression_binder/decide_binder.cpp` | 02 | ~1,020 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
-| `planner/expression_binder/decide_constraints_binder.cpp` | 02 | ~550 | `SUCH THAT` |
-| `planner/expression_binder/decide_objective_binder.cpp` | 02 | ~240 | Objective |
+| `parser/decide/decide_parse_hints.cpp` | 01 | ~65 | DECIDE-aware parse-error hint |
+| `planner/expression_binder/decide/decide_binder.cpp` | 02 | ~1,020 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
+| `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | ~550 | `SUCH THAT` |
+| `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | ~240 | Objective |
 | `planner/binder/query_node/bind_select_node.cpp` | 02 | — | DECIDE declarations, scopes, and scoped-variable spelling. No formulation runs here |
 | `planner/binder/query_node/plan_select_node.cpp` | 03/04 | ~290 | Subquery flattening, correlation provenance, the user canonicalization call |
-| `planner/operator/logical_decide.cpp` | 03 | ~415 | `AddConstraint`, `SetObjective`, EXPLAIN strings, serialization |
+| `planner/operator/decide/logical_decide.cpp` | 03 | ~415 | `AddConstraint`, `SetObjective`, EXPLAIN strings, serialization |
 | `planner/decide/decide_canonicalizer.cpp` | 04 | ~985 | The one shape boundary |
 | `planner/decide/decide_source_provenance.cpp` | 03 | ~250 | Source display capture and rendering |
-| `decidb/utility/decide_cast_policy.cpp` | 04 | ~60 | Cast unwrapping |
-| `optimizer/decide/decide_optimizer.cpp` | 05 | ~1,740 | All eight rewrite passes |
+| `planner/decide/decide_cast_policy.cpp` | 04 | ~60 | Cast unwrapping |
+| `optimizer/decide/decide_optimizer.cpp` | 05 | ~2,364 | All eight rewrite passes |
 | `execution/column_binding_resolver.cpp` | 03 | — | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | ~170 | Logical → physical, entity key indices, verification |
 | `execution/operator/decide/physical_decide.cpp` | 08 | ~7,400 | Extraction, materialization, evaluation, emission, readback |
-| `decidb/utility/ilp_model_builder.cpp` | 06 | ~1,400 | `SolverModel::Build` |
-| `decidb/utility/ilp_solver.cpp` | 07 | ~395 | Dispatch, INF_OR_UNBD probe, ray attachment |
+| `decidb/formulation/ilp_model_builder.cpp` | 06 | ~1,400 | `SolverModel::Build` |
+| `decidb/solver/ilp_solver.cpp` | 07 | ~395 | Dispatch, INF_OR_UNBD probe, ray attachment |
 | `decidb/gurobi/gurobi_solver.cpp`, `gurobi_loader.cpp` | 07 | ~830 | Gurobi backend |
 | `decidb/naive/deterministic_naive.cpp` | 07 | — | HiGHS backend |
-| `decidb/utility/decide_diagnostic*.cpp`, `decide_router.cpp` | — | ~2,100 | Diagnostics |
+| `decidb/diagnostics/decide_diagnostic*.cpp`, `decide_router.cpp` | — | ~2,100 | Diagnostics |
 
 ### Grammar (`third_party/libpg_query/`)
 
@@ -162,7 +162,7 @@ classDiagram
 
 ## 3. Key entry points
 
-### `src/planner/expression_binder/decide_binder.cpp` — stage 02
+### `src/planner/expression_binder/decide/decide_binder.cpp` — stage 02
 - **`ValidateSumArgument()`** — linear (or optionally quadratic) combination check.
 - **`DecideDegreeInternal()`** — polynomial degree, not occurrence count.
 - **`ValidateDecideNoExplicitDecisionCasts()`** — the cast authorship boundary.
@@ -174,7 +174,7 @@ classDiagram
 - **`ClassifyCanonicalComparison()`** — `PER_ROW` / `AGGREGATE` / `INVALID`.
 - **`VerifyCanonical()` / `VerifyCanonicalObjective()`** — non-mutating, throwing.
 
-### `src/planner/operator/logical_decide.cpp` — stage 03
+### `src/planner/operator/decide/logical_decide.cpp` — stage 03
 - **`AddConstraint()` / `SetObjective()`** — the only post-planning entry points.
 - **`Serialize()` / `Deserialize()`** — hand-maintained.
 
@@ -198,7 +198,7 @@ classDiagram
 - **`Finalize()`** — entity mappings, coefficient evaluation, model build, solve.
 - **`GetData()`** — readback with type-specific projection.
 
-### `src/decidb/utility/ilp_model_builder.cpp` — stage 06
+### `src/decidb/formulation/ilp_model_builder.cpp` — stage 06
 - **`SolverModel::Build(SolverInput &, const VarIndexer &)`** — three linear
   constraint paths plus the quadratic builder, then the two native lists
   (general and indicator constraints) carried across in flat columns. Takes
@@ -207,12 +207,12 @@ classDiagram
   fact stage 05's plan-time prediction is checked against.
 - **`SparseCoeffAccumulator`** — reusable scratch, dense or sorted-pairs.
 
-### `src/decidb/utility/ilp_solver.cpp` — stage 07
+### `src/decidb/solver/ilp_solver.cpp` — stage 07
 - **`SelectSolverBackend()` / `SolveModel()`**. `SolveModel` takes the backend chosen
   at plan time rather than resolving one, and asserts the built model is within that
   backend's declared capabilities before loading it.
 
-### `src/decidb/utility/solver_registry.cpp` — stage 07
+### `src/decidb/solver/solver_registry.cpp` — stage 07
 - **`REGISTERED_BACKENDS`** — the one table naming every backend: identifier, display
   name, availability probe, capabilities, session factory. Adding a backend is adding a
   row; nothing else in the tree branches on which one is in play.

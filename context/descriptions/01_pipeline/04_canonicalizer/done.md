@@ -455,12 +455,12 @@ raising, so a single statement is enough and nothing has to survive an error.
 |---|---|
 | Canonical transformation (constraints and objective) | `src/planner/decide/decide_canonicalizer.cpp` |
 | Contract, in code | `src/include/duckdb/planner/decide/decide_canonicalizer.hpp` |
-| Cast policy and unwrapping | `src/decidb/utility/decide_cast_policy.cpp` |
+| Cast policy and unwrapping | `src/planner/decide/decide_cast_policy.cpp` |
 | Cast-policy interface | `src/include/duckdb/decidb/decide_cast_policy.hpp` |
-| Parsed cast-authorship validator | `src/planner/expression_binder/decide_binder.cpp` |
+| Parsed cast-authorship validator | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | User call site and subquery provenance | `src/planner/binder/query_node/plan_select_node.cpp` |
 | Source display capture and rendering | `src/planner/decide/decide_source_provenance.cpp` |
-| Generated-constraint / rewritten-objective entry points | `src/planner/operator/logical_decide.cpp` |
+| Generated-constraint / rewritten-objective entry points | `src/planner/operator/decide/logical_decide.cpp` |
 | Verification at physical-plan entry | `src/execution/physical_plan/plan_decide.cpp` |
 | Canonical model corpus | `test/decide/golden/` |
 | Behavior tests | `test/decide/tests/test_canonicalize_*.py` |

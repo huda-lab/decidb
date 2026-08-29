@@ -97,7 +97,7 @@ SUM(x * v) <= 12 WHEN (NOT w)
 SUM(x * v) <= 12 WHEN (a + b > 5)
 ```
 
-**Actionable parser hint.** The raw bison error for these shapes (`syntax error at or near "NOT"` / `"<="`) is uninformative on its own, so DECIDE queries whose syntax error names one of the WHEN-breaking tokens get a one-line hint appended: *"wrap the WHEN condition in parentheses — e.g. WHEN (a = b), WHEN (NOT flag), or WHEN (a + b > 5)."* The augmentation lives in `src/decidb/utility/decide_parse_hints.cpp` (`MaybeAppendDecideWhenHint`), called from `src/parser/parser.cpp` at the syntax-error throw site; it is gated on the query containing `DECIDE` + `WHEN` and the error naming a break token, so it never fires on unrelated syntax errors. Pinned by `test_when_grammar.py::test_when_unparen_error_carries_paren_hint`.
+**Actionable parser hint.** The raw bison error for these shapes (`syntax error at or near "NOT"` / `"<="`) is uninformative on its own, so DECIDE queries whose syntax error names one of the WHEN-breaking tokens get a one-line hint appended: *"wrap the WHEN condition in parentheses — e.g. WHEN (a = b), WHEN (NOT flag), or WHEN (a + b > 5)."* The augmentation lives in `src/parser/decide/decide_parse_hints.cpp` (`MaybeAppendDecideWhenHint`), called from `src/parser/parser.cpp` at the syntax-error throw site; it is gated on the query containing `DECIDE` + `WHEN` and the error naming a break token, so it never fires on unrelated syntax errors. Pinned by `test_when_grammar.py::test_when_unparen_error_carries_paren_hint`.
 
 ### Expression-level and Aggregate-local WHEN Do Not Mix
 
@@ -209,7 +209,7 @@ Decomposing into multiple WHEN constraints fails here because the conditions ove
 
 A `CASE` expression placed directly inside a DECIDE constraint or objective is rejected with a friendly user-facing error that points to the supported alternatives (postfix `WHEN`, `PER`, CTE pre-computation).
 
-There are three places that reject one, and they share **one wording**, returned by `DecideCaseUnsupportedMessage()` in `src/planner/expression_binder/decide_binder.cpp`:
+There are three places that reject one, and they share **one wording**, returned by `DecideCaseUnsupportedMessage()` in `src/planner/expression_binder/decide/decide_binder.cpp`:
 
 | Where the `CASE` sits | Rejected by |
 |---|---|
@@ -275,14 +275,14 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
   - `decide_constraint_item` rule: WHEN (and WHEN+PER) support for constraints
   - `func_application WHEN decide_when_condition` in `c_expr`: aggregate-local WHEN support
 
-- **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp`
+- **Constraint binder**: `src/planner/expression_binder/decide/decide_constraints_binder.cpp`
   - `BindWhenConstraint()`: Extracts the WHEN condition as a separate boolean expression. Validates that the condition references only table columns, not decision variables.
   - `BindExpression()` dispatch: Recognizes top-level `WHEN_CONSTRAINT_TAG` and calls `BindWhenConstraint`; nested `WHEN_CONSTRAINT_TAG` is aggregate-local and binds through `DecideBinder::BindLocalWhenAggregate`.
 
-- **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
+- **Objective binder**: `src/planner/expression_binder/decide/decide_objective_binder.cpp`
   - `BindExpression()`: Handles PER stripping on objectives, then WHEN condition extraction on the objective expression. Nested `WHEN_CONSTRAINT_TAG` binds as aggregate-local.
 
-- **Base DECIDE binder**: `src/planner/expression_binder/decide_binder.cpp`
+- **Base DECIDE binder**: `src/planner/expression_binder/decide/decide_binder.cpp`
   - `BindLocalWhenAggregate()`: Binds the aggregate child, binds the data-only boolean condition, and stores the condition as `BoundAggregateExpression::filter`.
 
 - **Execution**: `src/execution/operator/decide/physical_decide.cpp`
@@ -299,11 +299,11 @@ Aggregate-local WHEN is evaluated separately from that row-grouping wrapper. Eac
   - `Objective::per_columns`: Same for objectives.
   - `Term::filter`, `BilinearConstraintTerm::filter`, `DecideConstraint::QuadraticGroup::filter`, and `Objective::BilinearTerm::filter`: Optional aggregate-local WHEN filters carried to coefficient evaluation.
 
-- **Evaluated constraint**: `src/include/duckdb/decidb/solver_input.hpp`
+- **Evaluated constraint**: `src/include/duckdb/decidb/solver/solver_input.hpp`
   - `EvaluatedConstraint::row_group_ids`: Per-row group assignment (`INVALID_INDEX` = excluded).
   - `EvaluatedConstraint::num_groups`: `0` = ungrouped fast path, `1` = WHEN-only, `>1` = PER groups.
 
-- **Model builder**: `src/decidb/utility/ilp_model_builder.cpp`
+- **Model builder**: `src/decidb/formulation/ilp_model_builder.cpp`
   - Empty groups are skipped — no constraint is emitted.
 
 - **Tag constants and helpers**: `src/include/duckdb/common/enums/decide.hpp`

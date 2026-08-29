@@ -23,7 +23,7 @@ rows when the user stops. No query is edited or rerun.
 
 **Shared time limit (both backends).** The per-solve wall-clock cap is resolved in
 one solver-agnostic place — `ResolveDecideTimeLimit()` in
-`src/include/duckdb/decidb/solver_config.hpp` — so Gurobi and HiGHS honor the same
+`src/include/duckdb/decidb/solver/solver_config.hpp` — so Gurobi and HiGHS honor the same
 value and cannot drift. It returns `DECIDE_DEFAULT_TIME_LIMIT_SECONDS` (300s) unless
 the user overrides it via the global `DECIDB_TIME_LIMIT` env var (seconds, double;
 non-positive / unparseable values are ignored). Gurobi applies it as the `TimeLimit`
@@ -229,7 +229,7 @@ on stderr with the report. A stop with **no** incumbent throws the existing time
 
 **Warm-resumable solver session.** The continuation needs the live solver to survive
 across chunks, so the single-shot backend `Solve(model)` was refactored into a
-`SolverSession` (`src/include/duckdb/decidb/solver_session.hpp`): `Load(model)` builds the
+`SolverSession` (`src/include/duckdb/decidb/solver/solver_session.hpp`): `Load(model)` builds the
 backend handle once (now a member — Gurobi env+model / the `Highs` object), and
 `RunAndReadback(chunk_seconds)` sets the per-chunk limit and (re-)optimizes. `Solve()` =
 `Load` + one `RunAndReadback`; `Continue()` = another `RunAndReadback` on the same warm

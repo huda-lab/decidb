@@ -31,13 +31,13 @@ Based on the topic, identify which files and docs to read:
 
 **Pipeline topics** — map to `context/descriptions/01_pipeline/`:
 - `parser` → `01_parser/done.md` + `third_party/libpg_query/grammar/statements/select.y`, `third_party/libpg_query/src_backend_parser_parser.cpp`
-- `binder` → `02_binder/done.md` + `src/planner/expression_binder/decide_binder.cpp`
+- `binder` → `02_binder/done.md` + `src/planner/expression_binder/decide/decide_binder.cpp`
 - `canonicalizer`, `canonical form` → `04_canonicalizer/done.md` + `src/planner/decide/decide_canonicalizer.cpp`
-- `logical plan`, `LogicalDecide` → `03_logical_plan/done.md` + `src/planner/operator/logical_decide.cpp`
-- `model building`, `VarIndexer` → `06_model_formulation/done.md` + `src/decidb/utility/ilp_model_builder.cpp`
+- `logical plan`, `LogicalDecide` → `03_logical_plan/done.md` + `src/planner/operator/decide/logical_decide.cpp`
+- `model building`, `VarIndexer` → `06_model_formulation/done.md` + `src/decidb/formulation/ilp_model_builder.cpp`
 - `optimizer` → `context/descriptions/01_pipeline/05_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
 - `execution` → `08_execution/done.md` + `src/execution/operator/decide/physical_decide.cpp`
-- `solver` → `07_solver/done.md` + `src/decidb/utility/ilp_solver.cpp` (facade), `src/decidb/gurobi/gurobi_solver.cpp` (Gurobi), `src/decidb/naive/deterministic_naive.cpp` (HiGHS)
+- `solver` → `07_solver/done.md` + `src/decidb/solver/ilp_solver.cpp` (facade), `src/decidb/gurobi/gurobi_solver.cpp` (Gurobi), `src/decidb/naive/deterministic_naive.cpp` (HiGHS)
 - `pipeline` (broad) → read `context/descriptions/01_pipeline/README.md` for the stage map, then the stage folders it names
 
 **Concept topics** — read the optimizer docs and relevant source:

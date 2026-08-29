@@ -142,7 +142,7 @@ the lexer emits DECIDE-only tokens inside the clause:
 
 No lookahead is needed for this decision.
 
-When a parse still fails, `MaybeAppendDecideWhenHint` (`src/decidb/utility/decide_parse_hints.cpp`,
+When a parse still fails, `MaybeAppendDecideWhenHint` (`src/parser/decide/decide_parse_hints.cpp`,
 called from `src/parser/parser.cpp:229`) appends a DECIDE-specific hint to the
 error.
 
@@ -277,4 +277,4 @@ continuation cases outside the materializing verifier. The guarded release run p
 | `WHEN`/`PER` tag construction | `src/parser/transform/expression/transform_operator.cpp` |
 | DECIDE statement rendering | `src/parser/query_node/select_node.cpp`, `src/parser/expression/function_expression.cpp` |
 | Parsed reparse verifier boundary | `src/verification/parsed_statement_verifier.cpp`, `src/main/client_verify.cpp` |
-| Parse-error hint | `src/decidb/utility/decide_parse_hints.cpp` |
+| Parse-error hint | `src/parser/decide/decide_parse_hints.cpp` |

@@ -14,7 +14,7 @@ the operator *before* the router runs (see
 ## The classifier — `RouteSolveResult`
 
 `RouteSolveResult(const SolverResult &, bool armed)` (`decide_router.hpp` /
-`src/decidb/utility/decide_router.cpp`) is a **pure** function: status + the DIAGNOSE
+`src/decidb/diagnostics/decide_router.cpp`) is a **pure** function: status + the DIAGNOSE
 prefix + the residual `INF_OR_UNBD` ray sub-signal → `DiagnosisTerminal`. It owns no
 engine invocation and no DuckDB execution/operator types, so the decision tree is
 unit-testable in isolation (`test/common/test_decidb_router.cpp`).

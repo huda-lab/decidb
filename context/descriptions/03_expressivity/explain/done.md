@@ -237,7 +237,7 @@ and the `N Rows` in `EXPLAIN ANALYZE` match the scan's cardinality.
 
 | Concern | Location |
 |---|---|
-| `GetName()` / `ParamsToString()` on the logical node | `src/planner/operator/logical_decide.cpp` |
+| `GetName()` / `ParamsToString()` on the logical node | `src/planner/operator/decide/logical_decide.cpp` |
 | The shared walker and `RenderDecideSource` | `src/planner/decide/decide_source_provenance.cpp` |
 | Their declarations | `src/include/duckdb/planner/decide/decide_source_provenance.hpp` |
 | Physical node rendering (calls the same walker) | `src/execution/operator/decide/physical_decide.cpp:728-772` |

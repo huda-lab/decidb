@@ -331,7 +331,7 @@ This covers (non-exhaustive) `SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND
 
 **Why this guard exists**: before it, per-row non-linear scalars were silently stripped (`SUCH THAT sqrt(x) <= 2` returned `x = 2` instead of `x = 4`), aggregate non-linear scalars crashed the parsed-level normalizer of the day with `InternalException`, and `ABS(sqrt(x))` FATAL-ed the session at physical execution. The validator catches all three classes at bind time.
 
-**Code**: `ValidateDecideNoNonLinearScalar` in `src/planner/expression_binder/decide_binder.cpp`, called from `src/planner/binder/query_node/bind_select_node.cpp` on the parsed tree, before binding.
+**Code**: `ValidateDecideNoNonLinearScalar` in `src/planner/expression_binder/decide/decide_binder.cpp`, called from `src/planner/binder/query_node/bind_select_node.cpp` on the parsed tree, before binding.
 
 **Tests**: `test/decide/tests/test_error_binder.py` — `test_nonlinear_scalar_per_row_lhs`, `test_nonlinear_scalar_inside_sum`, `test_nonlinear_scalar_inside_abs` (parametrized over SQRT, EXP, LN, LOG, FLOOR, CEIL, ROUND, SIN, COS).
 
@@ -456,7 +456,7 @@ MINIMIZE SUM(POWER(x / weight - 1, 2))     -- OK: data-column divisor in QP
 ```
 
 **Code**:
-- Bind-time validation: `IsAllowedNameOverDecideVar` and the dedicated `/`-arm of `ValidateDecideNoNonLinearScalar` (per-row pre-pass) and `ValidateSumArgumentInternal` (SUM/POWER inner) in `src/planner/expression_binder/decide_binder.cpp` reject any `/` whose divisor contains a decide variable.
+- Bind-time validation: `IsAllowedNameOverDecideVar` and the dedicated `/`-arm of `ValidateDecideNoNonLinearScalar` (per-row pre-pass) and `ValidateSumArgumentInternal` (SUM/POWER inner) in `src/planner/expression_binder/decide/decide_binder.cpp` reject any `/` whose divisor contains a decide variable.
 - Per-row extraction: `ExtractTerms` at `src/optimizer/decide/decide_linear_form.cpp` walks `/` by recursing into the numerator and wrapping each emitted coefficient as `coef / divisor`.
 - QP linearity check: `IsLinearInDecideVars` in the same file accepts `/` when the divisor is decide-var-free, so quadratic patterns like `POWER(x/2 - 1, 2)` reach the QP extractor.
 
@@ -480,7 +480,7 @@ This is the same "fold data-only subterms" idea already applied to `x + cost` an
 **Rejected — data-only aggregates as coefficients**: `SUM(avg(col) * x)` is a different beast — the inner aggregate needs the whole row set, not a per-row fold — so it is rejected (not folded here). A data-only aggregate (`avg`/`min`/`max`/`sum` over columns only) multiplied by a decision variable is caught in `ValidateDecideNoNonLinearScalar` on the parsed tree, before binding. All four aggregates reject uniformly with a friendly "pre-compute it as a scalar or move it to the RHS" message. A data-only aggregate as a constraint *RHS* (`SUM(x) <= AVG(col)`) stays supported.
 
 **Code** (operators and functions share the mechanism):
-- Bind-time: `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide_binder.cpp` returns success (instead of an error) when `ExpressionContainsDecideVariable` is false — both in the unsupported-operator arm and in the unsupported-named-function arm.
+- Bind-time: `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide/decide_binder.cpp` returns success (instead of an error) when `ExpressionContainsDecideVariable` is false — both in the unsupported-operator arm and in the unsupported-named-function arm.
 - Downstream: a data-only subterm is simply an atom nothing opens. The canonicalizer treats it as one term, and physical coefficient evaluation runs it through DuckDB's own `ExpressionExecutor` — so any scalar function DuckDB can evaluate works as a coefficient without DECIDE needing to model it.
 
 **Tests**: `test/decide/tests/test_error_unsupported_operator.py` — operator forms (`test_modulo_data_coefficient_matches_oracle`, `test_modulo_data_coefficient_in_constraint_runs`), function forms (`test_mod_function_data_coefficient_matches_oracle` oracle-verified, `test_floor_function_data_coefficient_in_constraint`), and the `TestUnsupportedOperatorOverVariableRejection` cases pinning that a variable-bearing `%` or `mod()` still errors without a stack trace. `test/decide/tests/test_null_coalesce_reducer.py` covers the `COALESCE`/`IFNULL` operator node in reducer constraints and objectives and keeps its decision-bearing form rejected.
@@ -497,7 +497,7 @@ SUCH THAT 2 * x + 3 <= 11      -- x <= 4
 SUCH THAT x / 2 + 1 <= 3       -- x <= 4
 ```
 
-**Code**: `ExtractTerms` in `src/optimizer/decide/decide_linear_form.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`. `ExtractConstraintTerms` delegates there. In `src/decidb/utility/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
+**Code**: `ExtractTerms` in `src/optimizer/decide/decide_linear_form.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`. `ExtractConstraintTerms` delegates there. In `src/decidb/formulation/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
 
 **Tests**: `test/decide/tests/test_cons_perrow.py` — `test_perrow_linear_lhs_upper_bound` (parametrized over `x+c`, `x-c`, `x/c`, `c*x+c`, `x/c+c`, `x+c-c`), `test_perrow_unary_minus_lower_bound`, `test_perrow_data_column_in_lhs`, all oracle-verified.
 

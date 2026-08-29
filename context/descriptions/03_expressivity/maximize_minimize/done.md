@@ -70,13 +70,13 @@ For linear objectives, the objective function is compiled into the `c` vector of
 
 ## Code Pointers
 
-- **Objective binder**: `src/planner/expression_binder/decide_objective_binder.cpp`
+- **Objective binder**: `src/planner/expression_binder/decide/decide_objective_binder.cpp`
   - Validates that only `SUM`, `AVG`, `MIN`, `MAX` are used (rejects other aggregates with error message)
   - Handles WHEN condition extraction on objective
   - Dispatches nested `WHEN` on aggregate terms to aggregate-local binding
   - Binds nested aggregate PER objectives (inner/outer aggregate detection)
-- **SUM argument validation**: `src/planner/expression_binder/decide_binder.cpp` — `ValidateSumArgumentInternal` validates the expression tree inside SUM()
+- **SUM argument validation**: `src/planner/expression_binder/decide/decide_binder.cpp` — `ValidateSumArgumentInternal` validates the expression tree inside SUM()
 - **Nested aggregate PER objective rewrite/classification**: `src/optimizer/decide/decide_optimizer.cpp`
   - `RewriteMinMaxObjective()` detects `OUTER(INNER(expr)) PER col`, sets `per_inner_*` / `per_outer_*` metadata, and rewrites inner `MIN/MAX/AVG` to `SUM`
   - Rejects flat `MIN(...) PER col` / `MAX(...) PER col` as ambiguous (requires nested aggregate form)
-- **Solver input**: `src/include/duckdb/decidb/solver_input.hpp`
+- **Solver input**: `src/include/duckdb/decidb/solver/solver_input.hpp`

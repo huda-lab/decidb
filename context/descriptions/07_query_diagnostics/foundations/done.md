@@ -8,7 +8,7 @@ infrastructure, topic by topic. No foundation work remains open.
 The solve path returns a structured result instead of throwing on solver status,
 so callers branch on the outcome. This gates the whole area.
 
-- **`SolverResult` + `SolverStatus`** (`src/include/duckdb/decidb/solver_result.hpp`).
+- **`SolverResult` + `SolverStatus`** (`src/include/duckdb/decidb/solver/solver_result.hpp`).
   `SolverStatus = {OPTIMAL, INFEASIBLE, UNBOUNDED, INF_OR_UNBD, TIME_LIMIT,
   SUBOPTIMAL, ITERATION_LIMIT, OTHER}`; `SolverResult { status, solution, objective_value, ray,
   diagnostic_timed_out, raw_status, has_solution, best_bound, gap }`.
@@ -197,7 +197,7 @@ user-clause level instead of raw rows.
 
 - **`ConstraintProvenance {clause_id, group_key, kind, shape, avg_scaled, strict,
   typed_k}`** on `ModelConstraint` and `SolverModel::QuadraticConstraint`
-  (`src/include/duckdb/decidb/ilp_model.hpp`). `clause_id` indexes
+  (`src/include/duckdb/decidb/formulation/ilp_model.hpp`). `clause_id` indexes
   `SolverInput::constraints` (`INVALID_INDEX` for synthetic rows); `group_key` is the
   PER/WHEN group id at emission (or row id for per-row, INVALID when ungrouped); `kind`
   is the row role. The trailing fields (added in I2) drive the elastic engine's slack
@@ -310,8 +310,8 @@ State-specific diagnosis logic lives behind free-function engines rather than as
 inline branches in `PhysicalDecide::Finalize`.
 
 - **Unbounded engine:** `DiagnoseUnbounded(const UnboundedDiagnosisInput&)`
-  (`src/include/duckdb/decidb/decide_diagnostic_engines.hpp`,
-  `src/decidb/utility/decide_diagnostic_engines.cpp`). The input carries the
+  (`src/include/duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp`,
+  `src/decidb/diagnostics/decide_diagnostic_engines.cpp`). The input carries the
   `SolverResult`, `VarIndexer`, user labels, aux flags, diagnostic params, and an
   injected `get_candidates(decide_var_idx, total_instances)` callback for categorical
   groupings.
@@ -342,11 +342,11 @@ Tested in `test/common/test_decidb_diagnostic_engines.cpp`.
 ## Shared diagnostic constants
 
 The box-LP ray-fallback path spans three translation units — the model builder
-(`diagnostic_solves.cpp`, which opens bounds), the solver facade (`ilp_solver.cpp`,
+(`probe_models.cpp`, which opens bounds), the solver facade (`ilp_solver.cpp`,
 which confirms an improving ray), and the unbounded engine
 (`decide_diagnostic_engines.cpp`, which filters escaping columns). Its "free suspect
 filter" invariant only holds if these all use the *same* two thresholds, so they are
-defined once in `src/include/duckdb/decidb/diagnostic_constants.hpp`:
+defined once in `src/include/duckdb/decidb/diagnostics/diagnostic_constants.hpp`:
 
 - `EFFECTIVE_INFINITY` (`1e20`) — a finite bound at/above this magnitude is treated
   as unbounded in that direction (which upper bounds the fallback LP opens).
@@ -401,7 +401,7 @@ are the user-facing contract and live in `00_project_overview/syntax_reference.m
 this section is the mechanics.
 
 - **`DecideDiagnostic` / `DiagnosticFinding` / `DecideDiagnosticState`**
-  (`src/include/duckdb/decidb/decide_diagnostic.hpp`). A `DecideDiagnostic` is one
+  (`src/include/duckdb/decidb/diagnostics/decide_diagnostic.hpp`). A `DecideDiagnostic` is one
   `state` plus a vector of findings; a `DiagnosticFinding` is one row of the relation,
   with real columns and real types (`amount` DOUBLE, `row` BIGINT, `has_amount` /
   `has_row` for NULL).

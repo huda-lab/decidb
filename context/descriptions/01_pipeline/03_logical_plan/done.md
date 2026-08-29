@@ -10,8 +10,8 @@ It contains no solver-specific structures and no execution mechanics.
 **Key source files**
 
 - `src/planner/binder/query_node/plan_select_node.cpp` — builds the operator
-- `src/planner/operator/logical_decide.cpp` — the operator itself
-- `src/include/duckdb/planner/operator/logical_decide.hpp` — the metadata contract
+- `src/planner/operator/decide/logical_decide.cpp` — the operator itself
+- `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — the metadata contract
 - `src/execution/column_binding_resolver.cpp` — the `LOGICAL_DECIDE` case
 - `src/execution/physical_plan/plan_decide.cpp` — logical → physical
 
@@ -215,7 +215,7 @@ several operators; only the first is armed today, so a later failing subquery ca
 the diagnosis relation. The unresolved policy is tracked in
 [`../../07_query_diagnostics/foundations/todo.md`](../../07_query_diagnostics/foundations/todo.md).
 
-**`LogicalDecideDiagnose`** (`planner/operator/logical_decide_diagnose.hpp`) is the
+**`LogicalDecideDiagnose`** (`planner/operator/decide/logical_decide_diagnose.hpp`) is the
 prefix's own plan node: one child (the whole decision query), and an output schema that
 is *not* the child's. It resolves its types from `GetDecideDiagnoseSchema` — the single
 definition of the diagnosis relation's columns, shared with the physical operator that
@@ -329,10 +329,10 @@ for the output itself.
 | Concern | Location |
 |---|---|
 | Operator construction, subquery provenance | `src/planner/binder/query_node/plan_select_node.cpp` |
-| Operator, entry points, serialization, EXPLAIN strings | `src/planner/operator/logical_decide.cpp` |
-| Metadata contract (every field, documented) | `src/include/duckdb/planner/operator/logical_decide.hpp` |
+| Operator, entry points, serialization, EXPLAIN strings | `src/planner/operator/decide/logical_decide.cpp` |
+| Metadata contract (every field, documented) | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Binding resolution shielding | `src/execution/column_binding_resolver.cpp` |
 | Logical → physical, entity key physical indices | `src/execution/physical_plan/plan_decide.cpp` |
 | `DIAGNOSE` binding, and the flag's origin | `src/planner/binder/tableref/bind_showref.cpp` (`BindDiagnose`) |
-| The `DIAGNOSE` plan node and its schema | `src/planner/operator/logical_decide_diagnose.cpp` |
+| The `DIAGNOSE` plan node and its schema | `src/planner/operator/decide/logical_decide_diagnose.cpp` |
 | Source display registry | `src/planner/decide/decide_source_provenance.cpp` |

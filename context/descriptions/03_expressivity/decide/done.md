@@ -186,7 +186,7 @@ Linear expressions are always supported; bilinear (`x * y`) and quadratic (`POWE
   - REAL → `LogicalType::DOUBLE`, BOOL/INT → `LogicalType::INTEGER` (the DuckDB-facing type — kept INTEGER even for `BOOL` so the variable can appear in arithmetic like `x * weight`, which BOOLEAN cannot implicitly cast into)
   - Boolean type detected via `type_marker == "bool_variable"` and recorded in `is_boolean_var[i]` — the domain signal, independent of the DuckDB type above
   - `is_boolean_var` carries the `[0,1]` domain from here through `LogicalDecide` to `PhysicalDecide`; nothing is synthesized into the `SUCH THAT` tree for it (see below)
-- **ILP model builder** (variable type handling): `src/decidb/utility/ilp_model_builder.cpp`
+- **ILP model builder** (variable type handling): `src/decidb/formulation/ilp_model_builder.cpp`
   - DOUBLE/FLOAT → `is_integer = false`, type-default bounds `[0, 1e30]`
   - `LogicalType::BOOLEAN` → `is_binary = true`, bounds `[0, 1]`
   - INT → `is_integer = true`, type-default bounds `[0, 1e30]`
@@ -196,7 +196,7 @@ Linear expressions are always supported; bilinear (`x * y`) and quadratic (`POWE
 - **Solver backends**: HiGHS `!is_integer → kContinuous` (`deterministic_naive.cpp`); Gurobi `!is_integer && !is_binary → GRB_CONTINUOUS` (`gurobi_solver.cpp`)
 - **Physical execution** (DOUBLE output path): `physical_decide.cpp` — returns raw `double` solution values for REAL vars
 - **Table-scoped variables**:
-  - `EntityScopeInfo` struct: `src/include/duckdb/planner/operator/logical_decide.hpp` — table alias + entity column indices per scoped variable
-  - `VarIndexer`: `src/include/duckdb/decidb/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
+  - `EntityScopeInfo` struct: `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — table alias + entity column indices per scoped variable
+  - `VarIndexer`: `src/include/duckdb/decidb/formulation/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
   - Entity mapping (Phase 1.5): `src/execution/operator/decide/physical_decide.cpp`
   - Physical index resolution: `src/execution/physical_plan/plan_decide.cpp`

@@ -337,7 +337,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 
 ## Code Pointers
 
-- **Variable type -> solver flags**: `src/decidb/utility/ilp_model_builder.cpp`
+- **Variable type -> solver flags**: `src/decidb/formulation/ilp_model_builder.cpp`
   - DOUBLE/FLOAT -> `is_integer=false`, BOOLEAN -> `is_binary=true`, INTEGER -> `is_integer=true`
   - These flags determine whether the solver treats the problem as LP, ILP, or MILP
 
@@ -346,7 +346,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
   - Extracts inner linear expression terms into `Objective::squared_terms` with `quadratic_sign` (scalar; sign combines negation and constant scaling).
   - **Degree guard**: `IsLinearInDecideVars` (same file) is invoked on the inner of every POWER / self-product pattern and on each side of a bilinear `*`. Inputs whose total decision-variable degree would exceed 2 (e.g. `POWER(x,2)*POWER(x,2)`, `POWER(x,2)*POWER(y,2)`, `a*POWER(x,2)`, `POWER(POWER(x,2),2)`) are rejected with a clear `InvalidInputException` rather than silently misclassified as a lower-degree Q term. Same guard runs in the constraint path (`TryDetectConstraintQuadratic` and the constraint bilinear branch).
 
-- **Q matrix construction**: `src/decidb/utility/ilp_model_builder.cpp`
+- **Q matrix construction**: `src/decidb/formulation/ilp_model_builder.cpp`
   - Builds Q from outer products of per-row inner expression coefficients: Q = sign * A^T A
   - sign = +1.0 produces PSD Q (convex), sign = -1.0 produces NSD Q (concave)
   - Sets `nonconvex_quadratic` flag based on sign+sense combination
@@ -356,13 +356,13 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 
 - **HiGHS QP**: `src/decidb/naive/deterministic_naive.cpp` — calls `passHessian` with COO->CSC conversion. It contains no model-class check: non-convex QP, MIQP and quadratic constraints are all declared unsupported in its capability table and refused at plan time (`src/optimizer/decide/decide_solver_gate.cpp`)
 
-- **Solver dispatch**: `src/decidb/utility/ilp_solver.cpp`
+- **Solver dispatch**: `src/decidb/solver/ilp_solver.cpp`
   - `SolverModel::Build()` constructs the formulation; `SolveModel()` dispatches to Gurobi (if available) or HiGHS
 
-- **Solver input (Q matrix storage)**: `src/include/duckdb/decidb/solver_input.hpp`
+- **Solver input (Q matrix storage)**: `src/include/duckdb/decidb/solver/solver_input.hpp`
   - `quadratic_inner_coefficients`, `quadratic_inner_variable_indices`, `has_quadratic_objective`
 
-- **SUM argument validation (QP + bilinear syntax)**: `src/planner/expression_binder/decide_binder.cpp`
+- **SUM argument validation (QP + bilinear syntax)**: `src/planner/expression_binder/decide/decide_binder.cpp`
   - `ValidateSumArgumentInternal` accepts `POWER(linear_expr, 2)`, `POW(linear_expr, 2)`, `(expr) * (expr)` where both sides are identical, and products of two different DECIDE variables (`x * y`) when `allow_bilinear` is true
   - Rejects `POWER(expr, N)` for N != 2, triple or higher products, non-constant exponents
 
@@ -371,7 +371,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
   - `TryDetectConstraintQuadratic` (local lambda) handles pattern matching for all syntax forms
   - Populates `DecideConstraint::QuadraticGroup` with inner linear terms and sign
 
-- **Quadratic constraint Q matrix**: `src/decidb/utility/ilp_model_builder.cpp`
+- **Quadratic constraint Q matrix**: `src/decidb/formulation/ilp_model_builder.cpp`
   - `BuildQuadraticConstraint` lambda builds `QuadraticConstraint` from `EvaluatedConstraint` quadratic groups
   - Computes outer product Q = sign * A^T A per group, accumulates into single Q matrix
   - Handles PER groups (one QuadraticConstraint per group), WHEN filtering, and per-row constraints

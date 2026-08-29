@@ -8,7 +8,7 @@ The `SUCH THAT` clause specifies the **constraints** of a COP query. The solver 
 
 ## Integer-LHS requirements for `<` / `>` / `<>`
 
-**Strict `<` / `>` require an integer-valued LHS.** Internally `LHS < K` is rewritten to `LHS <= ceil(K) - 1`, which is only equivalent to the strict inequality when the LHS can take integer values — i.e., every referenced DECIDE variable is `INT` or `BOOL` and every coefficient is integral. Bilinear products `b * n` between a Boolean and an Integer (or Integer × Integer) count as integer-valued: the McCormick auxiliary for `b * n` is declared `INTEGER` in `decide_optimizer.cpp:RewriteBilinear`, preserving integer-valuedness through linearization. If any term makes the LHS continuous (a `REAL` variable, a fractional coefficient, or a bilinear product involving a `REAL` factor), DeciDB raises `InvalidInputException` at model-build time; use `<=` / `>=` instead. Enforced in `src/decidb/utility/ilp_model_builder.cpp` (`IsEvalConstraintLhsIntegerValued` + `ApplyComparisonSense`, plus the parallel check in `BuildQuadraticConstraint`).
+**Strict `<` / `>` require an integer-valued LHS.** Internally `LHS < K` is rewritten to `LHS <= ceil(K) - 1`, which is only equivalent to the strict inequality when the LHS can take integer values — i.e., every referenced DECIDE variable is `INT` or `BOOL` and every coefficient is integral. Bilinear products `b * n` between a Boolean and an Integer (or Integer × Integer) count as integer-valued: the McCormick auxiliary for `b * n` is declared `INTEGER` in `decide_optimizer.cpp:RewriteBilinear`, preserving integer-valuedness through linearization. If any term makes the LHS continuous (a `REAL` variable, a fractional coefficient, or a bilinear product involving a `REAL` factor), DeciDB raises `InvalidInputException` at model-build time; use `<=` / `>=` instead. Enforced in `src/decidb/formulation/ilp_model_builder.cpp` (`IsEvalConstraintLhsIntegerValued` + `ApplyComparisonSense`, plus the parallel check in `BuildQuadraticConstraint`).
 
 **On a backend with indicator constraints, `<>` is stated rather than encoded.** Gurobi
 takes `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1` directly, so there is no Big-M
@@ -43,7 +43,7 @@ counts. The rule and the message are the same on both backends.
 
   Enforced at `src/execution/operator/decide/physical_decide.cpp` (per-row guard inside the NE expansion loop; per-group guard inside the deferred-aggregate expansion before the `z_idx` allocation). Tolerance for the integer test is `1e-9`.
 
-**Per-row NE indicator column storage.** When a per-row `<>` constraint is filtered by `WHEN` or grouped by `PER`, the disjunction's indicator column carries `-M` only on rows that pass the filter and `0` everywhere else — typically a small fraction of `num_rows`. The column is stored as `CoefficientColumn::SparseMasked` (a sorted list of active row indices plus a single shared value), not as a Dense `vector<double>` of mostly-zero entries. The unfiltered case stays a `Scalar` broadcast of `-M`. Defined in `src/include/duckdb/decidb/solver_input.hpp`; read paths in `src/decidb/utility/ilp_model_builder.cpp` go through `Get(row)` and observe the same zero-skip semantics as Dense.
+**Per-row NE indicator column storage.** When a per-row `<>` constraint is filtered by `WHEN` or grouped by `PER`, the disjunction's indicator column carries `-M` only on rows that pass the filter and `0` everywhere else — typically a small fraction of `num_rows`. The column is stored as `CoefficientColumn::SparseMasked` (a sorted list of active row indices plus a single shared value), not as a Dense `vector<double>` of mostly-zero entries. The unfiltered case stays a `Scalar` broadcast of `-M`. Defined in `src/include/duckdb/decidb/solver/solver_input.hpp`; read paths in `src/decidb/formulation/ilp_model_builder.cpp` go through `Get(row)` and observe the same zero-skip semantics as Dense.
 
 ---
 
@@ -222,16 +222,16 @@ scan ordinal is not something the user can look up in their own data.
 
 ## Code Pointers
 
-- **Constraint binder**: `src/planner/expression_binder/decide_constraints_binder.cpp`
+- **Constraint binder**: `src/planner/expression_binder/decide/decide_constraints_binder.cpp`
   - `BindComparison()` — handles `=`, `<`, `<=`, `>`, `>=`, `<>` (all operators on both per-row and aggregate). Classifies both sides via `GetExpressionType` and accepts when either is a DECIDE expression (`IsDecideSide`); the constraint is reduced when either classifies as `SUM`, and only then is the non-DECIDE side checked as a bound (`IsAllowedConstraintRHS` plus decision-free). It performs no rewriting — the parsed-level side flip it used to do was deleted at the canonicalization refactor.
   - `BindBetween()` — desugars to two comparison constraints
   - `BindOperator()` — handles IN clause
   - `BindWhenConstraint()` / `BindPerConstraint()` — bind WHEN / PER modifiers; the canonicalizer validates `PER` against the final aggregate/per-row classification
   - Nested `WHEN` dispatch through `DecideBinder::BindLocalWhenAggregate()` — aggregate-local WHEN filters
   - Validates that only SUM, AVG, MIN, and MAX are used as aggregate functions
-- **Subquery handling**: `src/planner/expression_binder/decide_binder.cpp`
+- **Subquery handling**: `src/planner/expression_binder/decide/decide_binder.cpp`
   - `DecideBinder::BindExpression()` — validates scalar-only, no DECIDE variable references, then delegates to `ExpressionBinder::BindExpression`
-  - Correlated subquery RHS validation at execution: `src/decidb/utility/ilp_model_builder.cpp`, `SolverModel::Build()`
+  - Correlated subquery RHS validation at execution: `src/decidb/formulation/ilp_model_builder.cpp`, `SolverModel::Build()`
 - **Execution** (constraint matrix construction): `src/execution/operator/decide/physical_decide.cpp`
   - `ExtractDoubleColumn()` — the single NULL / non-finite gate every evaluated coefficient and bound passes through
   - `CollectNullColumnsAtRow()` / `DescribeNullSource()` — name the NULL column on the error path

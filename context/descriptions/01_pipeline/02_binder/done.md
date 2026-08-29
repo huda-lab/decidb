@@ -9,10 +9,10 @@ choose a solver formulation.
 
 - `src/planner/binder/query_node/bind_select_node.cpp` — declaration handling and
   the DECIDE section of `BindSelectNode`
-- `src/planner/expression_binder/decide_binder.cpp` — shared DECIDE expression
+- `src/planner/expression_binder/decide/decide_binder.cpp` — shared DECIDE expression
   rules (reducers, degree, qualified reducers, aggregate-local `WHEN`)
-- `src/planner/expression_binder/decide_constraints_binder.cpp` — `SUCH THAT`
-- `src/planner/expression_binder/decide_objective_binder.cpp` — `MAXIMIZE` / `MINIMIZE`
+- `src/planner/expression_binder/decide/decide_constraints_binder.cpp` — `SUCH THAT`
+- `src/planner/expression_binder/decide/decide_objective_binder.cpp` — `MAXIMIZE` / `MINIMIZE`
 
 ---
 
@@ -403,9 +403,9 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Concern | Location |
 |---|---|
 | Declarations, scopes, types, aux pruning | `src/planner/binder/query_node/bind_select_node.cpp` |
-| Shared DECIDE expression rules, reducers | `src/planner/expression_binder/decide_binder.cpp` |
-| Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide_degree.cpp` |
-| `SUCH THAT` binding and `PER` gate | `src/planner/expression_binder/decide_constraints_binder.cpp` |
-| Objective binding | `src/planner/expression_binder/decide_objective_binder.cpp` |
-| Entity scope struct | `src/include/duckdb/planner/operator/logical_decide.hpp` |
+| Shared DECIDE expression rules, reducers | `src/planner/expression_binder/decide/decide_binder.cpp` |
+| Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
+| `SUCH THAT` binding and `PER` gate | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
+| Objective binding | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
+| Entity scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Scope enum and DECIDE tags | `src/include/duckdb/common/enums/decide.hpp` |

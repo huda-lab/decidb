@@ -27,7 +27,7 @@ arrives here as a clean `UNBOUNDED`.
 To name escapers we need a recession ray — a direction the solver can travel forever
 improving the objective. Rather than depend on solver-specific ray APIs, DeciDB
 extracts one with a portable LP built over the prepared `SolverModel`
-(`BuildUnboundedRayFallbackModel`, `diagnostic_solves.cpp`). For variables `d` over
+(`BuildUnboundedRayFallbackModel`, `probe_models.cpp`). For variables `d` over
 the model's columns:
 
 ```
@@ -289,7 +289,7 @@ cardinality-knob tests) · `test/decide/tests/test_query_diagnostics_relation.py
 statement) · `test/common/test_decidb_diagnostic_engines.cpp` (`DiagnoseUnbounded` with
 injected grouping, plus the renderer and the statement-scoped handoff) · `test/common/test_decidb_escape_characterization.cpp`
 (the pure `CharacterizeEscape` core: threshold gating, union/sort, all-escape,
-excluded instances, empty-rules fallback) · `test/common/test_decidb_diagnostic_solves.cpp`
+excluded instances, empty-rules fallback) · `test/common/test_decidb_probe_models.cpp`
 (ray fallback: full-support ray, signed objective, finite-UB zeroing, row-sense
 preservation, integrality relaxation, opt-in attachment) ·
 `test/common/test_decidb_variable_provenance.cpp` (USER/AUX/GLOBAL_AUX resolution).

@@ -5,15 +5,15 @@ normalizes the outcome. It never inspects SQL plans or DECIDE query semantics.
 
 **Key source files**
 
-- `src/decidb/utility/ilp_solver.cpp` — selection, `SolveModel`, disambiguation, ray attachment
-- `src/decidb/utility/solver_registry.cpp` — the backend table
+- `src/decidb/solver/ilp_solver.cpp` — selection, `SolveModel`, disambiguation, ray attachment
+- `src/decidb/solver/solver_registry.cpp` — the backend table
 - `src/decidb/gurobi/gurobi_solver.cpp`, `src/decidb/gurobi/gurobi_loader.cpp` — Gurobi (C API)
 - `src/decidb/naive/deterministic_naive.cpp` — HiGHS (C++ API)
-- `src/include/duckdb/decidb/solver_registry.hpp` — the backend handle and the registry
-- `src/include/duckdb/decidb/solver_capabilities.hpp` — what upstream stages may assume
-- `src/include/duckdb/decidb/solver_result.hpp` — the normalized outcome
-- `src/include/duckdb/decidb/solver_session.hpp` — the warm-continuation handle
-- `src/include/duckdb/decidb/solver_config.hpp` — time limits
+- `src/include/duckdb/decidb/solver/solver_registry.hpp` — the backend handle and the registry
+- `src/include/duckdb/decidb/solver/solver_capabilities.hpp` — what upstream stages may assume
+- `src/include/duckdb/decidb/solver/solver_result.hpp` — the normalized outcome
+- `src/include/duckdb/decidb/solver/solver_session.hpp` — the warm-continuation handle
+- `src/include/duckdb/decidb/solver/solver_config.hpp` — time limits
 
 Both backends must remain valid implementations. A Gurobi-only API is an
 *accelerator*, never a dependency.
@@ -490,13 +490,13 @@ evaluation, or model building is required.
 
 | Concern | Location |
 |---|---|
-| Backend selection, `SolveModel`, disambiguation | `src/decidb/utility/ilp_solver.cpp` |
-| Backend table | `src/decidb/utility/solver_registry.cpp`, `src/include/duckdb/decidb/solver_registry.hpp` |
-| Capability types, model-class gap, convexity predicate | `src/include/duckdb/decidb/solver_capabilities.hpp` |
-| `GeneralConstraintKind` → construct flag table | `src/include/duckdb/decidb/solver_input.hpp` |
-| Normalized outcome and default error text | `src/include/duckdb/decidb/solver_result.hpp` |
-| Session contract | `src/include/duckdb/decidb/solver_session.hpp` |
-| Time limits | `src/include/duckdb/decidb/solver_config.hpp` |
+| Backend selection, `SolveModel`, disambiguation | `src/decidb/solver/ilp_solver.cpp` |
+| Backend table | `src/decidb/solver/solver_registry.cpp`, `src/include/duckdb/decidb/solver/solver_registry.hpp` |
+| Capability types, model-class gap, convexity predicate | `src/include/duckdb/decidb/solver/solver_capabilities.hpp` |
+| `GeneralConstraintKind` → construct flag table | `src/include/duckdb/decidb/solver/solver_input.hpp` |
+| Normalized outcome and default error text | `src/include/duckdb/decidb/solver/solver_result.hpp` |
+| Session contract | `src/include/duckdb/decidb/solver/solver_session.hpp` |
+| Time limits | `src/include/duckdb/decidb/solver/solver_config.hpp` |
 | Gurobi backend | `src/decidb/gurobi/gurobi_solver.cpp` |
 | Gurobi dynamic loading | `src/decidb/gurobi/gurobi_loader.cpp` |
 | HiGHS backend | `src/decidb/naive/deterministic_naive.cpp` |

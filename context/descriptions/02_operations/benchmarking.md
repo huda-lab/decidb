@@ -82,7 +82,7 @@ The Python runner parses these lines and includes them in the result JSON. It wr
 
 **Source locations:**
 - `src/execution/operator/decide/physical_decide.cpp` - model_construction_ms, solver_ms, total_variables, total_constraint_specs, num_rows
-- `src/decidb/utility/ilp_solver.cpp` - total_constraint_rows (read off the built model as `SolverResult::model_constraint_rows`, since only the post-`Build` model knows the expanded row count)
+- `src/decidb/solver/ilp_solver.cpp` - total_constraint_rows (read off the built model as `SolverResult::model_constraint_rows`, since only the post-`Build` model knows the expanded row count)
 - `src/optimizer/decide/decide_optimizer.cpp` - optimizer_ms
 
 Timers use DuckDB's `Profiler` class (`src/include/duckdb/common/profiler.hpp`). They are gated behind `std::getenv("DECIDB_BENCH")`.

@@ -673,7 +673,7 @@ The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
 | Operator fields | `src/include/duckdb/execution/operator/decide/physical_decide.hpp` |
 | `DecideTerm`, `DecideConstraint`, `DecideObjective` | `src/include/duckdb/planner/decide/decide_prepared_model.hpp` |
 | The pass that fills them | `src/optimizer/decide/decide_linear_form.cpp` |
-| `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver_input.hpp` |
+| `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/solver/solver_input.hpp` |
 | Logical → physical, entity key indices, input column names | `src/execution/physical_plan/plan_decide.cpp` |
 | Binding resolution shielding | `src/execution/column_binding_resolver.cpp` |
 | The `DIAGNOSE` operator (sink the rows, emit the findings) | `src/execution/operator/decide/physical_decide_diagnose.cpp` |
