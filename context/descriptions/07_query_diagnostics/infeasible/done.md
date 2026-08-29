@@ -357,7 +357,7 @@ linearizer and the folded constant added by the builder site that folded it.
 **Edit conversion (the D3 helper).** Reading the slack support is centralized in
 `MakeLoosenEdit(provenance, lhs, rhs, sense, amount)` (a literal knob) and
 `MakeVirtualOffsetEdit(provenance, lhs, rhs_text, sense, delta)` (a query-mode data offset,
-`x <= col + delta`) in `decide_diagnostic_engines.cpp` — the one place per-shape rendering
+`x <= col + delta`) in `decide_diagnostic_render.cpp` — the one place per-shape rendering
 lives: they render the sense, re-quote a strict `<`/`>` against the typed literal, and format
 the suggestion. The LHS is rendered shape-aware by `FormatLhs` — plain `FormatTerms`,
 AVG-collapsing (`FormatAvgLhs`), or SUM-collapsing (`FormatSumLhs`) — or `FormatQuadraticLhs`

@@ -30,7 +30,7 @@ Stage numbers refer to [`README.md`](README.md).
 | `decidb/solver/solver_session.hpp` | 07 | `SolverSession` — warm continuation |
 | `decidb/solver/solver_config.hpp` | 07 | Time limits, primary and diagnostic |
 | `decidb/gurobi/gurobi_solver.hpp`, `gurobi_loader.hpp` | 07 | Gurobi backend and dynamic loading |
-| `decidb/diagnostics/decide_diagnostic.hpp`, `decide_diagnostic_engines.hpp`, `decide_router.hpp` | — | Query diagnostics; see `../07_query_diagnostics/` |
+| `decidb/diagnostics/decide_diagnostic.hpp`, `decide_diagnostic_engines.hpp`, `decide_diagnostic_render.hpp`, `decide_router.hpp` | — | Query diagnostics; see `../07_query_diagnostics/` |
 
 ### Sources (`src/`)
 
