@@ -463,7 +463,7 @@ raising, so a single statement is enough and nothing has to survive an error.
 | Canonical transformation (constraints and objective) | `src/planner/decide/decide_canonicalizer.cpp` |
 | Contract, in code | `src/include/duckdb/planner/decide/decide_canonicalizer.hpp` |
 | Cast policy and unwrapping | `src/planner/decide/decide_cast_policy.cpp` |
-| Cast-policy interface | `src/include/duckdb/decidb/decide_cast_policy.hpp` |
+| Cast-policy interface | `src/include/duckdb/planner/decide/decide_cast_policy.hpp` |
 | Parsed cast-authorship validator | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | User call site and subquery provenance | `src/planner/binder/query_node/plan_select_node.cpp` |
 | Source display capture and rendering | `src/planner/decide/decide_source_provenance.cpp` |

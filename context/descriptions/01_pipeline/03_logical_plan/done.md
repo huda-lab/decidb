@@ -208,12 +208,12 @@ setting:
   binder does not consult the executor, and the executor does not consult the session.
 
 `BindDiagnose` binds the inner query exactly as it would without the prefix — DIAGNOSE
-changes what is reported, never what is asked — then finds the first `LogicalDecide`
-under projections, ORDER BY, or LIMIT, sets the flag, and wraps the whole plan in
-`LogicalDecideDiagnose`. A plan composed from multiple DECIDE subqueries can contain
-several operators; only the first is armed today, so a later failing subquery can bypass
-the diagnosis relation. The unresolved policy is tracked in
-[`../../07_query_diagnostics/foundations/todo.md`](../../07_query_diagnostics/foundations/todo.md).
+changes what is reported, never what is asked — then `CollectDecides` walks the complete
+bound plan. Zero DECIDE operators is an error. More than one is also an error, naming the
+count and asking the user to diagnose each decision query separately. With exactly one,
+the binder sets that operator's flag and wraps the whole plan in
+`LogicalDecideDiagnose`. This applies equally when the sole DECIDE sits inside an
+ordinary subquery; what is refused is ambiguity between several solves, not nesting.
 
 **`LogicalDecideDiagnose`** (`planner/operator/decide/logical_decide_diagnose.hpp`) is the
 prefix's own plan node: one child (the whole decision query), and an output schema that
@@ -292,7 +292,7 @@ rows. The two PTY-driven continuation cases are likewise outside DuckDB's materi
 verifier. Model-dump assertions select one complete build when verifier paths append
 equivalent copies.
 
-The guarded suite passes 1,602 tests with no skips.
+The guarded suite passes 1,604 tests with no skips.
 
 ---
 

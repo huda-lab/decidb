@@ -92,9 +92,9 @@ Stage numbers refer to [`README.md`](README.md).
 
 | Path | Contents |
 |---|---|
-| `grammar/statements/select.y` | Every DECIDE production |
-| `grammar/grammar.y` | The `%expect 6` conflict budget and its rationale |
-| `grammar/keywords/reserved_keywords.list` | `DECIDE`, `MAXIMIZE`, `MINIMIZE`, `SUCH` |
+| `third_party/libpg_query/grammar/statements/select.y` | Every DECIDE production |
+| `third_party/libpg_query/grammar/grammar.y` | The `%expect 6` conflict budget and its rationale |
+| `third_party/libpg_query/grammar/keywords/reserved_keywords.list` | `DECIDE`, `MAXIMIZE`, `MINIMIZE`, `SUCH` |
 | `src_backend_parser_parser.cpp` | `base_yylex` — the `WHEN_DECIDE` gating |
 
 ---

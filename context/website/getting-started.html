@@ -21,10 +21,10 @@
   <!-- DM Serif Display + DM Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
 
   <!-- JetBrains Mono for code -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 
   <!-- Prism.js for syntax highlighting -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
@@ -206,7 +206,7 @@
                   <li><strong>Python:</strong> Version 3.7+ (parser generation)</li>
                   <li><strong>Git:</strong> For cloning the repository</li>
                   <li><strong>Make or Ninja:</strong> Build system</li>
-                  <li><strong>Gurobi (optional):</strong> Auto-detected at build time. If installed, Gurobi is used as the primary solver; otherwise the bundled HiGHS solver is used.</li>
+                  <li><strong>Gurobi (optional):</strong> Auto-detected at runtime. If its library and license are available, Gurobi is used as the primary solver; otherwise bundled HiGHS handles the model classes it supports. Gurobi-only models are rejected when Gurobi is unavailable.</li>
                 </ul>
               </div>
 
@@ -214,7 +214,7 @@
                 <h3 class="font-semibold text-fg mb-3">Supported Platforms</h3>
                 <ul class="text-fg-muted text-sm space-y-1">
                   <li>Linux x86-64 (Ubuntu 18.04+)</li>
-                  <li>macOS 11.0+ (Intel & Apple Silicon)</li>
+                  <li>macOS 11.0+ (Intel &amp; Apple Silicon)</li>
                   <li>Windows 10+ (x64)</li>
                 </ul>
               </div>
@@ -241,8 +241,8 @@
                   <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-canvas-inset text-fg-muted hover:bg-canvas-subtle" data-tab="source">
                     Build from Source
                   </button>
-                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-canvas-inset text-fg-subtle hover:bg-canvas-subtle" data-tab="pip">
-                    pip install (coming soon)
+                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-canvas-inset text-fg-muted hover:bg-canvas-subtle" data-tab="pip">
+                    pip install
                   </button>
                 </div>
 
@@ -466,23 +466,40 @@ ninja -C build/release</code></pre>
 
                 <!-- Option 3: pip install -->
                 <div id="install-pip" class="install-content hidden">
-                  <div class="text-center py-8">
-                    <h3 class="text-xl font-semibold text-fg mb-2">Coming Soon</h3>
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 1: Install the Package</h3>
                     <p class="text-fg-muted mb-4 text-sm">
-                      Python package is under development.
+                      Wheels are published for Python 3.11, 3.12 and 3.13 on macOS (Apple Silicon), Linux (x86-64) and Windows (x86-64).
                     </p>
-                    <div class="code-block max-w-md mx-auto opacity-50">
+                    <div class="code-block">
                       <div class="code-header">
                         <span class="language-label">Bash</span>
+                        <button class="copy-button">
+                          <i data-lucide="copy" class="w-4 h-4"></i>
+                          Copy
+                        </button>
                       </div>
                       <pre class="language-bash"><code>pip install decidb</code></pre>
                     </div>
-                    <p class="text-sm text-fg-subtle mt-4">
-                      <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="text-fg-muted hover:underline">
-                        Watch the GitHub repo
-                      </a>
-                      for updates.
+                  </div>
+
+                  <div class="mb-8">
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Verify It Works</h3>
+                    <p class="text-fg-muted mb-4 text-sm">
+                      The API mirrors <code>duckdb</code>'s: connect, then run SQL.
                     </p>
+                    <div class="code-block">
+                      <div class="code-header">
+                        <span class="language-label">Python</span>
+                        <button class="copy-button">
+                          <i data-lucide="copy" class="w-4 h-4"></i>
+                          Copy
+                        </button>
+                      </div>
+                      <pre class="language-python"><code>import decidb
+
+decidb.connect().sql("SELECT 42").fetchall()</code></pre>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -709,7 +726,7 @@ MAXIMIZE SUM(x * value);</code></pre>
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
       </div>
     </div>
   </footer>

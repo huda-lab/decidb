@@ -13,8 +13,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
@@ -128,7 +128,8 @@ JOIN shifts s ON n.id = s.nurse_id
 DECIDE n.keepN(BOOL)
 SUCH THAT
     SUM(keepN * s.hours * n.hourly_rate) <= 1200
-MAXIMIZE SUM(keepN * s.hours);</code></pre>
+MAXIMIZE SUM(keepN * s.hours)
+ORDER BY n.name, s.shift_date;</code></pre>
       </div>
     </section>
 
@@ -189,7 +190,7 @@ MAXIMIZE SUM(keepN * s.hours);</code></pre>
     <!-- Navigation -->
     <div class="flex justify-between pt-8 border-t border-bdcolor">
       <a href="advanced-scheduling.html" class="text-accent hover:text-accent">&larr; Resource Scheduling</a>
-      <a href="../examples.html" class="text-accent hover:text-accent">Back to Examples &rarr;</a>
+      <a href="advanced-relief-allocation.html" class="text-accent hover:text-accent">Next: Relief Allocation &rarr;</a>
     </div>
   </main>
 
@@ -227,7 +228,7 @@ MAXIMIZE SUM(keepN * s.hours);</code></pre>
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
       </div>
     </div>
   </footer>

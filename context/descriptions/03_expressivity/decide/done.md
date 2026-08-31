@@ -11,7 +11,7 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
 - **Two clause orders.** The declaration may sit between `SELECT` and `FROM` (the
   paper's order) or inside the single block after `WHERE`. The parser has two
   optional slots — `decide_declaration` before `from_clause`, `decide_body` after
-  `where_clause` — and `makeDecideClause()` (`grammar/grammar.cpp`) reassembles
+  `where_clause` — and `makeDecideClause()` (`third_party/libpg_query/grammar/grammar.cpp`) reassembles
   them into the one `PGDecideClause` the transform already consumed, so nothing
   downstream of the parser distinguishes the orders. Declaring in both slots, a
   declaration with no `SUCH THAT`, and a `SUCH THAT` with no declaration are all

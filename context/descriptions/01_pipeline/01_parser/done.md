@@ -14,7 +14,7 @@ once by `DecideCanonicalizer` on the bound tree — see
 ## 1. Grammar
 
 `third_party/libpg_query/grammar/statements/select.y`. `DECIDE`, `MAXIMIZE` and
-`MINIMIZE` are reserved keywords (`grammar/keywords/reserved_keywords.list`), as
+`MINIMIZE` are reserved keywords (`third_party/libpg_query/grammar/keywords/reserved_keywords.list`), as
 is `SUCH`.
 
 ### Two clause orders
@@ -243,7 +243,7 @@ DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/t
 The CLI harness suppresses the pragma's own result, reduces repeated model-dump builds
 to one complete dump for shape assertions, and leaves the two PTY-driven interactive
 continuation cases outside the materializing verifier. The guarded release run passes
-1,602 tests with no skips.
+1,604 tests with no skips.
 
 ---
 

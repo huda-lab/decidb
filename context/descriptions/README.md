@@ -30,7 +30,7 @@ restating an entry.
 
 | Folder | Contains | Start here if… |
 |---|---|---|
-| `00_project_overview/` | What DeciDB is, and the DECIDE syntax reference (the canonical spec) | You are new, or need to know what queries are valid |
+| `00_project_overview/` | What DeciDB is, and the code-grounded DECIDE syntax reference | You are new, or need to know what queries are valid |
 | `01_pipeline/` | The eight pipeline stages, each a folder with `done.md`/`todo.md`, plus architecture, source map and an end-to-end trace | You are working on or debugging any part of the DECIDE query path |
 | `02_operations/` | Oracle testing methodology, release workflow, benchmarking, pip packaging | You need to run tests, cut a release, benchmark, or build the wheel |
 | `03_expressivity/` | The DECIQL surface — each keyword or construct a folder with `done.md`/`todo.md`. Also `problem_types/` (LP/ILP/QP classification), `explain/` and `diagnose/` | You want to know whether a construct is valid, or are implementing one |
@@ -48,7 +48,7 @@ flow diagram: [`01_pipeline/README.md`](01_pipeline/README.md).
 
 | # | Stage | Owns | Key source |
 |---|---|---|---|
-| 01 | [parser](01_pipeline/01_parser/done.md) | Grammar, DECIDE `WHEN` lexing and precedence, transformer | `grammar/statements/select.y`, `bind_select_node.cpp` |
+| 01 | [parser](01_pipeline/01_parser/done.md) | Grammar, DECIDE `WHEN` lexing and precedence, transformer | `third_party/libpg_query/grammar/statements/select.y`, `src/planner/binder/query_node/bind_select_node.cpp` |
 | 02 | [binder](01_pipeline/02_binder/done.md) | Names, scopes, types, degree, reducers, DECIDE validity | `decide_binder.cpp`, `decide_constraints_binder.cpp` |
 | 03 | [logical_plan](01_pipeline/03_logical_plan/done.md) | `LogicalDecide`, subquery provenance, `AddConstraint`/`SetObjective`, serialization | `logical_decide.cpp`, `plan_select_node.cpp` |
 | 04 | [canonicalizer](01_pipeline/04_canonicalizer/done.md) | The one shape boundary — decisions left, bound right, one spelling per reducer scale | `decide_canonicalizer.cpp` |
@@ -72,12 +72,16 @@ and need to know where a concern lives.
 
 ---
 
-## Authoritative sources (anti-redundancy rule)
+## Documentation ownership (anti-redundancy rule)
 
-- **DECIDE syntax** — `00_project_overview/syntax_reference.md` is the canonical
-  spec. Feature docs in `03_expressivity/` deliberately do **not** restate syntax;
-  they hold semantics, implementation notes and code pointers. When adding or
-  changing syntax, update the spec first, then the feature doc.
+- **Source of truth** — current source defines implemented behavior; tests are
+  executable evidence of that behavior. If documentation disagrees, update it;
+  if the behavior itself is suspect, add an entry under `06_issues/` rather than
+  silently documenting it as desirable.
+- **DECIDE syntax documentation** — `00_project_overview/syntax_reference.md` is
+  the single documentation surface for syntax. Feature docs in
+  `03_expressivity/` deliberately do **not** restate it; they hold semantics,
+  implementation notes and code pointers.
 - **Constraint and objective shape** — `01_pipeline/04_canonicalizer/done.md`. No
   other document says where a term is allowed to sit.
 - **Linearization mechanics** (MIN/MAX easy/hard, ABS, `IN`, AVG scaling) —

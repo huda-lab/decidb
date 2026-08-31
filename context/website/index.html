@@ -23,10 +23,10 @@
   <!-- DM Serif Display + DM Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
 
   <!-- JetBrains Mono for code -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 
   <!-- Prism.js for syntax highlighting -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
@@ -144,7 +144,7 @@
 
           <p class="text-lg md:text-xl text-fg-muted mb-10 max-w-2xl mx-auto leading-relaxed">
             DeciDB extends DuckDB with declarative optimization.
-            Select optimal subsets of data with constraints and objectives &mdash; no external tools required.
+            Assign optimal decisions over data with constraints and objectives &mdash; no external solver code required.
           </p>
 
           <!-- CTA Buttons -->
@@ -200,7 +200,7 @@ MAXIMIZE SUM(x * value);</code></pre>
               Why Optimization Belongs in the Database
             </h2>
             <p class="text-lg text-fg-muted leading-relaxed">
-              Many real-world decisions require choosing the best subset of items from a table &mdash; which products to stock, which patients to schedule, which assets to include.
+              Many real-world decisions require choosing or allocating over rows in a table &mdash; which products to stock, which patients to schedule, how much to ship.
               Today, solving these <em>decision problems</em> means exporting data, writing solver code in Python, and mapping results back.
               DeciDB collapses that entire pipeline into a single SQL statement.
             </p>
@@ -279,7 +279,7 @@ MAXIMIZE SUM(x * value);</code></pre>
               Built for Complex Selection Problems
             </h3>
             <p class="text-center text-fg-muted mb-10 max-w-2xl mx-auto">
-              Any problem where you need to pick the best subset from a table &mdash; subject to constraints &mdash; is a constrained optimization problem.
+              Selection, assignment and allocation problems can all be expressed with typed decision variables and collective constraints.
             </p>
             <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
               <a href="examples/basic-knapsack.html" class="card p-5 block group">
@@ -344,7 +344,7 @@ MAXIMIZE SUM(x * value);</code></pre>
             <div class="feature-item">
               <i data-lucide="cpu" class="w-5 h-5 text-accent mb-3"></i>
               <h4 class="text-fg">Built on DuckDB</h4>
-              <p>Columnar storage, vectorized execution, Gurobi solver (HiGHS bundled fallback).</p>
+              <p>Columnar storage, vectorized execution, and runtime selection between Gurobi and bundled HiGHS.</p>
             </div>
           </div>
         </div>
@@ -444,7 +444,7 @@ MAXIMIZE SUM(x * value);</code></pre>
 
       <!-- Bottom Bar -->
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
       </div>
     </div>
   </footer>

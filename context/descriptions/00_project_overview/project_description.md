@@ -8,9 +8,9 @@ A key contrast with standard SQL: `WHERE` applies predicates to *individual* tup
 
 ## 2. Solution: DeciDB
 
-DeciDB extends DuckDB with native constrained optimization. A declarative `DECIDE` clause (syntax: see `syntax_reference.md`) lets users express optimization problems directly in SQL. DeciDB translates them into an Integer Linear Programming model (maximize **c**ᵀ**x** subject to A**x** ≤ **b**), solves it with an embedded solver, and returns the optimum as standard relational output. DuckDB's columnar, vectorized execution makes computing the model coefficients (**c**, A) over large datasets fast.
+DeciDB extends DuckDB with native constrained optimization. A declarative `DECIDE` clause (syntax: see `syntax_reference.md`) lets users express optimization problems directly in SQL. DeciDB translates them into linear, mixed-integer, or supported quadratic solver models, solves them in-process, and returns the optimum as standard relational output. DuckDB's columnar, vectorized execution makes computing model coefficients over large datasets fast.
 
-**Solver strategy**: **Gurobi** is the primary solver — empirically much faster on DeciDB workloads. **HiGHS** (open-source) is bundled as a fallback for environments without a Gurobi license, but it is substantially slower and not recommended for production use.
+**Solver strategy**: **Gurobi** is preferred when its runtime library and license are available — it is empirically faster on DeciDB workloads and supports every implemented model class. **HiGHS** is bundled and handles the model classes in its capability table when Gurobi is unavailable; a Gurobi-only model is rejected rather than sent to an unsupported backend.
 
 ## 3. Design Goals
 

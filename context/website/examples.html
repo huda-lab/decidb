@@ -21,10 +21,10 @@
   <!-- DM Serif Display + DM Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
 
   <!-- JetBrains Mono for code -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -297,12 +297,12 @@
             </div>
             <h3 class="text-xl font-semibold text-fg mb-2">Dynamic Constraints</h3>
             <p class="text-fg-muted text-sm mb-4">
-              Use scalar subqueries and CASE expressions to compute constraint bounds dynamically.
+              Pull constraint bounds from a configuration table, and apply per-category rules with WHEN.
             </p>
             <div class="flex flex-wrap gap-2 mb-4">
               <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Scalar Subquery</span>
-              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">CASE Expression</span>
-              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">COUNT Simulation</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">WHEN Filter</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Config-Driven Bounds</span>
             </div>
             <a href="examples/intermediate-dynamic.html" class="text-accent hover:text-accent font-medium text-sm flex items-center gap-1">
               View Example
@@ -324,7 +324,7 @@
             </p>
             <div class="flex flex-wrap gap-2 mb-4">
               <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Scalar Subquery</span>
-              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">CASE Expression</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">PER Grouping</span>
               <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">Complex Coefficients</span>
             </div>
             <a href="examples/advanced-portfolio.html" class="text-accent hover:text-accent font-medium text-sm flex items-center gap-1">
@@ -421,6 +421,30 @@
             </a>
           </article>
 
+          <!-- Example Card: Relief Allocation -->
+          <article data-category="advanced" class="card hover:shadow-lg hover:shadow-black/20 transition-shadow bg-canvas-subtle border border-bdcolor">
+            <div class="flex items-start justify-between mb-4">
+              <div class="w-12 h-12 rounded-xl flex items-center justify-center bg-accent-tint">
+                <i data-lucide="truck" class="w-6 h-6 text-accent"></i>
+              </div>
+              <span class="badge badge-advanced">Advanced</span>
+            </div>
+            <h3 class="text-xl font-semibold text-fg mb-2">Relief Allocation</h3>
+            <p class="text-fg-muted text-sm mb-4">
+              Ship supplies from depots to regions across a three-way join, charging each depot's opening cost once with a relation-qualified reducer, SUM(D: expr).
+            </p>
+            <div class="flex flex-wrap gap-2 mb-4">
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">SUM(D: expr)</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">DECIDE Table.var</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">PER</span>
+              <span class="text-xs px-2 py-1 bg-canvas-inset rounded text-fg-muted">WHEN</span>
+            </div>
+            <a href="examples/advanced-relief-allocation.html" class="text-accent hover:text-accent font-medium text-sm flex items-center gap-1">
+              View Example
+              <i data-lucide="arrow-right" class="w-4 h-4"></i>
+            </a>
+          </article>
+
         </div>
       </div>
     </section>
@@ -485,7 +509,7 @@
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
       </div>
     </div>
   </footer>

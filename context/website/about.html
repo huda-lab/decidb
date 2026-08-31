@@ -21,10 +21,10 @@
   <!-- DM Serif Display + DM Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
 
   <!-- JetBrains Mono for code -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 
   <!-- Prism.js for syntax highlighting -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
@@ -352,17 +352,7 @@
                        class="font-semibold text-accent hover:text-accent inline-flex items-center gap-1">
                       HiGHS <i data-lucide="external-link" class="w-3 h-3"></i>
                     </a>
-                    <span class="text-sm text-fg-muted"> &mdash; Bundled open-source LP/MIP solver, used as fallback when Gurobi is unavailable</span>
-                  </div>
-                </li>
-                <li class="flex items-baseline gap-3">
-                  <span class="text-accent">&bull;</span>
-                  <div>
-                    <a href="https://issc.uj.ac.za/symbolic/symbolic.html" target="_blank" rel="noopener noreferrer"
-                       class="font-semibold text-accent hover:text-accent inline-flex items-center gap-1">
-                      SymbolicC++ <i data-lucide="external-link" class="w-3 h-3"></i>
-                    </a>
-                    <span class="text-sm text-fg-muted"> &mdash; Computer algebra for constraint linearization</span>
+                    <span class="text-sm text-fg-muted"> &mdash; Bundled open-source LP/MIP and continuous convex QP solver; handles supported models when Gurobi is unavailable</span>
                   </div>
                 </li>
               </ul>
@@ -373,20 +363,20 @@
               <h3 class="text-xl font-semibold text-fg mb-4">Current Status</h3>
               <div class="grid md:grid-cols-2 gap-x-8 gap-y-3 text-sm">
                 <div class="py-2 border-b border-bdcolor-muted">
-                  <span class="font-semibold text-fg">Version:</span>
-                  <span class="text-fg-muted"> 0.1.0 (Prototype)</span>
+                  <span class="font-semibold text-fg">Distribution:</span>
+                  <span class="text-fg-muted"> Tagged releases provide command-line binaries and Python packages</span>
                 </div>
                 <div class="py-2 border-b border-bdcolor-muted">
                   <span class="font-semibold text-fg">Branch:</span>
-                  <span class="text-fg-muted"> <code>master</code> (working)</span>
+                  <span class="text-fg-muted"> <code>master</code> (active development)</span>
                 </div>
                 <div class="py-2 border-b border-bdcolor-muted">
                   <span class="font-semibold text-fg">Test Coverage:</span>
-                  <span class="text-fg-muted"> automated test suite</span>
+                  <span class="text-fg-muted"> 1,600+ Python cases across 84 test files, 9 focused C++ test files, and a 94-query golden corpus</span>
                 </div>
                 <div class="py-2 border-b border-bdcolor-muted">
                   <span class="font-semibold text-fg">Target Scale:</span>
-                  <span class="text-fg-muted"> ~1M rows (exact solving with Gurobi)</span>
+                  <span class="text-fg-muted"> 1M rows in the standard TPC-H benchmark (exact solving with Gurobi)</span>
                 </div>
               </div>
             </div>
@@ -400,13 +390,6 @@
                   <div>
                     <span class="font-semibold text-fg">Sketch-Refine Algorithm</span>
                     <p class="text-sm text-fg-muted">Scale beyond exact solving to very large datasets with bounded approximation error</p>
-                  </div>
-                </li>
-                <li class="flex items-start gap-3">
-                  <span class="text-accent mt-0.5">&bull;</span>
-                  <div>
-                    <span class="font-semibold text-fg">Python Bindings</span>
-                    <p class="text-sm text-fg-muted"><code>pip install decidb</code> &mdash; in-process Python package for embedding optimization queries in data pipelines</p>
                   </div>
                 </li>
                 <li class="flex items-start gap-3">
@@ -465,7 +448,7 @@
       </div>
 
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
       </div>
     </div>
   </footer>

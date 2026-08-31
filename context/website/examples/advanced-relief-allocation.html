@@ -7,7 +7,7 @@
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Resource Scheduling - DeciDB Examples</title>
+  <title>Relief Allocation - DeciDB Examples</title>
   <link rel="icon" type="image/svg+xml" href="../assets/images/logo.svg">
   <script src="../assets/js/tw-config.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -28,6 +28,7 @@
 </head>
 <body class="min-h-screen">
 
+  <!-- Header -->
   <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
     <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
       <a href="../index.html" class="flex items-center space-x-2">
@@ -55,143 +56,150 @@
     </nav>
   </header>
 
+  <!-- Main Content -->
   <main class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
+    <!-- Breadcrumb -->
     <div class="breadcrumb mb-8">
       <a href="../examples.html">Examples</a>
       <span class="separator">/</span>
-      <span>Resource Scheduling</span>
+      <span>Relief Allocation</span>
     </div>
 
+    <!-- Title -->
     <div class="mb-10">
       <div class="flex items-center gap-3 mb-3">
-        <h1 class="text-4xl text-fg">Resource Scheduling</h1>
+        <h1 class="text-4xl text-fg">Relief Allocation</h1>
         <span class="badge badge-advanced">Advanced</span>
       </div>
       <div class="flex flex-wrap gap-2">
-        <span class="badge badge-tag">JOIN</span>
-        <span class="badge badge-tag">BETWEEN Filter</span>
-        <span class="badge badge-tag">PER Clause</span>
-        <span class="badge badge-tag">Complex Objective</span>
+        <span class="badge badge-tag">SUM(D: expr)</span>
+        <span class="badge badge-tag">DECIDE Table.var</span>
+        <span class="badge badge-tag">PER</span>
+        <span class="badge badge-tag">WHEN</span>
+        <span class="badge badge-tag">BETWEEN</span>
+        <span class="badge badge-tag">MINIMIZE</span>
       </div>
     </div>
 
+    <!-- The Problem -->
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        A facility manager assigns staff to time slots across multiple days. Resources (staff) have efficiency ratings and available days; slots have start times, days, and priority levels. A resource can only be assigned to a slot on a day they're available, and only if their skill level meets the slot's requirement. Each resource handles at most 3 slots, and each slot needs exactly 1 resource. The objective maximizes the combined efficiency &times; priority score across all assignments.
+        A relief agency ships supplies from depots to regions along fixed routes. Opening a depot costs money once; shipping along a route costs money per unit. A depot can only ship what it has in stock, and a region marked <code>critical</code> must have its demand met. The goal is to cover the critical demand at the lowest total cost. The depot decision belongs to the depot, not to each route it serves, so its opening cost must be charged once no matter how many routes the join produces.
       </p>
     </section>
 
+    <!-- Sample Data -->
     <section class="example-section">
       <div class="example-section-label">SAMPLE DATA</div>
       <div class="code-block">
-        <pre class="language-sql"><code>CREATE TABLE Resources (
-    resource_id INTEGER, name VARCHAR, efficiency DOUBLE,
-    skill_level INTEGER, available_day VARCHAR
+        <pre class="language-sql"><code>CREATE TABLE Depots (
+    depotID VARCHAR, stock INTEGER, opening_cost INTEGER
 );
-INSERT INTO Resources VALUES
-    (101, 'Alice', 0.95, 5, 'Monday'),
-    (102, 'Bob', 0.88, 4, 'Monday'),
-    (103, 'Carol', 0.92, 5, 'Tuesday');
+INSERT INTO Depots VALUES
+    ('D1', 800, 12000),
+    ('D2', 500, 8000);
 
-CREATE TABLE Slots (
-    slot_id INTEGER, start_time VARCHAR, day VARCHAR,
-    priority INTEGER, required_level INTEGER
+CREATE TABLE Routes (
+    routeID VARCHAR, depotID VARCHAR, regionID VARCHAR,
+    capacity INTEGER, unit_cost INTEGER
 );
-INSERT INTO Slots VALUES
-    (1, '09:00', 'Monday', 10, 3),
-    (2, '10:00', 'Monday', 8, 3),
-    (3, '11:00', 'Monday', 9, 4),
-    (4, '13:00', 'Tuesday', 10, 4);</code></pre>
+INSERT INTO Routes VALUES
+    ('T1', 'D1', 'R1', 500, 6),
+    ('T2', 'D1', 'R2', 350, 6),
+    ('T3', 'D2', 'R2', 300, 3);
+
+CREATE TABLE Regions (
+    regionID VARCHAR, demand INTEGER, priority VARCHAR
+);
+INSERT INTO Regions VALUES
+    ('R1', 450, 'critical'),
+    ('R2', 600, 'standard');</code></pre>
       </div>
     </section>
 
+    <!-- The Query -->
     <section class="example-section">
       <div class="example-section-label">THE QUERY</div>
       <div class="code-block">
-        <pre class="language-sql"><code>SELECT r.name as resource_name, s.slot_id,
-       s.start_time, s.day, r.efficiency, s.priority, x as assigned
-FROM Resources r
-JOIN Slots s ON r.available_day = s.day
-WHERE s.start_time BETWEEN '09:00' AND '17:00'
-  AND r.skill_level >= s.required_level
-DECIDE x(BOOL)
-SUCH THAT
-    SUM(x) <= 3 PER resource_id AND
-    SUM(x) = 1 PER slot_id
-MAXIMIZE SUM(x * r.efficiency * s.priority)
-ORDER BY r.name, s.slot_id;</code></pre>
+        <pre class="language-sql"><code>SELECT routeID, depotID, regionID, open, ship
+FROM Depots D JOIN Routes T USING (depotID) JOIN Regions R USING (regionID)
+DECIDE D.open(BOOL), T.ship(INT)
+SUCH THAT ship BETWEEN 0 AND capacity * open
+  AND SUM(ship) &lt;= stock PER depotID
+  AND SUM(ship) &gt;= demand WHEN priority = 'critical' PER regionID
+MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open)
+ORDER BY routeID;</code></pre>
       </div>
     </section>
 
+    <!-- Query Breakdown -->
     <section class="example-section">
       <div class="example-section-label">QUERY BREAKDOWN</div>
       <div class="space-y-1">
         <div class="query-annotation">
           <span class="annotation-marker">1</span>
-          <div><code>JOIN ... ON r.available_day = s.day</code> — Only consider resource-slot pairs where the resource is available on that day.</div>
+          <div><code>DECIDE D.open(BOOL), T.ship(INT)</code> &mdash; Two table-scoped decisions. <code>open</code> has one value per depot and <code>ship</code> one value per route, however many rows the three-way join produces.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">2</span>
-          <div><code>WHERE r.skill_level &gt;= s.required_level</code> — Further filter: resource must meet the slot's skill requirement.</div>
+          <div><code>ship BETWEEN 0 AND capacity * open</code> &mdash; A route ships nothing unless its depot is open, and never more than the route's capacity. A decision may appear in the bound of a <code>BETWEEN</code>.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">3</span>
-          <div><code>SUM(x) &lt;= 3 PER resource_id</code> — Each resource is assigned to at most 3 slots. A <code>PER</code> column may be written bare or qualified &mdash; <code>PER resource_id</code>, <code>PER r.resource_id</code> and <code>PER Resources.resource_id</code> all mean the same thing. Use the qualifier when a join makes the bare name ambiguous.</div>
+          <div><code>SUM(ship) &lt;= stock PER depotID</code> &mdash; One constraint per depot, bounded by that depot's own <code>stock</code> column.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">4</span>
-          <div><code>SUM(x) = 1 PER slot_id</code> — Each slot is filled by exactly one resource.</div>
+          <div><code>SUM(ship) &gt;= demand WHEN priority = 'critical' PER regionID</code> &mdash; <code>WHEN</code> keeps only the critical regions, then <code>PER</code> writes one constraint for each of them.</div>
         </div>
         <div class="query-annotation">
           <span class="annotation-marker">5</span>
-          <div><code>MAXIMIZE SUM(x * r.efficiency * s.priority)</code> — Maximize combined efficiency &times; priority.</div>
+          <div><code>SUM(D: opening_cost * open)</code> &mdash; The relation qualifier <code>D:</code> reduces over the depots themselves, so each depot contributes its opening cost once. The unqualified <code>SUM(opening_cost * open)</code> would charge D1 once for each route it serves.</div>
         </div>
       </div>
     </section>
 
+    <!-- Result -->
     <section class="example-section">
       <div class="example-section-label">RESULT</div>
       <div class="table-wrapper">
         <table>
           <thead>
             <tr>
-              <th>resource_name</th>
-              <th>slot_id</th>
-              <th>start_time</th>
-              <th>day</th>
-              <th>efficiency</th>
-              <th>priority</th>
-              <th>assigned</th>
+              <th>routeID</th>
+              <th>depotID</th>
+              <th>regionID</th>
+              <th>open</th>
+              <th>ship</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>Alice</td><td>1</td><td>09:00</td><td>Monday</td><td>0.95</td><td>10</td><td class="selected-row">1</td></tr>
-            <tr><td>Alice</td><td>2</td><td>10:00</td><td>Monday</td><td>0.95</td><td>8</td><td class="selected-row">1</td></tr>
-            <tr><td>Alice</td><td>3</td><td>11:00</td><td>Monday</td><td>0.95</td><td>9</td><td class="selected-row">1</td></tr>
-            <tr><td>Bob</td><td>1</td><td>09:00</td><td>Monday</td><td>0.88</td><td>10</td><td>0</td></tr>
-            <tr><td>Bob</td><td>2</td><td>10:00</td><td>Monday</td><td>0.88</td><td>8</td><td>0</td></tr>
-            <tr><td>Bob</td><td>3</td><td>11:00</td><td>Monday</td><td>0.88</td><td>9</td><td>0</td></tr>
-            <tr><td>Carol</td><td>4</td><td>13:00</td><td>Tuesday</td><td>0.92</td><td>10</td><td class="selected-row">1</td></tr>
+            <tr><td>T1</td><td>D1</td><td>R1</td><td class="selected-row">1</td><td>450</td></tr>
+            <tr><td>T2</td><td>D1</td><td>R2</td><td class="selected-row">1</td><td>0</td></tr>
+            <tr><td>T3</td><td>D2</td><td>R2</td><td>0</td><td>0</td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
+    <!-- Interpretation -->
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        Alice (efficiency 0.95) takes all three Monday slots — she has higher efficiency than Bob (0.88), so every Monday slot is more valuable when assigned to her. The 3-slots-per-resource cap is exactly binding for Alice; Bob is left unassigned. Carol (0.92) covers the only Tuesday slot. Total score is 0.95&times;(10 + 8 + 9) + 0.92&times;10 = 25.65 + 9.2 = <strong>34.85</strong>. The JOIN and WHERE clauses do the feasibility filtering up front: Carol can't be considered for Monday slots (wrong day), and any candidate with insufficient skill level is dropped before the optimizer ever sees them. To force a more balanced assignment (e.g., give Bob a shot), you would tighten the per-resource cap from 3 down to 2.
+        R1 is the only critical region, and only route T1 reaches it, so T1 must carry the full demand of 450 &mdash; within its capacity of 500 and within D1's stock of 800. Opening D1 is therefore unavoidable, and its 12,000 is paid once. R2 is standard, so nothing has to reach it: T2 ships 0, and D2 stays shut rather than paying 8,000 to open. Total cost is 12,000 for D1 plus 450 &times; 6 = 2,700 of shipping. Because <code>open</code> is scoped to <code>Depots</code>, both rows carrying D1 report the same value, and <code>SUM(D: opening_cost * open)</code> counts that depot once.
       </div>
     </section>
 
+    <!-- Navigation -->
     <div class="flex justify-between pt-8 border-t border-bdcolor">
-      <a href="advanced-portfolio.html" class="text-accent hover:text-accent">&larr; Portfolio Optimization</a>
-      <a href="advanced-table-scoped.html" class="text-accent hover:text-accent">Next: Table-Scoped Variables &rarr;</a>
+      <a href="advanced-table-scoped.html" class="text-accent hover:text-accent">&larr; Table-Scoped Variables</a>
+      <a href="../examples.html" class="text-accent hover:text-accent">Back to Examples &rarr;</a>
     </div>
   </main>
 
+  <!-- Footer -->
   <footer class="bg-canvas text-fg-muted border-t border-bdcolor">
     <div class="container mx-auto px-4 py-12">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8">

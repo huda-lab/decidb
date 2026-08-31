@@ -13,8 +13,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
@@ -78,7 +78,7 @@
     <section class="example-section">
       <div class="example-section-label">THE PROBLEM</div>
       <p class="text-fg leading-relaxed">
-        An inventory manager selects items for a display, but the rules come from a configuration table — the maximum number of items and the budget are stored externally rather than hard-coded. Additionally, category-specific rules apply: at least 2 items from category A and at most 3 from category B. This example shows how DeciDB constraints can reference scalar subqueries (for dynamic bounds) and use CASE expressions (for category-level counting).
+        An inventory manager selects items for a display, but the rules come from a configuration table — the maximum number of items and the budget are stored externally rather than hard-coded. Additionally, category-specific rules apply: at least 2 items from category A and at most 3 from category B. This example shows how a constraint bound can come from a scalar subquery, and how WHEN applies a rule to one category at a time.
       </p>
     </section>
 
@@ -111,7 +111,8 @@ SUCH THAT
     SUM(x) >= 2 WHEN category = 'A' AND
     SUM(x) <= 3 WHEN category = 'B' AND
     SUM(x * value) <= (SELECT budget FROM Config WHERE id = 1)
-MAXIMIZE SUM(x * value);</code></pre>
+MAXIMIZE SUM(x * value)
+ORDER BY item_id;</code></pre>
       </div>
     </section>
 
@@ -172,7 +173,7 @@ MAXIMIZE SUM(x * value);</code></pre>
     <section class="example-section">
       <div class="example-section-label">INTERPRETATION</div>
       <div class="interpretation-box">
-        The solver selects 5 items totaling exactly 600 (the budget limit): three from category A (Premium A1 at 150, A2 at 140, A3 at 100), one from category B (Standard B0 at 130), and one from category C (Basic C1 at 80). This satisfies the minimum 2 category-A items and stays well within the maximum 3 category-B items. There are several alternative selections that also reach 600 (e.g. A1+A2+B1+B2+C1) — the solver returns one optimum among them. The key feature here is that the constraints reference the Config table dynamically: changing the budget or max_items in Config would change the optimal selection without modifying the query.
+        The solver selects 5 items totaling exactly 600 (the budget limit): three from category A (Premium A1 at 150, A2 at 140, A3 at 100), one from category B (Standard B0 at 130), and one from category C (Basic C1 at 80). This satisfies the minimum 2 category-A items and stays well within the maximum 3 category-B items. This problem has more than one equally good answer. DeciDB returns one of them. The key feature here is that the constraints reference the Config table dynamically: changing the budget or max_items in Config would change the optimal selection without modifying the query.
       </div>
     </section>
 
@@ -215,7 +216,7 @@ MAXIMIZE SUM(x * value);</code></pre>
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
       </div>
     </div>
   </footer>

@@ -61,7 +61,11 @@ Model form: minimize (1/2) x^T Q x + c^T x, subject to Ax <= b and
 l <= x <= u. DeciDB defaults l to 0, but supports explicit finite negative
 lower bounds.
 
-**Convex QP** (MINIMIZE with PSD Q, or MAXIMIZE with NSD Q): Supported by both Gurobi and HiGHS.
+**Convex QP** (MINIMIZE with PSD Q, or MAXIMIZE with NSD Q): Gurobi supports
+the full implemented class. HiGHS supports continuous QP only when Q is
+non-singular. DeciDB rejects coupled/rank-deficient Q on HiGHS at plan time
+because the bundled backend can otherwise stop on a flat valley and return a
+wrong optimum.
 
 ```sql
 -- MINIMIZE convex: Q is PSD (standard)
@@ -232,7 +236,7 @@ Gurobi as the solver to install — see `01_pipeline/05_optimizer/done.md` §0.
 | LP | Yes | Yes |
 | ILP | Yes | Yes |
 | MILP | Yes | Yes |
-| QP (convex) | Yes | Yes |
+| QP (convex) | Yes | Yes, continuous and non-singular Q only |
 | QP (non-convex) | Yes (NonConvex=2) | **No** — refused at plan time |
 | MIQP | Yes | **No** — refused at plan time |
 | Bilinear (Bool × anything) | Yes (McCormick → MILP) | Yes (McCormick → MILP) |

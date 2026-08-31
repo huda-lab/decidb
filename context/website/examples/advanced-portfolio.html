@@ -13,8 +13,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
@@ -96,11 +96,11 @@ INSERT INTO Assets VALUES
     ('MSFT', 'Microsoft', 'Technology', 11.2, 55, 5000),
     ('AAPL', 'Apple', 'Technology', 10.5, 60, 6000),
     ('PFE', 'Pfizer', 'Healthcare', 8.5, 35, 2000),
-    ('JNJ', 'Johnson & Johnson', 'Healthcare', 7.2, 25, 3000),
+    ('JNJ', 'Johnson &amp; Johnson', 'Healthcare', 7.2, 25, 3000),
     ('JPM', 'JP Morgan', 'Finance', 9.2, 50, 4000),
     ('BAC', 'Bank of America', 'Finance', 10.1, 55, 3000),
     ('XOM', 'Exxon', 'Energy', 8.0, 45, 3000),
-    ('PG', 'Procter & Gamble', 'Consumer', 6.5, 20, 2000),
+    ('PG', 'Procter &amp; Gamble', 'Consumer', 6.5, 20, 2000),
     ('KO', 'Coca-Cola', 'Consumer', 5.8, 15, 2000);</code></pre>
       </div>
     </section>
@@ -116,7 +116,8 @@ SUCH THAT
     SUM(x * risk_score) <= 300 AND
     SUM(x) >= 5 AND
     SUM(x) <= 2 PER sector
-MAXIMIZE SUM(x * expected_return * min_investment / 100);</code></pre>
+MAXIMIZE SUM(x * expected_return * min_investment / 100)
+ORDER BY sector, ticker;</code></pre>
       </div>
     </section>
 
@@ -155,22 +156,22 @@ MAXIMIZE SUM(x * expected_return * min_investment / 100);</code></pre>
               <th>ticker</th>
               <th>name</th>
               <th>sector</th>
-              <th>return</th>
-              <th>risk</th>
-              <th>investment</th>
+              <th>expected_return</th>
+              <th>risk_score</th>
+              <th>min_investment</th>
               <th>selected</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>MSFT</td><td>Microsoft</td><td>Technology</td><td>11.2%</td><td>55</td><td>$5,000</td><td class="selected-row">1</td></tr>
-            <tr><td>AAPL</td><td>Apple</td><td>Technology</td><td>10.5%</td><td>60</td><td>$6,000</td><td class="selected-row">1</td></tr>
-            <tr><td>PFE</td><td>Pfizer</td><td>Healthcare</td><td>8.5%</td><td>35</td><td>$2,000</td><td class="selected-row">1</td></tr>
-            <tr><td>JNJ</td><td>J&amp;J</td><td>Healthcare</td><td>7.2%</td><td>25</td><td>$3,000</td><td class="selected-row">1</td></tr>
-            <tr><td>JPM</td><td>JP Morgan</td><td>Finance</td><td>9.2%</td><td>50</td><td>$4,000</td><td class="selected-row">1</td></tr>
-            <tr><td>BAC</td><td>Bank of America</td><td>Finance</td><td>10.1%</td><td>55</td><td>$3,000</td><td class="selected-row">1</td></tr>
-            <tr><td>XOM</td><td>Exxon</td><td>Energy</td><td>8.0%</td><td>45</td><td>$3,000</td><td>0</td></tr>
-            <tr><td>PG</td><td>P&amp;G</td><td>Consumer</td><td>6.5%</td><td>20</td><td>$2,000</td><td class="selected-row">1</td></tr>
-            <tr><td>KO</td><td>Coca-Cola</td><td>Consumer</td><td>5.8%</td><td>15</td><td>$2,000</td><td>0</td></tr>
+            <tr><td>KO</td><td>Coca-Cola</td><td>Consumer</td><td>5.8</td><td>15</td><td>2000</td><td>0</td></tr>
+            <tr><td>PG</td><td>Procter &amp; Gamble</td><td>Consumer</td><td>6.5</td><td>20</td><td>2000</td><td class="selected-row">1</td></tr>
+            <tr><td>XOM</td><td>Exxon</td><td>Energy</td><td>8.0</td><td>45</td><td>3000</td><td>0</td></tr>
+            <tr><td>BAC</td><td>Bank of America</td><td>Finance</td><td>10.1</td><td>55</td><td>3000</td><td class="selected-row">1</td></tr>
+            <tr><td>JPM</td><td>JP Morgan</td><td>Finance</td><td>9.2</td><td>50</td><td>4000</td><td class="selected-row">1</td></tr>
+            <tr><td>JNJ</td><td>Johnson &amp; Johnson</td><td>Healthcare</td><td>7.2</td><td>25</td><td>3000</td><td class="selected-row">1</td></tr>
+            <tr><td>PFE</td><td>Pfizer</td><td>Healthcare</td><td>8.5</td><td>35</td><td>2000</td><td class="selected-row">1</td></tr>
+            <tr><td>AAPL</td><td>Apple</td><td>Technology</td><td>10.5</td><td>60</td><td>6000</td><td class="selected-row">1</td></tr>
+            <tr><td>MSFT</td><td>Microsoft</td><td>Technology</td><td>11.2</td><td>55</td><td>5000</td><td class="selected-row">1</td></tr>
           </tbody>
         </table>
       </div>
@@ -222,7 +223,7 @@ MAXIMIZE SUM(x * expected_return * min_investment / 100);</code></pre>
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled fallback)</p>
+        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
       </div>
     </div>
   </footer>

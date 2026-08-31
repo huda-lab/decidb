@@ -121,6 +121,9 @@ too-open one.
 rows. It is a property of the *statement*, carried parser → binder → logical plan →
 stage 08 as `LogicalDecide::diagnose`; nothing reads it back out of a session setting.
 The full syntax and output schema are in `00_project_overview/syntax_reference.md` §8.
+The complete bound plan must contain exactly one DECIDE operator. A sole DECIDE may sit
+inside an ordinary subquery; plans containing several solves are rejected before any of
+them is armed.
 
 The engine's *tuning* knobs remain sticky session settings — they configure how it works
 once it is running, never whether it runs. The one that changes what you see most is

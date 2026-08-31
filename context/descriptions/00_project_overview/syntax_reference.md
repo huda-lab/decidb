@@ -1,18 +1,15 @@
 # Syntax Reference
 
-> **Frozen as the canonical spec — 2026-08-26.**
+> **Code-grounded syntax reference — reviewed 2026-08-30.**
 >
-> This file is the authoritative description of what a DECIDE query may contain.
-> Every claim in it was checked by running it during the batch-F paper review, and
-> where this file and `context/DeciDB_Paper.pdf` disagree, **this file is right**: the
-> paper is submitted and cannot be edited, so the code is what we build and the paper's
-> wrong claims are simply not repeated on the website.
+> The current implementation is the source of truth. Every claim here should describe
+> behavior exercised by the current source and tests. Where this file or
+> `context/DeciDB_Paper.pdf` disagrees with the implementation, update the documentation;
+> if the implementation itself is suspect, record that separately as an open code issue.
 >
-> Frozen means the spec leads and the code follows, not that it can never change. A
-> behaviour change updates this file **first**, in the same commit; a change that lands
-> here without one is the bug. Feature docs under `03_expressivity/` deliberately do not
-> restate syntax — they hold semantics and code pointers — so this stays the single
-> place a syntax question is answered.
+> Feature docs under `03_expressivity/` deliberately do not restate all syntax — they
+> hold semantics and code pointers — so this remains the single documentation entry
+> point for syntax questions.
 
 ## 1. The DECIDE Clause usage
 
@@ -197,7 +194,8 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
   - `POWER(x - target, 2)`: OK — quadratic constraint (Gurobi only, via `GRBaddqconstr`).
   - `x * x * x`: **ERROR** (triple+ products not supported).
 - **Quadratic constraints**: `POWER(linear_expr, 2)` / `expr ** 2` / `(expr)*(expr)` in constraints enables QCQP. Gurobi only. Composes with WHEN, PER. See Section 3.1 below.
-- **Subqueries**: Scalar subqueries (both uncorrelated and correlated) are allowed on the RHS of constraints. Correlated subqueries are decorrelated into joins, producing per-row values. For aggregate constraints, the subquery RHS must evaluate to the same scalar for all rows. Subqueries cannot reference DECIDE variables.
+- **Subqueries**: Scalar subqueries (both uncorrelated and correlated) are allowed on the RHS of constraints. Correlated subqueries are decorrelated into joins, producing per-row values. For aggregate constraints, the subquery RHS must evaluate to the same scalar for all rows. Subqueries cannot reference DECIDE variables from the enclosing query.
+- **Nested DECIDE**: A scalar RHS subquery may contain its own `DECIDE` clause. The inner decision query solves first and its one-row result becomes the outer bound. Nested DECIDE clauses restore the enclosing lexer state, so an outer `WHEN` may follow the subquery. `DIAGNOSE` has a separate exactly-one-DECIDE restriction (§8.3).
 - **NULL**: A NULL in any value the solver reads is an error, never a zero — coefficients, bounds, and reducer inputs alike. The message names the offending column and asks for explicit `COALESCE()` imputation or a `WHERE` filter. A data-only imputation may be written inline anywhere the value is used, including inside a reducer (`SUM(x * COALESCE(weight, 0))`). Rationale in [`../03_expressivity/such_that/done.md`](../03_expressivity/such_that/done.md). This is distinct from `WHEN` and `PER`, where a NULL excludes the row rather than failing the query.
 
 ### 3.1 Quadratic Constraints (QCQP)
@@ -265,7 +263,10 @@ what the solver could represent in any case. This limit is pinned by
 ## 4. Objective
 
 - **Optional**: Omitting `MAXIMIZE`/`MINIMIZE` creates a feasibility problem — the solver finds any assignment satisfying all constraints. Both Gurobi and HiGHS support this.
-- When present, must be a supported aggregate expression (`SUM(...)`, `AVG(...)`, `MIN(...)`, `MAX(...)`) or an additive expression composed of supported aggregate terms.
+- When present, it may be a supported aggregate expression (`SUM(...)`, `AVG(...)`,
+  `MIN(...)`, `MAX(...)`), a bare query-wide (`scalar`) decision, or an additive
+  expression composed of those terms. A bare row- or table-scoped decision is
+  rejected because it varies across rows.
 - Must involve at least one decision variable.
 - Linear objectives: must be linear in decision variables.
 - **Quadratic objectives (QP)**: `MINIMIZE SUM(POWER(linear_expr, 2))` is supported for convex quadratic programming. The inner expression must be linear in decision variables. Three equivalent syntax forms:
@@ -274,7 +275,10 @@ what the solver could represent in any case. This limit is pinned by
   - `(expr) * (expr)` — identical multiplication (both sides must be the same expression)
   - Negated forms: `-POWER(expr, 2)`, `(-1) * POWER(expr, 2)` for concave QP (both solvers).
   - `MAXIMIZE SUM(POWER(expr, 2))` is non-convex (Gurobi only, via NonConvex=2).
-  - Gurobi supports both continuous QP and mixed-integer QP (MIQP). HiGHS supports continuous QP only — integer/boolean variables with quadratic objectives require Gurobi.
+  - Gurobi supports continuous QP, mixed-integer QP (MIQP), and coupled or
+    rank-deficient quadratic groups. HiGHS supports continuous QP only when the
+    quadratic matrix is non-singular; integer/boolean variables or a square that
+    couples several decision variables require Gurobi.
 - **Bilinear objectives and constraints (`x * y`)**: Products of two different DECIDE variables are supported in both objectives and constraints. Two categories:
   - **Boolean x anything** (McCormick linearization): When one factor is `BOOL`, the product is exactly linearized. Works with both Gurobi and HiGHS. Requires a finite upper bound on the non-Boolean variable — given explicitly (`x <= K`) or inferred by implied-bound propagation from a non-negative constraint like `SUM(x) <= K`. Bool x Bool uses simpler AND-linearization (no Big-M).
   - **General non-convex** (`Real*Real`, `Int*Int`, `Int*Real`): Produces indefinite Q matrix. Objectives: Gurobi only (NonConvex=2). Constraints: Gurobi only (via quadratic constraints). HiGHS rejects with clear errors.
@@ -561,6 +565,10 @@ elastic solve, and that only happens when you ask for it.
 
 - The inner query must contain a `DECIDE` clause. `DIAGNOSE` reports on an optimization
   run; a plain SQL query has none, and is rejected with a message saying so.
+- The complete bound plan must contain **exactly one** `DECIDE` operator. A DECIDE query
+  inside an ordinary subquery is accepted when it is the only one. An outer DECIDE with
+  a nested DECIDE, or sibling subqueries that each contain DECIDE, is rejected so one
+  diagnosis relation can never be mistaken for the result of another solve.
 - `DIAGNOSE` takes no options. There is no `DIAGNOSE (VERBOSE) …`.
 - A query that fails before it can be solved — a syntax error, a semantic error, a model
   class the host's solver refuses — still raises under the prefix. `DIAGNOSE` explains
@@ -590,3 +598,24 @@ how far it can still improve — and then:
   answer the offer;
 - **after Ctrl-C**, hands back the best solution found so far with the caveat that it is
   not proven best, terminal or not. You already said stop; there is nothing to ask.
+
+## 9. Inspecting a Decision Plan — `EXPLAIN`
+
+DuckDB's three plan-inspection forms work on DECIDE queries:
+
+```sql
+EXPLAIN SELECT id, x FROM t DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 50 MAXIMIZE SUM(x * value);
+
+EXPLAIN ANALYZE SELECT ... DECIDE ...;
+EXPLAIN (FORMAT JSON) SELECT ... DECIDE ...;
+```
+
+The DECIDE node shows the declared variables, objective, and constraints. It leads with
+the SQL the user wrote, then adds indented canonical or rewritten rows only when the
+model differs materially from that spelling. Internal auxiliary variables are excluded
+from the declaration list but may appear in rewritten rows because they are real solver
+columns.
+
+`EXPLAIN` plans without executing the decision query. `EXPLAIN ANALYZE` executes it and
+adds actual row counts and timing. JSON uses the same content in a structured plan.

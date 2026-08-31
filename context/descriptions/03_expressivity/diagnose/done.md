@@ -7,9 +7,9 @@ Shipped in batch H (2026-08-26). The paper's §5 interface exists:
 > on the run rather than returning rows. Without the prefix, a failed query just reports
 > its status.
 
-The syntax and the output schema are in `../../00_project_overview/syntax_reference.md`
-§8, which is the canonical spec; this file records the semantics that were decided and
-where the code lives.
+The syntax and output schema are summarized in the code-grounded
+`../../00_project_overview/syntax_reference.md` §8; this file records the
+semantics and where the implementation lives.
 
 ## The semantic question, answered
 
@@ -33,6 +33,10 @@ reading 2's relation output folded in:
   query that worked.
 - **A query with no `DECIDE` clause is rejected**, at bind time, rather than falling
   through to `EXPLAIN ANALYZE` semantics. `DIAGNOSE` reports on an optimization run.
+- **The bound plan must contain exactly one `DECIDE`.** A DECIDE inside an ordinary
+  subquery is accepted when it is the only optimization in the plan. An outer DECIDE
+  with a nested DECIDE, or sibling DECIDE subqueries, is rejected with the number found;
+  one diagnosis relation cannot identify which of several solves it describes.
 - **No options syntax.** There is no `DIAGNOSE (VERBOSE) …`.
 
 ## Where it lives
@@ -44,7 +48,7 @@ buys an options syntax we do not need; `SUMMARIZE` is one grammar alternative pl
 | --- | --- |
 | grammar | `DIAGNOSE SelectStmt` alternative on `VariableShowStmt` (`variable_show.y`), `is_diagnose` on `PGVariableShowSelectStmt`, `DIAGNOSE` added to `reserved_keywords.list`. Requires `make grammar-build`. |
 | parser | `TransformShowSelect` produces a `ShowRef` with `ShowType::DIAGNOSE`. `select_with_parens`' existing `'(' VariableShowStmt ')'` production gives `FROM (DIAGNOSE …)` for free. |
-| binder | `Binder::BindDiagnose` (`bind_showref.cpp`) binds the inner query unchanged, finds the plan's one `LogicalDecide`, sets `diagnose = true`, and wraps the plan in `LogicalDecideDiagnose`. |
+| binder | `Binder::BindDiagnose` (`bind_showref.cpp`) binds the inner query unchanged, collects every `LogicalDecide`, requires exactly one, sets `diagnose = true`, and wraps the plan in `LogicalDecideDiagnose`. |
 | logical plan | `LogicalDecide::diagnose` — a property of the statement, never read back out of a session setting. `LogicalDecideDiagnose` owns the output schema. |
 | stage 08 | `PhysicalDecide::diagnose` arms the engines and reports findings instead of raising; `PhysicalDecideDiagnose` sinks the query's rows and emits the findings. |
 

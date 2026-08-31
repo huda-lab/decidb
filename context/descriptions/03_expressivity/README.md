@@ -12,14 +12,14 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
 | [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | SOCP |
-| [decide/](decide/) | BOOL, INT, REAL, row/entity/query-wide scope, both clause orders, relation-qualified reducers | Qualified-reducer rendering in EXPLAIN |
-| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`) | NULL-coefficient policy |
+| [decide/](decide/) | BOOL, INT, REAL, row/entity/query-wide scope, both clause orders, relation-qualified reducers | *(no planned features)* |
+| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`), NULL policy | *(no planned features)* |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
-| [when/](when/) | Constraints, objectives, PER composition, aggregate-local filters, grammar restrictions | Friendly CASE rejection outside reducers |
+| [when/](when/) | Constraints, objectives, PER composition, aggregate-local filters, grammar restrictions | *(no planned features)* |
 | [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row-varying RHS | *(no planned features)* |
 | [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, norm, `<>`, IN (dec. vars), arithmetic including division, comparisons, BETWEEN, NULL | *(no planned features)* |
 | [bilinear/](bilinear/) | Bool×anything (McCormick), non-convex (Q matrix), bilinear constraints, data coefficients, WHEN composition | *(no planned features)* |
-| [explain/](explain/) | `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN (FORMAT JSON)` on a DECIDE query: node structure, the shared `WHEN`/`PER` renderer, cardinality | Layered as-written → canonical → rewritten rendering |
+| [explain/](explain/) | `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN (FORMAT JSON)` on a DECIDE query: node structure, the shared `WHEN`/`PER` renderer, cardinality, layered as-written → canonical → rewritten rendering | *(no planned features)* |
 | [diagnose/](diagnose/) | `DIAGNOSE <query>` statement prefix — the only trigger for the diagnostics engine, returning its findings as a relation | — |
 
 ---
@@ -41,6 +41,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `IN (...)` on decision variables | Yes (auxiliary binary indicators) | — |
 | Uncorrelated scalar subqueries | Yes | — |
 | Correlated scalar subqueries | Yes (per-row constraints; aggregate requires scalar RHS) | — |
+| Nested DECIDE in a scalar RHS subquery | Yes (inner solve supplies the outer bound) | — |
 | Linear constraints | Yes | — |
 | Quadratic objective: `MINIMIZE SUM(POWER(expr, 2))` | Yes (convex QP, syntax-enforced) | — |
 | Bilinear objectives (`b * x`, `x * y`) | Yes (McCormick / Q matrix) | — |
@@ -53,6 +54,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `PER` on objective | Yes (nested aggregate syntax) | — |
 | `MAXIMIZE SUM(...)` | Yes | — |
 | `MINIMIZE SUM(...)` | Yes | — |
+| Bare query-wide scalar objective (`MINIMIZE cap`) | Yes | — |
 | `SUM()` over decision variables | Yes | — |
 | `AVG()` over decision variables | Yes (coefficient scaling) | — |
 | `ABS()` | Yes (linearized) | — |
@@ -60,7 +62,6 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `DIAGNOSE <query>` prefix | Yes | [diagnose/done.md](diagnose/done.md) |
 | Relation-qualified reducer `SUM(D: expr)` / `SUM(D, T: expr)` | Yes (paper §3.2.2; composite multi-relation keys included) | — |
 | `DECIDE` before `FROM` (paper clause order) | Yes (both orders accepted) | — |
-| `DECIDE x(BOOL)` / `x(INT)` type form | Yes (both forms accepted) | — |
 | `DECIDE scalar x(INT)` (query-wide) | Yes (paper §3.1) | — |
 | `IS BETWEEN a AND b` | **No** (bare `BETWEEN` is the supported syntax) | — |
 
@@ -72,13 +73,9 @@ For a complete taxonomy of what mathematical optimization problem classes DeciDB
 
 ## Development Priorities
 
-The active language-surface queue is deliberately small:
-
-- qualified-reducer and layered rendering in
-  [decide/todo.md](decide/todo.md) and [explain/todo.md](explain/todo.md);
-- [SOCP](problem_types/todo.md);
-- the [NULL-coefficient policy](such_that/todo.md); and
-- the [CASE error-message follow-up](when/todo.md).
+The only deferred language-surface extension currently recorded here is
+[SOCP](problem_types/todo.md). The other feature-specific `todo.md` files have
+no open work.
 
 `DIAGNOSE <query>` is implemented — [diagnose/done.md](diagnose/done.md).
 
