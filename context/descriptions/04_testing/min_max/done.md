@@ -50,12 +50,13 @@ The outer-comparison guard is pinned by
 `test_composed_minmax_outer_not_equal_rejected` (`<> K`, over a whole-numbered
 column so the generic fractional-`<>` refusal does not fire first).
 
-### `BETWEEN` on a composed MIN/MAX is supported
+### Current `BETWEEN` behavior on a composed MIN/MAX
 
 `BETWEEN` arrives at the composed path as its two directional halves, so both
-are ordinary supported bounds and the constraint solves. That makes
-`BETWEEN K AND K` the equality the `= K` rejection tells the user to write, and
-the `=` message names it. Pinned by
+are ordinary supported bounds and the constraint solves. Equal endpoints also
+solve today even though the equivalent outer `= K` is rejected; this is a
+known semantic inconsistency, not a recommended workaround, and is tracked in
+`todo.md`. Current behavior is pinned by
 `test_composed_minmax_between_is_supported` and
 `test_composed_minmax_equality_via_degenerate_between`, each on an instance
 where only one selection lands on the bound.

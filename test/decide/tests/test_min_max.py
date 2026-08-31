@@ -1503,17 +1503,13 @@ def test_composed_minmax_outer_when_rejected(decidb_cli):
 def test_composed_minmax_outer_equality_rejected(decidb_cli):
     """`SUM(...) + MAX(...) = K` is rejected: the composed path only pushes each
     MIN/MAX term in one direction, and an equality demands both at once.
-
-    The message has to carry the workaround, because `BETWEEN K AND K` *is*
-    accepted (it arrives as the two directional halves) and is the smallest edit
-    from the query the user wrote.
     """
     decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT (SUM(x * v) + MAX(x * v)) = 12
         MAXIMIZE SUM(x * v)
-    """, match=r"does not support '='.*BETWEEN K AND K")
+    """, match=r"does not support '='")
 
 
 @pytest.mark.min_max
@@ -1541,8 +1537,7 @@ def test_composed_minmax_between_is_supported(decidb_cli):
     """`(SUM(x*v) + MAX(x*v)) BETWEEN 5 AND 12` solves.
 
     BETWEEN is two directional comparisons by the time the composed path sees
-    it, so both halves are ordinary supported bounds. Pinned because the
-    equality rejection's message advertises this shape as the workaround.
+    it, so both halves are ordinary supported bounds.
 
     v = [10, 5]. Totals of `SUM + MAX`: {} -> 0, {1} -> 20, {2} -> 10,
     {1,2} -> 25. Only `{2}` lands in [5, 12], so the optimum is v = 5 with
@@ -1565,8 +1560,12 @@ def test_composed_minmax_between_is_supported(decidb_cli):
 @pytest.mark.cons_between
 @pytest.mark.correctness
 def test_composed_minmax_equality_via_degenerate_between(decidb_cli):
-    """`BETWEEN K AND K` is the equality the rejection above points users at, and
-    it pins the composed sum to exactly K.
+    """Documents the current inconsistency: equal BETWEEN endpoints pin the
+    composed sum to exactly K even though the equivalent `= K` is rejected.
+
+    This is not a recommended workaround. The behavior is tracked in
+    `context/descriptions/04_testing/min_max/todo.md` so a semantic fix can
+    make the two spellings consistent.
 
     v = [10, 5, 7]; reachable `SUM + MAX` totals are 0, 20, 10, 14, 25, 27, 19,
     32. K = 19 is reached only by `{2, 3}`, so the answer is forced.

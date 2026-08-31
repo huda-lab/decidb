@@ -303,11 +303,9 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	    cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
 	    cmp_type != ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
 		// BETWEEN never reaches here — it is already a pair of directional
-		// comparisons by this point — so the message must not claim otherwise;
-		// for '=' it is also the smallest edit that works.
+		// comparisons by this point — so the message must not claim otherwise.
 		if (cmp_type == ExpressionType::COMPARE_EQUAL) {
-			throw BinderException("Composed MIN/MAX in DECIDE v1 does not support '='. "
-			                      "Write the bound as BETWEEN K AND K.");
+			throw BinderException("Composed MIN/MAX in DECIDE v1 does not support '='.");
 		}
 		throw BinderException("Composed MIN/MAX in DECIDE v1 supports only the <, <=, >, >= and "
 		                      "BETWEEN comparisons.");
