@@ -618,7 +618,10 @@ row mask the reducer runs over — is already evaluated by stage 08, and an empt
 set is refused there before these functions see it.
 
 A composed term needs **both** sides of its link in the hard direction, and that is the
-one place the two-flag spec earns its keep. The clause sits in a constraint, so nothing
+one place the two-flag spec earns its keep. An outer `=` needs both sides on *every*
+term — the equality drives `z_k` in neither direction, so stage 05 marks each term
+hard (`exact_pin`) and the outer row is emitted with sense `'='`, one native equality
+row rather than a pair of opposing inequalities the presolver would have to re-pair. The clause sits in a constraint, so nothing
 drives `z_k` at all: the envelope holds it against the members and the closing side
 pins it onto one. In the easy direction the outer comparison supplies the closing side
 and the envelope alone is exact. Every term's reach is walked once by

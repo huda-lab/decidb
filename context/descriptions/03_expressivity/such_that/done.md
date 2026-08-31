@@ -110,13 +110,21 @@ MIN(x * v) WHEN tier_a + MIN(x * v) WHEN tier_b >= 15
 
 **Subtraction is supported.** `MAX(x*v) WHEN w - MIN(x*v) WHEN w <= 3` and `SUM(x) - MAX(y) <= 0` both work. A subtracted term carries sign `-1`, which flips the direction it is pushed and therefore its easy/hard classification: under `<=`, a subtracted `MAX` is pushed *up* (hard) while an added one is pushed down (easy). `WalkComposedLhs` threads the sign through binary and unary `-`; the physical layer was already sign-generic. A zero constant reaching a leaf is dropped, so a shape is never rejected purely on how its negation was spelled. `DecideOptimizer` still writes negations that way (`0 - inner_expr` in the ABS linearization); the canonicalizer no longer does — since C.2 `BuildAdditive` emits a unary minus for a leading negative term, because the synthesized `0` was a term to every downstream spine walker and is not a term to K3.
 
-Still rejected at bind time (separate v2 shapes): outer `WHEN`/`PER` wrappers,
-non-constant RHS, and an equality (`=`) outer comparison. `BETWEEN` reaches the
-composed path as two directional halves and solves; equal endpoints therefore
-work today even though the equivalent `= K` is rejected. That inconsistency is
-tracked in `../../04_testing/min_max/todo.md` and must not be presented as a
-workaround. The RHS test is *foldability*, not a literal node, so a bound that
-canonicalization rebuilt as `(0 - 3) + 0` is accepted. See also
+**Equality is supported.** `SUM(x*v) + MAX(x*v) = K` holds the composed sum from
+both sides at once, so no term in it has an easy direction: every `z_k` takes the
+envelope *and* the closing indicator layer, and the outer row reaches the backend
+as one native `=` rather than a pair of opposing inequalities. `WalkComposedLhs`
+expresses this as `exact_pin`, which short-circuits the easy/hard classification
+the same way an unknown factor sign does. `BETWEEN` reaches the composed path as
+two directional halves and solves; equal endpoints therefore also work, and agree
+with `= K` — but as two comparisons they allocate two auxiliaries and pay for the
+indicator layer on one of them anyway, so `= K` is the cheaper spelling of the
+same constraint.
+
+Still rejected at bind time (separate v2 shapes): outer `WHEN`/`PER` wrappers, a
+non-constant RHS, and a `<>` outer comparison. The RHS test is *foldability*, not
+a literal node, so a bound that canonicalization rebuilt as `(0 - 3) + 0` is
+accepted. See also
 `../maximize_minimize/done.md` for composed objectives.
 
 ---

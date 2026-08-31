@@ -1128,6 +1128,15 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
         outer.sense = '>';
         outer.rhs = outer_rhs;
         break;
+    case ExpressionType::COMPARE_EQUAL:
+        // One native equality row, not a pair of opposing inequalities: the backends take
+        // '=' directly, and presolve can eliminate against an equality in a way it cannot
+        // against two inequalities that happen to meet. Every `z_k` in it carries both the
+        // envelope and the closing side (see `exact_pin` in the DECIDE rewrite), so the
+        // row is exact in both directions.
+        outer.sense = '=';
+        outer.rhs = outer_rhs;
+        break;
     default:
         throw InternalException("Composed MIN/MAX: unexpected comparison type.");
     }

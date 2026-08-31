@@ -218,7 +218,7 @@ public:
     struct ComposedMinMaxConstraint {
         vector<ComposedMinMaxTerm> terms;
         unique_ptr<Expression> rhs_expr;      // RHS expression (typically scalar constant)
-        ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >)
+        ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >, =)
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
     };

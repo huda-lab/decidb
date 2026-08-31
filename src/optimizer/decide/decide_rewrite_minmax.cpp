@@ -122,14 +122,19 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 // Walk the additive LHS, emitting a ComposedMinMaxTerm for each leaf aggregate.
 // Throws BinderException on v1-unsupported shapes (non-aggregate leaves,
 // nested subtraction/scaling, non-SUM/AVG/MIN/MAX aggregates).
+//
+// `outer_push_down` is which way the outer comparison drives the LHS, and decides
+// each MIN/MAX term's easy/hard classification. `exact_pin` says there is no such
+// direction — an outer `=` — so every MIN/MAX term is classified hard and gets its
+// auxiliary pinned from both sides.
 static void WalkComposedLhs(ClientContext &context, const Expression &e, int sign, idx_t decide_index,
-                             bool outer_push_down,
+                             bool outer_push_down, bool exact_pin,
                              vector<LogicalDecide::ComposedMinMaxTerm> &out_terms) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
 	if (IsAddNode(u, decide_index)) {
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		for (auto &child : fn.children) {
-			WalkComposedLhs(context, *child, sign, decide_index, outer_push_down, out_terms);
+			WalkComposedLhs(context, *child, sign, decide_index, outer_push_down, exact_pin, out_terms);
 		}
 		return;
 	}
@@ -141,12 +146,12 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 		// and a term that crosses the relation arrives negated.
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		if (fn.children.size() == 2) {
-			WalkComposedLhs(context, *fn.children[0], sign, decide_index, outer_push_down, out_terms);
-			WalkComposedLhs(context, *fn.children[1], -sign, decide_index, outer_push_down, out_terms);
+			WalkComposedLhs(context, *fn.children[0], sign, decide_index, outer_push_down, exact_pin, out_terms);
+			WalkComposedLhs(context, *fn.children[1], -sign, decide_index, outer_push_down, exact_pin, out_terms);
 			return;
 		}
 		if (fn.children.size() == 1) {
-			WalkComposedLhs(context, *fn.children[0], -sign, decide_index, outer_push_down, out_terms);
+			WalkComposedLhs(context, *fn.children[0], -sign, decide_index, outer_push_down, exact_pin, out_terms);
 			return;
 		}
 	}
@@ -207,7 +212,13 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 		// so the two combine into one effective sign. `-2 * MAX(e)` under `<=` pushes
 		// MAX up, the hard direction, just as `- MAX(e)` would.
 		int scale_sign = ScaleSignAtPlanTime(context, scale, scale_divides);
-		if (scale_sign == 0) {
+		if (exact_pin) {
+			// An equality holds the LHS from both sides at once, so no MIN/MAX term in it
+			// has a cheap direction. The indicator layer pins z to the true MIN/MAX from
+			// both sides, which is exactly what the equality needs -- the same machinery
+			// the unknown-sign case below falls back to, asked for deliberately here.
+			term.is_easy = false;
+		} else if (scale_sign == 0) {
 			// The factor's sign is not known until the query runs, so neither is the
 			// cheap direction. The indicator layer pins z to the true MIN/MAX in BOTH
 			// directions, which is correct for either sign -- pay for it rather than
@@ -298,19 +309,24 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	}
 
 	auto cmp_type = comp.type;
-	if (cmp_type != ExpressionType::COMPARE_LESSTHAN &&
+	// An equality has no cheap direction: it holds the LHS from both sides, so every
+	// MIN/MAX term needs its auxiliary pinned exactly rather than pushed one way. That
+	// costs the indicator layer on every term, but it is still cheaper than the
+	// `BETWEEN K AND K` spelling users reached for while `=` was rejected -- two
+	// comparisons allocate two auxiliaries and pay for the indicator layer on one of
+	// them anyway, plus a redundant second envelope.
+	bool exact_pin = (cmp_type == ExpressionType::COMPARE_EQUAL);
+	if (!exact_pin && cmp_type != ExpressionType::COMPARE_LESSTHAN &&
 	    cmp_type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
 	    cmp_type != ExpressionType::COMPARE_GREATERTHAN &&
 	    cmp_type != ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
 		// BETWEEN never reaches here — it is already a pair of directional
 		// comparisons by this point — so the message must not claim otherwise.
-		if (cmp_type == ExpressionType::COMPARE_EQUAL) {
-			throw BinderException("Composed MIN/MAX in DECIDE v1 does not support '='.");
-		}
-		throw BinderException("Composed MIN/MAX in DECIDE v1 supports only the <, <=, >, >= and "
+		throw BinderException("Composed MIN/MAX in DECIDE v1 supports only the <, <=, =, >, >= and "
 		                      "BETWEEN comparisons.");
 	}
 
+	// Meaningless when `exact_pin` is set, which short-circuits the classification.
 	bool outer_push_down = (cmp_type == ExpressionType::COMPARE_LESSTHAN ||
 	                         cmp_type == ExpressionType::COMPARE_LESSTHANOREQUALTO);
 
@@ -321,7 +337,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	TryParseRemovalGroupTag(comp.GetAlias(), spec.removal_group_id);
 
 	WalkComposedLhs(optimizer.context, *comp.left, /*sign=*/1, decide.decide_index, outer_push_down,
-	                spec.terms);
+	                exact_pin, spec.terms);
 
 	decide.composed_minmax_constraints.push_back(std::move(spec));
 
@@ -386,7 +402,9 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	bool outer_push_down = (decide.decide_sense == DecideSense::MINIMIZE);
 
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
-	WalkComposedLhs(optimizer.context, obj, /*sign=*/1, decide.decide_index, outer_push_down, terms);
+	// An objective always has a direction, so no term needs the both-sides pin here.
+	WalkComposedLhs(optimizer.context, obj, /*sign=*/1, decide.decide_index, outer_push_down,
+	                /*exact_pin=*/false, terms);
 
 	decide.composed_minmax_objective_terms = std::move(terms);
 

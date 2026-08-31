@@ -1499,35 +1499,125 @@ def test_composed_minmax_outer_when_rejected(decidb_cli):
 
 
 @pytest.mark.min_max
-@pytest.mark.error_binder
-def test_composed_minmax_outer_equality_rejected(decidb_cli):
-    """`SUM(...) + MAX(...) = K` is rejected: the composed path only pushes each
-    MIN/MAX term in one direction, and an equality demands both at once.
+@pytest.mark.correctness
+def test_composed_minmax_outer_equality_max(
+    decidb_cli, oracle_solver, perf_tracker
+):
+    """`SUM(x*v) + MAX(x*v) = K` solves, checked against an independently built
+    oracle model.
+
+    An equality holds the composed sum from both sides, so the auxiliary standing
+    in for MAX gets the envelope AND the closing indicator rows. The oracle below
+    spells that pinning out by hand, so a regression in either half shows up as a
+    disagreement rather than as a plausible-looking wrong answer.
     """
-    decidb_cli.assert_error("""
-        SELECT id, v FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
+    sql = """
+        SELECT id, v, x FROM (VALUES (1, 10.0), (2, 5.0), (3, 7.0)) t(id, v)
         DECIDE x(BOOL)
-        SUCH THAT (SUM(x * v) + MAX(x * v)) = 12
+        SUCH THAT (SUM(x * v) + MAX(x * v)) = 19
         MAXIMIZE SUM(x * v)
-    """, match=r"does not support '='")
+    """
+    t0 = time.perf_counter()
+    rows, cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = [(1, 10.0), (2, 5.0), (3, 7.0)]
+    n = len(data)
+    big_m = max(d[1] for d in data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("composed_minmax_equality_max")
+    vnames = [f"x_{i}" for i in range(n)]
+    for v in vnames:
+        oracle_solver.add_variable(v, VarType.BINARY)
+    oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=big_m)
+    ynames = [f"y_{i}" for i in range(n)]
+    for y in ynames:
+        oracle_solver.add_variable(y, VarType.BINARY)
+    for i, d in enumerate(data):
+        # Envelope: z is no smaller than any member.
+        oracle_solver.add_constraint(
+            {"z": 1.0, vnames[i]: -d[1]}, ">=", 0.0, name=f"env_{i}",
+        )
+        # Closing: z is no larger than the member its indicator selects.
+        oracle_solver.add_constraint(
+            {"z": 1.0, vnames[i]: -d[1], ynames[i]: big_m}, "<=", big_m,
+            name=f"close_{i}",
+        )
+    oracle_solver.add_constraint({y: 1.0 for y in ynames}, "=", 1.0, name="pick_one")
+    outer = {vnames[i]: data[i][1] for i in range(n)}
+    outer["z"] = 1.0
+    oracle_solver.add_constraint(outer, "=", 19.0, name="composed_eq")
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][1] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    def decidb_obj(rs, cs):
+        xi = cs.index("x"); vi = cs.index("v")
+        return sum(int(r[xi]) * float(r[vi]) for r in rs)
+
+    cmp = compare_solutions(
+        rows, cols, result, data, ["x"], decidb_objective_fn=decidb_obj,
+    )
+    perf_tracker.record(
+        "composed_minmax_equality_max", decidb_time, build_time,
+        result.solve_time_seconds, n, 2 * n + 1, 2 * n + 2,
+        result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+    # The equality itself, restated on the returned rows.
+    ci = {c: i for i, c in enumerate(cols)}
+    picked = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
+    assert abs(sum(picked) + max(picked) - 19.0) < 1e-6
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+def test_composed_minmax_outer_equality_min(decidb_cli):
+    """`SUM(x*v) + MIN(x*v) = K` — the MIN arm of the same exact pin.
+
+    Integer `x` bounded to 1..2 so no row contributes a zero: `MIN` ranges over
+    every row, not just the selected ones, so with BOOL variables any unselected
+    row would drive it to 0 and the MIN would stop binding.
+
+    v = [10, 5, 7]. Reachable `SUM + MIN` totals over x in {1,2}^3 are 27, 37,
+    34, 34, 44, 44, 44, 54. K = 37 is reached only by x = (2, 1, 1), where MIN
+    is a genuine 5 — an auxiliary pinned on only one side would let that float
+    and admit other assignments.
+    """
+    rows, cols = decidb_cli.execute("""
+        SELECT id, v, x FROM (VALUES (1, 10.0), (2, 5.0), (3, 7.0)) t(id, v)
+        DECIDE x(INT)
+        SUCH THAT x >= 1 AND x <= 2 AND (SUM(x * v) + MIN(x * v)) = 37
+        MAXIMIZE SUM(x * v)
+    """)
+    ci = {c: i for i, c in enumerate(cols)}
+    got = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
+    assert got == {1: 2, 2: 1, 3: 1}, f"expected x = (2, 1, 1), got {got}"
+    total = sum(float(r[ci["v"]]) * got[int(r[ci["id"]])] for r in rows)
+    assert abs(total + min(float(r[ci["v"]]) * got[int(r[ci["id"]])] for r in rows)
+               - 37.0) < 1e-6
 
 
 @pytest.mark.min_max
 @pytest.mark.error_binder
 def test_composed_minmax_outer_not_equal_rejected(decidb_cli):
-    """`SUM(...) + MAX(...) <> K` shares the equality rejection's guard.
+    """`SUM(...) + MAX(...) <> K` is rejected.
 
     `v` is whole-numbered so the generic `<>` fractional-type refusal does not
     fire first — this reaches the composed-comparison guard, which is the one
-    being pinned. Unlike `=`, there is no BETWEEN rewrite, so the message stays
-    the plain list of supported comparisons.
+    being pinned. `=` is supported and appears in the message; `<>` is the
+    remaining unsupported comparison.
     """
     decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10, true), (2, 5, true)) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT (SUM(x * v) + MAX(x * v)) <> 12
         MAXIMIZE SUM(x * v)
-    """, match=r"supports only the <, <=, >, >= and BETWEEN comparisons")
+    """, match=r"supports only the <, <=, =, >, >= and BETWEEN comparisons")
 
 
 @pytest.mark.min_max
@@ -1560,12 +1650,12 @@ def test_composed_minmax_between_is_supported(decidb_cli):
 @pytest.mark.cons_between
 @pytest.mark.correctness
 def test_composed_minmax_equality_via_degenerate_between(decidb_cli):
-    """Documents the current inconsistency: equal BETWEEN endpoints pin the
-    composed sum to exactly K even though the equivalent `= K` is rejected.
+    """Equal BETWEEN endpoints agree with the `= K` spelling.
 
-    This is not a recommended workaround. The behavior is tracked in
-    `context/descriptions/04_testing/min_max/todo.md` so a semantic fix can
-    make the two spellings consistent.
+    Both mean the same thing and both now solve, so this pins the agreement.
+    `= K` is the cheaper spelling — one auxiliary with both pinning sides —
+    while equal endpoints arrive as two directional comparisons and allocate an
+    auxiliary each. Same answer, more rows.
 
     v = [10, 5, 7]; reachable `SUM + MAX` totals are 0, 20, 10, 14, 25, 27, 19,
     32. K = 19 is reached only by `{2, 3}`, so the answer is forced.

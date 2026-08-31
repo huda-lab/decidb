@@ -43,23 +43,28 @@ and subtraction such as `MAX(...) - MIN(...) <= K`.
 
 `test_min_max.py` / `test_per_objective.py`: `MAX(x) <> K` rejected; flat
 `MIN/MAX + PER` (ambiguous) rejected; and composed MIN/MAX rejected for an outer
-`PER`/`WHEN` wrapper, a non-constant RHS, or equality at the outer comparison.
+`PER`/`WHEN` wrapper or a non-constant RHS.
 
-The outer-comparison guard is pinned by
-`test_composed_minmax_outer_equality_rejected` (`= K`) and
-`test_composed_minmax_outer_not_equal_rejected` (`<> K`, over a whole-numbered
-column so the generic fractional-`<>` refusal does not fire first).
+`<>` is the only outer comparison the composed path refuses, pinned by
+`test_composed_minmax_outer_not_equal_rejected` (over a whole-numbered column so
+the generic fractional-`<>` refusal does not fire first).
 
-### Current `BETWEEN` behavior on a composed MIN/MAX
+### Outer equality and `BETWEEN` on a composed MIN/MAX
+
+`SUM(x*v) + MAX(x*v) = K` solves. An equality holds the composed sum from both
+sides, so every `z_k` in it carries the envelope *and* the closing indicator
+rows, and the outer row goes to the backend as one native `=`.
+`test_composed_minmax_outer_equality_max` checks it against an oracle model that
+spells that pinning out by hand; `test_composed_minmax_outer_equality_min`
+covers the `MIN` arm on an instance where one selection is forced.
 
 `BETWEEN` arrives at the composed path as its two directional halves, so both
-are ordinary supported bounds and the constraint solves. Equal endpoints also
-solve today even though the equivalent outer `= K` is rejected; this is a
-known semantic inconsistency, not a recommended workaround, and is tracked in
-`todo.md`. Current behavior is pinned by
-`test_composed_minmax_between_is_supported` and
-`test_composed_minmax_equality_via_degenerate_between`, each on an instance
-where only one selection lands on the bound.
+are ordinary supported bounds and the constraint solves —
+`test_composed_minmax_between_is_supported`. Equal endpoints mean the same thing
+as `= K` and agree with it
+(`test_composed_minmax_equality_via_degenerate_between`), but they are the more
+expensive spelling: two comparisons allocate an auxiliary each, where `= K`
+allocates one and pins both its sides.
 
 ### Empty `WHEN` rejection (execution-time errors)
 
