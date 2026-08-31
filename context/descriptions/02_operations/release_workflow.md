@@ -11,12 +11,12 @@ Actions tab → **DecidB Release Build** → Run workflow:
 | Input | Description | Default |
 |-------|-------------|---------|
 | `version` | Release version tag (e.g., `v0.1.0-beta`) | Required |
-| `platforms` | Comma-separated: `linux`, `macos`, `windows` | `linux` |
+| `platforms` | Comma-separated: `linux`, `macos`, `windows` | `linux,macos,windows` |
 | `create_release` | Whether to create a draft GitHub release | `true` |
 
 ## Job Structure
 
-Three parallel platform builds (each gated on `platforms` containing its name) feed a final `create-release` job:
+Three parallel platform builds (each gated on `platforms` containing its name) feed a final `create-release` job. A draft release is created only when all three platform jobs succeed, so its generated download table cannot advertise missing files. For a partial build, set `create_release=false`:
 
 ```
 linux-x64 (ubuntu-latest)   macos-universal (macos-14)   windows-x64 (windows-2022)
@@ -38,7 +38,7 @@ Each platform job: checkout (full history) → setup Python 3.12 → build → v
 ### Per-platform build notes
 
 - **Linux** (`ubuntu-latest`): builds inside the `manylinux2014_x86_64` Docker image for glibc 2.17+ compatibility (CentOS 7+, Ubuntu 18.04+). Installs `perl-IPC-Cmd` for the OpenSSL build, then runs `make`.
-- **macOS** (`macos-14`): installs Ninja + `libomp` (OpenMP, required by HiGHS), uses ccache. Builds a universal binary (`OSX_BUILD_UNIVERSAL=1`) with libomp include paths passed via `EXTRA_CMAKE_VARIABLES` (`-I/opt/homebrew/opt/libomp/include`; on Intel Macs the prefix is `/usr/local`). Verified with `file build/release/decidb`.
+- **macOS** (`macos-14`): installs Ninja, uses ccache, and builds a universal binary (`OSX_BUILD_UNIVERSAL=1`). The workflow verifies the result with `file build/release/decidb`.
 - **Windows** (`windows-2022`): installs Ninja via choco, uses ccache, builds under MSVC vars (`vcvars64.bat`) with `cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1` then `ninja -C build/release`. Output: `build/release/decidb.exe`.
 
 ### create-release job
@@ -53,6 +53,8 @@ gh release create ${version} \
 ```
 
 - `--target ${{ github.sha }}` pins the tag to the **exact commit that was built**.
+- The job explicitly grants `contents: write` to its `GITHUB_TOKEN` so draft
+  creation does not depend on the repository's default workflow permissions.
 - No `|| true`: if the tag/release already exists the job **fails loudly** rather than leaving a stale release in place.
 - The release is a **draft** — review and publish manually. Publishing it triggers `python-wheels.yml` to push to PyPI and attach wheels.
 
@@ -63,7 +65,6 @@ gh release create ${version} \
 | `OVERRIDE_GIT_DESCRIBE` | Sets the version string embedded in binaries (from the `version` input) |
 | `GH_TOKEN` | GitHub token for creating releases |
 | `OSX_BUILD_UNIVERSAL` | Enables universal binary build on macOS |
-| `EXTRA_CMAKE_VARIABLES` | Extra CMake flags (used for macOS libomp paths) |
 | `GEN=ninja` | Use Ninja instead of Make (Makefile option) |
 | `CMAKE_BUILD_PARALLEL_LEVEL` | Number of parallel build jobs |
 
@@ -86,10 +87,6 @@ Build outputs:
 | Windows | `build/release/decidb.exe` | `build/release/src/duckdb.dll`, `duckdb.lib` |
 
 **Note**: The executable is named `decidb`, but internal libraries retain `libduckdb` naming for DuckDB extension/API compatibility.
-
-## Known Build Warnings (cosmetic, safe to ignore)
-
-- DeciDB (macOS): `decide_binder.hpp:42` missing `override`, `logical_operator_type.cpp:10` unhandled `LOGICAL_DECIDE` enum in switch.
 
 ## Notes
 

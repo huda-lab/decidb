@@ -146,7 +146,11 @@ cmake .. -DBUILD_PYTHON=1
 The amalgamation path detects `add_library_unity` in CMakeLists.txt files and generates unity build `.cpp` files that `#include` multiple source files. This speeds up compilation significantly.
 
 ### Version Detection
-Version is derived from `git describe --tags --long` via `setuptools_scm` (configured in `pyproject.toml` with `root = "../.."`). The version format is `0.1.devN` where N is the number of commits since the last tag.
+Local builds derive their version from Git through `setuptools_scm` (configured in
+`pyproject.toml` with `root = "../.."`). Tagged builds use the tag; development builds
+use the next patch version plus a `.devN` suffix. The release workflow sets
+`SETUPTOOLS_SCM_PRETEND_VERSION` from its version input or release tag for both wheels
+and the source distribution, so every artifact in one release carries the same version.
 
 ## 9. CI / Wheel Building
 The GitHub Actions workflow (`.github/workflows/python-wheels.yml`) uses `cibuildwheel` to build cross-platform wheels. It is triggered by `workflow_dispatch` (manual, requires a version input) or on GitHub release publish.
@@ -154,21 +158,19 @@ The GitHub Actions workflow (`.github/workflows/python-wheels.yml`) uses `cibuil
 ### Build Job (`build_wheels`)
 - **Platforms**: ubuntu-22.04 (Linux x86_64), macos-14 (macOS arm64), windows-2022 (AMD64)
 - **Python versions**: cp311, cp312, cp313
-- **Smoke test**: After building, runs `python -c "import decidb; print(decidb.__version__)"`
+- **Smoke test**: Each built wheel imports `decidb`, runs `SELECT 42`, forces the
+  bundled HiGHS backend through a typed `DECIDE x(BOOL)` query, checks its result,
+  and prints the package version.
 - **Artifacts**: Wheels are uploaded as GitHub Actions artifacts (7-day retention). Each OS produces 3 `.whl` files (one per Python version). The sdist is built separately on Linux.
 
-### Test Job (`test_wheels`)
-After wheels are built, a separate `test_wheels` job downloads and tests them:
-1. Downloads the wheel artifact for the target OS
-2. Installs the wheel plus test dependencies (`pytest`, `numpy`, `pandas<3.0`, `pyarrow`, `pytz`, `typing_extensions`)
-3. Runs smoke tests (import + basic SQL query)
-4. Runs the fast test suite: `python -m pytest fast --verbose --continue-on-collection-errors`
-
-**Pandas version constraint**: Tests require `pandas<3.0` because pandas 3.0 changed its default string dtype to `StringDtype` (pyarrow-backed), which the C++ binding's pandas scanner does not yet recognize (`Data type 'str' not recognized`).
+There is no separate wheel-test job in the release workflow. The complete package test
+suite remains available through the default `cibuildwheel` configuration in
+`pyproject.toml`; the release workflow deliberately overrides it with the bounded smoke
+test above. Broader pre-publication artifact validation is tracked in `todo.md`.
 
 ### Publish Job (`publish_pypi`)
-- Only runs on release events or when `publish_to_pypi` is set in manual dispatch
-- Depends on both `build_wheels` and `test_wheels` passing
+- Only runs on release events or when `publish_target=pypi` is selected in a manual dispatch
+- Depends on both `build_wheels` and `build_sdist` passing
 - Uses trusted publishing (`id-token: write`)
 
 `pyproject.toml` also configures `cibuildwheel` defaults (used when building locally with `cibuildwheel`):
@@ -177,7 +179,9 @@ After wheels are built, a separate `test_wheels` job downloads and tests them:
 
 ### Prerequisites for CI
 - **HiGHS must be committed**: `third_party/highs/` must be tracked in git (not just present locally). The workflow checks out the repo with `submodules: recursive`, but HiGHS is not a submodule — it must be committed directly.
-- **Version tags**: `setuptools_scm` derives version from git tags. Without tags, version will be `0.1.devN`. The workflow sets `OVERRIDE_GIT_DESCRIBE` but this only affects CMake builds, not the pip/setuptools_scm path.
+- **Version input/tag**: the workflow passes it to `setuptools_scm` as
+  `SETUPTOOLS_SCM_PRETEND_VERSION` for wheels and the sdist. Local untagged builds still
+  derive a development version from Git.
 
 ## 10. Testing the Python Package
 

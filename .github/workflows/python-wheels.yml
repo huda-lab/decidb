@@ -84,7 +84,7 @@ jobs:
           CIBW_ENVIRONMENT_WINDOWS: >
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.OVERRIDE_GIT_DESCRIBE }}
           CIBW_BEFORE_TEST: ""
-          CIBW_TEST_COMMAND: python -c "import decidb; print(decidb.__version__)"
+          CIBW_TEST_COMMAND: python -c "import os, decidb; os.environ['DECIDB_FORCE_SOLVER']='highs'; con=decidb.connect(); assert con.sql('SELECT 42').fetchall() == [(42,)]; rows=con.sql('SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) = 1 MAXIMIZE SUM(x)').fetchall(); assert sum(row[1] for row in rows) == 1; print(decidb.__version__)"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -117,6 +117,8 @@ jobs:
       - name: Build sdist
         working-directory: tools/pythonpkg
         run: python -m build --sdist
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ env.OVERRIDE_GIT_DESCRIBE }}
 
       - name: Verify sdist contents
         working-directory: tools/pythonpkg

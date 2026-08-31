@@ -10,7 +10,7 @@ on:
       platforms:
         description: 'Platforms to build (comma-separated: linux, macos, windows)'
         required: true
-        default: 'linux'
+        default: 'linux,macos,windows'
         type: string
       create_release:
         description: 'Create GitHub release'
@@ -210,8 +210,14 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs: [linux-x64, macos-universal, windows-x64]
-    if: always() && inputs.create_release
+    if: >-
+      always() && inputs.create_release &&
+      needs.linux-x64.result == 'success' &&
+      needs.macos-universal.result == 'success' &&
+      needs.windows-x64.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Code
@@ -274,14 +280,14 @@ jobs:
 
           **Note**: Windows/macOS may show security warnings because the binary is not signed. See below for instructions.
 
-          ## Package Optimization
+          ## Decision Queries
 
-          DecidB extends DuckDB with a DECIDE clause for optimizing queries with packaging operations:
+          DecidB extends DuckDB with a DECIDE clause for optimization queries:
 
           ```sql
           SELECT x, item_name, item_price
           FROM items
-          DECIDE x
+          DECIDE x(BOOL)
           SUCH THAT SUM(x * item_weight) <= 50
           MAXIMIZE SUM(x * item_value);
           ```
