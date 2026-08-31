@@ -248,58 +248,60 @@
 
                 <!-- Option 1: Download Binary -->
                 <div id="install-binary" class="install-content">
-                  <!-- Step 1: Choose Platform -->
+                  <!-- Step 1: Download -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 1: Choose Your Platform</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 1: Download for Your Platform</h3>
                     <div class="bg-canvas-subtle rounded-lg border border-bdcolor overflow-hidden">
                       <table class="w-full text-sm">
                         <thead>
                           <tr class="bg-canvas-inset">
                             <th class="text-left px-4 py-3 text-fg">Platform</th>
                             <th class="text-left px-4 py-3 text-fg">Requirements</th>
-                            <th class="text-left px-4 py-3 text-fg">Filename</th>
+                            <th class="text-left px-4 py-3 text-fg">Download</th>
                           </tr>
                         </thead>
                         <tbody>
                           <tr class="border-t border-bdcolor">
                             <td class="px-4 py-3 font-medium text-fg">Linux x86-64</td>
                             <td class="px-4 py-3 text-fg-muted">Ubuntu 18.04+, CentOS 7+</td>
-                            <td class="px-4 py-3"><code class="text-fg-muted">decidb_cli-linux-amd64.zip</code></td>
+                            <td class="px-4 py-3">
+                              <a href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-linux-amd64.zip"
+                                 class="btn btn-primary btn-sm">
+                                <i data-lucide="download" class="w-4 h-4"></i>
+                                Download
+                              </a>
+                            </td>
                           </tr>
                           <tr class="border-t border-bdcolor">
                             <td class="px-4 py-3 font-medium text-fg">macOS Universal</td>
                             <td class="px-4 py-3 text-fg-muted">macOS 11.0+</td>
-                            <td class="px-4 py-3"><code class="text-fg-muted">decidb_cli-osx-universal.zip</code></td>
+                            <td class="px-4 py-3">
+                              <a href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-osx-universal.zip"
+                                 class="btn btn-primary btn-sm">
+                                <i data-lucide="download" class="w-4 h-4"></i>
+                                Download
+                              </a>
+                            </td>
                           </tr>
                           <tr class="border-t border-bdcolor">
                             <td class="px-4 py-3 font-medium text-fg">Windows x64</td>
                             <td class="px-4 py-3 text-fg-muted">Windows 10+</td>
-                            <td class="px-4 py-3"><code class="text-fg-muted">decidb_cli-windows-amd64.zip</code></td>
+                            <td class="px-4 py-3">
+                              <a href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-windows-amd64.zip"
+                                 class="btn btn-primary btn-sm">
+                                <i data-lucide="download" class="w-4 h-4"></i>
+                                Download
+                              </a>
+                            </td>
                           </tr>
                         </tbody>
                       </table>
                     </div>
-                    <p class="text-fg-subtle text-xs mt-3">
-                      .gz archives are also available for Linux and macOS in the release assets.
-                    </p>
                   </div>
 
-                  <!-- Step 2: Download -->
+                  <!-- Step 2: Extract and Verify -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Download from GitHub Releases</h3>
-                    <a href="https://github.com/huda-lab/decidb/releases/latest" target="_blank" rel="noopener noreferrer"
-                       class="inline-flex items-center gap-2 btn btn-primary mb-4">
-                      <i data-lucide="external-link" class="w-4 h-4"></i>
-                      Latest Release
-                    </a>
-                    <p class="text-sm text-fg-muted">
-                      Download the ZIP file for your platform from the Assets section.
-                    </p>
-                  </div>
-
-                  <!-- Step 3: Extract and Verify -->
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 3: Extract and Verify</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Extract and Verify</h3>
 
                     <!-- Linux/macOS -->
                     <div class="mb-4">
@@ -352,7 +354,7 @@ Expand-Archive decidb_cli-windows-amd64.zip -DestinationPath .
 
                   <!-- Test Query -->
                   <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 4: Test Installation</h3>
+                    <h3 class="text-xl font-semibold text-fg mb-4">Step 3: Test Installation</h3>
                     <div class="code-block">
                       <div class="code-header">
                         <span class="language-label">Bash</span>

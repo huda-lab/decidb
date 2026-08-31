@@ -67,19 +67,15 @@ jobs:
         run: |
           # Create CLI packages only (skip library package - build from source if needed)
           zip -j decidb_cli-linux-amd64.zip build/release/decidb
-          gzip -9 -k -n -c build/release/decidb > decidb_cli-linux-amd64.gz
 
-          # Verify packages
+          # Verify package
           ls -lh decidb_cli-linux-amd64.zip
-          ls -lh decidb_cli-linux-amd64.gz
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: decidb-binaries-linux-amd64
-          path: |
-            decidb_cli-linux-amd64.zip
-            decidb_cli-linux-amd64.gz
+          path: decidb_cli-linux-amd64.zip
           retention-days: 7
 
   #############################################################################
@@ -130,19 +126,15 @@ jobs:
         run: |
           # Create CLI packages only (skip library package - build from source if needed)
           zip -j decidb_cli-osx-universal.zip build/release/decidb
-          gzip -9 -k -n -c build/release/decidb > decidb_cli-osx-universal.gz
 
-          # Verify packages
+          # Verify package
           ls -lh decidb_cli-osx-universal.zip
-          ls -lh decidb_cli-osx-universal.gz
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: decidb-binaries-osx-universal
-          path: |
-            decidb_cli-osx-universal.zip
-            decidb_cli-osx-universal.gz
+          path: decidb_cli-osx-universal.zip
           retention-days: 7
 
   #############################################################################
@@ -200,8 +192,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: decidb-binaries-windows-amd64
-          path: |
-            decidb_cli-windows-amd64.zip
+          path: decidb_cli-windows-amd64.zip
           retention-days: 7
 
   #############################################################################
@@ -257,8 +248,8 @@ jobs:
 
           | Platform | Download |
           |----------|----------|
-          | **Linux x86-64** | `decidb_cli-linux-amd64.zip` or `.gz` |
-          | **macOS (Universal)** | `decidb_cli-osx-universal.zip` or `.gz` |
+          | **Linux x86-64** | `decidb_cli-linux-amd64.zip` |
+          | **macOS (Universal)** | `decidb_cli-osx-universal.zip` |
           | **Windows x64** | `decidb_cli-windows-amd64.zip` |
 
           ## Quick Start
@@ -330,6 +321,6 @@ jobs:
             --title "DecidB ${{ inputs.version }}" \
             --notes-file release_notes.md \
             --draft \
-            artifacts/**/*.zip artifacts/**/*.gz
+            artifacts/**/*.zip
 
           echo "::notice::Draft release created at https://github.com/${{ github.repository }}/releases — review and publish manually"

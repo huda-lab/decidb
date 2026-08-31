@@ -10,7 +10,7 @@ Actions tab → **DecidB Release Build** → Run workflow:
 
 | Input | Description | Default |
 |-------|-------------|---------|
-| `version` | Release version tag (e.g., `v0.1.0-beta`) | Required |
+| `version` | Release version tag. Must be `vX.Y.Z` or `vX.Y.Z-N-gHASH` — `CMakeLists.txt` fails the build on anything else, including suffixes like `-beta` or `-rc1` | Required |
 | `platforms` | Comma-separated: `linux`, `macos`, `windows` | `linux,macos,windows` |
 | `create_release` | Whether to create a draft GitHub release | `true` |
 
@@ -31,8 +31,8 @@ Each platform job: checkout (full history) → setup Python 3.12 → build → v
 
 | Platform | Artifacts |
 |----------|-----------|
-| Linux | `decidb_cli-linux-amd64.zip`, `decidb_cli-linux-amd64.gz` |
-| macOS | `decidb_cli-osx-universal.zip`, `decidb_cli-osx-universal.gz` |
+| Linux | `decidb_cli-linux-amd64.zip` |
+| macOS | `decidb_cli-osx-universal.zip` |
 | Windows | `decidb_cli-windows-amd64.zip` |
 
 ### Per-platform build notes
@@ -49,7 +49,7 @@ Runs `if: always() && inputs.create_release`, downloads all artifacts, generates
 gh release create ${version} \
   --repo ... --target ${github.sha} \
   --title "DecidB ${version}" --notes-file release_notes.md \
-  --draft artifacts/**/*.zip artifacts/**/*.gz
+  --draft artifacts/**/*.zip
 ```
 
 - `--target ${{ github.sha }}` pins the tag to the **exact commit that was built**.
@@ -57,6 +57,25 @@ gh release create ${version} \
   creation does not depend on the repository's default workflow permissions.
 - No `|| true`: if the tag/release already exists the job **fails loudly** rather than leaving a stale release in place.
 - The release is a **draft** — review and publish manually. Publishing it triggers `python-wheels.yml` to push to PyPI and attach wheels.
+
+## Website download links
+
+`context/website/getting-started.html` links straight at the binaries using
+GitHub's floating-latest URL:
+
+```
+https://github.com/huda-lab/decidb/releases/latest/download/<asset-name>
+```
+
+GitHub serves these with `Content-Disposition: attachment`, so a click starts the
+download without visiting the release page, and `latest/` resolves to the newest
+**published** release — the links never need updating for a new version.
+
+**The asset filenames are therefore a public contract.** Renaming
+`decidb_cli-linux-amd64.zip` and friends in this workflow silently 404s the
+website's download buttons. Change both together, or not at all. Draft releases
+are not "latest", so the links keep serving the previous version until you
+publish.
 
 ## Key Environment Variables
 
