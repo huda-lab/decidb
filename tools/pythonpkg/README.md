@@ -38,6 +38,17 @@ print(conn.execute("""
 
 `x` comes back as `1` for chosen rows and `0` for the rest. The equivalent with an external modelling library means exporting the table, rebuilding it as variables, solving, and joining the answer back by hand.
 
+Choosing rows is only the simplest case. `INT` and `REAL` decisions assign a *quantity* to every row, which is what most real problems need — here, how many units to produce at each plant to meet demand at the lowest cost:
+
+```sql
+SELECT plant, units
+FROM Plants
+DECIDE units(INT)
+SUCH THAT units <= capacity
+      AND SUM(units) >= 500
+MINIMIZE SUM(units * unit_cost)
+```
+
 ## The DECIDE Clause
 
 ```sql
@@ -112,9 +123,20 @@ DECIDE x(INT) SUCH THAT x <= 5 AND x >= 8 MAXIMIZE SUM(x);
 
 [HiGHS](https://highs.dev/) is embedded — nothing to install. [Gurobi](https://www.gurobi.com/) is detected at runtime when present and unlocks non-convex bilinear objectives and quadratic constraints.
 
-## Use Cases
+## What You Can Model
 
-Knapsack and inventory selection, portfolio construction under risk limits, resource and shift allocation, meal planning within nutritional budgets — anywhere the answer is a *subset* or an *assignment* rather than a row.
+Any problem where the answer is a set of values that has to satisfy constraints while optimizing an objective — not only which rows to keep.
+
+| Problem | The decision | Declared as |
+|---|---|---|
+| Ship what fits in a weight budget | keep or drop each row | `x(BOOL)` |
+| Produce how much at each plant | a whole quantity per row | `units(INT)` |
+| Blend inputs to hit a spec at least cost | a continuous amount per row | `mix(REAL)` |
+| Roster staff across shifts | one decision per person, shared by their rows | `staff.on(BOOL)` |
+| Hold a portfolio under a risk limit | continuous weights, quadratic risk constraint | `w(REAL)`, Gurobi |
+| Cap the worst shortfall anywhere | a single number for the whole query | `scalar worst(INT)` |
+
+The shape is always the same: declare the decisions, constrain them, name what to optimize.
 
 ## Documentation
 

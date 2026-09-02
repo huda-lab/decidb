@@ -273,7 +273,8 @@ jobs:
 
           ## Decision Queries
 
-          DeciDB extends DuckDB with a DECIDE clause for optimization queries:
+          Declare the decisions, constrain them, and name what to optimize. A
+          `BOOL` decision keeps or drops each row:
 
           ```sql
           SELECT x, item_name, item_price
@@ -281,6 +282,16 @@ jobs:
           DECIDE x(BOOL)
           SUCH THAT SUM(x * item_weight) <= 50
           MAXIMIZE SUM(x * item_value);
+          ```
+
+          `INT` and `REAL` decisions assign a quantity to every row instead:
+
+          ```sql
+          SELECT plant, units
+          FROM plants
+          DECIDE units(INT)
+          SUCH THAT units <= capacity AND SUM(units) >= 500
+          MINIMIZE SUM(units * unit_cost);
           ```
 
           For documentation and examples, see: https://huda-lab.github.io/decidb

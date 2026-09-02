@@ -8,13 +8,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "decidb"
-description = "DeciDB - DuckDB with DECIDE clause for optimization queries"
+description = "DuckDB with a DECIDE clause for constrained optimization in SQL"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "HUDA Lab", email = "huda-lab@nyu.edu"}
 ]
-keywords = ["database", "sql", "olap", "optimization", "decidb", "duckdb", "ilp"]
+keywords = [
+    "sql", "database", "duckdb", "decidb",
+    "constrained-optimization", "mathematical-optimization", "operations-research",
+    "linear-programming", "mixed-integer-programming", "quadratic-programming",
+    "solver", "highs", "gurobi",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

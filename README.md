@@ -1,7 +1,7 @@
 ### Optimization, Native in SQL
 
-DeciDB extends DuckDB with declarative optimization.  
-Select optimal subsets of data with constraints and objectives — no external tools required.
+DeciDB extends DuckDB with declarative constrained optimization.  
+Assign optimal decisions over data with constraints and objectives — no external solver code required.
 
   
   
@@ -22,11 +22,23 @@ SUCH THAT
 MAXIMIZE SUM(x * value);
 ```
 
+Decisions are not only which rows to keep. `INT` and `REAL` variables assign a
+quantity to every row — here, how much to produce at each plant:
+
+```sql
+SELECT plant, units
+FROM Plants
+DECIDE units(INT)
+SUCH THAT units <= capacity
+      AND SUM(units) >= 500
+MINIMIZE SUM(units * unit_cost);
+```
+
 ## Why DeciDB?
 
 - **Native SQL** — Express optimization as a SQL extension. No context switching between your database and an external solver.
 - **Zero Data Movement** — Solve directly on database buffers. No export/import overhead.
-- **Declarative** — Define *what* to optimize, not *how*. The system handles ILP formulation automatically.
+- **Declarative** — Define *what* to optimize, not *how*. The system chooses the solver formulation automatically, from linear through mixed-integer and quadratic.
 - **Built on DuckDB** — Columnar storage, vectorized execution, and an embedded [HiGHS](https://highs.dev/) solver. Optional [Gurobi](https://www.gurobi.com/) support for commercial workloads.
 
 ## DECIDE Syntax
