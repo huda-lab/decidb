@@ -35,17 +35,23 @@ MAXIMIZE SUM(x * value);
 SELECT select_list
 FROM table_expression
 [WHERE ...]
-DECIDE variable_name [IS type] [, ...]
+DECIDE [Table.]variable_name(TYPE) [, ...]
 SUCH THAT constraint [AND constraint ...]
-[MAXIMIZE | MINIMIZE] SUM|MIN|MAX(linear_expression)
+[MAXIMIZE | MINIMIZE] objective_expression
 ```
+
+The type is mandatory and written in parentheses. The declaration may also sit
+between `SELECT` and `FROM`; both orders parse to the same plan. Omitting
+`MAXIMIZE`/`MINIMIZE` asks only for a feasible assignment.
 
 
 | Feature                  | Details                                                                          |
 | ------------------------ | -------------------------------------------------------------------------------- |
 | **Variable types**       | `BOOL` (0/1), `INT` (non-negative), `REAL` (continuous) |
 | **Constraint operators** | `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, `IN`                                 |
-| **Aggregates**           | `SUM()`, `COUNT()`, `AVG()`, `MIN()`, `MAX()`                                    |
+| **Variable scopes**      | `x(T)` per row, `Table.x(T)` per entity, `scalar x(T)` once per query            |
+| **Aggregates**           | `SUM()`, `AVG()`, `MIN()`, `MAX()` — `COUNT()` over a decision is rejected; use `SUM(x)` |
+| **Beyond linear**        | bilinear `x * y`, quadratic `POWER(expr, 2)` objectives (some forms Gurobi-only) |
 | **Conditional**          | `expression WHEN condition` (postfix)                                            |
 | **Grouping**             | `SUM(expr) op rhs PER column` — one constraint per distinct group                |
 

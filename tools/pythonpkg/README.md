@@ -2,124 +2,119 @@
 
 **Optimization, Native in SQL**
 
-DeciDB extends SQL with the `DECIDE` clause for declarative in-database optimization. Express Integer Linear Programming (ILP) problems directly in SQL — no external solvers, no data export, no context switching.
+DeciDB extends SQL with a `DECIDE` clause for declarative in-database optimization. Express constrained optimization problems directly in SQL — no external solver, no data export, no context switching.
 
 A research project by [HUDA Lab](https://huda-lab.github.io/) at NYU Abu Dhabi.
 
-## Quick Example
-
-**Traditional approach** — export data, build a model in Python, solve, map results back:
-
-```python
-import duckdb, pulp
-
-items = conn.execute("SELECT id, value, weight FROM Items").fetchall()
-prob = pulp.LpProblem("knapsack", pulp.LpMaximize)
-x = [pulp.LpVariable(f"x_{i}", cat='Binary') for i in range(len(items))]
-prob += pulp.lpSum(x[i] * items[i][2] for i in range(len(items))) <= 50
-prob += pulp.lpSum(x[i] * items[i][1] for i in range(len(items)))
-prob.solve()
-# ... then map results back to database
-```
-
-**With DeciDB** — one SQL query:
-
-```sql
-SELECT id, value, weight, x
-FROM Items
-WHERE category = 'electronics'
-DECIDE x(BOOL)
-SUCH THAT
-    SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);
-```
-
-Same result, a fraction of the code.
-
-## Installation
+## Install
 
 ```bash
 pip install decidb
 ```
 
-## Usage
+Wheels are published for Linux x86-64, macOS arm64, and Windows AMD64 on Python 3.11–3.13. DeciDB is a fork of DuckDB, so the Python API is DuckDB's.
+
+## Quick Example
+
+A knapsack: pick the most valuable items that fit in the weight budget.
 
 ```python
 import decidb
 
-# Connect (in-memory or file-based)
 conn = decidb.connect()
-
-# Create data
 conn.execute("""
     CREATE TABLE Items (id INTEGER, value INTEGER, weight INTEGER);
     INSERT INTO Items VALUES (1, 100, 20), (2, 60, 10), (3, 120, 30);
 """)
 
-# Run an optimization query
-result = conn.execute("""
+print(conn.execute("""
     SELECT id, value, weight, x
     FROM Items
     DECIDE x(BOOL)
-    SUCH THAT
-        SUM(x * weight) <= 50
+    SUCH THAT SUM(x * weight) <= 50
     MAXIMIZE SUM(x * value)
-""").fetchall()
-
-print(result)
+""").fetchall())
 ```
+
+`x` comes back as `1` for chosen rows and `0` for the rest. The equivalent with an external modelling library means exporting the table, rebuilding it as variables, solving, and joining the answer back by hand.
 
 ## The DECIDE Clause
 
-DeciDB adds the `DECIDE` clause to standard SQL:
-
 ```sql
-SELECT columns
-FROM table
-DECIDE variable [IS type], ...
-SUCH THAT
-    constraint AND ...
-MAXIMIZE | MINIMIZE SUM(objective)
+SELECT select_list
+FROM table_expression
+[WHERE ...]
+DECIDE [Table.]variable_name(TYPE) [, ...]
+SUCH THAT constraint [AND constraint ...]
+[MAXIMIZE | MINIMIZE] objective_expression
 ```
 
-### Decision Variable Types
+The declaration may also sit between `SELECT` and `FROM`; the two orders parse to the same plan. `SUCH THAT` is required.
 
-| Type | Domain | Example |
-|------|--------|---------|
-| `IS BOOLEAN` | {0, 1} | Select/skip an item |
-| `IS INTEGER` | {0, 1, 2, ...} | Quantity to assign |
+### Decision Variables
 
-`IS INTEGER` is the default if no type is specified.
+The type is **mandatory** and written in parentheses after the name.
+
+| Declaration | Domain | Typical use |
+|---|---|---|
+| `x(BOOL)` | {0, 1} | Select or skip a row |
+| `x(INT)` | {0, 1, 2, ...} | A whole quantity |
+| `x(REAL)` | [0, ∞) | A continuous amount |
+
+Lower bounds default to 0. A variable goes negative only when the query gives it an explicit negative bound, such as `SUCH THAT adj BETWEEN -10 AND 10`.
+
+Three scopes control how many variables one declaration creates:
+
+| Spelling | Scope | Variables |
+|---|---|---|
+| `x(INT)` | row-scoped (default) | one per result row |
+| `T.x(INT)` | table-scoped | one per distinct entity of `T` |
+| `scalar x(INT)` | query-wide | exactly one |
+
+Table-scoped variables matter after a join: `DECIDE n.keep(BOOL)` gives each nurse one decision even when they appear in five shift rows.
 
 ### Constraints
 
-- Arithmetic: `SUM(x * weight) <= 50`
-- Multiple constraints separated by `AND`
-- Conditional constraints: `SUM(x * weight) <= 50 WHEN category = 'A'`
-- Supported operators: `=`, `<>`, `<`, `<=`, `>`, `>=`
+Operators are `=`, `<>`, `<`, `<=`, `>`, `>=`, plus `BETWEEN` and `IN`. Aggregates over a decision are `SUM`, `AVG`, `MIN`, and `MAX`. To count selected rows use `SUM(x)` — `COUNT(x)` is rejected, because a decision variable is never null and so counting one always returns the row count.
+
+```sql
+SUCH THAT SUM(x * weight) <= 50            -- aggregate
+SUCH THAT x <= 3                           -- per row
+SUCH THAT SUM(x) <= 2 PER category         -- one constraint per group
+SUCH THAT SUM(x * cost) <= 100 WHEN region = 'EU'   -- conditional
+```
+
+`PER` produces one constraint per distinct group. `WHEN` is a postfix condition that restricts which rows a constraint or objective term applies to.
 
 ### Objective
 
+`MAXIMIZE` or `MINIMIZE` over an aggregate expression, or omit it entirely to ask only for a feasible assignment.
+
+### Beyond linear
+
+Products of a decision and a column (`x * weight`) are linear and always supported. Two further forms work:
+
+- **Bilinear** — `x * y`, a product of two decisions. Bundled HiGHS handles Boolean-by-anything pairs; other pairs need Gurobi.
+- **Quadratic** — `POWER(expr, 2)`, `expr ** 2`, or `(expr) * (expr)` in an objective, for least-squares style problems. Quadratic *constraints* are Gurobi only.
+
+Triple products such as `x * x * x` are rejected.
+
+## Diagnosing a Query
+
+Prefix any decision query with `DIAGNOSE` to ask why it behaved as it did — which constraints conflict when there is no answer, and what to relax.
+
 ```sql
-MAXIMIZE SUM(x * value)
-MINIMIZE SUM(x * cost)
+DIAGNOSE SELECT id, x FROM Items
+DECIDE x(INT) SUCH THAT x <= 5 AND x >= 8 MAXIMIZE SUM(x);
 ```
 
-All expressions involving decision variables must be **linear**.
+## Solvers
+
+[HiGHS](https://highs.dev/) is embedded — nothing to install. [Gurobi](https://www.gurobi.com/) is detected at runtime when present and unlocks non-convex bilinear objectives and quadratic constraints.
 
 ## Use Cases
 
-- **Knapsack / inventory selection** — maximize value under weight or budget constraints
-- **Portfolio optimization** — select assets maximizing return under risk limits
-- **Resource allocation** — assign resources to tasks within capacity constraints
-- **Meal planning** — choose items optimizing nutrition within calorie budgets
-
-## Key Features
-
-- **Native SQL** — no context switching between query and optimization languages
-- **Zero data movement** — solve directly on database buffers
-- **Declarative** — define what to optimize, not how
-- **Embedded solver** — powered by [HiGHS](https://highs.dev/), a high-performance LP/MIP solver
+Knapsack and inventory selection, portfolio construction under risk limits, resource and shift allocation, meal planning within nutritional budgets — anywhere the answer is a *subset* or an *assignment* rather than a row.
 
 ## Documentation
 
@@ -129,7 +124,7 @@ All expressions involving decision variables must be **linear**.
 
 ## Research
 
-DeciDB builds on a decade of research into **in-database constrained optimization**:
+DeciDB builds on a decade of research into in-database constrained optimization:
 
 - *Scalable Package Queries in Relational Database Systems* — Brucato, Abouzied, Meliou (VLDB 2016)
 - *Scalable Computation of High-Order Optimization Queries* — Brucato, Abouzied, Meliou (CACM 2019)
@@ -137,7 +132,7 @@ DeciDB builds on a decade of research into **in-database constrained optimizatio
 
 ## License
 
-MIT License. See [LICENSE](https://github.com/huda-lab/decidb/blob/main/LICENSE) for details.
+MIT. See [LICENSE](https://github.com/huda-lab/decidb/blob/master/LICENSE).
 
 ## Links
 

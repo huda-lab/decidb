@@ -229,7 +229,7 @@ jobs:
           cat > release_notes.md << 'EOF'
           # DeciDB ${{ inputs.version }}
 
-          DeciDB is a fork of DuckDB that adds package query optimization through a DECIDE clause.
+          DeciDB is a fork of DuckDB that adds a DECIDE clause for constrained optimization in SQL.
 
           ## Install via pip
 

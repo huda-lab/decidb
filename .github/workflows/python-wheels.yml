@@ -59,6 +59,14 @@ jobs:
         working-directory: tools/pythonpkg
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
+          # NEXT RELEASE: shift this window up one version -- drop cp311, add
+          # cp314. A Python with no matching wheel does not fail loudly; pip
+          # silently falls back to the sdist and compiles all of DuckDB on the
+          # user's machine, which takes over an hour and needs a working C++
+          # toolchain. 3.14 was already Homebrew's default python3 at v0.2.0,
+          # so that fallback is not hypothetical. Moving the window also means
+          # updating requires-python and the Programming Language classifiers
+          # in tools/pythonpkg/pyproject.toml -- the three must agree.
           CIBW_BUILD: "cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux* *-manylinux_i686"
           CIBW_ARCHS_LINUX: x86_64
