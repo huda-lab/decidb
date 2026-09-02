@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "decidb"
-description = "DecidB - DuckDB with DECIDE clause for optimization queries"
+description = "DeciDB - DuckDB with DECIDE clause for optimization queries"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -46,7 +46,15 @@ local_scheme = "no-local-version"
 # Default config runs all tests and requires at least one extension to be tested against
 [tool.cibuildwheel]
 dependency-versions = "latest"
-before-build = 'pip install numpy>=2.0'
+# numpy dropped manylinux_2_17 (manylinux2014) wheels at 2.3.0, and the Linux
+# wheel job builds in the manylinux2014 image. Without an upper bound, pip
+# resolves to a 2.3+ release, finds no compatible wheel, builds from source,
+# and fails: "NumPy requires GCC >= 10.3" against manylinux2014's GCC 10.2.1.
+# numpy 2.x has a stable ABI, so building against 2.2 headers supports every
+# 2.x at runtime. Lifting this means moving to manylinux_2_28, which would
+# drop glibc < 2.28 -- CentOS 7 and Ubuntu 18.04, both promised in the
+# release notes.
+before-build = 'pip install "numpy>=2.0,<2.3"'
 before-test = 'python scripts/optional_requirements.py'
 test-requires = 'pytest'
 test-command = 'DECIDB_PYTHON_TEST_EXTENSION_PATH={project} DECIDB_PYTHON_TEST_EXTENSION_REQUIRED=1 python -m pytest {project}/tests --verbose'

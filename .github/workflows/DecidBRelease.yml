@@ -1,4 +1,4 @@
-name: DecidB Release Build
+name: DeciDB Release Build
 
 on:
   workflow_dispatch:
@@ -227,9 +227,9 @@ jobs:
         shell: bash
         run: |
           cat > release_notes.md << 'EOF'
-          # DecidB ${{ inputs.version }}
+          # DeciDB ${{ inputs.version }}
 
-          DecidB is a fork of DuckDB that adds package query optimization through a DECIDE clause.
+          DeciDB is a fork of DuckDB that adds package query optimization through a DECIDE clause.
 
           ## Install via pip
 
@@ -273,7 +273,7 @@ jobs:
 
           ## Decision Queries
 
-          DecidB extends DuckDB with a DECIDE clause for optimization queries:
+          DeciDB extends DuckDB with a DECIDE clause for optimization queries:
 
           ```sql
           SELECT x, item_name, item_price
@@ -318,7 +318,7 @@ jobs:
           gh release create ${{ inputs.version }} \
             --repo ${{ github.repository }} \
             --target ${{ github.sha }} \
-            --title "DecidB ${{ inputs.version }}" \
+            --title "DeciDB ${{ inputs.version }}" \
             --notes-file release_notes.md \
             --draft \
             artifacts/**/*.zip

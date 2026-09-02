@@ -14,6 +14,7 @@
 
 #include "duckdb/common/common.hpp"
 
+#include <cmath>
 #include <limits>
 
 namespace duckdb {

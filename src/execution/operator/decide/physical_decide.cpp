@@ -38,8 +38,16 @@
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/decidb/solver/solver_config.hpp"
-#include <sys/resource.h>
-#include <unistd.h>  // isatty / STDIN_FILENO — interactive-terminal check for the slow-solve prompt
+// The slow-solve report needs peak process memory, and its prompt needs to know
+// whether stdin is a terminal. Both are platform primitives; MSVC has neither
+// <sys/resource.h> nor <unistd.h>. Same split as gurobi_loader.cpp.
+#ifdef _WIN32
+#include <cstdio>    // _fileno
+#include <io.h>      // _isatty
+#else
+#include <sys/resource.h>  // getrusage — peak process memory
+#include <unistd.h>        // isatty / STDIN_FILENO
+#endif
 #include <iostream>  // std::cin / std::getline — read the continuation decision at a time-limit stop
 
 namespace duckdb {
@@ -1577,7 +1585,15 @@ BuildUnboundedCandidateProvider(ClientContext &context, ColumnDataCollection &da
 //! Peak resident set size of the whole process, in bytes. Whole-process, not
 //! solve-only — it answers "will continuing risk running out of RAM." ru_maxrss is
 //! bytes on macOS but KiB on Linux, so normalize.
+//! Returns 0 when the figure is unavailable; callers drop the memory line rather
+//! than reporting a zero that reads as a measurement.
 static double PeakProcessMemoryBytes() {
+#ifdef _WIN32
+    // Windows has no getrusage. The equivalent (GetProcessMemoryInfo) would add a
+    // psapi link entry to both CMake and setup.py, so the report simply omits its
+    // memory line here instead.
+    return 0.0;
+#else
     struct rusage usage;
     if (getrusage(RUSAGE_SELF, &usage) != 0) {
         return 0.0;
@@ -1586,6 +1602,7 @@ static double PeakProcessMemoryBytes() {
     return (double)usage.ru_maxrss;
 #else
     return (double)usage.ru_maxrss * 1024.0;
+#endif
 #endif
 }
 
@@ -1624,9 +1641,14 @@ static string FormatDuration(double seconds) {
 static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_seconds,
                                      double time_limit) {
     string limit_str = FormatDuration(time_limit);
-    string tail = StringUtil::Format("  elapsed %s · peak memory %s\n",
-                                     FormatDuration(elapsed_seconds).c_str(),
-                                     FormatMemory(PeakProcessMemoryBytes()).c_str());
+    // 0 means "not measurable here" (Windows, or a getrusage failure), not "no memory
+    // used" — say nothing rather than print "peak memory 0 B".
+    double peak_bytes = PeakProcessMemoryBytes();
+    string tail = peak_bytes > 0.0
+                      ? StringUtil::Format("  elapsed %s · peak memory %s\n",
+                                           FormatDuration(elapsed_seconds).c_str(),
+                                           FormatMemory(peak_bytes).c_str())
+                      : StringUtil::Format("  elapsed %s\n", FormatDuration(elapsed_seconds).c_str());
     // A user Ctrl-C and a wall-clock timeout share the same best-so-far readback, but
     // must not read the same to the user: "you stopped it" vs "the clock ran out".
     if (result.has_solution) {
@@ -3605,7 +3627,11 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
     // back to a plain error when stdin is not a terminal (tests, benchmarks, -c pipes,
     // C-API) — never prompt where no one can answer. That tty test IS the rule now; there
     // is no mode to set.
+#ifdef _WIN32
+    bool stdin_is_tty = _isatty(_fileno(stdin)) != 0;
+#else
     bool stdin_is_tty = isatty(STDIN_FILENO) != 0;
+#endif
     bool can_prompt = stdin_is_tty;
     // The warm solver is retained only where a continuation can actually be asked for.
     bool want_session = can_prompt;

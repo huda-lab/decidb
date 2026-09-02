@@ -58,6 +58,17 @@ gh release create ${version} \
 - No `|| true`: if the tag/release already exists the job **fails loudly** rather than leaving a stale release in place.
 - The release is a **draft** — review and publish manually. Publishing it triggers `python-wheels.yml` to push to PyPI and attach wheels.
 
+## Before triggering a release
+
+Run `python3 scripts/check_portability.py`. Windows compiles only during a
+release, so portability bugs otherwise surface one 25-minute build at a time —
+four of them accumulated between v0.1.0 and v0.2.0. See `portability.md`.
+
+The Windows job also compiles `tools/shell/rc/duckdb.rc`, which embeds
+`logo/decidb.ico`. That icon is a build dependency: deleting or renaming it
+fails the Windows build in the resource compiler, after every C++ target has
+already compiled. It happened once, when the DuckDB logo folder was removed.
+
 ## Website download links
 
 `context/website/getting-started.html` links straight at the binaries using

@@ -1,0 +1,3 @@
+# Build-time constraints for cibuildwheel, referenced by PIP_CONSTRAINT in
+# pyproject.toml. See the before-build comment there for why numpy is capped.
+numpy<2.3

@@ -7,6 +7,28 @@
 #include <cstdlib>
 #include <string>
 
+namespace {
+
+// MSVC has neither setenv nor unsetenv. _putenv_s covers both: passing an empty
+// value removes the variable rather than setting it to "".
+void SetEnvVar(const char *name, const char *value) {
+#ifdef _WIN32
+	_putenv_s(name, value);
+#else
+	setenv(name, value, 1);
+#endif
+}
+
+void UnsetEnvVar(const char *name) {
+#ifdef _WIN32
+	_putenv_s(name, "");
+#else
+	unsetenv(name);
+#endif
+}
+
+} // namespace
+
 using namespace duckdb;
 
 // The registry is the single table naming every backend DeciDB can run. These
@@ -86,19 +108,19 @@ TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 		std::string saved_value = saved ? saved : std::string();
 		bool had_value = saved != nullptr;
 
-		setenv("DECIDB_FORCE_SOLVER", "HiGHS", 1);
+		SetEnvVar("DECIDB_FORCE_SOLVER", "HiGHS");
 		CHECK(SelectSolverBackend() == SolverRegistry::Find("highs"));
 
 		// An unrecognized name is refused, not ignored. Falling through would run the
 		// host default under a name promising a specific backend, so a typo in a test
 		// fixture would silently exercise the wrong solver.
-		setenv("DECIDB_FORCE_SOLVER", "no-such-solver", 1);
+		SetEnvVar("DECIDB_FORCE_SOLVER", "no-such-solver");
 		CHECK_THROWS_AS(SelectSolverBackend(), InvalidInputException);
 
 		if (had_value) {
-			setenv("DECIDB_FORCE_SOLVER", saved_value.c_str(), 1);
+			SetEnvVar("DECIDB_FORCE_SOLVER", saved_value.c_str());
 		} else {
-			unsetenv("DECIDB_FORCE_SOLVER");
+			UnsetEnvVar("DECIDB_FORCE_SOLVER");
 		}
 	}
 }

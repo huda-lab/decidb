@@ -1,0 +1,66 @@
+name: Portability
+
+# Windows and Linux compile DeciDB only during a release. Between v0.1.0 and
+# v0.2.0 that let four portability bugs accumulate over 355 commits, each
+# costing a 25-minute release build to find one at a time. This workflow makes
+# the same failures surface on the commit that introduces them.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Daily, so drift is bounded by a day even if the Windows job is skipped by
+    # the paths filter on some push.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: portability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ~2 minutes. Catches missing standard headers, unguarded POSIX use, and
+  # files that only compile because a unity-build neighbour supplied a
+  # declaration. Runs on every push and PR.
+  static-checks:
+    name: Portability static checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure only (for compile_commands.json)
+        run: cmake -B build/ci -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Release .
+
+      - name: Run portability checks
+        run: python3 scripts/check_portability.py
+
+  # ~25 minutes, and the only thing that proves MSVC is happy -- the static
+  # checks cannot see template resolution, two-phase lookup, or .rc problems.
+  # Compile only: no packaging, no artifacts.
+  windows-compile:
+    name: Windows compile
+    if: github.event_name != 'pull_request'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: portability-windows
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1 -DOVERRIDE_GIT_DESCRIBE="v0.0.1"
+          ninja -C build/release
+
+      - name: Verify
+        shell: bash
+        run: |
+          build/release/decidb.exe -c "PRAGMA platform;"
+          build/release/decidb.exe -c "SELECT id, x FROM (VALUES (1),(2),(3)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) = 2 MAXIMIZE SUM(x * id);"

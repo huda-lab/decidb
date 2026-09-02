@@ -18,16 +18,16 @@ BEGIN
 	BEGIN
 		BLOCK "040904b0"
 		BEGIN
-			VALUE "Comments",         "DecidB shell"
+			VALUE "Comments",         "DeciDB shell"
 			VALUE "CompanyName",      "HUDA Lab"
 
-			VALUE "FileDescription",  "DecidB shell"
+			VALUE "FileDescription",  "DeciDB shell"
 			VALUE "FileVersion",      QUOTE(DUCKDB_VERSION)
-			VALUE "InternalName",     "DecidB shell"
+			VALUE "InternalName",     "DeciDB shell"
 			VALUE "LegalCopyright",   "Copyright 2024 HUDA Lab"
 
 			VALUE "OriginalFilename", "decidb.exe"
-			VALUE "ProductName",      "DecidB"
+			VALUE "ProductName",      "DeciDB"
 			VALUE "ProductVersion",   QUOTE(DUCKDB_VERSION)
 		END
 	END
@@ -37,4 +37,4 @@ BEGIN
 	END
 END
 
-MAINICON ICON "../../../logo/DuckDB.ico"
+MAINICON ICON "../../../logo/decidb.ico"

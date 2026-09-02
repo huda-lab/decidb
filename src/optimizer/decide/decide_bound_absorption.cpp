@@ -10,7 +10,9 @@
 
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 
+#include <cmath>
 #include <cstdlib>
+#include <limits>
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
