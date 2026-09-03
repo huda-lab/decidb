@@ -166,7 +166,73 @@ The GitHub Actions workflow (`.github/workflows/python-wheels.yml`) uses `cibuil
 There is no separate wheel-test job in the release workflow. The complete package test
 suite remains available through the default `cibuildwheel` configuration in
 `pyproject.toml`; the release workflow deliberately overrides it with the bounded smoke
-test above. Broader pre-publication artifact validation is tracked in `todo.md`.
+test above. What CI does not cover is closed by the dry run below.
+
+### Pre-publication validation (run before every production publish)
+
+CI builds the sdist and greps its file list, but never installs or executes it. Since
+`pip` falls back to the sdist on any interpreter without a matching wheel, that path
+reaches real users untested unless it is checked by hand. Do this while the GitHub
+release is still a draft — publishing is what triggers the PyPI upload, and **both PyPI
+and TestPyPI are write-once**: a version number, once uploaded, can never be reused even
+after deleting the files.
+
+1. Dispatch the wheels workflow against TestPyPI with a throwaway version. Use one that
+   collides with no plausible real release (`v0.99.0`), because the string is burned on
+   success. `CMakeLists.txt` accepts only `vX.Y.Z` or `vX.Y.Z-N-gHASH`, so a `.post1`
+   retry is not available.
+
+   ```bash
+   gh workflow run python-wheels.yml --repo huda-lab/decidb --ref master \
+     -f version=v0.99.0 -f publish_target=testpypi
+   ```
+
+2. Install the wheel into a clean environment and solve one query of each decision type.
+   `--only-binary` keeps a silent source build from masking a missing wheel. The
+   `--extra-index-url` is required because TestPyPI carries no numpy or pandas.
+
+   ```bash
+   pip install --only-binary decidb \
+     --index-url https://test.pypi.org/simple/ \
+     --extra-index-url https://pypi.org/simple/ decidb==0.99.0
+   ```
+
+3. Install the sdist. Fetch the tarball by URL rather than with `pip download
+   --no-binary`, which needs `setuptools` from an index TestPyPI does not carry and fails
+   with a misleading `from versions: none`. The compile takes roughly 30 minutes and
+   saturates every core.
+
+   ```bash
+   pip install <sdist-url-from-the-json-api>
+   ```
+
+The README is the PyPI long description and is baked into the artifacts at build time, so
+its rendering is checked locally rather than by uploading — `readme_renderer` is the same
+library the index uses:
+
+```bash
+uv run --with "readme_renderer[md]" python -c \
+  "import readme_renderer.markdown as m; print(bool(m.render(open('tools/pythonpkg/README.md').read(), stream=None)))"
+```
+
+At v0.2.0 this path verified: versioned filenames on all 10 artifacts, a clean-environment
+sdist install that compiled in 27 minutes and solved a typed DECIDE query through bundled
+HiGHS, and green per-wheel smokes on Linux x86-64, macOS arm64 and Windows AMD64 across
+Python 3.11–3.13.
+
+**A draft release pins its own commit.** The release event builds the tag, and the tag is
+created at the draft's `target_commitish`. Any commit made after the draft was built —
+including a documentation-only one — requires retargeting, or the published package is
+built from the stale commit:
+
+```bash
+gh release edit v0.2.0 --repo huda-lab/decidb --target $(git rev-parse HEAD)
+```
+
+The target must be the full 40-character SHA; an abbreviated one returns a bare
+`422 Validation Failed`. Release notes are frozen text generated when the CLI build ran,
+so edits to the notes template after that build do not reach the draft — regenerate them
+with `gh release edit --notes-file` before publishing.
 
 ### Publish Job (`publish_pypi`)
 - Only runs on release events or when `publish_target=pypi` is selected in a manual dispatch
