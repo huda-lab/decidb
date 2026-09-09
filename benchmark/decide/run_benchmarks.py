@@ -59,6 +59,7 @@ COEFFICIENTS: dict[str, dict[str, int]] = {
         "Q9_ROW_LIMIT": 7500,
         "Q10_ROW_LIMIT": 500000, "Q10_SUM_CAP": 7500000, "Q10_ABS_FLOOR": 1250000,
         "Q11_BUDGET": 51000000000,
+        "P3_BUDGET": 5000000,
     },
     "large": {
         "Q1_QTY_CAP": 7660945, "Q1_R_QTY_CAP": 2520000, "Q1_GRP_CAP": 125000,
@@ -73,6 +74,7 @@ COEFFICIENTS: dict[str, dict[str, int]] = {
         "Q9_ROW_LIMIT": 15000,
         "Q10_ROW_LIMIT": 1000000, "Q10_SUM_CAP": 15000000, "Q10_ABS_FLOOR": 2500000,
         "Q11_BUDGET": 102000000000,
+        "P3_BUDGET": 10000000,
     },
 }
 

@@ -64,20 +64,21 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	    [&](unique_ptr<Expression> &expr, const string &source_alias) {
 		if (!expr) return;
 		auto clause_alias = DescendSourceAlias(*expr, source_alias);
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			auto &comparison = expr->Cast<BoundComparisonExpression>();
-			rewrite(comparison.left, clause_alias);
-			rewrite(comparison.right, clause_alias);
-			return;
-		}
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			for (auto &child : expr->Cast<BoundConjunctionExpression>().children) rewrite(child, clause_alias);
-			return;
-		}
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) return;
-		auto &aggregate = expr->Cast<BoundAggregateExpression>();
 		string payload;
-		if (!TryParseNormMarker(aggregate.GetAlias(), payload)) return;
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
+		    !TryParseNormMarker(expr->GetAlias(), payload)) {
+			// A marker stands wherever a scalar may stand. Under a comparison, but just
+			// as much under `+`, `*` or a cast -- which is how a regularizer is normally
+			// written: `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. Descend through
+			// every container so no spelling is left holding an unlowered marker, which
+			// would read downstream as the plain SUM the marker is built on and silently
+			// drop the norm. A marker beneath another aggregate cannot occur: the binder
+			// rejects `SUM(norm(...))` before this pass runs.
+			ExpressionIterator::EnumerateChildren(
+			    *expr, [&](unique_ptr<Expression> &child) { rewrite(child, clause_alias); });
+			return;
+		}
+		auto &aggregate = expr->Cast<BoundAggregateExpression>();
 		if (aggregate.children.size() != 1) {
 			throw InternalException("DECIDE NORM marker must contain one bound expression");
 		}

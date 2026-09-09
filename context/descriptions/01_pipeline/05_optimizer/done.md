@@ -283,6 +283,23 @@ aggregate-local `WHEN` and `PER` binding remains available. The optimizer lowers
 L1, L2, and infinity norms to `SUM(ABS)`, `SUM(POWER(_, 2))`, and `MAX(ABS)`;
 L0 emits its existing Boolean indicator and exact forward/reverse links.
 
+**A marker is lowered wherever it stands.** `RewriteNorm` descends through every
+expression container, not only comparisons and conjunctions, because a norm is a
+scalar and a regularizer is normally written as one term of a larger expression —
+`MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`, `2 * norm(e, 1) <= K`. The
+descent is `ExpressionIterator::EnumerateChildren`, the same generic recursion
+`RewriteAbs` and `RewriteAvgToSum` use. A marker cannot sit beneath another
+aggregate, because the binder rejects `SUM(norm(...))` before this pass runs.
+
+**The marker must not outlive this layer**, and `VerifyNormMarkersLowered` asserts
+that over `LogicalDecide::EnumerateExpressions` at the end of `OptimizeDecide` —
+after the composed MIN/MAX pass, which lifts sub-expressions out of the trees into
+its own vectors. This assertion is not defence in depth. The marker is a real `SUM`
+aggregate with the order recorded in its alias, so an unlowered one is not
+recognisably broken downstream: extraction reads it as the `SUM(e)` it is built on,
+the norm silently leaves the model, and the query returns a confident wrong answer.
+Until 2026-09-08 a marker under arithmetic did exactly that.
+
 A bound `x IN (...)` stays a native `COMPARE_IN` marker until this pass. It then
 uses the existing singleton, Boolean-domain, or cardinality/linking formulation,
 copying an expression-level `WHEN` to every generated row. The two size

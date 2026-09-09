@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "duckdb/common/profiler.hpp"
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
@@ -327,6 +328,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs,
                           vector<idx_t> &out_row_to_group,
                           idx_t &out_num_groups,
                           vector<vector<Value>> *out_rep_keys = nullptr) {
+	DecideProfileScope profile("extraction.group_ids");
 	out_row_to_group.assign(num_rows, DConstants::INVALID_INDEX);
 	out_num_groups = 0;
 	if (num_rows == 0 || key_exprs.empty()) {
@@ -834,6 +836,7 @@ static void MaskCoefficientColumn(CoefficientColumn &column, const vector<bool> 
 static vector<vector<bool>> EvaluateBooleanMasks(const vector<const Expression *> &conditions,
                                                   ChunkExprCache &chunk_expr_cache, ClientContext &context,
                                                   ColumnDataCollection &data, idx_t num_rows) {
+    DecideProfileScope profile("extraction.boolean_masks");
     if (conditions.empty()) return {};
 
     ExpressionExecutor cond_executor(context);
@@ -1373,6 +1376,7 @@ public:
 
 class DecideLocalSinkState : public LocalSinkState {
 public:
+    DecideProfileTotals profile_sink {"execution.sink_append"};
     explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op)
         : data(context, op.children[0]->GetTypes()) {
         data.InitializeAppend(append_state);
@@ -1393,11 +1397,13 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 
 SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
     auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
+    DecideProfileSample profile(lstate.profile_sink);
     lstate.data.Append(lstate.append_state, chunk);
     return SinkResultType::NEED_MORE_INPUT;
 }
 
 SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
+    DecideProfileScope profile("execution.sink_combine");
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
 
@@ -1710,6 +1716,7 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
 
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
+    DecideProfileScope profile("execution.finalize");
     bool bench = std::getenv("DECIDB_BENCH") != nullptr;
     Profiler model_timer;
     Profiler solver_timer;
@@ -1749,6 +1756,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // PHASE 1.5: Build Entity Mappings for Table-Scoped Variables
     //===--------------------------------------------------------------------===//
 
+    DecideProfileScope phase("execution.entity_mapping");
     vector<EntityMapping> entity_mappings = BuildEntityMappings(context, gstate, num_rows);
 
     //===--------------------------------------------------------------------===//
@@ -1756,13 +1764,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //===--------------------------------------------------------------------===//
 
     // 1. Evaluate constraints
+    phase.Next("execution.evaluate_constraints");
     EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
 
     // 2. Evaluate objective
+    phase.Next("execution.evaluate_objective");
     EvaluatedClauses evaluated =
         EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
 
     // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
+    phase.Next("execution.evaluate_composed");
     EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, entity_mappings, evaluated);
 
     //===--------------------------------------------------------------------===//
@@ -1771,6 +1782,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // 3a. Assemble the model input and settle the column box. Nothing below this line
     // touches the data again.
+    phase.Next("execution.assemble_input");
     VarIndexer var_indexer;
     SolverInput solver_input =
         BuildSolverInput(gstate, num_rows, std::move(entity_mappings), evaluated, var_indexer);
@@ -1791,8 +1803,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 3b. Formulate: derive the constants and emit the rows, against the box the model
     // declares. A pure function of what came before, which is what lets the elastic
     // (infeasibility-repair) path run it a second time against a widened box.
+    phase.Next("execution.formulate");
     FormulateModel(solver_input, FormulationBox::OfSolvedModel(solver_input), var_indexer, evaluated);
 
+    phase.Next("execution.solve_and_route");
     return FinalizeSolveResult(context, gstate, solver_input, var_indexer, evaluated, elastic.get(),
                                bench, model_timer, solver_timer);
 }
@@ -1806,6 +1820,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                                          PerGroupCache &per_group_cache,
                                          const vector<EntityMapping> &entity_mappings) const {
     for (idx_t c = 0; c < gstate.constraints.size(); c++) {
+        DecideProfileScope clause_profile("extraction.constraint");
+        DecideProfileScope::Counter("constraint.ordinal", c);
+        DecideProfileScope clause_phase("extraction.constraint_setup");
         auto &constraint = gstate.constraints[c];
 
         EvaluatedConstraint eval_const;
@@ -1917,6 +1934,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // produce a multi-column result chunk per scan iteration.
         vector<LogicalType> coef_result_types;
         coef_result_types.reserve(constraint->lhs_terms.size());
+        clause_phase.Next("extraction.linear_coefficients");
         ExpressionExecutor coef_executor(context);
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
             auto &term = constraint->lhs_terms[term_idx];
@@ -1975,6 +1993,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // - WHEN only: row_group_ids[row] = 0 (matching) or INVALID_INDEX (excluded), num_groups = 1
         // - PER only: row_group_ids[row] = 0..K-1 (group id), INVALID_INDEX for NULL PER values, num_groups = K
         // - WHEN+PER: WHEN filters first, then PER groups the remaining rows
+        clause_phase.Next("extraction.when_per_and_qualifiers");
         bool has_when = (constraint->when_condition != nullptr);
         bool has_per = (!constraint->per_columns.empty());
 
@@ -2130,6 +2149,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // Evaluate RHS
         // RHS can be a constant, an aggregate (scalar), or a row-varying expression (for row-wise constraints)
 
+        clause_phase.Next("extraction.rhs");
         if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
             auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
             double rhs_constant = const_expr.value.GetValue<double>();
@@ -2329,6 +2349,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
         // Evaluate quadratic groups in constraint (POWER(expr, 2) / self-products).
         // Per group, batch all inner_terms into a single ExpressionExecutor.
+        clause_phase.Next("extraction.quadratic_coefficients");
         if (constraint->has_quadratic) {
             eval_const.has_quadratic = true;
             for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
@@ -2951,6 +2972,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
                                              vector<EntityMapping> entity_mappings,
                                              EvaluatedClauses &evaluated,
                                              VarIndexer &out_var_indexer) const {
+    DecideProfileScope phase("assembly.copy_and_bounds");
     idx_t num_decide_vars = decide_variables.size();
 
     // Construct SolverInput
@@ -3034,8 +3056,10 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
     // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
     // Only provably-implied bounds are applied; the feasible region is unchanged.
+    phase.Next("assembly.implied_bounds");
     DecidePropagateImpliedBounds(solver_input.constraints, solver_input.lower_bounds,
                                  solver_input.upper_bounds, num_rows);
+    phase.Next("assembly.objective_and_avg");
     // Objective (linear part)
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
@@ -3151,6 +3175,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // (2) the SolverModel::Build() call inside SolveModel(), and (3) gstate.var_indexer
     // for solution readback after the solve. The owning form, so it survives past
     // `solver_input` once that is moved onto gstate.
+    phase.Next("assembly.var_indexer");
     VarIndexer var_indexer = VarIndexer::Build(solver_input);
 
     out_var_indexer = std::move(var_indexer);
@@ -3164,6 +3189,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 void PhysicalDecide::FormulateModel(SolverInput &solver_input, const FormulationBox &box,
                                     VarIndexer &var_indexer,
                                     const EvaluatedClauses &evaluated) const {
+    DecideProfileScope phase("formulation.l0_constants");
     idx_t num_rows = solver_input.num_rows;
 
     // The flat column space is settled by assembly and is never rebuilt here: the row,
@@ -3272,6 +3298,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // unbounded column and refuses a query whose bound was there to be computed. Only
     // the LOWERING path refuses an underivable range; the native path leaves the
     // auxiliary open and answers.
+    phase.Next("formulation.abs_bounds");
     DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);
     if (native_abs) {
         EmitNativeAbs(solver_input, var_indexer);
@@ -3290,6 +3317,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // Encode `<>` as the disjunction it is: two conditional rows per instance. Whether a
     // condition is stated to the backend or encoded with a Big-M is settled once, by
     // LowerDecideConstructs at the end of this function.
+    phase.Next("formulation.not_equal");
     if (!ne_clause_labels.empty()) {
         LinearizeNotEqual(solver_input, var_indexer, decide_var_names);
     }
@@ -3299,6 +3327,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		solver_input.lower_bounds[saved.first] = saved.second.first;
 		solver_input.upper_bounds[saved.first] = saved.second.second;
 	}
+    phase.Next("formulation.bilinear");
     LinearizeBilinear(solver_input, box, decide_var_names);
 
     // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
@@ -3320,6 +3349,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // `OUTER(INNER(expr)) PER key` spelling) into global auxiliaries and their
     // envelope/indicator rows. Pure stage-06 work: it reads the coefficients PHASE 2
     // evaluated plus the flat column space, and needs no row of its own.
+    phase.Next("formulation.minmax_objective");
     MinMaxObjectiveSpec minmax_objective_spec;
     minmax_objective_spec.flat_agg = flat_objective_agg;
     minmax_objective_spec.flat_is_easy = flat_objective_is_easy;
@@ -3337,6 +3367,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // envelope and indicator emission. The linearizer fills each MIN/MAX term's `z_idx`,
     // so it is handed a mutable copy — the evaluated clauses stay reusable for a second
     // formulation against a different box.
+    phase.Next("formulation.composed_minmax");
     for (idx_t i = 0; i < evaluated.composed_constraints.size() &&
                       i < composed_minmax_constraints.size();
          i++) {
@@ -3366,6 +3397,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // No backend is consulted at execution time, and nothing here re-decides a
     // formulation: a pass that answered differently from the rewrites would run a model
     // on a solver it was not built for.
+    phase.Next("formulation.lower_constructs");
     LowerDecideConstructs(solver_input, var_indexer, box, decide_var_names, use_native_constructs);
 
 #ifdef DEBUG
@@ -4074,6 +4106,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 //===--------------------------------------------------------------------===//
 class DecideGlobalSourceState : public GlobalSourceState {
 public:
+    DecideProfileTotals profile_readback {"execution.output_readback"};
     explicit DecideGlobalSourceState(const PhysicalDecide &op, DecideGlobalSinkState &sink) {
         sink.data.InitializeScan(scan_state);
         sink.data.InitializeScanChunk(scan_chunk);
@@ -4136,6 +4169,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
                                          OperatorSourceInput &input) const {
     auto &gstate = sink_state->Cast<DecideGlobalSinkState>();
     auto &source_state = input.global_state.Cast<DecideGlobalSourceState>();
+    DecideProfileSample profile(source_state.profile_readback);
 
     // The solve failed under DIAGNOSE: there is no assignment to read back, so this
     // operator produces nothing and the diagnosis it handed off is the statement's answer.

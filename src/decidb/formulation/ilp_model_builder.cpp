@@ -1,5 +1,6 @@
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/decide_profile.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -269,6 +270,8 @@ SolverModelClass SolverModel::ModelClass() const {
 }
 
 SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
+    DecideProfileScope profile("model.build");
+    DecideProfileScope phase("model.variables_and_bounds");
     SolverModel model;
     model.constraint_sources = std::move(input.constraint_sources);
 
@@ -376,6 +379,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // 2. Set up objective function
     //===--------------------------------------------------------------------===//
 
+    phase.Next("model.linear_objective");
     model.obj_coeffs.resize(total_vars, 0.0);
 
     // Set objective coefficients for global variables
@@ -427,6 +431,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // 2b. Build quadratic objective (Q matrix) if present
     //===--------------------------------------------------------------------===//
 
+    phase.Next("model.quadratic_objective");
     bool has_power_quadratic = input.has_quadratic_objective && !input.quadratic_inner_variable_indices.empty();
     bool has_bilinear = !input.bilinear_objective_terms.empty();
 
@@ -541,6 +546,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     //===--------------------------------------------------------------------===//
     // 3. Build constraints
     //===--------------------------------------------------------------------===//
+
+    phase.Next("model.constraints");
 
     // Helper: is the LHS of this EvaluatedConstraint provably integer-valued?
     //
@@ -1204,6 +1211,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         return qc;
     };
 
+    phase.Next("model.quadratic_constraints");
     for (auto &eval_const : input.constraints) {
         if (eval_const.bilinear_terms.empty() && !eval_const.has_quadratic) {
             continue;  // Already handled as linear above
@@ -1281,6 +1289,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // Append raw global constraints (for MIN/MAX objective linking, etc.).
     // Move the index/coefficient vectors out of `input` to avoid deep copies —
     // SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
+    phase.Next("model.global_rows");
     for (auto &raw : input.global_constraints) {
         ModelConstraint constr;
         constr.indices = std::move(raw.indices);
@@ -1339,6 +1348,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         model.indicator_constraints.push_back(std::move(ic));
     }
 
+    phase.Next("model.general_constraints");
     model.general_constraints.reserve(input.general_constraints.size());
     for (auto &spec : input.general_constraints) {
         SolverModel::GeneralConstraint gc;
@@ -1355,6 +1365,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     //===--------------------------------------------------------------------===//
     // 4. Sanity checks
     //===--------------------------------------------------------------------===//
+
+    phase.Next("model.sanity_checks");
 
     for (idx_t i = 0; i < total_vars; i++) {
         if (!std::isfinite(model.col_lower[i]) || !std::isfinite(model.col_upper[i])) {

@@ -1,3 +1,4 @@
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 
 #include "duckdb/common/exception.hpp"
@@ -501,6 +502,7 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
+	DecideProfileScope profile("canonicalize.comparison");
 	auto &cmp = expr.Cast<BoundComparisonExpression>();
 
 	vector<Atom> left_atoms;
@@ -607,6 +609,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
                                                                   double &out_constant_offset) const {
+	DecideProfileScope profile("canonicalize.objective");
 	// A WHEN/PER wrapper carries no algebra: recurse into the objective child and copy
 	// the condition or grouping columns unchanged. Identical rule to C0, and the same
 	// wrapper predicate, so the two clauses cannot drift apart on what a wrapper is.

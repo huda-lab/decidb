@@ -632,6 +632,16 @@ after binding means types, scopes and casts are already resolved.
   `physical_decide.cpp` (`Finalize`, right after implied-bound propagation).
 - Usable as an objective penalty, a sole objective, or a constraint
   (`norm(e, 1) <= K`, and the exact count cap/floor `norm(e, 0[, M]) <= K` / `>= K`).
+- **Composes with arithmetic anywhere.** A norm is a scalar, so it may sit under
+  `+`, `*` or a cast at any depth on either side — `MINIMIZE SUM(cost*x) + 0.5 *
+  norm(x - base, 1)`, `MINIMIZE norm(e, 1) + 0.25 * norm(e, 2)` (elastic-net
+  shaped), `SUCH THAT 2 * norm(e, 1) <= K`. `RewriteNorm` descends every container
+  to reach it. Until 2026-09-08 it descended only comparisons and conjunctions, so
+  a marker under arithmetic was left in place and read downstream as the plain
+  `SUM(e)` the marker is built on: no error, and the norm silently absent from the
+  model. `VerifyNormMarkersLowered` now fails the query rather than let a marker
+  leave the optimizer. The one place a norm may not go is inside another aggregate
+  (`SUM(norm(...))`), which the binder rejects.
 - Unsupported orders (e.g. `p = 3`) and `norm(e, 0)` without `M` raise a clear
   binder error.
 - The user supplies the weight λ directly; scale-free `α`/`λ_max` auto-selection
@@ -639,7 +649,11 @@ after binding means types, scopes and casts are already resolved.
 - Tests: `test/decide/tests/test_norm.py` — per-order desugaring equivalence,
   WHEN/PER composition, HiGHS backend (QP + MILP), error paths, and L0 exactness
   (`test_norm_l0_*`: lower-bound/equality/maximize infeasibility on both backends,
-  feasible-is-honest, and the `decide_l0_tolerance` pragma).
+  feasible-is-honest, and the `decide_l0_tolerance` pragma). Composition with
+  arithmetic is pinned separately (`test_norm_*_in_arithmetic_*`,
+  `test_norm_scaled_*`, `test_norm_combined_l1_l2_objective`): each compares the
+  *composed* objective against the same composition written out by hand, which is
+  the only spelling that can tell a dropped marker from a lowered one.
 
 ## Summary Table (Implemented Only)
 

@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
@@ -38,6 +39,9 @@ ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
 	return ObjectiveAggregateType::NONE;
 }
 
+//! Defined below with the other NORM marker helpers; called at the end of OptimizeDecide.
+static void VerifyNormMarkersLowered(LogicalDecide &decide);
+
 DecideOptimizer::DecideOptimizer(Optimizer &optimizer) : optimizer(optimizer) {
 }
 
@@ -57,6 +61,7 @@ unique_ptr<LogicalOperator> DecideOptimizer::Optimize(unique_ptr<LogicalOperator
 }
 
 void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
+	DecideProfileScope profile("optimizer.decide");
 	bool bench = std::getenv("DECIDB_BENCH") != nullptr;
 	Profiler timer;
 	if (bench) {
@@ -76,22 +81,34 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	// only once. From here they ride the plan (LogicalDecide::solver_backend_name and
 	// ::use_native_constructs → PhysicalDecide) all the way to the solve and to any
 	// diagnostic re-solve, so nothing downstream ever decides a second time.
+	DecideProfileScope phase("optimizer.choose_backend");
 	ChooseDecideSolver(decide);
+	phase.Next("optimizer.tag_groups");
 	TagAtomicRemovalGroups(decide);
 
 	RewriteNorm(decide);
+	phase.Next("optimizer.in_domain");
 	RewriteInDomain(decide);
+	phase.Next("optimizer.abs");
 	TagAbsConstraintsForBigM(optimizer.context, decide); // Must run before RewriteAbs: marks ABS nodes that need Big-M
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
+	phase.Next("optimizer.bilinear");
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
+	phase.Next("optimizer.composed_minmax");
 	RewriteComposedMinMax(decide); // Detect composed MIN/MAX before single-term MIN/MAX rewrite
+	phase.Next("optimizer.minmax");
 	RewriteMinMax(decide);       // Classify + rewrite min/max (creates indicators and SUM nodes)
+	phase.Next("optimizer.not_equal");
 	RewriteNotEqual(decide);
+	phase.Next("optimizer.avg");
 	RewriteAvgToSum(decide);
 	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
 	// that is itself absorbable, and every auxiliary variable must exist before the
 	// box is sized.
+	phase.Next("optimizer.absorb_bounds");
 	AbsorbVariableBounds(decide);
+
+	VerifyNormMarkersLowered(decide);
 
 	if (bench) {
 		timer.End();
@@ -148,21 +165,39 @@ string decide_rewrite::DescendSourceAlias(const Expression &expr, const string &
 	           : inherited;
 }
 
-//! A norm payload is `1`, `2`, `inf`, `0_auto`, or `0_<double>`, so the `0_` prefix
-//! selects exactly the L0 counts and nothing else.
-static bool ContainsL0NormMarker(const Expression &expr) {
+//! Does `expr` hold a NORM marker anywhere beneath it?
+//!
+//! `l0_only` narrows the answer to the L0 counts: a norm payload is `1`, `2`, `inf`,
+//! `0_auto`, or `0_<double>`, so the `0_` prefix selects exactly those and nothing else.
+static bool ContainsNormMarker(const Expression &expr, bool l0_only) {
 	string payload;
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-	    TryParseNormMarker(expr.GetAlias(), payload) && payload.rfind("0_", 0) == 0) {
+	    TryParseNormMarker(expr.GetAlias(), payload) && (!l0_only || payload.rfind("0_", 0) == 0)) {
 		return true;
 	}
 	bool found = false;
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (!found && ContainsL0NormMarker(child)) {
+		if (!found && ContainsNormMarker(child, l0_only)) {
 			found = true;
 		}
 	});
 	return found;
+}
+
+//! Layer 5's exit contract: a NORM marker is lowered here or nowhere.
+//!
+//! The marker is not a node downstream can recognise and reject -- the binder builds it
+//! as a real `SUM` aggregate and records the order in the alias, so a marker that reaches
+//! extraction is read as the plain `SUM(e)` it is made of. The norm silently disappears
+//! and the query answers a different question, which is how a marker under arithmetic
+//! (`norm(e, 1) + 0.5 * SUM(x)`) went unnoticed. Fail where the owning pass can be named
+//! instead of returning a number nothing marks as wrong.
+static void VerifyNormMarkersLowered(LogicalDecide &decide) {
+	decide.EnumerateExpressions([](unique_ptr<Expression> *expr) {
+		if (*expr && ContainsNormMarker(**expr, false)) {
+			throw InternalException("DECIDE NORM marker survived optimization in '%s'", (*expr)->ToString());
+		}
+	});
 }
 
 void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
@@ -173,7 +208,7 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
 		bool removable = false;
 		if (node.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			removable = node.type == ExpressionType::COMPARE_NOTEQUAL || ContainsL0NormMarker(node);
+			removable = node.type == ExpressionType::COMPARE_NOTEQUAL || ContainsNormMarker(node, true);
 		} else if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
 			removable = node.type == ExpressionType::COMPARE_IN;
 		}

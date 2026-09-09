@@ -1,3 +1,4 @@
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/parser/parser.hpp"
 
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -191,6 +192,7 @@ vector<string> SplitQueryStringIntoStatements(const string &query) {
 }
 
 void Parser::ParseQuery(const string &query) {
+	DecideProfileScope profile("frontend.parse");
 	Transformer transformer(options);
 	string parser_error;
 	optional_idx parser_error_location;

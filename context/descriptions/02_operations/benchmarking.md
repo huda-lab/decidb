@@ -357,7 +357,9 @@ python3 benchmark/decide/run_benchmarks.py --compare abc1234
 
 ### Recording Results
 
-Whenever a commit is made for the purpose of improving performance, a corresponding entry MUST be added to `context/descriptions/05_performance/`. One file per optimization batch, named `{NNN}_{baseline_commit}_{evaluated_commit}.md` where `NNN` is a zero-padded sequential log number (e.g., `002_9c3a53fb62_6bc8ae1412.md`), recording the change set, hypothesis, and measured outcome (with references to the commit hash and the benchmark JSON files used for the comparison). The `05_performance/README.md` index lists all entries. The log is append-only — superseded entries get a new entry referencing the old one rather than being rewritten.
+Performance work belongs in the topic folders under [`05_performance/`](../05_performance/README.md). Keep implemented measurement capabilities and evidence-backed findings in `done.md`; keep open questions and proposed optimizations in `todo.md`. Link exact SQL, source/binary identity, raw results, memory conditions and validation. Measuring a bottleneck does not complete its optimization.
+
+For finer profiling, `benchmark/decide/profile_pipeline.py` runs every `queries/` file on both backends with `DECIDB_PROFILE=1`, which makes the engine emit a nested timing span per pipeline stage. It writes one row per (query, backend, repeat) to `results/pipeline_profile_{tier}.csv` (`{tier}` is whichever database the `DATABASE` constant names), splitting each run into stage columns and a `solve_ms` / `non_solver_ms` pair. Its constants sit at the top of the file; there are no command-line options. It measures and records whatever a run does — there is no memory guard, no cap and no early stopping.
 
 ## Makefile Targets
 

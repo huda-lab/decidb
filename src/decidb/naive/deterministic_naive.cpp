@@ -1,4 +1,5 @@
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/solver/solver_session.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
@@ -266,13 +267,15 @@ private:
 };
 
 void HighsSession::Load(const SolverModel &model) {
+    DecideProfileScope profile("highs.load");
+    DecideProfileScope phase("highs.variable_types");
     total_vars = model.num_vars;
 
     //===--------------------------------------------------------------------===//
     // 1. Create HiGHS model and set up variables
     //===--------------------------------------------------------------------===//
 
-    highs.setOptionValue("log_to_console", false);
+    highs.setOptionValue("log_to_console", std::getenv("DECIDB_PROFILE_SOLVER_LOG") != nullptr);
     // Note: the time_limit is NOT set here — it is a per-chunk budget applied in
     // RunAndReadback(), so a warm Continue() can extend it without a reload.
 
@@ -289,6 +292,7 @@ void HighsSession::Load(const SolverModel &model) {
     // 2. Convert SolverModel constraints to HiGHS range format + COO matrix
     //===--------------------------------------------------------------------===//
 
+    phase.Next("highs.rows_to_coo");
     vector<int> a_rows;
     vector<int> a_cols;
     vector<double> a_vals;
@@ -355,6 +359,7 @@ void HighsSession::Load(const SolverModel &model) {
     // Bring every row inside HiGHS's coefficient window before the matrix is packed.
     // Each out-of-window row is multiplied through by its own power of two, bounds
     // included, which leaves the constraint — and therefore the answer — exactly intact.
+    phase.Next("highs.scale_rows");
     ScaleRowsIntoHighsWindow(model, a_rows, a_vals, row_lower, row_upper);
 
     idx_t num_constraints = static_cast<idx_t>(row_lower.size());
@@ -363,6 +368,7 @@ void HighsSession::Load(const SolverModel &model) {
     // 3. Build HighsLp and convert COO to CSR
     //===--------------------------------------------------------------------===//
 
+    phase.Next("highs.pack_csr");
     HighsLp lp;
     lp.num_col_ = total_vars;
     lp.num_row_ = num_constraints;
@@ -405,6 +411,7 @@ void HighsSession::Load(const SolverModel &model) {
         lp.integrality_[i] = var_types[i];
     }
 
+    phase.Next("highs.pass_model");
     HighsStatus status = highs.passModel(lp);
     // `passModel` returns kWarning for conditions it expects the caller to proceed
     // through — a matrix entry dropped for being sub-tolerance, an inconsistent bound
@@ -434,6 +441,7 @@ void HighsSession::Load(const SolverModel &model) {
     // below has no off-diagonal case left to exercise in practice. It is still written
     // for the general matrix: the refusal is a solver-quality judgement that should be
     // lifted when HiGHS improves, and the conversion must be correct when it is.
+    phase.Next("highs.hessian");
     if (model.has_quadratic_obj && !model.q_vals.empty()) {
         // Convert COO lower-triangle Q to CSC format for HiGHS passHessian.
         // HiGHS expects the lower triangle in column-major compressed sparse column format.
@@ -492,6 +500,8 @@ void HighsSession::Load(const SolverModel &model) {
 }
 
 SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
+    DecideProfileScope profile("highs.run_and_readback");
+    DecideProfileScope phase("highs.optimize");
     //===--------------------------------------------------------------------===//
     // 4. Solve
     //===--------------------------------------------------------------------===//
@@ -502,6 +512,17 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
     highs.setOptionValue("time_limit", time_limit_seconds);
 
     HighsStatus status = highs.run();
+    phase.Next("highs.status_and_readback");
+    if (DecideProfileScope::Enabled()) {
+        const auto &info = highs.getInfo();
+        DecideProfileScope::Counter("highs.simplex_iterations", info.simplex_iteration_count);
+        DecideProfileScope::Counter("highs.ipm_iterations", info.ipm_iteration_count);
+        DecideProfileScope::Counter("highs.qp_iterations", info.qp_iteration_count);
+        DecideProfileScope::Counter("highs.mip_nodes", info.mip_node_count);
+        if (std::isfinite(info.objective_function_value)) {
+            DecideProfileScope::Counter("highs.objective", info.objective_function_value);
+        }
+    }
     // HiGHS returns kWarning (not kOk) at the time limit while still exposing a
     // valid model status + incumbent, so throwing on any non-kOk return would
     // crash a diagnosable timeout with INTERNAL. Throw only on a genuine kError;
