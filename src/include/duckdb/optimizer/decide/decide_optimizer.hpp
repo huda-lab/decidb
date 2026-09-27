@@ -190,7 +190,7 @@ private:
 	//! the pass that emits the rows reading them.
 	unique_ptr<Expression> EmitHardMinMaxClause(LogicalDecide &decide, const string &agg_name,
 	                                            const Expression &inner, const Expression *filter,
-	                                            idx_t &out_clause_idx);
+	                                            const string &source_alias, idx_t &out_clause_idx);
 
 	//! Helper: append a constraint to the decide constraint tree via AND conjunction
 	//! Thin forwarder to LogicalDecide::AddConstraint, which canonicalizes on insert.

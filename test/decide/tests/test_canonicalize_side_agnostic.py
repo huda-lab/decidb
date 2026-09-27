@@ -118,7 +118,7 @@ def test_scalar_decision_as_reversed_bound(decidb_cli):
     common = """
         SELECT c_custkey, x, cap
         FROM customer WHERE c_custkey <= 20
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), PER (): cap(INT)
         SUCH THAT {constraint} AND cap <= 12 AND x <= 12
         MAXIMIZE 3 * SUM(x) - 2 * cap
     """
@@ -155,7 +155,7 @@ def test_data_term_left_of_reducer(decidb_cli, duckdb_conn, oracle_solver):
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x, cap
         FROM lineitem WHERE l_orderkey <= 3
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), PER (): cap(INT)
         SUCH THAT l_quantity - SUM(x) <= cap AND x <= 4
         MINIMIZE cap
     """
@@ -340,20 +340,23 @@ def test_row_varying_bound_collapses_to_tightest_on_either_side(
         assert actual_sum == pytest.approx(result.objective_value)
 
 
-@pytest.mark.error
-def test_row_scoped_decision_as_aggregate_bound_rejected(decidb_cli):
-    """``SUM(x) <= y`` with a row-scoped ``y`` is K3, and is named as such.
+@pytest.mark.var_integer
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_row_scoped_decision_as_aggregate_bound_is_per_row(decidb_cli):
+    """``SUM(x) <= y`` with a row-scoped ``y`` is one row per tuple: the global
+    sum against that tuple's own ``y``.
 
-    A query-wide decision is a legal term of a reduced constraint because it is
-    row-invariant; a row-scoped one is not — there is no single ``y`` for a number
-    that has no row. C.2 moved this from a binder rejection to the homogeneity
-    validation at the canonicalization boundary.  The ``Binder Error`` prefix
-    pins that ownership: physical extraction must not be the first stage to
-    discover the unsupported mixture.
+    DeciQL reads an omitted PER as per row and an omitted BY as the whole
+    input, so the mixed shape is well-defined: every row imposes
+    ``SUM(x) <= y_row`` and ``y_row <= 3``, which caps the sum at 3.
     """
-    decidb_cli.assert_error("""
+    rows, cols = decidb_cli.execute("""
         SELECT c_custkey, x, y FROM customer WHERE c_custkey <= 10
         DECIDE x(INT), y(INT)
-        SUCH THAT SUM(x) <= y AND y <= 3
+        SUCH THAT SUM(x) <= y AND y <= 3 AND x >= 0
         MAXIMIZE SUM(x)
-    """, match=r"Binder Error: DECIDE constraint.*row-scoped.*'y'.*outside.*(?:reducer|SUM)")
+    """)
+    xi, yi = cols.index("x"), cols.index("y")
+    assert sum(int(r[xi]) for r in rows) == 3
+    assert all(int(r[yi]) == 3 for r in rows)

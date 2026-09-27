@@ -499,9 +499,9 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, c.c_mktsegment, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT SUM(keepN) <= 150
-        MAXIMIZE MIN(SUM(keepN * c.c_acctbal)) PER c.c_mktsegment
+        MAXIMIZE MIN(PER c.c_mktsegment: SUM(keepN * c.c_acctbal) BY (c.c_mktsegment))
     """
     rows, cols = decidb_cli.execute(sql)
     assert len(rows) > 0
@@ -610,10 +610,10 @@ def test_per_sum_outer_min_inner_additive_coefficient(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
-        MAXIMIZE SUM(MIN((l_quantity + 1) * x)) PER l_returnflag
+        SUCH THAT SUM(WHEN (l_returnflag = 'A'): x) >= 1
+              AND SUM(WHEN (l_returnflag = 'N'): x) >= 1
+              AND SUM(WHEN (l_returnflag = 'R'): x) >= 1
+        MAXIMIZE SUM(PER l_returnflag: MIN((l_quantity + 1) * x) BY (l_returnflag))
     """
     rows, cols = decidb_cli.execute(sql)
 
@@ -665,10 +665,10 @@ def test_per_sum_outer_min_inner_repeated_variable(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
-        MAXIMIZE SUM(MIN(l_quantity * x + x)) PER l_returnflag
+        SUCH THAT SUM(WHEN (l_returnflag = 'A'): x) >= 1
+              AND SUM(WHEN (l_returnflag = 'N'): x) >= 1
+              AND SUM(WHEN (l_returnflag = 'R'): x) >= 1
+        MAXIMIZE SUM(PER l_returnflag: MIN(l_quantity * x + x) BY (l_returnflag))
     """
     rows, cols = decidb_cli.execute(sql)
 
@@ -720,10 +720,10 @@ def test_per_sum_outer_max_inner_additive_coefficient(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
-        MINIMIZE SUM(MAX((l_quantity + 1) * x)) PER l_returnflag
+        SUCH THAT SUM(WHEN (l_returnflag = 'A'): x) >= 1
+              AND SUM(WHEN (l_returnflag = 'N'): x) >= 1
+              AND SUM(WHEN (l_returnflag = 'R'): x) >= 1
+        MINIMIZE SUM(PER l_returnflag: MAX((l_quantity + 1) * x) BY (l_returnflag))
     """
     rows, cols = decidb_cli.execute(sql)
 

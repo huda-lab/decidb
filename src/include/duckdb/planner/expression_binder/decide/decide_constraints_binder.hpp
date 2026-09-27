@@ -32,7 +32,9 @@ private:
     BindResult BindOperator(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+    BindResult BindKnownCondition(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindWhenConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+    BindResult BindIfConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindPerConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 };
 

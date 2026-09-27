@@ -799,10 +799,13 @@ static ClauseEdit MakeDropEdit(const SolverModel &model, const RemovalGroupInfo 
 		const string &lhs = source.written_lhs.empty() ? source.canonical_lhs : source.written_lhs;
 		const string &rhs = source.written_rhs.empty() ? source.canonical_rhs : source.written_rhs;
 		const string &cmp = source.written_cmp.empty() ? source.canonical_cmp : source.written_cmp;
-		edit.label = cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
+		// A written spelling captured in one piece (a TEXT decision's comparison) has
+		// no parts to reassemble.
+		const bool written_whole = !source.written_lhs.empty() && source.written_cmp.empty();
+		edit.label = written_whole || cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
 		const string &qualifier = source.qualifier.empty() ? group.qualifier : source.qualifier;
 		if (!qualifier.empty()) {
-			edit.label += " " + qualifier;
+			edit.label = qualifier + " " + edit.label;
 		}
 	} else {
 		edit.label = "constraint " + to_string(group.id);

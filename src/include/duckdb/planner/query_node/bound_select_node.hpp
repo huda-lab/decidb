@@ -37,6 +37,14 @@ struct BoundUnnestNode {
 };
 
 //! Bound equivalent of SelectNode
+//! One objective stage after the first, as bound: `THEN MAXIMIZE e`.
+struct BoundDecideObjectiveStage {
+	DecideSense sense = DecideSense::MINIMIZE;
+	unique_ptr<Expression> expression;
+	//! The stage's own peeled constant (see objective_constant_offset below).
+	double constant_offset = 0.0;
+};
+
 class BoundSelectNode : public BoundQueryNode {
 public:
 	static constexpr const QueryNodeType TYPE = QueryNodeType::SELECT_NODE;
@@ -60,8 +68,20 @@ public:
     //! canonicalization. source_fragments preserves casts/subqueries while planning.
     vector<ConstraintSourceInfo> decide_constraint_sources;
     vector<string> decide_source_fragments;
+    //! The first objective stage: its sense and body. FEASIBILITY / null when the
+    //! clause has no objective (`SATISFY`, or none written).
     DecideSense decide_sense;
     unique_ptr<Expression> decide_objective;
+    //! Later lexicographic stages (`... THEN MINIMIZE b`), in order.
+    vector<BoundDecideObjectiveStage> decide_objective_tail;
+    //! Each declared variable's domain as written, indexed like decide_variables;
+    //! TEXT domains carry their admissible strings in decide_text_values.
+    vector<DecideDomain> decide_domains;
+    vector<vector<string>> decide_text_values;
+    //! Each TEXT decision's one-hot encoding (see DecideTextDomain).
+    vector<DecideTextDomain> decide_text_domains;
+    //! The frame expressions' timelines (see DecideFrameInfo).
+    vector<DecideFrameInfo> decide_frames;
     //! Additive constant peeled from the objective body by
     //! DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
     //! `MAXIMIZE SUM(x) + 3`). The solver doesn't need this to compute

@@ -1,6 +1,6 @@
 # Stage 07 — Solver: open work
 
-No solver-stage work is open. Shipped behavior is recorded in `done.md`.
+- Gurobi's native multi-objective API for `THEN` stages (today: staged solves on both backends).
 
 `SolverConstructSupport::bilinear` (`src/include/duckdb/common/decide_solver_capabilities.hpp`)
 is always `false` today. This is intentional, not a bug: it stays `false`

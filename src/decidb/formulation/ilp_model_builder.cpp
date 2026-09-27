@@ -1,14 +1,18 @@
 #include "duckdb/decidb/formulation/ilp_model.hpp"
+#include "duckdb/decidb/formulation/ilp_linearization_internal.hpp"
 #include "duckdb/common/exception.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <numeric>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace duckdb {
+
+using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpers
 
 double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
                                   const vector<idx_t> *rows, idx_t begin, idx_t end,
@@ -300,6 +304,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             per_var_binary[var] = true;
             per_var_lower[var] = 0.0;
             per_var_upper[var] = 1.0;
+        } else if (logical_type == LogicalType::VARCHAR) {
+            // A TEXT decision is read back from its one-hot indicators; its own column
+            // carries nothing and is pinned so the solver never has to place it.
+            per_var_lower[var] = 0.0;
+            per_var_upper[var] = 0.0;
         } else {
             // INTEGER / BIGINT or default
             per_var_lower[var] = 0.0;
@@ -387,9 +396,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     }
     model.maximize = (input.sense == DecideSense::MAXIMIZE);
 
-    if (!input.objective_variable_indices.empty()) {
-        for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
-            idx_t decide_var_idx = input.objective_variable_indices[term_idx];
+    // The linear objective, flattened onto the columns. Shared by the first objective
+    // and every `THEN` stage, which is the same shape with its own terms.
+    auto FlattenLinearObjective = [&](const vector<idx_t> &variable_indices,
+                                      const vector<CoefficientColumn> &coefficients,
+                                      const vector<LinearTermReduction> &reductions, vector<double> &out) {
+        for (idx_t term_idx = 0; term_idx < variable_indices.size(); term_idx++) {
+            idx_t decide_var_idx = variable_indices[term_idx];
 
             // Skip constant terms (data columns without decide variables).
             // These don't affect the optimal solution — they add a constant offset
@@ -398,12 +411,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 continue;
             }
 
-            if (term_idx >= input.objective_coefficients.size()) {
+            if (term_idx >= coefficients.size()) {
                 continue;
             }
-            auto &col = input.objective_coefficients[term_idx];
-            bool is_reduced_scalar = term_idx < input.objective_term_reductions.size() &&
-                                     input.objective_term_reductions[term_idx] == LinearTermReduction::SUM;
+            auto &col = coefficients[term_idx];
+            bool is_reduced_scalar =
+                term_idx < reductions.size() && reductions[term_idx] == LinearTermReduction::SUM;
             if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
                 // A query-wide decision standing beside a reducer (not inside one) has one
                 // column and does not vary by row, so its term contributes once rather than
@@ -411,16 +424,25 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // the input cardinality. A scalar *inside* a reducer body (`SUM(cost * cap)`)
                 // is marked SUM-reduced and falls through to the per-row loop below instead,
                 // so its coefficient is the sum of every counted row's data.
-                model.obj_coeffs[indexer.Get(decide_var_idx, 0)] += col.Size() > 0 ? col.Get(0) : 1.0;
+                out[indexer.Get(decide_var_idx, 0)] += col.Size() > 0 ? col.Get(0) : 1.0;
                 continue;
             }
             for (idx_t row = 0; row < num_rows; row++) {
                 if (row >= col.Size()) break;
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
                 // Use += because entity-scoped vars: multiple rows map to same solver var
-                model.obj_coeffs[var_idx] += col.Get(row);
+                out[var_idx] += col.Get(row);
             }
         }
+    };
+    FlattenLinearObjective(input.objective_variable_indices, input.objective_coefficients,
+                           input.objective_term_reductions, model.obj_coeffs);
+    for (auto &stage : input.objective_stages) {
+        SolverModel::ObjectiveStage flat;
+        flat.maximize = stage.sense == DecideSense::MAXIMIZE;
+        flat.obj_coeffs.assign(total_vars, 0.0);
+        FlattenLinearObjective(stage.variable_indices, stage.coefficients, stage.term_reductions, flat.obj_coeffs);
+        model.objective_stages.push_back(std::move(flat));
     }
 
     //===--------------------------------------------------------------------===//
@@ -650,26 +672,183 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // the offending clause — it stays a USER_PARAMETER row with its own source
     // provenance, and the elastic weighting already guards an all-zero row. No
     // backend ever sees it: SolveModel short-circuits on the flag.
+    auto ConstantRowViolated = [](const ModelConstraint &constr) {
+        constexpr double EPS = 1e-9;
+        if (constr.sense == '<') {
+            return constr.rhs < -EPS;
+        }
+        if (constr.sense == '>') {
+            return constr.rhs > EPS;
+        }
+        return std::abs(constr.rhs) > EPS; // '='
+    };
     auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
         if (!constr.indices.empty()) {
             model.constraints.push_back(std::move(constr));
             return;
         }
-        constexpr double EPS = 1e-9;
-        bool violated = false;
-        if (constr.sense == '<') {
-            violated = constr.rhs < -EPS;
-        } else if (constr.sense == '>') {
-            violated = constr.rhs > EPS;
-        } else { // '='
-            violated = std::abs(constr.rhs) > EPS;
-        }
-        if (violated) {
+        if (ConstantRowViolated(constr)) {
             model.build_proven_infeasible = true;
             model.constraints.push_back(std::move(constr));
             return;
         }
         // Tautology (0 <= k>=0, 0 >= k<=0, 0 = 0) — drop.
+    };
+
+    //===--------------------------------------------------------------------===//
+    // `IF b:` -- a guarded instance is the conditional row `b ⟹ row`
+    //===--------------------------------------------------------------------===//
+
+    // The box a guard's Big-M is derived from: the one every other lowering uses
+    // (`FormulationBox::OfSolvedModel`), not the elastic-opened columns a diagnosis
+    // declares, which are enforced by loosenable rows instead.
+    auto GuardColumnBox = [&](int col, double &lo, double &hi) {
+        idx_t c = static_cast<idx_t>(col);
+        if (c >= indexer.global_block_start) {
+            idx_t g = c - indexer.global_block_start;
+            lo = input.global_lower_bounds[g];
+            hi = input.global_upper_bounds[g];
+            if (input.global_variable_types[g] == LogicalType::BOOLEAN) {
+                lo = MaxValue<double>(lo, 0.0);
+                hi = MinValue<double>(hi, 1.0);
+            }
+            return;
+        }
+        idx_t v = indexer.OwnerOf(c);
+        lo = input.lower_bounds[v];
+        hi = input.upper_bounds[v];
+        if (input.variable_types[v] == LogicalType::BOOLEAN) {
+            hi = MinValue<double>(hi, 1.0);
+        }
+    };
+    // `binary == value ⟹ row`, stated natively when the backend does, else as a Big-M
+    // row over the box -- the same rewrite LowerDecideConstructs applies to a `<>`.
+    // Only reached with the row's sense already applied.
+    std::function<void(ModelConstraint &&, int, int)> EmitConditionalRow;
+    EmitConditionalRow = [&](ModelConstraint &&row, int binary_column, int binary_value) {
+        if (row.indices.empty()) {
+            // A constant row: a tautology conditions nothing; a violated one says the
+            // guard cannot hold, which is a bound on the binary itself.
+            if (!ConstantRowViolated(row)) {
+                return;
+            }
+            row.indices.push_back(binary_column);
+            row.coefficients.push_back(1.0);
+            row.sense = binary_value == 1 ? '<' : '>';
+            row.rhs = binary_value == 1 ? 0.0 : 1.0;
+            model.constraints.push_back(std::move(row));
+            return;
+        }
+        if (input.native_indicators) {
+            SolverModel::IndicatorConstraint ic;
+            ic.binary_column = binary_column;
+            ic.binary_value = binary_value;
+            ic.indices = std::move(row.indices);
+            ic.coefficients = std::move(row.coefficients);
+            ic.sense = row.sense;
+            ic.rhs = row.rhs;
+            ic.provenance = std::move(row.provenance);
+            model.indicator_constraints.push_back(std::move(ic));
+            return;
+        }
+        if (row.sense == '=') {
+            ModelConstraint upper = row;
+            upper.sense = '<';
+            row.sense = '>';
+            EmitConditionalRow(std::move(upper), binary_column, binary_value);
+            EmitConditionalRow(std::move(row), binary_column, binary_value);
+            return;
+        }
+        const bool hi_end = row.sense == '<';
+        double reach = 0.0;
+        for (idx_t k = 0; k < row.indices.size(); k++) {
+            double c = row.coefficients[k];
+            if (c == 0.0) {
+                continue;
+            }
+            double lo, hi;
+            GuardColumnBox(row.indices[k], lo, hi);
+            double end = (c > 0.0) == hi_end ? hi : lo;
+            if (end >= 1e20 || end <= -1e20) {
+                ThrowUnboundedBigMNaming(indexer.OwnerOf(static_cast<idx_t>(row.indices[k])),
+                                         input.decide_variable_names, "an IF guard");
+            }
+            reach += c * end;
+        }
+        double M = hi_end ? reach - row.rhs : row.rhs - reach;
+        M = MaxValue<double>(M, 0.0) + 1.0;
+        ApplyIndicatorBigM(row.indices, row.coefficients, row.sense, row.rhs, binary_column, binary_value, M);
+        model.constraints.push_back(std::move(row));
+    };
+    // Every emission site routes through here. `instance` numbers the clause's rows the
+    // way LinearizeGuards allotted binaries (the row for a per-row body, the instance
+    // index otherwise); `guard_row` is the row the guard is read at.
+    auto PushConstraintRow = [&](ModelConstraint &&constr, const EvaluatedConstraint &ec, idx_t instance,
+                                 idx_t guard_row) {
+        if (!ec.guard) {
+            PushNormalizedConstraint(std::move(constr));
+            return;
+        }
+        auto &guard = *ec.guard;
+        switch (guard.kind) {
+        case EvaluatedGuard::Kind::ALWAYS:
+            PushNormalizedConstraint(std::move(constr));
+            return;
+        case EvaluatedGuard::Kind::NEVER:
+            return;
+        case EvaluatedGuard::Kind::VARIABLE:
+            EmitConditionalRow(std::move(constr), static_cast<int>(indexer.Get(guard.bool_var, guard_row)),
+                               guard.bool_value);
+            return;
+        case EvaluatedGuard::Kind::COMPARISON:
+            break;
+        }
+        const int y = static_cast<int>(guard.aux_base + instance);
+        // `y = 0 ⟹ NOT b`, read at this instance's row. The complement steps on the
+        // integer lattice LinearizeGuards proved the guard's terms lie on.
+        std::unordered_map<int, double> acc;
+        double fixed = 0.0;
+        for (idx_t t = 0; t < guard.variable_indices.size(); t++) {
+            double c = guard.row_coefficients[t].Get(guard_row);
+            idx_t var = guard.variable_indices[t];
+            if (var == DConstants::INVALID_INDEX) {
+                fixed += c;
+            } else if (c != 0.0) {
+                acc[static_cast<int>(indexer.Get(var, guard_row))] += c;
+            }
+        }
+        double k = guard.rhs_values.Get(guard_row) - fixed;
+        ModelConstraint complement;
+        for (auto &kv : acc) {
+            if (kv.second != 0.0) {
+                complement.indices.push_back(kv.first);
+                complement.coefficients.push_back(kv.second);
+            }
+        }
+        switch (guard.comparison_type) {
+        case ExpressionType::COMPARE_GREATERTHANOREQUALTO: // NOT (a·x >= k)  is  a·x <= ceil(k) - 1
+            complement.sense = '<';
+            complement.rhs = std::ceil(k) - 1.0;
+            break;
+        case ExpressionType::COMPARE_GREATERTHAN: // NOT (a·x > k)  is  a·x <= floor(k)
+            complement.sense = '<';
+            complement.rhs = std::floor(k);
+            break;
+        case ExpressionType::COMPARE_LESSTHANOREQUALTO: // NOT (a·x <= k)  is  a·x >= floor(k) + 1
+            complement.sense = '>';
+            complement.rhs = std::floor(k) + 1.0;
+            break;
+        default: // NOT (a·x < k)  is  a·x >= ceil(k)
+            complement.sense = '>';
+            complement.rhs = std::ceil(k);
+            break;
+        }
+        complement.provenance = constr.provenance;
+        complement.provenance.kind = ConstraintKind::STRUCTURAL;
+        complement.provenance.indicator_col = static_cast<idx_t>(y);
+        EmitConditionalRow(std::move(complement), y, 0);
+        constr.provenance.indicator_col = static_cast<idx_t>(y);
+        EmitConditionalRow(std::move(constr), y, 1);
     };
 
     // Rough upper-bound on total model.constraints rows to avoid repeated
@@ -787,6 +966,130 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
         }
 
+        if (eval_const.HasGeneralGrouping()) {
+            // GENERAL PATH: some term reads rows outside its instance (DeciQL aggregation
+            // keyed differently from the generation, or a reducer beside a per-row term).
+            // One model row per instance; each term contributes over the rows its
+            // grouping names: the instance's own rows (CLASS), one of them once (DIRECT),
+            // every WHEN-admitted row (ALL), or its BY key's group holding the instance
+            // (KEYED). Always accumulates: a KEYED or ALL term visits the same column from
+            // several instances' rows, so the fast path's uniqueness does not hold.
+            BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups,
+                          eval_const.group_offsets, eval_const.group_row_ids);
+            for (auto &partition : eval_const.partitions) {
+                BuildGroupCSR(partition.row_group_ids, partition.num_groups,
+                              partition.group_offsets, partition.group_row_ids);
+            }
+            vector<idx_t> all_rows;
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (eval_const.when_active.empty() || eval_const.when_active[row]) {
+                    all_rows.push_back(row);
+                }
+            }
+            auto &offsets = eval_const.group_offsets;
+            auto &flat_rows = eval_const.group_row_ids;
+            SparseCoeffAccumulator accum;
+            {
+                constexpr idx_t DENSE_CAP = 1u << 20;
+                idx_t decide_var_index_span = indexer.global_block_start;
+                if (decide_var_index_span <= DENSE_CAP) {
+                    accum.BeginDense(decide_var_index_span);
+                } else {
+                    accum.BeginSparse(eval_const.variable_indices.size() * MaxValue<idx_t>(num_rows, 1));
+                }
+            }
+            for (idx_t g = 0; g < eval_const.num_groups; g++) {
+                idx_t g_begin = offsets[g];
+                idx_t g_end = offsets[g + 1];
+                if (g_begin == g_end) {
+                    continue;
+                }
+                // An instance a frame's NULL policy dropped has no row (spec §7.3).
+                if (g < eval_const.instance_dropped.size() && eval_const.instance_dropped[g]) {
+                    continue;
+                }
+                idx_t representative = flat_rows[g_begin];
+                double fixed_offset = 0.0;
+                ModelConstraint constr;
+                for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
+                    auto &grouping = eval_const.term_groupings[term_idx];
+                    const vector<idx_t> *rows = nullptr;
+                    idx_t begin = 0, end = 0;
+                    idx_t single_row = DConstants::INVALID_INDEX;
+                    switch (grouping.kind) {
+                    case EvaluatedConstraint::TermGroupKind::DIRECT:
+                        single_row = representative;
+                        break;
+                    case EvaluatedConstraint::TermGroupKind::CLASS:
+                        rows = &flat_rows;
+                        begin = g_begin;
+                        end = g_end;
+                        break;
+                    case EvaluatedConstraint::TermGroupKind::ALL:
+                        rows = &all_rows;
+                        begin = 0;
+                        end = all_rows.size();
+                        break;
+                    case EvaluatedConstraint::TermGroupKind::KEYED: {
+                        auto &partition = eval_const.partitions[grouping.partition];
+                        idx_t group = partition.class_to_group[g];
+                        if (group == DConstants::INVALID_INDEX) {
+                            continue;
+                        }
+                        rows = &partition.group_row_ids;
+                        begin = partition.group_offsets[group];
+                        end = partition.group_offsets[group + 1];
+                        break;
+                    }
+                    case EvaluatedConstraint::TermGroupKind::FRAME: {
+                        auto &frame = eval_const.frame_rows[grouping.frame];
+                        if (grouping.frame_fill) {
+                            // The `ELSE v` fill for the instance's missing positions, with
+                            // the frame's sign and factor read at the instance's own row.
+                            fixed_offset +=
+                                eval_const.row_coefficients[term_idx].Get(representative) * frame.else_values[g];
+                            continue;
+                        }
+                        rows = &frame.rows;
+                        begin = frame.offsets[g];
+                        end = frame.offsets[g + 1];
+                        break;
+                    }
+                    }
+                    idx_t decide_var_idx = eval_const.variable_indices[term_idx];
+                    auto &col = eval_const.row_coefficients[term_idx];
+                    auto visit = [&](idx_t row) {
+                        double coeff = col.Get(row);
+                        if (decide_var_idx == DConstants::INVALID_INDEX) {
+                            fixed_offset += coeff;
+                        } else if (coeff != 0.0) {
+                            accum.Add(static_cast<int>(indexer.Get(decide_var_idx, row)), coeff);
+                        }
+                    };
+                    if (single_row != DConstants::INVALID_INDEX) {
+                        visit(single_row);
+                    } else {
+                        for (idx_t k = begin; k < end; k++) {
+                            visit((*rows)[k]);
+                        }
+                    }
+                }
+                accum.Flush(constr.indices, constr.coefficients);
+                double rhs = eval_const.rhs_values.Get(representative) - fixed_offset;
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
+                string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
+                StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_label, fixed_offset);
+                if (is_aggregate) {
+                    StampAggregateProvenance(constr.provenance, eval_const);
+                    constr.provenance.avg_scaled = eval_const.avg_scaled;
+                    StampWeightLabels(constr.provenance);
+                    constr.provenance.folded_terms = clause_folded_terms;
+                }
+                PushConstraintRow(std::move(constr), eval_const, g, representative);
+            }
+            continue;
+        }
+
         if (is_aggregate) {
             if (!has_groups) {
                 // FAST PATH: no WHEN, no PER — one constraint summing all rows.
@@ -869,7 +1172,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
                 StampWeightLabels(constr.provenance);
                 constr.provenance.folded_terms = clause_folded_terms;
-                PushNormalizedConstraint(std::move(constr));
+                // One instance for the whole input; a guard here is a query-wide decision.
+                PushConstraintRow(std::move(constr), eval_const, 0, 0);
 
             } else {
                 // UNIFIED PATH: WHEN and/or PER — build group→rows CSR once, emit one constraint per group
@@ -977,7 +1281,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     constr.provenance.avg_scaled = eval_const.avg_scaled;
                     StampWeightLabels(constr.provenance);
                     constr.provenance.folded_terms = clause_folded_terms;
-                    PushNormalizedConstraint(std::move(constr));
+                    PushConstraintRow(std::move(constr), eval_const, g, flat_rows[g_begin]);
                 }
             }
 
@@ -1047,7 +1351,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         : string();
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
                                           row_group_label, rhs_adjustment);
-                PushNormalizedConstraint(std::move(constr));
+                PushConstraintRow(std::move(constr), eval_const, row, row);
             }
         }
     }

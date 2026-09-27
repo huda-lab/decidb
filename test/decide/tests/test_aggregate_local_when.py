@@ -84,7 +84,7 @@ def test_aggregate_local_when_constraint_independent_masks(
                    ('c', 10, false, false)
         ) t(name, value, w1, w2)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN w1 + SUM(x * value) WHEN w2 <= 6
+        SUCH THAT SUM(WHEN w1: x * value) + SUM(WHEN w2: x * value) <= 6
         MAXIMIZE SUM(x * value)
     """
 
@@ -133,7 +133,7 @@ def test_aggregate_local_when_constraint_parenthesized_condition(
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'none')
         ) t(name, value, tier)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN (tier = 'high') + SUM(x * value) WHEN (tier = 'low') <= 7
+        SUCH THAT SUM(WHEN (tier = 'high'): x * value) + SUM(WHEN (tier = 'low'): x * value) <= 7
         MAXIMIZE SUM(x * value)
     """
 
@@ -186,7 +186,7 @@ def test_aggregate_local_when_objective_independent_masks(
         ) t(name, value, bonus, w1, w2)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN w1 + SUM(x * bonus) WHEN w2
+        MAXIMIZE SUM(WHEN w1: x * value) + SUM(WHEN w2: x * bonus)
     """
 
     def build(oracle, data, cols, rows):
@@ -236,7 +236,7 @@ def test_expression_level_when_still_works(
             VALUES ('a', 6, true), ('b', 4, true), ('c', 10, false)
         ) t(name, value, w1)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) <= 6 WHEN w1
+        SUCH THAT WHEN w1: SUM(x * value) <= 6
         MAXIMIZE SUM(x * value)
     """
 
@@ -264,22 +264,6 @@ def test_expression_level_when_still_works(
     )
 
 
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_expression_level_when_cannot_mix_with_aggregate_local_when(decidb_cli):
-    """Mixed expression-level + aggregate-local WHEN is rejected."""
-    decidb_cli.assert_error("""
-        SELECT name, value, w1, w2, x FROM (
-            VALUES ('a', 6, true, false), ('b', 4, false, true)
-        ) t(name, value, w1, w2)
-        DECIDE x(BOOL)
-        SUCH THAT (SUM(x * value) WHEN w1 + SUM(x * value) WHEN w2 <= 6) WHEN w1
-        MAXIMIZE SUM(x * value)
-    """, match=r"Cannot combine")
-
-
 # ---------------------------------------------------------------------------
 # A. Composition with other features
 # ---------------------------------------------------------------------------
@@ -302,7 +286,7 @@ def test_aggregate_local_when_with_avg_constraint(
             VALUES ('a', 12, true), ('b', 4, true), ('c', 8, false), ('d', 6, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) WHEN active <= 5
+        SUCH THAT AVG(WHEN active: x * value) <= 5
         MAXIMIZE SUM(x * value)
     """
 
@@ -356,7 +340,7 @@ def test_aggregate_local_when_with_per_constraint(
                    ('e', 7, 'X', true), ('f', 6, 'Y', true)
         ) t(name, value, grp, priority)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN priority <= 12 PER grp
+        SUCH THAT PER grp: SUM(WHEN priority: x * value) BY (grp) <= 12
         MAXIMIZE SUM(x * value)
     """
 
@@ -412,7 +396,7 @@ def test_aggregate_local_when_with_avg_and_per(
                    ('e', 6, 'G2', true), ('f', 2, 'G2', false)
         ) t(name, value, grp, active)
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) WHEN active <= 6 PER grp
+        SUCH THAT PER grp: AVG(WHEN active: x * value) BY (grp) <= 6
         MAXIMIZE SUM(x * value)
     """
 
@@ -464,7 +448,7 @@ def test_aggregate_local_when_with_max(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 20, false), ('d', 3, true)
         ) t(name, value, eligible)
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * value) WHEN eligible <= 7
+        SUCH THAT MAX(WHEN eligible: x * value) <= 7
         MAXIMIZE SUM(x * value)
     """
 
@@ -523,7 +507,7 @@ def test_aggregate_local_when_with_hard_max(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 20, false), ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * value) WHEN active >= 6
+        SUCH THAT MAX(WHEN active: x * value) >= 6
             AND SUM(x) <= 2
         MAXIMIZE SUM(x * value)
     """
@@ -589,7 +573,7 @@ def test_aggregate_local_when_mixed_filtered_unfiltered_constraint(
             VALUES ('a', 8, true), ('b', 5, false), ('c', 10, true), ('d', 3, false)
         ) t(name, value, premium)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN premium + SUM(x) <= 12
+        SUCH THAT SUM(WHEN premium: x * value) + SUM(x) <= 12
         MAXIMIZE SUM(x * value)
     """
 
@@ -641,7 +625,7 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
         ) t(name, value, bonus, vip)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN vip + SUM(x * bonus)
+        MAXIMIZE SUM(WHEN vip: x * value) + SUM(x * bonus)
     """
 
     def build(oracle, data, cols, rows):
@@ -693,7 +677,7 @@ def test_aggregate_local_when_all_filtered_out(decidb_cli):
             VALUES ('a', 10, false), ('b', 5, false), ('c', 8, false)
         ) t(name, value, flag)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN flag + SUM(x * value) <= 23
+        SUCH THAT SUM(WHEN flag: x * value) + SUM(x * value) <= 23
         MAXIMIZE SUM(x * value)
     """
     decidb_cli.assert_error(decide_sql, match=r"empty|WHEN")
@@ -719,7 +703,7 @@ def test_aggregate_local_when_overlapping_filters(
                    ('c', 8, false, true), ('d', 3, false, false)
         ) t(name, value, cat_a, cat_b)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN cat_a + SUM(x * value) WHEN cat_b <= 20
+        SUCH THAT SUM(WHEN cat_a: x * value) + SUM(WHEN cat_b: x * value) <= 20
         MAXIMIZE SUM(x * value)
     """
 
@@ -768,7 +752,7 @@ def test_aggregate_local_when_single_aggregate(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN active <= 10
+        SUCH THAT SUM(WHEN active: x * value) <= 10
         MAXIMIZE SUM(x * value)
     """
 
@@ -815,7 +799,7 @@ def test_aggregate_local_when_three_terms(
                    ('d', 3, 'X'), ('e', 7, 'Y')
         ) t(name, value, cat)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN (cat = 'X') + SUM(x * value) WHEN (cat = 'Y') + SUM(x * value) WHEN (cat = 'Z') <= 20
+        SUCH THAT SUM(WHEN (cat = 'X'): x * value) + SUM(WHEN (cat = 'Y'): x * value) + SUM(WHEN (cat = 'Z'): x * value) <= 20
         MAXIMIZE SUM(x * value)
     """
 
@@ -864,24 +848,9 @@ def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
             VALUES ('a', 10), ('b', 5)
         ) t(name, value)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN x <= 10
+        SUCH THAT SUM(WHEN x: x * value) <= 10
         MAXIMIZE SUM(x * value)
-    """, match=r"(?i)DECIDE variables")
-
-
-@pytest.mark.when
-@pytest.mark.when_objective
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_aggregate_local_when_mixed_expression_objective_error(decidb_cli):
-    decidb_cli.assert_error("""
-        SELECT name, value, w1, w2, x FROM (
-            VALUES ('a', 10, true, false), ('b', 5, false, true)
-        ) t(name, value, w1, w2)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2
-        MAXIMIZE (SUM(x * value) WHEN w1 + SUM(x * value) WHEN w2) WHEN w1
-    """, match=r"Cannot combine")
+    """, match=r"cannot reference a decision")
 
 
 @pytest.mark.when
@@ -895,8 +864,8 @@ def test_aggregate_local_when_decide_var_in_objective_condition_error(decidb_cli
         ) t(name, value)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN x
-    """, match=r"(?i)DECIDE variables")
+        MAXIMIZE SUM(WHEN x: x * value)
+    """, match=r"(?i)cannot reference a decision")
 
 
 # ---------------------------------------------------------------------------
@@ -921,7 +890,7 @@ def test_expression_level_when_objective_still_works(
         ) t(name, value, vip)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN vip
+        MAXIMIZE SUM(WHEN vip: x * value)
     """
 
     def build(oracle, data, cols, rows):
@@ -971,7 +940,7 @@ def test_expression_level_when_per_still_works(
                    ('c', 8, 'B', true), ('d', 3, 'B', false)
         ) t(name, value, grp, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) <= 10 WHEN active PER grp
+        SUCH THAT WHEN active PER grp: SUM(x * value) BY (grp) <= 10
         MAXIMIZE SUM(x * value)
     """
 
@@ -1027,7 +996,7 @@ def test_bilinear_aggregate_local_when_constraint(
             VALUES (1, 10, true), (2, 5, true), (3, 8, false), (4, 3, true)
         ) t(id, value, active)
         DECIDE b(BOOL), x(BOOL)
-        SUCH THAT SUM(b * x) WHEN active <= 1
+        SUCH THAT SUM(WHEN active: b * x) <= 1
         MAXIMIZE SUM(b * value + x * value)
     """
     t0 = time.perf_counter()
@@ -1091,7 +1060,7 @@ def test_bilinear_aggregate_local_when_objective(
         ) t(id, value, premium)
         DECIDE b(BOOL), x(BOOL)
         SUCH THAT SUM(b) <= 3 AND SUM(x) <= 3
-        MAXIMIZE SUM(b * x * value) WHEN premium
+        MAXIMIZE SUM(WHEN premium: b * x * value)
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(decide_sql)
@@ -1155,7 +1124,7 @@ def test_ne_aggregate_local_when_constraint(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) WHEN active <> 2
+        SUCH THAT SUM(WHEN active: x) <> 2
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * value)
     """
@@ -1209,7 +1178,7 @@ def test_ne_with_per_constraint(
                    ('d', 3, 'sales'), ('e', 7, 'eng')
         ) t(name, value, dept)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 2 PER dept
+        SUCH THAT PER dept: SUM(x) BY (dept) <> 2
             AND SUM(x) <= 4
         MAXIMIZE SUM(x * value)
     """
@@ -1261,7 +1230,7 @@ def test_between_aggregate_local_when_constraint(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN active BETWEEN 5 AND 13
+        SUCH THAT SUM(WHEN active: x * value) BETWEEN 5 AND 13
         MAXIMIZE SUM(x * value)
     """
 
@@ -1302,8 +1271,8 @@ def test_entity_scoped_aggregate_local_when(
         SELECT c.c_custkey, n.n_nationkey, n.n_name, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN * c.c_acctbal) WHEN (c.c_acctbal > 5000) <= 50000
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT SUM(WHEN (c.c_acctbal > 5000): keepN * c.c_acctbal) <= 50000
         MAXIMIZE SUM(keepN)
     """
     t0 = time.perf_counter()
@@ -1372,7 +1341,7 @@ def test_aggregate_local_when_unparenthesized_comparison_error(decidb_cli):
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'none')
         ) t(name, value, tier)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN tier = 'high' <= 7
+        SUCH THAT SUM(WHEN tier: x * value) = 'high' <= 7
         MAXIMIZE SUM(x * value)
     """, match=r'syntax error at or near "<="')
 
@@ -1395,7 +1364,7 @@ def test_aggregate_local_when_objective_atomic_comparison(
         ) t(name, value, tier)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN tier = 'high'
+        MAXIMIZE SUM(WHEN tier = 'high': x * value)
     """
 
     def build(oracle, data, cols, rows):
@@ -1463,7 +1432,7 @@ def test_when_with_constant_offset_paren_condition(
             VALUES (1, 2.0), (2, 0.5), (3, 3.0)
         ) t(id, w)
         DECIDE x(REAL)
-        SUCH THAT SUM(x) WHEN (w > 1) + 3 <= 10
+        SUCH THAT SUM(WHEN (w > 1): x) + 3 <= 10
             AND x <= 10
         MAXIMIZE SUM(x)
     """
@@ -1513,7 +1482,7 @@ def test_when_with_scalar_multiplier(
             VALUES (1, true), (2, false), (3, true)
         ) t(id, w)
         DECIDE x(REAL)
-        SUCH THAT 2 * (SUM(x) WHEN w) <= 10
+        SUCH THAT 2 * (SUM(WHEN w: x)) <= 10
             AND x <= 10
         MAXIMIZE SUM(x)
     """
@@ -1563,7 +1532,7 @@ def test_when_with_parallel_sum_and_offset(
             VALUES (1, true), (2, false), (3, true)
         ) t(id, w)
         DECIDE x(REAL), y(REAL)
-        SUCH THAT (SUM(x) WHEN w) + (SUM(y) + 3) <= 10
+        SUCH THAT (SUM(WHEN w: x)) + (SUM(y) + 3) <= 10
             AND x <= 10 AND y <= 10
         MAXIMIZE SUM(x) + SUM(y)
     """
@@ -1611,7 +1580,7 @@ def test_when_unparenthesized_condition_misparses(decidb_cli):
     decidb_cli.assert_error("""
         SELECT id, x FROM (VALUES (1, 2.0), (2, 0.5), (3, 3.0)) t(id, w)
         DECIDE x(REAL)
-        SUCH THAT (SUM(x) WHEN w > 1) + 3 <= 10
+        SUCH THAT (SUM(WHEN w: x) > 1) + 3 <= 10
             AND x <= 10
         MAXIMIZE SUM(x)
     """, match=r"\+\(BOOLEAN, INTEGER")
@@ -1639,7 +1608,7 @@ def test_when_objective_with_constant_offset(
         ) t(id, w)
         DECIDE x(REAL)
         SUCH THAT x <= 10
-        MAXIMIZE (SUM(x) WHEN w > 1) + 3
+        MAXIMIZE (SUM(WHEN w > 1: x)) + 3
     """
 
     def build(oracle, data, cols, rows):
@@ -1691,7 +1660,7 @@ def test_outer_when_with_arithmetic_offset_works(
             VALUES (1, 6.0, true), (2, 4.0, true), (3, 10.0, false)
         ) t(id, value, w)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) + 3 <= 10 WHEN w
+        SUCH THAT WHEN w: SUM(x * value) + 3 <= 10
         MAXIMIZE SUM(x * value)
     """
 
@@ -1745,7 +1714,7 @@ def test_when_with_data_column_scalar_left_rejected(decidb_cli):
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
         ) t(id, col, w)
         DECIDE x(REAL)
-        SUCH THAT col * (SUM(x) WHEN w) <= 20
+        SUCH THAT col * (SUM(WHEN w: x)) <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
     """, match=r"'col' varies per row, so it cannot multiply SUM\(x\)")
@@ -1763,7 +1732,7 @@ def test_when_with_data_column_scalar_right_rejected(decidb_cli):
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
         ) t(id, col, w)
         DECIDE x(REAL)
-        SUCH THAT (SUM(x) WHEN w) * col <= 20
+        SUCH THAT (SUM(WHEN w: x)) * col <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
     """, match=r"'col' varies per row, so it cannot multiply SUM\(x\)")
@@ -1781,7 +1750,7 @@ def test_when_divided_by_data_column_rejected(decidb_cli):
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
         ) t(id, col, w)
         DECIDE x(REAL)
-        SUCH THAT (SUM(x) WHEN w) / col <= 5
+        SUCH THAT (SUM(WHEN w: x)) / col <= 5
             AND x <= 10
         MAXIMIZE SUM(x)
     """, match=r"'col' varies per row, so it cannot divide SUM\(x\)")
@@ -1806,7 +1775,7 @@ def test_when_with_data_column_moved_inside(
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
         ) t(id, col, w)
         DECIDE x(REAL)
-        SUCH THAT SUM(col * x) WHEN w <= 20
+        SUCH THAT SUM(WHEN w: col * x) <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
     """

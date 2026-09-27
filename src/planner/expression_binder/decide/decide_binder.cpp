@@ -1,5 +1,8 @@
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
+#include "duckdb/common/set.hpp"
+#include "duckdb/common/pair.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_generation.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
@@ -9,6 +12,9 @@
 #include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/decide/decide_frame_spec.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -24,6 +30,7 @@
 #include <unordered_set>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
@@ -115,66 +122,153 @@ bool IsDecideAggregateName(const string &name) {
 	return lname == "sum" || lname == "avg" || lname == "min" || lname == "max";
 }
 
-idx_t FindOrCreateEntityScope(BindContext &bind_context, const string &table_name,
-                              vector<EntityScopeInfo> &entity_scopes,
-                              case_insensitive_map_t<idx_t> &table_scope_map) {
-	return FindOrCreateEntityScope(bind_context, vector<string> {table_name}, entity_scopes, table_scope_map);
+//! One key element resolved to the columns it stands for.
+struct ResolvedKeyElement {
+	//! The relation's binding index when the element named a whole relation.
+	idx_t whole_relation = DConstants::INVALID_INDEX;
+	vector<ColumnBinding> bindings;
+	vector<LogicalType> types;
+};
+
+static void AppendBindingColumn(Binding &binding, idx_t col_idx, ResolvedKeyElement &out) {
+	out.types.push_back(binding.types[col_idx]);
+	if (binding.binding_type == BindingType::TABLE) {
+		// GetColumnBinding forces the column into the scan's column_ids and returns
+		// the binding as (table_index, position-in-col_ids).
+		out.bindings.push_back(binding.Cast<TableBinding>().GetColumnBinding(col_idx));
+	} else {
+		out.bindings.push_back(ColumnBinding(binding.index, col_idx));
+	}
 }
 
-idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &table_names,
-                              vector<EntityScopeInfo> &entity_scopes,
-                              case_insensitive_map_t<idx_t> &table_scope_map) {
-	D_ASSERT(!table_names.empty());
-	// Canonicalize order so sum(D,T: ...) and sum(T,D: ...) share one scope: the
-	// composite identity is a set, not a sequence.
-	auto sorted_names = table_names;
-	std::sort(sorted_names.begin(), sorted_names.end(), [](const string &a, const string &b) {
-		return StringUtil::Lower(a) < StringUtil::Lower(b);
-	});
-	string cache_key = StringUtil::Join(sorted_names, ",");
+static bool ResolveKeyElement(BindContext &bind_context, const ParsedExpression &elem, ResolvedKeyElement &out,
+                              string &error) {
+	if (elem.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+		error = StringUtil::Format("'%s' is not a column or relation name", elem.ToString());
+		return false;
+	}
+	auto &colref = elem.Cast<ColumnRefExpression>();
+	auto &names = colref.column_names;
+	if (names.size() == 2) {
+		ErrorData binding_error;
+		auto binding = bind_context.GetBinding(names[0], binding_error);
+		if (!binding) {
+			error = StringUtil::Format("relation '%s' is not in the FROM clause", names[0]);
+			return false;
+		}
+		column_t col_idx;
+		if (!binding->TryGetBindingIndex(names[1], col_idx)) {
+			error = StringUtil::Format("'%s' has no column '%s'", names[0], names[1]);
+			return false;
+		}
+		AppendBindingColumn(*binding, col_idx, out);
+		return true;
+	}
+	if (names.size() != 1) {
+		error = StringUtil::Format("'%s' is not a column or relation name", elem.ToString());
+		return false;
+	}
+	// A bare name is a relation when one of that name is bound, else a column.
+	ErrorData binding_error;
+	auto relation = bind_context.GetBinding(names[0], binding_error);
+	if (relation) {
+		out.whole_relation = relation->index;
+		for (idx_t col_idx = 0; col_idx < relation->names.size(); col_idx++) {
+			AppendBindingColumn(*relation, col_idx, out);
+		}
+		return true;
+	}
+	auto matches = bind_context.GetMatchingBindings(names[0]);
+	if (matches.empty()) {
+		error = StringUtil::Format("'%s' is neither a column nor a relation in the FROM clause", names[0]);
+		return false;
+	}
+	if (matches.size() > 1) {
+		vector<string> candidates;
+		for (auto &match : matches) {
+			candidates.push_back(match.get().GetAlias() + "." + names[0]);
+		}
+		error = StringUtil::Format("'%s' is ambiguous; write one of %s", names[0], StringUtil::Join(candidates, ", "));
+		return false;
+	}
+	auto &binding = matches[0].get();
+	AppendBindingColumn(binding, binding.GetBindingIndex(names[0]), out);
+	return true;
+}
+
+idx_t FindOrCreateKeyScope(BindContext &bind_context, const vector<unique_ptr<ParsedExpression>> &key,
+                           vector<EntityScopeInfo> &entity_scopes, case_insensitive_map_t<idx_t> &table_scope_map,
+                           string &error) {
+	EntityScopeInfo scope_info;
+	vector<string> written;
+	// The cache key is the set of resolved columns, so `PER D` and `PER D.a, D.b`
+	// (D having exactly those columns) are one scope, as are two orders of one list.
+	set<pair<idx_t, idx_t>> seen;
+	for (auto &elem : key) {
+		ResolvedKeyElement resolved;
+		if (!ResolveKeyElement(bind_context, *elem, resolved, error)) {
+			return DConstants::INVALID_INDEX;
+		}
+		written.push_back(elem->ToString());
+		if (resolved.whole_relation != DConstants::INVALID_INDEX) {
+			scope_info.source_table_indices.push_back(resolved.whole_relation);
+		}
+		for (idx_t i = 0; i < resolved.bindings.size(); i++) {
+			auto &binding = resolved.bindings[i];
+			if (!seen.insert(make_pair(binding.table_index, binding.column_index)).second) {
+				continue;
+			}
+			scope_info.entity_key_bindings.push_back(binding);
+			scope_info.entity_key_column_types.push_back(resolved.types[i]);
+		}
+	}
+	vector<string> cache_parts;
+	for (auto &column : seen) {
+		cache_parts.push_back(to_string(column.first) + "." + to_string(column.second));
+	}
+	string cache_key = "key:" + StringUtil::Join(cache_parts, ",");
 	auto scope_it = table_scope_map.find(cache_key);
 	if (scope_it != table_scope_map.end()) {
 		return scope_it->second;
 	}
-	EntityScopeInfo scope_info;
-	scope_info.table_alias = cache_key;
-	for (auto &table_name : sorted_names) {
-		ErrorData error;
-		auto binding = bind_context.GetBinding(table_name, error);
-		D_ASSERT(binding); // callers resolve the name first so they can word their own error
-		scope_info.source_table_indices.push_back(binding->index);
-		// Register every source-table column via GetColumnBinding. This forces the
-		// columns into the scan's column_ids and returns the correct ColumnBinding
-		// (table_index, position-in-col_ids).
-		if (binding->binding_type == BindingType::TABLE) {
-			auto &tbl_binding = binding->Cast<TableBinding>();
-			for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-				scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-				scope_info.entity_key_bindings.push_back(tbl_binding.GetColumnBinding(col_idx));
-			}
-		} else {
-			// Non-base table (e.g., subquery): fall back to raw bindings.
-			for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-				scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-				scope_info.entity_key_bindings.push_back(ColumnBinding(binding->index, col_idx));
-			}
-		}
-	}
+	std::sort(scope_info.source_table_indices.begin(), scope_info.source_table_indices.end());
+	scope_info.source_table_indices.erase(
+	    std::unique(scope_info.source_table_indices.begin(), scope_info.source_table_indices.end()),
+	    scope_info.source_table_indices.end());
+	scope_info.table_alias = StringUtil::Join(written, ", ");
 	idx_t scope_idx = entity_scopes.size();
 	table_scope_map.emplace(cache_key, scope_idx);
 	entity_scopes.push_back(std::move(scope_info));
 	return scope_idx;
 }
 
+idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &table_names,
+                              vector<EntityScopeInfo> &entity_scopes,
+                              case_insensitive_map_t<idx_t> &table_scope_map) {
+	D_ASSERT(!table_names.empty());
+	vector<unique_ptr<ParsedExpression>> key;
+	for (auto &table_name : table_names) {
+		key.push_back(make_uniq<ColumnRefExpression>(table_name));
+	}
+	string error;
+	auto scope_idx = FindOrCreateKeyScope(bind_context, key, entity_scopes, table_scope_map, error);
+	if (scope_idx == DConstants::INVALID_INDEX) {
+		throw BinderException("DECIDE key %s: %s", StringUtil::Join(table_names, ", "), error);
+	}
+	return scope_idx;
+}
+
 const ParsedExpression &UnwrapQualifiedReducer(const ParsedExpression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
-		return expr;
+	const ParsedExpression *current = &expr;
+	while (current->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = current->Cast<const FunctionExpression>();
+		if (!func.is_operator || func.children.empty() ||
+		    (func.function_name != QUALIFIED_REDUCER_TAG && func.function_name != REDUCER_BY_TAG)) {
+			break;
+		}
+		current = func.children[0].get();
 	}
-	auto &func = expr.Cast<const FunctionExpression>();
-	if (func.is_operator && func.function_name == QUALIFIED_REDUCER_TAG && !func.children.empty()) {
-		return *func.children[0];
-	}
-	return expr;
+	return *current;
 }
 
 bool ContainsDecideAggregate(const ParsedExpression &expr) {
@@ -182,9 +276,6 @@ bool ContainsDecideAggregate(const ParsedExpression &expr) {
 		auto &func = expr.Cast<const FunctionExpression>();
 		if (!func.is_operator && (IsDecideAggregateName(func.function_name) || StringUtil::CIEquals(func.function_name, "norm"))) {
 			return true;
-		}
-		if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
-			return ContainsDecideAggregate(*func.children[0]);
 		}
 		for (auto &child : func.children) {
 			if (ContainsDecideAggregate(*child)) {
@@ -498,8 +589,9 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 	case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<const FunctionExpression>();
 		if (func.is_operator && !func.children.empty() &&
-		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG)) {
-			// children[0] is the constraint; the rest are the condition / PER columns.
+		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG ||
+		     func.function_name == IF_CONSTRAINT_TAG)) {
+			// children[0] is the constraint; the rest are the condition / key / guard.
 			ValidateDecideNoIntegerStepComparisonOnReal(*func.children[0], variables, variable_types);
 		}
 		return;
@@ -819,10 +911,10 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 
 const char *DecideCaseUnsupportedMessage() {
 	return "CASE expressions are not supported inside DECIDE constraints or "
-	       "objectives. Use postfix WHEN to gate on a row predicate "
-	       "(e.g. `SUM(x) >= 1 WHEN category = 'A'`), PER to partition by "
-	       "a column, or a CTE/subquery to pre-compute conditional values "
-	       "before the DECIDE clause.";
+	       "objectives. Use a WHEN prefix to gate on a row predicate "
+	       "(e.g. `WHEN category = 'A': SUM(x) >= 1`), PER to generate one "
+	       "constraint per key, or a CTE/subquery to pre-compute conditional "
+	       "values before the DECIDE clause.";
 }
 
 // Forward declaration — needed because ValidateQuadraticPower calls ValidateSumArgumentInternal.
@@ -916,8 +1008,8 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 				return ValidateQuadraticPower(func.children, variables, has_decide_variable, error_msg, "POWER(..., 2)");
 			}
 			if (func_name_lower == "min" || func_name_lower == "max" || func_name_lower == "sum" || func_name_lower == "avg") {
-				// Nested aggregates (e.g., SUM(MAX(expr)) for PER objectives) are allowed.
-				// The optimizer will detect and rewrite them.
+				// Nested reducers (`max(PER g: sum(: e) BY (g))`) are allowed; the
+				// optimizer detects and lowers them.
 				if (func.children.size() == 1 && ExpressionContainsDecideVariable(*func.children[0], variables)) {
 					has_decide_variable = true;
 					return true;
@@ -936,6 +1028,23 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			}
 			error_msg = StringUtil::Format("Unsupported function '%s' inside DECIDE SUM expression", func.function_name);
 			return false;
+		}
+		if (func_name_lower == QUALIFIED_REDUCER_TAG || func_name_lower == REDUCER_BY_TAG ||
+		    func_name_lower == FRAME_TAG) {
+			// A keyed reducer or a frame is judged by what it navigates or reduces; the
+			// key columns and the frame's order are metadata.
+			if (func.children.empty()) {
+				error_msg = "malformed DECIDE reducer";
+				return false;
+			}
+			if (func_name_lower == FRAME_TAG) {
+				if (ExpressionContainsDecideVariable(*func.children[0], variables)) {
+					has_decide_variable = true;
+				}
+				return true;
+			}
+			return ValidateSumArgumentInternal(*func.children[0], variables, has_decide_variable, error_msg,
+			                                   allow_quadratic);
 		}
 		if (func_name_lower == "**") {
 			if (!ExpressionContainsDecideVariable(expr, variables)) {
@@ -1080,6 +1189,13 @@ bool DecideBinder::IsScalarDecideVariable(const ParsedExpression &expr) const {
 }
 
 bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (func.is_operator && !func.children.empty() &&
+		    (func.function_name == QUALIFIED_REDUCER_TAG || func.function_name == REDUCER_BY_TAG)) {
+			return IsRowInvariantExpression(*func.children[0]);
+		}
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 		if (!IsVariableExpression(expr, variables)) {
 			return false; // a plain data column varies per row
@@ -1192,9 +1308,35 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 		}
 	}
 
-	// No Filter/Distinc allowed for Aggregate
-	if (aggr.filter || aggr.distinct) {
-        return BindResult(BinderException::Unsupported(aggr, StringUtil::Format("DECIDE clause does not support '%s'", aggr.ToString())));
+	if (aggr.distinct) {
+		return BindResult(BinderException::Unsupported(
+		    aggr, StringUtil::Format("DECIDE reducers do not support DISTINCT: '%s'", aggr.ToString())));
+	}
+	// The reducer's own filter, `agg(WHEN theta: e)`, selects known rows before the
+	// reduction and therefore reads no decision.
+	unique_ptr<Expression> bound_filter;
+	if (aggr.filter) {
+		if (ExpressionContainsDecideVariable(*aggr.filter, variables)) {
+			return BindResult(BinderException::Unsupported(
+			    aggr, "A reducer's WHEN filters rows before the solve, so it cannot reference a decision."));
+		}
+		// A known condition binds through the base binder: the DECIDE dispatch would
+		// read its comparison as a constraint or objective shape.
+		auto was_binding_condition = binding_when_condition;
+		binding_when_condition = true;
+		BindResult filter_result;
+		try {
+			filter_result = ExpressionBinder::BindExpression(aggr.filter, depth);
+		} catch (...) {
+			binding_when_condition = was_binding_condition;
+			throw;
+		}
+		binding_when_condition = was_binding_condition;
+		if (filter_result.HasError()) {
+			return filter_result;
+		}
+		bound_filter = BoundCastExpression::AddCastToType(context, std::move(filter_result.expression),
+		                                                  LogicalType::BOOLEAN);
 	}
 
 	// Bind arguments
@@ -1226,6 +1368,7 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	// reducers, optimizer markers, provenance). DuckDB's generic binder does not
 	// need them here, but dropping one would make the later DECIDE pass blind.
 	bound_aggregate->alias = aggr.alias;
+	bound_aggregate->filter = std::move(bound_filter);
 	// Note: We are NOT storing this aggregate in a BoundSelectNode. We are returning it directly.
 	return BindResult(std::move(bound_aggregate));
 }
@@ -1241,46 +1384,10 @@ static BoundAggregateExpression *GetBoundAggregate(Expression &expr) {
 	return nullptr;
 }
 
-BindResult DecideBinder::BindLocalWhenAggregate(FunctionExpression &when_expr, idx_t depth) {
-	if (when_expr.children.size() != 2) {
-		return BindResult(BinderException::Unsupported(
-		    when_expr, "Aggregate-local WHEN expects exactly two arguments: aggregate WHEN condition."));
-	}
-	if (ExpressionContainsDecideVariable(*when_expr.children[1], variables)) {
-		return BindResult(BinderException::Unsupported(
-		    when_expr,
-		    "Aggregate-local WHEN conditions cannot reference DECIDE variables. "
-		    "The WHEN condition must only reference table columns."));
-	}
-
-	auto aggregate_result = BindExpression(when_expr.children[0], depth);
-	if (aggregate_result.HasError()) {
-		return aggregate_result;
-	}
-	auto aggregate_expr = std::move(aggregate_result.expression);
-	auto *aggregate = GetBoundAggregate(*aggregate_expr);
-	if (!aggregate) {
-		return BindResult(BinderException::Unsupported(
-		    when_expr, "Aggregate-local WHEN can only be applied directly to SUM, AVG, MIN, or MAX aggregates."));
-	}
-	if (aggregate->filter) {
-		return BindResult(BinderException::Unsupported(
-		    when_expr, "DECIDE aggregate-local WHEN cannot be combined with SQL FILTER on the same aggregate."));
-	}
-
-	auto condition_result = ExpressionBinder::BindExpression(when_expr.children[1], depth);
-	if (condition_result.HasError()) {
-		return condition_result;
-	}
-	aggregate->filter = BoundCastExpression::AddCastToType(context, std::move(condition_result.expression),
-	                                                       LogicalType::BOOLEAN);
-	return BindResult(std::move(aggregate_expr));
-}
-
-//! True when `expr` holds the same value on every row of the qualified relation: no
-//! plain data column and no row- or entity-scoped decision appears anywhere inside it.
-//! The bound-tree twin of `DecideBinder::IsRowInvariantExpression`, used once the
-//! reducer body is bound and its columns carry scope information.
+//! True when `expr` holds the same value on every row: no plain data column and no
+//! row- or entity-scoped decision appears anywhere inside it. The bound-tree twin of
+//! `DecideBinder::IsRowInvariantExpression`, used once the reducer body is bound and
+//! its columns carry scope information.
 static bool IsBoundReducerBodyRowInvariant(const Expression &expr, const DecideQualifierContext &ctx) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<const BoundColumnRefExpression>();
@@ -1300,121 +1407,46 @@ static bool IsBoundReducerBodyRowInvariant(const Expression &expr, const DecideQ
 	return invariant;
 }
 
-//! Whether `table_index` is one of the tables `scope` names.
-static bool ScopeContainsTable(const EntityScopeInfo &scope, idx_t table_index) {
-	return std::find(scope.source_table_indices.begin(), scope.source_table_indices.end(), table_index) !=
-	       scope.source_table_indices.end();
-}
-
-//! Whether two scopes name any table in common. Used to check a decision variable's
-//! own (always single-relation) declaration scope against a qualifier's — possibly
-//! composite — scope.
-static bool ScopeTablesIntersect(const EntityScopeInfo &a, const EntityScopeInfo &b) {
-	for (auto table_index : a.source_table_indices) {
-		if (ScopeContainsTable(b, table_index)) {
-			return true;
+//! Resolves the key children (1..N) of a reducer wrapper into an entity scope. Returns
+//! INVALID_INDEX with `error` set when an element does not resolve.
+idx_t DecideBinder::ResolveReducerKey(const FunctionExpression &wrapper, string &error) {
+	vector<unique_ptr<ParsedExpression>> key;
+	for (idx_t i = 1; i < wrapper.children.size(); i++) {
+		if (ExpressionContainsDecideVariable(*wrapper.children[i], variables)) {
+			error = StringUtil::Format("'%s' is a decision; a key groups known rows, so it names columns or relations",
+			                           wrapper.children[i]->ToString());
+			return DConstants::INVALID_INDEX;
 		}
+		if (wrapper.children[i]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+			error = StringUtil::Format("'%s' is not a column or relation name; a key names columns or relations",
+			                           wrapper.children[i]->ToString());
+			return DConstants::INVALID_INDEX;
+		}
+		key.push_back(wrapper.children[i]->Copy());
 	}
-	return false;
-}
-
-//! Enforces the well-formedness rule for a relation-qualified reducer: everything the
-//! reducer body reads must come from one of the qualified relations, so that all rows
-//! sharing a tuple identity carry the same value and de-duplication can keep any one of
-//! them. A query-wide (`scalar`) decision is exempt — it is row-invariant, so it
-//! contributes the same value to every tuple regardless of which relation "owns" it; the
-//! caller rejects it separately when it is the *only* thing in the body (nothing left to
-//! reduce over). Anything else — a column from an unnamed relation, a decision not
-//! scoped to any named relation — would make the kept row an arbitrary choice, so it is
-//! rejected here rather than resolved silently. Returns "" when the body is well formed,
-//! else the message to raise. `relations` names the qualifier for error text, in the
-//! order the query wrote them.
-static string CheckQualifiedReducerBody(const Expression &expr, const vector<string> &relations,
-                                        const string &agg_name, idx_t scope_idx,
-                                        const DecideQualifierContext &ctx) {
-	string error;
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &colref = expr.Cast<const BoundColumnRefExpression>();
-		auto name = colref.GetName();
-		auto relation_list = StringUtil::Join(relations, ", ");
-		auto &qualifier_scope = (*ctx.entity_scopes)[scope_idx];
-		if (colref.binding.table_index == ctx.decide_index) {
-			idx_t var_idx = colref.binding.column_index;
-			auto &scopes = *ctx.variable_scopes;
-			if (var_idx < scopes.size() && scopes[var_idx].IsEntity() &&
-			    ScopeTablesIntersect((*ctx.entity_scopes)[scopes[var_idx].entity_scope_idx], qualifier_scope)) {
-				return "";
-			}
-			if (var_idx < scopes.size() && scopes[var_idx].IsScalar()) {
-				return ""; // row-invariant: contributes uniformly, whichever relation it sits beside
-			}
-			if (relations.size() == 1) {
-				return StringUtil::Format(
-				    "'%s' is not a decision of %s, so %s(%s: ...) cannot use it; declare it as "
-				    "%s.%s(...) or move that term into its own reducer",
-				    name, relation_list, StringUtil::Upper(agg_name), relation_list, relation_list, name);
-			}
-			return StringUtil::Format(
-			    "'%s' is not a decision of %s, so %s(%s: ...) cannot use it; declare it on one of "
-			    "those relations or move that term into its own reducer",
-			    name, relation_list, StringUtil::Upper(agg_name), relation_list);
-		}
-		if (!ScopeContainsTable(qualifier_scope, colref.binding.table_index)) {
-			return StringUtil::Format(
-			    "'%s' does not come from %s, so %s(%s: ...) cannot use it; keep only those relations' "
-			    "columns inside the qualified reducer and sum the rest separately",
-			    name, relation_list, StringUtil::Upper(agg_name), relation_list);
-		}
-		return "";
-	}
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (!error.empty()) {
-			return;
-		}
-		error = CheckQualifiedReducerBody(child, relations, agg_name, scope_idx, ctx);
-	});
-	return error;
+	return FindOrCreateKeyScope(binder.bind_context, key, *qualifier_context->entity_scopes,
+	                            *qualifier_context->table_scope_map, error);
 }
 
 BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth) {
-	if (qualified_expr.children.size() < 2) {
-		return BindResult(BinderException::Unsupported(
-		    qualified_expr, "A qualified reducer expects one or more relations and an expression, as in "
-		                    "sum(D: ...) or sum(D, T: ...)."));
-	}
-	vector<string> relations;
-	for (idx_t i = 1; i < qualified_expr.children.size(); i++) {
-		auto &qualifier = *qualified_expr.children[i];
-		if (qualifier.GetExpressionClass() != ExpressionClass::COLUMN_REF ||
-		    qualifier.Cast<ColumnRefExpression>().IsQualified()) {
-			return BindResult(BinderException::Unsupported(
-			    qualified_expr,
-			    "The qualifier of a reducer must be a relation name or alias, as in sum(D: ...)."));
-		}
-		relations.push_back(qualifier.Cast<ColumnRefExpression>().GetColumnName());
-	}
-	auto relation_list = StringUtil::Join(relations, ", ");
-
 	if (!qualifier_context) {
 		return BindResult(BinderException::Unsupported(
-		    qualified_expr, "A relation-qualified reducer is only allowed inside a DECIDE clause."));
+		    qualified_expr, "A keyed reducer, agg(PER K: ...), is only allowed inside a DECIDE clause."));
 	}
 	auto &ctx = *qualifier_context;
-	for (auto &relation : relations) {
-		ErrorData binding_error;
-		auto binding = binder.bind_context.GetBinding(relation, binding_error);
-		if (!binding || binding->index == ctx.decide_index) {
-			return BindResult(BinderException::Unsupported(
-			    qualified_expr, StringUtil::Format(
-			                        "Relation '%s' is not in the FROM clause, so a reducer cannot be qualified by it.",
-			                        relation)));
-		}
+	// `agg(PER (): e)` generates one term for the whole group, so the body would have
+	// to be the same on every row -- which is the row-invariant shape rejected below.
+	if (qualified_expr.children.size() == 1) {
+		return BindResult(BinderException::Unsupported(
+		    qualified_expr, "agg(PER (): ...) reduces over a single instance and has nothing to aggregate; "
+		                    "write the body without the reducer, or generate PER a key."));
 	}
-	// A qualifier is an entity scope with no variable of its own, so it shares the
-	// declaration path's key and the one EntityMapping the executor builds per scope.
-	// Naming several relations widens the scope's tuple identity to their concatenation.
-	idx_t scope_idx =
-	    FindOrCreateEntityScope(binder.bind_context, relations, *ctx.entity_scopes, *ctx.table_scope_map);
+	string error;
+	idx_t scope_idx = ResolveReducerKey(qualified_expr, error);
+	if (scope_idx == DConstants::INVALID_INDEX) {
+		return BindResult(BinderException::Unsupported(qualified_expr, "reducer PER key: " + error));
+	}
+	auto key_text = (*ctx.entity_scopes)[scope_idx].table_alias;
 
 	auto aggregate_result = BindExpression(qualified_expr.children[0], depth);
 	if (aggregate_result.HasError()) {
@@ -1424,17 +1456,14 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	auto *aggregate = GetBoundAggregate(*aggregate_expr);
 	if (!aggregate) {
 		return BindResult(BinderException::Unsupported(
-		    qualified_expr, StringUtil::Format(
-		                        "A relation qualifier is only allowed on SUM, AVG, MIN or MAX; write %s(...) without "
-		                        "the '%s:' qualifier.",
-		                        StringUtil::Upper(relation_list), relation_list)));
+		    qualified_expr, StringUtil::Format("PER %s inside a reducer is only allowed on SUM, AVG, MIN or MAX.",
+		                                       key_text)));
 	}
 	auto agg_name = StringUtil::Lower(aggregate->function.name);
 	if (!IsDecideAggregateName(agg_name)) {
 		return BindResult(BinderException::Unsupported(
-		    qualified_expr,
-		    StringUtil::Format("'%s' cannot be qualified by a relation; only SUM, AVG, MIN and MAX can.",
-		                       StringUtil::Upper(agg_name))));
+		    qualified_expr, StringUtil::Format("'%s' cannot carry a PER key; only SUM, AVG, MIN and MAX can.",
+		                                       StringUtil::Upper(agg_name))));
 	}
 	bool any_row_varying = false;
 	for (auto &child : aggregate->children) {
@@ -1447,28 +1476,250 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		auto body_text = aggregate->children.empty() ? "" : aggregate->children[0]->ToString();
 		return BindResult(BinderException::Unsupported(
 		    qualified_expr, StringUtil::Format(
-		                        "%s is a query-wide decision, so %s(%s: ...) has nothing to aggregate over; "
+		                        "%s is a query-wide decision, so %s(PER %s: ...) has nothing to aggregate over; "
 		                        "use %s on its own",
-		                        body_text, StringUtil::Upper(agg_name), relation_list, body_text)));
+		                        body_text, StringUtil::Upper(agg_name), key_text, body_text)));
 	}
+	// One term per distinct key value is well defined only when the body is a
+	// function of the key (spec §6.3); every row sharing a key value then carries the
+	// same body, and de-duplication may keep any one of them.
 	for (auto &child : aggregate->children) {
-		auto error = CheckQualifiedReducerBody(*child, relations, agg_name, scope_idx, ctx);
-		if (!error.empty()) {
-			return BindResult(BinderException::Unsupported(qualified_expr, error));
+		auto fd_error = CheckDeterminedByGeneration(*child, DecideGenerationScope::Key(scope_idx), ctx,
+		                                            binder.bind_context);
+		if (!fd_error.empty()) {
+			return BindResult(BinderException::Unsupported(
+			    qualified_expr, StringUtil::Format("%s(PER %s: ...): %s", StringUtil::Upper(agg_name), key_text,
+			                                       fd_error)));
 		}
 	}
-	aggregate->alias = MakeQualifiedReducerTag(scope_idx);
+	AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
+	return BindResult(std::move(aggregate_expr));
+}
+
+//! The frame as the user wrote it, for every later rendering (EXPLAIN, a diagnosis).
+static string FrameSpelling(const FunctionExpression &frame_expr, const DecideFrameSpec &spec) {
+	string body = frame_expr.children[0]->ToString();
+	string order = frame_expr.children[2]->ToString();
+	if (spec.descending) {
+		order += " DESC";
+	}
+	if (spec.cyclic) {
+		order += " CYCLIC";
+	}
+	if (frame_expr.children.size() > 4) {
+		vector<string> within;
+		for (idx_t i = 4; i < frame_expr.children.size(); i++) {
+			within.push_back(frame_expr.children[i]->ToString());
+		}
+		order += " WITHIN " + StringUtil::Join(within, ", ");
+	} else if (spec.has_within) {
+		order += " WITHIN ()";
+	}
+	string fill;
+	if (spec.policy == DecideFramePolicy::ELSE_VALUE) {
+		fill = " ELSE " + frame_expr.children[3]->ToString();
+	} else if (spec.policy == DecideFramePolicy::ALL) {
+		fill = " ALL";
+	}
+	if (!spec.is_range) {
+		return "AT(" + spec.from_selector.ToString() + fill + ": " + body + ") OVER (" + order + ")";
+	}
+	string every = spec.every > 1 ? " EVERY " + to_string(spec.every) : string();
+	return StringUtil::Upper(spec.aggregate) + "(FROM " + spec.from_selector.ToString() + " TO " +
+	       spec.to_selector.ToString() + every + fill + ": " + body + ") OVER (" + order + ")";
+}
+
+BindResult DecideBinder::BindFrame(FunctionExpression &frame_expr, idx_t depth) {
+	if (!qualifier_context || !qualifier_context->frames || !qualifier_context->source_fragments) {
+		return BindResult(BinderException::Unsupported(
+		    frame_expr, "A frame expression (AT / FROM .. TO .. OVER) is only allowed in a DECIDE constraint."));
+	}
+	auto &ctx = *qualifier_context;
+	if (frame_expr.children.size() < 4 || frame_expr.children[1]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+		throw InternalException("DECIDE frame wrapper is malformed");
+	}
+	auto spec = DecideFrameSpec::Decode(frame_expr.children[1]->Cast<ConstantExpression>().value.GetValue<string>());
+	if (spec.is_range && spec.aggregate != "sum") {
+		return BindResult(BinderException::Unsupported(
+		    frame_expr, StringUtil::Format("A range frame reduces with SUM; %s(FROM .. TO ..) is not available yet.",
+		                                   StringUtil::Upper(spec.aggregate))));
+	}
+	if (spec.every == 0) {
+		return BindResult(BinderException::Unsupported(frame_expr, "EVERY needs a step of at least 1."));
+	}
+	string written = FrameSpelling(frame_expr, spec);
+
+	// The timeline is known data: the order key and the partition read no decision.
+	if (ExpressionContainsDecideVariable(*frame_expr.children[2], variables)) {
+		return BindResult(BinderException::Unsupported(
+		    frame_expr, "A frame's OVER key orders known rows, so it cannot reference a decision."));
+	}
+	vector<unique_ptr<ParsedExpression>> within_key;
+	for (idx_t i = 4; i < frame_expr.children.size(); i++) {
+		if (ExpressionContainsDecideVariable(*frame_expr.children[i], variables)) {
+			return BindResult(BinderException::Unsupported(
+			    frame_expr, "A frame's WITHIN partition is known data, so it cannot reference a decision."));
+		}
+		within_key.push_back(frame_expr.children[i]->Copy());
+	}
+	idx_t within_scope = DConstants::INVALID_INDEX;
+	if (!within_key.empty()) {
+		string error;
+		within_scope = FindOrCreateKeyScope(binder.bind_context, within_key, *ctx.entity_scopes, *ctx.table_scope_map,
+		                                    error);
+		if (within_scope == DConstants::INVALID_INDEX) {
+			return BindResult(BinderException::Unsupported(frame_expr, "frame WITHIN key: " + error));
+		}
+	}
+	// A known expression binds through the base binder: the DECIDE dispatch would read
+	// a comparison in it as a constraint shape.
+	auto bind_known = [&](unique_ptr<ParsedExpression> &child) {
+		auto was_binding_condition = binding_when_condition;
+		binding_when_condition = true;
+		BindResult result;
+		try {
+			result = ExpressionBinder::BindExpression(child, depth);
+		} catch (...) {
+			binding_when_condition = was_binding_condition;
+			throw;
+		}
+		binding_when_condition = was_binding_condition;
+		return result;
+	};
+	auto order_result = bind_known(frame_expr.children[2]);
+	if (order_result.HasError()) {
+		return order_result;
+	}
+	unique_ptr<Expression> else_value;
+	if (spec.policy == DecideFramePolicy::ELSE_VALUE) {
+		if (ExpressionContainsDecideVariable(*frame_expr.children[3], variables)) {
+			return BindResult(BinderException::Unsupported(
+			    frame_expr, "A frame's ELSE value fills a missing position with a known value, not a decision."));
+		}
+		auto else_result = bind_known(frame_expr.children[3]);
+		if (else_result.HasError()) {
+			return else_result;
+		}
+		else_value = std::move(else_result.expression);
+		// A missing position has no row to read a column from: the fill is a constant.
+		if (!else_value->IsFoldable()) {
+			return BindResult(BinderException::Unsupported(
+			    frame_expr, "A frame's ELSE value is a constant (there is no row at a missing position to read "
+			                "a column from); write ELSE 0, ELSE 100, ..."));
+		}
+	}
+	// The body is reduced over the navigated rows; a reducer or another frame inside
+	// it would need a second navigation, which is not available yet.
+	if (ContainsDecideAggregate(*frame_expr.children[0])) {
+		return BindResult(BinderException::Unsupported(
+		    frame_expr, "A frame's body reads a row's columns and decisions; a reducer or another frame inside "
+		                "it is not available yet."));
+	}
+
+	// The body reduces over the navigated rows: a SUM whose rows the executor picks by
+	// navigation rather than by group. `AT` reads one position, so its SUM has one row.
+	vector<unique_ptr<ParsedExpression>> body_children;
+	body_children.push_back(frame_expr.children[0]->Copy());
+	unique_ptr<ParsedExpression> body = make_uniq<FunctionExpression>("sum", std::move(body_children));
+	auto body_result = BindExpression(body, depth);
+	if (body_result.HasError()) {
+		return body_result;
+	}
+	auto *aggregate = GetBoundAggregate(*body_result.expression);
+	if (!aggregate) {
+		throw InternalException("DECIDE frame body did not bind as a reducer");
+	}
+
+	DecideFrameInfo info;
+	info.spec = spec.Encode();
+	info.order_key = std::move(order_result.expression);
+	info.else_value = std::move(else_value);
+	info.within_scope_idx = within_scope;
+	idx_t frame_idx = ctx.frames->size();
+	ctx.frames->push_back(std::move(info));
+	AddDecideTag(aggregate->alias, MakeFrameRefTag(frame_idx));
+	ctx.source_fragments->push_back(written);
+	AddDecideTag(aggregate->alias, MakeSourceFragmentTag(ctx.source_fragments->size() - 1));
+	return BindResult(std::move(body_result.expression));
+}
+
+void ValidateDecideNoNestedReducers(const Expression &constraints) {
+	std::function<void(const Expression &, const BoundAggregateExpression *)> walk =
+	    [&](const Expression &node, const BoundAggregateExpression *outer) {
+		    if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			    auto &agg = node.Cast<BoundAggregateExpression>();
+			    if (outer) {
+				    idx_t frame_idx;
+				    const bool inner_frame = TryParseFrameRefTag(agg.GetAlias(), frame_idx);
+				    const bool outer_frame = TryParseFrameRefTag(outer->GetAlias(), frame_idx);
+				    if (inner_frame && !outer_frame) {
+					    throw BinderException(node, "A frame (AT / FROM .. TO .. OVER) inside a reducer is not "
+					                                "available yet; navigate in a per-row constraint instead.");
+				    }
+				    if (outer_frame) {
+					    throw BinderException(node, "A reducer inside a frame's body is not available yet.");
+				    }
+				    throw BinderException(node, "Nested reducers are supported in an objective only "
+				                                "(MAX(PER k: SUM(e) BY (k))); in a constraint, reduce once -- "
+				                                "PER k: SUM(e) BY (k) <= cap -- or state the inner values as decisions.");
+			    }
+			    for (auto &child : agg.children) {
+				    walk(*child, &agg);
+			    }
+			    return;
+		    }
+		    ExpressionIterator::EnumerateChildren(node, [&](const Expression &child) { walk(child, outer); });
+	    };
+	walk(constraints, nullptr);
+}
+
+BindResult DecideBinder::BindReducerBy(FunctionExpression &by_expr, idx_t depth) {
+	if (!qualifier_context) {
+		return BindResult(BinderException::Unsupported(
+		    by_expr, "A reducer's BY (...) is only allowed inside a DECIDE clause."));
+	}
+	string error;
+	idx_t scope_idx = ResolveReducerKey(by_expr, error);
+	if (scope_idx == DConstants::INVALID_INDEX) {
+		return BindResult(BinderException::Unsupported(by_expr, "BY key: " + error));
+	}
+	auto aggregate_result = BindExpression(by_expr.children[0], depth);
+	if (aggregate_result.HasError()) {
+		return aggregate_result;
+	}
+	auto aggregate_expr = std::move(aggregate_result.expression);
+	auto *aggregate = GetBoundAggregate(*aggregate_expr);
+	auto by_name = aggregate ? StringUtil::Lower(aggregate->function.name) : string();
+	if (!aggregate || (!IsDecideAggregateName(by_name) && by_name != "count" && by_name != "count_star")) {
+		return BindResult(BinderException::Unsupported(
+		    by_expr, "BY (...) is only allowed on a SUM, AVG, MIN, MAX or COUNT reducer."));
+	}
+	idx_t existing;
+	if (TryParseReduceByTag(aggregate->alias, existing)) {
+		return BindResult(BinderException::Unsupported(by_expr, "A reducer takes one BY (...)."));
+	}
+	AddDecideTag(aggregate->alias, MakeReduceByTag(scope_idx));
 	return BindResult(std::move(aggregate_expr));
 }
 
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &function = expr.Cast<FunctionExpression>();
-    if (function.is_operator && function.function_name == WHEN_CONSTRAINT_TAG) {
-        return BindLocalWhenAggregate(function, depth);
-    }
     if (function.is_operator && function.function_name == QUALIFIED_REDUCER_TAG) {
         return BindQualifiedReducer(function, depth);
+    }
+    if (function.is_operator && function.function_name == REDUCER_BY_TAG) {
+        return BindReducerBy(function, depth);
+    }
+    if (function.is_operator && function.function_name == FRAME_TAG) {
+        return BindFrame(function, depth);
+    }
+    if (function.is_operator && (function.function_name == WHEN_CONSTRAINT_TAG ||
+                                 function.function_name == PER_CONSTRAINT_TAG ||
+                                 function.function_name == IF_CONSTRAINT_TAG)) {
+        return BindResult(BinderException::Unsupported(
+            function, "A WHEN / PER / IF prefix belongs at the start of a constraint or inside a reducer, "
+                      "not inside an expression."));
     }
     // NORM is DECIDE syntax, not a catalog function. Bind it as a deliberately
     // inert SUM aggregate marker; DecideOptimizer owns the mathematical rewrite
@@ -1531,6 +1782,7 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
         marker_children.push_back(std::move(function.children[0]));
         auto marker = make_uniq<FunctionExpression>("sum", std::move(marker_children));
         marker->alias = function.alias;
+        marker->filter = std::move(function.filter); // `norm(WHEN c: e, p)` keeps its filter
         AddDecideTag(marker->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
         expr_ptr = std::move(marker);
         return BindFunction(expr_ptr, depth);

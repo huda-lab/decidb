@@ -13,7 +13,7 @@ Covers:
   - The ``in_decide_clause`` lexer flag is cleared between the slots, so
     ``CASE WHEN`` in an intervening ``JOIN ... ON`` or ``WHERE`` still lexes
     as ordinary SQL
-  - Errors: declaring in both slots, a declaration with no ``SUCH THAT``, and
+  - Errors: declaring in both slots, a declaration with no ``SUCH THAT``, AND
     a ``SUCH THAT`` with no declaration
 """
 
@@ -164,7 +164,7 @@ def test_scalar_declaration_in_split_slot(decidb_cli, perf_tracker):
     shared column."""
     rows, cols = decidb_cli.execute("""
         SELECT c_custkey, ship, cap
-        DECIDE ship(INT), scalar cap(INT)
+        DECIDE ship(INT), PER (): cap(INT)
         FROM customer
         WHERE c_custkey <= 20
         SUCH THAT ship <= cap AND cap <= 4
@@ -181,12 +181,12 @@ def test_entity_scoped_declaration_in_split_slot(decidb_cli, perf_tracker):
     variable per entity across the join's repeated rows."""
     rows, cols = decidb_cli.execute("""
         SELECT n.n_nationkey, keep
-        DECIDE n.keep(BOOL)
+        DECIDE PER n: keep(BOOL)
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
-        SUCH THAT SUM(n: keep) <= 2
-        MAXIMIZE SUM(n: n.n_nationkey * keep)
+        SUCH THAT SUM(PER n: keep) <= 2
+        MAXIMIZE SUM(PER n: n.n_nationkey * keep)
     """)
     assert len(rows) > 0
     key_idx, keep_idx = cols.index("n_nationkey"), cols.index("keep")
@@ -298,7 +298,7 @@ def test_split_order_over_subquery_source(decidb_cli, perf_tracker):
     """
     rows, cols = decidb_cli.execute("""
         SELECT t.c_custkey, x
-        DECIDE t.x(BOOL)
+        DECIDE PER t: x(BOOL)
         FROM (SELECT c_custkey, c_acctbal FROM customer WHERE c_custkey <= 60) t
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(t.c_acctbal * x)
@@ -389,7 +389,7 @@ def test_split_order_with_when(decidb_cli, perf_tracker):
         DECIDE x(BOOL)
         FROM customer
         WHERE c_custkey <= 60
-        SUCH THAT SUM(x) <= 5 WHEN (c_acctbal > 0)
+        SUCH THAT WHEN (c_acctbal > 0): SUM(x) <= 5
         MAXIMIZE SUM(x * c_acctbal)
     """
     single_block = """
@@ -397,7 +397,7 @@ def test_split_order_with_when(decidb_cli, perf_tracker):
         FROM customer
         WHERE c_custkey <= 60
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 WHEN (c_acctbal > 0)
+        SUCH THAT WHEN (c_acctbal > 0): SUM(x) <= 5
         MAXIMIZE SUM(x * c_acctbal)
     """
     split_rows, _ = decidb_cli.execute(split)
@@ -414,7 +414,7 @@ def test_split_order_with_per(decidb_cli, perf_tracker):
         DECIDE x(BOOL)
         FROM customer
         WHERE c_custkey <= 60
-        SUCH THAT SUM(x) <= 2 PER c_nationkey
+        SUCH THAT PER c_nationkey: SUM(x) BY (c_nationkey) <= 2
         MAXIMIZE SUM(x * c_acctbal)
     """
     single_block = """
@@ -422,7 +422,7 @@ def test_split_order_with_per(decidb_cli, perf_tracker):
         FROM customer
         WHERE c_custkey <= 60
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER c_nationkey
+        SUCH THAT PER c_nationkey: SUM(x) BY (c_nationkey) <= 2
         MAXIMIZE SUM(x * c_acctbal)
     """
     split_rows, split_cols = decidb_cli.execute(split)
@@ -447,7 +447,7 @@ def test_split_order_with_nested_per_objective(decidb_cli, perf_tracker):
         FROM customer
         WHERE c_custkey <= 60
         SUCH THAT SUM(x) <= 6
-        MAXIMIZE MIN(SUM(x * c_acctbal)) PER c_nationkey
+        MAXIMIZE MIN(PER c_nationkey: SUM(x * c_acctbal) BY (c_nationkey))
     """
     single_block = """
         SELECT c_custkey, c_nationkey, x
@@ -455,7 +455,7 @@ def test_split_order_with_nested_per_objective(decidb_cli, perf_tracker):
         WHERE c_custkey <= 60
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 6
-        MAXIMIZE MIN(SUM(x * c_acctbal)) PER c_nationkey
+        MAXIMIZE MIN(PER c_nationkey: SUM(x * c_acctbal) BY (c_nationkey))
     """
     split_rows, _ = decidb_cli.execute(split)
     single_rows, _ = decidb_cli.execute(single_block)

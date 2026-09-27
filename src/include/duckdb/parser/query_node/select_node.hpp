@@ -16,6 +16,7 @@
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/common/enums/aggregate_handling.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/parser/decide/decide_declaration.hpp"
 
 namespace duckdb {
 
@@ -43,11 +44,11 @@ public:
 	AggregateHandling aggregate_handling;
 	//! The SAMPLE clause
 	unique_ptr<SampleOptions> sample;
-	// decidb's DECIDE
-	vector<unique_ptr<ParsedExpression>> decide_variables;
+	// decidb's DECIDE clause: the declarators, the SUCH THAT tree, and the
+	// lexicographic objective stages (empty for a feasibility problem).
+	vector<DecideDeclaration> decide_variables;
 	unique_ptr<ParsedExpression> decide_constraints;
-	DecideSense decide_sense = DecideSense::FEASIBILITY;
-	unique_ptr<ParsedExpression> decide_objective;
+	vector<DecideObjectiveClause> decide_objectives;
 
 	const vector<unique_ptr<ParsedExpression>> &GetSelectList() const override {
 		return select_list;

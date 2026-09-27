@@ -18,15 +18,14 @@ MAXIMIZE SUM(x * o_totalprice);
 -- EXPLAIN SELECT l_orderkey, l_extendedprice, x
 -- FROM lineitem WHERE l_orderkey < 100
 -- DECIDE x(BOOL)
--- SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
--- MAXIMIZE SUM(x * l_extendedprice);
+-- SUCH THAT WHEN l_returnflag = 'R'
+--: SUM(x * l_quantity) <= 50 MAXIMIZE SUM(x * l_extendedprice);
 
 -- -- PER clause
 -- EXPLAIN SELECT s_suppkey, s_acctbal, x
 -- FROM supplier
 -- DECIDE x(BOOL)
--- SUCH THAT SUM(x) <= 5 PER s_nationkey
--- MAXIMIZE SUM(x * s_acctbal);
+-- SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5 -- MAXIMIZE SUM(x * s_acctbal);
 
 -- -- Multiple variables
 -- EXPLAIN SELECT l_orderkey, x, y

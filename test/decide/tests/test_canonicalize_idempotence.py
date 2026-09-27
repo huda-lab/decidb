@@ -66,7 +66,7 @@ _PAIRS = [
             FROM (VALUES (1,'a',true),(2,'a',false),(3,'b',true),(4,'b',true))
                  t(id,grp,active)
             DECIDE x(INT)
-            SUCH THAT 3 >= SUM(x) WHEN active PER grp AND x <= 2
+            SUCH THAT PER grp: 3 >= SUM(WHEN active: x) BY (grp) AND x <= 2
             MAXIMIZE SUM(x)
         """,
         """
@@ -74,7 +74,7 @@ _PAIRS = [
             FROM (VALUES (1,'a',true),(2,'a',false),(3,'b',true),(4,'b',true))
                  t(id,grp,active)
             DECIDE x(INT)
-            SUCH THAT SUM(x) <= 3 WHEN active PER grp AND x <= 2
+            SUCH THAT WHEN active PER grp: SUM(x) BY (grp) <= 3 AND x <= 2
             MAXIMIZE SUM(x)
         """,
         id="when_per_wrapper",

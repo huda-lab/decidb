@@ -186,6 +186,12 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                     canonical_objective.clear();
                 }
             }
+            // Every later stage is an objective in its own right and crosses the same
+            // boundary.
+            for (auto &stage : statement.decide_objective_tail) {
+                stage.expression = canonicalizer.CanonicalizeObjective(*stage.expression, stage.constant_offset);
+                canonicalizer.VerifyCanonicalObjective(*stage.expression);
+            }
         }
 
         auto decide_op = make_uniq<LogicalDecide>(
@@ -198,6 +204,15 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 
         decide_op->num_auxiliary_vars = statement.num_auxiliary_vars;
         decide_op->objective_constant_offset = statement.objective_constant_offset;
+        decide_op->text_domains = std::move(statement.decide_text_domains);
+        decide_op->frames = std::move(statement.decide_frames);
+        for (auto &stage : statement.decide_objective_tail) {
+            DecideObjectiveStage bound_stage;
+            bound_stage.sense = stage.sense;
+            bound_stage.expression = std::move(stage.expression);
+            bound_stage.constant_offset = stage.constant_offset;
+            decide_op->objective_tail.push_back(std::move(bound_stage));
+        }
         decide_op->is_boolean_var = std::move(statement.is_boolean_var);
         decide_op->entity_scopes = std::move(statement.entity_scopes);
         decide_op->variable_scopes = std::move(statement.variable_scopes);

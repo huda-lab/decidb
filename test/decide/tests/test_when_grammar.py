@@ -94,7 +94,7 @@ def test_when_paren_not_constraint(
                    (3,  7.0, false)
         ) t(id, val, w)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN (NOT w) <= 8
+        SUCH THAT SUM(WHEN (NOT w): x * val) <= 8
         MAXIMIZE SUM(x * val)
     """
 
@@ -150,7 +150,7 @@ def test_when_paren_eq_constraint(
                    (3,  7.0, 'high')
         ) t(id, val, tier)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN (tier = 'high') <= 8
+        SUCH THAT SUM(WHEN (tier = 'high'): x * val) <= 8
         MAXIMIZE SUM(x * val)
     """
 
@@ -206,7 +206,7 @@ def test_when_paren_arith_constraint(
                    (3,  7.0, 3, 3)
         ) t(id, val, a, b)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN (a + b > 5) <= 8
+        SUCH THAT SUM(WHEN (a + b > 5): x * val) <= 8
         MAXIMIZE SUM(x * val)
     """
 
@@ -268,7 +268,7 @@ def test_when_paren_not_objective(
         ) t(id, val, w)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN (NOT w)
+        MAXIMIZE SUM(WHEN (NOT w): x * val)
     """
 
     def build(oracle, data, cols, rows):
@@ -326,7 +326,7 @@ def test_when_paren_eq_objective(
         ) t(id, val, tier)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN (tier = 'high')
+        MAXIMIZE SUM(WHEN (tier = 'high'): x * val)
     """
 
     def build(oracle, data, cols, rows):
@@ -372,7 +372,7 @@ def test_when_unparen_eq_objective_matches_parenthesized(decidb_cli):
         ) t(id, val, tier)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN {condition}
+        MAXIMIZE SUM(WHEN {condition}: x * val)
     """
     unparenthesized = decidb_cli.execute(template.format(condition="tier = 'high'"))
     parenthesized = decidb_cli.execute(template.format(condition="(tier = 'high')"))
@@ -401,7 +401,7 @@ def test_when_paren_arith_objective(
         ) t(id, val, a, b)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN (a + b > 5)
+        MAXIMIZE SUM(WHEN (a + b > 5): x * val)
     """
 
     def build(oracle, data, cols, rows):
@@ -438,134 +438,92 @@ def test_when_paren_arith_objective(
 
 
 # ===========================================================================
-# Unparenthesized WHEN conditions — supported boundary and pinned errors
+# Unparenthesized WHEN conditions -- the prefix form ends at ':', so a condition
+# may carry NOT, a comparison or arithmetic without parentheses.
 # ===========================================================================
 
 
 @pytest.mark.when
 @pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_not_constraint_rejects(decidb_cli):
-    """`WHEN NOT w` (unparenthesized) on a constraint — parser-level reject."""
-    decidb_cli.assert_error(
-        """
+def test_when_unparen_not_constraint(decidb_cli):
+    """`WHEN NOT w:` (unparenthesized) inside a reducer."""
+    rows, cols = decidb_cli.execute("""
         SELECT id, val, w, x FROM (
             VALUES (1, 10.0, true),
                    (2,  5.0, false)
         ) t(id, val, w)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN NOT w <= 8
+        SUCH THAT SUM(WHEN NOT w: x * val) <= 8
         MAXIMIZE SUM(x * val)
-        """,
-        match=r'syntax error at or near "NOT"',
-    )
+        """)
+    picked = {int(r[cols.index("id")]) for r in rows if int(r[cols.index("x")]) == 1}
+    # Row 2 is the only NOT-w row, and it fits under 8; row 1 is unconstrained.
+    assert picked == {1, 2}
 
 
 @pytest.mark.when
 @pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_eq_constraint_rejects(decidb_cli):
-    """The trailing comparison is ambiguous with the constraint bound."""
-    decidb_cli.assert_error("""
+def test_when_unparen_eq_constraint(decidb_cli):
+    """A comparison condition needs no parentheses: the ':' ends it."""
+    rows, cols = decidb_cli.execute("""
         SELECT id, val, tier, x FROM (
             VALUES (1, 10.0, 'high'),
                    (2,  5.0, 'low')
         ) t(id, val, tier)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN tier = 'high' <= 8
+        SUCH THAT SUM(WHEN tier = 'high': x * val) <= 8
         MAXIMIZE SUM(x * val)
-    """, match=r'syntax error at or near "<="')
+    """)
+    picked = {int(r[cols.index("id")]) for r in rows if int(r[cols.index("x")]) == 1}
+    assert picked == {2}
 
 
 @pytest.mark.when
 @pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_arith_constraint_rejects(decidb_cli):
-    """`WHEN a + b > 5` (unparenthesized arithmetic+comparison) on a constraint."""
-    decidb_cli.assert_error(
-        """
+def test_when_unparen_arith_constraint(decidb_cli):
+    """`WHEN a + b > 5:` (unparenthesized arithmetic and comparison)."""
+    rows, cols = decidb_cli.execute("""
         SELECT id, val, a, b, x FROM (
             VALUES (1, 10.0, 2, 4),
                    (2,  5.0, 1, 1)
         ) t(id, val, a, b)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN a + b > 5 <= 8
+        SUCH THAT SUM(WHEN a + b > 5: x * val) <= 8
         MAXIMIZE SUM(x * val)
-        """,
-        match=r'syntax error at or near "<="',
-    )
+        """)
+    picked = {int(r[cols.index("id")]) for r in rows if int(r[cols.index("x")]) == 1}
+    assert picked == {2}
 
 
 @pytest.mark.when
 @pytest.mark.when_objective
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_not_objective_rejects(decidb_cli):
-    """`WHEN NOT w` (unparenthesized) on an objective — parser-level reject."""
-    decidb_cli.assert_error(
-        """
+def test_when_unparen_not_objective(decidb_cli):
+    """`WHEN NOT w:` inside the objective's reducer."""
+    rows, cols = decidb_cli.execute("""
         SELECT id, val, w, x FROM (
             VALUES (1, 10.0, true),
                    (2,  5.0, false)
         ) t(id, val, w)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN NOT w
-        """,
-        match=r'syntax error at or near "NOT"',
-    )
+        MAXIMIZE SUM(WHEN NOT w: x * val)
+        """)
+    picked = {int(r[cols.index("id")]) for r in rows if int(r[cols.index("x")]) == 1}
+    assert picked == {2}
 
 
 @pytest.mark.when
 @pytest.mark.when_objective
-@pytest.mark.error_binder
-@pytest.mark.error
-def test_when_unparen_arith_objective_rejects(decidb_cli):
-    """`WHEN a + b > 5` (unparenthesized) on an objective — binder-level reject.
-
-    The grammar handles one comparison between atomic operands, but not the
-    arithmetic-then-comparison shape `(SUM ... WHEN a) + b > 5`. The binder rejects the
-    resulting comparison expression as a top-level objective component.
-    This reaches a different error phase from the constraint-side parser
-    failure; both shapes remain documented in the WHEN todo.
-    """
-    decidb_cli.assert_error(
-        """
+def test_when_unparen_arith_objective(decidb_cli):
+    """`WHEN a + b > 5:` inside the objective's reducer."""
+    rows, cols = decidb_cli.execute("""
         SELECT id, val, a, b, x FROM (
             VALUES (1, 10.0, 2, 4),
                    (2,  5.0, 1, 1)
         ) t(id, val, a, b)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN a + b > 5
-        """,
-        match=r'\[MAXIMIZE\|MINIMIZE\] clause does not support',
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_error_carries_paren_hint(decidb_cli):
-    """The bare bison syntax error on an unparenthesized WHEN condition is
-    augmented with an actionable parenthesization hint (MaybeAppendDecideWhenHint).
-
-    This pins the hint text so it is not silently dropped. If the grammar is
-    widened to accept unparenthesized NOT, convert this to a positive test.
-    """
-    decidb_cli.assert_error(
-        """
-        SELECT id, val, w, x FROM (
-            VALUES (1, 10.0, true),
-                   (2,  5.0, false)
-        ) t(id, val, w)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN NOT w <= 8
-        MAXIMIZE SUM(x * val)
-        """,
-        match=r"wrap the WHEN condition in parentheses",
-    )
+        MAXIMIZE SUM(WHEN a + b > 5: x * val)
+        """)
+    picked = {int(r[cols.index("id")]) for r in rows if int(r[cols.index("x")]) == 1}
+    assert picked == {1}

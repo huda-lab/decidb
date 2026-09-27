@@ -88,10 +88,9 @@ void SelectNode::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(206, "having", having);
 	serializer.WritePropertyWithDefault<unique_ptr<SampleOptions>>(207, "sample", sample);
 	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(208, "qualify", qualify);
-	serializer.WritePropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(209, "decide_variables", decide_variables);
+	serializer.WritePropertyWithDefault<vector<DecideDeclaration>>(209, "decide_variables", decide_variables);
 	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(210, "decide_constraints", decide_constraints);
-	serializer.WriteProperty<DecideSense>(211, "decide_sense", decide_sense);
-	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(212, "decide_objective", decide_objective);
+	serializer.WritePropertyWithDefault<vector<DecideObjectiveClause>>(211, "decide_objectives", decide_objectives);
 }
 
 unique_ptr<QueryNode> SelectNode::Deserialize(Deserializer &deserializer) {
@@ -105,10 +104,9 @@ unique_ptr<QueryNode> SelectNode::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(206, "having", result->having);
 	deserializer.ReadPropertyWithDefault<unique_ptr<SampleOptions>>(207, "sample", result->sample);
 	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(208, "qualify", result->qualify);
-	deserializer.ReadPropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(209, "decide_variables", result->decide_variables);
+	deserializer.ReadPropertyWithDefault<vector<DecideDeclaration>>(209, "decide_variables", result->decide_variables);
 	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(210, "decide_constraints", result->decide_constraints);
-	deserializer.ReadProperty<DecideSense>(211, "decide_sense", result->decide_sense);
-	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(212, "decide_objective", result->decide_objective);
+	deserializer.ReadPropertyWithDefault<vector<DecideObjectiveClause>>(211, "decide_objectives", result->decide_objectives);
 	return std::move(result);
 }
 

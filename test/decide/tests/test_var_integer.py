@@ -30,7 +30,7 @@ def test_simple_test(decidb_cli):
             DECIDE x
             SUCH THAT SUM(x * l_extendedprice) <= 10000
             MAXIMIZE SUM(x * l_extendedprice)
-        """, match=r'DECIDE variable "x" needs a type')
+        """, match=r'DECIDE variable "x" needs a domain')
 
 
 @pytest.mark.var_integer
@@ -44,4 +44,4 @@ def test_qualified_missing_type(decidb_cli):
             DECIDE lineitem.x
             SUCH THAT SUM(x * l_extendedprice) <= 10000
             MAXIMIZE SUM(x * l_extendedprice)
-        """, match=r'DECIDE variable "lineitem\.x" needs a type')
+        """, match=r'DECIDE variable "lineitem\.x" needs a domain and a key')

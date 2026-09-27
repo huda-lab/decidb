@@ -29,6 +29,9 @@
 
 namespace duckdb {
 
+struct DecideDeclaration;
+enum class DecideScopeKind : uint8_t;
+
 class ColumnDefinition;
 struct OrderByNode;
 struct CopyInfo;
@@ -237,6 +240,16 @@ private:
 	unique_ptr<ParsedExpression> TransformInterval(duckdb_libpgquery::PGIntervalConstant &root);
 	//! Transform a Postgres lambda node [e.g. (x, y) -> x + y] into a lambda expression
 	unique_ptr<ParsedExpression> TransformLambda(duckdb_libpgquery::PGLambdaFunction &node);
+	// DecidB: the DECIDE clause's own parse nodes (transform_decide.cpp)
+	void TransformDecideClause(duckdb_libpgquery::PGDecideClause &clause, SelectNode &result);
+	DecideDeclaration TransformDecideDeclarator(duckdb_libpgquery::PGDecideDeclarator &root);
+	void TransformDecideScope(duckdb_libpgquery::PGDecideScope *scope, DecideScopeKind &kind,
+	                          vector<unique_ptr<ParsedExpression>> &key);
+	unique_ptr<ParsedExpression> TransformDecideScopeWrapper(const char *tag, duckdb_libpgquery::PGNode *body,
+	                                                         duckdb_libpgquery::PGNode *scope_node);
+	unique_ptr<ParsedExpression> TransformDecideReducerBy(duckdb_libpgquery::PGNode *reducer,
+	                                                      duckdb_libpgquery::PGNode *keys_node);
+	unique_ptr<ParsedExpression> TransformDecideFrame(duckdb_libpgquery::PGDecideFrame &root);
 	//! Transform a Postgres array access node (e.g. x[1] or x[1:3])
 	unique_ptr<ParsedExpression> TransformArrayAccess(duckdb_libpgquery::PGAIndirection &node);
 	//! Transform a positional reference (e.g. #1)

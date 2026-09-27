@@ -1,5 +1,13 @@
 # Clause-Order Test Coverage — Done
 
+> **Spelling note (2026-09-26).** The language is now the DeciQL redesign
+> (`../../00_project_overview/syntax_reference.md`). Examples below that use the
+> retired spellings read with this mapping: `T.x(INT)` → `PER T: x(INT)`,
+> `scalar x(INT)` → `PER (): x(INT)`, `body WHEN c` → `WHEN c: body`,
+> `SUM(x) <= K PER g` → `PER g: SUM(x) BY (g) <= K`, `SUM(e) WHEN c` →
+> `SUM(WHEN c: e)`, `SUM(D: e)` → `SUM(PER D: e)`,
+> `MINIMIZE MAX(SUM(e)) PER g` → `MINIMIZE MAX(PER g: SUM(e) BY (g))`.
+
 Tests live in `test/decide/tests/test_clause_order.py`.
 
 Covers the two accepted positions of the `DECIDE` declaration — the paper's

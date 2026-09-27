@@ -212,7 +212,7 @@ def test_vacuous_minmax_bound_drops(decidb_cli, oracle_solver):
     assert n > 1
     for extra in (" AND MIN(x) <= 1e1000::DOUBLE",
                   " AND MAX(x) >= -1e1000",
-                  " AND MIN(x) <= 1e1000::DOUBLE PER l_orderkey"):
+                  " AND PER l_orderkey: MIN(x) BY (l_orderkey) <= 1e1000::DOUBLE"):
         assert solve(extra) == (unconstrained, n), \
             f"a vacuous bound restricted the model: {extra}"
 
@@ -351,7 +351,7 @@ def test_data_reducer_bound_agrees_with_the_literal_spelling(decidb_cli):
         )
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= {bound} PER g
+        SUCH THAT x >= 0 AND x <= 6 AND PER g: MIN(x) BY (g) <= {bound}
         MAXIMIZE SUM(x)
     """
     reduced = _by_group(*decidb_cli.execute(data.format(bound="MAX(cap)")))
@@ -378,7 +378,7 @@ def test_data_reducer_bound_is_classified_per_group(decidb_cli, oracle_solver):
     constraints rather than a Big-M of our own.
     """
     mixed = _by_group(*decidb_cli.execute(
-        _MIXED.format(extra=" AND MIN(x) <= MAX(cap) PER g")))
+        _MIXED.format(extra=" AND PER g: MIN(x) BY (g) <= MAX(cap) BY (g)")))
     unconstrained = _by_group(*decidb_cli.execute(_MIXED.format(extra="")))
 
     # g=0 reduces to MAX(inf, 2.0) = +inf: vacuous, so it matches the model with
@@ -432,7 +432,7 @@ def test_data_reducer_ignores_an_infinity_it_never_reads(decidb_cli):
         )
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) WHEN ok PER g
+        SUCH THAT x >= 0 AND x <= 6 AND PER g: MIN(x) BY (g) <= MAX(WHEN ok: cap) BY (g)
         MAXIMIZE SUM(x)
     """)
     assert _by_group(rows, cols) == {0: [2, 6], 1: [3, 6]}
@@ -460,7 +460,7 @@ def test_data_reducer_unreachable_bound_is_infeasible(decidb_cli):
         )
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g
+        SUCH THAT x >= 0 AND x <= 6 AND PER g: MIN(x) BY (g) <= MAX(cap) BY (g)
         MAXIMIZE SUM(x)
     """, match=_UNREACHABLE)
 
@@ -486,7 +486,7 @@ def test_nan_from_reducer_arithmetic_is_still_rejected(decidb_cli):
         )
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) + MIN(cap) PER g
+        SUCH THAT x >= 0 AND x <= 6 AND PER g: MIN(x) BY (g) <= MAX(cap) BY (g) + MIN(cap) BY (g)
         MAXIMIZE SUM(x)
     """, match=r"NaN")
 

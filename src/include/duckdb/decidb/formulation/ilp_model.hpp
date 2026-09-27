@@ -265,6 +265,14 @@ struct SolverModel {
     //! Linear objective: minimize/maximize c^T x
     vector<double> obj_coeffs; //!< Coefficient per variable (linear part)
     bool maximize;             //!< True = maximize, false = minimize
+    //! Lexicographic stages after the first objective (`A THEN B`): solved in order,
+    //! each among the optima of the ones before it. The solver facade freezes every
+    //! solved stage's value as a row before the next is solved.
+    struct ObjectiveStage {
+        bool maximize = false;
+        vector<double> obj_coeffs; //!< Coefficient per variable, like `obj_coeffs`
+    };
+    vector<ObjectiveStage> objective_stages;
 
     //! Quadratic objective: x^T Q x, added to the linear part. NOT the (1/2) x^T Q x
     //! form some solvers take -- see the convention note below, which every backend

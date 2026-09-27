@@ -1053,6 +1053,93 @@
     "pointer_type": "none"
   },
   {
+    "class": "DecideDeclaration",
+    "includes": [
+      "duckdb/parser/decide/decide_declaration.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "name",
+        "type": "string"
+      },
+      {
+        "id": 101,
+        "name": "scope_kind",
+        "type": "DecideScopeKind"
+      },
+      {
+        "id": 102,
+        "name": "scope_key",
+        "type": "vector<ParsedExpression*>"
+      },
+      {
+        "id": 103,
+        "name": "domain",
+        "type": "DecideDomain"
+      },
+      {
+        "id": 104,
+        "name": "text_values",
+        "type": "vector<string>"
+      },
+      {
+        "id": 105,
+        "name": "lower_bound",
+        "type": "ParsedExpression*"
+      },
+      {
+        "id": 106,
+        "name": "upper_bound",
+        "type": "ParsedExpression*"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideObjectiveClause",
+    "includes": [
+      "duckdb/parser/decide/decide_declaration.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "sense",
+        "type": "DecideSense"
+      },
+      {
+        "id": 101,
+        "name": "expression",
+        "type": "ParsedExpression*"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideTextDomain",
+    "includes": [
+      "duckdb/common/enums/decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "variable_index",
+        "type": "idx_t"
+      },
+      {
+        "id": 101,
+        "name": "values",
+        "type": "vector<string>"
+      },
+      {
+        "id": 102,
+        "name": "indicator_indices",
+        "type": "vector<idx_t>"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
     "class": "DecideVarScopeInfo",
     "includes": [
       "duckdb/common/enums/decide.hpp"
@@ -1072,9 +1159,62 @@
     "pointer_type": "none"
   },
   {
+    "class": "DecideFrameInfo",
+    "includes": [
+      "duckdb/planner/operator/decide/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "spec",
+        "type": "string"
+      },
+      {
+        "id": 101,
+        "name": "order_key",
+        "type": "Expression*"
+      },
+      {
+        "id": 102,
+        "name": "else_value",
+        "type": "Expression*"
+      },
+      {
+        "id": 103,
+        "name": "within_scope_idx",
+        "type": "idx_t"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideObjectiveStage",
+    "includes": [
+      "duckdb/planner/operator/decide/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "sense",
+        "type": "DecideSense"
+      },
+      {
+        "id": 101,
+        "name": "expression",
+        "type": "Expression*"
+      },
+      {
+        "id": 102,
+        "name": "constant_offset",
+        "type": "double"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
     "class": "EntityScopeInfo",
     "includes": [
-      "duckdb/planner/operator/logical_decide.hpp"
+      "duckdb/planner/operator/decide/logical_decide.hpp"
     ],
     "members": [
       {
@@ -1108,7 +1248,7 @@
   {
     "class": "DecideSourceColumnName",
     "includes": [
-      "duckdb/planner/operator/logical_decide.hpp"
+      "duckdb/planner/operator/decide/logical_decide.hpp"
     ],
     "members": [
       {

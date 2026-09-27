@@ -488,7 +488,7 @@ def test_max_constraint_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_t
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE x(BOOL)
-        SUCH THAT MAX(x) <= 0 WHEN l_quantity > 30
+        SUCH THAT WHEN l_quantity > 30: MAX(x) <= 0
         MAXIMIZE SUM(x)
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -525,7 +525,7 @@ def test_maximize_max_mixed_sign_coefficient(decidb_cli):
         SELECT id, c, x
         FROM data
         DECIDE x(INT)
-        SUCH THAT x <= 10 AND x >= 10 WHEN c < 0
+        SUCH THAT x <= 10 AND WHEN c < 0: x >= 10
         MAXIMIZE MAX(c * x)
     """
     rows, cols = decidb_cli.execute(sql)
@@ -665,8 +665,8 @@ def test_maximize_max_max_per_mixed_sign(decidb_cli):
         SELECT g, c, x
         FROM data
         DECIDE x(INT)
-        SUCH THAT x <= 10 AND x >= 10 WHEN c < 0
-        MAXIMIZE MAX(MAX(c * x)) PER g
+        SUCH THAT x <= 10 AND WHEN c < 0: x >= 10
+        MAXIMIZE MAX(PER g: MAX(c * x) BY (g))
     """
     rows, cols = decidb_cli.execute(sql)
     ci = {name: i for i, name in enumerate(cols)}
@@ -694,7 +694,7 @@ def test_min_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         WHERE l_orderkey <= 5
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
-        MAXIMIZE MIN(x * l_quantity) WHEN l_quantity <= 30
+        MAXIMIZE MIN(WHEN l_quantity <= 30: x * l_quantity)
     """
     t0 = time.perf_counter()
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
@@ -780,7 +780,7 @@ def test_max_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         WHERE l_orderkey <= 5
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
-        MINIMIZE MAX(x * l_quantity) WHEN l_quantity <= 30
+        MINIMIZE MAX(WHEN l_quantity <= 30: x * l_quantity)
     """
     t0 = time.perf_counter()
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
@@ -934,7 +934,7 @@ def test_max_constraint_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE x(BOOL)
-        SUCH THAT MAX(x) <= 0 PER l_orderkey
+        SUCH THAT PER l_orderkey: MAX(x) BY (l_orderkey) <= 0
         MAXIMIZE SUM(x)
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -961,7 +961,7 @@ def test_min_max_when_per_composition(decidb_cli, duckdb_conn, oracle_solver, pe
         FROM lineitem
         WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT MAX(x) <= 0 WHEN l_quantity > 40 PER l_orderkey
+        SUCH THAT WHEN l_quantity > 40 PER l_orderkey: MAX(x) BY (l_orderkey) <= 0
         MAXIMIZE SUM(x)
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -1079,8 +1079,8 @@ def test_multiple_minmax_constraints(decidb_cli, duckdb_conn, oracle_solver, per
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE x(BOOL)
-        SUCH THAT MAX(x) <= 0 WHEN l_quantity > 40 AND
-              MIN(x) >= 1 WHEN l_quantity < 5
+        SUCH THAT WHEN l_quantity > 40: MAX(x) <= 0 AND
+              WHEN l_quantity < 5: MIN(x) >= 1
         MAXIMIZE SUM(x)
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -1169,7 +1169,7 @@ def test_sum_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
                    (3, 7.0, false)
         ) t(id, v, w)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= 12
+        SUCH THAT SUM(x * v) + MAX(WHEN w: x * v) <= 12
         MAXIMIZE SUM(x * v)
     """
     t0 = time.perf_counter()
@@ -1224,7 +1224,7 @@ def test_max_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
                    (3, 7.0, false, false)
         ) t(id, v, w1, w2)
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * v) WHEN w1 + MAX(x * v) WHEN w2 <= 12
+        SUCH THAT MAX(WHEN w1: x * v) + MAX(WHEN w2: x * v) <= 12
         MAXIMIZE SUM(x * v)
     """
     t0 = time.perf_counter()
@@ -1283,7 +1283,7 @@ def test_min_plus_min_geq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
                    (3, 7.0, false, false)
         ) t(id, v, w1, w2)
         DECIDE x(BOOL)
-        SUCH THAT MIN(x * v) WHEN w1 + MIN(x * v) WHEN w2 >= 15
+        SUCH THAT MIN(WHEN w1: x * v) + MIN(WHEN w2: x * v) >= 15
         MINIMIZE SUM(x * v)
     """
     t0 = time.perf_counter()
@@ -1365,7 +1365,7 @@ def test_composed_minmax_subtraction(decidb_cli):
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x FROM (VALUES (1, 10.0, true), (2, 12.0, true)) t(id, v, w)
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * v) WHEN w - MIN(x * v) WHEN w <= 3
+        SUCH THAT MAX(WHEN w: x * v) - MIN(WHEN w: x * v) <= 3
         MAXIMIZE SUM(x * v)
     """)
     ci = {c: i for i, c in enumerate(cols)}
@@ -1396,7 +1396,7 @@ def test_composed_minmax_scalar_mult_hard_min(decidb_cli):
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x FROM (VALUES (1,10.0,true),(2,5.0,true)) t(id,v,w)
         DECIDE x(BOOL)
-        SUCH THAT (2 * MIN(x * v) WHEN w) + SUM(x * v) <= 20
+        SUCH THAT (2 * MIN(WHEN w: x * v)) + SUM(x * v) <= 20
         MAXIMIZE SUM(x * v)
     """)
     ci = {c: i for i, c in enumerate(cols)}
@@ -1437,7 +1437,7 @@ def test_composed_minmax_per_wrapper_rejected(decidb_cli):
     decidb_cli.assert_error("""
         SELECT id, v, g FROM (VALUES (1, 10.0, true, 'A'), (2, 5.0, true, 'B')) t(id, v, w, g)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= 12 PER g
+        SUCH THAT PER g: SUM(x * v) BY (g) + MAX(WHEN w: x * v) BY (g) <= 12
         MAXIMIZE SUM(x * v)
     """, match=r"does not support outer WHEN/PER")
 
@@ -1454,7 +1454,7 @@ def test_composed_minmax_nonconst_rhs_subquery_rejected(decidb_cli):
     decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= (SELECT 12)
+        SUCH THAT SUM(x * v) + MAX(WHEN w: x * v) <= (SELECT 12)
         MAXIMIZE SUM(x * v)
     """, match=r"Composed MIN/MAX in DECIDE v1 requires a constant RHS")
 
@@ -1472,7 +1472,7 @@ def test_composed_minmax_nonconst_rhs_column_rejected(decidb_cli):
     decidb_cli.assert_error("""
         SELECT id, v FROM (VALUES (1, 10.0, true, 12), (2, 5.0, true, 12)) t(id, v, w, cap)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= cap
+        SUCH THAT SUM(x * v) + MAX(WHEN w: x * v) <= cap
         MAXIMIZE SUM(x * v)
     """, match=r"Composed MIN/MAX in DECIDE v1 requires a constant RHS")
 
@@ -1493,9 +1493,9 @@ def test_composed_minmax_outer_when_rejected(decidb_cli):
             VALUES (1, 10.0, true, 'high'), (2, 5.0, true, 'low')
         ) t(id, v, w, tier)
         DECIDE x(BOOL)
-        SUCH THAT (SUM(x * v) + MAX(x * v) WHEN w) <= 12 WHEN (tier = 'high')
+        SUCH THAT WHEN (tier = 'high'): (SUM(x * v) + MAX(WHEN w: x * v)) <= 12
         MAXIMIZE SUM(x * v)
-    """, match=r"Cannot combine expression-level WHEN with aggregate-local WHEN")
+    """, match=r"does not support outer WHEN/PER")
 
 
 @pytest.mark.min_max
@@ -1691,7 +1691,7 @@ def test_minimize_sum_plus_max_composed_objective(
         ) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
-        MINIMIZE SUM(x * v) + MAX(x * v) WHEN w
+        MINIMIZE SUM(x * v) + MAX(WHEN w: x * v)
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1754,7 +1754,7 @@ def test_maximize_min_plus_sum_composed_objective(
         ) t(id, v, w)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE MIN(x * v) WHEN w + SUM(x * v)
+        MAXIMIZE MIN(WHEN w: x * v) + SUM(x * v)
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1817,7 +1817,7 @@ def test_composed_minmax_objective_hard_max(decidb_cli):
         SELECT id, v, x FROM (VALUES (1,10.0,true),(2,5.0,true)) t(id,v,w)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
-        MAXIMIZE MAX(x * v) WHEN w + SUM(x * v)
+        MAXIMIZE MAX(WHEN w: x * v) + SUM(x * v)
     """)
     ci = {c: i for i, c in enumerate(cols)}
     chosen = [float(r[ci["v"]]) for r in rows if int(r[ci["x"]]) == 1]
@@ -1882,7 +1882,7 @@ def test_composed_minmax_entity_scoped_multi_row(decidb_cli, perf_tracker):
     rows, cols = decidb_cli.execute(setup + """
         SELECT R.rid, D.did, open
         FROM D JOIN R ON D.did = R.did
-        DECIDE D.open(BOOL)
+        DECIDE PER D: open(BOOL)
         SUCH THAT SUM(open) >= 1
         MINIMIZE SUM(D.c * open) + MAX(D.c * open)
     """)

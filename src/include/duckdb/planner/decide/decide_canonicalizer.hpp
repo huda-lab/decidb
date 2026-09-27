@@ -114,7 +114,11 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 //! The semantic row shape of a canonical DECIDE comparison. INVALID means the
 //! tree mixes reduced values with row/entity-varying decision algebra and cannot
 //! denote either one constraint per row or one reduced constraint.
-enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, INVALID };
+//! PER_ROW: no reducer, one instance per generated key value reading direct terms.
+//! AGGREGATE: every decision term is reduced (or query-wide), one instance per key value.
+//! MIXED: direct row-varying terms beside reducers (`ship <= 0.2 * sum(: ship) BY ()`):
+//! one instance per row, reading the row and the reducers' groups (DeciQL spec §7.1).
+enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, MIXED, INVALID };
 
 class DecideCanonicalizer {
 public:

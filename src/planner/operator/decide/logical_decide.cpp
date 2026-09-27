@@ -1,6 +1,7 @@
 // src/planner/operator/logical_decide.cpp
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -71,6 +72,17 @@ void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> 
 	canonicalizer.VerifyCanonicalObjective(*decide_objective);
 }
 
+void LogicalDecide::SetObjectiveStage(ClientContext &context, idx_t stage_idx, unique_ptr<Expression> objective) {
+	auto &stage = objective_tail[stage_idx];
+	if (!objective) {
+		stage.expression = nullptr;
+		return;
+	}
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes);
+	stage.expression = canonicalizer.CanonicalizeObjective(*objective, stage.constant_offset);
+	canonicalizer.VerifyCanonicalObjective(*stage.expression);
+}
+
 void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback) {
 	for (auto &expr : decide_variables) {
 		callback(&expr);
@@ -80,6 +92,19 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	}
 	if (decide_objective) {
 		callback(&decide_objective);
+	}
+	for (auto &stage : objective_tail) {
+		if (stage.expression) {
+			callback(&stage.expression);
+		}
+	}
+	for (auto &frame : frames) {
+		if (frame.order_key) {
+			callback(&frame.order_key);
+		}
+		if (frame.else_value) {
+			callback(&frame.else_value);
+		}
 	}
 	// The composed MIN/MAX rewrite (DecideOptimizer) lifts sub-expressions out of the
 	// objective/constraint trees into these vectors and leaves a placeholder behind, so
@@ -141,6 +166,16 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs);
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
 		                                                  objective_strs);
+		// `THEN` stages, each on its own line after the first objective.
+		for (auto &stage : objective_tail) {
+			if (!stage.expression) {
+				continue;
+			}
+			vector<string> stage_strs;
+			CollectDecideExpressionStrings(*stage.expression, source_fragments, entity_scopes, stage_strs);
+			result["Objective"] += "\nTHEN " + string(stage.sense == DecideSense::MAXIMIZE ? "MAXIMIZE " : "MINIMIZE ") +
+			                       StringUtil::Join(stage_strs, " ");
+		}
 	} else {
 		result["Objective"] = "FEASIBILITY";
 	}

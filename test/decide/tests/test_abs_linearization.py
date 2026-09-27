@@ -111,7 +111,7 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         WHERE l_orderkey <= 5
         DECIDE new_qty(REAL)
         SUCH THAT SUM(new_qty) = 100
-        MINIMIZE SUM(ABS(new_qty - l_quantity)) WHEN l_returnflag = 'R'
+        MINIMIZE SUM(WHEN l_returnflag = 'R': ABS(new_qty - l_quantity))
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -186,7 +186,7 @@ def test_abs_objective_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE new_qty(REAL)
-        SUCH THAT SUM(new_qty) = 20 PER l_orderkey
+        SUCH THAT PER l_orderkey: SUM(new_qty) BY (l_orderkey) = 20
         MINIMIZE SUM(ABS(new_qty - l_quantity))
     """
     t0 = time.perf_counter()
@@ -429,7 +429,7 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
         WHERE l_orderkey <= 5
         DECIDE new_qty(REAL)
         SUCH THAT new_qty <= 60
-            AND SUM(ABS(new_qty - l_quantity)) <= 30 WHEN l_returnflag = 'R'
+            AND WHEN l_returnflag = 'R': SUM(ABS(new_qty - l_quantity)) <= 30
         MAXIMIZE SUM(new_qty * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -1327,7 +1327,7 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
         FROM lineitem WHERE l_orderkey <= 3
         DECIDE x(REAL)
         SUCH THAT x <= {ub}
-            AND SUM(ABS(x - l_quantity)) >= {k} WHEN l_linenumber <= 2
+            AND WHEN l_linenumber <= 2: SUM(ABS(x - l_quantity)) >= {k}
         MINIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -1405,7 +1405,7 @@ def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
         SELECT id, grp, target, x
         FROM data
         DECIDE x(REAL)
-        SUCH THAT x <= {ub} AND SUM(ABS(x - target)) >= {k} PER grp
+        SUCH THAT x <= {ub} AND PER grp: SUM(ABS(x - target)) BY (grp) >= {k}
         MINIMIZE SUM(x)
     """
     t0 = time.perf_counter()

@@ -440,7 +440,7 @@ def test_sum_not_equal_with_when(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 5 WHEN l_quantity > 20
+        SUCH THAT WHEN l_quantity > 20: SUM(x) <> 5
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
     """)
@@ -467,7 +467,7 @@ def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
                    ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 2 WHEN active
+        SUCH THAT WHEN active: SUM(x) <> 2
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * value)
     """)

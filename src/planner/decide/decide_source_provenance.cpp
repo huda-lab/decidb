@@ -102,9 +102,23 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const vector<
 		}
 		body += RenderSource(*agg.children[i], fragments, entity_scopes);
 	}
+	// DeciQL spelling: agg(WHEN f PER k: body) BY (g)
+	string prefix;
+	if (agg.filter) {
+		prefix += "WHEN " + RenderSource(*agg.filter, fragments, entity_scopes) + " ";
+	}
 	idx_t scope_idx;
 	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < entity_scopes.size()) {
-		body = entity_scopes[scope_idx].table_alias + ": " + body;
+		prefix += "PER " + entity_scopes[scope_idx].table_alias + " ";
+	}
+	if (!prefix.empty()) {
+		prefix.pop_back();
+		body = prefix + ": " + body;
+	}
+	string by_suffix;
+	idx_t by_scope_idx;
+	if (TryParseReduceByTag(agg.GetAlias(), by_scope_idx) && by_scope_idx < entity_scopes.size()) {
+		by_suffix = " BY (" + entity_scopes[by_scope_idx].table_alias + ")";
 	}
 	string result;
 	string norm_payload;
@@ -127,10 +141,7 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const vector<
 	} else {
 		result = StringUtil::Upper(agg.function.name) + "(" + body + ")";
 	}
-	if (agg.filter) {
-		result += " WHEN " + RenderSource(*agg.filter, fragments, entity_scopes);
-	}
-	return result;
+	return result + by_suffix;
 }
 
 template <class CALLBACK>
@@ -175,10 +186,14 @@ static string RenderSource(const Expression &expr, const vector<string> &fragmen
 		// a case here it fell through to ToString() -- the one renderer that spells out
 		// the casts the binder inserted. Every other clause in the same plan is
 		// cast-free, so this one read as though the user had typed CAST(10 AS BIGINT).
+		// `NOT open` (an IF guard) is rendered the same way, for the same reason.
+		auto &in = expr.Cast<BoundOperatorExpression>();
+		if (expr.type == ExpressionType::OPERATOR_NOT && in.children.size() == 1) {
+			return "NOT " + RenderSource(*in.children[0], fragments, entity_scopes);
+		}
 		if (expr.type != ExpressionType::COMPARE_IN) {
 			break;
 		}
-		auto &in = expr.Cast<BoundOperatorExpression>();
 		if (in.children.size() < 2) {
 			break;
 		}
@@ -201,67 +216,88 @@ static string RenderSource(const Expression &expr, const vector<string> &fragmen
 	return expr.ToString();
 }
 
-static string AppendQualifier(string prefix, const string &suffix) {
-	if (suffix.empty()) {
-		return prefix;
+//! The generation key of a PER wrapper, as written: `()` for global, else the key.
+static string PerKeyText(const BoundConjunctionExpression &conj, const vector<string> &fragments,
+                         const vector<EntityScopeInfo> &entity_scopes) {
+	if (conj.children.size() == 1) {
+		return "()";
 	}
-	if (!prefix.empty()) {
-		prefix += " ";
-	}
-	prefix += suffix;
-	return prefix;
-}
-
-static string PerQualifier(const BoundConjunctionExpression &conj, const vector<string> &fragments,
-	                       const vector<EntityScopeInfo> &entity_scopes) {
-	string result = "PER ";
-	bool parenthesize = conj.children.size() > 2;
-	if (parenthesize) {
-		result += "(";
-	}
+	string result;
 	for (idx_t i = 1; i < conj.children.size(); i++) {
 		if (i > 1) {
 			result += ", ";
 		}
 		result += RenderSource(*conj.children[i], fragments, entity_scopes);
 	}
-	if (parenthesize) {
-		result += ")";
-	}
 	return result;
+}
+
+//! The prefixes of one clause in the DeciQL order, `WHEN c PER k IF b`, gathered from
+//! the wrappers in whatever nesting the tree holds them. Rendered as a single prefix
+//! string ending in ':' when non-empty.
+struct ClausePrefixes {
+	string filter;
+	string scope;
+	bool has_scope = false;
+	string guard;
+
+	bool Empty() const {
+		return filter.empty() && !has_scope && guard.empty();
+	}
+	string ToString() const {
+		vector<string> parts;
+		if (!filter.empty()) {
+			parts.push_back("WHEN " + filter);
+		}
+		if (has_scope) {
+			parts.push_back("PER " + scope);
+		}
+		if (!guard.empty()) {
+			parts.push_back("IF " + guard);
+		}
+		return parts.empty() ? string() : StringUtil::Join(parts, " ") + ":";
+	}
+};
+
+static bool AbsorbWrapperPrefix(const BoundConjunctionExpression &conj, const vector<string> &fragments,
+                                const vector<EntityScopeInfo> &entity_scopes, ClausePrefixes &prefixes) {
+	if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
+		prefixes.has_scope = true;
+		prefixes.scope = PerKeyText(conj, fragments, entity_scopes);
+		return true;
+	}
+	if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+		prefixes.filter = RenderSource(*conj.children[1], fragments, entity_scopes);
+		return true;
+	}
+	if (IsIfConstraintWrapper(conj) && conj.children.size() == 2) {
+		prefixes.guard = RenderSource(*conj.children[1], fragments, entity_scopes);
+		return true;
+	}
+	return false;
 }
 
 template <class CALLBACK>
 static void VisitSourceComparisons(Expression &expr, const vector<string> &fragments,
-	                               const vector<EntityScopeInfo> &entity_scopes, bool render_qualifiers,
-	                               string qualifier,
-	                               CALLBACK &&callback) {
+                                   const vector<EntityScopeInfo> &entity_scopes, bool render_qualifiers,
+                                   ClausePrefixes prefixes, CALLBACK &&callback) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
+		if (IsConstraintWrapper(conj) && !conj.children.empty()) {
 			if (render_qualifiers) {
-				qualifier = AppendQualifier(std::move(qualifier), PerQualifier(conj, fragments, entity_scopes));
+				AbsorbWrapperPrefix(conj, fragments, entity_scopes, prefixes);
 			}
 			VisitSourceComparisons(*conj.children[0], fragments, entity_scopes, render_qualifiers,
-			                       std::move(qualifier), callback);
-			return;
-		}
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			if (render_qualifiers) {
-				qualifier = AppendQualifier("WHEN " + RenderSource(*conj.children[1], fragments, entity_scopes),
-				                            qualifier);
-			}
-			VisitSourceComparisons(*conj.children[0], fragments, entity_scopes, render_qualifiers,
-			                       std::move(qualifier), callback);
+			                       std::move(prefixes), callback);
 			return;
 		}
 		for (auto &child : conj.children) {
-			VisitSourceComparisons(*child, fragments, entity_scopes, render_qualifiers, qualifier, callback);
+			VisitSourceComparisons(*child, fragments, entity_scopes, render_qualifiers, prefixes, callback);
 		}
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		callback(expr.Cast<BoundComparisonExpression>(), qualifier);
+		callback(expr.Cast<BoundComparisonExpression>(), prefixes.ToString());
 	}
 }
 
@@ -287,7 +323,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 	                                                        const vector<EntityScopeInfo> &entity_scopes,
 	                                                        idx_t decide_index) {
 	vector<ConstraintSourceInfo> result;
-	VisitSourceComparisons(constraints, fragments, entity_scopes, false, string(),
+	VisitSourceComparisons(constraints, fragments, entity_scopes, false, ClausePrefixes(),
 	                       [&](BoundComparisonExpression &cmp, const string &) {
 		                       idx_t source_id = result.size();
 		                       auto alias = cmp.GetAlias();
@@ -315,9 +351,17 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       // became of it -- so the render happens unconditionally and the
 		                       // narrower diagnostic signal is assigned from it.
 		                       ConstraintSourceInfo info;
-		                       info.written_lhs = RenderSource(*cmp.left, fragments, entity_scopes);
-		                       info.written_rhs = RenderSource(*cmp.right, fragments, entity_scopes);
-		                       info.written_cmp = DecideComparisonOperator(cmp.type);
+		                       idx_t fragment_id;
+		                       if (TryParseSourceFragmentTag(cmp.GetAlias(), fragment_id) && fragment_id < fragments.size()) {
+			                       // The whole comparison stands for something the user wrote
+			                       // differently (`status = 'open'` over a TEXT decision's
+			                       // indicator): the written spelling is that, in one piece.
+			                       info.written_lhs = fragments[fragment_id];
+		                       } else {
+			                       info.written_lhs = RenderSource(*cmp.left, fragments, entity_scopes);
+			                       info.written_rhs = RenderSource(*cmp.right, fragments, entity_scopes);
+			                       info.written_cmp = DecideComparisonOperator(cmp.type);
+		                       }
 		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
 		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
 			                       info.source_lhs = info.written_lhs;
@@ -358,7 +402,7 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 	                              const vector<string> &fragments,
 	                              const vector<EntityScopeInfo> &entity_scopes) {
 	auto &mutable_constraints = const_cast<Expression &>(constraints);
-	VisitSourceComparisons(mutable_constraints, fragments, entity_scopes, true, string(),
+	VisitSourceComparisons(mutable_constraints, fragments, entity_scopes, true, ClausePrefixes(),
 	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
 		                       idx_t source_id;
 		                       if (!TryParseSourceClauseTag(cmp.GetAlias(), source_id) || source_id >= sources.size()) {
@@ -425,27 +469,24 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
                                     vector<idx_t> *out_source_ids) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		// PER wrapper: child[0] is the constraint, children[1..N] are the PER key columns.
-		if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
-			string suffix = " " + PerQualifier(conj, fragments, entity_scopes);
-			vector<string> inner;
-			vector<idx_t> inner_ids;
-			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner, sources,
-			                               &inner_ids);
-			for (idx_t i = 0; i < inner.size(); i++) {
-				PushClause(out, out_source_ids, inner[i] + suffix, inner_ids[i]);
+		// A prefix wrapper: render the inner clauses with the prefix in front.
+		if (IsConstraintWrapper(conj) && !conj.children.empty()) {
+			ClausePrefixes prefixes;
+			const Expression *inner_expr = &expr;
+			while (inner_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+				auto &inner_conj = inner_expr->Cast<BoundConjunctionExpression>();
+				if (!IsConstraintWrapper(inner_conj) || inner_conj.children.empty() ||
+				    !AbsorbWrapperPrefix(inner_conj, fragments, entity_scopes, prefixes)) {
+					break;
+				}
+				inner_expr = inner_conj.children[0].get();
 			}
-			return;
-		}
-		// WHEN wrapper: child[0] is the constraint, child[1] is the condition.
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			string suffix = " WHEN " + RenderSource(*conj.children[1], fragments, entity_scopes);
+			string prefix = prefixes.ToString();
 			vector<string> inner;
 			vector<idx_t> inner_ids;
-			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner, sources,
-			                               &inner_ids);
+			CollectDecideExpressionStrings(*inner_expr, fragments, entity_scopes, inner, sources, &inner_ids);
 			for (idx_t i = 0; i < inner.size(); i++) {
-				PushClause(out, out_source_ids, inner[i] + suffix, inner_ids[i]);
+				PushClause(out, out_source_ids, inner[i].empty() ? inner[i] : prefix + " " + inner[i], inner_ids[i]);
 			}
 			return;
 		}
@@ -504,14 +545,19 @@ static string RenderComposedTerm(const LogicalDecide::ComposedMinMaxTerm &term,
                                  const vector<string> &fragments,
                                  const vector<EntityScopeInfo> &entity_scopes) {
 	string body = term.inner_expr ? RenderSource(*term.inner_expr, fragments, entity_scopes) : string();
+	string prefix;
+	if (term.filter) {
+		prefix += "WHEN " + RenderSource(*term.filter, fragments, entity_scopes) + " ";
+	}
 	idx_t scope_idx = term.qualifier_scope_idx;
 	if (scope_idx != DConstants::INVALID_INDEX && scope_idx < entity_scopes.size()) {
-		body = entity_scopes[scope_idx].table_alias + ": " + body;
+		prefix += "PER " + entity_scopes[scope_idx].table_alias + " ";
+	}
+	if (!prefix.empty()) {
+		prefix.pop_back();
+		body = prefix + ": " + body;
 	}
 	string result = StringUtil::Upper(term.agg_name) + "(" + body + ")";
-	if (term.filter) {
-		result += " WHEN " + RenderSource(*term.filter, fragments, entity_scopes);
-	}
 	if (term.scale) {
 		string scale = RenderSource(*term.scale, fragments, entity_scopes);
 		result = term.scale_divides ? result + " / " + scale : scale + " * " + result;
@@ -538,9 +584,9 @@ static void RenderComposedRewrite(const LogicalDecide::ComposedMinMaxConstraint 
 	}
 }
 
-//! Join a clause body with its WHEN/PER qualifier, which sits after it in DECIDE syntax.
+//! Join a clause body with its WHEN/PER/IF prefix, which sits before it in DeciQL.
 static string WithQualifier(const string &body, const string &qualifier) {
-	return qualifier.empty() ? body : body + " " + qualifier;
+	return qualifier.empty() ? body : qualifier + " " + body;
 }
 
 vector<DecideClauseLayers> CollectDecideClauseLayers(
@@ -604,8 +650,12 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(
 		if (info.written_lhs.empty() && info.written_cmp.empty()) {
 			layers.written = canonical;
 		} else {
-			layers.written = WithQualifier(
-			    info.written_lhs + " " + info.written_cmp + " " + info.written_rhs, info.qualifier);
+			// A spelling captured in one piece (a TEXT decision's comparison) has no
+			// operator and bound of its own to join.
+			string written = info.written_cmp.empty()
+			                     ? info.written_lhs
+			                     : info.written_lhs + " " + info.written_cmp + " " + info.written_rhs;
+			layers.written = WithQualifier(written, info.qualifier);
 			if (canonical != layers.written) {
 				layers.canonical = canonical;
 			}

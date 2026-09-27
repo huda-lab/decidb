@@ -23,21 +23,6 @@ class DecideGlobalSinkState;
 //! Finalize, so it's safe for executors to retain references into cached entries.
 using ChunkExprCache = std::unordered_map<const Expression *, unique_ptr<Expression>>;
 
-//! One cached PER grouping: the expression set it was built from, plus the resulting
-//! unfiltered row→group assignment. Keyed by a hash of the PER expression set so a
-//! PER spec evaluated once (e.g. by a constraint) is reused by every other call site
-//! that asks for the same expression set (e.g. the objective, or a later constraint).
-struct PerGroupCacheEntry {
-    vector<const Expression *> exprs;
-    bool null_excludes;
-    vector<idx_t> unfiltered_row_group_ids;
-    idx_t unfiltered_num_groups;
-    //! Representative key values per unfiltered group ([key_col][gid]); used to label
-    //! each PER group with its printable key for infeasible diagnosis.
-    vector<vector<Value>> unfiltered_rep_keys;
-};
-using PerGroupCache = std::unordered_map<size_t, vector<PerGroupCacheEntry>>;
-
 //! Per-term filter state for aggregate-local WHEN (constraint terms, bilinear terms,
 //! quadratic groups, and their objective-side equivalents all share this shape).
 struct TermFilterState {
@@ -93,6 +78,12 @@ public:
 
     // The bound objective function expression
     unique_ptr<Expression> decide_objective;
+    //! `THEN` stages as bound, for EXPLAIN; their linear form is in `prepared`.
+    vector<DecideObjectiveStage> objective_tail;
+    //! Each TEXT decision's one-hot encoding, read back as the chosen value.
+    vector<DecideTextDomain> text_domains;
+    //! The frame expressions' timelines, navigated per instance at evaluation.
+    vector<DecideFrameInfo> frames;
 
     // Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
     idx_t num_auxiliary_vars = 0;
@@ -154,6 +145,7 @@ public:
     bool per_outer_is_easy = false;
     // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
     bool per_inner_was_avg = false;
+    idx_t per_inner_scope_idx = DConstants::INVALID_INDEX;
 
     // --- Table-scoped variable metadata ---
 
@@ -261,7 +253,7 @@ private:
     //! PHASE 2, sub-phase 1: evaluate every constraint's coefficients and append the
     //! result to gstate.evaluated_constraints.
     void EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                             ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                             ChunkExprCache &chunk_expr_cache,
                              const vector<EntityMapping> &entity_mappings) const;
 
     //! Everything PHASE 2 reads off the data that a later phase still needs. It carries
@@ -294,8 +286,12 @@ private:
 
     //! PHASE 2, sub-phase 2: evaluate the objective's coefficients onto gstate's
     //! objective-evaluation fields, then settle the objective's PER grouping.
+    //! Evaluate every `THEN` stage into `gstate.objective_stages`, through
+    //! EvaluateObjective; runs before the first objective is evaluated.
+    void EvaluateObjectiveStages(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                 ChunkExprCache &chunk_expr_cache, const vector<EntityMapping> &entity_mappings) const;
     EvaluatedClauses EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                       ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                                       ChunkExprCache &chunk_expr_cache,
                                        const vector<EntityMapping> &entity_mappings) const;
 
     //! PHASE 2, sub-phase 3: evaluate every composed MIN/MAX clause — each inner term's

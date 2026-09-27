@@ -31,7 +31,7 @@ def test_when_aggregate_string_equality(decidb_cli, duckdb_conn, oracle_solver, 
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -93,8 +93,8 @@ def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_t
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
-            AND SUM(x * l_quantity) <= 80 WHEN l_returnflag = 'A'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 50
+            AND WHEN l_returnflag = 'A': SUM(x * l_quantity) <= 80
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -159,7 +159,7 @@ def test_when_aggregate_numeric_comparison(decidb_cli, duckdb_conn, oracle_solve
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_extendedprice) <= 5000 WHEN l_discount >= 0.06
+        SUCH THAT WHEN l_discount >= 0.06: SUM(x * l_extendedprice) <= 5000
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -219,7 +219,7 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_quantity > 0
+        SUCH THAT WHEN l_quantity > 0: SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -280,7 +280,7 @@ def test_when_no_rows_match(decidb_cli):
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'Z'
+        SUCH THAT WHEN l_returnflag = 'Z': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     decidb_cli.assert_error(sql, match=r"empty|WHEN")
@@ -300,7 +300,7 @@ def test_when_mixed_conditional_and_unconditional(decidb_cli, duckdb_conn, oracl
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 50
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -366,7 +366,7 @@ def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, p
         FROM customer
         WHERE c_nationkey = 1
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * 10) <= 200 WHEN c_mktsegment = 'AUTOMOBILE'
+        SUCH THAT WHEN c_mktsegment = 'AUTOMOBILE': SUM(x * 10) <= 200
         MAXIMIZE SUM(x * c_acctbal)
     """
     t0 = time.perf_counter()
@@ -425,7 +425,7 @@ def test_when_not_equal(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 80 WHEN l_returnflag <> 'N'
+        SUCH THAT WHEN l_returnflag <> 'N': SUM(x * l_quantity) <= 80
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -490,7 +490,7 @@ def test_when_constraint_ordering_invariance(decidb_cli):
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 20
-            AND SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+            AND WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 50
         MAXIMIZE SUM(x * l_extendedprice)
     """
     # Order 2: unconditional AFTER WHEN
@@ -500,7 +500,7 @@ def test_when_constraint_ordering_invariance(decidb_cli):
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 50
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -548,7 +548,7 @@ def test_when_null_condition_column(decidb_cli, duckdb_conn, oracle_solver, perf
         SELECT id, val, flag, x
         FROM data
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 20 WHEN flag = 'R'
+        SUCH THAT WHEN flag = 'R': SUM(x * val) <= 20
         MAXIMIZE SUM(x * val)
     """
     result, cols = decidb_cli.execute(sql)
@@ -595,7 +595,7 @@ def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
                    (3, 8.0, 'c'), (4, 15.0, NULL)
         ) t(id, val, note)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 15 WHEN (note IS NOT NULL)
+        SUCH THAT WHEN (note IS NOT NULL): SUM(x * val) <= 15
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * val)
     """

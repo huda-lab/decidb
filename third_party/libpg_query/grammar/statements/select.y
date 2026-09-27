@@ -167,84 +167,176 @@ opt_select:
 			}
 	;
 
-variable_type:
-			INT_P
-				{ $$ = makeTypeName("integer_variable"); $$->location = @1; }
-			| REAL
-				{ $$ = makeTypeName("real_variable"); $$->location = @1; }
-			| BOOL_P
-				{ $$ = makeTypeName("bool_variable"); $$->location = @1; }
-		;
+/* ============================================================================
+ * DecidB: the DECIDE clause (DeciQL, context/descriptions/00_project_overview/
+ * deciql_language_spec.md). The parser only retains structure: which prefix
+ * belongs to which body, which BY belongs to which reducer. It resolves no
+ * name, decides no shape, and lowers nothing.
+ * ========================================================================== */
 
-/* Same three types, marked query-wide. The scope rides on the type marker
- * because the marker namespace ("integer_variable", ...) is already private to
- * DeciDB; the binder strips the "scalar_" prefix and reads it as the scope.
- */
-scalar_variable_type:
-			INT_P
-				{ $$ = makeTypeName("scalar_integer_variable"); $$->location = @1; }
-			| REAL
-				{ $$ = makeTypeName("scalar_real_variable"); $$->location = @1; }
-			| BOOL_P
-				{ $$ = makeTypeName("scalar_bool_variable"); $$->location = @1; }
-		;
-
-/* A single typed variable declaration. The type is mandatory:
- *   "x(INT)"                  -- row-scoped (one per result row)
- *   "T.x(BOOL)"               -- table-scoped (one per entity in table T)
- *   "scalar x(INT)"           -- query-wide (one for the whole query)
- */
-typed_decide_variable:
-			ColId '(' variable_type ')'
+/* One element of a scope: a column (`depotID`, `D.depotID`) or a relation (`D`).
+ * The parser cannot tell a relation from a column; the binder resolves it. */
+decide_scope_elem:
+			ColId
 				{
-					/* Row-scoped variable: x(TYPE) */
 					PGColumnRef *col = makeNode(PGColumnRef);
 					col->fields = list_make1(makeString($1));
 					col->location = @1;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$3, @2);
+					$$ = (PGNode *) col;
 				}
-			| ColId '.' ColId '(' variable_type ')'
+			| ColId '.' ColId
 				{
-					/* Table-scoped variable: T.x(TYPE) */
 					PGColumnRef *col = makeNode(PGColumnRef);
 					col->fields = list_make2(makeString($1), makeString($3));
 					col->location = @1;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$5, @2);
+					$$ = (PGNode *) col;
 				}
-			| SCALAR ColId '(' scalar_variable_type ')'
+		;
+
+decide_scope_list:
+			decide_scope_elem								{ $$ = list_make1($1); }
+			| decide_scope_list ',' decide_scope_elem		{ $$ = lappend($1, $3); }
+		;
+
+/* The Key: `()` is global, a list is a key. */
+decide_scope:
+			'(' ')'
 				{
-					/* Query-wide variable: scalar x(TYPE) */
-					PGColumnRef *col = makeNode(PGColumnRef);
-					col->fields = list_make1(makeString($2));
-					col->location = @2;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$4, @3);
+					PGDecideScope *n = makeNode(PGDecideScope);
+					n->kind = PG_DECIDE_SCOPE_GLOBAL;
+					n->keys = NIL;
+					n->location = @1;
+					$$ = (PGNode *) n;
 				}
-				/* Removed spellings, kept only to give an actionable message: a
-			 * declaration with no type, the old "x IS INTEGER" form, and a
-			 * table-qualified scalar (a contradiction in terms).
-			 */
-			| SCALAR ColId '.' ColId '(' variable_type ')'
+			| decide_scope_list
+				{
+					PGDecideScope *n = makeNode(PGDecideScope);
+					n->kind = PG_DECIDE_SCOPE_KEY;
+					n->keys = $1;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+		;
+
+decide_domain:
+			INT_P											{ $$ = PG_DECIDE_DOMAIN_INT; }
+			| REAL											{ $$ = PG_DECIDE_DOMAIN_REAL; }
+			| BOOL_P										{ $$ = PG_DECIDE_DOMAIN_BOOL; }
+			| SEMIREAL										{ $$ = PG_DECIDE_DOMAIN_SEMIREAL; }
+			| SEMIINT										{ $$ = PG_DECIDE_DOMAIN_SEMIINT; }
+		;
+
+decide_string_list:
+			Sconst											{ $$ = list_make1(makeString($1)); }
+			| decide_string_list ',' Sconst					{ $$ = lappend($1, makeString($3)); }
+		;
+
+/* Declaration-level bounds. The lower bound of BETWEEN is a b_expr, as in SQL's
+ * own BETWEEN, so the AND that separates the bounds is not read as a conjunction. */
+decide_declarator_bounds:
+			/* EMPTY */										{ $$ = NULL; }
+			| BETWEEN b_expr AND a_expr
+				{
+					$$ = (PGNode *) list_make2($2, $4);
+				}
+			| LESS_EQUALS a_expr
+				{
+					$$ = (PGNode *) list_make2(NULL, $2);
+				}
+			| GREATER_EQUALS a_expr
+				{
+					$$ = (PGNode *) list_make2($2, NULL);
+				}
+		;
+
+/* A single declarator:
+ *   "x(INT)"                       -- one decision per surviving row
+ *   "PER (): x(INT)"               -- one decision for the whole query
+ *   "PER D.region, P.id: x(REAL)"  -- one decision per distinct key
+ *   "PER D: open(BOOL)"            -- one per distinct tuple of relation D
+ * with optional bounds and the TEXT / SEMI domains of the spec.
+ */
+typed_decide_variable:
+			ColId '(' decide_domain ')' decide_declarator_bounds
+				{
+					PGDecideDeclarator *n = makeNode(PGDecideDeclarator);
+					n->scope = NULL;
+					n->name = $1;
+					n->domain = (PGDecideDomain) $3;
+					n->text_values = NIL;
+					n->lower_bound = $5 ? (PGNode *) linitial((PGList *) $5) : NULL;
+					n->upper_bound = $5 ? (PGNode *) lsecond((PGList *) $5) : NULL;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| ColId '(' TEXT_P IN_P '[' decide_string_list ']' ')'
+				{
+					PGDecideDeclarator *n = makeNode(PGDecideDeclarator);
+					n->scope = NULL;
+					n->name = $1;
+					n->domain = PG_DECIDE_DOMAIN_TEXT;
+					n->text_values = $6;
+					n->lower_bound = NULL;
+					n->upper_bound = NULL;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| PER_DECIDE decide_scope ':' ColId '(' decide_domain ')' decide_declarator_bounds
+				{
+					PGDecideDeclarator *n = makeNode(PGDecideDeclarator);
+					n->scope = (PGDecideScope *) $2;
+					n->name = $4;
+					n->domain = (PGDecideDomain) $6;
+					n->text_values = NIL;
+					n->lower_bound = $8 ? (PGNode *) linitial((PGList *) $8) : NULL;
+					n->upper_bound = $8 ? (PGNode *) lsecond((PGList *) $8) : NULL;
+					n->location = @4;
+					$$ = (PGNode *) n;
+				}
+			| PER_DECIDE decide_scope ':' ColId '(' TEXT_P IN_P '[' decide_string_list ']' ')'
+				{
+					PGDecideDeclarator *n = makeNode(PGDecideDeclarator);
+					n->scope = (PGDecideScope *) $2;
+					n->name = $4;
+					n->domain = PG_DECIDE_DOMAIN_TEXT;
+					n->text_values = $9;
+					n->lower_bound = NULL;
+					n->upper_bound = NULL;
+					n->location = @4;
+					$$ = (PGNode *) n;
+				}
+			| ColId '(' TEXT_P ')'
 				{
 					ereport(ERROR,
 							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("scalar DECIDE variable \"%s\" cannot name a table; write scalar %s(INT), or drop scalar for one decision per %s row",
-									$4, $4, $2),
-							 parser_errposition(@2)));
+							 errmsg("DECIDE variable \"%s\": a TEXT decision lists its values; write %s(TEXT IN ['a', 'b', ...])", $1, $1),
+							 parser_errposition(@3)));
 					$$ = NULL;
 				}
-			| SCALAR ColId
+			/* Retired spellings, kept only to name the edit that replaces them. */
+			| ColId '.' ColId '(' decide_domain ')'
 				{
 					ereport(ERROR,
 							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE variable \"%s\" needs a type; write scalar %s(INT), scalar %s(BOOL) or scalar %s(REAL)", $2, $2, $2, $2),
-							 parser_errposition(@2)));
+							 errmsg("\"%s.%s(...)\" is no longer a DECIDE declaration; write PER %s: %s(...) for one decision per tuple of %s",
+									$1, $3, $1, $3, $1),
+							 parser_errposition(@1)));
+					$$ = NULL;
+				}
+			| SCALAR ColId '(' decide_domain ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("\"scalar %s(...)\" is no longer a DECIDE declaration; write PER (): %s(...) for one decision shared by the whole query",
+									$2, $2),
+							 parser_errposition(@1)));
 					$$ = NULL;
 				}
 			| ColId
 				{
 					ereport(ERROR,
 							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE variable \"%s\" needs a type; write %s(INT), %s(BOOL) or %s(REAL)", $1, $1, $1, $1),
+							 errmsg("DECIDE variable \"%s\" needs a domain; write %s(INT), %s(BOOL) or %s(REAL)", $1, $1, $1, $1),
 							 parser_errposition(@1)));
 					$$ = NULL;
 				}
@@ -252,30 +344,22 @@ typed_decide_variable:
 				{
 					ereport(ERROR,
 							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("DECIDE variable \"%s.%s\" needs a type; write %s.%s(INT), %s.%s(BOOL) or %s.%s(REAL)",
+							 errmsg("DECIDE variable \"%s.%s\" needs a domain and a key; write PER %s: %s(INT), PER %s: %s(BOOL) or PER %s: %s(REAL)",
 									$1, $3, $1, $3, $1, $3, $1, $3),
 							 parser_errposition(@1)));
 					$$ = NULL;
 				}
-			| ColId IS ColId
+			| SCALAR ColId
 				{
 					ereport(ERROR,
 							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("write the DECIDE type in parentheses, e.g. %s(INT); the IS form is no longer accepted", $1),
-							 parser_errposition(@2)));
-					$$ = NULL;
-				}
-			| ColId '.' ColId IS ColId
-				{
-					ereport(ERROR,
-							(errcode(PG_ERRCODE_SYNTAX_ERROR),
-							 errmsg("write the DECIDE type in parentheses, e.g. %s.%s(INT); the IS form is no longer accepted", $1, $3),
-							 parser_errposition(@4)));
+							 errmsg("\"scalar %s\" is no longer a DECIDE declaration; write PER (): %s(INT), PER (): %s(BOOL) or PER (): %s(REAL)",
+									$2, $2, $2, $2),
+							 parser_errposition(@1)));
 					$$ = NULL;
 				}
 		;
 
-/* List of typed variables: "x IS INTEGER, y IS BOOLEAN" */
 typed_decide_variable_list:
 			typed_decide_variable
 				{ $$ = list_make1($1); }
@@ -283,84 +367,135 @@ typed_decide_variable_list:
 				{ $$ = lappend($1, $3); }
 		;
 
-decide_when_condition:
-			c_expr								%prec DECIDE_ITEM
-				{ $$ = $1; }
-		;
-
-/* Objective WHEN has no trailing comparison bound, so it may admit one
- * comparison directly without creating the constraint-side ambiguity. */
-decide_objective_when_condition:
-			c_expr								%prec DECIDE_ITEM
-				{ $$ = $1; }
-			| d_expr '<' d_expr					%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", $1, $3, @2); }
-			| d_expr '>' d_expr					%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", $1, $3, @2); }
-			| d_expr '=' d_expr					%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", $1, $3, @2); }
-			| d_expr LESS_EQUALS d_expr			%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", $1, $3, @2); }
-			| d_expr GREATER_EQUALS d_expr		%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", $1, $3, @2); }
-			| d_expr NOT_EQUALS d_expr			%prec POSTFIXOP
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", $1, $3, @2); }
-		;
-
-/* Constraint-local WHEN stays narrow because its next comparison can be the
- * constraint bound (`SUM(x) WHEN flag <= 20`). After MAXIMIZE/MINIMIZE there
- * is no trailing bound, so the objective token admits one atomic comparison. */
-decide_aggregate_when_condition:
-			WHEN_DECIDE decide_when_condition
-				{ $$ = $2; }
-			| WHEN_DECIDE_OBJECTIVE decide_objective_when_condition
-				{ $$ = $2; }
-		;
-
-/* One DECIDE item body. DECIDE_ITEM sits above AND but below the DECIDE WHEN
- * tokens and comparison operators: a top-level AND belongs to
- * decide_constraint_list, while the item's own comparisons stay intact. */
+/* One DECIDE item body. DECIDE_ITEM sits above AND, so a top-level AND belongs
+ * to decide_constraint_list while the item's own comparisons stay intact. */
 decide_item_expr:
 			a_expr								%prec DECIDE_ITEM
 				{ $$ = $1; }
 		;
 
-decide_objective_item:
-			decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER columnref_opt_indirection
+/* The prefixes of a constraint, in the spec's fixed order: WHEN (filter known
+ * data), PER (generate), IF (guard on a decision). Each is optional; at least
+ * one is present when this nonterminal is used. */
+decide_prefix_per_opt:
+			/* EMPTY */										{ $$ = NULL; }
+			| PER_DECIDE decide_scope				{ $$ = $2; }
+		;
+
+decide_prefix_if_opt:
+			/* EMPTY */										{ $$ = NULL; }
+			| IF_DECIDE a_expr								{ $$ = $2; }
+		;
+
+decide_constraint_prefix:
+			WHEN_DECIDE a_expr decide_prefix_per_opt decide_prefix_if_opt
 				{
-					/* DecidB: objective WHEN condition PER column */
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
+					PGDecidePrefix *n = makeNode(PGDecidePrefix);
+					n->filter = $2;
+					n->scope = (PGDecideScope *) $3;
+					n->guard = $4;
+					n->location = @1;
+					$$ = (PGNode *) n;
 				}
-			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER '(' columnrefList ')'
+			| PER_DECIDE decide_scope decide_prefix_if_opt
 				{
-					/* DecidB: objective WHEN condition PER (col1, col2, ...) */
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
+					PGDecidePrefix *n = makeNode(PGDecidePrefix);
+					n->filter = NULL;
+					n->scope = (PGDecideScope *) $2;
+					n->guard = $3;
+					n->location = @1;
+					$$ = (PGNode *) n;
 				}
-			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition
+			| IF_DECIDE a_expr
 				{
-					/* DecidB: objective WHEN condition (restricted grammar excludes AND/OR) */
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+					PGDecidePrefix *n = makeNode(PGDecidePrefix);
+					n->filter = NULL;
+					n->scope = NULL;
+					n->guard = $2;
+					n->location = @1;
+					$$ = (PGNode *) n;
 				}
-			| decide_item_expr PER columnref_opt_indirection
+		;
+
+/* A constraint: `[prefixes] : body` or a bare body. The wrappers nest
+ * PER(WHEN(IF(body))): the guard is closest to the row it conditions. */
+decide_constraint_item:
+			decide_constraint_prefix ':' decide_item_expr
 				{
-					/* DecidB: objective PER column */
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
+					$$ = makeDecideScopedBody((PGDecidePrefix *) $1, $3, @1);
 				}
-			| decide_item_expr PER '(' columnrefList ')'
-				{
-					/* DecidB: objective PER (col1, col2, ...) */
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
-				}
+			| ':' decide_item_expr
+				{ $$ = $2; }
 			| decide_item_expr
 				{ $$ = $1; }
+		;
+
+decide_constraint_list:
+			decide_constraint_item
+				{ $$ = $1; }
+			| decide_constraint_list ',' decide_constraint_item
+				{ ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("comma-separated SUCH THAT constraints are not supported; use AND between constraints"), parser_errposition(@2))); }
+			| decide_constraint_list AND decide_constraint_item
+				{ $$ = makeAndExpr($1, $3, @2); }
+		;
+
+/* An objective stage. `PER ()` may be spelled explicitly; it is the only
+ * generation an objective has. */
+decide_objective:
+			MAXIMIZE decide_item_expr
+				{
+					PGDecideObjective *n = makeNode(PGDecideObjective);
+					n->sense = PG_OBJ_MAXIMIZE;
+					n->expr = $2;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| MINIMIZE decide_item_expr
+				{
+					PGDecideObjective *n = makeNode(PGDecideObjective);
+					n->sense = PG_OBJ_MINIMIZE;
+					n->expr = $2;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| MAXIMIZE PER_DECIDE '(' ')' ':' decide_item_expr
+				{
+					PGDecideObjective *n = makeNode(PGDecideObjective);
+					n->sense = PG_OBJ_MAXIMIZE;
+					n->expr = $6;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| MINIMIZE PER_DECIDE '(' ')' ':' decide_item_expr
+				{
+					PGDecideObjective *n = makeNode(PGDecideObjective);
+					n->sense = PG_OBJ_MINIMIZE;
+					n->expr = $6;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| MAXIMIZE PER_DECIDE decide_scope_list ':' decide_item_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("an objective is generated once, so it takes no key: write MAXIMIZE PER (): ... or drop the PER, and reduce per key inside it, e.g. MAX(PER k: SUM(...) BY (k))"),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+			| MINIMIZE PER_DECIDE decide_scope_list ':' decide_item_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("an objective is generated once, so it takes no key: write MINIMIZE PER (): ... or drop the PER, and reduce per key inside it, e.g. MIN(PER k: SUM(...) BY (k))"),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+		;
+
+/* `MAXIMIZE a THEN MINIMIZE b THEN ...`: lexicographic, first stage first. */
+decide_objective_list:
+			decide_objective								{ $$ = list_make1($1); }
+			| decide_objective_list THEN_DECIDE decide_objective	{ $$ = lappend($1, $3); }
 		;
 
 /* DecidB: the constraints and optional objective. Shared by both clause
@@ -369,24 +504,22 @@ decide_objective_item:
  * NULL; whoever has the declaration attaches it.
  */
 decide_tail:
-			SUCH THAT decide_constraint_list MAXIMIZE decide_objective_item
+			SUCH THAT decide_constraint_list decide_objective_list
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = $3;
-                    n->sense = PG_OBJ_MAXIMIZE;
-                    n->objective = $5;
+                    n->objectives = $4;
                     $$ = (PGNode *)n;
                 }
-			| SUCH THAT decide_constraint_list MINIMIZE decide_objective_item
+			| SUCH THAT decide_constraint_list SATISFY
                 {
                     PGDecideClause *n = makeNode(PGDecideClause);
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = $3;
-                    n->sense = PG_OBJ_MINIMIZE;
-                    n->objective = $5;
+                    n->objectives = NIL;
                     $$ = (PGNode *)n;
                 }
 			| SUCH THAT decide_constraint_list
@@ -395,8 +528,7 @@ decide_tail:
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
                     n->constraints = $3;
-                    n->sense = PG_OBJ_FEASIBILITY;
-                    n->objective = NULL;
+                    n->objectives = NIL;
                     $$ = (PGNode *)n;
                 }
 		;
@@ -466,51 +598,196 @@ decide_body:
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
-decide_constraint_list:
-			decide_constraint_item
-				{ $$ = $1; }
-			| decide_constraint_list ',' decide_constraint_item
-				{ ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR), errmsg("comma-separated SUCH THAT constraints are not supported; use AND between constraints. For multi-column PER, use PER (col1, col2)."), parser_errposition(@2))); }
-			| decide_constraint_list AND decide_constraint_item
-				{ $$ = makeAndExpr($1, $3, @2); }
+/* ---- reducers: agg([WHEN theta] [PER K]: e) [BY (keys)] ---------------------
+ * The prefix and the BY are attached here, in the grammar, so their
+ * association is never re-decided later. `sum(x)` and `sum(x) BY (g)` keep
+ * the plain func_application spelling of the body.
+ */
+decide_reducer_prefix:
+			WHEN_DECIDE a_expr
+				{
+					PGDecidePrefix *n = makeNode(PGDecidePrefix);
+					n->filter = $2;
+					n->scope = NULL;
+					n->guard = NULL;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| WHEN_DECIDE a_expr PER_DECIDE decide_scope
+				{
+					PGDecidePrefix *n = makeNode(PGDecidePrefix);
+					n->filter = $2;
+					n->scope = (PGDecideScope *) $4;
+					n->guard = NULL;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| PER_DECIDE decide_scope
+				{
+					PGDecidePrefix *n = makeNode(PGDecidePrefix);
+					n->filter = NULL;
+					n->scope = (PGDecideScope *) $2;
+					n->guard = NULL;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
 		;
 
-decide_constraint_item:
-			decide_item_expr WHEN_DECIDE b_expr PER columnref_opt_indirection
+decide_by_keys:
+			BY_DECIDE '(' ')'								{ $$ = NIL; }
+			| BY_DECIDE '(' expr_list ')'					{ $$ = $3; }
+		;
+
+decide_by_opt:
+			/* EMPTY */										{ $$ = NIL; }
+			| decide_by_keys								{ $$ = $1; }
+		;
+
+decide_reducer:
+			func_name '(' decide_reducer_prefix ':' a_expr ')' decide_by_opt
 				{
-					/* DecidB: constraint WHEN condition PER column */
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
+					$$ = makeDecideReducer($1, (PGDecidePrefix *) $3, $5, NIL, $7, @1, @7);
 				}
-			| decide_item_expr WHEN_DECIDE b_expr PER '(' columnrefList ')'
+			| func_name '(' ':' a_expr ')' decide_by_opt
 				{
-					/* DecidB: constraint WHEN condition PER (col1, col2, ...) */
-					PGNode *when_node = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, (PGNode *) $6, @4);
+					$$ = makeDecideReducer($1, NULL, $4, NIL, $6, @1, @6);
 				}
-			| decide_item_expr WHEN_DECIDE b_expr
+			/* norm(WHEN c: e, p): the scoped body is the first argument, the rest follow. */
+			| func_name '(' decide_reducer_prefix ':' a_expr ',' expr_list ')' decide_by_opt
 				{
-					/* DecidB: constraint WHEN condition (b_expr excludes AND/OR) */
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
+					$$ = makeDecideReducer($1, (PGDecidePrefix *) $3, $5, $7, $9, @1, @9);
 				}
-			| decide_item_expr PER columnref_opt_indirection
+			| func_name '(' ':' a_expr ',' expr_list ')' decide_by_opt
 				{
-					/* DecidB: constraint PER column */
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
+					$$ = makeDecideReducer($1, NULL, $4, $6, $8, @1, @8);
 				}
-			| decide_item_expr PER '(' columnrefList ')'
+			| func_application decide_by_keys
 				{
-					/* DecidB: constraint PER (col1, col2, ...) */
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, (PGNode *) $4, @2);
+					$$ = makeDecideReducerBy($1, $2, @2);
 				}
-			| decide_item_expr
-				{ $$ = $1; }
+		;
+
+/* ---- frames -----------------------------------------------------------------
+ *   AT(selector [ELSE v]: e) OVER (key [ASC|DESC] [CYCLIC] [WITHIN P])
+ *   agg(FROM selector TO selector [EVERY d] [ELSE v | ALL]: e) OVER (...)
+ * The selector words are ordinary identifiers elsewhere; they are read as
+ * selectors only in these positions.
+ */
+decide_frame_selector:
+			FIRST_P											{ $$ = PG_DECIDE_FRAME_FIRST * 1000 + 0; }
+			| LAST_P										{ $$ = PG_DECIDE_FRAME_LAST * 1000 + 0; }
+			| PREVIOUS										{ $$ = PG_DECIDE_FRAME_PREVIOUS * 1000 + 1; }
+			| NEXT											{ $$ = PG_DECIDE_FRAME_NEXT * 1000 + 1; }
+			| Iconst PREVIOUS
+				{
+					if ($1 < 1 || $1 >= 1000)
+						ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
+							errmsg("a frame selector distance must be between 1 and 999"), parser_errposition(@1)));
+					$$ = PG_DECIDE_FRAME_PREVIOUS * 1000 + $1;
+				}
+			| Iconst NEXT
+				{
+					if ($1 < 1 || $1 >= 1000)
+						ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
+							errmsg("a frame selector distance must be between 1 and 999"), parser_errposition(@1)));
+					$$ = PG_DECIDE_FRAME_NEXT * 1000 + $1;
+				}
+		;
+
+decide_frame_else_opt:
+			/* EMPTY */										{ $$ = NULL; }
+			| ELSE a_expr									{ $$ = $2; }
+		;
+
+decide_frame_every_opt:
+			/* EMPTY */										{ $$ = 1; }
+			| EVERY Iconst
+				{
+					if ($2 < 1)
+						ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
+							errmsg("EVERY needs a positive step"), parser_errposition(@2)));
+					$$ = $2;
+				}
+		;
+
+/* Range policy: NULL for a missing position (default), a fill value, or ALL
+ * (a complete frame or NULL). ALL is spelled as a NULL PGList marker. */
+decide_frame_policy_opt:
+			/* EMPTY */										{ $$ = NULL; }
+			| ELSE a_expr									{ $$ = $2; }
+			| ALL
+				{
+					PGList *marker = list_make1(NULL);
+					$$ = (PGNode *) marker;
+				}
+		;
+
+decide_frame_within_opt:
+			/* EMPTY */										{ $$ = NULL; }
+			| WITHIN_DECIDE decide_scope					{ $$ = $2; }
+		;
+
+decide_frame_order:
+			a_expr opt_asc_desc decide_frame_within_opt
+				{
+					PGDecideFrame *n = makeNode(PGDecideFrame);
+					n->order_key = $1;
+					n->descending = ($2 == PG_SORTBY_DESC);
+					n->cyclic = false;
+					n->within = (PGDecideScope *) $3;
+					$$ = (PGNode *) n;
+				}
+			| a_expr opt_asc_desc CYCLIC decide_frame_within_opt
+				{
+					PGDecideFrame *n = makeNode(PGDecideFrame);
+					n->order_key = $1;
+					n->descending = ($2 == PG_SORTBY_DESC);
+					n->cyclic = true;
+					n->within = (PGDecideScope *) $4;
+					$$ = (PGNode *) n;
+				}
+		;
+
+decide_frame:
+			AT_DECIDE '(' decide_frame_selector decide_frame_else_opt ':' a_expr ')' OVER_DECIDE '(' decide_frame_order ')'
+				{
+					PGDecideFrame *n = (PGDecideFrame *) $10;
+					n->is_range = false;
+					n->agg = NULL;
+					n->from_sel.kind = (PGDecideFrameSelectorKind) ($3 / 1000);
+					n->from_sel.distance = $3 % 1000;
+					n->to_sel = n->from_sel;
+					n->every = 1;
+					n->policy = $4 ? PG_DECIDE_FRAME_ELSE_VALUE : PG_DECIDE_FRAME_ELSE_NULL;
+					n->else_value = $4;
+					n->expr = $6;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+			| func_name '(' FROM decide_frame_selector TO decide_frame_selector decide_frame_every_opt decide_frame_policy_opt ':' a_expr ')' OVER_DECIDE '(' decide_frame_order ')'
+				{
+					PGDecideFrame *n = (PGDecideFrame *) $14;
+					n->is_range = true;
+					n->agg = makeDecideFrameAggName($1, @1, yyscanner);
+					n->from_sel.kind = (PGDecideFrameSelectorKind) ($4 / 1000);
+					n->from_sel.distance = $4 % 1000;
+					n->to_sel.kind = (PGDecideFrameSelectorKind) ($6 / 1000);
+					n->to_sel.distance = $6 % 1000;
+					n->every = $7;
+					if ($8 == NULL) {
+						n->policy = PG_DECIDE_FRAME_ELSE_NULL;
+						n->else_value = NULL;
+					} else if (IsA($8, PGList)) {
+						n->policy = PG_DECIDE_FRAME_ALL;
+						n->else_value = NULL;
+					} else {
+						n->policy = PG_DECIDE_FRAME_ELSE_VALUE;
+						n->else_value = $8;
+					}
+					n->expr = $10;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
 		;
 
 simple_select:
@@ -2848,10 +3125,6 @@ a_expr:		c_expr									{ $$ = $1; }
 				{
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "<>", $1, (PGNode *) $6, @2);
 				}
-			| a_expr IS variable_type			        %prec IS
-				{
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", $1, (PGNode *) $3, @2);
-				}
 			| a_expr BETWEEN opt_asymmetric b_expr AND a_expr		%prec BETWEEN
 				{
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_BETWEEN,
@@ -3074,70 +3347,15 @@ b_expr:		c_expr
  * ambiguity to the b_expr syntax.
  */
 c_expr:		d_expr									%prec DECIDE_ITEM
-			| func_application decide_aggregate_when_condition	%prec POSTFIXOP
+			| decide_reducer						%prec DECIDE_ITEM
 				{
-					/* DecidB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $2, @2);
+					/* DecidB: a scoped reducer or a reducer with a BY key. */
+					$$ = $1;
 				}
-			| func_name '(' func_arg_list ':' func_arg_list ')'		%prec DECIDE_ITEM
+			| decide_frame							%prec DECIDE_ITEM
 				{
-					/* DecidB: relation-qualified reducer, sum(D: expr) or, qualified by
-					 * several relations at once, sum(D, T: expr).
-					 *
-					 * The qualifier is parsed as a func_arg_list rather than as a
-					 * dedicated name list on purpose. `sum(D, T: e)` and `sum(a, b)`
-					 * share a prefix that LALR(1) cannot tell apart at the comma, so
-					 * both sides are read as argument lists and the qualifier's shape
-					 * is checked here instead of in the grammar. The decision point
-					 * moves to ':' vs ')' after a completed func_arg_list, which is
-					 * conflict-free. Every item in the list must be a bare relation
-					 * name; the whole list travels as one PGList (cast to PGNode*, the
-					 * same idiom `columnrefList` uses for multi-column PER) rather than
-					 * being unpacked here, so the binder sees the full qualifier set.
-					 */
-					for (PGListCell *lc = $3->head; lc != NULL; lc = lc->next)
-					{
-						if (!IsA((PGNode *) lc->data.ptr_value, PGColumnRef))
-						{
-							ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
-								errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
-								parser_errposition(@3)));
-						}
-					}
-					PGFuncCall *n = makeFuncCall($1, $5, @1);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, (PGNode *) $3, @4);
-				}
-			| func_name '(' func_arg_list ':' func_arg_list ')' decide_aggregate_when_condition	%prec POSTFIXOP
-				{
-					/* DecidB: aggregate-local WHEN on a relation-qualified reducer,
-					 * sum(D: expr) WHEN cond. Mirrors the two productions above: the
-					 * qualifier validation is duplicated (not factored into a shared
-					 * helper) rather than reusing the plain-qualified-reducer action,
-					 * because bison actions can't call each other directly and this
-					 * file has no C prologue of its own to hang a helper on.
-					 *
-					 * Without this production, `sum(D: expr) WHEN cond` never matches
-					 * here (a qualified reducer is not a func_application, so the
-					 * aggregate-WHEN clause right after `func_application` above cannot
-					 * fire), so the token stream falls to the loose, whole-constraint
-					 * `a_expr WHEN_DECIDE b_expr` production instead, which swallows
-					 * a trailing comparison like `<= bound` into the WHEN condition.
-					 */
-					for (PGListCell *lc = $3->head; lc != NULL; lc = lc->next)
-					{
-						if (!IsA((PGNode *) lc->data.ptr_value, PGColumnRef))
-						{
-							ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
-								errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
-								parser_errposition(@3)));
-						}
-					}
-					PGFuncCall *n = makeFuncCall($1, $5, @1);
-					PGNode *qualified_reducer = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, (PGNode *) $3, @4);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", qualified_reducer, $7, @7);
+					/* DecidB: a frame expression. */
+					$$ = $1;
 				}
 			| indirection_expr_or_a_expr opt_extended_indirection
 				{

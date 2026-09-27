@@ -32,7 +32,7 @@ def test_when_objective_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        MAXIMIZE SUM(WHEN l_returnflag = 'R': x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -98,7 +98,7 @@ def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 50
-        MINIMIZE SUM(x * l_quantity) WHEN l_returnflag = 'A'
+        MINIMIZE SUM(WHEN l_returnflag = 'A': x * l_quantity)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -164,7 +164,7 @@ def test_when_objective_no_match(decidb_cli):
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 10
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'Z'
+        MAXIMIZE SUM(WHEN l_returnflag = 'Z': x * l_extendedprice)
     """
     decidb_cli.assert_error(sql, match=r"empty|WHEN")
 
@@ -182,7 +182,7 @@ def test_when_objective_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_t
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_quantity > 0
+        MAXIMIZE SUM(WHEN l_quantity > 0: x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -244,8 +244,8 @@ def test_when_constraint_and_objective_same_condition(
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 50
+        MAXIMIZE SUM(WHEN l_returnflag = 'R': x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -312,8 +312,8 @@ def test_when_constraint_and_objective_different_conditions(
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'A'
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'A': SUM(x * l_quantity) <= 100
+        MAXIMIZE SUM(WHEN l_returnflag = 'R': x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -383,7 +383,7 @@ def test_when_objective_with_unconditional_constraint(
         DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
             AND x <= 1
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        MAXIMIZE SUM(WHEN l_returnflag = 'R': x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)

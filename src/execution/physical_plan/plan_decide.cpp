@@ -172,9 +172,13 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->per_inner_is_easy = op.per_inner_is_easy;
     decide_op->per_outer_is_easy = op.per_outer_is_easy;
     decide_op->per_inner_was_avg = op.per_inner_was_avg;
+    decide_op->per_inner_scope_idx = op.per_inner_scope_idx;
     // The flattened constraints and objective, produced by the DECIDE optimizer's
     // final pass. Execution evaluates their coefficients; it does not re-derive them.
     decide_op->prepared = std::move(op.prepared);
+    decide_op->objective_tail = std::move(op.objective_tail);
+    decide_op->text_domains = std::move(op.text_domains);
+    decide_op->frames = std::move(op.frames);
 
     // Entity key expressions are resolved by the column-binding resolver like every
     // other expression LogicalDecide owns (LogicalDecide::EnumerateExpressions), so by

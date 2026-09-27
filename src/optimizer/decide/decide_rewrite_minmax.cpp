@@ -605,7 +605,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 			hard_cmp_type = FlipComparisonExpression(hard_cmp_type);
 		}
 		idx_t ind_idx;
-		auto hard_lhs = EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
+		auto hard_lhs = EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), agg.alias, ind_idx);
 		comp.left = apply_scale(std::move(hard_lhs));
 		comp.type = hard_cmp_type;
 		return;
@@ -648,7 +648,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// coefficients, which is exact whatever its sign because the indicator layer
 		// has already pinned the auxiliary to the true MIN/MAX.
 		idx_t ind_idx;
-		auto hard_lhs = EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
+		auto hard_lhs = EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), agg.alias, ind_idx);
 		comp.left = apply_scale(std::move(hard_lhs));
 		return;
 	}
@@ -658,6 +658,7 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &deci
                                                             const string &agg_name,
                                                             const Expression &inner,
                                                             const Expression *filter,
+                                                            const string &source_alias,
                                                             idx_t &out_clause_idx) {
 	// No indicator variable. `MAX(e) >= K` now becomes an extremum COLUMN and the user's
 	// own bound as a single row over it, whichever way that column is then pinned, and the
@@ -678,8 +679,16 @@ unique_ptr<Expression> DecideOptimizer::EmitHardMinMaxClause(LogicalDecide &deci
 	if (filter) {
 		new_sum->Cast<BoundAggregateExpression>().filter = filter->Copy();
 	}
-	new_sum->alias =
-	    string(MINMAX_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__";
+	// The reducer's BY key still says which rows the extremum ranges over, so it
+	// rides along. Its relation qualifier does not: de-duplicating a joined
+	// relation zeroes the duplicate rows' coefficients, which for an extremum
+	// would put a spurious 0 among the candidates, and the extremum of a
+	// multiset is the extremum of its distinct values anyway.
+	idx_t by_scope_idx;
+	if (TryParseReduceByTag(source_alias, by_scope_idx)) {
+		new_sum->alias = MakeReduceByTag(by_scope_idx);
+	}
+	AddDecideTag(new_sum->alias, string(MINMAX_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "_" + agg_name + "__");
 	out_clause_idx = clause_idx;
 	return new_sum;
 }
@@ -697,22 +706,10 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective) {
-	// Navigate through PER and WHEN wrappers to find the actual aggregate
+	// Navigate through a WHEN wrapper to find the actual aggregate
 	unique_ptr<Expression> *obj_owner = &objective;
 	Expression *obj_expr = objective.get();
-	bool has_per = false;
 
-	// Unwrap PER wrapper (outermost layer)
-	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
-			has_per = true;
-			obj_owner = &conj.children[0];
-			obj_expr = conj.children[0].get();
-		}
-	}
-
-	// Unwrap WHEN wrapper (inside PER, if present)
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
 		if (IsWhenConstraintWrapper(conj) && !conj.children.empty()) {
@@ -748,8 +745,12 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		return;
 	}
 
-	// Check for nested aggregate: OUTER(INNER(expr)) where INNER is also SUM/MIN/MAX/AVG
-	if (has_per && (outer_name == "sum" || outer_name == "min" || outer_name == "max" || outer_name == "avg") &&
+	// Check for the nested spelling `OUTER(PER k: INNER(e) BY (k))`: the outer reducer
+	// generates its terms PER a key (its qualified tag) and each term is itself a
+	// reducer, whose BY must be that same key so each generated value is that key's
+	// own INNER.
+	bool has_per = false;
+	if ((outer_name == "sum" || outer_name == "min" || outer_name == "max" || outer_name == "avg") &&
 	    outer_agg.children.size() == 1) {
 		// Unwrap cast on inner child if present
 		Expression *inner_expr = outer_agg.children[0].get();
@@ -759,10 +760,34 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		if (inner_expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			auto &inner_agg = inner_expr->Cast<BoundAggregateExpression>();
 			auto inner_name = StringUtil::Lower(inner_agg.function.name);
+			idx_t inner_per_scope = DConstants::INVALID_INDEX;
+			idx_t inner_by_scope = DConstants::INVALID_INDEX;
+			has_per = TryParseQualifiedReducerTag(outer_agg.alias, inner_per_scope);
+			TryParseReduceByTag(inner_agg.alias, inner_by_scope);
 
 			if ((inner_name == "sum" || inner_name == "min" || inner_name == "max" || inner_name == "avg") &&
 			    inner_agg.children.size() == 1 &&
 			    BoundExpressionReferencesDecide(*inner_agg.children[0], decide.decide_index)) {
+				if (!has_per) {
+					throw BinderException(
+					    "%s(%s(...)) nests one reducer in another without a key. Generate the inner "
+					    "values PER a key and reduce them BY the same key: %s(PER k: %s(...) BY (k)).",
+					    StringUtil::Upper(outer_name), StringUtil::Upper(inner_name), StringUtil::Upper(outer_name),
+					    StringUtil::Upper(inner_name));
+				}
+				if (inner_by_scope != inner_per_scope) {
+					auto key = decide.entity_scopes[inner_per_scope].table_alias;
+					throw BinderException(
+					    "%s(PER %s: %s(...)): the inner reducer must reduce BY (%s), the key it is generated "
+					    "per, so each generated value is that key's own %s.",
+					    StringUtil::Upper(outer_name), key, StringUtil::Upper(inner_name), key,
+					    StringUtil::Upper(inner_name));
+				}
+				// The inner reducer's key is the objective's generation; it is carried as
+				// `per_inner_scope_idx`, not as a de-duplication tag on the terms.
+				RemoveDecideTag(outer_agg.alias, MakeQualifiedReducerTag(inner_per_scope));
+				RemoveDecideTag(inner_agg.alias, MakeReduceByTag(inner_by_scope));
+				decide.per_inner_scope_idx = inner_per_scope;
 				// Found nested pattern: set metadata
 				// Map outer AVG → SUM (dividing by constant G doesn't change optimal)
 				decide.per_outer_agg = (outer_name == "avg") ? ObjectiveAggregateType::SUM
@@ -805,18 +830,6 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		}
 	}
 
-	// Flat MIN/MAX + PER → error (ambiguous without outer aggregate)
-	if (has_per && (outer_name == "min" || outer_name == "max") &&
-	    outer_agg.children.size() == 1 &&
-	    BoundExpressionReferencesDecide(*outer_agg.children[0], decide.decide_index)) {
-		throw BinderException(
-		    "MINIMIZE/MAXIMIZE %s(...) PER is ambiguous. "
-		    "With PER, use a nested aggregate to specify how per-group values are combined: "
-		    "e.g., SUM(%s(...)) PER col or MAX(%s(...)) PER col.",
-		    StringUtil::Upper(outer_name), StringUtil::Upper(outer_name),
-		    StringUtil::Upper(outer_name));
-	}
-
 	// Flat non-PER MIN/MAX objective.
 	//
 	// A FACTOR on it never reaches here: this path replaces the whole objective with
@@ -827,7 +840,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	if (obj_scale) {
 		return;
 	}
-	if (!has_per && (outer_name == "min" || outer_name == "max") &&
+	if ((outer_name == "min" || outer_name == "max") &&
 	    outer_agg.children.size() == 1 &&
 	    BoundExpressionReferencesDecide(*outer_agg.children[0], decide.decide_index)) {
 		decide.flat_objective_agg = StrToAggType(outer_name);

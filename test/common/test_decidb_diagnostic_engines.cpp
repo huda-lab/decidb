@@ -232,7 +232,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(diag.findings[0].edit_source == "runaway_+inf");
 		// The one rule accounts for every escaping instance and its whole group escapes,
 		// so the cap is scoped to those rows rather than capping the domestic row too.
-		CHECK(diag.findings[0].suggested_change == "x <= <cap> WHEN channel = 'export'");
+		CHECK(diag.findings[0].suggested_change == "WHEN channel = 'export': x <= <cap>");
 		CHECK(diag.findings[0].group == "channel = 'export'");
 		REQUIRE(diag.findings[0].has_amount);
 		CHECK(diag.findings[0].amount == 2.0);
@@ -682,16 +682,16 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		ConstraintSourceInfo source;
 		source.canonical_lhs = "CAST(real_x AS DOUBLE)";
 		source.canonical_rhs = "capacity";
-		source.qualifier = "WHEN enabled PER region";
+		source.qualifier = "WHEN enabled PER region:";
 		source.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
 		model.constraint_sources[0] = std::move(source);
 		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		string clause = "CAST(real_x AS DOUBLE) <= capacity WHEN enabled PER region";
+		string clause = "WHEN enabled PER region: CAST(real_x AS DOUBLE) <= capacity";
 		CHECK(Find(diag, clause).suggested_change ==
-		      "CAST(real_x AS DOUBLE) <= capacity + 3 WHEN enabled PER region");
+		      "WHEN enabled PER region: CAST(real_x AS DOUBLE) <= capacity + 3");
 	}
 
 	SECTION("AVG row renders an AVG(...) label and reports the raw slack") {

@@ -234,9 +234,11 @@ typedef enum PGAExpr_Kind {
 	PG_AEXPR_BETWEEN_SYM,     /* name must be "BETWEEN SYMMETRIC" */
 	PG_AEXPR_NOT_BETWEEN_SYM, /* name must be "NOT BETWEEN SYMMETRIC" */
 	AEXPR_PAREN,              /* nameless dummy node for parentheses */
-	PG_AEXPR_WHEN_CONSTRAINT,   /* DecidB: constraint WHEN condition */
-	PG_AEXPR_PER_CONSTRAINT,    /* DecidB: constraint PER column */
-	PG_AEXPR_QUALIFIED_REDUCER  /* DecidB: relation-qualified reducer sum(D: expr) */
+	PG_AEXPR_WHEN_CONSTRAINT,   /* DecidB: `WHEN theta: body` -- lexpr body, rexpr condition */
+	PG_AEXPR_PER_CONSTRAINT,    /* DecidB: `PER K: body` -- lexpr body, rexpr PGDecideScope */
+	PG_AEXPR_IF_CONSTRAINT,     /* DecidB: `IF b: body` -- lexpr body, rexpr guard */
+	PG_AEXPR_QUALIFIED_REDUCER, /* DecidB: `agg(PER K: e)` -- lexpr the call, rexpr PGDecideScope */
+	PG_AEXPR_REDUCER_BY         /* DecidB: `agg(...) BY (keys)` -- lexpr the reducer, rexpr PGList of exprs */
 } PGAExpr_Kind;
 
 typedef struct PGAExpr {
@@ -1251,12 +1253,109 @@ typedef enum PGObjectiveSense {
 	PG_OBJ_FEASIBILITY       /* no objective (feasibility only) */
 } PGObjectiveSense;
 
+/* DecidB: one objective stage. `MAXIMIZE a THEN MINIMIZE b` is a list of two. */
+typedef struct PGDecideObjective {
+	PGNodeTag type;
+	PGObjectiveSense sense;
+	PGNode *expr;
+	int location;
+} PGDecideObjective;
+
 typedef struct PGDecideClause {
-    PGList *variables;      /* DECIDE <variables> */
+    PGNodeTag type;
+    PGList *variables;      /* DECIDE <declarators> (list of PGDecideDeclarator) */
     PGNode *constraints;    /* SUCH THAT <constraints> */
-    PGObjectiveSense sense; /* [MAXIMIZE|MINIMIZE] <objective> */
-    PGNode *objective;     
+    PGList *objectives;     /* lexicographic list of PGDecideObjective; NIL = SATISFY / omitted */
 } PGDecideClause;
+
+/*
+ * DecidB: the one shared "Key" shape (DeciQL spec section 5). A scope is either
+ * per row (no key), global (`()`), or a list of scope elements, each a PGColumnRef
+ * naming a column (`D.depotID`, `depotID`) or a relation (`D`). It is used for a
+ * declarator's generation key, a constraint's PER, a reducer's PER, and a frame's
+ * WITHIN partition.
+ */
+typedef enum PGDecideScopeKind {
+	PG_DECIDE_SCOPE_ROW,
+	PG_DECIDE_SCOPE_GLOBAL,
+	PG_DECIDE_SCOPE_KEY
+} PGDecideScopeKind;
+
+typedef struct PGDecideScope {
+	PGNodeTag type;
+	PGDecideScopeKind kind;
+	PGList *keys;           /* PGColumnRef list; NIL unless kind == KEY */
+	int location;
+} PGDecideScope;
+
+typedef enum PGDecideDomain {
+	PG_DECIDE_DOMAIN_INT,
+	PG_DECIDE_DOMAIN_REAL,
+	PG_DECIDE_DOMAIN_BOOL,
+	PG_DECIDE_DOMAIN_SEMIREAL,
+	PG_DECIDE_DOMAIN_SEMIINT,
+	PG_DECIDE_DOMAIN_TEXT
+} PGDecideDomain;
+
+/* DecidB: `[PER scope:] name(domain) [between lo and hi | <= hi | >= lo]` */
+typedef struct PGDecideDeclarator {
+	PGNodeTag type;
+	PGDecideScope *scope;   /* NULL = per row */
+	char *name;
+	PGDecideDomain domain;
+	PGList *text_values;    /* TEXT in [...]: list of PGValue strings */
+	PGNode *lower_bound;    /* NULL when absent */
+	PGNode *upper_bound;    /* NULL when absent */
+	int location;
+} PGDecideDeclarator;
+
+/* DecidB: the optional prefixes of a constraint or of a reducer argument. */
+typedef struct PGDecidePrefix {
+	PGNodeTag type;
+	PGNode *filter;         /* WHEN theta, or NULL */
+	PGDecideScope *scope;   /* PER K, or NULL */
+	PGNode *guard;          /* IF b, or NULL */
+	int location;
+} PGDecidePrefix;
+
+typedef enum PGDecideFrameSelectorKind {
+	PG_DECIDE_FRAME_FIRST,
+	PG_DECIDE_FRAME_LAST,
+	PG_DECIDE_FRAME_PREVIOUS,
+	PG_DECIDE_FRAME_NEXT
+} PGDecideFrameSelectorKind;
+
+typedef struct PGDecideFrameSelector {
+	PGDecideFrameSelectorKind kind;
+	int distance;           /* k in `k previous` / `k next`; 1 when omitted */
+} PGDecideFrameSelector;
+
+typedef enum PGDecideFramePolicy {
+	PG_DECIDE_FRAME_ELSE_NULL,   /* missing position reads as NULL */
+	PG_DECIDE_FRAME_ELSE_VALUE,  /* `else v` */
+	PG_DECIDE_FRAME_ALL          /* `all`: a complete frame or NULL */
+} PGDecideFramePolicy;
+
+/*
+ * DecidB: a frame expression. Point form `AT(sel [else v]: e) OVER (order)` and
+ * range form `agg(FROM sel TO sel [every d] [else v | all]: e) OVER (order)`.
+ */
+typedef struct PGDecideFrame {
+	PGNodeTag type;
+	bool is_range;
+	char *agg;                        /* range form: the aggregate name */
+	PGDecideFrameSelector from_sel;   /* point form: the selector */
+	PGDecideFrameSelector to_sel;     /* range form only */
+	int every;                        /* range step, 1 when omitted */
+	PGDecideFramePolicy policy;
+	PGNode *else_value;               /* policy == ELSE_VALUE */
+	PGNode *expr;
+	PGNode *order_key;
+	bool descending;
+	bool cyclic;
+	PGDecideScope *within;            /* NULL = within () */
+	int location;
+} PGDecideFrame;
 
 typedef struct PGSelectStmt {
 	PGNodeTag type;

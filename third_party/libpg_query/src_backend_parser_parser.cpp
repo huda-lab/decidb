@@ -53,7 +53,8 @@ PGList *raw_parser(const char *str) {
 	/* base_yylex() only needs this much initialization */
 	yyextra.have_lookahead = false;
 	yyextra.in_decide_clause = false;
-	yyextra.in_decide_objective = false;
+	yyextra.decide_paren_depth = 0;
+	yyextra.decide_sql_mark_depth = 0;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
 	yyextra.decide_state_depth = 0;
@@ -113,7 +114,8 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
 	yyscanner = scanner_init(str, &yyextra.core_yy_extra, ScanKeywords, NumScanKeywords);
 	yyextra.have_lookahead = false;
 	yyextra.in_decide_clause = false;
-	yyextra.in_decide_objective = false;
+	yyextra.decide_paren_depth = 0;
+	yyextra.decide_sql_mark_depth = 0;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
 	yyextra.decide_state_depth = 0;
@@ -209,18 +211,21 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 
 	/*
 	 * DecidB: track whether we are lexing inside a DECIDE clause, and while we
-	 * are, emit the clause's WHEN as a DECIDE-specific token. The objective gets
-	 * its own variant because it has no trailing comparison bound. This keeps
-	 * DECIDE WHEN out of the global expression grammar (where WHEN after a
-	 * function call collided with WITHIN GROUP and corrupted ordinary function
-	 * parsing). No lookahead is needed for this decision.
+	 * are, emit the DeciQL-only tokens (WHEN / PER / IF prefixes, the reducer
+	 * postfix BY, the objective chain THEN, the frame words AT / OVER / WITHIN)
+	 * as DECIDE-specific tokens. This keeps them out of the global expression
+	 * grammar, where WHEN after a function call collided with WITHIN GROUP and
+	 * corrupted ordinary function parsing. An ordinary SQL subquery nested in the
+	 * clause (a scalar-subquery bound) suppresses the rewrite until its closing
+	 * parenthesis, so GROUP BY / window OVER / AT TIME ZONE keep their meaning
+	 * there; a nested DECIDE query re-arms it on its own DECIDE / SUCH token.
 	 */
 	if (cur_token == DECIDE || cur_token == SUCH) {
 		/*
 		 * DecidB: a DECIDE clause may open while another is still being lexed
 		 * (a DECIDE query as a subquery inside an outer DECIDE clause). Save
 		 * the enclosing clause's state so the inner clause's reduction restores
-		 * it instead of disarming the outer clause's remaining WHENs. The
+		 * it instead of disarming the outer clause's remaining prefixes. The
 		 * matching pop lives in the decide_clause / decide_declaration /
 		 * decide_tail actions, one per DECIDE and one per SUCH.
 		 */
@@ -234,23 +239,65 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		 * here as an identifier.
 		 */
 		yyextra->in_decide_clause = true;
-		yyextra->in_decide_objective = false;
 		yyextra->decide_case_depth = 0;
+		yyextra->decide_sql_mark_depth = 0;
 	} else if (yyextra->in_decide_clause) {
-		/*
-		 * Keep WHENs that belong to a CASE...END as ordinary WHEN so the CASE
-		 * still parses (DecidB rejects CASE-in-DECIDE later, with a friendly
-		 * error). Only a bare DECIDE WHEN (depth 0) is rewritten.
-		 */
-		if (cur_token == MAXIMIZE || cur_token == MINIMIZE)
-			yyextra->in_decide_objective = true;
-		else if (cur_token == CASE)
+		bool suppressed = yyextra->decide_sql_mark_depth > 0;
+		if (cur_token == '(') {
+			yyextra->decide_paren_depth++;
+		} else if (cur_token == ')') {
+			if (yyextra->decide_sql_mark_depth > 0 &&
+			    (yyextra->decide_sql_mark_depth > PG_DECIDE_SQL_MARK_MAX ||
+			     yyextra->decide_sql_marks[yyextra->decide_sql_mark_depth - 1] >= yyextra->decide_paren_depth)) {
+				yyextra->decide_sql_mark_depth--;
+			}
+			if (yyextra->decide_paren_depth > 0) {
+				yyextra->decide_paren_depth--;
+			}
+		} else if (cur_token == SELECT || cur_token == VALUES) {
+			/* An ordinary SQL query opens here; it closes with the parenthesis
+			 * that encloses it. A DECIDE query nested in it re-arms on DECIDE. */
+			if (yyextra->decide_sql_mark_depth < PG_DECIDE_SQL_MARK_MAX) {
+				yyextra->decide_sql_marks[yyextra->decide_sql_mark_depth] = yyextra->decide_paren_depth;
+			}
+			yyextra->decide_sql_mark_depth++;
+		} else if (cur_token == CASE) {
 			yyextra->decide_case_depth++;
-		else if (cur_token == END_P) {
+		} else if (cur_token == END_P) {
 			if (yyextra->decide_case_depth > 0)
 				yyextra->decide_case_depth--;
-		} else if (cur_token == WHEN && yyextra->decide_case_depth == 0)
-			return yyextra->in_decide_objective ? WHEN_DECIDE_OBJECTIVE : WHEN_DECIDE;
+		} else if (!suppressed) {
+			/*
+			 * Keep WHEN / THEN that belong to a CASE...END as ordinary tokens so
+			 * the CASE still parses (DecidB rejects CASE-in-DECIDE later, with a
+			 * friendly error). Only a bare DECIDE prefix (depth 0) is rewritten.
+			 */
+			switch (cur_token) {
+			case WHEN:
+				if (yyextra->decide_case_depth == 0)
+					return WHEN_DECIDE;
+				break;
+			case THEN:
+				if (yyextra->decide_case_depth == 0)
+					return THEN_DECIDE;
+				break;
+			case PER:
+				return PER_DECIDE;
+			case IF_P:
+				return IF_DECIDE;
+			case WITHIN:
+				return WITHIN_DECIDE;
+			case BY:
+			case OVER:
+			case AT:
+				/* Rewritten only when a '(' follows, so a column named `at`,
+				 * `by` or `over` keeps working inside a DECIDE body; the
+				 * lookahead is taken below. */
+				break;
+			default:
+				break;
+			}
+		}
 	}
 
 	/*
@@ -267,6 +314,18 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		cur_token_length = 5;
 		break;
 	case WITH:
+		cur_token_length = 4;
+		break;
+	case BY:
+	case AT:
+		/* DecidB: only inside an armed DECIDE clause (see above). */
+		if (!yyextra->in_decide_clause || yyextra->decide_sql_mark_depth > 0)
+			return cur_token;
+		cur_token_length = 2;
+		break;
+	case OVER:
+		if (!yyextra->in_decide_clause || yyextra->decide_sql_mark_depth > 0)
+			return cur_token;
 		cur_token_length = 4;
 		break;
 	default:
@@ -336,6 +395,22 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 			cur_token = WITH_LA;
 			break;
 		}
+		break;
+
+	case BY:
+		/* DecidB: `agg(...) BY (keys)` */
+		if (next_token == '(')
+			cur_token = BY_DECIDE;
+		break;
+	case OVER:
+		/* DecidB: `AT(...) OVER (order)` / `agg(FROM ... TO ...: e) OVER (order)` */
+		if (next_token == '(')
+			cur_token = OVER_DECIDE;
+		break;
+	case AT:
+		/* DecidB: `AT(selector: e)` */
+		if (next_token == '(')
+			cur_token = AT_DECIDE;
 		break;
 	}
 

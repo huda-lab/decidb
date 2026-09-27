@@ -52,6 +52,13 @@ void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, const vector
                           const vector<double> &upper_bounds, double &out_lo, double &out_hi,
                           idx_t skip_idx = DConstants::INVALID_INDEX);
 
+//! Lower `binary == binary_value ⟹ row` to one ordinary row: slacken the row by `M`
+//! exactly when the binary takes the other value. `M` is the row's reach past its own
+//! bound, so the relaxed row cuts nothing. Appends the binary's term and moves the
+//! bound when the switching value is 1.
+void ApplyIndicatorBigM(vector<int> &indices, vector<double> &coefficients, char sense, double &rhs,
+                        int binary_column, int binary_value, double M);
+
 //! Refuse a Big-M that has no finite M, naming the column to bound. Every caller
 //! refuses in the same words, so the message the user reads lives in one place.
 //! `bad` is the column to blame, or INVALID_INDEX when the open bound could not be

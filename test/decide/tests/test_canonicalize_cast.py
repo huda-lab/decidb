@@ -104,7 +104,7 @@ def test_cast_lid_mixed_placement(decidb_cli, duckdb_conn, oracle_solver, perf_t
         WHERE l_orderkey <= 5
         DECIDE x(INT)
         SUCH THAT x <= 4
-          AND (SUM(x) WHEN (l_quantity > 25))
+          AND (SUM(WHEN (l_quantity > 25): x))
               + (SELECT MAX(l_quantity) FROM lineitem WHERE l_orderkey = 1) <= 60
         MAXIMIZE SUM(x)
     """
@@ -179,8 +179,8 @@ def test_cast_lid_negated_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
         WHERE l_orderkey <= 5
         DECIDE x(INT)
         SUCH THAT x <= 4
-          AND (SUM(x) WHEN (l_quantity > 25))
-              - (SUM(x * l_quantity) WHEN (l_quantity > 25)) + 2 <= 8
+          AND (SUM(WHEN (l_quantity > 25): x))
+              - (SUM(WHEN (l_quantity > 25): x * l_quantity)) + 2 <= 8
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -363,7 +363,7 @@ def test_cast_aggregate_per_bounds(decidb_cli, duckdb_conn):
             (4, 'b', 1000001::BIGINT, 2000007::DOUBLE)
         ) t(id, grp, value, lim)
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 3 AND SUM(x + value) <= MIN(lim) PER grp
+        SUCH THAT x >= 0 AND x <= 3 AND PER grp: SUM(x + value) BY (grp) <= MIN(lim) BY (grp)
         MAXIMIZE SUM(x)
     """)
     ci = {name: i for i, name in enumerate(cols)}
@@ -567,14 +567,14 @@ def test_all_explicit_decision_cast_syntax_is_rejected(
         pytest.param("""
             SELECT id, s
             FROM (VALUES (1)) t(id)
-            DECIDE scalar s(INT)
+            DECIDE PER (): s(INT)
             SUCH THAT CAST(s AS DOUBLE) <= 4
             MAXIMIZE s
         """, id="query_wide"),
         pytest.param("""
             SELECT n.n_nationkey, keepN
             FROM nation n
-            DECIDE n.keepN(BOOL)
+            DECIDE PER n: keepN(BOOL)
             SUCH THAT CAST(n.keepN AS DOUBLE) <= 1
             MAXIMIZE SUM(keepN)
         """, id="entity_scoped_qualified"),

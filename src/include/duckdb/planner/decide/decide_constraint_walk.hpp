@@ -8,8 +8,9 @@
 //
 // A bound DECIDE constraint tree is AND-conjunctions plus WRAPPERS. A wrapper is a
 // conjunction carrying a tag: `WHEN` holds the constraint in child 0 and its
-// condition in child 1; `PER` holds the constraint in child 0 and its grouping
-// columns in children 1..N. The condition and the grouping columns are METADATA --
+// condition in child 1; `PER` holds the constraint in child 0 and its generation
+// key's columns in children 1..N (none for `PER ()`); `IF` holds the constraint in
+// child 0 and its guard in child 1. The condition, the key and the guard are METADATA --
 // walking into them treats `WHEN c` as though the user had written another
 // constraint, which is silently wrong rather than loudly wrong.
 //
@@ -54,10 +55,17 @@ inline bool IsPerConstraintWrapper(const BoundConjunctionExpression &conjunction
 	return IsPerConstraintTag(conjunction.GetAlias());
 }
 
-//! True for either wrapper. An untagged conjunction is a plain AND, every child of
+//! `IF <guard>: <constraint>`: child 0 is the constraint, child 1 the guard, a
+//! decision-bearing condition under which the instance is imposed.
+inline bool IsIfConstraintWrapper(const BoundConjunctionExpression &conjunction) {
+	return HasDecideTag(conjunction.GetAlias(), IF_CONSTRAINT_TAG);
+}
+
+//! True for any wrapper. An untagged conjunction is a plain AND, every child of
 //! which is a constraint in its own right.
 inline bool IsConstraintWrapper(const BoundConjunctionExpression &conjunction) {
-	return IsPerConstraintWrapper(conjunction) || IsWhenConstraintWrapper(conjunction);
+	return IsPerConstraintWrapper(conjunction) || IsWhenConstraintWrapper(conjunction) ||
+	       IsIfConstraintWrapper(conjunction);
 }
 
 //! Whether child `child_index` is a constraint rather than wrapper metadata.

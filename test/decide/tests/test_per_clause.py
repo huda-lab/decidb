@@ -28,7 +28,7 @@ def test_per_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     sql = """
         SELECT s_suppkey, s_acctbal, s_nationkey, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER s_nationkey
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
@@ -81,7 +81,7 @@ def test_per_with_integer_variable(
         SELECT ps_partkey, ps_suppkey, ps_availqty, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 50
         DECIDE x(INT)
-        SUCH THAT SUM(x * ps_supplycost) <= 1000 PER ps_partkey
+        SUCH THAT PER ps_partkey: SUM(x * ps_supplycost) BY (ps_partkey) <= 1000
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
@@ -137,9 +137,9 @@ def test_per_combined_with_when(
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x * l_quantity) BY (l_returnflag) <= 50
             AND SUM(x) <= 30
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        MAXIMIZE SUM(WHEN l_returnflag = 'R': x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
@@ -207,7 +207,7 @@ def test_per_not_equal(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 3 PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) <> 3
             AND SUM(x) <= 15
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -278,7 +278,7 @@ def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_so
         DECIDE x(INT)
         SUCH THAT x BETWEEN 0 AND 10
             AND SUM(x) >= 3 AND SUM(x) <= 7
-            AND SUM(x) <> cap PER grp
+            AND PER grp, cap: SUM(x) BY (grp) <> cap
         MAXIMIZE SUM(x)
     """)
     xi = cols.index("x")
@@ -318,7 +318,7 @@ def test_per_null_group_key(
         SELECT id, grp, val, x
         FROM data
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 1 PER grp
+        SUCH THAT PER grp: SUM(x) BY (grp) <= 1
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
@@ -369,8 +369,8 @@ def test_per_different_grouping_columns(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER l_returnflag
-            AND SUM(x) <= 8 PER l_linestatus
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) <= 5
+            AND PER l_linestatus: SUM(x) BY (l_linestatus) <= 8
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -442,7 +442,7 @@ def test_real_between_per_oracle(
         FROM lineitem WHERE l_orderkey < 25
         DECIDE x(REAL)
         SUCH THAT x BETWEEN 0.1 AND 2.9
-            AND SUM(x) <= 10 PER l_linestatus
+            AND PER l_linestatus: SUM(x) BY (l_linestatus) <= 10
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()

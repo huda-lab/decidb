@@ -56,7 +56,7 @@ string DescribeRowClause(const SolverModel &model, const ModelConstraint &constr
     const char *sense = constr.sense == '<' ? "<=" : (constr.sense == '>' ? ">=" : "=");
     string label = source.canonical_lhs + " " + sense + " " + rhs_text;
     if (!source.qualifier.empty()) {
-        label += " " + source.qualifier;
+        label = source.qualifier + " " + label;
     }
     return label;
 }

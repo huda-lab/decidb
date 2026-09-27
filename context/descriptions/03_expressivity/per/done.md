@@ -1,5 +1,13 @@
 # PER Keyword — Implemented Features
 
+> **Spelling note (2026-09-26).** The language is now the DeciQL redesign
+> (`../../00_project_overview/syntax_reference.md`). Examples below that use the
+> retired spellings read with this mapping: `T.x(INT)` → `PER T: x(INT)`,
+> `scalar x(INT)` → `PER (): x(INT)`, `body WHEN c` → `WHEN c: body`,
+> `SUM(x) <= K PER g` → `PER g: SUM(x) BY (g) <= K`, `SUM(e) WHEN c` →
+> `SUM(WHEN c: e)`, `SUM(D: e)` → `SUM(PER D: e)`,
+> `MINIMIZE MAX(SUM(e)) PER g` → `MINIMIZE MAX(PER g: SUM(e) BY (g))`.
+
 `PER` generates **one constraint per data-driven group** (one per distinct value/combination of the named column(s)) — groups the user can't enumerate when writing the query. `SUM(new_hours) <= 40 PER empID` is semantically equivalent to writing `SUM(new_hours) <= 40 WHEN empID = 'E001' AND … ` once per distinct `empID`.
 
 **Syntax and basic semantics** (single/multi-column form, qualified references, WHEN+PER ordering, nested-aggregate objectives, restrictions): see `../../00_project_overview/syntax_reference.md` §7. This doc covers implementation semantics and architecture.

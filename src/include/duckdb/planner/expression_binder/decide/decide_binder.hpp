@@ -18,21 +18,25 @@ namespace duckdb {
 class BindContext;
 class FunctionExpression;
 
-//! Find or create the entity scope keyed by `table_name`, returning its index into
-//! `entity_scopes`. Shared by the declaration path (`T.x(INT)`) and the
-//! relation-qualified reducer path (`sum(T: ...)`): a qualifier is an entity scope
-//! that may carry no variable, so both build the same tuple-identity key the same
-//! way and both feed the one `EntityMapping` the executor builds per scope.
-idx_t FindOrCreateEntityScope(BindContext &bind_context, const string &table_name,
-                              vector<EntityScopeInfo> &entity_scopes,
-                              case_insensitive_map_t<idx_t> &table_scope_map);
+//! Resolve a written DeciQL key (`PER a, T.b, R`) against the FROM clause and find or
+//! create the entity scope that holds it, returning the scope's index into
+//! `entity_scopes`. This is the one place a key becomes columns (spec §6.1): a
+//! two-part element is a column of that relation; a one-part element is a relation
+//! when a binding of that name exists and a column otherwise; a relation expands to
+//! every column it has. Two spellings of the same column set share one scope, and
+//! therefore one `EntityMapping` at execution -- a variable's generation key, a
+//! constraint's PER, a reducer's PER or BY, and a frame's WITHIN all resolve here.
+//!
+//! On failure returns INVALID_INDEX with `error` naming the element that did not
+//! resolve, so the caller can word the refusal for its own construct.
+idx_t FindOrCreateKeyScope(BindContext &bind_context, const vector<unique_ptr<ParsedExpression>> &key,
+                           vector<EntityScopeInfo> &entity_scopes, case_insensitive_map_t<idx_t> &table_scope_map,
+                           string &error);
 
-//! Composite form for a reducer qualified by several relations at once
-//! (`sum(D, T: ...)`). The scope's tuple identity is the concatenation of each
-//! named relation's own key; de-duplication then collapses fan-out contributed
-//! only by relations *not* named. `table_names` is canonicalized (sorted,
-//! case-insensitively) before being used as the cache key, so `sum(D,T: ...)`
-//! and `sum(T,D: ...)` share one scope.
+//! Find or create the entity scope keyed by whole relations, `sum(PER D, T: ...)`
+//! spelled by name. The scope's tuple identity is the concatenation of each named
+//! relation's own columns. Convenience over FindOrCreateKeyScope for callers holding
+//! names rather than parsed elements.
 idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &table_names,
                               vector<EntityScopeInfo> &entity_scopes,
                               case_insensitive_map_t<idx_t> &table_scope_map);
@@ -53,6 +57,12 @@ struct DecideQualifierContext {
     case_insensitive_map_t<idx_t> *table_scope_map = nullptr;
     //! Scope of each declared variable, indexed as the decide columns are.
     const vector<DecideVarScopeInfo> *variable_scopes = nullptr;
+    //! Domain of each declared variable, indexed the same way.
+    const vector<DecideDomain> *variable_domains = nullptr;
+    //! Where a bound frame expression registers its timeline (see DecideFrameInfo).
+    vector<DecideFrameInfo> *frames = nullptr;
+    //! The written spellings a rendering quotes; a frame adds its own here.
+    vector<string> *source_fragments = nullptr;
 };
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
@@ -119,6 +129,11 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 //!
 //! `variable_types` is indexed as the DECIDE columns are; `variables` maps every
 //! spelling (bare and table-qualified) of a declared name onto that index.
+//! A reducer inside a reducer (or a frame) has no formulation in a constraint: the
+//! outer reducer would read one representative row per inner class. Refused by name,
+//! on the bound constraint tree (a frame binds as a tagged aggregate too).
+void ValidateDecideNoNestedReducers(const Expression &constraints);
+
 void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
                                                  const case_insensitive_map_t<idx_t> &variables,
                                                  const vector<LogicalType> &variable_types);
@@ -186,11 +201,17 @@ protected:
     bool IsRowInvariantExpression(const ParsedExpression &expr) const;
 
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
-    BindResult BindLocalWhenAggregate(FunctionExpression &when_expr, idx_t depth);
-    //! Binds `agg(D: expr)`: resolves `D` to an entity scope, enforces the §3.2.2
-    //! well-formedness rule on the reducer body, and tags the bound aggregate with
-    //! the scope it de-duplicates by.
+    //! Binds `agg(PER K: expr)`: resolves K to an entity scope, proves the body is a
+    //! function of K (spec §6.3), and tags the bound aggregate with the scope it
+    //! de-duplicates by.
     BindResult BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth);
+    //! Binds `agg(...) BY (K)`: resolves K to an entity scope and tags the bound
+    //! aggregate with the scope whose groups it reduces over.
+    BindResult BindReducerBy(FunctionExpression &by_expr, idx_t depth);
+    //! Binds `AT(sel: e) OVER (...)` / `agg(FROM .. TO ..: e) OVER (...)`: registers the
+    //! timeline as a DecideFrameInfo and binds the body as a SUM aggregate tagged with it.
+    BindResult BindFrame(FunctionExpression &frame_expr, idx_t depth);
+    idx_t ResolveReducerKey(const FunctionExpression &wrapper, string &error);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
     //! The dispatch itself. `BindExpression` wraps it so every bound node this binder

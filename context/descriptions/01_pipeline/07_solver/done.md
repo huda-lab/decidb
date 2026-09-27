@@ -20,6 +20,20 @@ Both backends must remain valid implementations. A Gurobi-only API is an
 
 ---
 
+## 0. The DeciQL surface (2026-09-26)
+
+`SolveModel` runs the lexicographic stages of `SolverModel::objective_stages`
+(`SolveLexicographicStages`): after the first objective solves to optimality, each stage's
+value is frozen as a row over its objective vector (tolerance `1e-6 · max(1, |v|)`) and
+the next stage's vector is solved on a copy of the model; the last stage's solution is
+the answer, reported with the first stage's objective value. A staged solve is what every
+backend can do; a backend's own multi-objective API would be an optimization of it.
+`DumpSolverModel` prints a `then k:` line per stage, so the golden corpus sees them.
+`IF` guards reach the backends as indicator constraints (Gurobi) or Big-M rows (HiGHS),
+exactly like `<>`; `SolverInput::native_indicators` carries the answer.
+
+---
+
 ## 1. Outcome is a value, not an exception
 
 `SolverResult` (`solver_result.hpp`) is what every solve returns. Callers branch on

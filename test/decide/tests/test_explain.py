@@ -169,14 +169,14 @@ def test_explain_when_string_filter(decidb_cli):
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     out = _explain(decidb_cli, sql)
     assert "DECIDE" in out
     assert _shows(
-        out, "Constraints:", "l_quantity", "<=", "100", "WHEN", "l_returnflag", "'R'"
-    ), f"WHEN suffix missing or incomplete in EXPLAIN:\n{_plan_text(out)}"
+        out, "Constraints:", "WHEN", "l_returnflag", "'R'", "l_quantity", "<=", "100"
+    ), f"WHEN prefix missing or incomplete in EXPLAIN:\n{_plan_text(out)}"
 
 
 @pytest.mark.explain
@@ -187,12 +187,12 @@ def test_explain_when_numeric_comparison(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_discount, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_extendedprice) <= 5000 WHEN l_discount >= 0.06
+        SUCH THAT WHEN l_discount >= 0.06: SUM(x * l_extendedprice) <= 5000
         MAXIMIZE SUM(x * l_extendedprice)
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Constraints:", "l_extendedprice", "<=", "5000", "WHEN", "l_discount", ">=", "0.06"
+        out, "Constraints:", "WHEN", "l_discount", ">=", "0.06", "l_extendedprice", "<=", "5000"
     ), _plan_text(out)
 
 
@@ -205,7 +205,7 @@ def test_explain_when_mixed_constraints(decidb_cli):
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 50
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -213,7 +213,7 @@ def test_explain_when_mixed_constraints(decidb_cli):
     # The WHEN belongs to the first constraint only; the second must render
     # unconditionally rather than inheriting the suffix.
     assert _shows(
-        out, "Constraints:", "l_quantity", "<=", "50", "WHEN", "l_returnflag", "'R'"
+        out, "Constraints:", "WHEN", "l_returnflag", "'R'", "l_quantity", "<=", "50"
     ), _plan_text(out)
     assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
 
@@ -229,13 +229,13 @@ def test_explain_per_basic(decidb_cli):
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER s_nationkey
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Constraints:", "SUM(x)", "<=", "5", "PER", "s_nationkey"
-    ), f"PER suffix missing or incomplete in EXPLAIN:\n{_plan_text(out)}"
+        out, "Constraints:", "PER", "s_nationkey", "SUM(x)", "<=", "5"
+    ), f"PER prefix missing or incomplete in EXPLAIN:\n{_plan_text(out)}"
 
 
 @pytest.mark.explain
@@ -246,12 +246,12 @@ def test_explain_per_integer(decidb_cli):
         SELECT ps_partkey, ps_availqty, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 50
         DECIDE x(INT)
-        SUCH THAT SUM(x * ps_supplycost) <= 1000 PER ps_partkey
+        SUCH THAT PER ps_partkey: SUM(x * ps_supplycost) BY (ps_partkey) <= 1000
         MAXIMIZE SUM(x * ps_availqty)
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Constraints:", "ps_supplycost", "<=", "1000", "PER", "ps_partkey"
+        out, "Constraints:", "PER", "ps_partkey", "ps_supplycost", "<=", "1000"
     ), _plan_text(out)
 
 
@@ -263,11 +263,11 @@ def test_explain_multi_column_per_parenthesized(decidb_cli):
         SELECT l_orderkey, l_returnflag, l_linestatus, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
+        SUCH THAT PER l_returnflag, l_linestatus: SUM(x) BY (l_returnflag, l_linestatus) <= 3
         MAXIMIZE SUM(x)
     """
     out = _explain_json(decidb_cli, sql)
-    assert "PER (l_returnflag, l_linestatus)" in out, out
+    assert "PER l_returnflag, l_linestatus:" in out, out
 
 
 # ===================================================================
@@ -317,7 +317,7 @@ def test_explain_per_key_renders_column_name_not_binding(decidb_cli):
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER s_nationkey
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     text = _plan_text(_explain(decidb_cli, sql))
@@ -340,10 +340,10 @@ def test_explain_renders_user_casts_only(decidb_cli):
         SELECT l_orderkey, l_linenumber, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """))
-    assert "SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'" in without_cast, without_cast
+    assert "WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100" in without_cast, without_cast
     assert "CAST" not in without_cast, f"binder cast reached EXPLAIN:\n{without_cast}"
 
     with_cast = _plan_text(_explain(decidb_cli, """
@@ -365,7 +365,7 @@ def test_explain_json_constraints_render_sql_not_internal_tags(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     out = _explain_json(decidb_cli, sql)
@@ -392,13 +392,13 @@ def test_explain_when_and_per(decidb_cli):
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x * l_quantity) BY (l_returnflag) <= 50
             AND SUM(x) <= 30
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        MAXIMIZE SUM(WHEN l_returnflag = 'R': x * l_extendedprice)
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Constraints:", "l_quantity", "<=", "50", "PER", "l_returnflag"
+        out, "Constraints:", "PER", "l_returnflag", "l_quantity", "<=", "50"
     ), f"PER missing from the constraint row:\n{_plan_text(out)}"
     assert _shows(out, "Constraints:", "SUM(x)", "<=", "30"), _plan_text(out)
     # The objective carries the only WHEN here; it must render as a postfix
@@ -406,7 +406,7 @@ def test_explain_when_and_per(decidb_cli):
     # unified, an objective WHEN leaked out as "(... AND ...)" and no WHEN
     # appeared at all.
     assert _shows(
-        out, "Objective:", "MAXIMIZE", "l_extendedprice", "WHEN", "l_returnflag", "'R'"
+        out, "Objective:", "MAXIMIZE", "WHEN", "l_returnflag", "'R'", "l_extendedprice"
     ), f"objective WHEN missing from EXPLAIN:\n{_plan_text(out)}"
 
 
@@ -430,11 +430,11 @@ def test_explain_objective_when_postfix(decidb_cli):
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 20
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        MAXIMIZE SUM(WHEN l_returnflag = 'R': x * l_extendedprice)
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Objective:", "MAXIMIZE", "l_extendedprice", "WHEN", "l_returnflag", "'R'"
+        out, "Objective:", "MAXIMIZE", "WHEN", "l_returnflag", "'R'", "l_extendedprice"
     ), f"objective WHEN missing from EXPLAIN:\n{_plan_text(out)}"
     assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
     assert " AND " not in out, (
@@ -473,12 +473,12 @@ def test_explain_json_when(decidb_cli):
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     out = _explain_json(decidb_cli, sql)
     assert _shows(
-        out, '"Constraints"', "l_quantity", "<=", "100", "WHEN", "l_returnflag", "'R'"
+        out, '"Constraints"', "WHEN", "l_returnflag", "'R'", "l_quantity", "<=", "100"
     ), out
 
 
@@ -489,12 +489,12 @@ def test_explain_json_per(decidb_cli):
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER s_nationkey
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     out = _explain_json(decidb_cli, sql)
     assert _shows(
-        out, '"Constraints"', "SUM(x)", "<=", "5", "PER", "s_nationkey"
+        out, '"Constraints"', "PER", "s_nationkey", "SUM(x)", "<=", "5"
     ), out
 
 
@@ -540,7 +540,7 @@ def test_explain_analyze_when(decidb_cli):
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     out = _explain_analyze(decidb_cli, sql)
@@ -548,7 +548,7 @@ def test_explain_analyze_when(decidb_cli):
     # Anchored at "Constraints:" so the match cannot be satisfied by the SQL
     # that EXPLAIN ANALYZE echoes above the plan.
     assert _shows(
-        out, "Constraints:", "l_quantity", "<=", "100", "WHEN", "l_returnflag", "'R'"
+        out, "Constraints:", "WHEN", "l_returnflag", "'R'", "l_quantity", "<=", "100"
     ), _plan_text(out)
 
 
@@ -559,13 +559,13 @@ def test_explain_analyze_per(decidb_cli):
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER s_nationkey
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out
     assert _shows(
-        out, "Constraints:", "SUM(x)", "<=", "5", "PER", "s_nationkey"
+        out, "Constraints:", "PER", "s_nationkey", "SUM(x)", "<=", "5"
     ), _plan_text(out)
 
 
@@ -577,14 +577,14 @@ def test_explain_analyze_multiple_constraints(decidb_cli):
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 50
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
     out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out
     assert _shows(
-        out, "Constraints:", "l_quantity", "<=", "50", "WHEN", "l_returnflag", "'R'"
+        out, "Constraints:", "WHEN", "l_returnflag", "'R'", "l_quantity", "<=", "50"
     ), _plan_text(out)
     assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
 
@@ -621,12 +621,12 @@ def test_explain_logical_when(decidb_cli):
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Constraints:", "l_quantity", "<=", "100", "WHEN", "l_returnflag", "'R'"
+        out, "Constraints:", "WHEN", "l_returnflag", "'R'", "l_quantity", "<=", "100"
     ), _plan_text(out)
 
 
@@ -638,12 +638,12 @@ def test_explain_logical_per(decidb_cli):
     sql = """
         SELECT s_suppkey, s_acctbal, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER s_nationkey
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     out = _explain(decidb_cli, sql)
     assert _shows(
-        out, "Constraints:", "SUM(x)", "<=", "5", "PER", "s_nationkey"
+        out, "Constraints:", "PER", "s_nationkey", "SUM(x)", "<=", "5"
     ), _plan_text(out)
 
 

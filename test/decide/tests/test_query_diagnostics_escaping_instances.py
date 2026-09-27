@@ -89,7 +89,7 @@ _ROW_PARTIAL = (
     "SELECT id, buy FROM ("
     "SELECT i AS id, CASE WHEN i % 5 = 0 THEN 'export' ELSE 'domestic' END AS channel, "
     "i * 1.0 AS margin FROM range(1, 101) t(i)) "
-    "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN channel = 'domestic' "
+    "DECIDE buy(REAL) SUCH THAT WHEN channel = 'domestic': buy <= 100 "
     "MAXIMIZE SUM(buy * margin)"
 )
 
@@ -125,7 +125,7 @@ class TestEscapingInstances:
         sql = (
             "SELECT id, buy FROM ("
             "SELECT i AS id, (i % 2) AS parity, i * 1.0 AS w FROM range(1, 101) t(i)) "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id <= 50 MAXIMIZE SUM(buy * w)"
+            "DECIDE buy(REAL) SUCH THAT WHEN id <= 50: buy <= 100 MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
         assert _escape(rows, "buy") == [(50, 100, "row", "")]
@@ -142,7 +142,7 @@ class TestEscapingInstances:
             "SELECT e.eid, hire FROM ("
             "SELECT i AS eid, CASE WHEN i <= 10 THEN 'A' ELSE 'B' END AS dept "
             "FROM range(1, 31) t(i)) e "
-            "DECIDE e.hire(REAL) SUCH THAT hire <= 50 WHEN dept = 'B' "
+            "DECIDE PER e: hire(REAL) SUCH THAT WHEN dept = 'B': hire <= 50 "
             "MAXIMIZE SUM(hire * eid)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -159,7 +159,7 @@ class TestEscapingInstances:
             "SELECT i AS eid, CASE WHEN i <= 10 THEN 1 ELSE 2 END AS rid "
             "FROM range(1, 31) t(i)) e "
             "JOIN (VALUES (1, 'A'), (2, 'B')) d(rid, region) ON e.rid = d.rid "
-            "DECIDE e.hire(REAL) SUCH THAT hire <= 50 WHEN region = 'B' "
+            "DECIDE PER e: hire(REAL) SUCH THAT WHEN region = 'B': hire <= 50 "
             "MAXIMIZE SUM(hire)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -184,7 +184,7 @@ class TestEscapingInstances:
             "SELECT id, zone, buy FROM ("
             "SELECT i AS id, CASE WHEN i <= 25 THEN 'A' ELSE 'B' END AS zone, "
             "i * 1.0 AS w FROM range(1, 101) t(i)) "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id > 25 "
+            "DECIDE buy(REAL) SUCH THAT WHEN id > 25: buy <= 100 "
             "MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -210,7 +210,7 @@ class TestEscapingInstances:
             "SELECT * FROM ("
             "SELECT i AS id, CASE WHEN i <= 25 THEN 'A' ELSE 'B' END, "
             "i * 1.0 AS w FROM range(1, 101) t(i)) "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id > 25 "
+            "DECIDE buy(REAL) SUCH THAT WHEN id > 25: buy <= 100 "
             "MAXIMIZE SUM(buy * w)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -230,7 +230,7 @@ class TestEscapingInstances:
             "SELECT id, buy FROM ("
             "SELECT i AS id, CASE WHEN i <= 150 THEN 'P' ELSE 'Q' END AS category, "
             "i * 1.0 AS w FROM range(1, 301) t(i)) "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN (category = 'Q' OR id <= 60) "
+            "DECIDE buy(REAL) SUCH THAT WHEN (category = 'Q' OR id <= 60): buy <= 100 "
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
@@ -253,7 +253,7 @@ class TestEscapingInstances:
             "CASE WHEN i <= 4 THEN 'target' "
             "ELSE 'B' || CAST(((i - 5) % 24) AS VARCHAR) END AS bucket, "
             "i * 1.0 AS w FROM range(1, 101) t(i)) "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN (id > 4 OR bucket = 'never') "
+            "DECIDE buy(REAL) SUCH THAT WHEN (id > 4 OR bucket = 'never'): buy <= 100 "
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
@@ -282,7 +282,7 @@ class TestEscapingInstances:
             "CASE WHEN i <= 8 THEN 'target' "
             "ELSE 'S' || CAST(((i - 9) % 14) AS VARCHAR) END AS segment, "
             "i * 1.0 AS w FROM range(1, 121) t(i)) "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN (id > 8 OR segment = 'never') "
+            "DECIDE buy(REAL) SUCH THAT WHEN (id > 8 OR segment = 'never'): buy <= 100 "
             "MAXIMIZE SUM(buy * w)"
         )
         default = _rows(_diagnose(cli, sql))
@@ -334,7 +334,7 @@ class TestEscapingInstances:
 _SIX_ROWS = "('A',1,1),('A',2,2),('A',3,3),('B',4,4),('B',5,5),('B',6,6)"
 _SAME_ROWS_DECIDE = (
     "SELECT region, buy FROM {source} "
-    "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN id <= 3 "
+    "DECIDE buy(REAL) SUCH THAT WHEN id <= 3: buy <= 100 "
     "MAXIMIZE SUM(buy * w)"
 )
 
@@ -431,7 +431,7 @@ class TestEquivalentSlicesCollapse:
     _NARROW = (
         "SELECT tag, colour, buy FROM "
         "(VALUES ('a','red',5,1),('b','blue',0,2),('c','blue',0,3)) t(tag, colour, cap, w) "
-        "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN cap > 0 "
+        "DECIDE buy(REAL) SUCH THAT WHEN cap > 0: buy <= 100 "
         "MAXIMIZE SUM(buy * w)"
     )
 
@@ -461,7 +461,7 @@ class TestEquivalentSlicesCollapse:
             "SELECT i AS id, CASE WHEN i % 10 = 0 THEN 'export' "
             "WHEN i % 10 = 1 THEN 'transit' WHEN i % 10 = 2 THEN 'bonded' "
             "ELSE 'domestic' END AS channel, i * 1.0 AS margin FROM range(1, 101) t(i)) "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN channel = 'domestic' "
+            "DECIDE buy(REAL) SUCH THAT WHEN channel = 'domestic': buy <= 100 "
             "MAXIMIZE SUM(buy * margin)"
         )
         found = _escape(_rows(_diagnose(cli, sql)), "buy")
@@ -483,7 +483,7 @@ class TestScopedRemedy:
         rows = _rows(
             _diagnose(cli, _SAME_ROWS_DECIDE.format(source="items"), setup=_TABLE_SETUP)
         )
-        assert _remedy(rows, "buy") == "buy <= <cap> WHEN region = 'B'"
+        assert _remedy(rows, "buy") == "WHEN region = 'B': buy <= <cap>"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_multiple_rules_render_as_a_disjunction(self, request, cli_fixture):
@@ -498,12 +498,12 @@ class TestScopedRemedy:
         )
         sql = (
             "SELECT region, buy FROM regions "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN region = 'A' "
+            "DECIDE buy(REAL) SUCH THAT WHEN region = 'A': buy <= 100 "
             "MAXIMIZE SUM(buy * w)"
         )
         assert (
             _remedy(_rows(_diagnose(cli, sql, setup=setup)), "buy")
-            == "buy <= <cap> WHEN (region = 'B' OR region = 'C')"
+            == "WHEN (region = 'B' OR region = 'C'): buy <= <cap>"
         )
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -518,7 +518,7 @@ class TestScopedRemedy:
             "SELECT id, buy FROM ("
             "SELECT i AS id, CASE WHEN i % 5 = 0 THEN 'export' ELSE 'domestic' END AS channel, "
             "i * 1.0 AS margin FROM range(1, 101) t(i)) "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN (channel = 'domestic' AND id <> 7) "
+            "DECIDE buy(REAL) SUCH THAT WHEN (channel = 'domestic' AND id <> 7): buy <= 100 "
             "MAXIMIZE SUM(buy * margin)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -540,7 +540,7 @@ class TestScopedRemedy:
 
         fixed = (
             "SELECT region, buy FROM items DECIDE buy(REAL) "
-            f"SUCH THAT buy <= 100 WHEN id <= 3 AND {remedy.replace('<cap>', '7')} "
+            f"SUCH THAT WHEN id <= 3: buy <= 100 AND {remedy.replace('<cap>', '7')} "
             "MAXIMIZE SUM(buy * w)"
         )
         result = cli.execute_script(f".mode csv\n{_TABLE_SETUP}{fixed};\n")

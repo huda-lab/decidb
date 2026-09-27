@@ -78,7 +78,7 @@ def test_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         WHERE s_nationkey < 5
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 3
-        MINIMIZE SUM(x * s_acctbal) PER s_nationkey
+        MINIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql_per)
@@ -125,7 +125,7 @@ def test_sum_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         WHERE s_nationkey < 5
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 3
-        MAXIMIZE SUM(SUM(x * s_acctbal)) PER s_nationkey
+        MAXIMIZE SUM(PER s_nationkey: SUM(x * s_acctbal) BY (s_nationkey))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -199,8 +199,8 @@ def test_minimize_sum_max_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-        MINIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 1
+        MINIMIZE SUM(PER l_returnflag: MAX(x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -265,8 +265,8 @@ def test_maximize_sum_min_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-        MAXIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 1
+        MAXIMIZE SUM(PER l_returnflag: MIN(x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -329,9 +329,9 @@ def test_maximize_sum_max_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-            AND SUM(x) <= 3 PER l_returnflag
-        MAXIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 1
+            AND PER l_returnflag: SUM(x) BY (l_returnflag) <= 3
+        MAXIMIZE SUM(PER l_returnflag: MAX(x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -397,9 +397,9 @@ def test_minimize_sum_min_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-            AND SUM(x) <= 3 PER l_returnflag
-        MINIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 1
+            AND PER l_returnflag: SUM(x) BY (l_returnflag) <= 3
+        MINIMIZE SUM(PER l_returnflag: MIN(x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -469,8 +469,8 @@ def test_minimize_max_sum_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 2 PER l_returnflag
-        MINIMIZE MAX(SUM(x * l_quantity)) PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 2
+        MINIMIZE MAX(PER l_returnflag: SUM(x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -531,8 +531,8 @@ def test_maximize_min_sum_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 2 PER l_returnflag
-        MAXIMIZE MIN(SUM(x * l_quantity)) PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 2
+        MAXIMIZE MIN(PER l_returnflag: SUM(x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -596,8 +596,8 @@ def test_sum_max_when_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-        MINIMIZE SUM(MAX(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 1
+        MINIMIZE SUM(PER l_returnflag: MAX(WHEN l_quantity > 10: x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -670,7 +670,7 @@ def test_single_group(
         FROM lineitem WHERE l_orderkey = 1
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
-        MINIMIZE SUM(MAX(x * l_quantity)) PER l_orderkey
+        MINIMIZE SUM(PER l_orderkey: MAX(x * l_quantity) BY (l_orderkey))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -730,8 +730,8 @@ def test_sum_avg_per_unequal_groups(
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER s_nationkey
-        MINIMIZE SUM(AVG(x * s_acctbal)) PER s_nationkey
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) >= 1
+        MINIMIZE SUM(PER s_nationkey: AVG(x * s_acctbal) BY (s_nationkey))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -798,7 +798,7 @@ def test_avg_sum_per_noop(
         WHERE s_nationkey < 5
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 3
-        MINIMIZE AVG(SUM(x * s_acctbal)) PER s_nationkey
+        MINIMIZE AVG(PER s_nationkey: SUM(x * s_acctbal) BY (s_nationkey))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -859,8 +859,8 @@ def test_minimize_max_avg_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 2 PER l_returnflag
-        MINIMIZE MAX(AVG(x * l_quantity)) PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 2
+        MINIMIZE MAX(PER l_returnflag: AVG(x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -923,8 +923,8 @@ def test_maximize_min_avg_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 2 PER l_returnflag
-        MAXIMIZE MIN(AVG(x * l_quantity)) PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 2
+        MAXIMIZE MIN(PER l_returnflag: AVG(x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -987,8 +987,8 @@ def test_sum_avg_when_per(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-        MINIMIZE SUM(AVG(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) >= 1
+        MINIMIZE SUM(PER l_returnflag: AVG(WHEN l_quantity > 10: x * l_quantity) BY (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1072,8 +1072,8 @@ def test_sum_avg_per_extreme_unequal_groups(
     sql = f"""
         SELECT id, grp, cost, x FROM ({data_sql})
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER grp
-        MINIMIZE SUM(AVG(x * cost)) PER grp
+        SUCH THAT PER grp: SUM(x) BY (grp) >= 1
+        MINIMIZE SUM(PER grp: AVG(x * cost) BY (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1197,7 +1197,7 @@ def test_maximize_sum_max_power_per(
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 10 AND SUM(x) <= 20
-        MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp
+        MAXIMIZE SUM(PER grp: MAX(POWER(x - target, 2)) BY (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli_gurobi.execute(sql)
@@ -1282,7 +1282,7 @@ def test_minimize_sum_min_power_per(
         SELECT id, grp, target, x FROM data
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 10
-        MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp
+        MINIMIZE SUM(PER grp: MIN(POWER(x - target, 2)) BY (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli_gurobi.execute(sql)
@@ -1334,29 +1334,3 @@ def test_minimize_sum_min_power_per(
     )
 
 
-@pytest.mark.per_clause
-@pytest.mark.min_max
-def test_flat_max_per_error(decidb_cli):
-    """MAX(x * cost) PER col without outer aggregate is ambiguous ⇒ error."""
-    with pytest.raises(Exception, match="ambiguous|nested aggregate"):
-        decidb_cli.execute("""
-            SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-            WHERE s_nationkey < 5
-            DECIDE x(BOOL)
-            SUCH THAT SUM(x) >= 1
-            MINIMIZE MAX(x * s_acctbal) PER s_nationkey
-        """)
-
-
-@pytest.mark.per_clause
-@pytest.mark.min_max
-def test_flat_min_per_error(decidb_cli):
-    """MIN(x * cost) PER col without outer aggregate ⇒ error."""
-    with pytest.raises(Exception, match="ambiguous|nested aggregate"):
-        decidb_cli.execute("""
-            SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-            WHERE s_nationkey < 5
-            DECIDE x(BOOL)
-            SUCH THAT SUM(x) >= 1
-            MAXIMIZE MIN(x * s_acctbal) PER s_nationkey
-        """)

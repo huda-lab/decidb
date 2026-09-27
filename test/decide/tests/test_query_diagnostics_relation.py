@@ -365,22 +365,22 @@ class TestDiagnosticsRelation:
         sql = (
             "SELECT r_name, keepR "
             "FROM nation n JOIN region r ON n.n_regionkey = r.r_regionkey "
-            "DECIDE r.keepR(BOOL) "
-            "SUCH THAT SUM(keepR) >= 6 PER r.r_name "
+            "DECIDE PER r: keepR(BOOL) "
+            "SUCH THAT PER r.r_name: SUM(keepR) BY (r.r_name) >= 6 "
             "MAXIMIZE SUM(keepR)"
         )
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        subject = "SUM(keepR) >= 6 PER r_name"
+        subject = "PER r_name: SUM(keepR) BY (r.r_name) >= 6"
         assert any(r["subject"] == subject for r in rows), (
             "clause label must quote the written coefficient, not the accumulated one:\n"
             + "\n".join(sorted({r["subject"] for r in rows if r["subject_kind"] == "clause"}))
         )
         attrs = _attrs(rows, "clause", subject)
-        assert attrs["suggested_change"] == "SUM(keepR) >= 5 PER r_name"
-        _apply_reported_fix(cli, sql, rows, {subject: "SUM(keepR) >= 6 PER r.r_name"})
+        assert attrs["suggested_change"] == "PER r_name: SUM(keepR) BY (r.r_name) >= 5"
+        _apply_reported_fix(cli, sql, rows, {subject: "PER r.r_name: SUM(keepR) BY (r.r_name) >= 6"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_entity_scoped_label_survives_mixed_multiplicity(
@@ -397,20 +397,20 @@ class TestDiagnosticsRelation:
             "SELECT n_name, keepN "
             "FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey "
             "JOIN region r ON n.n_regionkey = r.r_regionkey "
-            "DECIDE n.keepN(BOOL) "
-            "SUCH THAT SUM(keepN) >= 1000 PER r.r_name "
+            "DECIDE PER n: keepN(BOOL) "
+            "SUCH THAT PER r.r_name: SUM(keepN) BY (r.r_name) >= 1000 "
             "MAXIMIZE SUM(keepN)"
         )
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        subject = "SUM(keepN) >= 1000 PER r_name"
+        subject = "PER r_name: SUM(keepN) BY (r.r_name) >= 1000"
         assert any(r["subject"] == subject for r in rows), (
             "mixed-multiplicity group must not render as a data-varying weight:\n"
             + "\n".join(sorted({r["subject"] for r in rows if r["subject_kind"] == "clause"}))
         )
-        _apply_reported_fix(cli, sql, rows, {subject: "SUM(keepN) >= 1000 PER r.r_name"})
+        _apply_reported_fix(cli, sql, rows, {subject: "PER r.r_name: SUM(keepN) BY (r.r_name) >= 1000"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_row_scoped_label_unaffected_by_fold_rendering(
@@ -424,15 +424,15 @@ class TestDiagnosticsRelation:
         sql = (
             "SELECT id, grp, buy FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, grp) "
             "DECIDE buy(BOOL) "
-            "SUCH THAT SUM(buy) >= 5 PER grp "
+            "SUCH THAT PER grp: SUM(buy) BY (grp) >= 5 "
             "MAXIMIZE SUM(buy)"
         )
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        attrs = _attrs(rows, "clause", "SUM(buy) >= 5 PER grp")
-        assert attrs["suggested_change"] == "SUM(buy) >= 1 PER grp"
+        attrs = _attrs(rows, "clause", "PER grp: SUM(buy) BY (grp) >= 5")
+        assert attrs["suggested_change"] == "PER grp: SUM(buy) BY (grp) >= 1"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_stage2_picks_objective_best_edit(self, request, cli_fixture):
@@ -603,12 +603,12 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a',true),(2,'a',false)) t(id, grp, active) "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 WHEN active PER grp MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT WHEN active PER grp: SUM(x) BY (grp) >= 5 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
-        clause = "SUM(x) >= 5 WHEN active PER grp"
+        clause = "WHEN active PER grp: SUM(x) BY (grp) >= 5"
         edit = _attrs(rows, "clause", clause)
         assert edit["edit_kind"] == "loosen"
         assert "PER grp WHEN" not in result.stdout
@@ -623,7 +623,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT PER grp: SUM(x) BY (grp) >= 5 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
         err = result.stderr.lower()
@@ -633,8 +633,8 @@ class TestDiagnosticsRelation:
         edits = _clause_edits(rows)
         assert len(edits) == 1
         edit = edits[0]
-        assert edit["subject"] == "SUM(x) >= 5 PER grp"
-        assert edit["suggested_change"] == "SUM(x) >= 2 PER grp"
+        assert edit["subject"] == "PER grp: SUM(x) BY (grp) >= 5"
+        assert edit["suggested_change"] == "PER grp: SUM(x) BY (grp) >= 2"
         assert edit["amount"] == "3"
         assert edit["edit_source"] == "source_literal"
         assert edit["offset_scope"] == "clause"
@@ -650,7 +650,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'b')) t(id, grp) "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER grp MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT PER grp: SUM(x) BY (grp) >= 5 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, scope="expanded")
 
@@ -660,16 +660,16 @@ class TestDiagnosticsRelation:
         # The clause reads as written; the group is its own column, not a suffix on the
         # label the user has to parse back out.
         assert [e["subject"] for e in edits] == [
-            "SUM(x) >= 5 PER grp",
-            "SUM(x) >= 5 PER grp",
+            "PER grp: SUM(x) BY (grp) >= 5",
+            "PER grp: SUM(x) BY (grp) >= 5",
         ]
         by_group = {e["group"]: e for e in edits}
         assert set(by_group) == {"a", "b"}
-        assert by_group["a"]["suggested_change"] == "SUM(x) >= 2 PER grp"
+        assert by_group["a"]["suggested_change"] == "PER grp: SUM(x) BY (grp) >= 2"
         assert by_group["a"]["amount"] == "3"
         assert by_group["a"]["edit_source"] == "expanded_group"
         assert by_group["a"]["offset_scope"] == "group"
-        assert by_group["b"]["suggested_change"] == "SUM(x) >= 3 PER grp"
+        assert by_group["b"]["suggested_change"] == "PER grp: SUM(x) BY (grp) >= 3"
         assert by_group["b"]["amount"] == "2"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -680,7 +680,7 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,''),(2,'a')) t(id, grp) "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 2 PER grp MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT PER grp: SUM(x) BY (grp) >= 2 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql, scope="expanded")
 
@@ -688,10 +688,10 @@ class TestDiagnosticsRelation:
         edits = _clause_edits(rows)
         by_group = {e["group"]: e for e in edits}
         assert set(by_group) == {"''", "a"}
-        assert by_group["''"]["subject"] == "SUM(x) >= 2 PER grp"
+        assert by_group["''"]["subject"] == "PER grp: SUM(x) BY (grp) >= 2"
         assert by_group["''"]["edit_source"] == "expanded_group"
         assert by_group["''"]["offset_scope"] == "group"
-        assert by_group["''"]["suggested_change"] == "SUM(x) >= 1 PER grp"
+        assert by_group["''"]["suggested_change"] == "PER grp: SUM(x) BY (grp) >= 1"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_single_row_when_group_keeps_sum_wrapper(self, request, cli_fixture):
@@ -703,17 +703,17 @@ class TestDiagnosticsRelation:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a'),(2,'b')) t(id, grp) "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 99 WHEN grp='a' MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT WHEN grp='a': SUM(x) >= 99 MAXIMIZE SUM(x)"
         )
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        edit = _attrs(rows, "clause", "SUM(x) >= 99 WHEN grp = 'a'")
+        edit = _attrs(rows, "clause", "WHEN grp = 'a': SUM(x) >= 99")
         assert edit["edit_kind"] == "loosen"
-        assert edit["suggested_change"] == "SUM(x) >= 1 WHEN grp = 'a'"
+        assert edit["suggested_change"] == "WHEN grp = 'a': SUM(x) >= 1"
         _apply_reported_fix(
-            cli, sql, rows, {"SUM(x) >= 99 WHEN grp = 'a'": "SUM(x) >= 99 WHEN grp='a'"}
+            cli, sql, rows, {"WHEN grp = 'a': SUM(x) >= 99": "WHEN grp='a': SUM(x) >= 99"}
         )
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -1479,7 +1479,7 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize("domain", ["(2)", "(2, 3)"])
-    @pytest.mark.parametrize("when", ["", " WHEN id = 1"])
+    @pytest.mark.parametrize("when", ["", "WHEN id = 1: "])
     def test_infeasible_in_formulation_is_one_atomic_drop(
         self, request, cli_fixture, domain, when
     ):
@@ -1487,7 +1487,7 @@ class TestDiagnosticsRelation:
         source-level remove-only groups. Cardinality/linking/absorbed-floor rows never
         surface separately and always disappear together."""
         cli = request.getfixturevalue(cli_fixture)
-        clause = f"b IN {domain}{when}"
+        clause = f"{when}b IN {domain}"
         sql = (
             "SELECT id, b FROM (VALUES (1)) t(id) DECIDE b(BOOL) "
             f"SUCH THAT SUM(b) >= 0 AND {clause} MAXIMIZE SUM(b)"
@@ -2039,7 +2039,7 @@ class TestUnreachableBound:
         assert not [r for r in rows if r["attribute"] in
                     ("edit_kind", "suggested_change", "amount")], rows
         # The generic "a fixed part of the query" fallback is wrong here — the conflict
-        # is in a SUCH THAT clause — and must no longer be reached.
+        # is in a SUCH THAT clause — AND must no longer be reached.
         assert not [r for r in rows if r["attribute"] == "elastic_infeasible"], rows
 
     @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
@@ -2059,14 +2059,14 @@ class TestUnreachableBound:
             "SELECT 1, 3.0 UNION ALL "
             "SELECT 1, 1.0) "
             "SELECT g, x FROM data DECIDE x(INT) "
-            "SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g "
+            "SUCH THAT x >= 0 AND x <= 6 AND PER g: MIN(x) BY (g) <= MAX(cap) BY (g) "
             "MAXIMIZE SUM(x)"
         )
         rows = _rows(_diagnose(cli, sql))
         assert {r["state"] for r in rows} == {"infeasible"}
         # The clause reads as the user wrote it, and the group is its own attribute
         # rather than a suffix baked into the clause text.
-        assert _attrs(rows, "clause", "MIN(x) <= -inf PER g") == {
+        assert _attrs(rows, "clause", "PER g: MIN(x) BY (g) <= -inf") == {
             "unreachable_bound": "true",
             "group": "0",
         }
@@ -2171,7 +2171,7 @@ class TestNativeConstructDiagnosis:
     # wrong.
     _SHAPES = [
         ("max", "x(REAL), y(REAL)", "MAX(x) >= 5"),
-        ("max_per", "x(REAL), y(REAL)", "MAX(x) >= 5 PER g"),
+        ("max_per", "x(REAL), y(REAL)", "PER g: MAX(x) BY (g) >= 5"),
         ("min", "x(REAL), y(REAL)", "MIN(x) >= 5"),
         ("abs", "x(REAL), y(REAL)", "ABS(x - 3) >= 2"),
         ("not_equal", "x(INT), y(REAL)", "x <> 3"),
@@ -2257,7 +2257,7 @@ class TestNativeConstructDiagnosis:
 
         edits = _clause_edits(rows)
         assert len(edits) == 1, f"one clause, one edit:\n{rows}"
-        assert edits[0]["subject"] == "MAX(x * 0.5 + c) >= 25 PER g", rows
+        assert edits[0]["subject"] == "PER g: MAX(x * 0.5 + c) BY (g) >= 25", rows
         # A shared literal, not a per-row data offset — the user has a number to retype.
         assert edits[0]["edit_source"] == "source_literal", rows
 
@@ -2277,7 +2277,7 @@ class TestNativeConstructDiagnosis:
     #: The tie itself is covered by `test_a_tie_goes_to_the_repair_worth_more`.
     _MINMAX_SQL = (
         "SELECT g, x FROM (VALUES (0,1),(0,2),(1,3),(1,4)) t(g,c) "
-        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND MAX(x * 0.5 + c) >= 25 PER g "
+        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND PER g: MAX(x * 0.5 + c) BY (g) >= 25 "
         "MAXIMIZE SUM(x)"
     )
 
@@ -2308,7 +2308,7 @@ class TestNativeConstructDiagnosis:
             rows = _rows(proc)
             edits = _clause_edits(rows)
             assert len(edits) == 1, f"{label}: one clause, one edit:\n{rows}"
-            assert edits[0]["subject"] == "MAX(x * 0.5 + c) >= 25 PER g", f"{label}:\n{rows}"
+            assert edits[0]["subject"] == "PER g: MAX(x * 0.5 + c) BY (g) >= 25", f"{label}:\n{rows}"
             _apply_reported_fix(runner, self._MINMAX_SQL, rows)
 
         distinct = set(seen.values())
@@ -2620,7 +2620,7 @@ class TestRepairsTheModelCanReach:
         `x <= 23` was the same size of edit and worth 92."""
         sql = (
             "SELECT g, x FROM (VALUES (0,1),(0,2),(1,3),(1,4)) t(g,c) "
-            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND MAX(x + c) >= 25 PER g "
+            "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 9 AND PER g: MAX(x + c) BY (g) >= 25 "
             "MAXIMIZE SUM(x)"
         )
         # `force` earns its place here: MIN/MAX is native only where the Big-M is

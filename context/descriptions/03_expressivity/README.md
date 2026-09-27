@@ -5,6 +5,11 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 - `done.md` — What is implemented today: semantics, implementation notes, and code pointers (the canonical *syntax* spec is `../00_project_overview/syntax_reference.md`)
 - `todo.md` — What remains to be built, with design rationale and implementation suggestions
 
+The language is the clean redesign of `../00_project_overview/deciql_language_spec.md`
+(implemented 2026-09-26): generation (`PER K:`), aggregation (`BY (Γ)`) and
+navigation (frames) are separate constructs, and a constraint reads as
+`[WHEN θ] [PER K] [IF b]: body`.
+
 ---
 
 ## Folders
@@ -12,58 +17,43 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
 | [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | SOCP |
-| [decide/](decide/) | BOOL, INT, REAL, row/entity/query-wide scope, both clause orders, relation-qualified reducers | *(no planned features)* |
-| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`), NULL policy | *(no planned features)* |
-| [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
-| [when/](when/) | Constraints, objectives, PER composition, aggregate-local filters, grammar restrictions | *(no planned features)* |
-| [per/](per/) | PER on constraints (single + multi-column), PER on objective (nested aggregates), WHEN+PER composition, row-varying RHS | *(no planned features)* |
-| [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, norm, `<>`, IN (dec. vars), arithmetic including division, comparisons, BETWEEN, NULL | *(no planned features)* |
+| [decide/](decide/) | `INT`/`BOOL`/`REAL`/`SEMIINT`/`SEMIREAL`/`TEXT IN [...]`, row / `PER K:` / `PER ():` generation, declaration bounds, both clause orders, keyed reducers | *(no planned features)* |
+| [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries, the `WHEN`/`PER`/`IF` prefixes, quadratic (`POWER(expr,2)`), NULL policy | *(no planned features)* |
+| [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives, `THEN` stages, `SATISFY` | *(no planned features)* |
+| [when/](when/) | `WHEN θ` as a row filter on constraints, objectives and inside reducers; `IF b` as a decision guard | *(no planned features)* |
+| [per/](per/) | `PER K:` generation, the functional-dependency rule, `BY (Γ)` aggregation, nested `MAX(PER k: SUM(e) BY (k))` objectives | *(no planned features)* |
+| [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, norm, `<>`, IN (dec. vars), arithmetic including division, comparisons, BETWEEN, NULL, frames (`AT` / `SUM(FROM .. TO ..) OVER`) | `MIN`/`MAX`/`AVG` range frames |
 | [bilinear/](bilinear/) | Bool×anything (McCormick), non-convex (Q matrix), bilinear constraints, data coefficients, WHEN composition | *(no planned features)* |
-| [explain/](explain/) | `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN (FORMAT JSON)` on a DECIDE query: node structure, the shared `WHEN`/`PER` renderer, cardinality, layered as-written → canonical → rewritten rendering | *(no planned features)* |
+| [explain/](explain/) | `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN (FORMAT JSON)` on a DECIDE query: node structure, prefix-first clause rendering, layered as-written → canonical → rewritten rendering | *(no planned features)* |
 | [diagnose/](diagnose/) | `DIAGNOSE <query>` statement prefix — the only trigger for the diagnostics engine, returning its findings as a relation | — |
 
 ---
 
 ## Keyword Status Matrix
 
-| Keyword / Feature | Implemented | Todo File |
+| Keyword / Feature | Implemented | Notes |
 |---|---|---|
-| `DECIDE x(BOOL)` | Yes | — |
-| `DECIDE x(INT)` | Yes | — |
-| `DECIDE x(REAL)` | Yes | — |
-| Multiple variables: `DECIDE x(INT), y(BOOL)` | Yes | — |
-| `DECIDE Table.var(TYPE)` (table-scoped) | Yes (entity-keyed, mixed with row-scoped) | — |
-| `SUCH THAT` with `=`, `<`, `<=`, `>`, `>=` | Yes | — |
-| `<>` (not-equal) | Yes (Big-M disjunction) | — |
-| `AND` constraint separator | Yes | — |
-| `BETWEEN ... AND ...` | Yes | — |
-| `IN (...)` on table columns | Yes | — |
-| `IN (...)` on decision variables | Yes (auxiliary binary indicators) | — |
-| Uncorrelated scalar subqueries | Yes | — |
-| Correlated scalar subqueries | Yes (per-row constraints; aggregate requires scalar RHS) | — |
-| Nested DECIDE in a scalar RHS subquery | Yes (inner solve supplies the outer bound) | — |
-| Linear constraints | Yes | — |
-| Quadratic objective: `MINIMIZE SUM(POWER(expr, 2))` | Yes (convex QP, syntax-enforced) | — |
-| Bilinear objectives (`b * x`, `x * y`) | Yes (McCormick / Q matrix) | — |
-| Bilinear constraints (`b * x`, `x * y`) | Yes (McCormick / `GRBaddqconstr`) | — |
-| Quadratic constraints: `POWER(expr, 2)` in SUCH THAT | Yes (QCQP, Gurobi only) | — |
-| Feasibility (no MAXIMIZE/MINIMIZE) | Yes (both solvers) | — |
-| `WHEN` on constraints | Yes | — |
-| `WHEN` on objective | Yes | — |
-| `PER` on constraints | Yes | — |
-| `PER` on objective | Yes (nested aggregate syntax) | — |
-| `MAXIMIZE SUM(...)` | Yes | — |
-| `MINIMIZE SUM(...)` | Yes | — |
-| Bare query-wide scalar objective (`MINIMIZE cap`) | Yes | — |
-| `SUM()` over decision variables | Yes | — |
-| `AVG()` over decision variables | Yes (coefficient scaling) | — |
-| `ABS()` | Yes (linearized) | — |
-| `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | — |
-| `DIAGNOSE <query>` prefix | Yes | [diagnose/done.md](diagnose/done.md) |
-| Relation-qualified reducer `SUM(D: expr)` / `SUM(D, T: expr)` | Yes (paper §3.2.2; composite multi-relation keys included) | — |
-| `DECIDE` before `FROM` (paper clause order) | Yes (both orders accepted) | — |
-| `DECIDE scalar x(INT)` (query-wide) | Yes (paper §3.1) | — |
-| `IS BETWEEN a AND b` | **No** (bare `BETWEEN` is the supported syntax) | — |
+| `DECIDE x(INT)` / `x(BOOL)` / `x(REAL)` | Yes | row-scoped by default |
+| `x(SEMIINT) BETWEEN lo AND hi` / `SEMIREAL` | Yes | `0 OR lo <= x <= hi`; hidden BOOL switch |
+| `x(TEXT IN ['a', 'b'])` | Yes | one-hot indicators, VARCHAR readback; `=`, `<>`, `IN` only |
+| `PER K: x(D)` (keyed decision, any column list or relation) | Yes | replaces `T.x(TYPE)` |
+| `PER (): x(D)` (query-wide decision) | Yes | replaces `scalar x(TYPE)` |
+| Declaration bounds `BETWEEN lo AND hi` / `<= hi` / `>= lo` | Yes | constants or key-determined columns |
+| `SUCH THAT` with `=`, `<`, `<=`, `>`, `>=`, `<>`, BETWEEN, IN | Yes | |
+| `WHEN θ:` filter prefix | Yes | known data only |
+| `PER K:` generation prefix (`PER ()` global) | Yes | functional-dependency rule, reject policy |
+| `IF b:` guard prefix | Yes | BOOL / TEXT / integer linear comparison guards; linear bodies; indicator (Gurobi) or Big-M (HiGHS) |
+| `agg(WHEN θ PER K: e) BY (Γ)` reducers | Yes | `BY ()` = whole input |
+| Nested `MAX(PER k: SUM(e) BY (k))` objective | Yes | all 9 outer/inner combinations |
+| Frames `AT(sel [ELSE v]: e) OVER (key [DESC] [CYCLIC] [WITHIN P])` | Yes | constraints only |
+| Frames `SUM(FROM a TO b [EVERY d] [ELSE v \| ALL]: e) OVER (...)` | Yes | `MIN`/`MAX`/`AVG` ranges not yet |
+| `MAXIMIZE a THEN MINIMIZE b ...` | Yes | staged solves; later stages linear |
+| `SATISFY` / omitted objective | Yes | |
+| Quadratic / bilinear objectives and constraints | Yes | Gurobi for non-convex and QCQP |
+| `ABS()`, `norm(e, p)`, `MIN()`/`MAX()` | Yes | `norm(WHEN c: e, p)` takes the filter prefix |
+| `DIAGNOSE <query>` prefix | Yes | labels quote the prefixes first |
+| Uncorrelated / correlated scalar subqueries, nested DECIDE | Yes | |
+| Variant Signature (spec §7.2) | **No** | the FD rule rejects instead |
 
 ### Problem Classification
 
@@ -73,11 +63,8 @@ For a complete taxonomy of what mathematical optimization problem classes DeciDB
 
 ## Development Priorities
 
-The only deferred language-surface extension currently recorded here is
-[SOCP](problem_types/todo.md). The other feature-specific `todo.md` files have
-no open work.
-
-`DIAGNOSE <query>` is implemented — [diagnose/done.md](diagnose/done.md).
+Open language-surface work: [SOCP](problem_types/todo.md), and range frames that
+reduce with `MIN`/`MAX`/`AVG` ([sql_functions/todo.md](sql_functions/todo.md)).
 
 ---
 
@@ -87,16 +74,15 @@ DECIQL extends SQL with constrained optimization. The key structure:
 
 ```sql
 SELECT select_list
-DECIDE [Table.]variable_name(type) [, ...]
+DECIDE [PER scope:] name(domain) [bounds] [, ...]
 FROM table_expression
 [WHERE ...]
 SUCH THAT
-    constraint [AND constraint ...]
-[MAXIMIZE | MINIMIZE] objective_expression
+    [WHEN θ] [PER K] [IF b]: body [AND ...]
+[MAXIMIZE | MINIMIZE expr [THEN ...] | SATISFY]
 ```
 
-The declaration may equally sit after `WHERE`, immediately before `SUCH THAT`
-(`... FROM t WHERE ... DECIDE x(INT) SUCH THAT ...`). Both orders are accepted
-and produce the same plan.
+The declaration may equally sit after `WHERE`, immediately before `SUCH THAT`.
+Both orders are accepted and produce the same plan.
 
 See `context/descriptions/00_project_overview/syntax_reference.md` for the full implemented syntax reference.

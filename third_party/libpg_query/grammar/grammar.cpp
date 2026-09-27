@@ -516,6 +516,66 @@ doNegateFloat(PGValue *v)
  * variables are both still in scope to name as the duplicate; by the time
  * decl reaches here, body->variables != NULL is therefore never true.
  */
+/*
+ * DecidB: wrap a constraint body in its prefixes. The nesting is
+ * PER(WHEN(IF(body))): the guard sits closest to the row it conditions, the
+ * filter selects the rows before generation, and the generation key is
+ * outermost. Downstream stages descend into the first child of each wrapper
+ * only; the other children are the prefix's own operands.
+ */
+static PGNode *
+makeDecideScopedBody(PGDecidePrefix *prefix, PGNode *body, int location)
+{
+	PGNode *node = body;
+	if (prefix->guard)
+		node = (PGNode *) makeSimpleAExpr(PG_AEXPR_IF_CONSTRAINT, "if_constraint", node, prefix->guard, location);
+	if (prefix->filter)
+		node = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", node, prefix->filter, location);
+	if (prefix->scope && prefix->scope->kind != PG_DECIDE_SCOPE_ROW)
+		node = (PGNode *) makeSimpleAExpr(PG_AEXPR_PER_CONSTRAINT, "per_constraint", node, (PGNode *) prefix->scope, location);
+	return node;
+}
+
+/*
+ * DecidB: `agg([WHEN theta] [PER K]: body) [BY (keys)]`. The filter travels as
+ * the call's own FILTER, the generation key as a QUALIFIED_REDUCER wrapper, and
+ * the aggregation key as a REDUCER_BY wrapper. An omitted or empty BY is the
+ * global group and needs no wrapper.
+ */
+static PGNode *
+makeDecideReducer(PGList *funcname, PGDecidePrefix *prefix, PGNode *body, PGList *more_args, PGList *by_keys,
+				  int location, int by_location)
+{
+	PGFuncCall *call = makeFuncCall(funcname, lcons(body, more_args), location);
+	PGNode *node = (PGNode *) call;
+	if (prefix && prefix->filter)
+		call->agg_filter = prefix->filter;
+	if (prefix && prefix->scope && prefix->scope->kind != PG_DECIDE_SCOPE_ROW)
+		node = (PGNode *) makeSimpleAExpr(PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", node,
+										  (PGNode *) prefix->scope, prefix->scope->location);
+	return makeDecideReducerBy(node, by_keys, by_location);
+}
+
+static PGNode *
+makeDecideReducerBy(PGNode *reducer, PGList *by_keys, int location)
+{
+	if (by_keys == NIL)
+		return reducer;
+	return (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by", reducer, (PGNode *) by_keys, location);
+}
+
+/* DecidB: the aggregate name of a range frame, `sum(FROM ... TO ...: e)`. */
+static char *
+makeDecideFrameAggName(PGList *funcname, int location, core_yyscan_t yyscanner)
+{
+	if (list_length(funcname) != 1)
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("a frame aggregate must be a bare name: sum, avg, min or max"),
+				 parser_errposition(location)));
+	return strVal(linitial(funcname));
+}
+
 static PGNode *
 makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 				 int body_location, core_yyscan_t yyscanner)

@@ -14,6 +14,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
@@ -215,6 +216,9 @@ public:
 		}
 		if (op.decide_objective) {
 			AnalyzeObjective(op.decide_objective);
+		}
+		for (auto &stage : op.objective_tail) {
+			AnalyzeObjectiveStage(stage);
 		}
 		// The composed MIN/MAX terms are emitted by RewriteComposedMinMax as bare
 		// inner expressions. Flatten them here too, so stage 08 reads prepared terms
@@ -793,17 +797,44 @@ private:
 		return scope_idx;
 	}
 
+	//! Entity scope a reducer aggregates BY (`sum(...) BY (k)`), read back from the tag
+	//! the binder stamped; INVALID_INDEX for `BY ()`.
+	static idx_t GroupScopeOf(const BoundAggregateExpression &agg) {
+		idx_t scope_idx = DConstants::INVALID_INDEX;
+		TryParseReduceByTag(agg.alias, scope_idx);
+		return scope_idx;
+	}
+
 	static void ApplyAggregateMetadata(vector<DecideTerm> &terms, idx_t begin, const BoundAggregateExpression &agg) {
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
+		idx_t group_scope = GroupScopeOf(agg);
+		idx_t frame_idx = DConstants::INVALID_INDEX;
+		TryParseFrameRefTag(agg.alias, frame_idx);
 		for (idx_t i = begin; i < terms.size(); i++) {
 			if (agg.filter) {
 				terms[i].filter = agg.filter->Copy();
 			}
 			terms[i].avg_scale = is_avg;
 			terms[i].qualifier_scope_idx = qualifier_scope;
+			terms[i].group_scope_idx = group_scope;
+			terms[i].frame_idx = frame_idx;
 			terms[i].reduction = LinearTermReduction::SUM;
 		}
+	}
+
+	//! True when a frame aggregate sits anywhere in `expr`.
+	static bool ContainsFrameAggregate(const Expression &expr) {
+		idx_t frame_idx;
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		    TryParseFrameRefTag(expr.GetAlias(), frame_idx)) {
+			return true;
+		}
+		bool found = false;
+		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+			found = found || ContainsFrameAggregate(child);
+		});
+		return found;
 	}
 
 	//! Name an expression the way the user wrote it: strip the casts the binder added.
@@ -1011,11 +1042,20 @@ private:
 		}
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
+		idx_t group_scope = GroupScopeOf(agg);
 
 		idx_t linear_before = constraint.lhs_terms.size();
 		idx_t bilinear_before = constraint.bilinear_terms.size();
 		idx_t quadratic_before = constraint.quadratic_groups.size();
 		ExtractConstraintTerms(*agg.children[0], constraint, sign);
+		// A frame's `ELSE v` fill enters through a term of its own, so the sign and
+		// any factor on the frame reach it the way they reach the body's terms.
+		idx_t frame_idx;
+		if (TryParseFrameRefTag(agg.alias, frame_idx)) {
+			DecideTerm fill(DConstants::INVALID_INDEX, make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0)), sign);
+			fill.frame_fill = true;
+			constraint.lhs_terms.push_back(std::move(fill));
+		}
 		ApplyAggregateMetadata(constraint.lhs_terms, linear_before, agg);
 		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
 			if (agg.filter) {
@@ -1023,6 +1063,7 @@ private:
 			}
 			constraint.bilinear_terms[i].avg_scale = is_avg;
 			constraint.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
+			constraint.bilinear_terms[i].group_scope_idx = group_scope;
 		}
 		for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
 			if (agg.filter) {
@@ -1030,6 +1071,7 @@ private:
 			}
 			constraint.quadratic_groups[i].avg_scale = is_avg;
 			constraint.quadratic_groups[i].qualifier_scope_idx = qualifier_scope;
+			constraint.quadratic_groups[i].group_scope_idx = group_scope;
 		}
 
 		string minmax_payload;
@@ -1066,6 +1108,17 @@ private:
 			}
 			if (fname == "-" && func.children.size() == 1) {
 				ExtractConstraintTerms(*func.children[0], constr, -sign, filter);
+				return;
+			}
+			// A reducer atom beside direct terms (a MIXED constraint, `ship <= 0.2 *
+			// sum(: ship) BY ()`): its terms are reduced over the reducer's group, the
+			// direct ones read the instance's own row. The aggregate path stamps the
+			// reduction, filter, key and scale on what it extracts. A frame over data
+			// alone (`AT(previous: demand)`) is one too: it reads other rows, not this one.
+			if (BoundExpressionContainsAggregate(expr) &&
+			    (FindDecideVariable(expr) != DConstants::INVALID_INDEX || ContainsFrameAggregate(expr))) {
+				ExtractAggregateConstraintTerms(expr, constr, sign);
+				constr.has_reduced_terms = true;
 				return;
 			}
 			// POWER(e,2) / POW / ** / (e)*(e), on its own or scaled by a constant.
@@ -1117,6 +1170,14 @@ private:
 				}
 			}
 		}
+		// The same reducer atom when it is not under a scalar function: a bare
+		// `sum(: ship)` or one the binder wrapped in a cast.
+		if (BoundExpressionContainsAggregate(expr) &&
+		    (FindDecideVariable(expr) != DConstants::INVALID_INDEX || ContainsFrameAggregate(expr))) {
+			ExtractAggregateConstraintTerms(expr, constr, sign);
+			constr.has_reduced_terms = true;
+			return;
+		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 			auto &cast = expr.Cast<BoundCastExpression>();
 			if (FindDecideVariable(expr) == DConstants::INVALID_INDEX) {
@@ -1153,27 +1214,130 @@ private:
 		}
 	}
 
-	void AnalyzeConstraint(const unique_ptr<Expression> &expr_ptr, unique_ptr<Expression> when_condition = nullptr,
-	                       vector<unique_ptr<Expression>> per_columns = {}) {
+	//! The prefixes gathered on the way down to a comparison.
+	struct ConstraintPrefixes {
+		unique_ptr<Expression> when_condition;
+		vector<unique_ptr<Expression>> per_columns;
+		DecideScopeKind gen_kind = DecideScopeKind::ROW;
+		idx_t gen_scope_idx = DConstants::INVALID_INDEX;
+		unique_ptr<Expression> guard;
+	};
+
+	void AnalyzeConstraint(const unique_ptr<Expression> &expr_ptr) {
+		ConstraintPrefixes none;
+		AnalyzeConstraint(expr_ptr, std::move(none));
+	}
+
+	//! The linear form of an `IF b:` guard (spec §7.4). A bare BOOL decision is
+	//! `open >= 1`, `NOT open` is `open <= 0`, and a comparison keeps its own terms --
+	//! the canonicalizer has already put its decisions left and its bound right.
+	unique_ptr<DecideGuard> AnalyzeGuard(const Expression &guard_expr) {
+		const Expression *guard = &guard_expr;
+		while (guard->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+			guard = guard->Cast<BoundCastExpression>().child.get();
+		}
+		auto spec = make_uniq<DecideGuard>();
+		auto bool_guard = [&](const Expression &decision, bool holds_when_true) {
+			idx_t var_idx = FindDecideVariable(decision);
+			if (var_idx == DConstants::INVALID_INDEX || decision.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+				throw BinderException("An IF guard is a BOOL decision, NOT of one, or a comparison over decisions "
+				                      "(for example IF open: or IF ship > 0:); found '%s'.",
+				                      StripDecideTags(guard_expr.ToString()));
+			}
+			if (var_idx >= op.is_boolean_var.size() || !op.is_boolean_var[var_idx]) {
+				throw BinderException("An IF guard that names a decision on its own needs a BOOL one; '%s' is not. "
+				                      "Compare it instead, for example IF %s > 0:.",
+				                      StripDecideTags(guard_expr.ToString()), StripDecideTags(decision.GetName()));
+			}
+			spec->lhs_terms.emplace_back(var_idx, make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0)));
+			spec->rhs_expr = make_uniq<BoundConstantExpression>(Value::DOUBLE(holds_when_true ? 1.0 : 0.0));
+			spec->comparison_type = holds_when_true ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
+			                                        : ExpressionType::COMPARE_LESSTHANOREQUALTO;
+		};
+		switch (guard->GetExpressionClass()) {
+		case ExpressionClass::BOUND_COLUMN_REF:
+			bool_guard(*guard, true);
+			break;
+		case ExpressionClass::BOUND_OPERATOR: {
+			auto &op = guard->Cast<BoundOperatorExpression>();
+			if (op.type != ExpressionType::OPERATOR_NOT || op.children.size() != 1) {
+				throw BinderException("An IF guard is a BOOL decision, NOT of one, or a comparison over decisions "
+				                      "(for example IF open: or IF ship > 0:); found '%s'.",
+				                      StripDecideTags(guard_expr.ToString()));
+			}
+			const Expression *decision = op.children[0].get();
+			while (decision->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+				decision = decision->Cast<BoundCastExpression>().child.get();
+			}
+			bool_guard(*decision, false);
+			break;
+		}
+		case ExpressionClass::BOUND_COMPARISON: {
+			auto &comp = guard->Cast<BoundComparisonExpression>();
+			switch (comp.type) {
+			case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+			case ExpressionType::COMPARE_LESSTHAN:
+			case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+			case ExpressionType::COMPARE_GREATERTHAN:
+				break;
+			default:
+				throw BinderException("An IF guard compares with <=, <, >= or >; '%s' is not supported as a guard. "
+				                      "Guard on a BOOL decision instead.",
+				                      StripDecideTags(guard_expr.ToString()));
+			}
+			if (BoundExpressionContainsAggregate(comp)) {
+				throw BinderException("An IF guard reads the instance's own decisions; a reducer such as '%s' "
+				                      "cannot guard it.",
+				                      StripDecideTags(guard_expr.ToString()));
+			}
+			spec->comparison_type = comp.type;
+			ExtractTerms(*UnwrapDecideCasts(*comp.left, decide_index), spec->lhs_terms);
+			spec->rhs_expr = comp.right->Copy();
+			bool any_decision = false;
+			for (auto &term : spec->lhs_terms) {
+				any_decision |= term.variable_index != DConstants::INVALID_INDEX;
+			}
+			if (!any_decision) {
+				throw BinderException("An IF guard must reference a decision; '%s' reads none. A condition "
+				                      "over known data filters rows and is written WHEN <condition>: instead.",
+				                      StripDecideTags(guard_expr.ToString()));
+			}
+			break;
+		}
+		default:
+			throw BinderException("An IF guard is a BOOL decision, NOT of one, or a comparison over decisions "
+			                      "(for example IF open: or IF ship > 0:); found '%s'.",
+			                      StripDecideTags(guard_expr.ToString()));
+		}
+		return spec;
+	}
+
+	void AnalyzeConstraint(const unique_ptr<Expression> &expr_ptr, ConstraintPrefixes prefixes) {
 		auto &expr = *expr_ptr;
 		switch (expr.GetExpressionClass()) {
 		case ExpressionClass::BOUND_CONJUNCTION: {
 			auto &conj = expr.Cast<BoundConjunctionExpression>();
-			// DecidB: PER wrapper — outermost layer
-			if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
-				// child[0] = the constraint (possibly WHEN-wrapped)
-				// children[1..N] = the PER column expressions
-				vector<unique_ptr<Expression>> per_cols;
+			// DecidB: PER wrapper -- child[0] the constraint, children[1..N] the key
+			if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
 				for (idx_t i = 1; i < conj.children.size(); i++) {
-					per_cols.push_back(conj.children[i]->Copy());
+					prefixes.per_columns.push_back(conj.children[i]->Copy());
 				}
-				AnalyzeConstraint(conj.children[0], std::move(when_condition), std::move(per_cols));
+				if (!TryParseGenScopeTag(conj.GetAlias(), prefixes.gen_kind, prefixes.gen_scope_idx)) {
+					throw InternalException("PER wrapper carries no generation scope");
+				}
+				AnalyzeConstraint(conj.children[0], std::move(prefixes));
 				break;
 			}
-			// DecidB: Check if this is a WHEN constraint wrapper
+			// DecidB: WHEN wrapper -- child[0] the constraint, child[1] the condition
 			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-				// child[0] = the actual constraint, child[1] = the WHEN condition
-				AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(), std::move(per_columns));
+				prefixes.when_condition = conj.children[1]->Copy();
+				AnalyzeConstraint(conj.children[0], std::move(prefixes));
+				break;
+			}
+			// DecidB: IF wrapper -- child[0] the constraint, child[1] the guard
+			if (IsIfConstraintWrapper(conj) && conj.children.size() == 2) {
+				prefixes.guard = conj.children[1]->Copy();
+				AnalyzeConstraint(conj.children[0], std::move(prefixes));
 				break;
 			}
 			// Regular conjunction: recursively analyze each child
@@ -1227,12 +1391,14 @@ private:
 				constraint->was_minmax_easy = true;
 			}
 
-			// DecidB: Store WHEN condition and PER columns if present
-			if (when_condition) {
-				constraint->when_condition = std::move(when_condition);
-			}
-			if (!per_columns.empty()) {
-				constraint->per_columns = std::move(per_columns);
+			// DecidB: the prefixes, as gathered on the way down
+			constraint->when_condition = std::move(prefixes.when_condition);
+			constraint->per_columns = std::move(prefixes.per_columns);
+			constraint->gen_kind = prefixes.gen_kind;
+			constraint->gen_scope_idx = prefixes.gen_scope_idx;
+			constraint->guard = std::move(prefixes.guard);
+			if (constraint->guard) {
+				constraint->guard_spec = AnalyzeGuard(*constraint->guard);
 			}
 
 			// Extract terms from LHS
@@ -1248,7 +1414,12 @@ private:
 				    comp.ToString());
 			}
 
-			if (constraint_class == CanonicalConstraintClass::AGGREGATE) {
+			if (constraint_class == CanonicalConstraintClass::MIXED) {
+				// Direct row-varying terms beside reducers: one instance per row.
+				constraint->lhs_is_aggregate = false;
+				ExtractConstraintTerms(*lhs, *constraint, 1);
+				constraint->has_reduced_terms = true;
+			} else if (constraint_class == CanonicalConstraintClass::AGGREGATE) {
 				// Aggregate constraint. Handles both legacy single aggregates and
 				// additive aggregate expressions with aggregate-local WHEN filters. The
 				// classification comes from the canonical boundary rather than aggregate
@@ -1529,19 +1700,66 @@ private:
 	}
 
 	void AnalyzeObjective(const unique_ptr<Expression> &expr_ptr) {
-		auto *expr = UnwrapDecideCasts(*expr_ptr, decide_index);
+		AnalyzeObjective(expr_ptr, op.prepared.objective, op.per_inner_scope_idx);
+	}
 
-		// DecidB: Check for PER wrapper on objective (outermost layer)
-		vector<unique_ptr<Expression>> per_cols;
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
-				for (idx_t i = 1; i < conj.children.size(); i++) {
-					per_cols.push_back(conj.children[i]->Copy());
-				}
-				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
+	//! A `THEN` stage: the same linear form as the first objective, restricted to what
+	//! a staged solve can freeze as one row -- a linear expression. The rewrites that
+	//! lower MIN/MAX, ABS, norms and products introduce auxiliaries tied to the first
+	//! objective, so a stage that needs them is refused rather than mis-solved.
+	void AnalyzeObjectiveStage(const DecideObjectiveStage &stage) {
+		string offender;
+		bool rejected = false;
+		std::function<void(const Expression &)> visit = [&](const Expression &node) {
+			if (rejected) {
+				return;
 			}
+			ExpressionIterator::EnumerateChildren(node, visit);
+			if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+				auto &agg = node.Cast<BoundAggregateExpression>();
+				if (!StringUtil::CIEquals(agg.function.name, "sum") && !StringUtil::CIEquals(agg.function.name, "avg")) {
+					offender = StringUtil::Upper(agg.function.name) + "(...)";
+					rejected = true;
+				}
+			} else if (node.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+				auto &func = node.Cast<BoundFunctionExpression>();
+				const string &fname = func.function.name;
+				if (fname == "abs" || fname == "power" || fname == "pow" || fname == "**" ||
+				    StringUtil::StartsWith(fname, "norm")) {
+					offender = StringUtil::Upper(fname) + "(...)";
+					rejected = true;
+				} else if (fname == "*") {
+					idx_t decisions = 0;
+					for (auto &child : func.children) {
+						decisions += FindDecideVariable(*child) != DConstants::INVALID_INDEX ? 1 : 0;
+					}
+					if (decisions > 1) {
+						offender = "a product of decisions";
+						rejected = true;
+					}
+				}
+			}
+		};
+		visit(*stage.expression);
+		if (rejected) {
+			throw BinderException("A THEN objective stage must be linear (SUM or AVG of decision terms); %s is not "
+			                      "supported there. Put the non-linear objective first, or state it as a "
+			                      "constraint.",
+			                      offender);
 		}
+		DecidePreparedObjectiveStage prepared;
+		prepared.sense = stage.sense;
+		AnalyzeObjective(stage.expression, prepared.objective, DConstants::INVALID_INDEX);
+		if (!prepared.objective) {
+			throw BinderException("A THEN objective stage must read a decision: '%s' reads none.",
+			                      StripDecideTags(stage.expression->ToString()));
+		}
+		op.prepared.objective_tail.push_back(std::move(prepared));
+	}
+
+	void AnalyzeObjective(const unique_ptr<Expression> &expr_ptr, unique_ptr<DecideObjective> &objective,
+	                      idx_t per_scope_idx) {
+		auto *expr = UnwrapDecideCasts(*expr_ptr, decide_index);
 
 		// DecidB: Check for WHEN wrapper on objective (inside PER, if present)
 		unique_ptr<Expression> when_cond;
@@ -1554,7 +1772,6 @@ private:
 			}
 		}
 
-		auto &objective = op.prepared.objective;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			auto &agg = expr->Cast<BoundAggregateExpression>();
 
@@ -1586,14 +1803,14 @@ private:
 			}
 
 			objective->when_condition = std::move(when_cond);
-			objective->per_columns = std::move(per_cols);
+			objective->per_scope_idx = per_scope_idx;
 		} else if (BoundExpressionContainsAggregate(*expr) || IsScalarDecideTerm(*expr)) {
 			// The second arm covers an objective made only of query-wide decisions
 			// (e.g. `minimize max_shortfall`), which carries no aggregate at all.
 			objective = make_uniq<DecideObjective>();
 			ExtractAggregateObjectiveTerms(*expr, *objective, 1);
 			objective->when_condition = std::move(when_cond);
-			objective->per_columns = std::move(per_cols);
+			objective->per_scope_idx = per_scope_idx;
 		}
 	}
 

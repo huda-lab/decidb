@@ -121,6 +121,7 @@
 #include "duckdb/parallel/meta_pipeline.hpp"
 #include "duckdb/parallel/task.hpp"
 #include "duckdb/parser/constraint.hpp"
+#include "duckdb/parser/decide/decide_frame_spec.hpp"
 #include "duckdb/parser/expression/parameter_expression.hpp"
 #include "duckdb/parser/expression/window_expression.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
@@ -1172,6 +1173,28 @@ DebugInitialize EnumUtil::FromString<DebugInitialize>(const char *value) {
 	return static_cast<DebugInitialize>(StringUtil::StringToEnum(GetDebugInitializeValues(), 3, "DebugInitialize", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDecideDomainValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideDomain::INT), "INT" },
+		{ static_cast<uint32_t>(DecideDomain::REAL), "REAL" },
+		{ static_cast<uint32_t>(DecideDomain::BOOL), "BOOL" },
+		{ static_cast<uint32_t>(DecideDomain::SEMIREAL), "SEMIREAL" },
+		{ static_cast<uint32_t>(DecideDomain::SEMIINT), "SEMIINT" },
+		{ static_cast<uint32_t>(DecideDomain::TEXT), "TEXT" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideDomain>(DecideDomain value) {
+	return StringUtil::EnumToString(GetDecideDomainValues(), 6, "DecideDomain", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideDomain EnumUtil::FromString<DecideDomain>(const char *value) {
+	return static_cast<DecideDomain>(StringUtil::StringToEnum(GetDecideDomainValues(), 6, "DecideDomain", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDecideExpressionValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideExpression::INVALID), "INVALID" },
@@ -1189,6 +1212,64 @@ const char* EnumUtil::ToChars<DecideExpression>(DecideExpression value) {
 template<>
 DecideExpression EnumUtil::FromString<DecideExpression>(const char *value) {
 	return static_cast<DecideExpression>(StringUtil::StringToEnum(GetDecideExpressionValues(), 3, "DecideExpression", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideFramePolicyValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideFramePolicy::ELSE_NULL), "ELSE_NULL" },
+		{ static_cast<uint32_t>(DecideFramePolicy::ELSE_VALUE), "ELSE_VALUE" },
+		{ static_cast<uint32_t>(DecideFramePolicy::ALL), "ALL" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideFramePolicy>(DecideFramePolicy value) {
+	return StringUtil::EnumToString(GetDecideFramePolicyValues(), 3, "DecideFramePolicy", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideFramePolicy EnumUtil::FromString<DecideFramePolicy>(const char *value) {
+	return static_cast<DecideFramePolicy>(StringUtil::StringToEnum(GetDecideFramePolicyValues(), 3, "DecideFramePolicy", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideFrameSelectorKindValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideFrameSelectorKind::FIRST), "FIRST" },
+		{ static_cast<uint32_t>(DecideFrameSelectorKind::LAST), "LAST" },
+		{ static_cast<uint32_t>(DecideFrameSelectorKind::PREVIOUS), "PREVIOUS" },
+		{ static_cast<uint32_t>(DecideFrameSelectorKind::NEXT), "NEXT" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideFrameSelectorKind>(DecideFrameSelectorKind value) {
+	return StringUtil::EnumToString(GetDecideFrameSelectorKindValues(), 4, "DecideFrameSelectorKind", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideFrameSelectorKind EnumUtil::FromString<DecideFrameSelectorKind>(const char *value) {
+	return static_cast<DecideFrameSelectorKind>(StringUtil::StringToEnum(GetDecideFrameSelectorKindValues(), 4, "DecideFrameSelectorKind", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideScopeKindValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideScopeKind::ROW), "ROW" },
+		{ static_cast<uint32_t>(DecideScopeKind::GLOBAL), "GLOBAL" },
+		{ static_cast<uint32_t>(DecideScopeKind::KEY), "KEY" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideScopeKind>(DecideScopeKind value) {
+	return StringUtil::EnumToString(GetDecideScopeKindValues(), 3, "DecideScopeKind", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideScopeKind EnumUtil::FromString<DecideScopeKind>(const char *value) {
+	return static_cast<DecideScopeKind>(StringUtil::StringToEnum(GetDecideScopeKindValues(), 3, "DecideScopeKind", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {

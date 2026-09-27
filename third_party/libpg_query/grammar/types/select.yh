@@ -5,12 +5,20 @@
 %type <node> decide_body
 %type <node> typed_decide_variable
 %type <list> typed_decide_variable_list
+%type <node> decide_scope decide_scope_elem
+%type <list> decide_scope_list decide_string_list
+%type <ival> decide_domain
+%type <node> decide_declarator_bounds
 %type <node> decide_constraint_list
 %type <node> decide_constraint_item
-%type <node> decide_objective_item
+%type <node> decide_constraint_prefix decide_prefix_per_opt decide_prefix_if_opt
 %type <node> decide_item_expr
-%type <node> decide_aggregate_when_condition
-%type <node> decide_objective_when_condition
+%type <list> decide_objective_list
+%type <node> decide_objective
+%type <node> decide_reducer decide_reducer_prefix
+%type <list> decide_by_opt decide_by_keys
+%type <node> decide_frame decide_frame_order decide_frame_else_opt decide_frame_policy_opt decide_frame_within_opt
+%type <ival> decide_frame_selector decide_frame_every_opt
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause values_clause_opt_comma
@@ -74,7 +82,7 @@
 %type <node> TableFuncElement
 
 %type <list> columnrefList
-%type <node> where_clause 				a_expr b_expr c_expr d_expr AexprConst opt_slice_bound extended_indirection_el decide_when_condition
+%type <node> where_clause 				a_expr b_expr c_expr d_expr AexprConst opt_slice_bound extended_indirection_el
 				columnref columnref_opt_indirection in_expr having_clause qualify_clause func_table
 %type <list>	rowsfrom_item rowsfrom_list opt_col_def_list
 %type <boolean> opt_ordinality
@@ -110,7 +118,7 @@
 
 
 %type <typnam>	Typename SimpleTypename ConstTypename opt_Typename
-				GenericType Numeric opt_float variable_type scalar_variable_type
+				GenericType Numeric opt_float
 				Character ConstCharacter
 				CharacterWithLength CharacterWithoutLength
 				ConstDatetime ConstInterval

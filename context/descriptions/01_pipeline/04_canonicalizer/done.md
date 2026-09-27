@@ -13,6 +13,23 @@ current code.
 
 ---
 
+## 0. The DeciQL surface (2026-09-26)
+
+- The tree walk recurses through `PER`, `WHEN` and `IF` wrappers (child 0) and, for an
+  `IF` wrapper, also canonicalizes a comparison guard (child 1) — decisions left, bound
+  right — since a guard is stated as a row too.
+- `ClassifyCanonicalComparison` has a third class, **MIXED**: a row-varying direct term
+  beside a reducer (`ship <= 0.2 * SUM(ship) BY ()`), which the spec defines as one
+  instance per row reading its own row and the reducer's group. It is no longer a
+  homogeneity error.
+- A frame aggregate is placed LEFT even when it reads data alone: it reads other rows,
+  which only the left side's per-term row sets express. Any other decision-free reducer
+  is still a bound and moves right.
+- `PER` wrappers must carry a generation scope tag (C0); an `IF` wrapper has exactly a
+  constraint and a guard.
+
+---
+
 ## 1. Ownership
 
 The boundary is two operations:

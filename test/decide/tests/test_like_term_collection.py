@@ -47,7 +47,7 @@ def test_differing_aggregate_local_when_filters_do_not_merge(decidb_cli, tmp_pat
             SELECT id, x FROM {_ROWS}
             DECIDE x(INT)
             SUCH THAT x <= 9
-                  AND SUM(x) WHEN (grp = 'A') + SUM(x) WHEN (grp = 'B') <= 6
+                  AND SUM(WHEN (grp = 'A'): x) + SUM(WHEN (grp = 'B'): x) <= 6
             MAXIMIZE SUM(x)
         """,
         tmp_path / "when.dump")

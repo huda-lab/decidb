@@ -208,7 +208,7 @@ def test_real_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE x(REAL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT WHEN l_returnflag = 'R': SUM(x * l_quantity) <= 100
             AND x <= 10
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -399,7 +399,7 @@ def test_real_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE x(REAL)
-        SUCH THAT SUM(x * l_quantity) <= 50 PER l_orderkey
+        SUCH THAT PER l_orderkey: SUM(x * l_quantity) BY (l_orderkey) <= 50
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()

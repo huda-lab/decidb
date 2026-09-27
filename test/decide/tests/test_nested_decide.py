@@ -43,7 +43,7 @@ _INNER_SPLIT_ORDER = (
 
 
 def _outer(inner: str, trailing_when: bool) -> str:
-    when = "\n    AND SUM(x) <= 5 WHEN grp = 'a'" if trailing_when else ""
+    when = "\n    AND WHEN grp = 'a': SUM(x) <= 5" if trailing_when else ""
     return f"""
         SELECT id, x
         FROM (VALUES (1, 'a'), (2, 'b')) t(id, grp)
@@ -137,7 +137,7 @@ def test_case_when_after_a_nested_clause_lexes_as_sql(decidb_cli, perf_tracker):
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 9
             AND SUM(x) <= ({_INNER})
-            AND SUM(x) <= 5 WHEN grp = 'a'
+            AND WHEN grp = 'a': SUM(x) <= 5
         MAXIMIZE SUM(x)
         ORDER BY CASE WHEN id = 1 THEN 0 ELSE 1 END
     """

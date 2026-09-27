@@ -36,10 +36,14 @@ namespace duckdb_libpgquery {
  */
 typedef struct PGDecideLexState {
 	bool in_decide_clause;
-	bool in_decide_objective;
 	int decide_case_depth;
 	bool decide_declared_before_from;
+	int decide_sql_mark_depth;
 } PGDecideLexState;
+
+/* Ordinary-SQL subqueries nested inside a DECIDE clause deeper than this are
+ * still parsed; only the innermost levels are tracked exactly. */
+#define PG_DECIDE_SQL_MARK_MAX 16
 
 /* Nesting deeper than this keeps parsing; only the innermost levels' state is
  * restored exactly, which no realistic query reaches. */
@@ -71,10 +75,17 @@ typedef struct base_yy_extra_type {
 	 */
 	bool in_decide_clause;
 
-	/* DecidB: true after MAXIMIZE/MINIMIZE in a DECIDE clause. Objective WHEN
-	 * gets a distinct token because its condition cannot steal a trailing
-	 * constraint bound. */
-	bool in_decide_objective;
+	/*
+	 * DecidB: parenthesis depth while inside a DECIDE clause, and the depths at
+	 * which an ordinary SQL subquery (`(SELECT ...)`) opened. While the top mark
+	 * is active the DeciQL-only tokens are NOT emitted, so a `GROUP BY`, a window
+	 * `OVER`, an `AT TIME ZONE` or a `WITHIN GROUP` inside a scalar-subquery bound
+	 * keeps its ordinary meaning. A nested DECIDE clause re-arms the gating on its
+	 * own DECIDE / SUCH token (its mark depth is saved with the rest of the state).
+	 */
+	int decide_paren_depth;
+	int decide_sql_marks[PG_DECIDE_SQL_MARK_MAX];
+	int decide_sql_mark_depth;
 
 	/*
 	 * DecidB: CASE...END nesting depth while inside a DECIDE clause. WHEN is
@@ -122,11 +133,20 @@ static inline void PGDecidePushLexState(base_yy_extra_type *yyextra) {
 	if (yyextra->decide_state_depth >= 0 && yyextra->decide_state_depth < PG_DECIDE_STATE_STACK_MAX) {
 		PGDecideLexState *slot = &yyextra->decide_state_stack[yyextra->decide_state_depth];
 		slot->in_decide_clause = yyextra->in_decide_clause;
-		slot->in_decide_objective = yyextra->in_decide_objective;
 		slot->decide_case_depth = yyextra->decide_case_depth;
 		slot->decide_declared_before_from = yyextra->decide_declared_before_from;
+		slot->decide_sql_mark_depth = yyextra->decide_sql_mark_depth;
 	}
 	yyextra->decide_state_depth++;
+}
+
+/* DecidB: drop subquery marks that closed while a nested clause was armed. */
+static inline void PGDecideTrimSqlMarks(base_yy_extra_type *yyextra) {
+	while (yyextra->decide_sql_mark_depth > 0 &&
+	       (yyextra->decide_sql_mark_depth > PG_DECIDE_SQL_MARK_MAX ||
+	        yyextra->decide_sql_marks[yyextra->decide_sql_mark_depth - 1] > yyextra->decide_paren_depth)) {
+		yyextra->decide_sql_mark_depth--;
+	}
 }
 
 /* DecidB: restore the enclosing DECIDE clause's lexer state as this one closes.
@@ -136,17 +156,19 @@ static inline void PGDecidePopLexState(base_yy_extra_type *yyextra) {
 	if (yyextra->decide_state_depth <= 0) {
 		yyextra->decide_state_depth = 0;
 		yyextra->in_decide_clause = false;
-		yyextra->in_decide_objective = false;
 		yyextra->decide_case_depth = 0;
+		yyextra->decide_sql_mark_depth = 0;
+		yyextra->decide_paren_depth = 0;
 		return;
 	}
 	yyextra->decide_state_depth--;
 	if (yyextra->decide_state_depth < PG_DECIDE_STATE_STACK_MAX) {
 		PGDecideLexState *slot = &yyextra->decide_state_stack[yyextra->decide_state_depth];
 		yyextra->in_decide_clause = slot->in_decide_clause;
-		yyextra->in_decide_objective = slot->in_decide_objective;
 		yyextra->decide_case_depth = slot->decide_case_depth;
 		yyextra->decide_declared_before_from = slot->decide_declared_before_from;
+		yyextra->decide_sql_mark_depth = slot->decide_sql_mark_depth;
+		PGDecideTrimSqlMarks(yyextra);
 	}
 }
 

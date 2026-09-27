@@ -129,6 +129,21 @@ void DumpSolverModel(const SolverModel &model) {
 
 	std::string out = "=== DECIDB MODEL DUMP ===\n";
 	out += "sense: " + std::string(model.maximize ? "maximize" : "minimize") + "\n";
+	for (idx_t s = 0; s < model.objective_stages.size(); s++) {
+		auto &stage = model.objective_stages[s];
+		out += "then " + std::to_string(s + 1) + ": sense=" + std::string(stage.maximize ? "maximize" : "minimize") +
+		       " |";
+		vector<int> indices;
+		vector<double> coefficients;
+		for (idx_t col = 0; col < stage.obj_coeffs.size(); col++) {
+			if (stage.obj_coeffs[col] != 0.0) {
+				indices.push_back(static_cast<int>(col));
+				coefficients.push_back(stage.obj_coeffs[col]);
+			}
+		}
+		AppendSparseRow(out, indices, coefficients);
+		out += "\n";
+	}
 	out += "num_vars: " + std::to_string(model.num_vars) + "\n";
 	out += "num_rows: " + std::to_string(model.constraints.size()) + "\n";
 	out += "num_qrows: " + std::to_string(model.quadratic_constraints.size()) + "\n";
@@ -394,6 +409,64 @@ static void AssertBackendAcceptsBuiltModel(const SolverModel &model, SolverBacke
 	}
 }
 
+//! `A THEN B THEN ...` (spec §7.5): solve the stages in order, each among the optima of
+//! the ones before it. A solved stage's value is frozen as a row over its own objective
+//! vector before the next stage is solved, with a tolerance that keeps an integer-valued
+//! optimum exact and a fractional one within solver precision. The last stage's solution
+//! is the answer; the reported objective value stays the first stage's, which is what the
+//! query names first. A staged solve is what every backend can do; a backend's own
+//! multi-objective API would be a faster route to the same answer, not a different one.
+static SolverResult SolveLexicographicStages(const SolverModel &model, SolverBackend backend, double time_limit,
+                                             const SolveModelOptions &options, SolverResult first) {
+	if (model.objective_stages.empty() || first.status != SolverStatus::OPTIMAL) {
+		return first;
+	}
+	SolverModel staged = model;
+	const double primary_value = first.objective_value;
+	SolverResult result = std::move(first);
+	const vector<double> *frozen_obj = &model.obj_coeffs;
+	bool frozen_maximize = model.maximize;
+	for (auto &stage : model.objective_stages) {
+		ModelConstraint row;
+		for (idx_t col = 0; col < frozen_obj->size(); col++) {
+			if ((*frozen_obj)[col] != 0.0) {
+				row.indices.push_back(static_cast<int>(col));
+				row.coefficients.push_back((*frozen_obj)[col]);
+			}
+		}
+		const double value = result.objective_value;
+		const double tolerance = 1e-6 * MaxValue<double>(1.0, std::fabs(value));
+		row.sense = frozen_maximize ? '>' : '<';
+		row.rhs = frozen_maximize ? value - tolerance : value + tolerance;
+		row.provenance.kind = ConstraintKind::STRUCTURAL;
+		staged.constraints.push_back(std::move(row));
+		staged.obj_coeffs = stage.obj_coeffs;
+		staged.maximize = stage.maximize;
+
+		auto session = backend.CreateSession();
+		if (options.interrupt_poll) {
+			session->SetInterruptPoll(options.interrupt_poll);
+		}
+		result = session->Solve(staged, time_limit);
+		if (result.status == SolverStatus::UNBOUNDED || result.status == SolverStatus::INF_OR_UNBD) {
+			// A later stage cannot be infeasible (the frozen optimum is feasible), so
+			// this is the stage growing without limit under the earlier optima.
+			idx_t stage_number = static_cast<idx_t>(&stage - model.objective_stages.data()) + 2;
+			throw InvalidInputException("DECIDE optimization: THEN stage %llu is unbounded once the earlier "
+			                            "objectives are held at their optimum. Bound the decisions it reads.",
+			                            stage_number);
+		}
+		if (result.status != SolverStatus::OPTIMAL) {
+			// A limit or a backend error in the stage is the query's outcome.
+			return result;
+		}
+		frozen_obj = &stage.obj_coeffs;
+		frozen_maximize = stage.maximize;
+	}
+	result.objective_value = primary_value;
+	return result;
+}
+
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBackend backend,
                         const SolveModelOptions &options, SolverModel *retained_model,
                         unique_ptr<SolverSession> *retained_session) {
@@ -473,6 +546,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	SolverResult result = session->Solve(model, time_limit);
 	result = DisambiguateInfOrUnbd(model, backend, diagnostic_options, result);
 	result = RejectIntegerCeilingOptimum(model, result);
+	result = SolveLexicographicStages(model, backend, time_limit, options, std::move(result));
 	AttachUnboundedRayIfRequested(model, backend, options, diagnostic_options, result);
 	// Hand the live session to the continuation loop if one asked for it, so a
 	// time-limit stop can Continue() the same warm solver. Done before moving the

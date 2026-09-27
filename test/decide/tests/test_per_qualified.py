@@ -36,8 +36,8 @@ def test_per_single_qualified_column_in_constraint(
 ):
     """`PER s.s_nationkey` in a JOIN-based SUCH THAT constraint.
 
-    Joins supplier × nation and groups by the supplier-side nationkey via
-    the table alias. Confirms both parse acceptance and that the qualifier
+    Joins supplier × nation AND groups by the supplier-side nationkey via
+    the table alias. Confirms both parse acceptance AND that the qualifier
     resolves to the supplier column (not nation's — they happen to share
     a name across the join key).
     """
@@ -45,7 +45,7 @@ def test_per_single_qualified_column_in_constraint(
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, n.n_name, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER s.s_nationkey
+        SUCH THAT PER s.s_nationkey: SUM(x) BY (s.s_nationkey) <= 3
         MAXIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
@@ -102,7 +102,7 @@ def test_per_multi_column_all_qualified(
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, n.n_regionkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER (s.s_nationkey, n.n_regionkey)
+        SUCH THAT PER s.s_nationkey, n.n_regionkey: SUM(x) BY (s.s_nationkey, n.n_regionkey) <= 2
         MAXIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
@@ -160,7 +160,7 @@ def test_per_multi_column_mixed_qualified_and_bare(decidb_cli, duckdb_conn):
         SELECT s.s_suppkey, s.s_acctbal, s_nationkey, n_regionkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER (s_nationkey, n_regionkey)
+        SUCH THAT PER s_nationkey, n_regionkey: SUM(x) BY (s_nationkey, n_regionkey) <= 2
         MAXIMIZE SUM(x * s_acctbal)
     """
     mixed1_sql = bare_sql.replace(
@@ -210,7 +210,7 @@ def test_per_qualified_equivalent_to_unqualified(decidb_cli):
         SELECT s.s_suppkey, s.s_acctbal, s_nationkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER {per_col}
+        SUCH THAT PER {per_col}: SUM(x) BY ({per_col}) <= 3
         MAXIMIZE SUM(x * s_acctbal)
     """
     bare_rows, _ = decidb_cli.execute(base_sql.format(per_col="s_nationkey"))
@@ -237,7 +237,7 @@ def test_per_qualified_with_table_alias(decidb_cli):
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
         FROM supplier AS s
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER s.s_nationkey
+        SUCH THAT PER s.s_nationkey: SUM(x) BY (s.s_nationkey) <= 2
         MAXIMIZE SUM(x * s.s_acctbal)
     """
     rows, cols = decidb_cli.execute(sql)
@@ -259,7 +259,7 @@ def test_per_with_when_qualified_column(decidb_cli):
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 WHEN s.s_acctbal > 0 PER s.s_nationkey
+        SUCH THAT WHEN s.s_acctbal > 0 PER s.s_nationkey: SUM(x) BY (s.s_nationkey) <= 3
         MAXIMIZE SUM(x * s.s_acctbal)
     """
     rows, cols = decidb_cli.execute(sql)
@@ -282,7 +282,7 @@ def test_per_qualified_in_objective(decidb_cli):
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5
-        MAXIMIZE SUM(MAX(x * s.s_acctbal)) PER s.s_nationkey
+        MAXIMIZE SUM(PER s.s_nationkey: MAX(x * s.s_acctbal) BY (s.s_nationkey))
     """
     rows, cols = decidb_cli.execute(sql)
     assert rows, "Expected result rows from objective-side qualified PER"
@@ -304,7 +304,7 @@ def test_per_unknown_qualifier_gives_clean_error(decidb_cli):
         SELECT s.s_suppkey, s.s_acctbal, x
         FROM supplier s
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER unknown_table.s_nationkey
+        SUCH THAT PER unknown_table.s_nationkey: SUM(x) BY (unknown_table.s_nationkey) <= 3
         MAXIMIZE SUM(x * s.s_acctbal)
     """
     # Must produce some error (not parse error since the grammar now accepts

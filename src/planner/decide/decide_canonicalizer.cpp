@@ -124,6 +124,13 @@ DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &e
 	if (ReferencesDecideVar(expr)) {
 		return Placement::LEFT;
 	}
+	// A frame reads rows other than the instance's own, which only the left side's
+	// per-term row sets can express -- so it stays a term even when it reads data alone.
+	idx_t frame_idx;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	    TryParseFrameRefTag(expr.GetAlias(), frame_idx)) {
+		return Placement::LEFT;
+	}
 	// Everything decision-free is a bound, including a data-only reducer. The left
 	// side has no aggregate evaluator -- SumFixedAggregateLhsOffset merely SUMS a term's
 	// column over the group, which is why only SUM and AVG could ever be hoisted
@@ -679,6 +686,7 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 
 	vector<Atom> lhs_atoms;
 	Decompose(*cmp.left, 1, lhs_atoms);
+	bool has_direct_row_term = false;
 	for (auto &atom : lhs_atoms) {
 		if (atom.placement != Placement::LEFT) {
 			return CanonicalConstraintClass::INVALID;
@@ -689,17 +697,25 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 			// was recorded; any reducer still nested beneath another function is a
 			// shape the physical aggregate extractor cannot consume.
 			auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
-			if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
-			    !ReferencesDecideVar(*root)) {
+			if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+				return CanonicalConstraintClass::INVALID;
+			}
+			// A frame over data alone stays a term (it reads other rows); any other
+			// decision-free reducer is a bound and was moved right already.
+			idx_t frame_idx;
+			if (!ReferencesDecideVar(*root) && !TryParseFrameRefTag(root->GetAlias(), frame_idx)) {
 				return CanonicalConstraintClass::INVALID;
 			}
 			continue;
 		}
 		if (!IsQueryWideExpression(*atom.expr)) {
-			return CanonicalConstraintClass::INVALID;
+			// A row-varying term beside a reducer: one instance per row, reading its
+			// own row and the reducer's group (DeciQL spec §7.1, `: ship <= 0.2 *
+			// sum(: ship) BY ()`). Legal as long as the term is plain decision algebra.
+			has_direct_row_term = true;
 		}
 	}
-	return CanonicalConstraintClass::AGGREGATE;
+	return has_direct_row_term ? CanonicalConstraintClass::MIXED : CanonicalConstraintClass::AGGREGATE;
 }
 
 CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalTree(const Expression &constraints) const {
@@ -773,16 +789,6 @@ void DecideCanonicalizer::ValidateCanonicalTree(const Expression &constraints) c
 			ValidateCanonicalComparison(expression.Cast<BoundComparisonExpression>());
 			return true;
 		}
-		if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-			if (IsPerConstraintWrapper(conjunction) &&
-			    (conjunction.children.empty() ||
-			     ClassifyCanonicalTree(*conjunction.children[0]) != CanonicalConstraintClass::AGGREGATE)) {
-				throw BinderException(
-				    "PER can only be applied to aggregate (SUM) constraints. Per-row constraints "
-				    "already have one constraint per row.");
-			}
-		}
 		return true;
 	};
 	VisitConstraintTree(constraints, validate);
@@ -839,13 +845,16 @@ void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) con
 			CanonicalInvariantFailure("C0", "WHEN wrapper must contain one constraint and one condition",
 			                          expression);
 		}
+		if (IsIfConstraintWrapper(conjunction) && conjunction.children.size() != 2) {
+			CanonicalInvariantFailure("C0", "IF wrapper must contain one constraint and one guard", expression);
+		}
 		if (IsPerConstraintWrapper(conjunction)) {
-			if (conjunction.children.size() < 2) {
-				CanonicalInvariantFailure("C0", "PER wrapper must contain a constraint and grouping column",
-				                          expression);
-			}
-			if (ClassifyCanonicalTree(*conjunction.children[0]) != CanonicalConstraintClass::AGGREGATE) {
-				CanonicalInvariantFailure("C5", "PER wrapper does not contain an aggregate constraint",
+			// A PER wrapper generates instances; its body may be a per-row or an aggregate
+			// shape alike (spec §7.1). It always names its generation scope.
+			DecideScopeKind kind;
+			idx_t scope_idx;
+			if (conjunction.children.empty() || !TryParseGenScopeTag(conjunction.GetAlias(), kind, scope_idx)) {
+				CanonicalInvariantFailure("C0", "PER wrapper must contain a constraint and name its scope",
 				                          expression);
 			}
 		}
@@ -937,9 +946,17 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 		result->SetAlias(conj.GetAlias());
 		for (idx_t i = 0; i < conj.children.size(); i++) {
 			// A WHEN/PER wrapper holds the constraint in child 0; the remaining
-			// children are its condition / PER columns and are not constraints.
-			result->children.push_back(IsConstraintChild(conj, i) ? CanonicalizeTreeInternal(*conj.children[i])
-			                                                 : conj.children[i]->Copy());
+			// children are its condition / PER columns and are not constraints. An IF
+			// guard that is a comparison takes the same shape as a constraint --
+			// decisions left, bound right -- since it is stated as a row too.
+			if (IsConstraintChild(conj, i)) {
+				result->children.push_back(CanonicalizeTreeInternal(*conj.children[i]));
+			} else if (IsIfConstraintWrapper(conj) && i == 1 &&
+			           conj.children[i]->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+				result->children.push_back(CanonicalizeComparison(*conj.children[i]));
+			} else {
+				result->children.push_back(conj.children[i]->Copy());
+			}
 		}
 		return std::move(result);
 	}

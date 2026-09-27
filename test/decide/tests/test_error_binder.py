@@ -287,28 +287,6 @@ class TestBinderErrors:
                 MAXIMIZE SUM(x)
             """, match=r"More than one row returned by a subquery")
 
-    def test_per_on_perrow_constraint_rejection(self, decidb_cli):
-        """PER attached to a per-row constraint must be rejected with a clear message.
-
-        PER requires an aggregate constraint — each row already owns its own
-        constraint, so partitioning has no meaning. Closes both
-        `per/todo.md` and `error_handling/todo.md` gaps.
-        """
-        decidb_cli.assert_error("""
-                WITH t AS (SELECT 1 AS l_quantity, 'A' AS grp
-                    UNION ALL SELECT 2, 'B')
-                SELECT l_quantity, x FROM t
-                DECIDE x(INT)
-                SUCH THAT x <= 5 PER grp
-                MAXIMIZE SUM(x * l_quantity)
-            """, match=r"PER can only be applied to aggregate \(SUM\) constraints")
-
-    # `SUM(x*v) <= SUM(y*v)` used to be rejected here, sharing this file's "not a
-    # scalar or aggregate without DECIDE variables" message because the bound was
-    # itself a reducer over decision variables. the canonicalization refactor made the gate
-    # side-agnostic and the shape solves; it is now oracle-verified in
-    # test_canonicalize_side_agnostic.py::test_aggregate_vs_aggregate.
-
     def test_data_only_minmax_rhs_aggregate_now_supported(self, decidb_cli):
         """MIN/MAX on the RHS used to be refused because the left side could only
         reduce a data term by summing it. The reducer evaluator removes that limit,
@@ -582,9 +560,9 @@ class TestBinderErrors:
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
-                SUCH THAT SUM(x * l_quantity) <= 50 WHEN x = 1
+                SUCH THAT WHEN x = 1: SUM(x * l_quantity) <= 50
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"WHEN conditions cannot reference DECIDE variables")
+            """, match=r"cannot reference a decision")
 
     @pytest.mark.when_compound
     def test_when_decide_variable_in_compound_condition(self, decidb_cli):
@@ -592,9 +570,9 @@ class TestBinderErrors:
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
-                SUCH THAT x <= 1 WHEN (x = 1 AND l_returnflag = 'R')
+                SUCH THAT WHEN (x = 1 AND l_returnflag = 'R'): x <= 1
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"WHEN conditions cannot reference DECIDE variables")
+            """, match=r"cannot reference a decision")
 
     # --- Correlated subquery on aggregate RHS ---
     # A row-varying RHS on a reduced constraint used to be refused here. It is now

@@ -28,6 +28,29 @@ former.
 
 ---
 
+## 0. The DeciQL surface (2026-09-26)
+
+- `BuildDecidePreparedModel` reads the prefixes off the wrappers into
+  `DecideConstraint` (`when_condition`, `gen_kind`/`gen_scope_idx`/`per_columns`,
+  `guard`) and each reducer term's `group_scope_idx` (BY), `qualifier_scope_idx` (PER),
+  `frame_idx` (frame) from the aggregate's tags. A MIXED constraint extracts through the
+  reducer path for its aggregate atoms (`has_reduced_terms`), a frame over data alone
+  included; a frame also gets a fixed `frame_fill` term that carries its `ELSE v` fill
+  with the frame's sign and factor.
+- `AnalyzeGuard` turns `IF b` into `DecideGuard` (linear form): a BOOL decision is
+  `x >= 1`, `NOT x` is `x <= 0`, a comparison keeps its terms; `=`/`<>` guards, reducers
+  in guards, and guards without a decision are rejected here.
+- `AnalyzeObjectiveStage` flattens each `THEN` stage as a `DecideObjective` and refuses a
+  non-linear one (MIN/MAX/ABS/POWER/norm/products) — those rewrites tie auxiliaries to
+  the first objective. `RewriteAvgToSum` runs on the stages too.
+- The nested objective `OUTER(PER k: INNER(e) BY (k))` is recognised by the outer
+  reducer's qualified tag and the inner's BY tag (`decide_rewrite_minmax.cpp`) and lowered
+  through the existing PATH B machinery keyed by `per_inner_scope_idx`.
+- The hard MIN/MAX rewrite keeps the reducer's BY tag on the SUM it builds (and drops the
+  relation qualifier, whose de-duplication would put a spurious 0 among the candidates).
+
+---
+
 ## 0. The solver — and the formulation — are chosen before anything is rewritten
 
 `OptimizeDecide` opens by calling `ChooseDecideSolver` (`decide_solver_gate.cpp`),

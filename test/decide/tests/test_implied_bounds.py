@@ -159,7 +159,7 @@ def test_propagation_skips_when_excluded_constraint(decidb_cli):
         WITH data AS (SELECT 'A' AS g UNION ALL SELECT 'B' AS g)
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x <= 100 AND SUM(x) <= 5 WHEN g = 'A'
+        SUCH THAT x <= 100 AND WHEN g = 'A': SUM(x) <= 5
         MAXIMIZE SUM(x)
     """
     rows, cols = decidb_cli.execute(sql)

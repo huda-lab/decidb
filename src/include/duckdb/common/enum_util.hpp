@@ -130,7 +130,15 @@ enum class DatePartSpecifier : uint8_t;
 
 enum class DebugInitialize : uint8_t;
 
+enum class DecideDomain : uint8_t;
+
 enum class DecideExpression : uint8_t;
+
+enum class DecideFramePolicy : uint8_t;
+
+enum class DecideFrameSelectorKind : uint8_t;
+
+enum class DecideScopeKind : uint8_t;
 
 enum class DecideSense : uint8_t;
 
@@ -565,7 +573,19 @@ template<>
 const char* EnumUtil::ToChars<DebugInitialize>(DebugInitialize value);
 
 template<>
+const char* EnumUtil::ToChars<DecideDomain>(DecideDomain value);
+
+template<>
 const char* EnumUtil::ToChars<DecideExpression>(DecideExpression value);
+
+template<>
+const char* EnumUtil::ToChars<DecideFramePolicy>(DecideFramePolicy value);
+
+template<>
+const char* EnumUtil::ToChars<DecideFrameSelectorKind>(DecideFrameSelectorKind value);
+
+template<>
+const char* EnumUtil::ToChars<DecideScopeKind>(DecideScopeKind value);
 
 template<>
 const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
@@ -1142,7 +1162,19 @@ template<>
 DebugInitialize EnumUtil::FromString<DebugInitialize>(const char *value);
 
 template<>
+DecideDomain EnumUtil::FromString<DecideDomain>(const char *value);
+
+template<>
 DecideExpression EnumUtil::FromString<DecideExpression>(const char *value);
+
+template<>
+DecideFramePolicy EnumUtil::FromString<DecideFramePolicy>(const char *value);
+
+template<>
+DecideFrameSelectorKind EnumUtil::FromString<DecideFrameSelectorKind>(const char *value);
+
+template<>
+DecideScopeKind EnumUtil::FromString<DecideScopeKind>(const char *value);
 
 template<>
 DecideSense EnumUtil::FromString<DecideSense>(const char *value);

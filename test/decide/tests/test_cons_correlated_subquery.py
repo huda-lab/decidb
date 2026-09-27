@@ -237,10 +237,9 @@ def test_correlated_subquery_when_composition(decidb_cli, duckdb_conn, oracle_so
         FROM partsupp
         WHERE ps_partkey < 10
         DECIDE x(BOOL)
-        SUCH THAT x <= COALESCE(
+        SUCH THAT WHEN ps_supplycost < 500: x <= COALESCE(
                     (SELECT 1 FROM supplier
                      WHERE s_suppkey = ps_suppkey AND s_acctbal > 0), 0)
-                  WHEN ps_supplycost < 500
             AND SUM(x * ps_supplycost) <= 2000
         MAXIMIZE SUM(x)
     """
@@ -533,9 +532,8 @@ def test_correlated_subquery_aggregate_per_rhs_tightest_per_group(
         FROM partsupp
         WHERE ps_partkey < 20
         DECIDE x(INT)
-        SUCH THAT SUM(x) <= (SELECT CAST(p_size AS INTEGER) FROM part
-                             WHERE p_partkey = ps_partkey)
-                  PER ps_suppkey
+        SUCH THAT PER ps_suppkey: SUM(x) BY (ps_suppkey) <= MIN((SELECT CAST(p_size AS INTEGER) FROM part
+                             WHERE p_partkey = ps_partkey)) BY (ps_suppkey)
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -608,7 +606,7 @@ def test_correlated_subquery_rhs_ignores_aggregate_local_when(
         WHERE ps_partkey < 10
         DECIDE x(INT)
         SUCH THAT x <= 5
-          AND (SUM(x) WHEN (ps_partkey <> 2))
+          AND (SUM(WHEN (ps_partkey <> 2): x))
               <= (SELECT CAST(p_size AS INTEGER) FROM part
                   WHERE p_partkey = ps_partkey)
         MAXIMIZE SUM(x)

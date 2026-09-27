@@ -508,12 +508,17 @@ static double DisplayRhs(const ConstraintProvenance &prov, double rhs, char sens
 	return rhs - prov.rhs_mechanism_offset;
 }
 
+//! Facet C: a clause is quoted with its DeciQL prefix (`WHEN c PER k:`) in front, the
+//! way it was written, so the edit is recognizable and pasteable.
+static string WithQualifier(const ConstraintProvenance &prov, const string &clause) {
+	return prov.qualifier.empty() ? clause : prov.qualifier + " " + clause;
+}
+
 static string MakeClauseLabel(const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
-	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
-	return lhs + " " + sense_str + " " + FormatNum(base_rhs) + suffix;
+	return WithQualifier(prov, lhs + " " + sense_str + " " + FormatNum(base_rhs));
 }
 
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
@@ -527,14 +532,13 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
 	double base_rhs = DisplayRhs(prov, rhs, sense);
 	// `≥` loosens downward (b − s), `≤` / `=` upward (b + s).
 	double new_rhs = (sense == '>') ? base_rhs - amount : base_rhs + amount;
-	// Facet C: append the WHEN/PER qualifier (`PER grp`) so the clause is recognizable;
+	// Facet C: quote the WHEN/PER prefix (`PER grp:`) so the clause is recognizable;
 	// Facet A: carry the group's printable key as its own field (a separate `group` EAV
 	// row) so two folded `SUM(x)` groups stay distinguishable in the relation.
-	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
 	e.label = MakeClauseLabel(prov, lhs, rhs, sense);
-	e.suggestion = lhs + " " + sense_str + " " + FormatNum(new_rhs) + suffix;
+	e.suggestion = WithQualifier(prov, lhs + " " + sense_str + " " + FormatNum(new_rhs));
 	e.has_amount = true;
 	e.amount = std::fabs(amount);
 	e.group = prov.group_label;
@@ -597,13 +601,12 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &lhs,
                                  const string &rhs_text, char sense, double delta) {
 	string sense_str = SenseStr(sense);
-	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
 	string op = (sense == '>') ? " - " : " + ";
 	string mag = FormatNum(std::fabs(delta));
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = lhs + " " + sense_str + " " + rhs_text + suffix;
-	e.suggestion = lhs + " " + sense_str + " " + rhs_text + op + mag + suffix;
+	e.label = WithQualifier(prov, lhs + " " + sense_str + " " + rhs_text);
+	e.suggestion = WithQualifier(prov, lhs + " " + sense_str + " " + rhs_text + op + mag);
 	e.has_amount = true;
 	e.amount = std::fabs(delta);
 	e.group = prov.group_label;

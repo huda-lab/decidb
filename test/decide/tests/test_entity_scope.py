@@ -35,7 +35,7 @@ def test_entity_scoped_nation_selection(decidb_cli, duckdb_conn, oracle_solver, 
         SELECT c.c_custkey, n.n_nationkey, n.n_name, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT SUM(keepN) <= 100
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
@@ -113,7 +113,7 @@ def test_entity_scoped_consistency(decidb_cli, duckdb_conn, oracle_solver, perf_
         SELECT c.c_custkey, n.n_nationkey, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT SUM(keepN) <= 5
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
@@ -191,7 +191,7 @@ def test_entity_scoped_integer(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         SELECT c.c_custkey, n.n_nationkey, qty
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND n.n_nationkey <= 5
-        DECIDE n.qty(INT)
+        DECIDE PER n: qty(INT)
         SUCH THAT qty <= 3
           AND SUM(qty) <= 10
         MAXIMIZE SUM(qty * c.c_acctbal)
@@ -266,7 +266,7 @@ def test_entity_scoped_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_sol
         SELECT c.c_custkey, n.n_nationkey, x, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_acctbal > 0
-        DECIDE n.keepN(BOOL), x(BOOL)
+        DECIDE PER n: keepN(BOOL), x(BOOL)
         SUCH THAT x <= keepN
           AND SUM(x) <= 10
         MAXIMIZE SUM(x * c.c_acctbal)
@@ -351,8 +351,8 @@ def test_entity_scoped_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         SELECT c.c_custkey, n.n_nationkey, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN * c.c_acctbal) <= 50000 WHEN c.c_acctbal > 0
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT WHEN c.c_acctbal > 0: SUM(keepN * c.c_acctbal) <= 50000
         MAXIMIZE SUM(keepN)
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -413,11 +413,11 @@ def test_entity_scoped_nonexistent_table(decidb_cli, duckdb_conn, oracle_solver,
     sql = """
         SELECT c.c_custkey, x
         FROM customer c
-        DECIDE nonexistent.x(BOOL)
+        DECIDE PER nonexistent: x(BOOL)
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(x * c.c_acctbal)
     """
-    with pytest.raises(DecidBCliError, match="not found"):
+    with pytest.raises(DecidBCliError, match="neither a column nor a relation"):
         decidb_cli.execute(sql)
 
 
@@ -439,8 +439,8 @@ def test_entity_scoped_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         JOIN region r ON n.n_regionkey = r.r_regionkey
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN) <= 100 PER r_name
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT PER r_name: SUM(keepN) BY (r_name) <= 100
         MAXIMIZE SUM(keepN * c_acctbal)
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -536,7 +536,7 @@ def test_entity_scoped_with_max(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT MAX(keepN * c.c_acctbal) <= 8000
         MAXIMIZE SUM(keepN)
     """
@@ -609,7 +609,7 @@ def test_entity_scoped_with_avg(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT c.c_custkey, n.n_nationkey, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT AVG(keepN * c.c_acctbal) <= 3000
         MAXIMIZE SUM(keepN)
     """
@@ -683,7 +683,7 @@ def test_entity_scoped_with_avg(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 def test_entity_scoped_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Triple interaction: entity-scoped variable + WHEN + PER.
 
-    SUM(keepN * c.c_acctbal) <= 50000 WHEN c.c_acctbal > 5000 PER r.r_name
+    WHEN c.c_acctbal > 5000 PER r.r_name: SUM(keepN * c.c_acctbal) BY (r.r_name) <= 50000
     means: for each region, the sum of keepN * acctbal over high-balance
     customers only must be <= 50000.
     """
@@ -692,8 +692,8 @@ def test_entity_scoped_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, p
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         JOIN region r ON n.n_regionkey = r.r_regionkey
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN * c_acctbal) <= 50000 WHEN c_acctbal > 5000 PER r_name
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT WHEN c_acctbal > 5000 PER r_name: SUM(keepN * c_acctbal) BY (r_name) <= 50000
         MAXIMIZE SUM(keepN * c_acctbal)
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -792,7 +792,7 @@ def test_entity_scoped_ne_constraint(decidb_cli, duckdb_conn, oracle_solver):
         SELECT n.n_nationkey, n.n_name, keepN
         FROM nation n
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT SUM(keepN) <> 2
           AND SUM(keepN) <= 4
         MAXIMIZE SUM(keepN)
@@ -841,7 +841,7 @@ def test_entity_scoped_max_hard_case(decidb_cli, duckdb_conn, oracle_solver):
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT MAX(keepN * c.c_acctbal) >= 5000
           AND SUM(keepN) <= 50
         MAXIMIZE SUM(keepN)
@@ -919,9 +919,9 @@ def test_entity_scoped_mixed_when_per(
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         JOIN region r ON n.n_regionkey = r.r_regionkey
-        DECIDE n.keepN(BOOL), x(BOOL)
+        DECIDE PER n: keepN(BOOL), x(BOOL)
         SUCH THAT x <= keepN
-          AND SUM(x * c.c_acctbal) <= 15000 WHEN c.c_acctbal > 0 PER r_name
+          AND WHEN c.c_acctbal > 0 PER r_name: SUM(x * c.c_acctbal) BY (r_name) <= 15000
         MAXIMIZE SUM(x * c.c_acctbal)
     """
     result, cols = decidb_cli.execute(sql)
@@ -1035,9 +1035,9 @@ def test_entity_scoped_when_on_objective(decidb_cli, duckdb_conn, oracle_solver)
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT SUM(keepN) <= 10
-        MAXIMIZE SUM(keepN * c.c_acctbal) WHEN c.c_acctbal > 0
+        MAXIMIZE SUM(WHEN c.c_acctbal > 0: keepN * c.c_acctbal)
     """
     result, cols = decidb_cli.execute(sql)
     assert len(result) > 0
@@ -1113,8 +1113,8 @@ def test_entity_scoped_multi_column_per(decidb_cli, duckdb_conn, oracle_solver):
         SELECT c.c_custkey, n.n_nationkey, n.n_regionkey, c.c_mktsegment, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey < 3
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN) <= 30 PER (n_regionkey, c_mktsegment)
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT PER n_regionkey, c_mktsegment: SUM(keepN) BY (n_regionkey, c_mktsegment) <= 30
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
     result, cols = decidb_cli.execute(sql)
@@ -1203,7 +1203,7 @@ def test_entity_scoped_min_easy_case(decidb_cli, duckdb_conn, oracle_solver):
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT MIN(keepN * c.c_acctbal) >= 0
           AND SUM(keepN) <= 20
         MAXIMIZE SUM(keepN)
@@ -1283,8 +1283,8 @@ def test_entity_scoped_avg_per(decidb_cli, duckdb_conn, oracle_solver):
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         JOIN region r ON n.n_regionkey = r.r_regionkey
-        DECIDE n.keepN(BOOL)
-        SUCH THAT AVG(keepN * c.c_acctbal) <= 2000 PER r_name
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT PER r_name: AVG(keepN * c.c_acctbal) BY (r_name) <= 2000
         MAXIMIZE SUM(keepN)
     """
     result, cols = decidb_cli.execute(sql)
@@ -1358,8 +1358,8 @@ def test_entity_scoped_ne_per(decidb_cli, duckdb_conn, oracle_solver):
     sql = """
         SELECT n.n_nationkey, n.n_name, n.n_regionkey, keepN
         FROM nation n
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN) <> 2 PER n_regionkey
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT PER n_regionkey: SUM(keepN) BY (n_regionkey) <> 2
           AND SUM(keepN) <= 20
         MAXIMIZE SUM(keepN)
     """
@@ -1413,7 +1413,7 @@ def test_entity_scoped_between_constraint(decidb_cli, duckdb_conn, oracle_solver
         SELECT n.n_nationkey, n.n_name, keepN
         FROM nation n
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT SUM(keepN) BETWEEN 2 AND 4
         MAXIMIZE SUM(keepN)
     """
@@ -1460,7 +1460,7 @@ def test_entity_scoped_two_tables(decidb_cli, duckdb_conn, oracle_solver):
     sql = """
         SELECT n.n_nationkey, r.r_regionkey, r.r_name, keepN, keepR
         FROM nation n JOIN region r ON n.n_regionkey = r.r_regionkey
-        DECIDE n.keepN(BOOL), r.keepR(BOOL)
+        DECIDE PER n: keepN(BOOL), PER r: keepR(BOOL)
         SUCH THAT keepN <= keepR
           AND SUM(keepR) <= 10
         MAXIMIZE SUM(keepN)
@@ -1556,12 +1556,12 @@ def test_entity_scoped_two_tables(decidb_cli, duckdb_conn, oracle_solver):
 def test_entity_scoped_var_in_when_condition_error(decidb_cli):
     """WHEN condition must not reference DECIDE variables (including entity-scoped)."""
     with pytest.raises(DecidBCliError,
-                       match="WHEN conditions cannot reference DECIDE variables"):
+                       match="cannot reference a decision"):
         decidb_cli.execute("""
             SELECT n.n_nationkey, keepN
             FROM nation n
-            DECIDE n.keepN(BOOL)
-            SUCH THAT SUM(keepN) <= 5 WHEN keepN = 1
+            DECIDE PER n: keepN(BOOL)
+            SUCH THAT WHEN keepN = 1: SUM(keepN) <= 5
             MAXIMIZE SUM(keepN)
         """)
 
@@ -1580,8 +1580,8 @@ def test_entity_scoped_when_entity_invisible(decidb_cli):
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN * c.c_acctbal) <= 50000 WHEN c.c_acctbal > 9998
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT WHEN c.c_acctbal > 9998: SUM(keepN * c.c_acctbal) <= 50000
           AND SUM(keepN) <= 10
         MAXIMIZE SUM(keepN)
     """
@@ -1601,7 +1601,7 @@ def test_entity_scoped_equality_constraint(
         SELECT n.n_nationkey, n.n_name, keepN
         FROM nation n
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT SUM(keepN) = 3
         MAXIMIZE SUM(keepN)
     """
@@ -1658,7 +1658,7 @@ def test_entity_scoped_is_real(decidb_cli, duckdb_conn, oracle_solver):
     sql = """
         SELECT n_nationkey, ROUND(budget, 2) AS budget
         FROM nation WHERE n_regionkey <= 2
-        DECIDE nation.budget(REAL)
+        DECIDE PER nation: budget(REAL)
         SUCH THAT budget <= 1000 AND SUM(budget) <= 5000
         MAXIMIZE SUM(budget * n_nationkey)
     """
@@ -1713,7 +1713,7 @@ def test_entity_scoped_hard_min_max(decidb_cli, duckdb_conn, oracle_solver):
         SELECT c.c_custkey, n.n_nationkey, qty
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 100
-        DECIDE n.qty(INT)
+        DECIDE PER n: qty(INT)
         SUCH THAT qty <= 10 AND MIN(qty) <= 3 AND SUM(qty) >= 60
         MAXIMIZE SUM(qty)
     """
@@ -1794,7 +1794,7 @@ def test_entity_scoped_abs(decidb_cli, duckdb_conn, oracle_solver):
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 80
-        DECIDE n.keepN(BOOL)
+        DECIDE PER n: keepN(BOOL)
         SUCH THAT SUM(ABS(c_acctbal * keepN - 3000)) <= 50000
         MAXIMIZE SUM(keepN)
     """
@@ -1882,8 +1882,8 @@ def test_entity_scoped_when_min_max_triple(decidb_cli, duckdb_conn, oracle_solve
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 80
-        DECIDE n.keepN(BOOL)
-        SUCH THAT MAX(c_acctbal * keepN) >= 5000 WHEN c_acctbal > 2000
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT WHEN c_acctbal > 2000: MAX(c_acctbal * keepN) >= 5000
         MAXIMIZE SUM(keepN)
     """
     result, cols = decidb_cli.execute(sql)
@@ -1950,7 +1950,7 @@ def test_entity_scoped_ne_oracle(decidb_cli, duckdb_conn, oracle_solver):
     sql = """
         SELECT n_nationkey, qty
         FROM nation WHERE n_regionkey <= 2
-        DECIDE nation.qty(INT)
+        DECIDE PER nation: qty(INT)
         SUCH THAT qty >= 8 AND qty <= 10 AND qty <> 10
         MAXIMIZE SUM(qty * n_nationkey)
     """
@@ -2086,9 +2086,8 @@ def test_entity_scoped_subquery_per_three_way(
         SELECT n.n_nationkey, n.n_regionkey, n.n_name, keepN
         FROM nation n
         WHERE n.n_regionkey IN (0, 1)
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN) <= (SELECT CAST(COUNT(*) / 2 AS INTEGER) FROM nation)
-                  PER n_regionkey
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT PER n_regionkey: SUM(keepN) BY (n_regionkey) <= (SELECT CAST(COUNT(*) / 2 AS INTEGER) FROM nation)
         MAXIMIZE SUM(keepN)
     """
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
@@ -2173,7 +2172,7 @@ def test_entity_scoped_null_key(
         )
         SELECT n.nk, n.val, keep
         FROM t_null_entity n
-        DECIDE n.keep(BOOL)
+        DECIDE PER n.nk: keep(BOOL)
         SUCH THAT SUM(keep) = 1
         MAXIMIZE SUM(keep * n.val)
     """
@@ -2240,8 +2239,8 @@ def test_entity_scoped_three_way_join_per_region(
           JOIN nation n ON c.c_nationkey = n.n_nationkey
           JOIN region r ON n.n_regionkey = r.r_regionkey
         WHERE c.c_custkey <= 300 AND n.n_regionkey IN (0, 1)
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN) <= 25 PER r_name
+        DECIDE PER n: keepN(BOOL)
+        SUCH THAT PER r_name: SUM(keepN) BY (r_name) <= 25
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
@@ -2345,7 +2344,7 @@ def test_entity_scoped_over_subquery_of_base_table(
             SELECT n_nationkey AS rk, CAST(n_nationkey AS DOUBLE) AS val
             FROM nation
         ) t
-        DECIDE t.keep(BOOL)
+        DECIDE PER t: keep(BOOL)
         SUCH THAT SUM(keep) <= 5
         MAXIMIZE SUM(keep * t.val)
     """
@@ -2400,7 +2399,7 @@ def test_entity_scoped_over_cte_of_base_table(
         )
         SELECT t.rk, t.val, keep
         FROM t
-        DECIDE t.keep(BOOL)
+        DECIDE PER t: keep(BOOL)
         SUCH THAT SUM(keep) <= 5
         MAXIMIZE SUM(keep * t.val)
     """
@@ -2462,7 +2461,7 @@ def test_entity_scoped_vs_per_null_semantics(
     sql_entity = base_cte + """
         SELECT t.rk, t.val, keep
         FROM t
-        DECIDE t.keep(BOOL)
+        DECIDE PER t.rk: keep(BOOL)
         SUCH THAT SUM(keep) <= 5
         MAXIMIZE SUM(keep * t.val)
     """
@@ -2516,7 +2515,7 @@ def test_entity_scoped_vs_per_null_semantics(
         SELECT t.rk, t.val, keep
         FROM t
         DECIDE keep(BOOL)
-        SUCH THAT SUM(keep) <= 1 PER rk
+        SUCH THAT PER rk: SUM(keep) BY (rk) <= 1
         MAXIMIZE SUM(keep * t.val)
     """
     rows_per, cols_per = decidb_cli.execute(sql_per)
@@ -2574,7 +2573,7 @@ def test_entity_scoped_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver,
         SELECT c.c_custkey, n.n_nationkey, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(INT)
+        DECIDE PER n: keepN(INT)
         SUCH THAT keepN + 3 <= 10
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """

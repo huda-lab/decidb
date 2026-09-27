@@ -354,7 +354,7 @@ class TestQuadraticBasic:
             SELECT id, target, grp, ROUND(x, 4) AS x FROM data
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
-            MINIMIZE SUM(POWER(x - target, 2)) WHEN grp = 'A'
+            MINIMIZE SUM(WHEN grp = 'A': POWER(x - target, 2))
         """
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
@@ -1506,9 +1506,9 @@ def test_qp_nested_sum_sum_per_binding(
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
-            AND SUM(x) <= 10 WHEN grp = 'A'
-            AND SUM(x) <= 40 WHEN grp = 'B'
-        MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
+            AND WHEN grp = 'A': SUM(x) <= 10
+            AND WHEN grp = 'B': SUM(x) <= 40
+        MINIMIZE SUM(PER grp: SUM(POWER(x - target, 2)) BY (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1569,7 +1569,7 @@ def test_qp_nested_sum_sum_per_unconstrained(
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
-        MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
+        MINIMIZE SUM(PER grp: SUM(POWER(x - target, 2)) BY (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1627,9 +1627,9 @@ def test_qp_nested_sum_avg_per_binding(
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
-            AND SUM(x) <= 20 WHEN grp = 'A'
-            AND SUM(x) <= 60 WHEN grp = 'B'
-        MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp
+            AND WHEN grp = 'A': SUM(x) <= 20
+            AND WHEN grp = 'B': SUM(x) <= 60
+        MINIMIZE SUM(PER grp: AVG(POWER(x - target, 2)) BY (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1708,9 +1708,9 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
         SELECT id, grp, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
-            AND SUM(x) >= 4 WHEN grp = 'A'
-            AND SUM(x) >= 6 WHEN grp = 'B'
-        MINIMIZE SUM(SUM(POWER(x, 2))) PER grp
+            AND WHEN grp = 'A': SUM(x) >= 4
+            AND WHEN grp = 'B': SUM(x) >= 6
+        MINIMIZE SUM(PER grp: SUM(POWER(x, 2)) BY (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1780,7 +1780,7 @@ def test_qp_entity_scoped_objective(
     sql = f"""
         WITH items AS ({data_sql})
         SELECT item, target, ROUND(x, 4) AS x FROM items
-        DECIDE items.x(REAL)
+        DECIDE PER items.item: x(REAL)
         SUCH THAT x >= 0 AND x <= 100
             AND SUM(x) <= 50
         MINIMIZE SUM(POWER(x - target, 2))

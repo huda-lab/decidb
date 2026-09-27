@@ -123,15 +123,16 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		// PER: only the constraint (child 0) carries bounds; the grouping columns do not.
-		if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
+		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
 			AbsorbBoundsInExpression(*conj.children[0], decide);
 			break;
 		}
-		// WHEN: conditional per-row constraints must NOT contribute to a global bound.
-		// `x <= 0 WHEN c` does not mean `x <= 0` everywhere. This is why the pass keeps
-		// its own descent rather than using ForEachConstraintLeaf -- it asks the shared
-		// predicate what a wrapper is, then deliberately answers differently.
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+		// WHEN / IF: conditional constraints must NOT contribute to a global bound.
+		// `WHEN c: x <= 0` does not mean `x <= 0` everywhere, and neither does a guarded
+		// bound. This is why the pass keeps its own descent rather than using
+		// ForEachConstraintLeaf -- it asks the shared predicate what a wrapper is, then
+		// deliberately answers differently.
+		if ((IsWhenConstraintWrapper(conj) || IsIfConstraintWrapper(conj)) && conj.children.size() == 2) {
 			break;
 		}
 		for (auto &child : conj.children) {

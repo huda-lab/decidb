@@ -38,75 +38,6 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	}
 	case ExpressionClass::FUNCTION: {
 	    auto &func = expr.Cast<FunctionExpression>();
-	    // DecidB: Handle PER on objective — preserve PER columns for per-group objectives
-	    if (func.is_operator && IsPerConstraintTag(func.function_name)) {
-	        D_ASSERT(func.children.size() >= 2);
-
-	        // Validate each PER column
-	        for (idx_t i = 1; i < func.children.size(); i++) {
-	            if (ExpressionContainsDecideVariable(*func.children[i], variables)) {
-	                return BindResult(BinderException::Unsupported(*expr_ptr,
-	                    "PER column in MAXIMIZE/MINIMIZE cannot be a DECIDE variable. "
-	                    "PER must group by a table column."));
-	            }
-	            if (func.children[i]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-	                return BindResult(BinderException::Unsupported(*expr_ptr,
-	                    "PER columns in MAXIMIZE/MINIMIZE must be simple column references "
-	                    "(e.g., PER empID or PER (empID, dept)). Expressions are not supported."));
-	            }
-	        }
-
-	        return BindPerWrapper(func, depth);
-	    }
-	    // DecidB: Handle WHEN on objective: MAXIMIZE SUM(...) WHEN condition.
-	    // Nested WHEN is the aggregate-local form and binds through
-	    // DecideBinder::BindFunction.
-	    if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
-	        if (!is_top_expression) {
-	            return BindFunction(expr_ptr, depth);
-	        }
-	        D_ASSERT(func.children.size() == 2);
-	        // Validate: WHEN condition cannot reference DECIDE variables
-	        if (ExpressionContainsDecideVariable(*func.children[1], variables)) {
-	            return BindResult(BinderException::Unsupported(*expr_ptr,
-	                "WHEN conditions in MAXIMIZE/MINIMIZE cannot reference DECIDE variables. "
-	                "The WHEN condition must only reference table columns."));
-	        }
-	        if (ContainsWhenOperator(*func.children[0])) {
-	            return BindResult(BinderException::Unsupported(*expr_ptr,
-	                "Cannot combine expression-level WHEN with aggregate-local WHEN in the same DECIDE objective. "
-	                "Move the shared condition into each aggregate-local WHEN, or keep a single expression-level WHEN."));
-	        }
-	        // Bind the objective (child[0]) through normal objective binding
-	        is_top_expression = true;
-	        ErrorData obj_error;
-	        BindChild(func.children[0], depth, obj_error);
-	        if (obj_error.HasError()) {
-	            return BindResult(std::move(obj_error));
-	        }
-	        // Bind the condition (child[1]) using base ExpressionBinder
-	        is_top_expression = false;
-	        binding_when_condition = true;
-	        ErrorData cond_error;
-	        try {
-	            BindChild(func.children[1], depth, cond_error);
-	        } catch (...) {
-	            binding_when_condition = false;
-	            throw;
-	        }
-	        binding_when_condition = false;
-	        if (cond_error.HasError()) {
-	            return BindResult(std::move(cond_error));
-	        }
-	        // Construct tagged BoundConjunctionExpression
-	        auto &bound_objective = BoundExpression::GetExpression(*func.children[0]);
-	        auto &bound_condition = BoundExpression::GetExpression(*func.children[1]);
-	        auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	        result->children.push_back(std::move(bound_objective));
-	        result->children.push_back(BoundCastExpression::AddCastToType(context, std::move(bound_condition), LogicalType::BOOLEAN));
-	        result->alias = WHEN_CONSTRAINT_TAG;
-	        return BindResult(std::move(result));
-	    }
 	        if (is_top_expression && GetExpressionType(expr, error_msg) == DecideExpression::INVALID) {
 	            return BindResult(BinderException::Unsupported(expr, error_msg));
 	        }
@@ -138,6 +69,14 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	default:
         break;
 	}
+    if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF && IsVariableExpression(expr, variables)) {
+        // A row- or key-scoped decision on its own: the same rule the generation
+        // check states for a term beside a reducer, in the same words.
+        return BindResult(BinderException::Unsupported(
+            expr, StringUtil::Format("MAXIMIZE/MINIMIZE objective: decision '%s' varies across rows, but an objective "
+                                     "is generated once (PER ()); reduce it, e.g. SUM(%s), or declare it PER ().",
+                                     expr.ToString(), expr.ToString())));
+    }
     return BindResult(BinderException::Unsupported(expr, StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support '%s'(ExpressionClass::%s)", expr.ToString(), EnumUtil::ToString(expr.GetExpressionClass()))));
 }
 
@@ -177,6 +116,12 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
                 func.function_name, StringUtil::Upper(func.function_name));
             return DecideExpression::INVALID;
         }
+        if (func.is_operator && func.function_name == FRAME_TAG) {
+            error_msg = "A frame expression (AT / FROM .. TO .. OVER) navigates from an instance's position, "
+                        "and an objective has none: the position of a frame is not determined there. "
+                        "Use it in a constraint.";
+            return DecideExpression::INVALID;
+        }
         error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
         return DecideExpression::INVALID;
     }
@@ -185,6 +130,12 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
         // scalar objective — it needs no reducer to collapse it.
         if (IsScalarDecideVariable(expr)) {
             return DecideExpression::VARIABLE;
+        }
+        if (IsVariableExpression(expr, variables)) {
+            error_msg = StringUtil::Format("MAXIMIZE/MINIMIZE objective: decision '%s' varies across rows, but an objective is "
+                                           "generated once (PER ()); reduce it, e.g. SUM(%s), or declare it PER ().",
+                                           expr.ToString(), expr.ToString());
+            return DecideExpression::INVALID;
         }
         error_msg = StringUtil::Format("The objective of the [MAXIMIZE|MINIMIZE] clause must be a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());
         return DecideExpression::INVALID;

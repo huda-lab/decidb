@@ -2,6 +2,9 @@
 
 #include <utility>
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/parser/decide/decide_frame_spec.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hash.hpp"
@@ -35,15 +38,81 @@ FunctionExpression::FunctionExpression(const string &function_name, vector<uniqu
                          std::move(order_bys), distinct, is_operator, export_state_p) {
 }
 
-//! A relation-qualified reducer is represented by a parser-only operator whose first
-//! child is the real aggregate and whose remaining children are relation names. Render
-//! the aggregate's complete DuckDB function surface, inserting the qualifier before
-//! its arguments, rather than exposing the private marker as a function call.
-static string QualifiedReducerToString(const FunctionExpression &wrapper) {
-	if (wrapper.children.size() < 2 || wrapper.children[0]->GetExpressionClass() != ExpressionClass::FUNCTION) {
-		throw InternalException("DECIDE qualified-reducer marker has an invalid parsed shape");
+//! DECIDE spellings. The parser encodes the DeciQL constructs as tagged operator
+//! FunctionExpressions (common/enums/decide.hpp); these render them back in the
+//! grammar's own form so a parsed statement round-trips through ToString().
+
+static string DecideKeyListToString(const vector<unique_ptr<ParsedExpression>> &children, idx_t first) {
+	string result;
+	for (idx_t i = first; i < children.size(); i++) {
+		if (i > first) {
+			result += ", ";
+		}
+		result += children[i]->ToString();
 	}
-	auto &aggregate = wrapper.children[0]->Cast<FunctionExpression>();
+	return result;
+}
+
+//! `WHEN c PER k IF b: body` from any nesting of the three prefix wrappers.
+static string DecidePrefixedToString(const FunctionExpression &wrapper) {
+	string filter, scope, guard;
+	bool has_scope = false;
+	const ParsedExpression *current = &wrapper;
+	while (current->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = current->Cast<FunctionExpression>();
+		if (!func.is_operator || func.children.empty()) {
+			break;
+		}
+		if (func.function_name == WHEN_CONSTRAINT_TAG && func.children.size() == 2) {
+			filter = func.children[1]->ToString();
+		} else if (func.function_name == IF_CONSTRAINT_TAG && func.children.size() == 2) {
+			guard = func.children[1]->ToString();
+		} else if (func.function_name == PER_CONSTRAINT_TAG) {
+			has_scope = true;
+			scope = func.children.size() == 1 ? "()" : DecideKeyListToString(func.children, 1);
+		} else {
+			break;
+		}
+		current = func.children[0].get();
+	}
+	vector<string> parts;
+	if (!filter.empty()) {
+		parts.push_back("WHEN " + filter);
+	}
+	if (has_scope) {
+		parts.push_back("PER " + scope);
+	}
+	if (!guard.empty()) {
+		parts.push_back("IF " + guard);
+	}
+	return StringUtil::Join(parts, " ") + ": " + current->ToString();
+}
+
+//! `agg(WHEN f PER k: body) BY (keys)` from BY(QUALIFIED(agg)) in either nesting.
+static string DecideReducerToString(const FunctionExpression &wrapper) {
+	string by_keys, per_scope;
+	bool has_by = false, has_per = false;
+	const ParsedExpression *current = &wrapper;
+	while (current->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = current->Cast<FunctionExpression>();
+		if (!func.is_operator || func.children.empty()) {
+			break;
+		}
+		if (func.function_name == REDUCER_BY_TAG) {
+			has_by = true;
+			by_keys = DecideKeyListToString(func.children, 1);
+		} else if (func.function_name == QUALIFIED_REDUCER_TAG) {
+			has_per = true;
+			per_scope = func.children.size() == 1 ? "()" : DecideKeyListToString(func.children, 1);
+		} else {
+			break;
+		}
+		current = func.children[0].get();
+	}
+	if (current->GetExpressionClass() != ExpressionClass::FUNCTION) {
+		throw InternalException("DECIDE reducer marker does not wrap a function call");
+	}
+	auto &aggregate = current->Cast<FunctionExpression>();
 	string result;
 	if (!aggregate.catalog.empty()) {
 		result += KeywordHelper::WriteOptionallyQuoted(aggregate.catalog) + ".";
@@ -52,73 +121,74 @@ static string QualifiedReducerToString(const FunctionExpression &wrapper) {
 		result += KeywordHelper::WriteOptionallyQuoted(aggregate.schema) + ".";
 	}
 	result += KeywordHelper::WriteOptionallyQuoted(aggregate.function_name) + "(";
-	for (idx_t i = 1; i < wrapper.children.size(); i++) {
-		if (i > 1) {
-			result += ", ";
-		}
-		result += wrapper.children[i]->ToString();
-	}
-	result += ": ";
-	if (aggregate.distinct) {
-		result += "DISTINCT ";
-	}
-	for (idx_t i = 0; i < aggregate.children.size(); i++) {
-		if (i > 0) {
-			result += ", ";
-		}
-		auto &child = aggregate.children[i];
-		result += child->GetAlias().empty()
-		              ? child->ToString()
-		              : StringUtil::Format("%s := %s", SQLIdentifier(child->GetAlias()), child->ToString());
-	}
-	if (aggregate.order_bys && !aggregate.order_bys->orders.empty()) {
-		if (aggregate.children.empty()) {
-			result += ") WITHIN GROUP (";
-		}
-		result += " ORDER BY ";
-		for (idx_t i = 0; i < aggregate.order_bys->orders.size(); i++) {
-			if (i > 0) {
-				result += ", ";
-			}
-			result += aggregate.order_bys->orders[i].ToString();
-		}
-	}
-	result += ")";
+	vector<string> prefix;
 	if (aggregate.filter) {
-		result += " FILTER (WHERE " + aggregate.filter->ToString() + ")";
+		prefix.push_back("WHEN " + aggregate.filter->ToString());
 	}
-	if (aggregate.export_state) {
-		result += " EXPORT_STATE";
+	if (has_per) {
+		prefix.push_back("PER " + per_scope);
+	}
+	if (!prefix.empty()) {
+		result += StringUtil::Join(prefix, " ") + ": ";
+	}
+	result += DecideKeyListToString(aggregate.children, 0) + ")";
+	if (has_by) {
+		result += " BY (" + by_keys + ")";
 	}
 	return result;
 }
 
+//! `AT(sel [ELSE v]: e) OVER (key [DESC] [CYCLIC] [WITHIN p])` and the range form.
+static string DecideFrameToString(const FunctionExpression &wrapper) {
+	if (wrapper.children.size() < 4 || wrapper.children[1]->GetExpressionClass() != ExpressionClass::CONSTANT) {
+		throw InternalException("DECIDE frame marker has an invalid parsed shape");
+	}
+	auto spec = DecideFrameSpec::Decode(wrapper.children[1]->Cast<ConstantExpression>().value.ToString());
+	string result;
+	if (spec.is_range) {
+		result = KeywordHelper::WriteOptionallyQuoted(spec.aggregate) + "(FROM " + spec.from_selector.ToString() +
+		         " TO " + spec.to_selector.ToString();
+		if (spec.every != 1) {
+			result += " EVERY " + to_string(spec.every);
+		}
+	} else {
+		result = "AT(" + spec.from_selector.ToString();
+	}
+	switch (spec.policy) {
+	case DecideFramePolicy::ELSE_NULL:
+		break;
+	case DecideFramePolicy::ELSE_VALUE:
+		result += " ELSE " + wrapper.children[3]->ToString();
+		break;
+	case DecideFramePolicy::ALL:
+		result += " ALL";
+		break;
+	}
+	result += ": " + wrapper.children[0]->ToString() + ") OVER (" + wrapper.children[2]->ToString();
+	if (spec.descending) {
+		result += " DESC";
+	}
+	if (spec.cyclic) {
+		result += " CYCLIC";
+	}
+	if (spec.has_within) {
+		result += " WITHIN " + (wrapper.children.size() == 4 ? string("()") : DecideKeyListToString(wrapper.children, 4));
+	}
+	return result + ")";
+}
+
 string FunctionExpression::ToString() const {
-	if (is_operator && function_name == WHEN_CONSTRAINT_TAG) {
-		if (children.size() != 2) {
-			throw InternalException("DECIDE WHEN marker has %s children, expected 2", children.size());
+	if (is_operator) {
+		if (function_name == WHEN_CONSTRAINT_TAG || function_name == PER_CONSTRAINT_TAG ||
+		    function_name == IF_CONSTRAINT_TAG) {
+			return DecidePrefixedToString(*this);
 		}
-		return children[0]->ToString() + " WHEN " + children[1]->ToString();
-	}
-	if (is_operator && function_name == PER_CONSTRAINT_TAG) {
-		if (children.size() < 2) {
-			throw InternalException("DECIDE PER marker has %s children, expected at least 2", children.size());
+		if (function_name == QUALIFIED_REDUCER_TAG || function_name == REDUCER_BY_TAG) {
+			return DecideReducerToString(*this);
 		}
-		string result = children[0]->ToString() + " PER ";
-		bool parenthesize = children.size() > 2;
-		if (parenthesize) {
-			result += "(";
+		if (function_name == FRAME_TAG) {
+			return DecideFrameToString(*this);
 		}
-		for (idx_t i = 1; i < children.size(); i++) {
-			if (i > 1) {
-				result += ", ";
-			}
-			result += children[i]->ToString();
-		}
-		return result + (parenthesize ? ")" : "");
-	}
-	if (is_operator && function_name == QUALIFIED_REDUCER_TAG) {
-		return QualifiedReducerToString(*this);
 	}
 	return ToString<FunctionExpression, ParsedExpression>(*this, catalog, schema, function_name, is_operator, distinct,
 	                                                      filter.get(), order_bys.get(), export_state, true);

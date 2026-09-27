@@ -118,11 +118,12 @@
  * NULLS_LA and WITH_LA are needed to make the grammar LALR(1).
  */
 %token		NOT_LA NULLS_LA WITH_LA
-/* DecidB: context-sensitive WHEN tokens emitted only inside DECIDE. The
- * objective variant lets its condition consume a comparison safely because an
- * objective has no trailing comparison bound. Never produced by keywords. */
-%token		WHEN_DECIDE
-%token		WHEN_DECIDE_OBJECTIVE
+/* DecidB: context-sensitive tokens emitted by base_yylex only inside a DECIDE
+ * clause (and not inside an ordinary SQL subquery nested in one), so the DeciQL
+ * prefixes (WHEN / PER / IF), the reducer postfix (BY), the objective chain
+ * (THEN) and the frame words (OVER / WITHIN / AT) never collide with the global
+ * SQL grammar. Never produced by keywords. */
+%token		WHEN_DECIDE PER_DECIDE IF_DECIDE BY_DECIDE THEN_DECIDE OVER_DECIDE WITHIN_DECIDE AT_DECIDE
 
 
 /* Precedence: lowest to highest */
@@ -137,7 +138,7 @@
  * tightly than the tokens; the two condition nonterminals decide whether that
  * comparison belongs to WHEN or is the constraint bound. */
 %nonassoc	DECIDE_ITEM
-%nonassoc	WHEN_DECIDE WHEN_DECIDE_OBJECTIVE
+%nonassoc	WHEN_DECIDE PER_DECIDE IF_DECIDE BY_DECIDE THEN_DECIDE OVER_DECIDE WITHIN_DECIDE AT_DECIDE
 %right		NOT
 %nonassoc	IS ISNULL NOTNULL	/* IS sets precedence for IS NULL, etc */
 %nonassoc	'<' '>' '=' LESS_EQUALS GREATER_EQUALS NOT_EQUALS

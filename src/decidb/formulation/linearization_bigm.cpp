@@ -263,7 +263,11 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
             ec.comparison_type != ExpressionType::COMPARE_EQUAL) {
             continue;
         }
-        if (!ec.bilinear_terms.empty() || ec.has_quadratic) {
+        if (!ec.bilinear_terms.empty() || ec.has_quadratic || ec.HasGeneralGrouping()) {
+            continue;
+        }
+        // A guarded row holds only where its guard does, so it implies no bound.
+        if (ec.guard) {
             continue;
         }
         // A row that means something other than what its terms say: a hard MIN/MAX

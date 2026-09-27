@@ -93,22 +93,22 @@ TEST_CASE("Parsed DECIDE statements survive ToString and binary round trips", "[
 	    "SUCH THAT x >= 0 AND y <= 2.5 AND flag IN (0, 1)",
 	    // Table and scalar scopes, and the split clause order. ToString canonicalizes
 	    // both accepted orders to the single block after FROM.
-	    "SELECT ship, cap DECIDE D.ship(BOOL), scalar cap(REAL) FROM data D "
+	    "SELECT ship, cap DECIDE PER D: ship(BOOL), PER (): cap(REAL) FROM data D "
 	    "SUCH THAT ship <= cap AND cap >= 0 MINIMIZE cap - SUM(ship)",
 	    // Whole-constraint WHEN plus multi-column PER.
 	    "SELECT a, b, x FROM t DECIDE x(INT) "
-	    "SUCH THAT SUM(x) <= 2 WHEN (a > 0) PER (a, t.b) AND x BETWEEN 0 AND 2",
+	    "SUCH THAT WHEN (a > 0) PER a, t.b: SUM(x) BY (a, t.b) <= 2 AND x BETWEEN 0 AND 2",
 	    // Aggregate-local WHEN and one- and many-relation qualified reducers.
-	    "SELECT a, b, x FROM data D CROSS JOIN other T DECIDE D.x(INT) "
-	    "SUCH THAT SUM(D: x) WHEN (a > 0) + AVG(D, T: x) <= 10 "
-	    "MAXIMIZE SUM(D: x) WHEN (b = 2)",
+	    "SELECT a, b, x FROM data D CROSS JOIN other T DECIDE PER D: x(INT) "
+	    "SUCH THAT SUM(WHEN (a > 0) PER D: x) + AVG(PER D, T: x) <= 10 "
+	    "MAXIMIZE SUM(WHEN (b = 2) PER D: x)",
 	    // Objective WHEN + PER, nested aggregates, and NORM.
 	    "SELECT a, b, x FROM t DECIDE x(REAL) "
 	    "SUCH THAT norm(x - a, 1) <= (SELECT 3) "
-	    "MAXIMIZE MAX(SUM(x)) WHEN (a = 1) PER (a, b)",
+	    "MAXIMIZE MAX(PER a, b: SUM(WHEN (a = 1): x) BY (a, b))",
 	    // Quoted identifiers and the statement-level DIAGNOSE wrapper.
 	    "DIAGNOSE SELECT \"from\", \"Choice\", \"limit\" FROM data AS \"select\" "
-	    "DECIDE \"select\".\"Choice\"(BOOL), scalar \"limit\"(INT) "
+	    "DECIDE PER \"select\": \"Choice\"(BOOL), PER (): \"limit\"(INT) "
 	    "SUCH THAT \"Choice\" <= \"limit\" AND \"limit\" <= 1",
 	};
 
@@ -142,7 +142,7 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	// `ship <= cap * open` is the one shape canonicalization has to move -- a bound that
 	// CONTAINS a decision -- so it is the only thing that populates source_lhs/source_rhs.
 	auto plan = con.ExtractPlan("SELECT s_key, ship FROM site JOIN region USING (r_key) "
-	                            "DECIDE region.ship(INT), open(BOOL) "
+	                            "DECIDE PER region: ship(INT), open(BOOL) "
 	                            "SUCH THAT ship <= cap * open AND SUM(ship) <= 100 "
 	                            "MAXIMIZE SUM(ship) + 5");
 	auto *before = FindDecide(*plan);

@@ -6,7 +6,7 @@ FROM lineitem
 DECIDE keep(BOOL)
 SUCH THAT SUM(keep * l_quantity) <= ${Q1_QTY_CAP}
     AND AVG(keep * l_discount) <= 0.06
-    AND SUM(keep * l_quantity) <= ${Q1_R_QTY_CAP} WHEN l_returnflag = 'R'
-    AND SUM(keep) <= ${Q1_GRP_CAP} PER (l_returnflag, l_linestatus)
-    AND SUM(keep * l_extendedprice) WHEN (l_returnflag = 'A') + SUM(keep * l_extendedprice) WHEN (l_returnflag = 'N') <= ${Q1_LOCAL_CAP}
-MAXIMIZE SUM(keep * l_extendedprice) WHEN l_linestatus = 'F';
+    AND WHEN l_returnflag = 'R': SUM(keep * l_quantity) <= ${Q1_R_QTY_CAP}
+    AND PER l_returnflag, l_linestatus: SUM(keep) BY (l_returnflag, l_linestatus) <= ${Q1_GRP_CAP}
+    AND SUM(WHEN (l_returnflag = 'A'): keep * l_extendedprice) + SUM(WHEN (l_returnflag = 'N'): keep * l_extendedprice) <= ${Q1_LOCAL_CAP}
+MAXIMIZE SUM(WHEN l_linestatus = 'F': keep * l_extendedprice);

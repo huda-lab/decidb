@@ -284,7 +284,7 @@ def test_avg_constraint_when_filters_all_rows(decidb_cli):
                    (4, 12.0, 'B')
         ) t(id, val, flag)
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * val) WHEN (flag = 'Z') <= 1
+        SUCH THAT AVG(WHEN (flag = 'Z'): x * val) <= 1
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=r"empty|WHEN")
@@ -320,8 +320,8 @@ def test_maximize_sum_max_per_with_empty_when_group(
                    (5, 'B', 6.0, false)
         ) t(id, grp, val, flag)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER grp
-        MAXIMIZE SUM(MAX(x * val)) WHEN flag PER grp
+        SUCH THAT PER grp: SUM(x) BY (grp) >= 1
+        MAXIMIZE SUM(PER grp: MAX(WHEN flag: x * val) BY (grp))
     """
     t0 = time.perf_counter()
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
@@ -430,7 +430,7 @@ def test_min_geq_constraint_when_empty(decidb_cli):
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT MIN(x * val) >= 5 WHEN val > 100
+        SUCH THAT WHEN val > 100: MIN(x * val) >= 5
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -447,7 +447,7 @@ def test_min_leq_constraint_when_empty(decidb_cli):
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT MIN(x * val) <= 3 WHEN val > 100
+        SUCH THAT WHEN val > 100: MIN(x * val) <= 3
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -464,7 +464,7 @@ def test_max_leq_constraint_when_empty(decidb_cli):
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * val) <= 2 WHEN val > 100
+        SUCH THAT WHEN val > 100: MAX(x * val) <= 2
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -481,7 +481,7 @@ def test_max_geq_constraint_when_empty(decidb_cli):
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * val) >= 999 WHEN val > 100
+        SUCH THAT WHEN val > 100: MAX(x * val) >= 999
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -508,7 +508,7 @@ def test_avg_per_constraint_with_empty_group(decidb_cli, duckdb_conn, oracle_sol
                    (5, 'B', 100.0, false)
         ) t(id, grp, val, flag)
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * val) WHEN flag <= 8 PER grp
+        SUCH THAT PER grp: AVG(WHEN flag: x * val) BY (grp) <= 8
         MAXIMIZE SUM(x * val)
     """
     rows, cols = decidb_cli.execute(sql)
@@ -550,7 +550,7 @@ def test_maximize_min_objective_when_empty(decidb_cli):
         ) t(id, val)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
-        MAXIMIZE MIN(x * val) WHEN val > 100
+        MAXIMIZE MIN(WHEN val > 100: x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
@@ -571,7 +571,7 @@ def test_minimize_max_objective_when_empty(decidb_cli):
         ) t(id, val)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
-        MINIMIZE MAX(x * val) WHEN val > 100
+        MINIMIZE MAX(WHEN val > 100: x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
@@ -594,7 +594,7 @@ def test_maximize_max_objective_when_empty(decidb_cli):
         ) t(id, val)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
-        MAXIMIZE MAX(x * val) WHEN val > 100
+        MAXIMIZE MAX(WHEN val > 100: x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
@@ -620,8 +620,8 @@ def test_mixed_empty_and_populated_when_terms_constraint(decidb_cli):
                    (3, 7.0, false)
         ) t(id, val, w2)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN (val > 1000)
-                + SUM(x * val) WHEN w2 <= 8
+        SUCH THAT SUM(WHEN (val > 1000): x * val)
+                + SUM(WHEN w2: x * val) <= 8
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -640,8 +640,8 @@ def test_mixed_empty_and_populated_when_terms_objective(decidb_cli):
         ) t(id, val, bonus, w2)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN (val > 1000)
-               + SUM(x * bonus) WHEN w2
+        MAXIMIZE SUM(WHEN (val > 1000): x * val)
+               + SUM(WHEN w2: x * bonus)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
@@ -664,7 +664,7 @@ def test_minimize_min_objective_when_empty(decidb_cli):
         ) t(id, val)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 1
-        MINIMIZE MIN(x * val) WHEN val > 100
+        MINIMIZE MIN(WHEN val > 100: x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
 
@@ -694,7 +694,7 @@ def test_max_when_empty_constraint_hard(decidb_cli):
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT (MAX(x * val) WHEN (val > 100)) >= 5
+        SUCH THAT (MAX(WHEN (val > 100): x * val)) >= 5
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -715,7 +715,7 @@ def test_min_when_empty_constraint_hard(decidb_cli):
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT (MIN(x * val) WHEN (val > 100)) <= 5
+        SUCH THAT (MIN(WHEN (val > 100): x * val)) <= 5
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -739,7 +739,7 @@ def test_sum_plus_max_when_empty_silently_vacates_constraint(decidb_cli):
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) + (MAX(x * val) WHEN (val > 100)) <= 5
+        SUCH THAT SUM(x * val) + (MAX(WHEN (val > 100): x * val)) <= 5
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -758,7 +758,7 @@ def test_sum_when_empty_rejected(decidb_cli):
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 5 WHEN val > 100
+        SUCH THAT WHEN val > 100: SUM(x * val) <= 5
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -777,7 +777,7 @@ def test_avg_when_empty_rejected(decidb_cli):
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * val) <= 5 WHEN val > 100
+        SUCH THAT WHEN val > 100: AVG(x * val) <= 5
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -799,7 +799,7 @@ def test_composed_easy_min_when_empty_rejected(decidb_cli):
             VALUES (1, 10.0), (2, 7.0)
         ) t(id, val)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) + (MIN(x * val) WHEN (val > 100)) >= 100
+        SUCH THAT SUM(x * val) + (MIN(WHEN (val > 100): x * val)) >= 100
         MAXIMIZE SUM(x * val)
     """
     decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
@@ -871,7 +871,7 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT id, grp, val, x
         FROM data
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) = 1 PER grp
+        SUCH THAT PER grp: SUM(x) BY (grp) = 1
             AND SUM(x * val) <= 35
     """
     t0 = time.perf_counter()
@@ -1145,8 +1145,8 @@ def test_five_plus_heterogeneous_constraints(
         DECIDE x(BOOL)
         SUCH THAT x <= 1
             AND SUM(x * qty) <= 12
-            AND SUM(x) >= 2 WHEN flag = 'R'
-            AND SUM(x) <= 2 PER category
+            AND WHEN flag = 'R': SUM(x) >= 2
+            AND PER category: SUM(x) BY (category) <= 2
             AND SUM(x) <> 7
             AND SUM(x * price) BETWEEN 10 AND 60
         MAXIMIZE SUM(x * price)

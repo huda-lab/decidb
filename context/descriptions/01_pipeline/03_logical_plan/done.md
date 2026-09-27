@@ -17,6 +17,22 @@ It contains no solver-specific structures and no execution mechanics.
 
 ---
 
+## 0. The DeciQL surface (2026-09-26)
+
+`LogicalDecide` carries, beyond what §4 lists: `objective_tail`
+(`DecideObjectiveStage`: sense, expression, peeled constant — the `THEN` stages),
+`text_domains` (`DecideTextDomain`: a TEXT decision's values and indicator indices),
+`frames` (`DecideFrameInfo`: encoded spec, bound order key, bound `ELSE` value, `WITHIN`
+scope), and `per_inner_scope_idx` (the key of a nested `MAX(PER k: SUM(e) BY (k))`
+objective). All are serialized (`logical_operator.json` ids 217–219, structs in
+`nodes.json`) and their expressions are reached by `EnumerateExpressions`, so column
+binding resolution and the `DECIDB_VERIFY_SERIALIZER=1` round trip cover them.
+`SetObjectiveStage` is the `THEN` counterpart of `SetObjective`. Generation scope tags on
+`PER` wrappers and `BY`/`PER`/frame tags on aggregates travel as aliases like every other
+DECIDE tag.
+
+---
+
 ## 1. Placement
 
 `LogicalDecide` is inserted **above** the source scan and any `Filter`, so the

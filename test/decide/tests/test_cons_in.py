@@ -490,7 +490,7 @@ def test_in_with_when(
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(INT)
-        SUCH THAT x IN (0, 2, 4) WHEN l_quantity > 20
+        SUCH THAT WHEN l_quantity > 20: x IN (0, 2, 4)
             AND SUM(x * l_quantity) <= 500
         MAXIMIZE SUM(x * l_extendedprice)
     """

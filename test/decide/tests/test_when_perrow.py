@@ -32,7 +32,7 @@ def test_when_perrow_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x <= 0 WHEN l_returnflag = 'N'
+        SUCH THAT WHEN l_returnflag = 'N': x <= 0
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -99,7 +99,7 @@ def test_when_perrow_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_t
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x = 1 WHEN l_discount >= 0.09
+        SUCH THAT WHEN l_discount >= 0.09: x = 1
             AND SUM(x * l_quantity) <= 5000
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -164,7 +164,7 @@ def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, p
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x <= 0 WHEN l_quantity > 40
+        SUCH THAT WHEN l_quantity > 40: x <= 0
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -228,7 +228,7 @@ def test_when_perrow_no_matches(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x <= 0 WHEN l_returnflag = 'Z'
+        SUCH THAT WHEN l_returnflag = 'Z': x <= 0
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -290,7 +290,7 @@ def test_when_perrow_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         FROM partsupp
         WHERE ps_partkey < 20
         DECIDE x(INT)
-        SUCH THAT x <= 3 WHEN ps_availqty > 0
+        SUCH THAT WHEN ps_availqty > 0: x <= 3
             AND SUM(x) <= 50
         MAXIMIZE SUM(x * ps_availqty)
     """
@@ -367,7 +367,7 @@ def test_when_perrow_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE x(REAL)
-        SUCH THAT x <= 10 WHEN l_returnflag = 'N'
+        SUCH THAT WHEN l_returnflag = 'N': x <= 10
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice)
     """

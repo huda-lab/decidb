@@ -783,7 +783,7 @@ class TestQuadraticConstraintInteractions:
             SELECT id, ROUND(x, 4) AS x, target, active FROM data
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
-                AND SUM(POWER(x - target, 2)) <= 2 WHEN active = 1
+                AND WHEN active = 1: SUM(POWER(x - target, 2)) <= 2
             MAXIMIZE SUM(x)
         """
         t0 = time.perf_counter()
@@ -849,7 +849,7 @@ class TestQuadraticConstraintInteractions:
             SELECT id, grp, ROUND(x, 4) AS x, target FROM data
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
-                AND SUM(POWER(x - target, 2)) <= 10 PER grp
+                AND PER grp: SUM(POWER(x - target, 2)) BY (grp) <= 10
             MAXIMIZE SUM(x)
         """
         t0 = time.perf_counter()
@@ -923,7 +923,7 @@ class TestQuadraticConstraintInteractions:
             SELECT id, grp, active, ROUND(x, 4) AS x, target FROM data
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
-                AND SUM(POWER(x - target, 2)) <= 5 WHEN active = 1 PER grp
+                AND WHEN active = 1 PER grp: SUM(POWER(x - target, 2)) BY (grp) <= 5
             MAXIMIZE SUM(x)
         """
         t0 = time.perf_counter()
@@ -1278,7 +1278,7 @@ class TestQuadraticConstraintVarTypes:
                 SELECT 'B', 22.0
             )
             SELECT item, ROUND(x, 4) AS x, target FROM items
-            DECIDE items.x(REAL)
+            DECIDE PER items: x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 20
             MAXIMIZE SUM(x)

@@ -88,7 +88,7 @@ class TestSolidBranches:
         )
         sql = (
             "SELECT l_orderkey, l_linenumber, buy FROM lineitem WHERE l_orderkey <= 300 "
-            "DECIDE buy(REAL) SUCH THAT buy <= 100 WHEN l_shipmode <> 'AIR' "
+            "DECIDE buy(REAL) SUCH THAT WHEN l_shipmode <> 'AIR': buy <= 100 "
             "MAXIMIZE SUM(buy * l_extendedprice)"
         )
         rows = _rows(_diagnose(cli, sql))
@@ -132,14 +132,14 @@ class TestSolidBranches:
 
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 40 "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT PER l_orderkey: SUM(x) BY (l_orderkey) >= 5 MAXIMIZE SUM(x)"
         )
 
         # --- query mode: one folded clause edit, amount = worst shortfall ---
         q = _rows(_diagnose(cli, sql))
         q_edits = [r for r in q if r["attribute"] == "edit_kind" and r["value"] == "loosen"]
         assert len(q_edits) == 1
-        subj = "SUM(x) >= 5 PER l_orderkey"
+        subj = "PER l_orderkey: SUM(x) BY (l_orderkey) >= 5"
         assert _attr(q, "clause", "edit_source", subject=subj) == "source_literal"
         assert _attr(q, "clause", "offset_scope", subject=subj) == "clause"
         assert int(float(_attr(q, "clause", "amount", subject=subj))) == max(
@@ -160,9 +160,9 @@ class TestSolidBranches:
         }
         for gkey, size in sizes.items():
             edit = by_group[gkey]
-            assert edit["clause"] == "SUM(x) >= 5 PER l_orderkey"
+            assert edit["clause"] == "PER l_orderkey: SUM(x) BY (l_orderkey) >= 5"
             assert int(float(edit["amount"])) == 5 - size
-            assert edit["suggested_change"] == f"SUM(x) >= {size} PER l_orderkey"
+            assert edit["suggested_change"] == f"PER l_orderkey: SUM(x) BY (l_orderkey) >= {size}"
         # once loosened, MAXIMIZE SUM(x) can select every row
         assert float(_attr(e, "model", "achievable_objective")) == float(total_rows)
 
@@ -226,7 +226,7 @@ class TestSolidBranches:
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT l_orderkey, x FROM lineitem WHERE l_orderkey <= 400 "
-            "DECIDE x(BOOL) SUCH THAT SUM(x) >= 5 PER l_orderkey MAXIMIZE SUM(x)"
+            "DECIDE x(BOOL) SUCH THAT PER l_orderkey: SUM(x) BY (l_orderkey) >= 5 MAXIMIZE SUM(x)"
         )
         flat = _flat(_diagnose(
             cli, sql,
@@ -258,7 +258,7 @@ class TestSolidBranches:
         sql = (
             "SELECT s.s_suppkey, keep FROM supplier s "
             "JOIN nation n ON s.s_nationkey = n.n_nationkey "
-            "DECIDE s.keep(REAL) SUCH THAT keep <= 50 WHEN n.n_name <> 'GERMANY' "
+            "DECIDE PER s: keep(REAL) SUCH THAT WHEN n.n_name <> 'GERMANY': keep <= 50 "
             "MAXIMIZE SUM(keep)"
         )
         rows = _rows(

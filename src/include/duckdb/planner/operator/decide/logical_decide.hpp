@@ -49,6 +49,34 @@ struct EntityScopeInfo {
     static EntityScopeInfo Deserialize(Deserializer &deserializer);
 };
 
+//! One lexicographic objective stage after the first (`... THEN MAXIMIZE e`): solved
+//! among the optima of every earlier stage. Canonicalized like the first objective,
+//! with its own peeled constant.
+struct DecideObjectiveStage {
+	DecideSense sense = DecideSense::MINIMIZE;
+	unique_ptr<Expression> expression;
+	double constant_offset = 0.0;
+
+	void Serialize(Serializer &serializer) const;
+	static DecideObjectiveStage Deserialize(Deserializer &deserializer);
+};
+
+//! A frame expression's navigation (spec §7.3): the timeline it walks. Referenced from
+//! the bound aggregate that carries the frame's body through `MakeFrameRefTag`.
+//! `spec` is `DecideFrameSpec::Encode()` (selectors, policy, direction, cyclic);
+//! `order_key` orders the peers, `else_value` fills a missing position under
+//! `ELSE v`, and `within_scope_idx` names the partition key's entity scope, or
+//! INVALID_INDEX for the whole relation.
+struct DecideFrameInfo {
+	string spec;
+	unique_ptr<Expression> order_key;
+	unique_ptr<Expression> else_value;
+	idx_t within_scope_idx = DConstants::INVALID_INDEX;
+
+	void Serialize(Serializer &serializer) const;
+	static DecideFrameInfo Deserialize(Deserializer &deserializer);
+};
+
 //! A source column's logical identity and the name the user wrote for it.
 //! Keeping these together makes it impossible for the binding/name association to
 //! drift through mismatched parallel vectors.
@@ -116,6 +144,12 @@ public:
 
     // The bound objective function expression
     unique_ptr<Expression> decide_objective;
+    //! Later lexicographic stages (`... THEN MINIMIZE b`), in order (spec §7.5).
+    vector<DecideObjectiveStage> objective_tail;
+    //! Each TEXT decision's one-hot encoding, for the readback (see DecideTextDomain).
+    vector<DecideTextDomain> text_domains;
+    //! The frame expressions' timelines, indexed by the frame tag on their aggregates.
+    vector<DecideFrameInfo> frames;
 
     //! The `DIAGNOSE` prefix, carried from the statement that was written. True means
     //! this query was asked to explain its failure: the operator arms the diagnosis
@@ -277,6 +311,9 @@ public:
     bool per_outer_is_easy = false;
     // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
     bool per_inner_was_avg = false;
+    //! The entity scope the inner reducer generates per (`OUTER(PER k: INNER(e) BY (k))`);
+    //! INVALID_INDEX for a flat objective.
+    idx_t per_inner_scope_idx = DConstants::INVALID_INDEX;
 
     // --- Table-scoped variable metadata ---
 
@@ -380,6 +417,8 @@ public:
     //! objective_constant_offset rather than replacing it, so the offset peeled from
     //! what the user wrote survives every later rewrite.
     void SetObjective(ClientContext &context, unique_ptr<Expression> objective);
+    //! The same boundary for a `THEN` stage: canonicalized into `objective_tail[stage_idx]`.
+    void SetObjectiveStage(ClientContext &context, idx_t stage_idx, unique_ptr<Expression> objective);
 
     //! Calls back with every expression this operator owns: decide_variables,
     //! decide_constraints, decide_objective, the composed MIN/MAX constraint and

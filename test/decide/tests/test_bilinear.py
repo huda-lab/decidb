@@ -538,7 +538,7 @@ class TestBilinearFeatureInteractions:
             FROM data
             DECIDE b(BOOL), x(REAL)
             SUCH THAT x >= 0 AND x <= 10
-            MAXIMIZE SUM(b * x) WHEN category = 'A'
+            MAXIMIZE SUM(WHEN category = 'A': b * x)
         """
         t0 = time.perf_counter()
         result, cols = decidb_cli.execute(sql)
@@ -714,7 +714,7 @@ class TestBilinearConstraints:
     def test_bool_bilinear_constraint(self, decidb_cli, oracle_solver, perf_tracker):
         """SUCH THAT SUM(b1 * b2) <= 1 — bilinear constraint, linear objective.
 
-        Oracle encodes z_i = b1_i AND b2_i via McCormick and constrains
+        Oracle encodes z_i = b1_i AND b2_i via McCormick AND constrains
         SUM(z_i) <= 1; objective is linear SUM(b1 + b2)."""
         sql = """
             WITH data AS (
@@ -770,13 +770,13 @@ class TestBilinearConstraints:
     def test_bilinear_constraint_and_bilinear_objective_together(
         self, decidb_cli, oracle_solver, perf_tracker,
     ):
-        """SUCH THAT SUM(b1 * b2) <= 1, MAXIMIZE SUM(b2 * b3) — a bilinear term in
+        """SUCH THAT SUM(b1 * b2) <= 1, MAXIMIZE SUM(WHEN exercised together, not just
+        individually.: b2 * b3) — a bilinear term in
         SUCH THAT and a *different* bilinear term in the objective, in one query.
 
         Regression for the constraint-side and objective-side bilinear coefficient
         evaluators sharing one code path (`EvaluateBilinearTerms`): pins that both
-        still agree with an independent oracle when exercised together, not just
-        individually.
+        still agree with an independent oracle
         """
         sql = """
             WITH data AS (
@@ -851,12 +851,12 @@ class TestFactoredProductDegree:
     Objectives were masked: the symbolic layer expanded the product before the
     check ran. Constraints were never expanded, so the *same expression* was
     accepted in MAXIMIZE and rejected in SUCH THAT. These tests pin both the
-    acceptance and the objective/constraint symmetry.
+    acceptance AND the objective/constraint symmetry.
 
     Assertions are differential — the factored spelling must agree with the
     hand-expanded spelling — so they test the property at issue without
     depending on a hand-computed optimum. Objective coefficients are distinct
-    powers of two so each optimum is unique and ties cannot make the
+    powers of two so each optimum is unique AND ties cannot make the
     comparison flaky.
     """
 
@@ -1226,7 +1226,7 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
                b, ROUND(x, 4) AS x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE b(BOOL), x(REAL)
-        SUCH THAT x <= 50 AND SUM(b * x) <= 100 PER l_returnflag
+        SUCH THAT x <= 50 AND PER l_returnflag: SUM(b * x) BY (l_returnflag) <= 100
         MAXIMIZE SUM(l_extendedprice * b * x)
     """
     t0 = time.perf_counter()
@@ -1313,8 +1313,8 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE b(BOOL), x(REAL)
         SUCH THAT x <= 50
-            AND SUM(b * x) <= 80 WHEN (l_shipmode = 'AIR' OR l_shipmode = 'RAIL') PER l_returnflag
-        MAXIMIZE SUM(l_extendedprice * b * x) WHEN (l_shipmode = 'AIR' OR l_shipmode = 'RAIL')
+            AND WHEN (l_shipmode = 'AIR' OR l_shipmode = 'RAIL') PER l_returnflag: SUM(b * x) BY (l_returnflag) <= 80
+        MAXIMIZE SUM(WHEN (l_shipmode = 'AIR' OR l_shipmode = 'RAIL'): l_extendedprice * b * x)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -1404,7 +1404,7 @@ def test_bilinear_entity_scoped(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN, ROUND(x, 4) AS x
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
-        DECIDE n.keepN(BOOL), x(REAL)
+        DECIDE PER n: keepN(BOOL), x(REAL)
         SUCH THAT x <= 100 AND SUM(keepN * x) <= 1000
         MAXIMIZE SUM(keepN * x * c_acctbal)
     """

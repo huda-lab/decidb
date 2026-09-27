@@ -32,6 +32,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
+#include "duckdb/parser/decide/decide_frame_spec.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -449,17 +450,8 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs,
 	}
 }
 
-//! PerGroupCacheEntry/PerGroupCache are declared in physical_decide.hpp (Finalize's
-//! private phase methods need PerGroupCache in their signatures). Cache for PER group
-//! assignments: shares one full-data scan + group-map build across constraints/
-//! objectives that use the same PER expression set. The cached value is the
-//! *unfiltered* row→group mapping (BuildGroupIds run with row_filter=nullptr); each
-//! call site then applies its own WHEN/local filter and remaps the surviving group IDs
-//! to consecutive 0..K' to preserve today's "encounter-order, no holes" semantics.
-//! Lifetime: one PerGroupCache per Finalize invocation; cleared at end.
-
-//! Printable key for an (unfiltered) group: the per-key-column representative values
-//! joined with ", " (composite PER key → `EU, 2024`); a NULL value renders "NULL".
+//! Printable key for a group: the per-key-column representative values joined with
+//! ", " (composite key → `EU, 2024`); a NULL value renders "NULL".
 static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, idx_t gid) {
 	string s;
 	for (idx_t c = 0; c < rep_keys.size(); c++) {
@@ -480,126 +472,88 @@ static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, idx_t gid
 	return s;
 }
 
-//! Hash a PER expression set + null_excludes flag into a size_t for the cache.
-static size_t HashPerKey(const vector<unique_ptr<Expression>> &per_columns, bool null_excludes) {
-	size_t h = std::hash<bool>{}(null_excludes);
-	for (auto &e : per_columns) {
-		size_t eh = static_cast<size_t>(e->Hash());
-		h ^= eh + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-	}
-	return h;
-}
-
-//! Returns true if the cache entry's expression set + null_excludes flag matches
-//! the constraint/objective being evaluated.
-static bool PerKeyMatches(const PerGroupCacheEntry &entry,
-                          const vector<unique_ptr<Expression>> &per_columns,
-                          bool null_excludes) {
-	if (entry.null_excludes != null_excludes) return false;
-	if (entry.exprs.size() != per_columns.size()) return false;
-	for (idx_t i = 0; i < per_columns.size(); i++) {
-		if (!entry.exprs[i]->Equals(*per_columns[i])) return false;
+//! Dense group ids over the rows `row_filter` admits, read off a key's entity mapping.
+//! Every keyed role -- a constraint's PER, a nested objective's PER, a reducer's BY --
+//! partitions the rows by one of the shared entity scopes, so the same mapping the
+//! decision variables use is the partition here; nothing re-hashes the key. Ids are
+//! assigned in encounter order with no holes, and a group is labelled by its key.
+//!
+//! `null_excludes` is generation's rule: an instance keyed on a NULL is not generated
+//! (the group is skipped), the same way SQL's GROUP BY on a NULL key would not drive
+//! a constraint. Aggregation keeps such rows in their own group.
+//!
+//! `loose_row_filter` / `out_loose_row_group_ids` give a second map over the SAME
+//! numbering but a looser row filter. The right-hand side needs this: its reducers
+//! must not inherit the LHS's aggregate-local WHENs, which `row_filter` folds in. A
+//! group no strict row reached emits no constraint, so its rows stay excluded.
+//! True when every column of `coarse`'s key is in `fine`'s: each of `fine`'s groups lies
+//! inside exactly one of `coarse`'s.
+static bool KeyRefines(const EntityScopeInfo &fine, const EntityScopeInfo &coarse) {
+	for (auto &binding : coarse.entity_key_bindings) {
+		bool found = false;
+		for (auto &fine_binding : fine.entity_key_bindings) {
+			if (fine_binding == binding) {
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			return false;
+		}
 	}
 	return true;
 }
 
-//! Look up (or build + cache) the unfiltered group ids for `per_columns`,
-//! then materialize a filter-aware view in `out_row_group_ids` / `out_num_groups`.
-//!
-//! Filter semantics (preserved from BuildGroupIds): rows where row_filter(r) is
-//! false (or NULL keys when null_excludes=true) get INVALID_INDEX in the output.
-//! Surviving group IDs are remapped to consecutive 0..K' in their first-seen
-//! row order so downstream code sees a dense [0..K') range exactly as today.
-static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
-                                     const vector<unique_ptr<Expression>> &per_columns,
-                                     ChunkExprCache &chunk_expr_cache,
-                                     ClientContext &context,
-                                     ColumnDataCollection &data,
-                                     idx_t num_rows,
-                                     bool null_excludes,
-                                     const std::function<bool(idx_t)> &row_filter,
-                                     vector<idx_t> &out_row_group_ids,
-                                     idx_t &out_num_groups,
-                                     vector<string> &out_group_labels,
-                                     // Optional second map over the SAME group numbering but a
-                                     // looser row filter. The right-hand side needs this: its
-                                     // reducers must not inherit the LHS's aggregate-local WHEN,
-                                     // which `row_filter` folds in. Groups that no strict row
-                                     // reached emit no constraint, so their rows stay excluded.
-                                     const std::function<bool(idx_t)> *loose_row_filter = nullptr,
-                                     vector<idx_t> *out_loose_row_group_ids = nullptr) {
-	size_t key = HashPerKey(per_columns, null_excludes);
-	auto &bucket = cache[key];
-	PerGroupCacheEntry *entry = nullptr;
-	for (auto &e : bucket) {
-		if (PerKeyMatches(e, per_columns, null_excludes)) {
-			entry = &e;
-			break;
-		}
-	}
-	if (entry == nullptr) {
-		bucket.emplace_back();
-		entry = &bucket.back();
-		entry->null_excludes = null_excludes;
-		entry->exprs.reserve(per_columns.size());
-		for (auto &e : per_columns) {
-			entry->exprs.push_back(e.get());
-		}
-		// Build unfiltered group ids; BuildGroupIds already excludes NULL keys
-		// when null_excludes=true.
-		vector<const Expression *> key_exprs;
-		key_exprs.reserve(per_columns.size());
-		for (auto &col : per_columns) {
-			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *col, context));
-		}
-		std::function<bool(idx_t)> no_filter; // empty = include all
-		BuildGroupIds(key_exprs, context, data, num_rows, no_filter, null_excludes,
-		              entry->unfiltered_row_group_ids, entry->unfiltered_num_groups,
-		              &entry->unfiltered_rep_keys);
-	}
-
-	// Apply per-call filter and remap surviving group IDs to consecutive 0..K'
-	// in encounter order, matching the legacy BuildGroupIds output exactly.
+static void BuildScopeGroupIds(const EntityMapping &mapping, idx_t num_rows, bool null_excludes,
+                               const std::function<bool(idx_t)> &row_filter,
+                               vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
+                               vector<string> *out_group_labels,
+                               const std::function<bool(idx_t)> *loose_row_filter = nullptr,
+                               vector<idx_t> *out_loose_row_group_ids = nullptr) {
 	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-	out_group_labels.clear();
+	if (out_group_labels) {
+		out_group_labels->clear();
+	}
 	if (out_loose_row_group_ids) {
 		out_loose_row_group_ids->assign(num_rows, DConstants::INVALID_INDEX);
 	}
-	if (entry->unfiltered_num_groups == 0 || num_rows == 0) {
-		out_num_groups = 0;
+	out_num_groups = 0;
+	if (mapping.num_entities == 0 || num_rows == 0) {
 		return;
 	}
-	vector<idx_t> remap(entry->unfiltered_num_groups, DConstants::INVALID_INDEX);
-	idx_t next_remap = 0;
+	vector<idx_t> remap(mapping.num_entities, DConstants::INVALID_INDEX);
 	for (idx_t r = 0; r < num_rows; r++) {
-		idx_t unf_gid = entry->unfiltered_row_group_ids[r];
-		if (unf_gid == DConstants::INVALID_INDEX) continue;
-		if (row_filter && !row_filter(r)) continue;
-		idx_t mapped = remap[unf_gid];
+		idx_t entity = mapping.row_to_entity[r];
+		if (null_excludes && entity < mapping.entity_key_has_null.size() && mapping.entity_key_has_null[entity]) {
+			continue;
+		}
+		if (row_filter && !row_filter(r)) {
+			continue;
+		}
+		idx_t mapped = remap[entity];
 		if (mapped == DConstants::INVALID_INDEX) {
-			mapped = next_remap++;
-			remap[unf_gid] = mapped;
-			// Reindex the printable key in lockstep with the dense 0..K' renumber:
-			// mapped == out_group_labels.size() exactly here, so labels stay aligned.
-			out_group_labels.push_back(FormatPerGroupKey(entry->unfiltered_rep_keys, unf_gid));
+			mapped = out_num_groups++;
+			remap[entity] = mapped;
+			if (out_group_labels) {
+				out_group_labels->push_back(FormatPerGroupKey(mapping.rep_keys, entity));
+			}
 		}
 		out_row_group_ids[r] = mapped;
 	}
-	out_num_groups = next_remap;
-
 	if (out_loose_row_group_ids) {
-		// Same `remap`, so a row lands in the group the model builder will emit for.
 		for (idx_t r = 0; r < num_rows; r++) {
-			idx_t unf_gid = entry->unfiltered_row_group_ids[r];
-			if (unf_gid == DConstants::INVALID_INDEX) continue;
-			if (loose_row_filter && *loose_row_filter && !(*loose_row_filter)(r)) continue;
-			idx_t mapped = remap[unf_gid];
-			if (mapped == DConstants::INVALID_INDEX) continue; // group emits no constraint
+			idx_t entity = mapping.row_to_entity[r];
+			if (loose_row_filter && *loose_row_filter && !(*loose_row_filter)(r)) {
+				continue;
+			}
+			idx_t mapped = remap[entity];
+			if (mapped == DConstants::INVALID_INDEX) {
+				continue; // group emits no constraint
+			}
 			(*out_loose_row_group_ids)[r] = mapped;
 		}
 	}
 }
-
 
 //! True when a bound contains a flattened scalar-subquery value. Its bound alias is
 //! internal planning metadata (`SUBQUERY` plus a DECIDE tag), not SQL the user can edit.
@@ -1211,6 +1165,16 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs);
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
 		                                                  objective_strs);
+		// `THEN` stages, each on its own line after the first objective.
+		for (auto &stage : objective_tail) {
+			if (!stage.expression) {
+				continue;
+			}
+			vector<string> stage_strs;
+			CollectDecideExpressionStrings(*stage.expression, source_fragments, entity_scopes, stage_strs);
+			result["Objective"] += "\nTHEN " + string(stage.sense == DecideSense::MAXIMIZE ? "MAXIMIZE " : "MINIMIZE ") +
+			                       StringUtil::Join(stage_strs, " ");
+		}
 	} else {
 		result["Objective"] = "FEASIBILITY";
 	}
@@ -1333,7 +1297,12 @@ public:
     //! (stage 05). Aliases rather than copies: this state evaluates their
     //! coefficients against the data, it does not derive or alter their shape.
     const vector<unique_ptr<DecideConstraint>> &constraints = op.prepared.constraints;
-    const unique_ptr<DecideObjective> &objective = op.prepared.objective;
+    //! The objective being evaluated: the first one, except while a `THEN` stage is
+    //! evaluated through the same code (EvaluateObjectiveStages), after which it is
+    //! pointed back at the first.
+    DecideObjective *objective = op.prepared.objective.get();
+    //! The evaluated `THEN` stages, in order, handed to the solver input at assembly.
+    vector<SolverInput::ObjectiveStage> objective_stages;
 
     //! Local copies of the decision column box and the absorbed-bound records that
     //! DecideOptimizer::AbsorbVariableBounds resolved. Finalize copies the box into
@@ -1702,7 +1671,15 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
 
         BuildGroupIds(key_exprs, context, gstate.data, num_rows,
                       std::function<bool(idx_t)>{}, /*null_excludes=*/false,
-                      mapping.row_to_entity, mapping.num_entities);
+                      mapping.row_to_entity, mapping.num_entities, &mapping.rep_keys);
+        mapping.entity_key_has_null.assign(mapping.num_entities, false);
+        for (auto &column : mapping.rep_keys) {
+            for (idx_t entity = 0; entity < column.size() && entity < mapping.num_entities; entity++) {
+                if (column[entity].IsNull()) {
+                    mapping.entity_key_has_null[entity] = true;
+                }
+            }
+        }
         entity_mappings.push_back(std::move(mapping));
     }
     return entity_mappings;
@@ -1743,7 +1720,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // Per-Finalize cache of unfiltered PER row→group assignments, shared across
     // every constraint and the objective so a PER spec evaluated once is reused
     // by every other call site that asks for the same expression set.
-    PerGroupCache per_group_cache;
 
     //===--------------------------------------------------------------------===//
     // PHASE 1.5: Build Entity Mappings for Table-Scoped Variables
@@ -1756,11 +1732,13 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //===--------------------------------------------------------------------===//
 
     // 1. Evaluate constraints
-    EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+    EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, entity_mappings);
 
-    // 2. Evaluate objective
+    // 2. Evaluate the objective -- the `THEN` stages first, through the same code,
+    //    so the first objective's evaluation is the one left in place.
+    EvaluateObjectiveStages(context, gstate, num_rows, chunk_expr_cache, entity_mappings);
     EvaluatedClauses evaluated =
-        EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+        EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, entity_mappings);
 
     // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
     EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, entity_mappings, evaluated);
@@ -1801,9 +1779,235 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 // Finalize: PHASE 2, sub-phase 1 -- Evaluate Constraints
 //===--------------------------------------------------------------------===//
 
+//! Evaluate a known expression over every row of the buffer, as values.
+static vector<Value> EvaluateValuesPerRow(ClientContext &context, DecideGlobalSinkState &gstate,
+                                          ChunkExprCache &chunk_expr_cache, const Expression &expr, idx_t num_rows) {
+	vector<Value> values;
+	values.reserve(num_rows);
+	const Expression &cached = CachedTransformToChunkExpression(chunk_expr_cache, expr, context);
+	ExpressionExecutor executor(context, cached);
+	ColumnDataScanState scan_state;
+	gstate.data.InitializeScan(scan_state);
+	DataChunk chunk;
+	chunk.Initialize(context, gstate.data.Types());
+	Vector result(cached.return_type);
+	while (gstate.data.Scan(scan_state, chunk)) {
+		result.Initialize(false, chunk.size());
+		executor.ExecuteExpression(chunk, result);
+		for (idx_t i = 0; i < chunk.size(); i++) {
+			values.push_back(result.GetValue(i));
+		}
+	}
+	return values;
+}
+
+//! The rows a frame reads for each instance (spec §7.3). Every admitted row lies on the
+//! timeline of its partition (`WITHIN`), ordered by the order key's distinct values --
+//! its peers share a position. An instance navigates from its representative row's
+//! position by the frame's selectors; `AT` reads one row of the selected position,
+//! a range reads every row of every selected position. A missing position is skipped
+//! within a range, filled under `ELSE v`, or drops the instance (`AT` with no ELSE, or
+//! a range under `ALL` / with no position at all).
+static void BuildFrameRows(ClientContext &context, DecideGlobalSinkState &gstate, ChunkExprCache &chunk_expr_cache,
+                           const DecideFrameInfo &frame, const vector<EntityMapping> &entity_mappings,
+                           idx_t num_rows, const vector<idx_t> &representative_rows,
+                           const std::function<bool(idx_t)> &admitted, EvaluatedConstraint::FrameRows &out,
+                           vector<bool> &instance_dropped) {
+	auto spec = DecideFrameSpec::Decode(frame.spec);
+	const idx_t num_instances = representative_rows.size();
+
+	// The partition of every admitted row.
+	vector<idx_t> partition_of(num_rows, DConstants::INVALID_INDEX);
+	idx_t num_partitions = 1;
+	if (frame.within_scope_idx != DConstants::INVALID_INDEX) {
+		auto &mapping = entity_mappings[frame.within_scope_idx];
+		num_partitions = MaxValue<idx_t>(mapping.num_entities, 1);
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (admitted(row)) {
+				partition_of[row] = mapping.row_to_entity[row];
+			}
+		}
+	} else {
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (admitted(row)) {
+				partition_of[row] = 0;
+			}
+		}
+	}
+
+	// Each partition's timeline: its distinct order-key values in order, and the rows
+	// at each. A row whose key is NULL is on no timeline.
+	auto keys = EvaluateValuesPerRow(context, gstate, chunk_expr_cache, *frame.order_key, num_rows);
+	vector<vector<idx_t>> partition_rows(num_partitions);
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (partition_of[row] != DConstants::INVALID_INDEX && !keys[row].IsNull()) {
+			partition_rows[partition_of[row]].push_back(row);
+		}
+	}
+	vector<vector<vector<idx_t>>> rows_at(num_partitions); // partition → position → rows
+	vector<idx_t> position_of(num_rows, DConstants::INVALID_INDEX);
+	for (idx_t p = 0; p < num_partitions; p++) {
+		auto &rows = partition_rows[p];
+		std::stable_sort(rows.begin(), rows.end(), [&](idx_t a, idx_t b) {
+			return spec.descending ? keys[b] < keys[a] : keys[a] < keys[b];
+		});
+		for (idx_t i = 0; i < rows.size(); i++) {
+			if (i == 0 || !(keys[rows[i]] == keys[rows[i - 1]])) {
+				rows_at[p].emplace_back();
+			}
+			rows_at[p].back().push_back(rows[i]);
+			position_of[rows[i]] = rows_at[p].size() - 1;
+		}
+	}
+
+	double fill = 0.0;
+	if (spec.policy == DecideFramePolicy::ELSE_VALUE && frame.else_value) {
+		auto value = ExpressionExecutor::EvaluateScalar(context, *frame.else_value);
+		if (value.IsNull()) {
+			throw InvalidInputException("A frame's ELSE value is NULL; give it a number.");
+		}
+		fill = value.GetValue<double>();
+	}
+
+	out.offsets.assign(1, 0);
+	out.else_values.assign(num_instances, 0.0);
+	for (idx_t g = 0; g < num_instances; g++) {
+		idx_t own = representative_rows[g];
+		idx_t p = own == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : partition_of[own];
+		idx_t pos = own == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : position_of[own];
+		if (p == DConstants::INVALID_INDEX || pos == DConstants::INVALID_INDEX) {
+			// The instance's own row is on no timeline (a NULL key): nothing to navigate from.
+			instance_dropped[g] = true;
+			out.offsets.push_back(out.rows.size());
+			continue;
+		}
+		auto &timeline = rows_at[p];
+		const int64_t n = static_cast<int64_t>(timeline.size());
+		// A selector as a raw (unwrapped) position.
+		auto raw = [&](const DecideFrameSelector &selector) -> int64_t {
+			switch (selector.kind) {
+			case DecideFrameSelectorKind::FIRST:
+				return 0;
+			case DecideFrameSelectorKind::LAST:
+				return n - 1;
+			case DecideFrameSelectorKind::PREVIOUS:
+				return static_cast<int64_t>(pos) - static_cast<int64_t>(selector.distance);
+			default:
+				return static_cast<int64_t>(pos) + static_cast<int64_t>(selector.distance);
+			}
+		};
+		// A raw position on the timeline, wrapped when cyclic; -1 when it does not exist.
+		auto place = [&](int64_t raw_pos) -> int64_t {
+			if (spec.cyclic) {
+				return ((raw_pos % n) + n) % n;
+			}
+			return raw_pos >= 0 && raw_pos < n ? raw_pos : -1;
+		};
+		vector<int64_t> wanted;
+		if (!spec.is_range) {
+			wanted.push_back(raw(spec.from_selector));
+		} else {
+			int64_t a = raw(spec.from_selector), b = raw(spec.to_selector);
+			int64_t lo = MinValue<int64_t>(a, b), hi = MaxValue<int64_t>(a, b);
+			for (int64_t i = lo; i <= hi; i += static_cast<int64_t>(spec.every)) {
+				wanted.push_back(i);
+			}
+		}
+		idx_t present = 0, missing = 0;
+		for (auto raw_pos : wanted) {
+			int64_t at = place(raw_pos);
+			if (at < 0) {
+				missing++;
+				continue;
+			}
+			present++;
+			auto &peers = timeline[static_cast<idx_t>(at)];
+			if (spec.is_range) {
+				out.rows.insert(out.rows.end(), peers.begin(), peers.end());
+			} else {
+				if (peers.size() > 1) {
+					throw InvalidInputException(
+					    "AT reads one row per position, but a position of its OVER key holds %llu rows; make the key "
+					    "unique within the partition (add a WITHIN column), or reduce the position with "
+					    "SUM(FROM ... TO ...).",
+					    peers.size());
+				}
+				out.rows.push_back(peers[0]);
+			}
+		}
+		if (missing > 0) {
+			switch (spec.policy) {
+			case DecideFramePolicy::ELSE_VALUE:
+				out.else_values[g] = fill * static_cast<double>(missing);
+				break;
+			case DecideFramePolicy::ALL:
+				instance_dropped[g] = true;
+				break;
+			case DecideFramePolicy::ELSE_NULL:
+				// A reduced NULL is ignored while any position remains; a value that is
+				// nothing but NULL skips the instance.
+				if (present == 0) {
+					instance_dropped[g] = true;
+				}
+				break;
+			}
+		}
+		out.offsets.push_back(out.rows.size());
+	}
+}
+
+//! Evaluate an `IF b:` guard's linear form over every row: each term's coefficient and
+//! the bound, read per row the way a per-row constraint's are. Which row an instance
+//! reads is the formulation's choice (its representative row), so nothing is grouped
+//! here.
+static shared_ptr<EvaluatedGuard> EvaluateGuardRows(ClientContext &context, DecideGlobalSinkState &gstate,
+                                                    ChunkExprCache &chunk_expr_cache, const DecideGuard &spec,
+                                                    idx_t num_rows) {
+	auto guard = make_shared_ptr<EvaluatedGuard>();
+	guard->comparison_type = spec.comparison_type;
+	guard->row_coefficients.resize(spec.lhs_terms.size());
+
+	vector<LogicalType> result_types;
+	ExpressionExecutor executor(context);
+	for (idx_t term_idx = 0; term_idx < spec.lhs_terms.size(); term_idx++) {
+		auto &term = spec.lhs_terms[term_idx];
+		guard->variable_indices.push_back(term.variable_index);
+		const Expression &cached = CachedTransformToChunkExpression(chunk_expr_cache, *term.coefficient, context);
+		result_types.push_back(cached.return_type);
+		executor.AddExpression(cached);
+		guard->row_coefficients[term_idx].Reserve(num_rows);
+	}
+	const Expression &cached_rhs = CachedTransformToChunkExpression(chunk_expr_cache, *spec.rhs_expr, context);
+	result_types.push_back(cached_rhs.return_type);
+	executor.AddExpression(cached_rhs);
+	guard->rhs_values.Reserve(num_rows);
+
+	ColumnDataScanState scan_state;
+	gstate.data.InitializeScan(scan_state);
+	DataChunk chunk;
+	chunk.Initialize(context, gstate.data.Types());
+	DataChunk results;
+	results.Initialize(context, result_types);
+	while (gstate.data.Scan(scan_state, chunk)) {
+		results.Reset();
+		executor.Execute(chunk, results);
+		for (idx_t term_idx = 0; term_idx < spec.lhs_terms.size(); term_idx++) {
+			NullSourceContext null_ctx {spec.lhs_terms[term_idx].coefficient.get(), &chunk};
+			ExtractDoubleColumn(results.data[term_idx], chunk.size(), spec.lhs_terms[term_idx].sign,
+			                    guard->row_coefficients[term_idx].MutableDense(), "IF guard coefficient",
+			                    /*allow_infinite=*/false, &null_ctx);
+			guard->row_coefficients[term_idx].SyncSize();
+		}
+		NullSourceContext rhs_ctx {spec.rhs_expr.get(), &chunk};
+		ExtractDoubleColumn(results.data[spec.lhs_terms.size()], chunk.size(), 1.0, guard->rhs_values.MutableDense(),
+		                    "IF guard bound", /*allow_infinite=*/false, &rhs_ctx);
+		guard->rhs_values.SyncSize();
+	}
+	return guard;
+}
+
 void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate,
                                          idx_t num_rows, ChunkExprCache &chunk_expr_cache,
-                                         PerGroupCache &per_group_cache,
                                          const vector<EntityMapping> &entity_mappings) const {
     for (idx_t c = 0; c < gstate.constraints.size(); c++) {
         auto &constraint = gstate.constraints[c];
@@ -1969,110 +2173,367 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
         }
 
-        // DecidB: Unified WHEN+PER row→group assignment
-        // Produces row_group_ids and num_groups for the evaluated constraint.
-        // - No WHEN, no PER: row_group_ids stays empty, num_groups = 0 (fast path)
-        // - WHEN only: row_group_ids[row] = 0 (matching) or INVALID_INDEX (excluded), num_groups = 1
-        // - PER only: row_group_ids[row] = 0..K-1 (group id), INVALID_INDEX for NULL PER values, num_groups = K
-        // - WHEN+PER: WHEN filters first, then PER groups the remaining rows
+        // DecidB: the generated instances (row_group_ids) and, per term, the rows it
+        // reduces over for an instance. Generation is the constraint's PER (spec §7.1):
+        //   - none: one instance per surviving row. A reduced-only body then has one
+        //     instance per distinct value its reducers' shared BY key takes -- the row
+        //     instances of one group are identical -- and just ONE instance when every
+        //     reducer is global, which is the classic aggregate constraint.
+        //   - `PER ()`: one instance for the query.
+        //   - `PER k`: one instance per distinct key value (a NULL key generates none).
+        // Aggregation is each reducer's BY: its rows are the instance's own when the
+        // BY key is the generation key (CLASS), every WHEN-admitted row for `BY ()`
+        // (ALL), and the key's group containing the instance otherwise (KEYED).
         bool has_when = (constraint->when_condition != nullptr);
-        bool has_per = (!constraint->per_columns.empty());
+        const bool gen_key = constraint->gen_kind == DecideScopeKind::KEY;
+        const bool gen_global = constraint->gen_kind == DecideScopeKind::GLOBAL;
+        const bool reduced_only = constraint->lhs_is_aggregate;
+        const bool mixed = !constraint->lhs_is_aggregate && constraint->has_reduced_terms;
+        bool has_per = gen_key;
+        // A frame navigates from each instance's own position, so instances are never
+        // collapsed onto a reducer's groups when one is present.
+        bool has_frame = false;
+        for (auto &term : constraint->lhs_terms) {
+            has_frame |= term.frame_idx != DConstants::INVALID_INDEX;
+        }
 
-        // Group map for the right-hand side's own reducers: the constraint's WHEN and
-        // PER, without the LHS's aggregate-local filters. Empty means "every row, one
-        // group", the same convention `row_group_ids` uses.
-        vector<idx_t> rhs_row_group_ids;
-
-        // Facet C: render the WHEN/PER qualifier for the clause label through
-        // RenderDecideSource, the same renderer EXPLAIN uses, so a clause reads
-        // identically wherever it is quoted back. Order mirrors the postfix syntax
-        // (`... WHEN <cond> PER <cols>`). Stamped onto provenance at the aggregate
-        // emission sites; the diagnosis appends it to the reconstructed label.
-        {
-            string &q = eval_const.qualifier;
-            if (has_when) {
-                q = "WHEN " + RenderDecideSource(*constraint->when_condition, source_fragments, entity_scopes);
+        // `IF b:` -- the guard, read at each instance's own row. A guard on a per-row or
+        // per-key decision under no PER makes a reduced body's instances distinct per
+        // row (each row conditions the same sum on its own decision), so they are
+        // generated per row below rather than collapsed onto the reducers' groups.
+        bool guard_varies_by_row = false;
+        if (constraint->guard_spec) {
+            if (constraint->minmax_clause_idx != DConstants::INVALID_INDEX ||
+                constraint->ne_clause_idx != DConstants::INVALID_INDEX ||
+                constraint->abs_aux_idx != DConstants::INVALID_INDEX || constraint->has_quadratic ||
+                constraint->has_bilinear) {
+                throw NotImplementedException(
+                    "DECIDE: an IF guard is supported on linear constraints only; a MIN/MAX, <>, ABS, "
+                    "quadratic or bilinear body cannot be guarded yet.");
             }
-            if (has_per) {
-                if (!q.empty()) {
-                    q += " ";
-                }
-                q += "PER ";
-                bool parenthesize = constraint->per_columns.size() > 1;
-                if (parenthesize) {
-                    q += "(";
-                }
-                for (idx_t i = 0; i < constraint->per_columns.size(); i++) {
-                    if (i > 0) {
-                        q += ", ";
-                    }
-                    q += RenderDecideSource(*constraint->per_columns[i], source_fragments, entity_scopes);
-                }
-                if (parenthesize) {
-                    q += ")";
+            eval_const.guard = EvaluateGuardRows(context, gstate, chunk_expr_cache, *constraint->guard_spec, num_rows);
+            eval_const.guard->label =
+                "IF " + RenderDecideSource(*constraint->guard, source_fragments, entity_scopes);
+            for (auto &term : constraint->guard_spec->lhs_terms) {
+                if (term.variable_index != DConstants::INVALID_INDEX &&
+                    variable_scopes[term.variable_index].scope != DecideVarScope::SCALAR) {
+                    guard_varies_by_row = true;
                 }
             }
         }
 
-        if (has_when || has_per || has_local_filters) {
-            vector<bool> when_mask;
+        // Instance map for the right-hand side's own reducers: the constraint's WHEN and
+        // PER, without the LHS's aggregate-local filters. Empty means "every row, one
+        // instance", the same convention `row_group_ids` uses.
+        vector<idx_t> rhs_row_group_ids;
+
+        // The DeciQL prefix, `WHEN c PER k IF b:`, as the clause was written.
+        {
+            vector<string> parts;
             if (has_when) {
-                when_mask = EvaluateBooleanMask(*constraint->when_condition, chunk_expr_cache, context,
-                                                gstate.data, num_rows);
+                parts.push_back("WHEN " +
+                                RenderDecideSource(*constraint->when_condition, source_fragments, entity_scopes));
             }
+            if (gen_global) {
+                parts.push_back("PER ()");
+            } else if (has_per) {
+                string key;
+                for (idx_t i = 0; i < constraint->per_columns.size(); i++) {
+                    if (i > 0) {
+                        key += ", ";
+                    }
+                    key += RenderDecideSource(*constraint->per_columns[i], source_fragments, entity_scopes);
+                }
+                parts.push_back("PER " + key);
+            }
+            if (constraint->guard) {
+                parts.push_back("IF " + RenderDecideSource(*constraint->guard, source_fragments, entity_scopes));
+            }
+            eval_const.qualifier = parts.empty() ? string() : StringUtil::Join(parts, " ") + ":";
+        }
 
-            auto row_is_included = [&](idx_t row) {
-                if (has_when && !when_mask[row]) {
-                    return false;
-                }
-                if (has_local_filters && !local_row_active[row]) {
-                    return false;
-                }
-                return true;
-            };
-            // The RHS's own reducers are scoped by the constraint's WHEN and PER, but
-            // NOT by the LHS's aggregate-local WHENs — those scope their own reducer
-            // only. `SUM(x) WHEN a <= MIN(b)` must take MIN over every row, not the
-            // a-rows. Kept in the same numbering so group g means the same thing on
-            // both sides.
-            std::function<bool(idx_t)> rhs_row_is_included = [&](idx_t row) {
-                return !has_when || when_mask[row];
-            };
+        vector<bool> when_mask;
+        if (has_when) {
+            when_mask = EvaluateBooleanMask(*constraint->when_condition, chunk_expr_cache, context,
+                                            gstate.data, num_rows);
+        }
+        auto row_is_included = [&](idx_t row) {
+            if (has_when && !when_mask[row]) {
+                return false;
+            }
+            if (has_local_filters && !local_row_active[row]) {
+                return false;
+            }
+            return true;
+        };
+        // The RHS's own reducers are scoped by the constraint's WHEN and PER, but
+        // NOT by the LHS's aggregate-local WHENs -- those scope their own reducer
+        // only. `SUM(WHEN a: x) <= MIN(b)` must take MIN over every row, not the
+        // a-rows. Kept in the same numbering so an instance means the same thing on
+        // both sides.
+        std::function<bool(idx_t)> rhs_row_is_included = [&](idx_t row) {
+            return !has_when || when_mask[row];
+        };
+        if (has_when) {
+            eval_const.when_active = when_mask;
+        }
 
-            if (has_per) {
-                LookupOrBuildPerGroupIds(per_group_cache, constraint->per_columns,
-                                         chunk_expr_cache, context, gstate.data, num_rows,
-                                         /*null_excludes=*/true, row_is_included,
-                                         eval_const.row_group_ids, eval_const.num_groups,
-                                         eval_const.group_labels,
-                                         &rhs_row_is_included, &rhs_row_group_ids);
-                // PER: individual empty groups are skipped silently, but the
-                // aggregate as a whole must see at least one group. Per-row
-                // constraints are exempt — a per-row WHEN matching zero rows is
-                // a valid no-op. Easy-direction MIN/MAX have been rewritten to
-                // per-row form by the optimizer but still count as aggregates
-                // for rejection. Spec: when/done.md → "Empty Row Sets" — reject
-                // when *every* group is empty.
-                if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
-                    RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+        // The BY keys the reduced terms use.
+        idx_t shared_by_scope = DConstants::INVALID_INDEX;
+        bool by_keys_uniform = true, any_by = false, any_global_reduced = false;
+        auto note_by = [&](LinearTermReduction reduction, idx_t by_scope) {
+            if (reduction != LinearTermReduction::SUM) {
+                return;
+            }
+            if (by_scope == DConstants::INVALID_INDEX) {
+                any_global_reduced = true;
+                return;
+            }
+            any_by = true;
+            if (shared_by_scope == DConstants::INVALID_INDEX) {
+                shared_by_scope = by_scope;
+            } else if (shared_by_scope != by_scope) {
+                by_keys_uniform = false;
+            }
+        };
+        for (auto &term : constraint->lhs_terms) {
+            note_by(term.reduction, term.group_scope_idx);
+        }
+        for (auto &term : constraint->bilinear_terms) {
+            note_by(LinearTermReduction::SUM, term.group_scope_idx);
+        }
+        for (auto &group : constraint->quadratic_groups) {
+            note_by(LinearTermReduction::SUM, group.group_scope_idx);
+        }
+        // Reduced-only, no PER, every reducer keyed on the same BY: the instances are
+        // that key's groups.
+        const bool instances_are_by_groups = !gen_key && !gen_global && reduced_only && any_by &&
+                                             by_keys_uniform && !any_global_reduced && !guard_varies_by_row &&
+                                             !has_frame;
+        // One instance per admitted row, with reducers reading their own groups.
+        const bool row_instances =
+            !gen_key && !gen_global &&
+            (mixed || has_frame ||
+             (reduced_only && ((any_by && !instances_are_by_groups) || guard_varies_by_row)));
+        // `PER grp, cap: SUM(x) BY (grp) <= cap`: the generation key refines the one BY
+        // key, so every instance lies inside exactly one BY group and reads that group's
+        // reduction. The rows are generated per BY group instead, with its instances'
+        // bounds reduced onto it below (ReduceAggregateRhsPerGroup: the tightest for an
+        // inequality, every one for `<>`). That is the classic reduced shape, so MIN/MAX,
+        // `<>` and the other lowerings that read the instance's own rows still apply.
+        const bool gen_coarsens_to_by = gen_key && reduced_only && any_by && by_keys_uniform && !any_global_reduced &&
+                                        shared_by_scope != constraint->gen_scope_idx &&
+                                        KeyRefines(entity_scopes[constraint->gen_scope_idx], entity_scopes[shared_by_scope]);
+        // The scope whose groups are the instances, when they are a key's groups.
+        const idx_t instance_scope = gen_key ? (gen_coarsens_to_by ? shared_by_scope : constraint->gen_scope_idx)
+                                             : (instances_are_by_groups ? shared_by_scope : DConstants::INVALID_INDEX);
+
+        if (gen_coarsens_to_by) {
+            // A BY group with no instance (every one of its rows has a NULL generation
+            // key, or none is admitted) generates nothing.
+            auto &by_mapping = entity_mappings[shared_by_scope];
+            auto &gen_mapping = entity_mappings[constraint->gen_scope_idx];
+            auto gen_key_is_null = [&](idx_t row) {
+                idx_t entity = gen_mapping.row_to_entity[row];
+                return entity < gen_mapping.entity_key_has_null.size() && gen_mapping.entity_key_has_null[entity];
+            };
+            vector<bool> group_has_instance(by_mapping.num_entities, false);
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (rhs_row_is_included(row) && !gen_key_is_null(row)) {
+                    group_has_instance[by_mapping.row_to_entity[row]] = true;
                 }
-            } else {
-                eval_const.row_group_ids.resize(num_rows);
-                rhs_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-                // WHEN and/or aggregate-local WHEN (no PER): one group (group 0) for matching rows
-                idx_t included_rows = 0;
-                for (idx_t row = 0; row < num_rows; row++) {
-                    bool inc = row_is_included(row);
-                    eval_const.row_group_ids[row] = inc ? 0 : DConstants::INVALID_INDEX;
-                    if (inc) included_rows++;
-                    if (rhs_row_is_included(row)) {
-                        rhs_row_group_ids[row] = 0;
+            }
+            std::function<bool(idx_t)> lhs_filter = [&](idx_t row) {
+                return row_is_included(row) && group_has_instance[by_mapping.row_to_entity[row]];
+            };
+            std::function<bool(idx_t)> rhs_filter = [&](idx_t row) {
+                return rhs_row_is_included(row) && !gen_key_is_null(row);
+            };
+            BuildScopeGroupIds(by_mapping, num_rows, /*null_excludes=*/false, lhs_filter,
+                               eval_const.row_group_ids, eval_const.num_groups, &eval_const.group_labels,
+                               &rhs_filter, &rhs_row_group_ids);
+            RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+        } else if (gen_key) {
+            BuildScopeGroupIds(entity_mappings[constraint->gen_scope_idx], num_rows,
+                               /*null_excludes=*/true, row_is_included,
+                               eval_const.row_group_ids, eval_const.num_groups,
+                               &eval_const.group_labels, &rhs_row_is_included, &rhs_row_group_ids);
+            // PER: individual empty instances are skipped silently, but a reduced body
+            // must see at least one. Per-row bodies are exempt -- a per-row WHEN
+            // matching zero rows is a valid no-op. Easy-direction MIN/MAX have been
+            // rewritten to per-row form but still count as reduced for rejection.
+            if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
+                RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+            }
+        } else if (instances_are_by_groups) {
+            BuildScopeGroupIds(entity_mappings[shared_by_scope], num_rows,
+                               /*null_excludes=*/false, row_is_included,
+                               eval_const.row_group_ids, eval_const.num_groups,
+                               &eval_const.group_labels, &rhs_row_is_included, &rhs_row_group_ids);
+            RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+        } else if (row_instances) {
+            eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+            rhs_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+            eval_const.num_groups = 0;
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (!rhs_row_is_included(row)) {
+                    continue;
+                }
+                if (reduced_only && !row_is_included(row)) {
+                    continue;
+                }
+                eval_const.row_group_ids[row] = eval_const.num_groups;
+                rhs_row_group_ids[row] = eval_const.num_groups;
+                eval_const.num_groups++;
+            }
+            if (reduced_only) {
+                RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+            }
+        } else if (gen_global && !reduced_only) {
+            // One instance for the query, read off one admitted row.
+            eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+            rhs_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+            eval_const.num_groups = 0;
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (row_is_included(row)) {
+                    eval_const.row_group_ids[row] = 0;
+                    rhs_row_group_ids[row] = 0;
+                    eval_const.num_groups = 1;
+                    break;
+                }
+            }
+        } else if (has_when || gen_global || has_local_filters) {
+            eval_const.row_group_ids.resize(num_rows);
+            rhs_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+            // WHEN and/or aggregate-local WHEN (no PER): one instance for the matching rows
+            idx_t included_rows = 0;
+            for (idx_t row = 0; row < num_rows; row++) {
+                bool inc = row_is_included(row);
+                eval_const.row_group_ids[row] = inc ? 0 : DConstants::INVALID_INDEX;
+                if (inc) included_rows++;
+                if (rhs_row_is_included(row)) {
+                    rhs_row_group_ids[row] = 0;
+                }
+            }
+            eval_const.num_groups = 1;
+            if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
+                RejectEmptyAggregate(included_rows, "aggregate", "constraint");
+            }
+        }
+
+        // Each term's rows for an instance.
+        {
+            auto resolve = [&](LinearTermReduction reduction, idx_t by_scope) {
+                EvaluatedConstraint::TermGrouping grouping;
+                if (reduction != LinearTermReduction::SUM) {
+                    grouping.kind = EvaluatedConstraint::TermGroupKind::DIRECT;
+                } else if (gen_global) {
+                    grouping.kind = EvaluatedConstraint::TermGroupKind::CLASS;
+                } else if (row_instances) {
+                    grouping.kind = by_scope == DConstants::INVALID_INDEX ? EvaluatedConstraint::TermGroupKind::ALL
+                                                                          : EvaluatedConstraint::TermGroupKind::KEYED;
+                } else if (by_scope == instance_scope) {
+                    grouping.kind = EvaluatedConstraint::TermGroupKind::CLASS;
+                } else if (by_scope == DConstants::INVALID_INDEX) {
+                    grouping.kind = instance_scope == DConstants::INVALID_INDEX
+                                        ? EvaluatedConstraint::TermGroupKind::CLASS
+                                        : EvaluatedConstraint::TermGroupKind::ALL;
+                } else {
+                    grouping.kind = EvaluatedConstraint::TermGroupKind::KEYED;
+                }
+                if (grouping.kind == EvaluatedConstraint::TermGroupKind::KEYED) {
+                    for (idx_t p = 0; p < eval_const.partitions.size(); p++) {
+                        if (eval_const.partitions[p].scope_idx == by_scope) {
+                            grouping.partition = p;
+                        }
+                    }
+                    if (grouping.partition == DConstants::INVALID_INDEX) {
+                        EvaluatedConstraint::KeyedPartition partition;
+                        partition.scope_idx = by_scope;
+                        BuildScopeGroupIds(entity_mappings[by_scope], num_rows, /*null_excludes=*/false,
+                                           rhs_row_is_included, partition.row_group_ids, partition.num_groups,
+                                           /*out_group_labels=*/nullptr);
+                        partition.class_to_group.assign(eval_const.num_groups, DConstants::INVALID_INDEX);
+                        for (idx_t row = 0; row < num_rows; row++) {
+                            idx_t instance = eval_const.row_group_ids[row];
+                            if (instance == DConstants::INVALID_INDEX ||
+                                partition.class_to_group[instance] != DConstants::INVALID_INDEX) {
+                                continue;
+                            }
+                            partition.class_to_group[instance] = partition.row_group_ids[row];
+                        }
+                        grouping.partition = eval_const.partitions.size();
+                        eval_const.partitions.push_back(std::move(partition));
                     }
                 }
-                eval_const.num_groups = 1;
-                if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
-                    RejectEmptyAggregate(included_rows, "aggregate", "constraint");
+                return grouping;
+            };
+            // A frame's rows per instance, built once per distinct frame the clause reads.
+            vector<idx_t> representative_rows;
+            auto resolve_frame = [&](idx_t frame_idx) -> idx_t {
+                for (idx_t f = 0; f < eval_const.frame_rows.size(); f++) {
+                    if (eval_const.frame_rows[f].frame_idx == frame_idx) {
+                        return f;
+                    }
                 }
+                if (representative_rows.empty()) {
+                    representative_rows.assign(eval_const.num_groups, DConstants::INVALID_INDEX);
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        idx_t g = row < eval_const.row_group_ids.size() ? eval_const.row_group_ids[row]
+                                                                         : DConstants::INVALID_INDEX;
+                        if (g != DConstants::INVALID_INDEX && representative_rows[g] == DConstants::INVALID_INDEX) {
+                            representative_rows[g] = row;
+                        }
+                    }
+                    eval_const.instance_dropped.assign(eval_const.num_groups, false);
+                }
+                if (frame_idx >= frames.size()) {
+                    throw InternalException("DECIDE frame %llu has no descriptor", frame_idx);
+                }
+                EvaluatedConstraint::FrameRows rows;
+                rows.frame_idx = frame_idx;
+                BuildFrameRows(context, gstate, chunk_expr_cache, frames[frame_idx], entity_mappings, num_rows,
+                               representative_rows, rhs_row_is_included, rows, eval_const.instance_dropped);
+                eval_const.frame_rows.push_back(std::move(rows));
+                return eval_const.frame_rows.size() - 1;
+            };
+            bool general = false;
+            for (auto &term : constraint->lhs_terms) {
+                EvaluatedConstraint::TermGrouping grouping;
+                if (term.frame_idx != DConstants::INVALID_INDEX) {
+                    grouping.kind = EvaluatedConstraint::TermGroupKind::FRAME;
+                    grouping.frame = resolve_frame(term.frame_idx);
+                    grouping.frame_fill = term.frame_fill;
+                } else {
+                    grouping = resolve(term.reduction, term.group_scope_idx);
+                    // A direct term of a reduced-only instance is what the classic path
+                    // already reads once per instance; only a term reading rows outside its
+                    // instance makes the grouping general.
+                    if (grouping.kind == EvaluatedConstraint::TermGroupKind::DIRECT && !mixed) {
+                        grouping.kind = EvaluatedConstraint::TermGroupKind::CLASS;
+                    }
+                }
+                general |= grouping.kind != EvaluatedConstraint::TermGroupKind::CLASS;
+                eval_const.term_groupings.push_back(grouping);
+            }
+            if (general) {
+                bool unsupported = constraint->has_bilinear || constraint->has_quadratic ||
+                                   constraint->minmax_clause_idx != DConstants::INVALID_INDEX ||
+                                   constraint->ne_clause_idx != DConstants::INVALID_INDEX ||
+                                   constraint->was_minmax_easy || constraint->abs_aux_idx != DConstants::INVALID_INDEX;
+                for (auto &term : constraint->lhs_terms) {
+                    unsupported |= term.reduction == LinearTermReduction::SUM &&
+                                   term.qualifier_scope_idx != DConstants::INVALID_INDEX;
+                }
+                if (unsupported) {
+                    throw NotImplementedException(
+                        "DECIDE: a reducer whose BY key differs from the constraint's generation is supported "
+                        "for SUM and AVG over linear terms only; MIN/MAX, <>, ABS, quadratic, bilinear and "
+                        "PER-keyed reducers still need BY to match PER.");
+                }
+            } else {
+                eval_const.term_groupings.clear();
+                eval_const.partitions.clear();
             }
         }
 
@@ -2165,12 +2626,39 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
             std::unordered_map<const Expression *, idx_t> agg_substitutions;
             vector<vector<double>> reducer_values;
+            // Each bound-side reducer reads its own BY group: the instance's rows when
+            // its BY key is the generation key, one global group for `BY ()`, and the
+            // key's groups otherwise. `reducer_maps[i]` is that reducer's row → group.
+            vector<vector<idx_t>> reducer_maps;
             const idx_t data_columns = gstate.data.ColumnCount();
             for (idx_t i = 0; i < rhs_reducers.size(); i++) {
                 auto &agg = rhs_reducers[i]->Cast<BoundAggregateExpression>();
+                idx_t by_scope = DConstants::INVALID_INDEX;
+                TryParseReduceByTag(agg.GetAlias(), by_scope);
+                vector<idx_t> reducer_map;
+                idx_t reducer_groups = 0;
+                if (by_scope == DConstants::INVALID_INDEX && instance_scope == DConstants::INVALID_INDEX && !row_instances) {
+                    reducer_map = rhs_row_group_ids;
+                    reducer_groups = eval_const.num_groups;
+                } else if (by_scope == DConstants::INVALID_INDEX) {
+                    reducer_map.assign(num_rows, DConstants::INVALID_INDEX);
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        if (rhs_row_is_included(row)) {
+                            reducer_map[row] = 0;
+                        }
+                    }
+                    reducer_groups = 1;
+                } else if (by_scope == instance_scope) {
+                    reducer_map = rhs_row_group_ids;
+                    reducer_groups = eval_const.num_groups;
+                } else {
+                    BuildScopeGroupIds(entity_mappings[by_scope], num_rows, /*null_excludes=*/false,
+                                       rhs_row_is_included, reducer_map, reducer_groups, /*out_group_labels=*/nullptr);
+                }
                 reducer_values.push_back(EvaluateRhsReducerPerGroup(
-                    agg, rhs_row_group_ids, eval_const.num_groups, entity_mappings,
+                    agg, reducer_map, reducer_groups, entity_mappings,
                     chunk_expr_cache, context, gstate.data, num_rows));
+                reducer_maps.push_back(std::move(reducer_map));
                 agg_substitutions.emplace(rhs_reducers[i], data_columns + i);
             }
 
@@ -2219,9 +2707,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                         auto out = FlatVector::GetData<double>(rhs_chunk.data[data_columns + i]);
                         for (idx_t row = 0; row < scan_chunk.size(); row++) {
                             idx_t abs_row = scanned + row;
-                            idx_t g = rhs_row_group_ids.empty()
-                                          ? 0
-                                          : rhs_row_group_ids[abs_row];
+                            auto &reducer_map = reducer_maps[i];
+                            idx_t g = reducer_map.empty() ? 0 : reducer_map[abs_row];
                             // A row in no group contributes to no constraint; its value
                             // is never read, so any finite filler will do.
                             out[row] = (g == DConstants::INVALID_INDEX || g >= vals.size())
@@ -2303,9 +2790,29 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                        !constraint->has_quadratic;
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
             if (term_filters[term_idx].avg_scale) {
+                // AVG divides by the rows the term reduces over for an instance.
+                const vector<idx_t> *scale_map = &eval_const.row_group_ids;
+                idx_t scale_groups = eval_const.num_groups;
+                vector<idx_t> all_active_map;
+                if (term_idx < eval_const.term_groupings.size()) {
+                    auto &grouping = eval_const.term_groupings[term_idx];
+                    if (grouping.kind == EvaluatedConstraint::TermGroupKind::KEYED) {
+                        scale_map = &eval_const.partitions[grouping.partition].row_group_ids;
+                        scale_groups = eval_const.partitions[grouping.partition].num_groups;
+                    } else if (grouping.kind == EvaluatedConstraint::TermGroupKind::ALL) {
+                        all_active_map.assign(num_rows, DConstants::INVALID_INDEX);
+                        for (idx_t row = 0; row < num_rows; row++) {
+                            if (eval_const.when_active.empty() || eval_const.when_active[row]) {
+                                all_active_map[row] = 0;
+                            }
+                        }
+                        scale_map = &all_active_map;
+                        scale_groups = 1;
+                    }
+                }
                 ScaleAvgRows(eval_const.row_coefficients[term_idx], term_filters[term_idx].has_filter,
                             term_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-                            eval_const.row_group_ids, eval_const.num_groups);
+                            *scale_map, scale_groups);
             } else {
                 all_avg = false;
             }
@@ -2434,11 +2941,34 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
     }
 }
 
+void PhysicalDecide::EvaluateObjectiveStages(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                             ChunkExprCache &chunk_expr_cache,
+                                             const vector<EntityMapping> &entity_mappings) const {
+    for (auto &stage : prepared.objective_tail) {
+        // A stage is an objective in its own linear form: evaluate it as the objective,
+        // take the columns that produced, and leave the first objective's slot clean.
+        gstate.objective = stage.objective.get();
+        gstate.evaluated_objective_coefficients.clear();
+        gstate.objective_variable_indices.clear();
+        gstate.objective_term_reductions.clear();
+        EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, entity_mappings);
+        SolverInput::ObjectiveStage evaluated;
+        evaluated.sense = stage.sense;
+        evaluated.coefficients = std::move(gstate.evaluated_objective_coefficients);
+        evaluated.variable_indices = std::move(gstate.objective_variable_indices);
+        evaluated.term_reductions = std::move(gstate.objective_term_reductions);
+        gstate.objective_stages.push_back(std::move(evaluated));
+        gstate.evaluated_objective_coefficients.clear();
+        gstate.objective_variable_indices.clear();
+        gstate.objective_term_reductions.clear();
+    }
+    gstate.objective = prepared.objective.get();
+}
+
 PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext &context,
                                                                    DecideGlobalSinkState &gstate,
                                                                    idx_t num_rows,
                                                                    ChunkExprCache &chunk_expr_cache,
-                                                                   PerGroupCache &per_group_cache,
                                                                    const vector<EntityMapping> &entity_mappings) const {
     // 2. Evaluate objective
     vector<TermFilterState> obj_linear_term_filters;
@@ -2683,7 +3213,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
     // belongs to this phase and not to the formulation pass — the grouping a widened
     // variable bound produces is the same grouping. It runs last here because the
     // "does this row carry a term at all" test below reads the filter masks settled above.
-    if (gstate.objective && !gstate.objective->per_columns.empty()) {
+    if (gstate.objective && gstate.objective->per_scope_idx != DConstants::INVALID_INDEX) {
         bool objective_has_local_filters = false;
         bool objective_has_unfiltered_part = false;
         for (auto &f : result.linear_filters) {
@@ -2727,12 +3257,10 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
             return true;
         };
 
-        vector<string> obj_group_labels; // unused: objective groups are not diagnosed by clause key
-        LookupOrBuildPerGroupIds(per_group_cache, gstate.objective->per_columns,
-                                 chunk_expr_cache, context, gstate.data, num_rows,
-                                 /*null_excludes=*/true, obj_row_is_included,
-                                 result.objective_row_group_ids,
-                                 result.objective_num_groups, obj_group_labels);
+        BuildScopeGroupIds(entity_mappings[gstate.objective->per_scope_idx], num_rows,
+                           /*null_excludes=*/true, obj_row_is_included,
+                           result.objective_row_group_ids, result.objective_num_groups,
+                           /*out_group_labels=*/nullptr);
     }
 
     return result;
@@ -3041,6 +3569,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
     solver_input.objective_term_reductions = std::move(gstate.objective_term_reductions);
     solver_input.sense = decide_sense;
+    solver_input.objective_stages = std::move(gstate.objective_stages);
 
     // Quadratic objective (if present)
     if (gstate.has_quadratic_objective) {
@@ -3366,6 +3895,13 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // No backend is consulted at execution time, and nothing here re-decides a
     // formulation: a pass that answered differently from the rewrites would run a model
     // on a solver it was not built for.
+    // `IF b:` guards: the switching binaries are allocated here; the rows they switch
+    // are stated by SolverModel::Build, which reads the backend's answer off the input.
+    solver_input.native_indicators = use_native_constructs.not_equal;
+    solver_input.decide_variable_names = decide_var_names;
+    LinearizeGuards(solver_input, var_indexer, decide_var_names);
+    var_indexer.total_vars = var_indexer.global_block_start + solver_input.num_global_vars;
+
     LowerDecideConstructs(solver_input, var_indexer, box, decide_var_names, use_native_constructs);
 
 #ifdef DEBUG
@@ -4235,6 +4771,35 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
                     solution_value = gstate.ilp_solution[solution_idx];
                 }
                 output_data[row_in_chunk] = solution_value;
+            }
+
+        } else if (var_type == LogicalType::VARCHAR) {
+            // A TEXT decision: the value whose one-hot indicator the solver set.
+            const DecideTextDomain *domain = nullptr;
+            for (auto &candidate : text_domains) {
+                if (candidate.variable_index == decide_var_idx) {
+                    domain = &candidate;
+                }
+            }
+            if (!domain) {
+                throw InternalException("TEXT decision '%s' has no one-hot domain to read back", decide_var.GetName());
+            }
+            auto &validity = FlatVector::Validity(output_vector);
+            for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+                idx_t global_row = source_state.current_row_offset + row_in_chunk;
+                bool chosen = false;
+                for (idx_t i = 0; i < domain->indicator_indices.size(); i++) {
+                    idx_t solution_idx = gstate.var_indexer.Get(domain->indicator_indices[i], global_row);
+                    if (solution_idx < gstate.ilp_solution.size() && gstate.ilp_solution[solution_idx] >= 0.5) {
+                        FlatVector::GetData<string_t>(output_vector)[row_in_chunk] =
+                            StringVector::AddString(output_vector, domain->values[i]);
+                        chosen = true;
+                        break;
+                    }
+                }
+                if (!chosen) {
+                    validity.SetInvalid(row_in_chunk);
+                }
             }
 
         } else {

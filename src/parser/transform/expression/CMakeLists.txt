@@ -12,6 +12,7 @@ add_library_unity(
   transform_expression.cpp
   transform_function.cpp
   transform_grouping_function.cpp
+  transform_decide.cpp
   transform_lambda.cpp
   transform_interval.cpp
   transform_is_null.cpp

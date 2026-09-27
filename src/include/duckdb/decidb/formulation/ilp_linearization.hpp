@@ -160,6 +160,12 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
 void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
                        const vector<string> &var_names);
 
+//! `IF b:` guards: decide how each guarded clause's rows are switched and allocate
+//! the binaries that needs (see linearization_guard.cpp). The conditional rows
+//! themselves are stated by SolverModel::Build, natively or as Big-M rows per
+//! `SolverInput::native_indicators`, since the instances exist only there.
+void LinearizeGuards(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names);
+
 //! The one place a construct is lowered, and the last pass of stage 06.
 //!
 //! Every construct site above emits the SEMANTIC form and nothing else: a `<>` becomes a

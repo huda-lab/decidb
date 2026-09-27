@@ -412,7 +412,7 @@ def test_decision_factor_rejected(decidb_cli):
     reducer's body."""
     decidb_cli.assert_error("""
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), PER (): s(INT)
         SUCH THAT x <= 5 AND s <= 3 AND s * SUM(x) <= 12
         MAXIMIZE SUM(x)
     """, match=r"'s' is a decision, so it cannot multiply SUM\(x\)")
@@ -571,7 +571,7 @@ def test_decision_factor_in_objective_rejected(decidb_cli):
     """
     decidb_cli.assert_error("""
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), PER (): s(INT)
         SUCH THAT x <= 5 AND s <= 3 AND SUM(x) <= 4
         MAXIMIZE s * SUM(x)
     """, match=r"'s' is a decision, so it cannot multiply SUM\(x\)")

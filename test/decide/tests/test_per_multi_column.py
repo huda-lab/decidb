@@ -33,7 +33,7 @@ def test_multi_column_per_basic(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
+        SUCH THAT PER l_returnflag, l_linestatus: SUM(x) BY (l_returnflag, l_linestatus) <= 3
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -84,13 +84,13 @@ def test_multi_column_per_single_column_in_parens(
     sql_parens = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER (s_nationkey)
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     sql_no_parens = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER s_nationkey
+        SUCH THAT PER s_nationkey: SUM(x) BY (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
@@ -152,7 +152,7 @@ def test_multi_column_per_with_when_on_different_column(
                l_extendedprice, l_quantity, l_discount, x
         FROM lineitem WHERE l_orderkey < 200
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 20 WHEN l_discount > 0.05 PER (l_returnflag, l_linestatus)
+        SUCH THAT WHEN l_discount > 0.05 PER l_returnflag, l_linestatus: SUM(x * l_quantity) BY (l_returnflag, l_linestatus) <= 20
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -215,7 +215,7 @@ def test_multi_column_per_when_overlaps_per_column(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 200
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 WHEN l_returnflag = 'R' PER (l_returnflag, l_linestatus)
+        SUCH THAT WHEN l_returnflag = 'R' PER l_returnflag, l_linestatus: SUM(x) BY (l_returnflag, l_linestatus) <= 2
             AND SUM(x) <= 50
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -277,7 +277,7 @@ def test_multi_column_per_when_eliminates_all_in_group(
                l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 WHEN l_quantity > 40 PER (l_returnflag, l_linestatus)
+        SUCH THAT WHEN l_quantity > 40 PER l_returnflag, l_linestatus: SUM(x) BY (l_returnflag, l_linestatus) <= 2
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -338,7 +338,7 @@ def test_multi_column_per_more_groups(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER l_returnflag
+        SUCH THAT PER l_returnflag: SUM(x) BY (l_returnflag) <= 3
         MAXIMIZE SUM(x * l_extendedprice)
     """
     sql_multi = """
@@ -346,7 +346,7 @@ def test_multi_column_per_more_groups(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
+        SUCH THAT PER l_returnflag, l_linestatus: SUM(x) BY (l_returnflag, l_linestatus) <= 3
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -407,7 +407,7 @@ def test_multi_column_per_three_columns(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 200
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER (l_returnflag, l_linestatus, l_shipmode)
+        SUCH THAT PER l_returnflag, l_linestatus, l_shipmode: SUM(x) BY (l_returnflag, l_linestatus, l_shipmode) <= 2
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -461,7 +461,7 @@ def test_multi_column_per_with_integer_variable(
                l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(INT)
-        SUCH THAT SUM(x * l_quantity) <= 100 PER (l_returnflag, l_linestatus)
+        SUCH THAT PER l_returnflag, l_linestatus: SUM(x * l_quantity) BY (l_returnflag, l_linestatus) <= 100
             AND x <= 3
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -513,7 +513,7 @@ def test_unparenthesized_multi_column_per_rejected_with_hint(decidb_cli):
     sql = """
         SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER region, yr
+        SUCH THAT PER region: SUM(x) BY (region) >= 1 , yr
         MAXIMIZE SUM(x)
     """
     decidb_cli.assert_error(
@@ -530,7 +530,7 @@ def test_parenthesized_multi_column_per_is_the_supported_form(decidb_cli):
     sql = """
         SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER (region, yr)
+        SUCH THAT PER region, yr: SUM(x) BY (region, yr) >= 1
         MAXIMIZE SUM(x)
     """
     rows, cols = decidb_cli.execute(sql)

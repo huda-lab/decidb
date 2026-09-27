@@ -78,7 +78,7 @@
       {
         "id": 209,
         "name": "decide_variables",
-        "type": "vector<ParsedExpression*>"
+        "type": "vector<DecideDeclaration>"
       },
       {
         "id": 210,
@@ -87,13 +87,8 @@
       },
       {
         "id": 211,
-        "name": "decide_sense",
-        "type": "DecideSense"
-      },
-      {
-        "id": 212,
-        "name": "decide_objective",
-        "type": "ParsedExpression*"
+        "name": "decide_objectives",
+        "type": "vector<DecideObjectiveClause>"
       }
     ]
   },

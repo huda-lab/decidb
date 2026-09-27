@@ -367,7 +367,7 @@ def test_sum_body_data_only_offset_outer_when(decidb_cli):
                    (3, 100.0, false, 30.0)
         ) t(id, cost, w, value)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x + cost) <= 9 WHEN w
+        SUCH THAT WHEN w: SUM(x + cost) <= 9
         MAXIMIZE SUM(x * value)
     """)
     assert _picked_ids(rows, cols) == {2, 3}
@@ -389,7 +389,7 @@ def test_sum_body_data_only_offset_per_group(decidb_cli):
                    (4, 'B', 1.0, 6.0)
         ) t(id, grp, cost, value)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x + cost) <= 6 PER grp
+        SUCH THAT PER grp: SUM(x + cost) BY (grp) <= 6
         MAXIMIZE SUM(x * value)
     """)
     assert _picked_ids(rows, cols) == {2, 3, 4}

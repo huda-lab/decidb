@@ -49,7 +49,7 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
                l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * l_quantity) >= 30 PER l_returnflag
+        SUCH THAT PER l_returnflag: MAX(x * l_quantity) BY (l_returnflag) >= 30
         MINIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -153,7 +153,7 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(INT)
         SUCH THAT x >= 1 AND x <= 5
-            AND MIN(x * l_quantity) <= 20 PER l_returnflag
+            AND PER l_returnflag: MIN(x * l_quantity) BY (l_returnflag) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -263,7 +263,7 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         FROM lineitem WHERE l_orderkey <= 100
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 5
-            AND MAX(x * l_quantity) = 30 PER l_returnflag
+            AND PER l_returnflag: MAX(x * l_quantity) BY (l_returnflag) = 30
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -378,7 +378,7 @@ def test_per_abs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         FROM data
         DECIDE x(REAL)
         SUCH THAT x <= 50
-            AND SUM(ABS(x - target)) <= 5 PER grp
+            AND PER grp: SUM(ABS(x - target)) BY (grp) <= 5
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -485,7 +485,7 @@ def test_per_multi_variable(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT id, grp, w, x, y
         FROM data
         DECIDE x(BOOL), y(INT)
-        SUCH THAT SUM(x * w) <= 12 PER grp
+        SUCH THAT PER grp: SUM(x * w) BY (grp) <= 12
             AND y <= 3
             AND SUM(y) <= 8
         MAXIMIZE SUM(x * w + y)
@@ -602,7 +602,7 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
         )
         SELECT id, grp, w, v, x, y FROM data
         DECIDE x(BOOL), y(INT)
-        SUCH THAT y <= 5 AND SUM(x * w + y * v) <= 18 WHEN active PER grp
+        SUCH THAT y <= 5 AND WHEN active PER grp: SUM(x * w + y * v) BY (grp) <= 18
         MAXIMIZE SUM(x * w + y * v)
     """
     t0 = time.perf_counter()
@@ -712,7 +712,7 @@ def test_qp_objective_per_constraint(
         SELECT id, grp, target, ROUND(x::DOUBLE, 6) AS x
         FROM data
         DECIDE x(REAL)
-        SUCH THAT x >= 0 AND x <= 100 AND SUM(x) >= 5 PER grp
+        SUCH THAT x >= 0 AND x <= 100 AND PER grp: SUM(x) BY (grp) >= 5
         MINIMIZE SUM(POWER(x - target, 2))
     """
     t0 = time.perf_counter()
@@ -802,7 +802,7 @@ def test_per_single_row_groups(decidb_cli, oracle_solver, perf_tracker):
             VALUES (1, 'A', 100.0), (2, 'B', 50.0), (3, 'C', 75.0)
         ) t(id, grp, val)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 60 PER grp
+        SUCH THAT PER grp: SUM(x * val) BY (grp) <= 60
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
@@ -869,7 +869,7 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
                    (3, 'B', 5.0), (4, 'B', 20.0)
         ) t(id, grp, val)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 8 PER grp
+        SUCH THAT PER grp: SUM(x * val) BY (grp) <= 8
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -944,7 +944,7 @@ def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
                    (5, NULL, 12.0, false)
         ) t(id, grp, val, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 10 WHEN active PER grp
+        SUCH THAT WHEN active PER grp: SUM(x * val) BY (grp) <= 10
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()

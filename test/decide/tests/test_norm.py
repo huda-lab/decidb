@@ -121,9 +121,9 @@ def test_norm_unsupported_order(decidb_cli):
 def test_norm_with_when_objective(decidb_cli):
     """norm(e,1) WHEN cond  ==  SUM(ABS(e)) WHEN cond (penalize one group only)."""
     r1, c1 = decidb_cli.execute(
-        _BASE.format(obj="norm(new_qty - l_quantity, 1) WHEN l_orderkey = 1"))
+        _BASE.format(obj="norm(WHEN l_orderkey = 1: new_qty - l_quantity, 1)"))
     r2, c2 = decidb_cli.execute(
-        _BASE.format(obj="SUM(ABS(new_qty - l_quantity)) WHEN l_orderkey = 1"))
+        _BASE.format(obj="SUM(WHEN l_orderkey = 1: ABS(new_qty - l_quantity))"))
 
     def val(rows, cols):
         ok, nq, lq = cols.index("l_orderkey"), cols.index("new_qty"), cols.index("l_quantity")
@@ -139,7 +139,7 @@ def test_norm_with_per_constraint(decidb_cli):
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem WHERE l_orderkey <= 3
         DECIDE new_qty(REAL)
-        SUCH THAT new_qty >= 1 AND norm(new_qty - l_quantity, 1) <= 5 PER l_orderkey
+        SUCH THAT new_qty >= 1 AND PER l_orderkey: norm(new_qty - l_quantity, 1) BY (l_orderkey) <= 5
         MINIMIZE SUM(new_qty)
     """
     plain_sql = norm_sql.replace("norm(new_qty - l_quantity, 1) <= 5",

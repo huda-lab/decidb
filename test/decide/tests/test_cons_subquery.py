@@ -94,7 +94,7 @@ def test_per_constraint_with_subquery_rhs(
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey <= 5
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_extendedprice) <= (SELECT 30000) PER l_orderkey
+        SUCH THAT PER l_orderkey: SUM(x * l_extendedprice) BY (l_orderkey) <= (SELECT 30000)
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()

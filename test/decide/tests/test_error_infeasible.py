@@ -106,7 +106,7 @@ class TestInfeasibleModels:
             SELECT l_orderkey, l_quantity, l_returnflag, x
             FROM lineitem WHERE l_orderkey < 10
             DECIDE x(BOOL)
-            SUCH THAT x <= 0 WHEN l_quantity > 0
+            SUCH THAT WHEN l_quantity > 0: x <= 0
                 AND SUM(x) >= 1
             MAXIMIZE SUM(x * l_quantity)
         """, match=r"(?i)(infeasible|WHEN conditions)")
@@ -178,7 +178,7 @@ class TestInfeasibleModels:
                 VALUES (1, 'a', 500), (2, 'a', 350)
             ) t(id, grp, cap)
             DECIDE x(INT)
-            SUCH THAT SUM(x) = cap PER grp
+            SUCH THAT PER grp, cap: SUM(x) BY (grp) = cap
             MAXIMIZE SUM(x)
         """, match=r"(?i)cannot hold two different values.*infeasible")
 

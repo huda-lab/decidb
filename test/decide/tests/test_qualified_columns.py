@@ -139,7 +139,7 @@ def test_qualified_decide_variable_with_qualified_column(decidb_cli, duckdb_conn
         SELECT n1.n_nationkey, keep
         FROM nation n1 JOIN nation n2 ON n1.n_regionkey = n2.n_regionkey
         WHERE n2.n_nationkey = 1
-        DECIDE n1.keep(BOOL)
+        DECIDE PER n1: keep(BOOL)
         SUCH THAT SUM(n1.keep * n2.n_nationkey) <= 2
         MAXIMIZE SUM(keep * n1.n_nationkey)
     """

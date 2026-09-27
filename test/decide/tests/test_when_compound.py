@@ -31,7 +31,7 @@ def test_when_compound_and_aggregate(decidb_cli, duckdb_conn, oracle_solver, per
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN (l_returnflag = 'R' AND l_linestatus = 'F')
+        SUCH THAT WHEN (l_returnflag = 'R' AND l_linestatus = 'F'): SUM(x * l_quantity) <= 50
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -96,7 +96,7 @@ def test_when_compound_or_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN (l_returnflag = 'R' OR l_returnflag = 'A')
+        SUCH THAT WHEN (l_returnflag = 'R' OR l_returnflag = 'A'): SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -161,7 +161,7 @@ def test_when_compound_and_perrow(decidb_cli, duckdb_conn, oracle_solver, perf_t
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x <= 0 WHEN (l_returnflag = 'N' AND l_quantity > 30)
+        SUCH THAT WHEN (l_returnflag = 'N' AND l_quantity > 30): x <= 0
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -227,7 +227,7 @@ def test_when_compound_and_objective(decidb_cli, duckdb_conn, oracle_solver, per
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice) WHEN (l_returnflag = 'R' AND l_discount >= 0.06)
+        MAXIMIZE SUM(WHEN (l_returnflag = 'R' AND l_discount >= 0.06): x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -298,7 +298,7 @@ def test_when_compound_mixed_types(decidb_cli, duckdb_conn, oracle_solver, perf_
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 80 WHEN (l_returnflag = 'A' AND l_quantity <= 25)
+        SUCH THAT WHEN (l_returnflag = 'A' AND l_quantity <= 25): SUM(x * l_quantity) <= 80
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -363,7 +363,7 @@ def test_when_compound_or_perrow(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x = 1 WHEN (l_discount >= 0.09 OR l_quantity < 3)
+        SUCH THAT WHEN (l_discount >= 0.09 OR l_quantity < 3): x = 1
             AND SUM(x * l_quantity) <= 5000
         MAXIMIZE SUM(x * l_extendedprice)
     """

@@ -10,6 +10,7 @@
 
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/to_string.hpp"
+#include "duckdb/common/vector.hpp"
 
 namespace duckdb {
 
@@ -21,6 +22,17 @@ enum class DecideSense : uint8_t {
     MINIMIZE = 1,
     FEASIBILITY = 2
 };
+
+//! The domain of a DECIDE declaration, as written: `x(INT)`, `x(TEXT in [...])`.
+//!   INT / REAL / BOOL     — the classic domains
+//!   SEMIREAL / SEMIINT    — {0} ∪ [lo, hi]; the bounds are mandatory
+//!   TEXT                  — one of a finite set of strings (one-hot at the solver)
+enum class DecideDomain : uint8_t { INT = 0, REAL = 1, BOOL = 2, SEMIREAL = 3, SEMIINT = 4, TEXT = 5 };
+
+//! How many instances a declaration, a constraint or a reducer term generates
+//! (DeciQL "Key", spec §5). ROW is the default (one per surviving row), GLOBAL is
+//! `PER ()` (exactly one), KEY is `PER k1, k2, ...` (one per distinct key value).
+enum class DecideScopeKind : uint8_t { ROW = 0, GLOBAL = 1, KEY = 2 };
 
 enum class DecideExpression : uint8_t {
     INVALID = 0,
@@ -41,6 +53,19 @@ enum class DecideVarScope : uint8_t {
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
 //! scope from its entity index.
+//! A `TEXT IN [...]` decision's one-hot encoding: `values[i]` is chosen exactly when
+//! the hidden BOOL decision `indicator_indices[i]` is 1. The binder declares the
+//! indicators beside the decision (same scope) and states the sum-to-one row; the
+//! readback maps the chosen indicator back to its string.
+struct DecideTextDomain {
+    idx_t variable_index = DConstants::INVALID_INDEX;
+    vector<string> values;
+    vector<idx_t> indicator_indices;
+
+    void Serialize(Serializer &serializer) const;
+    static DecideTextDomain Deserialize(Deserializer &deserializer);
+};
+
 struct DecideVarScopeInfo {
     DecideVarScope scope = DecideVarScope::ROW;
     //! Index into entity_scopes / entity_mappings. Meaningful only when
@@ -180,26 +205,70 @@ inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, s
 //! Tag used to identify WHEN-conditional constraints throughout the pipeline
 static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
 
-//! Tag used to identify PER-grouped constraints throughout the pipeline
+//! Tag used to identify PER-generated constraints throughout the pipeline. Child 0 is
+//! the constraint; children 1..N are the generation key's columns, and a wrapper with
+//! NO key children is `PER ()`: one instance for the whole query. PER decides how many
+//! constraint instances exist and nothing else -- which rows a reducer inside the
+//! constraint sums is that reducer's own BY (REDUCER_BY_TAG).
 static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
+
+//! Tags recording a PER wrapper's resolved generation key: `__gen_scope_<idx>__` names
+//! the entity scope (LogicalDecide::entity_scopes) whose distinct values are the
+//! constraint instances; `__gen_global__` is `PER ()`, exactly one instance. A PER
+//! wrapper carries exactly one of the two beside PER_CONSTRAINT_TAG.
+static constexpr const char *GEN_SCOPE_TAG_PREFIX = "__gen_scope_";
+static constexpr const char *GEN_GLOBAL_TAG = "__gen_global__";
+
+inline string MakeGenScopeTag(idx_t entity_scope_idx) {
+	return string(GEN_SCOPE_TAG_PREFIX) + to_string(entity_scope_idx) + "__";
+}
+
+//! Tag used to identify a guarded constraint, `IF b: body`. Child 0 is the constraint,
+//! child 1 the guard, which references at least one decision: the instance is imposed
+//! only when the guard holds (an implication the optimizer lowers).
+static constexpr const char *IF_CONSTRAINT_TAG = "__if_constraint__";
+
+//! Tag on a parsed reducer carrying an aggregation key, `agg(...) BY (k1, ...)`. Child 0
+//! is the reducer (possibly wrapped by QUALIFIED_REDUCER_TAG), children 1..N the key
+//! expressions. An omitted or empty BY is the global group and carries no wrapper.
+static constexpr const char *REDUCER_BY_TAG = "__reducer_by__";
+
+//! Tag on a parsed frame expression, `AT(sel: e) OVER (...)` / `agg(FROM .. TO ..: e)
+//! OVER (...)`. Children: [0] the navigated expression, [1] a VARCHAR constant holding
+//! the DecideFrameSpec, [2] the order key, [3] the fill value (a NULL constant when there
+//! is none), [4..] the WITHIN partition columns.
+static constexpr const char *FRAME_TAG = "__decide_frame__";
 
 //! Returns true if the alias is PER_CONSTRAINT_TAG
 inline bool IsPerConstraintTag(const string &alias) {
 	return HasDecideTag(alias, PER_CONSTRAINT_TAG);
 }
 
-//! Tag used by the parser to mark a relation-qualified reducer, `sum(D: expr)`.
-//! Shape mirrors the aggregate-local WHEN tag: children[0] is the aggregate,
-//! children[1] is the qualifier's relation name. The binder consumes and
-//! discards it, folding the resolved relation into the tag below.
+//! Tag used by the parser to mark a reducer with a generation key inside it,
+//! `agg(PER K: expr)`: one term per distinct value of K within the reducer's group,
+//! which is how a relation's tuple identity (`PER D`) is counted once however many
+//! rows the join repeated it on. children[0] is the aggregate, children[1..] the key's
+//! columns or relations, and no key children is `PER ()`. The binder consumes and
+//! discards it, folding the resolved key into the tag below.
 static constexpr const char *QUALIFIED_REDUCER_TAG = "__qualified_reducer__";
 
-//! Tag prefix recording a bound qualified reducer (on BoundAggregateExpression.alias).
-//! Format: "__qualified_by_<entity_scope_idx>__" — the index is into
-//! LogicalDecide::entity_scopes, whose entry supplies the tuple-identity key the
-//! reducer de-duplicates by. A qualifier is an entity scope that may have no
-//! variable declared on it, so the two share one table of keys and one mapping.
+//! Tag prefix recording a bound reducer's generation key (on BoundAggregateExpression
+//! .alias). Format: "__qualified_by_<entity_scope_idx>__" — the index is into
+//! LogicalDecide::entity_scopes, whose entry supplies the key the reducer
+//! de-duplicates by (one term per distinct key value). A key is an entity scope that
+//! may have no variable declared on it, so the two share one table of keys and one
+//! mapping.
 static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_by_";
+
+//! Tag prefix recording a bound reducer's aggregation key (on BoundAggregateExpression
+//! .alias). Format: "__reduce_by_<entity_scope_idx>__". The reducer sums the rows of
+//! the key's group that contains the generated instance; absent, it sums the whole
+//! enclosing relation (`BY ()`).
+static constexpr const char *REDUCE_BY_SCOPE_TAG_PREFIX = "__reduce_by_";
+
+inline string MakeReduceByTag(idx_t entity_scope_idx) {
+	return string(REDUCE_BY_SCOPE_TAG_PREFIX) + to_string(entity_scope_idx) + "__";
+}
 
 //! Builds the alias tag naming the entity scope a reducer is qualified by.
 inline string MakeQualifiedReducerTag(idx_t entity_scope_idx) {
@@ -217,6 +286,58 @@ inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 		return false;
 	}
 	scope_idx = static_cast<idx_t>(std::stoull(digits));
+	return true;
+}
+
+//! Reads back the generation scope from a PER wrapper's alias. Returns false when the
+//! alias carries neither tag (which a bound PER wrapper never does).
+inline bool TryParseGenScopeTag(const string &alias, DecideScopeKind &kind, idx_t &scope_idx) {
+	if (HasDecideTag(alias, GEN_GLOBAL_TAG)) {
+		kind = DecideScopeKind::GLOBAL;
+		scope_idx = DConstants::INVALID_INDEX;
+		return true;
+	}
+	string digits;
+	if (!ExtractDecideTagPayload(alias, GEN_SCOPE_TAG_PREFIX, digits) ||
+	    digits.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	kind = DecideScopeKind::KEY;
+	scope_idx = static_cast<idx_t>(std::stoull(digits));
+	return true;
+}
+
+//! Reads back the entity scope index from an alias written by MakeReduceByTag.
+inline bool TryParseReduceByTag(const string &alias, idx_t &scope_idx) {
+	string digits;
+	if (!ExtractDecideTagPayload(alias, REDUCE_BY_SCOPE_TAG_PREFIX, digits)) {
+		return false;
+	}
+	if (digits.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	scope_idx = static_cast<idx_t>(std::stoull(digits));
+	return true;
+}
+
+//! Alias tag naming the frame descriptor (`LogicalDecide::frames[i]`) a bound aggregate
+//! navigates by: `AT(sel: e) OVER (...)` and `agg(FROM .. TO ..: e) OVER (...)` bind as
+//! a SUM/AVG aggregate whose rows are the navigated positions rather than a group.
+static constexpr const char *FRAME_REF_TAG_PREFIX = "__frame_ref_";
+
+inline string MakeFrameRefTag(idx_t frame_idx) {
+	return string(FRAME_REF_TAG_PREFIX) + to_string(frame_idx) + "__";
+}
+
+inline bool TryParseFrameRefTag(const string &alias, idx_t &frame_idx) {
+	string digits;
+	if (!ExtractDecideTagPayload(alias, FRAME_REF_TAG_PREFIX, digits)) {
+		return false;
+	}
+	if (digits.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	frame_idx = static_cast<idx_t>(std::stoull(digits));
 	return true;
 }
 

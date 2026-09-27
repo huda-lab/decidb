@@ -95,6 +95,11 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 		RewriteAvgInExpression(objective, decide.decide_index);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
+	for (idx_t i = 0; i < decide.objective_tail.size(); i++) {
+		auto stage = std::move(decide.objective_tail[i].expression);
+		RewriteAvgInExpression(stage, decide.decide_index);
+		decide.SetObjectiveStage(optimizer.context, i, std::move(stage));
+	}
 }
 
 void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t decide_index) {

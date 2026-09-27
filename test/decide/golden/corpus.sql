@@ -105,24 +105,24 @@ SELECT id, x FROM items DECIDE x(INT) SUCH THAT AVG(x) <= 2 AND x <= 9 MAXIMIZE 
 -- ---------------------------------------------------------------------------
 
 -- 20 constraint-level WHEN
-SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 WHEN grp = 'A' AND x <= 9 MAXIMIZE SUM(x);
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT WHEN grp = 'A': SUM(x) <= 5 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 21 aggregate-local WHEN (comparison condition parenthesized before the bound)
-SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) WHEN (grp = 'A') <= 5 AND x <= 9 MAXIMIZE SUM(x);
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(WHEN (grp = 'A'): x) <= 5 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 21b two aggregate-local WHENs, additive
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT SUM(x) WHEN (grp = 'A') + SUM(x) WHEN (grp = 'B') <= 6 AND x <= 9 MAXIMIZE SUM(x);
+SUCH THAT SUM(WHEN (grp = 'A'): x) + SUM(WHEN (grp = 'B'): x) <= 6 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 22 PER
-SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 4 PER grp AND x <= 9 MAXIMIZE SUM(x);
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT PER grp: SUM(x) BY (grp) <= 4 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 23 PER + WHEN
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT SUM(x) <= 4 WHEN price > 15 PER grp AND x <= 9 MAXIMIZE SUM(x);
+SUCH THAT WHEN price > 15 PER grp: SUM(x) BY (grp) <= 4 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 24 per-row constraint under WHEN
-SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <= 2 WHEN grp = 'A' AND x <= 9 MAXIMIZE SUM(x);
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT WHEN grp = 'A': x <= 2 AND x <= 9 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
 -- Optimizer-rewritten shapes (these emit auxiliary constraints)
@@ -172,20 +172,20 @@ SUCH THAT x <= 5 AND SUM(b * x) <= 8 MAXIMIZE SUM(b * x);
 -- ---------------------------------------------------------------------------
 
 -- 36 scalar (query-wide) variable as a shared bound
-SELECT id, ship, cap FROM items DECIDE ship(INT), scalar cap(INT)
+SELECT id, ship, cap FROM items DECIDE ship(INT), PER (): cap(INT)
 SUCH THAT ship <= cap AND ship <= 10 AND cap <= 8 MAXIMIZE SUM(ship) - 20 * cap;
 
 -- 37 scalar variable inside a reducer constraint
-SELECT id, ship, cap FROM items DECIDE ship(INT), scalar cap(INT)
+SELECT id, ship, cap FROM items DECIDE ship(INT), PER (): cap(INT)
 SUCH THAT SUM(ship) <= 20 AND ship <= cap AND cap <= 6 MAXIMIZE SUM(ship);
 
 -- 38 table-scoped variable with a join
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
-DECIDE i.keep(BOOL) SUCH THAT SUM(i.price * keep) <= 60 MAXIMIZE SUM(i.price * keep);
+DECIDE PER i: keep(BOOL) SUCH THAT SUM(i.price * keep) <= 60 MAXIMIZE SUM(i.price * keep);
 
 -- 39 qualified reducer over a joined relation
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
-DECIDE i.keep(BOOL) SUCH THAT SUM(i: keep) <= 2 MAXIMIZE SUM(i.price * keep);
+DECIDE PER i: keep(BOOL) SUCH THAT SUM(PER i: keep) <= 2 MAXIMIZE SUM(i.price * keep);
 
 -- ---------------------------------------------------------------------------
 -- Shapes unlocked by Phase A (sign-aware ABS Big-M + composed MIN/MAX).
@@ -230,7 +230,7 @@ SUCH THAT 3 - MAX(x) <= 0 AND x <= 9 MINIMIZE SUM(x);
 -- cast lid. All terms are decision-bearing, so the split changes placement for
 -- none of them; it is the spine reaching them at all that is being pinned.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT (SUM(x) WHEN (price > 5)) - (SUM(x * price) WHEN (price > 5)) + 2 <= 8
+SUCH THAT (SUM(WHEN (price > 5): x)) - (SUM(WHEN (price > 5): x * price)) + 2 <= 8
 AND x <= 4 MAXIMIZE SUM(x);
 
 -- 46 mixed placement under a cast lid: a reducer (LEFT) beside a scalar
@@ -240,7 +240,7 @@ AND x <= 4 MAXIMIZE SUM(x);
 -- A subquery is used deliberately: a numeric offset in this position is peeled
 -- by the parsed-level simplifier before binding, so it never arrives sealed.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT (SUM(x) WHEN (price > 5)) + (SELECT max(budget) FROM groups) <= 210
+SUCH THAT (SUM(WHEN (price > 5): x)) + (SELECT max(budget) FROM groups) <= 210
 AND x <= 4 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
@@ -299,12 +299,12 @@ MAXIMIZE SUM(x);
 -- ---------------------------------------------------------------------------
 
 -- 55 the paper's max_shortfall shape: a scalar slack absorbing the overflow
-SELECT id, x, s FROM items DECIDE x(INT), scalar s(INT)
+SELECT id, x, s FROM items DECIDE x(INT), PER (): s(INT)
 SUCH THAT x >= 3 AND x <= 3 AND SUM(x) - s <= 4 MINIMIZE s;
 
 -- 56 scalar variable added to an aggregate, under PER
-SELECT id, grp, x, s FROM items DECIDE x(INT), scalar s(INT)
-SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND SUM(x) + s <= 8 PER grp
+SELECT id, grp, x, s FROM items DECIDE x(INT), PER (): s(INT)
+SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND PER grp: SUM(x) BY (grp) + s <= 8
 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ MAXIMIZE SUM(x);
 -- "one value per group" means concretely -- a single global MAX would give B's
 -- bound to A as well.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND SUM(x * price) <= MAX(price) * 2 PER grp
+SUCH THAT x <= 9 AND PER grp: SUM(x * price) BY (grp) <= MAX(price) BY (grp) * 2
 MAXIMIZE SUM(x);
 
 -- 62 COUNT(*) under PER. Regression pin for a live wrong answer: count_star was
@@ -366,7 +366,7 @@ MAXIMIZE SUM(x);
 -- the bound 4 instead of 2. The dump is the evidence -- the query still returned
 -- rows before, just against the wrong model.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND SUM(x) <= COUNT(*) PER grp
+SUCH THAT x <= 9 AND PER grp: SUM(x) BY (grp) <= COUNT(*) BY (grp)
 MAXIMIZE SUM(x);
 
 -- 63 a reducer mixed with an ordinary term. The reducer collapses to one value per
@@ -390,7 +390,7 @@ MAXIMIZE SUM(x);
 -- 65 the same bound under PER, where each group takes its own tightest value (100
 -- for A, 200 for B) rather than one global minimum.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 90 AND SUM(x) <= (SELECT budget FROM groups WHERE g = items.grp) PER grp
+SUCH THAT x <= 90 AND PER grp: SUM(x) BY (grp) <= MIN((SELECT budget FROM groups WHERE g = items.grp)) BY (grp)
 MAXIMIZE SUM(x);
 
 -- 66 an aggregate-local WHEN on the left, a row-varying bound on the right. The
@@ -399,7 +399,7 @@ MAXIMIZE SUM(x);
 -- keeps (200). Results do not reveal this -- x is capped at 9 either way -- so the
 -- dump's `rhs` is the whole evidence, as with 62.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND (SUM(x) WHEN (grp = 'B'))
+SUCH THAT x <= 9 AND (SUM(WHEN (grp = 'B'): x))
                      <= (SELECT budget FROM groups WHERE g = items.grp)
 MAXIMIZE SUM(x);
 
@@ -407,7 +407,7 @@ MAXIMIZE SUM(x);
 -- folding and row-varying reduction -- must answer "which rows?" the same way, so
 -- this binds at MIN over all four rows (10), not over the B rows (30).
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND (SUM(x) WHEN (grp = 'B')) <= MIN(price)
+SUCH THAT x <= 9 AND (SUM(WHEN (grp = 'B'): x)) <= MIN(price)
 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
@@ -429,14 +429,14 @@ MAXIMIZE SUM(x);
 -- that reducer: the bound is SUM(price) over the A rows (30), while the left side
 -- still sums every row.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND SUM(x) <= SUM(price) WHEN (grp = 'A')
+SUCH THAT x <= 9 AND SUM(x) <= SUM(WHEN (grp = 'A'): price)
 MAXIMIZE SUM(x);
 
 -- 70 a relation-qualified reducer as a bound. The join fans each group to two
 -- rows, so the de-duplication is what makes `rhs` 3 (= (100+200)/100) rather than
 -- 6 -- the same call the left side has always made.
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
-DECIDE i.keep(BOOL) SUCH THAT SUM(i: keep) <= SUM(g: budget) / 100
+DECIDE PER i: keep(BOOL) SUCH THAT SUM(PER i: keep) <= SUM(PER g: budget) / 100
 MAXIMIZE SUM(i.price * keep);
 
 -- ---------------------------------------------------------------------------
@@ -499,7 +499,7 @@ MAXIMIZE SUM(x * weight);
 -- 75 a query-wide decision as the bound. Rejected before C.2 by the RHS
 -- validator, which refused any bound containing a decision variable. Canonical
 -- form is `SUM(x*price) - cap <= 0`, the row-invariant term B.3 landed.
-SELECT id, x, cap FROM items DECIDE x(BOOL), scalar cap(INT)
+SELECT id, x, cap FROM items DECIDE x(BOOL), PER (): cap(INT)
 SUCH THAT SUM(x * price) <= cap AND cap <= 60
 MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 
@@ -511,7 +511,7 @@ MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 -- flip WAS a direction normalization, which is why it had to go rather than move.
 -- What is pinned here is that the two spellings agree as models: same columns,
 -- same bounds, and one row that is the other multiplied by -1.
-SELECT id, x, cap FROM items DECIDE x(BOOL), scalar cap(INT)
+SELECT id, x, cap FROM items DECIDE x(BOOL), PER (): cap(INT)
 SUCH THAT cap >= SUM(x * price) AND cap <= 60
 MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 
@@ -519,7 +519,7 @@ MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 -- decision on the bound. Canonical form is `-SUM(x) - cap <= -price`, so it
 -- exercises C.2's gate and B.5's runtime reduction of the row-varying bound in
 -- one query. `<=` takes the MIN over rows, i.e. the largest price binds.
-SELECT id, x, cap FROM items DECIDE x(INT), scalar cap(INT)
+SELECT id, x, cap FROM items DECIDE x(INT), PER (): cap(INT)
 SUCH THAT price - SUM(x) <= cap AND x <= 5
 MINIMIZE cap;
 
@@ -642,12 +642,12 @@ MAXIMIZE MAX(x + price) + 0.001 * SUM(x);
 -- row count, which is a bound on that family rather than a measurement of it.
 SELECT grp, id, x FROM items DECIDE x(INT)
 SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <= 6
-MAXIMIZE MAX(SUM(x)) PER grp;
+MAXIMIZE MAX(PER grp: SUM(x) BY (grp));
 
 -- 92 the MIN mirror of 91, whose hard direction is the other arm.
 SELECT grp, id, x FROM items DECIDE x(INT)
 SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 4
-MINIMIZE MIN(SUM(x)) PER grp;
+MINIMIZE MIN(PER grp: SUM(x) BY (grp));
 
 -- ---------------------------------------------------------------------------
 -- A plain column as the bound of a reduced constraint (C1/C2/C3)
@@ -670,13 +670,13 @@ Regions(regionID, demand, priority) AS (
     VALUES ('R1', 450, 'critical'), ('R2', 600, 'standard')
 )
 SELECT routeID, depotID, regionID, open, ship
-DECIDE D.open(BOOL), T.ship(INT)
+DECIDE PER D: open(BOOL), PER T: ship(INT)
 FROM Depots D JOIN Routes T USING (depotID) JOIN Regions R USING (regionID)
 SUCH THAT
     ship BETWEEN 0 AND capacity * open AND
-    SUM(ship) <= stock PER depotID AND
-    SUM(ship) >= demand WHEN priority = 'critical' PER regionID
-MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open);
+    PER D: SUM(ship) BY (D) <= stock AND
+    WHEN priority = 'critical' PER R: SUM(ship) BY (R) >= demand
+MINIMIZE SUM(unit_cost * ship) + SUM(PER D: opening_cost * open);
 
 -- 94 `<>` with a bound that varies within a PER group (C3): every excluded value
 -- is kept -- `SUM(x) <> 3 AND SUM(x) <> 7` for group 'a' -- rather than collapsed
@@ -685,5 +685,93 @@ SELECT id, grp, x FROM (VALUES (1, 'a', 3), (2, 'a', 7)) t(id, grp, cap)
 DECIDE x(INT)
 SUCH THAT x BETWEEN 0 AND 10
     AND SUM(x) >= 3 AND SUM(x) <= 7
-    AND SUM(x) <> cap PER grp
+    AND PER grp, cap: SUM(x) BY (grp) <> cap
 MAXIMIZE SUM(x);
+
+-- ---------------------------------------------------------------------------
+-- DeciQL conformance (spec §9): the generation x aggregation matrix, guards,
+-- lexicographic objectives, domains and frames. Each pins the built model.
+-- ---------------------------------------------------------------------------
+-- shipmentID is the PRIMARY KEY, which is what lets `PER shipmentID` read the row's
+-- other columns and reduce BY a key over them (spec §6.3, the "declare a PRIMARY KEY"
+-- repair).
+CREATE TABLE ship_rows(shipmentID VARCHAR PRIMARY KEY, depotID VARCHAR, region VARCHAR, day INTEGER,
+                       demand INTEGER, capacity INTEGER);
+INSERT INTO ship_rows VALUES
+    ('S1', 'D1', 'EU', 1, 10, 100),
+    ('S2', 'D1', 'EU', 2, 20, 100),
+    ('S3', 'D2', 'EU', 1, 30, 80),
+    ('S4', 'D2', 'US', 3, 40, 80);
+
+-- 95 matrix 1: per tuple, global aggregation
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT ship <= 0.5 * SUM(ship) BY () AND SUM(ship) <= 60 MAXIMIZE SUM(ship);
+
+-- 96 matrix 2: global generation, global aggregation
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT PER (): SUM(ship) BY () <= 70 MAXIMIZE SUM(ship);
+
+-- 97 matrix 3: local generation, global aggregation
+SELECT shipmentID, reserve FROM ship_rows DECIDE PER depotID: reserve(INT) BETWEEN 0 AND 500
+SUCH THAT PER depotID: reserve >= 0.25 * SUM(demand) BY () MINIMIZE SUM(PER depotID: reserve);
+
+-- 98 matrix 4: local generation, local aggregation with a keyed bound
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT PER depotID, capacity: SUM(ship) BY (depotID) <= capacity MAXIMIZE SUM(ship);
+
+-- 99 matrix 5: per tuple, local aggregation
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT ship <= 0.6 * SUM(ship) BY (depotID) AND SUM(ship) <= 60 MAXIMIZE SUM(ship);
+
+-- 100 matrix 6: two aggregation keys in one body (the key names both, since a depot
+-- here spans regions and the BY (region) group must be a function of the key)
+SELECT shipmentID, reserve FROM ship_rows DECIDE PER depotID: reserve(INT) BETWEEN 0 AND 500
+SUCH THAT PER depotID, region: reserve >= 0.1 * SUM(demand) BY (region) + 0.02 * SUM(demand) BY () MINIMIZE SUM(PER depotID: reserve);
+
+-- 101 matrix 7: filtered local aggregation
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT PER depotID, capacity: SUM(WHEN region = 'EU': ship) BY (depotID) <= capacity - 10 MAXIMIZE SUM(ship);
+
+-- 102 matrix 8: a composite aggregation key under per-tuple generation (a derived
+-- key such as `day + 1` is not a key today: keys name columns or relations)
+SELECT shipmentID, ship FROM ship_rows DECIDE PER shipmentID: ship(INT) BETWEEN 0 AND 50
+SUCH THAT PER shipmentID: ship <= 0.75 * SUM(ship) BY (depotID, day) AND SUM(ship) <= 60 MAXIMIZE SUM(ship);
+
+-- 103 matrix 9: nested reducers in the objective
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT SUM(ship) >= 40 MINIMIZE MAX(PER depotID: SUM(ship) BY (depotID));
+
+-- 104 IF guard on a BOOL decision, per row (indicator lowered per backend)
+SELECT shipmentID, open, ship FROM ship_rows DECIDE open(BOOL), ship(INT) BETWEEN 0 AND 50
+SUCH THAT IF NOT open: ship <= 0 MAXIMIZE SUM(ship * demand) - SUM(open * 500);
+
+-- 105 IF guard as a comparison (aux binary + complement row), keyed generation
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT IF ship > 0: ship >= 15 AND SUM(ship) <= 40 MAXIMIZE SUM(ship * demand);
+
+-- 106 THEN: two lexicographic stages
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT SUM(ship) <= 60 MAXIMIZE SUM(ship) THEN MINIMIZE SUM(ship * day);
+
+-- 107 TEXT domain: one-hot indicators, sum-to-one, guard on a value
+SELECT shipmentID, status, ship FROM ship_rows
+DECIDE status(TEXT IN ['closed', 'open']), ship(INT) BETWEEN 0 AND 50, opened(BOOL)
+SUCH THAT IF status = 'closed': ship <= 0 AND IF status = 'open': opened >= 1 AND SUM(ship) >= 30
+MINIMIZE SUM(opened * 100) - SUM(ship);
+
+-- 108 SEMIINT domain: switch rows
+SELECT shipmentID, ship FROM ship_rows DECIDE ship(SEMIINT) BETWEEN 15 AND capacity
+SUCH THAT SUM(ship) <= 100 MAXIMIZE SUM(ship * demand);
+
+-- 109 frame: previous-position balance within a partition, ELSE fill
+SELECT shipmentID, stock FROM ship_rows DECIDE stock(INT) BETWEEN 0 AND 100, produce(INT) BETWEEN 0 AND 60
+SUCH THAT stock = AT(PREVIOUS ELSE 0: stock) OVER (day WITHIN depotID) + produce - demand
+MINIMIZE SUM(produce) + SUM(stock);
+
+-- 110 frame: rolling range, missing positions skipped
+SELECT shipmentID, produce FROM ship_rows DECIDE produce(INT) BETWEEN 0 AND 60
+SUCH THAT SUM(FROM 2 PREVIOUS TO PREVIOUS: produce) OVER (day WITHIN depotID) <= 50 MAXIMIZE SUM(produce);
+
+-- 111 frame: cyclic next, data-only body on the bound side of the algebra
+SELECT shipmentID, ship FROM ship_rows WHERE depotID = 'D1' DECIDE ship(INT) BETWEEN 0 AND 50
+SUCH THAT ship <= AT(NEXT: demand) OVER (day CYCLIC) + 5 MAXIMIZE SUM(ship);

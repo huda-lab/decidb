@@ -2,7 +2,7 @@
 
 A `scalar` declaration yields exactly one solver column for the whole query,
 independent of input cardinality — the third variable scope alongside row-scoped
-(`x(INT)`) and table-scoped (`T.x(INT)`). See paper §3.1.
+(`x(INT)`) and table-scoped (`PER T: x(INT)`). See paper §3.1.
 
 Covers:
   - Scalar as a shared bound, oracle verified (the paper's `max_shortfall` shape)
@@ -39,7 +39,7 @@ def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         SELECT c.c_custkey, ship, cap
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
-        DECIDE ship(INT), scalar cap(INT)
+        DECIDE ship(INT), PER (): cap(INT)
         SUCH THAT ship <= cap AND ship <= 10 AND cap <= 8
         MAXIMIZE SUM(ship) - 20 * cap
     """
@@ -97,7 +97,7 @@ def test_scalar_objective_coefficient_applied_once(decidb_cli, duckdb_conn,
         SELECT c.c_custkey, x, cap
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 100
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), PER (): cap(INT)
         SUCH THAT x <= cap AND x <= 10 AND cap <= 10
         MINIMIZE 2 * cap - SUM(x)
     """
@@ -142,7 +142,7 @@ def test_scalar_is_one_column_regardless_of_cardinality(decidb_cli, perf_tracker
             SELECT cap
             FROM lineitem
             WHERE l_linenumber <= 7 AND l_orderkey <= {limit}
-            DECIDE scalar cap(INT)
+            DECIDE PER (): cap(INT)
             SUCH THAT cap >= l_linenumber
             MINIMIZE cap
         """
@@ -172,7 +172,7 @@ def test_scalar_value_repeated_on_every_row(decidb_cli, perf_tracker):
         SELECT l_orderkey, l_linenumber, cap
         FROM lineitem
         WHERE l_orderkey <= 100
-        DECIDE scalar cap(INT)
+        DECIDE PER (): cap(INT)
         SUCH THAT cap >= l_linenumber AND cap <= 20
         MINIMIZE cap
     """
@@ -194,7 +194,7 @@ class TestScalarReducerRejected:
     def test_sum_over_scalar_in_objective(self, decidb_cli):
         decidb_cli.assert_error("""
                 SELECT cap FROM lineitem
-                DECIDE scalar cap(INT)
+                DECIDE PER (): cap(INT)
                 SUCH THAT cap >= l_linenumber
                 MINIMIZE SUM(cap)
             """, match=r"query-wide decision.*use cap on its own")
@@ -202,7 +202,7 @@ class TestScalarReducerRejected:
     def test_sum_over_scalar_in_constraint(self, decidb_cli):
         decidb_cli.assert_error("""
                 SELECT cap FROM lineitem
-                DECIDE scalar cap(INT)
+                DECIDE PER (): cap(INT)
                 SUCH THAT SUM(cap) >= 5
                 MINIMIZE cap
             """, match=r"query-wide decision.*use cap on its own")
@@ -210,7 +210,7 @@ class TestScalarReducerRejected:
     def test_avg_over_scalar_in_objective(self, decidb_cli):
         decidb_cli.assert_error("""
                 SELECT cap FROM lineitem
-                DECIDE scalar cap(INT)
+                DECIDE PER (): cap(INT)
                 SUCH THAT cap >= l_linenumber
                 MINIMIZE AVG(cap)
             """, match=r"query-wide decision")
@@ -221,7 +221,7 @@ class TestScalarReducerRejected:
         not "contains a scalar")."""
         decidb_cli.assert_error("""
                 SELECT cap1, cap2 FROM lineitem
-                DECIDE scalar cap1(INT), scalar cap2(INT)
+                DECIDE PER (): cap1(INT), PER (): cap2(INT)
                 SUCH THAT cap1 <= 5 AND cap2 <= 5
                 MINIMIZE SUM(cap1 + cap2)
             """, match=r"query-wide decision")
@@ -245,7 +245,7 @@ def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, du
         SELECT l_orderkey, l_linenumber, cap
         FROM lineitem
         WHERE l_orderkey <= 200
-        DECIDE scalar cap(INT)
+        DECIDE PER (): cap(INT)
         SUCH THAT SUM(l_linenumber * cap) <= 300
         MAXIMIZE cap
     """
@@ -280,7 +280,7 @@ def test_scalar_plus_row_scoped_term_inside_reducer_is_legal(decidb_cli, perf_tr
         SELECT l_linenumber, x, cap
         FROM lineitem
         WHERE l_orderkey <= 50
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), PER (): cap(INT)
         SUCH THAT SUM(x) <= 10 AND cap <= 5
         MAXIMIZE SUM(x + cap)
     """
@@ -310,14 +310,7 @@ class TestScalarGrammar:
                 SELECT cap FROM lineitem
                 DECIDE scalar cap
                 SUCH THAT cap >= 1 MINIMIZE cap
-            """, match=r"needs a type; write scalar cap\(INT\)")
-
-    def test_scalar_cannot_be_table_qualified(self, decidb_cli):
-        decidb_cli.assert_error("""
-                SELECT cap FROM lineitem
-                DECIDE scalar lineitem.cap(INT)
-                SUCH THAT cap >= 1 MINIMIZE cap
-            """, match=r"cannot name a table")
+            """, match=r"is no longer a DECIDE declaration; write PER \(\): cap\(INT\)")
 
 
 # ---------------------------------------------------------------------------
@@ -337,13 +330,13 @@ def test_scalar_still_usable_as_identifier(decidb_cli, perf_tracker):
 
 @pytest.mark.correctness
 def test_scalar_identifier_and_keyword_in_one_query(decidb_cli, perf_tracker):
-    """The keyword and an identically-named column coexist: `scalar cap(INT)`
+    """The keyword and an identically-named column coexist: `PER (): cap(INT)`
     declares a decision while `scalar` also names an output column."""
     rows, cols = decidb_cli.execute("""
         SELECT l_linenumber AS scalar, cap
         FROM lineitem
         WHERE l_orderkey <= 50
-        DECIDE scalar cap(INT)
+        DECIDE PER (): cap(INT)
         SUCH THAT cap >= l_linenumber
         MINIMIZE cap
     """)
@@ -364,7 +357,7 @@ def test_scalar_empty_input(decidb_cli, perf_tracker):
         SELECT l_orderkey, cap
         FROM lineitem
         WHERE l_orderkey < 0
-        DECIDE scalar cap(INT)
+        DECIDE PER (): cap(INT)
         SUCH THAT cap >= l_linenumber
         MINIMIZE cap
     """
@@ -398,7 +391,7 @@ def test_scalar_with_abs_per_row_constraint(decidb_cli, duckdb_conn,
         SELECT c_custkey, x, cap
         FROM customer
         WHERE c_custkey <= 20
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), PER (): cap(INT)
         SUCH THAT ABS(x - cap) <= 2 AND x <= 10 AND cap <= 10 AND cap >= 3
         MAXIMIZE SUM(x) - 5 * cap
     """
@@ -447,7 +440,7 @@ def test_scalar_with_quadratic_constraint(decidb_cli_gurobi, oracle_solver,
         SELECT c_custkey, x, cap
         FROM customer
         WHERE c_custkey <= 20
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), PER (): cap(INT)
         SUCH THAT POWER(x - cap, 2) <= 4 AND x <= 10 AND cap <= 10 AND cap >= 3
         MAXIMIZE SUM(x) - 5 * cap
     """
@@ -494,7 +487,7 @@ def test_scalar_with_bilinear_per_row_constraint(decidb_cli, oracle_solver,
         SELECT c_custkey, b, cap
         FROM customer
         WHERE c_custkey <= 20
-        DECIDE b(BOOL), scalar cap(INT)
+        DECIDE b(BOOL), PER (): cap(INT)
         SUCH THAT b * cap <= 4 AND cap <= 6 AND SUM(b) <= 3
         MAXIMIZE SUM(b) + cap
     """
@@ -545,7 +538,7 @@ def test_scalar_with_not_equal(decidb_cli, perf_tracker):
         SELECT c_custkey, x, cap
         FROM customer
         WHERE c_custkey <= 20
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), PER (): cap(INT)
         SUCH THAT x <= cap AND cap <= 8 AND cap <> 8
         MAXIMIZE SUM(x)
     """)
@@ -581,7 +574,7 @@ def test_scalar_as_aggregate_rhs(decidb_cli, oracle_solver):
     rows, cols = decidb_cli.execute("""
             SELECT c_custkey, x, cap
             FROM customer WHERE c_custkey <= 20
-            DECIDE x(INT), scalar cap(INT)
+            DECIDE x(INT), PER (): cap(INT)
             SUCH THAT SUM(x) <= cap AND cap <= 12 AND x <= 12
             MAXIMIZE 3 * SUM(x) - 2 * cap
         """)
@@ -626,8 +619,8 @@ def test_scalar_as_aggregate_rhs_with_per(decidb_cli, duckdb_conn, oracle_solver
     rows, cols = decidb_cli.execute("""
             SELECT c_custkey, c_nationkey, x, cap
             FROM customer WHERE c_custkey <= 40
-            DECIDE x(INT), scalar cap(INT)
-            SUCH THAT SUM(x) <= cap PER c_nationkey AND cap <= 12 AND x <= 12
+            DECIDE x(INT), PER (): cap(INT)
+            SUCH THAT PER c_nationkey: SUM(x) BY (c_nationkey) <= cap AND cap <= 12 AND x <= 12
             MAXIMIZE 3 * SUM(x) - 2 * cap
         """)
     n = len(rows)
@@ -679,7 +672,7 @@ def test_unbounded_scalar_reports_a_single_instance(decidb_cli):
     script = (
         ".mode csv\n"
         "DIAGNOSE SELECT c_custkey, x, cap FROM customer WHERE c_custkey <= 20\n"
-        "DECIDE x(INT), scalar cap(INT)\n"
+        "DECIDE x(INT), PER (): cap(INT)\n"
         "SUCH THAT x <= 5\n"
         "MAXIMIZE SUM(x) + cap;\n"
     )
@@ -725,7 +718,7 @@ def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn,
         SELECT l_orderkey, l_linenumber, cap
         FROM lineitem
         WHERE l_orderkey <= 20
-        DECIDE scalar cap(INT)
+        DECIDE PER (): cap(INT)
         SUCH THAT norm(l_linenumber * cap - 3, 1) <= 85
         MAXIMIZE cap
     """
@@ -788,7 +781,7 @@ def test_scalar_inside_quadratic_objective_is_weighted_per_row(decidb_cli, duckd
         SELECT l_orderkey, l_linenumber, cap
         FROM lineitem
         WHERE l_orderkey <= 20
-        DECIDE scalar cap(REAL)
+        DECIDE PER (): cap(REAL)
         SUCH THAT cap >= 0 AND cap <= 10
         MINIMIZE SUM(POWER(l_linenumber * cap - 4, 2))
     """

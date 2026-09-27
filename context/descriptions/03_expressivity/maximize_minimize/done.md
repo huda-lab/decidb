@@ -1,5 +1,13 @@
 # MAXIMIZE / MINIMIZE — Implemented Features
 
+> **Spelling note (2026-09-26).** The language is now the DeciQL redesign
+> (`../../00_project_overview/syntax_reference.md`). Examples below that use the
+> retired spellings read with this mapping: `T.x(INT)` → `PER T: x(INT)`,
+> `scalar x(INT)` → `PER (): x(INT)`, `body WHEN c` → `WHEN c: body`,
+> `SUM(x) <= K PER g` → `PER g: SUM(x) BY (g) <= K`, `SUM(e) WHEN c` →
+> `SUM(WHEN c: e)`, `SUM(D: e)` → `SUM(PER D: e)`,
+> `MINIMIZE MAX(SUM(e)) PER g` → `MINIMIZE MAX(PER g: SUM(e) BY (g))`.
+
 The `MAXIMIZE` or `MINIMIZE` keyword specifies the **optimization objective** — the quantity the solver should optimize while satisfying all constraints.
 
 **Syntax** (objective forms, QP forms, bilinear, feasibility): see `../../00_project_overview/syntax_reference.md` §4. **Per-aggregate linearization** (SUM/AVG/MIN/MAX/ABS): see `../sql_functions/done.md`. **WHEN on objectives**: see `../when/done.md`. **PER on objectives** (nested-aggregate two-level formulation): see `../per/done.md`. This doc covers objective-specific semantics not in those files.

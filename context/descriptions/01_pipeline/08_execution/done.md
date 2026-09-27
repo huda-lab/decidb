@@ -43,6 +43,45 @@ separate objective-side copy.
 
 ---
 
+## 0. The DeciQL surface (2026-09-26)
+
+Generation and aggregation are separate at execution (`EvaluateConstraints`,
+`physical_decide.cpp`), on top of the `row_group_ids` instances:
+
+- **Instances** are the constraint's generation: `PER K` → one per non-NULL key value;
+  `PER ()` → one; omitted → one per row, except that a reduced-only body whose reducers
+  share one BY key collapses onto that key's groups (and `PER grp, cap: SUM(x) BY (grp)
+  <= cap`, whose key refines the BY key, coarsens onto the BY groups with its bounds
+  reduced by `ReduceAggregateRhsPerGroup`). A MIXED body, a row-varying `IF` guard and a
+  frame force one instance per row.
+- **Each term's rows** are recorded in `EvaluatedConstraint::term_groupings`
+  (`TermGroupKind`): CLASS (the instance's rows), DIRECT (one of them), ALL (every
+  WHEN-admitted row, `BY ()`), KEYED (the BY key's group holding the instance, through a
+  `KeyedPartition`), FRAME (the navigated rows in `frame_rows`). Anything but CLASS is the
+  **general path** of the model builder, which emits one row per instance from those row
+  sets; MIN/MAX, `<>`, ABS, quadratic and bilinear bodies are refused there.
+- **Frames** (`BuildFrameRows`): every admitted row lies on its partition's timeline
+  ordered by the order key's distinct values (peers share a position; a NULL key is on no
+  timeline); an instance navigates from its representative row by the selectors,
+  wrapping when `CYCLIC`; `AT` reads one row of the position, a range every row of every
+  selected position; a missing position is skipped in a range, filled under `ELSE v`
+  (`else_values`, added through the frame's fill term), or drops the instance
+  (`instance_dropped`) under `ALL` / `AT` with no ELSE.
+- **Guards** (`EvaluateGuardRows`): the guard's linear form is evaluated per row; the
+  formulation reads it at the instance's representative row. `LinearizeGuards` (stage 06)
+  decides VARIABLE / COMPARISON / ALWAYS / NEVER and allots one binary per instance for a
+  comparison guard; `SolverModel::Build` states each guarded row as a conditional row
+  (natively or Big-M). A guarded row implies no bound (`DecidePropagateImpliedBounds`
+  skips it).
+- **Objective stages** are evaluated through `EvaluateObjective` before the first
+  objective (`EvaluateObjectiveStages`) into `SolverInput::objective_stages`.
+- **Readback**: a `TEXT` decision's VARCHAR column is the value whose one-hot indicator
+  the solver set (`text_domains`); its own model column is pinned to 0.
+- **Rendering**: a clause is quoted prefixes first (`WHEN c PER k IF b: body`), in EXPLAIN
+  and in every diagnosis label and suggested edit.
+
+---
+
 ## 1. Order of operations
 
 | # | Where | What |

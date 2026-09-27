@@ -15,12 +15,15 @@ Stage numbers refer to [`README.md`](README.md).
 | `common/decide_source_info.hpp` | 03 | `ConstraintSourceInfo` — the source display registry entry |
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverCapabilities`, `SolverConstructSupport`, `SolverModelClass` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/decide_parse_hints.hpp` | 01 | `MaybeAppendDecideWhenHint` |
+| `parser/decide/decide_declaration.hpp` | 01 | `DecideDeclaration` (scope, domain, bounds), `DecideObjectiveClause` — the parsed declarator and objective stage |
+| `parser/decide/decide_frame_spec.hpp` | 01 | `DecideFrameSpec` — a frame's selectors, policy, direction, cyclic flag, encoded as one constant |
 | `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `ValidateSumArgument`, degree, `ValidateDecideNoExplicitDecisionCasts` |
 | `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
 | `planner/expression_binder/decide/decide_declarations_binder.hpp` | 02 | `DecideDeclarationsBinder` — the whole DECIDE clause: declarations, scopes, then `SUCH THAT` and the objective |
+| `planner/expression_binder/decide/decide_generation.hpp` | 02 | `CheckDeterminedByGeneration`, `ValidateDecideGenerationTree` — the functional-dependency proof of spec §6.3 |
 | `planner/expression_binder/decide/decide_degree.hpp` | 02 | `DecideDegree`, `DecideExpressionDegree` — the one definition of polynomial degree, and which degree-2 shape produced it |
-| `planner/operator/decide/logical_decide.hpp` | 03 | `LogicalDecide`, `EntityScopeInfo`, every metadata field |
+| `planner/operator/decide/logical_decide.hpp` | 03 | `LogicalDecide`, `EntityScopeInfo`, `DecideObjectiveStage`, `DecideFrameInfo`, every metadata field |
 | `planner/operator/decide/logical_decide_diagnose.hpp` | 03 | `LogicalDecideDiagnose` — the `DIAGNOSE <select>` plan node and the shape of the relation it returns |
 | `planner/decide/decide_canonicalizer.hpp` | 04 | The canonical contract, in code |
 | `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the WHEN/PER wrapper predicates and the constraint-position walk every stage shares |
@@ -51,10 +54,13 @@ Stage numbers refer to [`README.md`](README.md).
 | Path | Stage | Contents |
 |---|---|---|
 | `parser/decide/decide_parse_hints.cpp` | 01 | DECIDE-aware parse-error hint |
-| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
+| `parser/decide/decide_declaration.cpp`, `decide_frame_spec.cpp` | 01 | Parsed declarators and frame specs: copy, equality, rendering, encoding |
+| `parser/transform/expression/transform_decide.cpp` | 01 | `TransformDecideClause` / `Scope` / `Declarator` / `ScopeWrapper` / `ReducerBy` / `Frame` — libpg_query DECIDE nodes → parsed tree |
+| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, degree, reducers, `PER K` / `BY (Γ)` on reducers, frames (`BindFrame`), key scopes (`FindOrCreateKeyScope`) |
+| `planner/expression_binder/decide/decide_generation.cpp` | 02 | The functional-dependency proof: what a generation key determines |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective |
-| `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations, scopes, scoped-variable spelling, and the `SUCH THAT` / objective binds |
+| `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarators, domains (SEMI switches, TEXT one-hot indicators and comparison rewrite), declaration bounds, then the `SUCH THAT` / objective (and `THEN`) binds |
 | `planner/expression_binder/decide/decide_degree.cpp` | 02 | The degree walk, `DecideExpressionDegree`, and the constraint-degree validator |
 | `planner/binder/query_node/bind_select_node.cpp` | 02 | Generic SELECT binding. Its DECIDE branch is one `DecideDeclarationsBinder::BindDeclarations()` call |
 | `planner/binder/query_node/plan_select_node.cpp` | 03/04 | Subquery flattening, correlation provenance, the user canonicalization call |
@@ -80,8 +86,9 @@ Stage numbers refer to [`README.md`](README.md).
 | `decidb/formulation/linearization_bigm.cpp` | 06 | Big-M sizing and the per-row range walks |
 | `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: constraints, links, objectives, composed |
 | `decidb/formulation/linearization_not_equal.cpp` | 06 | `<>` collapse and Big-M disjunction |
+| `decidb/formulation/linearization_guard.cpp` | 06 | `IF` guards: VARIABLE / COMPARISON / ALWAYS / NEVER, and the per-instance switching binaries |
 | `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | McCormick and ABS rows |
-| `decidb/solver/ilp_solver.cpp` | 07 | Dispatch, INF_OR_UNBD probe, ray attachment |
+| `decidb/solver/ilp_solver.cpp` | 07 | Dispatch, lexicographic `THEN` stages, INF_OR_UNBD probe, ray attachment |
 | `decidb/solver/solver_registry.cpp` | 07 | `REGISTERED_BACKENDS` — the one table naming every backend |
 | `decidb/solver/probe_models.cpp` | 07 | Probe models for the diagnostic re-solve and ray-extraction paths |
 | `decidb/gurobi/gurobi_solver.cpp`, `gurobi_loader.cpp` | 07 | Gurobi backend |

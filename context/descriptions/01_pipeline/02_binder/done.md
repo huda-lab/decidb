@@ -16,6 +16,52 @@ choose a solver formulation.
 
 ---
 
+## 0. The DeciQL surface (2026-09-26)
+
+What this stage owns for the redesigned language:
+
+- **Keys are one shape.** Every keyed role — a declarator's `PER K`, a constraint's
+  `PER K`, a reducer's `PER K` and `BY (Γ)`, a frame's `WITHIN P` — resolves through
+  `FindOrCreateKeyScope` (`decide_binder.cpp`) into one `EntityScopeInfo` per distinct
+  column list (a relation expands to all of its columns). Execution builds one
+  `EntityMapping` per scope.
+- **Declarations** (`decide_declarations_binder.cpp`): domains type as before (`BOOL` is
+  `INTEGER` + `is_boolean_var`, `TEXT` is `VARCHAR`); declaration bounds become
+  `PER K: x >= lo` / `<= hi` constraints before binding. A `SEMI` domain declares a hidden
+  BOOL switch `__semi_on_x__` with the same scope and the rows `x <= hi * on`,
+  `x >= lo * on` (plus a negative constant floor as a plain bound). A `TEXT` domain
+  declares hidden indicators `__text_x_i__`, a sum-to-one row, and rewrites `x = 'v'`,
+  `x <> 'v'`, `x IN (...)` on the parsed tree to comparisons over the indicators, each
+  carrying the written spelling as a source fragment; `DecideTextDomain` records the
+  encoding for the readback. Hidden decisions are auxiliary (hidden from `SELECT *` and
+  EXPLAIN's declaration list).
+- **Prefixes** (`decide_constraints_binder.cpp`): `WHEN` binds a decision-free
+  condition (`BindKnownCondition`) and rejects a decision with a pointer to `IF`; `IF`
+  binds a decision-bearing guard (a comparison through the constraint dispatch, a BOOL
+  decision or `NOT` of one as an expression) and rejects known data with a pointer to
+  `WHEN`; `PER` tags its wrapper with the generation scope (`MakeGenScopeTag`,
+  `GEN_GLOBAL_TAG` for `PER ()`).
+- **Well-definedness** (`decide_generation.cpp`, spec §6.3, reject policy): every value
+  an instance reads directly must be determined by its generation key — in the key, a
+  relation wholly in the key, a base-table PRIMARY KEY/UNIQUE inside the key, a decision
+  whose key lies inside, a scalar, a constant, a reducer whose BY key is determined, or a
+  frame whose partition and order key are. The error names the value and the four repairs.
+  An objective is checked against `PER ()`.
+- **Reducers**: `BindQualifiedReducer` (`PER K` inside a reducer, FD-checked, tagged
+  `__qualified_by_`), `BindReducerBy` (`BY (Γ)`, tagged `__reduce_by_`), the filter of
+  `agg(WHEN c: e)` bound decision-free.
+- **Frames** (`BindFrame`): the body binds as a `SUM` aggregate tagged `__frame_ref_<i>__`
+  and with a source fragment holding the written spelling; the order key, `ELSE` value
+  and `WITHIN` columns bind as known data; the timeline is registered as
+  `DecideFrameInfo` on the bound node. Range frames reduce with `SUM` only.
+- **Objectives**: each `THEN` stage binds like the first into
+  `BoundSelectNode::decide_objective_tail`; `SATISFY` is `DecideSense::FEASIBILITY`.
+
+Older sections below use the pre-redesign spellings; see the mapping in
+`../01_parser/done.md` §0.
+
+---
+
 ## 1. Variable declarations
 
 Each entry of `statement.decide_variables` arrives as a `PG_AEXPR_OF` comparison

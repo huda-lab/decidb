@@ -48,6 +48,15 @@ struct DecideTerm {
 	//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! Entity scope the reducer aggregates BY (`sum(...) BY (k)`), or INVALID_INDEX for
+	//! `BY ()`: the whole enclosing relation. Only meaningful when `reduction` is SUM.
+	idx_t group_scope_idx = DConstants::INVALID_INDEX;
+	//! The frame (`LogicalDecide::frames[frame_idx]`) whose navigated rows this term
+	//! reads instead of a group; INVALID_INDEX for an ordinary term.
+	idx_t frame_idx = DConstants::INVALID_INDEX;
+	//! The frame's `ELSE v` fill: a fixed term whose value is the fill an instance's
+	//! missing positions add, scaled by this coefficient (the frame's sign and factor).
+	bool frame_fill = false;
 
 	DecideTerm(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
 	    : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {
@@ -67,22 +76,46 @@ struct BilinearConstraintTerm {
 	//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! Entity scope the reducer aggregates BY, or INVALID_INDEX for `BY ()`.
+	idx_t group_scope_idx = DConstants::INVALID_INDEX;
 };
 
 //! One canonical comparison, flattened into terms.
+//! An `IF b:` guard in linear form: the instance is imposed only where
+//! `lhs_terms <comparison> rhs_expr` holds, both read at the instance's own row. A
+//! bare BOOL decision `open` is `open >= 1`; `NOT open` is `open <= 0`.
+struct DecideGuard {
+	vector<DecideTerm> lhs_terms;
+	unique_ptr<Expression> rhs_expr;
+	ExpressionType comparison_type;
+};
+
 struct DecideConstraint {
 	vector<DecideTerm> lhs_terms;    // All additive terms from LHS
 	unique_ptr<Expression> rhs_expr; // RHS expression (may contain aggregates)
 	ExpressionType comparison_type;  // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
-	bool lhs_is_aggregate = false;   // True if original LHS was an aggregate (e.g., SUM(...))
+	bool lhs_is_aggregate = false;   // True if every decision term of the LHS is reduced (e.g., SUM(...))
+	//! True when a reduced term sits beside a direct per-row term (`ship <= 0.2 * sum(: ship)`):
+	//! one instance per row, each reading its own row and the reducers' groups.
+	bool has_reduced_terms = false;
 	bool was_minmax_easy = false;    // True if optimizer stripped an easy-direction MIN/MAX (MINMAX_EASY_REWRITE_TAG). Lets Site 1 enforce empty-WHEN rejection on user-written MIN/MAX even though the LHS is now per-row.
 	idx_t minmax_clause_idx = DConstants::INVALID_INDEX; // index into LogicalDecide::minmax_clause_labels
 	string minmax_agg_type;                                 // "min" or "max" (empty if not minmax)
 	idx_t ne_clause_idx = DConstants::INVALID_INDEX;     // index into LogicalDecide::ne_clause_labels
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;          // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                          // true=C1 (aux >= inner), false=C2 (aux >= -inner)
-	unique_ptr<Expression> when_condition;                  // DecidB: optional WHEN condition (nullptr = unconditional)
-	vector<unique_ptr<Expression>> per_columns;             // DecidB: optional PER grouping columns (empty = no grouping)
+	unique_ptr<Expression> when_condition;                  // DecidB: optional WHEN filter (nullptr = every row)
+	//! DecidB: the generation key. ROW (default) generates one instance per surviving
+	//! row; GLOBAL (`PER ()`) one for the query; KEY one per distinct value of the
+	//! entity scope `gen_scope_idx`, whose columns `per_columns` also lists.
+	DecideScopeKind gen_kind = DecideScopeKind::ROW;
+	idx_t gen_scope_idx = DConstants::INVALID_INDEX;
+	vector<unique_ptr<Expression>> per_columns;
+	//! DecidB: `IF b:` -- the instance is imposed only where the guard holds. `guard`
+	//! is the bound condition as written (for rendering); `guard_spec` is its linear
+	//! form, which the formulation states as a conditional row.
+	unique_ptr<Expression> guard;
+	unique_ptr<DecideGuard> guard_spec;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 	//! Stable origin in LogicalDecide::constraint_sources.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
@@ -110,6 +143,8 @@ struct DecideConstraint {
 		//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+		//! Entity scope the reducer aggregates BY, or INVALID_INDEX for `BY ()`.
+		idx_t group_scope_idx = DConstants::INVALID_INDEX;
 
 		QuadraticGroup() = default;
 	};
@@ -125,7 +160,10 @@ struct DecideConstraint {
 struct DecideObjective {
 	vector<DecideTerm> terms;              // Linear objective terms
 	unique_ptr<Expression> when_condition; // DecidB: optional WHEN condition (nullptr = unconditional)
-	vector<unique_ptr<Expression>> per_columns; // DecidB: optional PER grouping columns (empty = no grouping)
+	//! DecidB: the nested spelling `OUTER(PER k: INNER(e) BY (k))` generates one inner
+	//! value per distinct value of the entity scope `per_scope_idx`; INVALID_INDEX for a
+	//! flat objective.
+	idx_t per_scope_idx = DConstants::INVALID_INDEX;
 
 	//! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
 	//! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).
@@ -162,9 +200,18 @@ struct DecideObjective {
 //! `objective` is null when the query has no objective, or when the objective
 //! is neither an aggregate nor a query-wide decision -- the same two cases in
 //! which physical analysis used to leave its `objective` pointer unset.
+//! A later lexicographic objective stage, in the same linear form as the first.
+struct DecidePreparedObjectiveStage {
+	DecideSense sense = DecideSense::MINIMIZE;
+	unique_ptr<DecideObjective> objective;
+};
+
 struct DecidePreparedModel {
 	vector<unique_ptr<DecideConstraint>> constraints;
 	unique_ptr<DecideObjective> objective;
+	//! `THEN` stages after the first objective, in order. Linear only: each is solved
+	//! among the optima of the stages before it by freezing their values.
+	vector<DecidePreparedObjectiveStage> objective_tail;
 };
 
 } // namespace duckdb

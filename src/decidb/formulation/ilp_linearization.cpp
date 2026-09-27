@@ -172,7 +172,7 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
             // No finite M exists over an open box. Refuse, naming a column the user can
             // bound — which is what `OwnerOf` is for: this layer works in flat columns
             // and still has to speak the user's language.
-            ThrowUnboundedBigMNaming(indexer.OwnerOf(blame_col), var_names, "<>");
+            ThrowUnboundedBigMNaming(indexer.OwnerOf(blame_col), var_names, ic.construct);
         }
         double M = hi_end ? reach - row.rhs : row.rhs - reach;
         // A row already implied by its own box needs no relaxation at all. The margin is
@@ -182,21 +182,29 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
         M = MaxValue<double>(M, 0.0) + 1.0;
 
         SolverInput::RawConstraint lowered = std::move(row);
-        // `z == v` implies the row, so the row must be slackened by M exactly when
-        // `z != v`: by `M*z` when v is 0, and by `M*(1-z)` when v is 1 — which moves the
-        // bound as well as adding the term.
-        double m_coeff;
-        if (ic.binary_value == 0) {
-            m_coeff = hi_end ? -M : M;
-        } else {
-            m_coeff = hi_end ? M : -M;
-            lowered.rhs += hi_end ? M : -M;
-        }
-        lowered.indices.push_back(ic.binary_column);
-        lowered.coefficients.push_back(m_coeff);
+        ApplyIndicatorBigM(lowered.indices, lowered.coefficients, lowered.sense, lowered.rhs, ic.binary_column,
+                           ic.binary_value, M);
         input.global_constraints.push_back(std::move(lowered));
     }
     input.indicator_constraints.clear();
+}
+
+void decide_linearize::ApplyIndicatorBigM(vector<int> &indices, vector<double> &coefficients, char sense,
+                                          double &rhs, int binary_column, int binary_value, double M) {
+    D_ASSERT(sense == '<' || sense == '>');
+    const bool hi_end = sense == '<';
+    // `z == v` implies the row, so the row must be slackened by M exactly when
+    // `z != v`: by `M*z` when v is 0, and by `M*(1-z)` when v is 1 — which moves the
+    // bound as well as adding the term.
+    double m_coeff;
+    if (binary_value == 0) {
+        m_coeff = hi_end ? -M : M;
+    } else {
+        m_coeff = hi_end ? M : -M;
+        rhs += hi_end ? M : -M;
+    }
+    indices.push_back(binary_column);
+    coefficients.push_back(m_coeff);
 }
 
 } // namespace duckdb

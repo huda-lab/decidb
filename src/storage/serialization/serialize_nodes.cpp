@@ -35,6 +35,7 @@
 #include "duckdb/parser/qualified_name.hpp"
 #include "duckdb/parser/parsed_data/exported_table_data.hpp"
 #include "duckdb/common/column_index.hpp"
+#include "duckdb/parser/decide/decide_declaration.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
@@ -436,6 +437,70 @@ ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserialize
 	return result;
 }
 
+void DecideDeclaration::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<string>(100, "name", name);
+	serializer.WriteProperty<DecideScopeKind>(101, "scope_kind", scope_kind);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(102, "scope_key", scope_key);
+	serializer.WriteProperty<DecideDomain>(103, "domain", domain);
+	serializer.WritePropertyWithDefault<vector<string>>(104, "text_values", text_values);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(105, "lower_bound", lower_bound);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(106, "upper_bound", upper_bound);
+}
+
+DecideDeclaration DecideDeclaration::Deserialize(Deserializer &deserializer) {
+	DecideDeclaration result;
+	deserializer.ReadPropertyWithDefault<string>(100, "name", result.name);
+	deserializer.ReadProperty<DecideScopeKind>(101, "scope_kind", result.scope_kind);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(102, "scope_key", result.scope_key);
+	deserializer.ReadProperty<DecideDomain>(103, "domain", result.domain);
+	deserializer.ReadPropertyWithDefault<vector<string>>(104, "text_values", result.text_values);
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(105, "lower_bound", result.lower_bound);
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(106, "upper_bound", result.upper_bound);
+	return result;
+}
+
+void DecideFrameInfo::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<string>(100, "spec", spec);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(101, "order_key", order_key);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(102, "else_value", else_value);
+	serializer.WritePropertyWithDefault<idx_t>(103, "within_scope_idx", within_scope_idx);
+}
+
+DecideFrameInfo DecideFrameInfo::Deserialize(Deserializer &deserializer) {
+	DecideFrameInfo result;
+	deserializer.ReadPropertyWithDefault<string>(100, "spec", result.spec);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(101, "order_key", result.order_key);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(102, "else_value", result.else_value);
+	deserializer.ReadPropertyWithDefault<idx_t>(103, "within_scope_idx", result.within_scope_idx);
+	return result;
+}
+
+void DecideObjectiveClause::Serialize(Serializer &serializer) const {
+	serializer.WriteProperty<DecideSense>(100, "sense", sense);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression", expression);
+}
+
+DecideObjectiveClause DecideObjectiveClause::Deserialize(Deserializer &deserializer) {
+	DecideObjectiveClause result;
+	deserializer.ReadProperty<DecideSense>(100, "sense", result.sense);
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression", result.expression);
+	return result;
+}
+
+void DecideObjectiveStage::Serialize(Serializer &serializer) const {
+	serializer.WriteProperty<DecideSense>(100, "sense", sense);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(101, "expression", expression);
+	serializer.WriteProperty<double>(102, "constant_offset", constant_offset);
+}
+
+DecideObjectiveStage DecideObjectiveStage::Deserialize(Deserializer &deserializer) {
+	DecideObjectiveStage result;
+	deserializer.ReadProperty<DecideSense>(100, "sense", result.sense);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(101, "expression", result.expression);
+	deserializer.ReadProperty<double>(102, "constant_offset", result.constant_offset);
+	return result;
+}
+
 void DecideSourceColumnName::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<ColumnBinding>(100, "binding", binding);
 	serializer.WritePropertyWithDefault<string>(101, "name", name);
@@ -445,6 +510,20 @@ DecideSourceColumnName DecideSourceColumnName::Deserialize(Deserializer &deseria
 	DecideSourceColumnName result;
 	deserializer.ReadProperty<ColumnBinding>(100, "binding", result.binding);
 	deserializer.ReadPropertyWithDefault<string>(101, "name", result.name);
+	return result;
+}
+
+void DecideTextDomain::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<idx_t>(100, "variable_index", variable_index);
+	serializer.WritePropertyWithDefault<vector<string>>(101, "values", values);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(102, "indicator_indices", indicator_indices);
+}
+
+DecideTextDomain DecideTextDomain::Deserialize(Deserializer &deserializer) {
+	DecideTextDomain result;
+	deserializer.ReadPropertyWithDefault<idx_t>(100, "variable_index", result.variable_index);
+	deserializer.ReadPropertyWithDefault<vector<string>>(101, "values", result.values);
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(102, "indicator_indices", result.indicator_indices);
 	return result;
 }
 

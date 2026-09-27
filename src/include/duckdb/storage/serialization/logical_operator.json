@@ -1033,6 +1033,21 @@
         "id": 216,
         "name": "source_columns",
         "type": "vector<DecideSourceColumnName>"
+      },
+      {
+        "id": 217,
+        "name": "objective_tail",
+        "type": "vector<DecideObjectiveStage>"
+      },
+      {
+        "id": 218,
+        "name": "text_domains",
+        "type": "vector<DecideTextDomain>"
+      },
+      {
+        "id": 219,
+        "name": "frames",
+        "type": "vector<DecideFrameInfo>"
       }
     ]
   },

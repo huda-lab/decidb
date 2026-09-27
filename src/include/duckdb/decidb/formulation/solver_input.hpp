@@ -210,7 +210,36 @@ struct CoefficientColumn {
 };
 
 //! Represents an evaluated constraint ready for the solver
+//! An `IF b:` guard evaluated per row. The instance's row is imposed only where
+//! `lhs <comparison> rhs`, read at the instance's representative row, holds; the
+//! formulation states that as a conditional row (see ilp_model_builder.cpp).
+struct EvaluatedGuard {
+    vector<idx_t> variable_indices;             // [term_idx]; INVALID_INDEX for a fixed term
+    vector<CoefficientColumn> row_coefficients; // [term_idx], logical size = num_rows
+    CoefficientColumn rhs_values;               // logical size = num_rows
+    ExpressionType comparison_type;
+    string label;                               // `IF b` as written, for the auxiliary's name
+
+    //! How the guard switches the row, decided by `LinearizeGuards` once the
+    //! coefficients are known:
+    //!   VARIABLE   -- the guard is one BOOL decision (`IF open`, `IF NOT open`): the
+    //!                 row is conditioned on that column being `bool_value`.
+    //!   COMPARISON -- a linear comparison: instance `i` gets the binary
+    //!                 `aux_base + i`, with `aux = 0 ⟹ NOT guard` so the guard forces
+    //!                 `aux = 1`, and `aux = 1 ⟹ the row`.
+    //!   ALWAYS / NEVER -- the guard holds for every / no assignment (`IF open >= 0`):
+    //!                 the row is unconditional / dropped.
+    enum class Kind : uint8_t { VARIABLE, COMPARISON, ALWAYS, NEVER };
+    Kind kind = Kind::COMPARISON;
+    idx_t bool_var = DConstants::INVALID_INDEX;
+    int bool_value = 1;
+    idx_t aux_base = DConstants::INVALID_INDEX;
+};
+
 struct EvaluatedConstraint {
+    //! DecidB: the `IF b:` guard, or null. Shared because an evaluated constraint is
+    //! copied by the lowerings that split one clause into several rows.
+    shared_ptr<EvaluatedGuard> guard;
     vector<idx_t> variable_indices;           // Which variable for each term
     vector<CoefficientColumn> row_coefficients;  // [term_idx] = coefficient column for that term
     //! Printable symbolic label of each term's coefficient expression (parallel to
@@ -307,12 +336,70 @@ struct EvaluatedConstraint {
     //! already in the user's AVG units — report it raw). I2.d.
     bool avg_scaled = false;
 
-    //! Unified WHEN+PER row→group mapping
-    //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)
-    //! DConstants::INVALID_INDEX = row excluded (WHEN filter or NULL PER value)
-    //! 0..K-1 = group assignment
+    //! The generated instances (DeciQL generation, spec §7.1): row → instance id.
+    //! Empty = one implicit instance over every row (fast path: no WHEN, no PER)
+    //! DConstants::INVALID_INDEX = row excluded (WHEN filter or NULL key value)
+    //! 0..K-1 = the instance the row belongs to
+    //! A reduced term sums the rows of the instance unless `term_groupings` says
+    //! otherwise; a direct term reads any one of the instance's rows.
     vector<idx_t> row_group_ids;
-    idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
+    idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of instances
+
+    //! Which rows a linear term reads for a generated instance (DeciQL aggregation,
+    //! `agg(...) BY (k)`), parallel to `variable_indices`. Empty means every term is
+    //! CLASS: the instance's own rows, which is what a constraint whose reducers are
+    //! keyed on the generation key (or generated globally) needs and is the shape
+    //! every earlier consumer already handles.
+    enum class TermGroupKind : uint8_t {
+        CLASS,   //!< the instance's rows
+        DIRECT,  //!< one of the instance's rows, once (a direct, non-reduced term)
+        ALL,     //!< every row the WHEN filter admits (`BY ()`)
+        KEYED,   //!< the group of `partitions[partition]` that contains the instance
+        FRAME    //!< the rows `frame_rows[frame]` navigated to for the instance
+    };
+    struct TermGrouping {
+        TermGroupKind kind = TermGroupKind::CLASS;
+        idx_t partition = DConstants::INVALID_INDEX;
+        idx_t frame = DConstants::INVALID_INDEX;
+        //! FRAME only: the term is the frame's `ELSE v` fill (its coefficient at the
+        //! instance's row times `frame_rows[frame].else_values[g]`), not a row set.
+        bool frame_fill = false;
+    };
+    vector<TermGrouping> term_groupings;
+    //! The rows a frame reads per instance (spec §7.3): a CSR over the instances, plus
+    //! the `ELSE v` fill the frame adds for each of the instance's missing positions.
+    //! One entry per distinct frame the clause navigates, shared by the terms its
+    //! body produced, so the fill enters an instance's row once.
+    struct FrameRows {
+        idx_t frame_idx = DConstants::INVALID_INDEX;
+        vector<idx_t> offsets;      //!< instance → [offsets[g], offsets[g+1]) into `rows`
+        vector<idx_t> rows;
+        vector<double> else_values; //!< instance → constant added to the row's left side
+    };
+    vector<FrameRows> frame_rows;
+    //! Instances a frame's NULL policy dropped (a missing position, no ELSE): no row.
+    vector<bool> instance_dropped;
+    //! Rows the clause's WHEN filter admits (for ALL); empty = every row.
+    vector<bool> when_active;
+    //! A partition of the rows by a BY key that differs from the generation key.
+    struct KeyedPartition {
+        idx_t scope_idx = DConstants::INVALID_INDEX;
+        vector<idx_t> row_group_ids;   //!< row → group, INVALID_INDEX when filtered out
+        idx_t num_groups = 0;
+        vector<idx_t> class_to_group;  //!< instance → the group containing it
+        mutable vector<idx_t> group_offsets;
+        mutable vector<idx_t> group_row_ids;
+    };
+    vector<KeyedPartition> partitions;
+    //! True when some term reads rows other than its instance's own.
+    bool HasGeneralGrouping() const {
+        for (auto &grouping : term_groupings) {
+            if (grouping.kind != TermGroupKind::CLASS) {
+                return true;
+            }
+        }
+        return !instance_dropped.empty();
+    }
 
     //! Printable PER key per group (size num_groups when PER-grouped; empty otherwise).
     //! Surfaces each group's key value (`'a'`, or `EU, 2024` for a composite key) so
@@ -347,6 +434,13 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
 struct EntityMapping {
     idx_t num_entities = 0;          //! Number of distinct entities in this table
     vector<idx_t> row_to_entity;     //! [row_idx] -> entity_id (0..num_entities-1)
+    //! Representative key values, [key_column][entity_id], so a generated instance
+    //! can be labelled by its key (`EU, 2024`) in a diagnosis.
+    vector<vector<Value>> rep_keys;
+    //! [entity_id] -> whether any key column is NULL there. Generation (a PER) skips
+    //! such an entity, as SQL's GROUP BY would drop a NULL group from a constraint;
+    //! a decision keyed on it still exists, and aggregation (a BY) still groups it.
+    vector<bool> entity_key_has_null;
 };
 
 //! Links a McCormick auxiliary `w` to the pair it linearizes: `w = b * x`, with
@@ -504,6 +598,15 @@ struct SolverInput {
     //! (contributes once per counted row) from `SUM(x) + cap` (contributes once). Mirrors
     //! EvaluatedConstraint::linear_term_reductions on the constraint side.
     vector<LinearTermReduction> objective_term_reductions; // [term_idx]
+    //! `THEN` stages after the first objective (spec §7.5), each in the same linear
+    //! form, solved in order among the optima of the stages before it.
+    struct ObjectiveStage {
+        DecideSense sense = DecideSense::MINIMIZE;
+        vector<CoefficientColumn> coefficients;      // [term_idx]
+        vector<idx_t> variable_indices;              // [term_idx]
+        vector<LinearTermReduction> term_reductions; // [term_idx]
+    };
+    vector<ObjectiveStage> objective_stages;
     DecideSense sense;
 
     // Quadratic objective: inner linear expression of SUM(sign * POWER(expr, 2)).
@@ -604,8 +707,20 @@ struct SolverInput {
         //! The implied row, provenance included. Composed rather than restated so a
         //! conditional row and the matrix row it lowers to cannot drift apart.
         RawConstraint row;
+        //! What the user wrote that needs this conditional row, for the refusal a
+        //! Big-M lowering raises when no finite M exists.
+        const char *construct = "<>";
     };
     vector<IndicatorConstraintSpec> indicator_constraints;
+
+    //! Whether the chosen backend states a conditional row itself (an indicator
+    //! constraint) or needs it lowered to a Big-M row. Stage 05's answer, carried as a
+    //! value: `SolverModel::Build` reads it for the rows an `IF` guard conditions,
+    //! which exist only once the instances are enumerated there.
+    bool native_indicators = false;
+    //! Declared decision names, for the refusal a Big-M lowering raises when a column
+    //! it reads has no finite bound.
+    vector<string> decide_variable_names;
 
     //! Diagnosis text of each hard MIN/MAX clause (`MAX(x * c)`), indexed by
     //! `EvaluatedConstraint::minmax_clause_idx`. Names the extremum column the clause

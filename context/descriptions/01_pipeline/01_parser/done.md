@@ -11,6 +11,46 @@ once by `DecideCanonicalizer` on the bound tree — see
 
 ---
 
+## 0. The DeciQL surface (2026-09-26)
+
+The grammar is the clean redesign of `../../00_project_overview/deciql_language_spec.md`;
+the shipped syntax is in `../../00_project_overview/syntax_reference.md`. What this stage
+owns for it (`third_party/libpg_query/grammar/statements/select.y`, `grammar.cpp`,
+`src/parser/transform/expression/transform_decide.cpp`):
+
+- **Declarators** `[PER scope:] name(domain) [bounds]` → `DecideDeclaration`
+  (`parser/decide/decide_declaration.hpp`): scope kind ROW / KEY / GLOBAL with the key
+  columns, domain (`INT REAL BOOL SEMIINT SEMIREAL TEXT IN [...]`), bounds. The retired
+  spellings `T.x(...)`, `scalar x(...)`, a bare `x`, keep productions whose only job is a
+  parser error naming the new spelling.
+- **Constraint prefixes** `[WHEN a_expr] [PER scope] [IF a_expr] ':' body` → nested
+  wrappers `PER(WHEN(IF(body)))` built by `makeDecideScopedBody`; each is a
+  `FunctionExpression` operator (`PER_CONSTRAINT_TAG`, `WHEN_CONSTRAINT_TAG`,
+  `IF_CONSTRAINT_TAG`). Association is decided here and never re-decided.
+- **Reducers** `agg([WHEN c] [PER K]: e [, more]) [BY (keys)]` → the aggregate call
+  with `filter` = c, wrapped in `QUALIFIED_REDUCER_TAG` (PER) and `REDUCER_BY_TAG` (BY)
+  operators. `norm(WHEN c: e, p)` takes the same prefix.
+- **Frames** `AT(sel [ELSE v]: e) OVER (order)` and `agg(FROM sel TO sel [EVERY d]
+  [ELSE v | ALL]: e) OVER (order)` → one `FRAME_TAG` operator whose children are
+  `[body, spec constant, order key, else value, within columns...]`; the scalar part
+  travels as `DecideFrameSpec::Encode()` (`parser/decide/decide_frame_spec.hpp`).
+- **Objectives** `stage [THEN stage]* | SATISFY` → `vector<DecideObjectiveClause>`
+  (`decide_objectives` on `SelectNode`); `MAXIMIZE PER (): e` is accepted as the only
+  objective generation.
+- **Lexing.** DECIDE-only tokens (`WHEN_DECIDE PER_DECIDE IF_DECIDE BY_DECIDE
+  THEN_DECIDE OVER_DECIDE WITHIN_DECIDE AT_DECIDE`) are emitted only inside the DECIDE
+  phase, never inside a nested ordinary subquery (paren-depth marks), `AT`/`BY`/`OVER`
+  only when followed by `(`, and `WHEN`/`THEN` respect `CASE` depth
+  (`src_backend_parser_parser.cpp`). New unreserved keywords: `SATISFY SEMIREAL SEMIINT
+  PREVIOUS EVERY CYCLIC`.
+
+Sections below that mention postfix `WHEN`/`PER`, `T.x(TYPE)`, `scalar x(TYPE)` or
+`SUM(D: e)` describe the pre-redesign spelling; read them with the mapping
+`body WHEN c` → `WHEN c: body`, `SUM(x) <= K PER g` → `PER g: SUM(x) BY (g) <= K`,
+`T.x(INT)` → `PER T: x(INT)`, `scalar x(INT)` → `PER (): x(INT)`, `SUM(D: e)` → `SUM(PER D: e)`.
+
+---
+
 ## 1. Grammar
 
 `third_party/libpg_query/grammar/statements/select.y`. `DECIDE`, `MAXIMIZE` and

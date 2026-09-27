@@ -134,8 +134,7 @@ class TestCaseExpressionRejection:
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
             DECIDE x(BOOL)
-            SUCH THAT SUM(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END) <= 1
-                     PER s_nationkey
+            SUCH THAT PER s_nationkey: SUM(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END) BY (s_nationkey) <= 1
             MAXIMIZE SUM(x * s_acctbal)
         """
         decidb_cli.assert_error(sql, match=self._FRIENDLY)

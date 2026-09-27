@@ -31,7 +31,7 @@ def test_column_bound_reduces_to_tightest_per_group(decidb_cli, oracle_solver):
             VALUES (1, 'a', 10), (2, 'a', 15), (3, 'b', 7)
         ) t(id, grp, cap)
         DECIDE x(INT)
-        SUCH THAT SUM(x) <= cap PER grp
+        SUCH THAT PER grp, cap: SUM(x) BY (grp) <= cap
         MAXIMIZE SUM(x)
     """)
     gi, xi = cols.index("grp"), cols.index("x")
@@ -86,13 +86,13 @@ def test_figure1_paper_query_matches_published_output(decidb_cli, oracle_solver)
             VALUES ('R1', 450, 'critical'), ('R2', 600, 'standard')
         )
         SELECT routeID, depotID, regionID, open, ship
-        DECIDE D.open(BOOL), T.ship(INT)
+        DECIDE PER D: open(BOOL), PER T: ship(INT)
         FROM Depots D JOIN Routes T USING (depotID) JOIN Regions R USING (regionID)
         SUCH THAT
             ship BETWEEN 0 AND capacity * open AND
-            SUM(ship) <= stock PER depotID AND
-            SUM(ship) >= demand WHEN priority = 'critical' PER regionID
-        MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open)
+            PER D: SUM(ship) BY (D) <= stock AND
+            WHEN priority = 'critical' PER R: SUM(ship) BY (R) >= demand
+        MINIMIZE SUM(unit_cost * ship) + SUM(PER D: opening_cost * open)
     """
     rows, cols = decidb_cli.execute(query)
     ri, oi, si = cols.index("routeID"), cols.index("open"), cols.index("ship")

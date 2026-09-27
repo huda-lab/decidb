@@ -19,42 +19,6 @@ bool SelectNode::HasDecideClause() const {
 	return !decide_variables.empty();
 }
 
-//! Reverse the parser-only comparison marker used for a typed DECIDE declaration.
-//! The generic expression renderer would expose the marker as
-//! `(x = 'integer_variable')`, which is neither public nor parseable DECIDE syntax.
-static string DecideVariableToString(const ParsedExpression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::COMPARISON) {
-		throw InternalException("DECIDE variable declaration is not a typed comparison marker");
-	}
-	auto &comparison = expr.Cast<ComparisonExpression>();
-	if (comparison.type != ExpressionType::COMPARE_EQUAL ||
-	    comparison.left->GetExpressionClass() != ExpressionClass::COLUMN_REF ||
-	    comparison.right->GetExpressionClass() != ExpressionClass::CONSTANT) {
-		throw InternalException("DECIDE variable declaration has an invalid parsed shape");
-	}
-	auto &constant = comparison.right->Cast<ConstantExpression>();
-	if (constant.value.type() != LogicalType::VARCHAR) {
-		throw InternalException("DECIDE variable declaration has a non-string type marker");
-	}
-
-	auto marker = constant.value.GetValue<string>();
-	bool scalar = StringUtil::StartsWith(marker, "scalar_");
-	if (scalar) {
-		marker = marker.substr(7);
-	}
-	string type;
-	if (marker == DECIDE_VARIABLE_TYPES[0]) {
-		type = "REAL";
-	} else if (marker == DECIDE_VARIABLE_TYPES[1]) {
-		type = "INT";
-	} else if (marker == DECIDE_VARIABLE_TYPES[2]) {
-		type = "BOOL";
-	} else {
-		throw InternalException("Unknown DECIDE variable type marker '%s'", marker);
-	}
-	return string(scalar ? "scalar " : "") + comparison.left->ToString() + "(" + type + ")";
-}
-
 //! A top-level AND is the DECIDE constraint list, not an ordinary parenthesized SQL
 //! conjunction. Keeping DuckDB's generic outer parentheses makes a following WHEN or
 //! PER unparseable, so emit the list in the grammar's own form.
@@ -119,16 +83,12 @@ string SelectNode::ToString() const {
 			if (i > 0) {
 				result += ", ";
 			}
-			result += DecideVariableToString(*decide_variables[i]);
+			result += decide_variables[i].ToString();
 		}
 		result += " SUCH THAT " + DecideConstraintsToString(*decide_constraints);
-		if (decide_objective) {
-			if (decide_sense == DecideSense::MAXIMIZE) {
-				result += " MAXIMIZE ";
-			} else if (decide_sense == DecideSense::MINIMIZE) {
-				result += " MINIMIZE ";
-			}
-			result += decide_objective->ToString();
+		for (idx_t i = 0; i < decide_objectives.size(); i++) {
+			result += i == 0 ? " " : " THEN ";
+			result += decide_objectives[i].ToString();
 		}
 	}
 	if (!groups.grouping_sets.empty()) {
@@ -207,19 +167,24 @@ bool SelectNode::Equals(const QueryNode *other_p) const {
 		return false;
 	}
 	// decidb's DECIDE
-	if (!ParsedExpression::ListEquals(decide_variables, other.decide_variables)) {
+	if (decide_variables.size() != other.decide_variables.size()) {
 		return false;
+	}
+	for (idx_t i = 0; i < decide_variables.size(); i++) {
+		if (!decide_variables[i].Equals(other.decide_variables[i])) {
+			return false;
+		}
 	}
 	if (!ParsedExpression::Equals(decide_constraints, other.decide_constraints)) {
 		return false;
 	}
-	if (HasDecideClause() && other.HasDecideClause()) {
-		if (decide_sense != other.decide_sense) {
+	if (decide_objectives.size() != other.decide_objectives.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < decide_objectives.size(); i++) {
+		if (!decide_objectives[i].Equals(other.decide_objectives[i])) {
 			return false;
 		}
-	}
-	if (!ParsedExpression::Equals(decide_objective, other.decide_objective)) {
-		return false;
 	}
 	// WHERE
 	if (!ParsedExpression::Equals(where_clause, other.where_clause)) {
@@ -253,14 +218,13 @@ unique_ptr<QueryNode> SelectNode::Copy() const {
 	}
 	result->from_table = from_table ? from_table->Copy() : nullptr;
 	// decidb's decide
-	for (auto &child : decide_variables) {
-		result->decide_variables.push_back(child->Copy());
+	for (auto &declaration : decide_variables) {
+		result->decide_variables.push_back(declaration.Copy());
 	}
 	result->decide_constraints = decide_constraints ? decide_constraints->Copy() : nullptr;
-	if (!decide_variables.empty()) {
-		result->decide_sense = decide_sense;
+	for (auto &objective : decide_objectives) {
+		result->decide_objectives.push_back(objective.Copy());
 	}
-	result->decide_objective = decide_objective ? decide_objective->Copy() : nullptr;
 	result->where_clause = where_clause ? where_clause->Copy() : nullptr;
 	// groups
 	for (auto &group : groups.group_expressions) {

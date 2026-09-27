@@ -1,20 +1,39 @@
 # DeciQL Language Specification (target — clean redesign)
 
-> **Status: DESIGN TARGET, not shipped behavior.**
+> **Status: IMPLEMENTED (2026-09-26), with the exceptions listed here.**
 >
-> This document defines the *next-generation* DeciQL surface proposed in the
-> NYUAD "DeciQL proposals" deck (Mai, HUDA Lab). It is a **clean redesign**: it
-> deliberately supersedes the current overloaded `PER` (see §11 Migration and
-> the "per Trap" discussion in the deck).
+> This document is the language design from the NYUAD "DeciQL proposals" deck
+> (Mai, HUDA Lab). It is a **clean redesign** and the engine now speaks it: the
+> old overloaded `PER`, `T.x(TYPE)`, `scalar x(TYPE)`, postfix `WHEN` and
+> `SUM(D: e)` are gone (each raises a parser error naming the new spelling), and
+> the test suite, golden corpus and benchmarks were migrated with it.
 >
-> The single source of truth for what the engine does **today** remains
-> [`syntax_reference.md`](syntax_reference.md). Nothing here is implemented yet.
-> Where this spec and the current implementation disagree, the difference is a
-> planned change, tracked in §10 and §11 — not a documentation bug.
+> What the engine does **today** is recorded in [`syntax_reference.md`](syntax_reference.md);
+> read that first for the shipped surface. The open decisions of §10 were settled:
+>
+> | decision | settled as |
+> |---|---|
+> | OPEN-1 `per` placement in declarations | prefix: `PER F.city: open(BOOL)` |
+> | OPEN-2 FD-failure policy | reject with a named error (§6.3); Variant Signature (§7.2) is **not** implemented |
+> | OPEN-3 `norm(e, 2)` | squared L2 (unchanged) |
+> | OPEN-4 backend reach | indicator constraints (`IF`, `<>`) native on Gurobi, Big-M on HiGHS; lexicographic `THEN` as staged solves on both; nothing new is gated |
+> | OPEN-5 `SATISFY` | both `SATISFY` and an omitted objective are accepted |
+>
+> Not yet implemented from this spec: derived keys (`BY (D, S.day + S.transit)`,
+> §9 #8 — a key names columns or relations), nested reducers in a *constraint*
+> (§9 #9's `sum(... max(...) by (c)) by (d) <= cap`; only the objective form
+> `MAX(PER k: SUM(e) BY (k))` is formulated), a frame inside a reducer or a
+> reducer inside a frame's body ("nested frame aggregation"), range frames
+> reducing with `MIN`/`MAX`/`AVG` (only `SUM` and `AT`), `ABS` over a frame term,
+> a non-constant `ELSE` value, `IF` guards on MIN/MAX/`<>`/ABS/quadratic/bilinear
+> bodies, a comparison inside an `AND`/`OR` guard (pure `AND`/`OR` of BOOL
+> decisions is supported), guards comparing a `REAL` decision, `=`/`<>` guards,
+> and frames or TEXT decisions inside an objective. Each is refused with a
+> message naming the restriction. Variant Signature (§7.2) is not implemented:
+> the FD rule of §6.3 rejects instead.
 >
 > Reading order: §1 principles → §3–4 grammar → §6–7 semantics → §8 lowering →
-> §9 conformance examples. §10 lists decisions still open; do not implement past
-> an open decision without settling it.
+> §9 conformance examples.
 
 ---
 
@@ -66,10 +85,12 @@ formally; the deck proves it (Theorems, deck p31/p55).
 
 ### 3.1 New reserved words
 
-Added to `third_party/libpg_query/grammar/keywords/reserved_keywords.list`
-(current reserved DECIDE words are `DECIDE`, `SUCH`, `MAXIMIZE`, `MINIMIZE`):
-
-`PER`, `BY`, `WHEN`, `IF`, `THEN`, `SATISFY`, `OVER`, `WITHIN`, `AT`.
+None beyond today's `DECIDE`, `SUCH`, `MAXIMIZE`, `MINIMIZE`. `WHEN`, `THEN`
+and `IF` are already SQL keywords. `PER`, `BY`, `OVER`, `WITHIN`, `AT`,
+`SATISFY`, `PREVIOUS`, `NEXT`, `FIRST`, `LAST`, `EVERY`, `CYCLIC`, `SEMIREAL`,
+`SEMIINT` stay unreserved: they remain usable as column, alias and table names
+everywhere, including inside a DECIDE body, because the lexer emits their
+DECIDE-only tokens by context (§3.2).
 
 ### 3.2 New unreserved / contextual words
 
@@ -195,7 +216,7 @@ Defaults (deck p16, p43, p56): no `PER` ⟹ *per row*; no `BY` ⟹ `BY ()`
 ```ebnf
 objective_decl ::= objective ( 'THEN' objective )*        -- lexicographic
                  | 'SATISFY'                              -- feasibility only
-objective      ::= ( 'MINIMIZE' | 'MAXIMIZE' ) ( 'PER' '(' ')' )? expr
+objective      ::= ( 'MINIMIZE' | 'MAXIMIZE' ) ( 'PER' '(' ')' ':' )? expr
 ```
 
 - `THEN` chains **lexicographic** objectives: optimize the first; among its
@@ -203,7 +224,10 @@ objective      ::= ( 'MINIMIZE' | 'MAXIMIZE' ) ( 'PER' '(' ')' )? expr
 - `SATISFY` asks only for a feasible assignment (replaces today's "omit
   MAXIMIZE/MINIMIZE"). The two forms are mutually exclusive.
 - An objective is generated **exactly once**, so an omitted outer `PER` resolves
-  to `PER ()`, never per-row. Any other `PER` on an objective is rejected.
+  to `PER ()`, never per-row. Any other `PER` on an objective is rejected (a
+  parser error names the `PER ():` form and the nested-reducer alternative).
+- A later stage must be linear (`SUM`/`AVG` of decision terms); a `MIN`/`MAX`,
+  `ABS`, quadratic or `norm` body belongs in the first stage.
 
 ---
 
@@ -265,11 +289,30 @@ Frame partition `π`: `∅` if `WITHIN` omitted, else the given `P`.
 
 Rules carried from today (still hold): `INT` result is `BIGINT`; `<>` / strict
 `<` / `>` require a provably integer LHS; a NULL in any value the solver reads
-is an error, not a zero. `TEXT` decisions are only usable where an enum makes
+is an error, not a zero. A NULL in a **key** is not a value the solver reads:
+a generation key (`PER K`) generates no instance for a NULL key; an aggregation
+key (`BY`) puts NULL-keyed rows in a group of their own; a frame's order key puts
+a NULL-keyed row on no timeline (its instance is skipped); a decision keyed on
+NULL exists and reads back.
+
+A `SEMI` range whose floor is a *data* column that is negative on some rows
+needs an explicit negative constant bound as well (`x(SEMIINT) BETWEEN lo AND hi
+... SUCH THAT x >= -K`): only a constant floor widens the column box. A
+declaration bound is a constant or a column; a decision or a reducer in a
+bound is rejected (write it in `SUCH THAT`), as is an empty constant range
+(`BETWEEN 5 AND 2`). `TEXT` decisions are only usable where an enum makes
 sense — comparisons `status = 'open'` and as generation predicates (deck p11,
 p58); arithmetic on a `TEXT` decision is rejected.
 
 ### 6.3 Well-definedness (the core theorems)
+
+Implementation note: a column is also determined by a key when it belongs to a
+base table whose `PRIMARY KEY` / `UNIQUE` columns all lie in the key — the
+schema's own functional dependency, which is how `PER S.shipmentID: ... BY
+(S.depotID, S.day)` is admitted when `shipmentID` is the table's key and refused
+over an unkeyed `VALUES` list. A reducer over an **empty** row set (a `WHEN`
+that admits nothing, a `BY` group with no rows) is an error naming the
+reducer, not 0 and not NULL.
 
 For **every** scoped expression reached recursively — with filtered relation
 `Rθ`, resolved key `κ`, direct tuple terms `eᵢ`, reducer groups `γⱼ`, frame
@@ -363,6 +406,16 @@ Point vs range spellings:
   over the selected positions; `every d` steps (e.g. `every 7`); `all` requires
   a complete frame (else NULL); `else v` fills missing positions.
 
+Implementation notes: the timeline is built over the WHEN-filtered rows `Rθ`,
+so a `WHEN` that removes the previous period removes that position too. `at(F:
+e)` reads **one** row of the selected position; if the position holds several
+peers the query is refused (make the order key unique within the partition, or
+reduce with a range). A range's endpoints are normalised (`from previous to 2
+previous` ≡ `from 2 previous to previous`), a range that straddles the current
+position includes it, `every d` steps from the lower endpoint, and `else v`
+contributes `v` once per missing position. `else` and `all` are mutually
+exclusive; distances run from 1 to 999. `else v` is a constant.
+
 **NULL / boundary policy** (deck p49–50):
 - A NULL **consumed by a reducer** is ignored while any non-NULL value remains
   (the reduced-NULL case — still a valid constraint).
@@ -381,12 +434,20 @@ instance(C) = ⟦b⟧C ⟹ ⟦B⟧C
 
 Require `κ → b`. `θ` (known) filters *rows* before generation; `b` (unknown)
 guards the *constraint*, lowering to an indicator / big-M implication (stage 05).
+`b` is a BOOL decision, its negation, a TEXT comparison, a linear comparison over
+integer-valued decisions (`<=`, `<`, `>=`, `>`), or an `AND` / `OR` of BOOL
+literals (`if open and not closed`, which is the linear guard `open - closed
+>= 1`). A guarded body is linear.
 
 ### 7.5 Objectives
 
 - `MINIMIZE/MAXIMIZE e` evaluates `e` once at `PER ()`.
 - `A THEN B THEN …` is lexicographic: solve for A's optimum, freeze it as a
   constraint (or use the backend's lexicographic API), then optimize B, etc.
+  "Optimum" is the solver's: the frozen row admits a relative slack of `1e-6`
+  (exact for integer-valued objectives), so a later `REAL` stage may move an
+  earlier stage within that tolerance. A later stage that is unbounded under
+  the earlier optima is an error naming the stage.
 - `SATISFY` sets no objective; any feasible point is returned.
 
 ---

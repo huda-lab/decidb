@@ -37,7 +37,7 @@ def test_scalar_slack_absorbs_aggregate_shortfall(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, x, s FROM (VALUES (1), (2), (3), (4)) t(id)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), PER (): s(INT)
         SUCH THAT x >= 3 AND x <= 3 AND SUM(x) - s <= 4
         MINIMIZE s
     """)
@@ -58,7 +58,7 @@ def test_scalar_var_added_to_aggregate(decidb_cli):
     """
     rows, cols = decidb_cli.execute("""
         SELECT id, x, s FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), PER (): s(INT)
         SUCH THAT x <= 9 AND s >= 4 AND s <= 4 AND SUM(x) + s <= 10
         MAXIMIZE SUM(x)
     """)
@@ -84,7 +84,7 @@ def test_scalar_slack_oracle_verified(decidb_cli, oracle_solver, perf_tracker):
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute("""
         SELECT id, v, x, s FROM (VALUES (1, 3.0), (2, 5.0), (3, 7.0)) t(id, v)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), PER (): s(INT)
         SUCH THAT x <= 4 AND s <= 100 AND SUM(x * v) - s <= 20
         MINIMIZE 10 * s - SUM(x)
     """)
@@ -139,8 +139,8 @@ def test_scalar_var_in_per_aggregate(decidb_cli):
         SELECT id, g, x, s FROM (
             VALUES (1, 'A'), (2, 'A'), (3, 'B'), (4, 'B')
         ) t(id, g)
-        DECIDE x(INT), scalar s(INT)
-        SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND SUM(x) + s <= 8 PER g
+        DECIDE x(INT), PER (): s(INT)
+        SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND PER g: SUM(x) BY (g) + s <= 8
         MAXIMIZE SUM(x)
     """)
     ci = {c: i for i, c in enumerate(cols)}

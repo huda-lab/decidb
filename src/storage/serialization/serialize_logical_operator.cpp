@@ -386,6 +386,9 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", canonical_objective);
 	serializer.WritePropertyWithDefault<vector<string>>(215, "source_fragments", source_fragments);
 	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", source_columns);
+	serializer.WritePropertyWithDefault<vector<DecideObjectiveStage>>(217, "objective_tail", objective_tail);
+	serializer.WritePropertyWithDefault<vector<DecideTextDomain>>(218, "text_domains", text_domains);
+	serializer.WritePropertyWithDefault<vector<DecideFrameInfo>>(219, "frames", frames);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -407,6 +410,9 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->canonical_objective);
 	deserializer.ReadPropertyWithDefault<vector<string>>(215, "source_fragments", result->source_fragments);
 	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->source_columns);
+	deserializer.ReadPropertyWithDefault<vector<DecideObjectiveStage>>(217, "objective_tail", result->objective_tail);
+	deserializer.ReadPropertyWithDefault<vector<DecideTextDomain>>(218, "text_domains", result->text_domains);
+	deserializer.ReadPropertyWithDefault<vector<DecideFrameInfo>>(219, "frames", result->frames);
 	return std::move(result);
 }
 

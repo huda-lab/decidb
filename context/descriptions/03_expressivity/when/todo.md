@@ -1,3 +1,5 @@
-# WHEN Keyword — Planned Features
+# WHEN / IF — Planned Features
 
-No open gaps.
+- `IF` guards on MIN/MAX, `<>`, ABS, quadratic and bilinear bodies; `=` / `<>` guards;
+  guards comparing a `REAL` decision. Each is refused with a message naming the
+  restriction today.

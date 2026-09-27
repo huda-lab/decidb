@@ -206,57 +206,32 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		                                       std::move(right_expr));
 	}
 	case duckdb_libpgquery::PG_AEXPR_WHEN_CONSTRAINT: {
-		// DecidB: constraint WHEN condition
-		auto constraint_expr = TransformExpression(root.lexpr);
-		auto condition_expr = TransformExpression(root.rexpr);
+		// DecidB: `WHEN theta: body` -- child 0 the body, child 1 the condition
 		vector<unique_ptr<ParsedExpression>> children;
-		children.push_back(std::move(constraint_expr));
-		children.push_back(std::move(condition_expr));
+		children.push_back(TransformExpression(root.lexpr));
+		children.push_back(TransformExpression(root.rexpr));
 		auto result = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(children));
 		result->is_operator = true;
 		return std::move(result);
 	}
-	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT: {
-		// DecidB: constraint PER column(s)
-		auto constraint_expr = TransformExpression(root.lexpr);
-		vector<unique_ptr<ParsedExpression>> children;
-		children.push_back(std::move(constraint_expr));
-		// Multi-column PER: rexpr is a PGList of column refs
-		if (root.rexpr->type == duckdb_libpgquery::T_PGList) {
-			auto *list = reinterpret_cast<duckdb_libpgquery::PGList *>(root.rexpr);
-			for (auto cell = list->head; cell != nullptr; cell = cell->next) {
-				auto *col_node = reinterpret_cast<duckdb_libpgquery::PGNode *>(cell->data.ptr_value);
-				children.push_back(TransformExpression(col_node));
-			}
-		} else {
-			// Single column PER
-			children.push_back(TransformExpression(root.rexpr));
-		}
-		auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(children));
-		result->is_operator = true;
-		return std::move(result);
-	}
-	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER: {
-		// DecidB: relation-qualified reducer, sum(D: expr) or sum(D, T: expr).
-		// children[0] = the aggregate, children[1..] = one column ref per named
-		// relation. rexpr is a PGList (mirrors multi-column PER's transform above)
-		// whenever the qualifier names more than one relation.
+	case duckdb_libpgquery::PG_AEXPR_IF_CONSTRAINT: {
+		// DecidB: `IF b: body` -- child 0 the body, child 1 the guard
 		vector<unique_ptr<ParsedExpression>> children;
 		children.push_back(TransformExpression(root.lexpr));
-		if (root.rexpr->type == duckdb_libpgquery::T_PGList) {
-			auto *list = reinterpret_cast<duckdb_libpgquery::PGList *>(root.rexpr);
-			for (auto cell = list->head; cell != nullptr; cell = cell->next) {
-				auto *col_node = reinterpret_cast<duckdb_libpgquery::PGNode *>(cell->data.ptr_value);
-				children.push_back(TransformExpression(col_node));
-			}
-		} else {
-			children.push_back(TransformExpression(root.rexpr));
-		}
-		auto result = make_uniq<FunctionExpression>(QUALIFIED_REDUCER_TAG, std::move(children));
+		children.push_back(TransformExpression(root.rexpr));
+		auto result = make_uniq<FunctionExpression>(IF_CONSTRAINT_TAG, std::move(children));
 		result->is_operator = true;
 		return std::move(result);
 	}
-
+	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT:
+		// DecidB: `PER K: body` -- child 0 the body, children 1.. the key; no key = PER ()
+		return TransformDecideScopeWrapper(PER_CONSTRAINT_TAG, root.lexpr, root.rexpr);
+	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER:
+		// DecidB: `agg(PER K: e)` -- child 0 the aggregate, children 1.. the key
+		return TransformDecideScopeWrapper(QUALIFIED_REDUCER_TAG, root.lexpr, root.rexpr);
+	case duckdb_libpgquery::PG_AEXPR_REDUCER_BY:
+		// DecidB: `agg(...) BY (keys)` -- child 0 the reducer, children 1.. the keys
+		return TransformDecideReducerBy(root.lexpr, root.rexpr);
 	default:
 		break;
 	}

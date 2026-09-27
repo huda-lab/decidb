@@ -473,7 +473,7 @@ def test_perrow_when_plus_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, per
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
         DECIDE x(INT)
-        SUCH THAT x + 3 <= 10 WHEN (ps_partkey % 2 = 0)
+        SUCH THAT WHEN (ps_partkey % 2 = 0): x + 3 <= 10
             AND x <= 20
         MAXIMIZE SUM(x * ps_availqty)
     """

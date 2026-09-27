@@ -46,7 +46,7 @@ def test_decision_bearing_bound_is_quoted_as_written(decidb_cli):
     attrs, message = _diagnostics(decidb_cli, f"""
         SELECT routeID, ship, open
         FROM {_DEPOTS} JOIN {_ROUTES} USING (depotID)
-        DECIDE T.ship(INT), D.open(BOOL)
+        DECIDE PER T: ship(INT), PER D: open(BOOL)
         SUCH THAT ship BETWEEN 0 AND capacity * open AND SUM(ship) >= 5000
         MINIMIZE SUM(ship)
     """)
@@ -69,7 +69,7 @@ def test_written_form_is_used_for_a_plain_comparison_too(decidb_cli):
     _, message = _diagnostics(decidb_cli, f"""
         SELECT routeID, ship, open
         FROM {_DEPOTS} JOIN {_ROUTES} USING (depotID)
-        DECIDE T.ship(INT), D.open(BOOL)
+        DECIDE PER T: ship(INT), PER D: open(BOOL)
         SUCH THAT ship >= 0 AND ship <= capacity * open AND SUM(ship) >= 5000
         MINIMIZE SUM(ship)
     """)
@@ -83,7 +83,7 @@ def test_a_data_only_bound_is_untouched(decidb_cli):
     """Nothing moved, so there is no written form to prefer — and none is invented."""
     attrs, message = _diagnostics(decidb_cli, f"""
         SELECT routeID, ship FROM {_ROUTES}
-        DECIDE T.ship(INT)
+        DECIDE PER T: ship(INT)
         SUCH THAT ship BETWEEN 0 AND capacity AND SUM(ship) >= 9000
         MINIMIZE SUM(ship)
     """)
@@ -106,7 +106,7 @@ def test_explain_leads_with_the_written_clause(decidb_cli):
     plan = decidb_cli.execute_raw(f"""
         EXPLAIN SELECT routeID, ship, open
         FROM {_DEPOTS} JOIN {_ROUTES} USING (depotID)
-        DECIDE T.ship(INT), D.open(BOOL)
+        DECIDE PER T: ship(INT), PER D: open(BOOL)
         SUCH THAT ship BETWEEN 0 AND capacity * open
         MINIMIZE SUM(ship)
     """).stdout

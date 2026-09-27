@@ -115,7 +115,7 @@ def test_per_inner_minmax_auxiliaries_are_boxed(decidb_cli, tmp_path):
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE SUM(MAX(x * c)) PER g
+            MAXIMIZE SUM(PER g: MAX(x * c) BY (g))
         """,
         tmp_path / "per_inner.dump")
     aux = _assert_all_boxed(dump, 2)
@@ -132,7 +132,7 @@ def test_per_outer_minmax_over_group_values_is_boxed(decidb_cli, tmp_path):
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE MAX(MAX(x * c)) PER g
+            MAXIMIZE MAX(PER g: MAX(x * c) BY (g))
         """,
         tmp_path / "per_outer_values.dump")
     aux = _assert_all_boxed(dump, 3)  # two z_g plus the outer w
@@ -156,7 +156,7 @@ def test_per_outer_minmax_over_group_sums_is_boxed(decidb_cli, tmp_path):
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE MIN(SUM(x * c)) PER g
+            MAXIMIZE MIN(PER g: SUM(x * c) BY (g))
         """,
         tmp_path / "per_outer_sums.dump")
     assert _assert_all_boxed(dump, 1) == [(3, 0.0, 32.0)], \
@@ -266,14 +266,14 @@ def test_half_open_range_keeps_its_closed_side(decidb_cli_gurobi, tmp_path):
 
     "Unbounded" is a property of one end, not of a range. `x(INT) SUCH THAT x >= 0`
     with no ceiling reaches arbitrarily high, so a `MAX(x)` auxiliary genuinely has no
-    upper bound — but its lower bound is 0, and it was computed on the way to finding
-    that out. Discarding it along with the ceiling hands the root simplex a fully free
-    column when half a box was available, which is the cliff this whole module exists
+    upper bound — but its lower bound is 0, AND WHEN half a box was available, which is the cliff this whole module exists
     to keep out.
 
     Only the native arm can be asked this. The lowered arm needs a Big-M over the same
-    family, has no finite one here, and refuses the query outright — that refusal is
-    `test_native_constructs.test_native_minmax_needs_no_bound`, and it is why an
+    family, has no finite one here,: it was computed on the way to finding
+    that out. Discarding it along with the ceiling hands the root simplex a fully free
+    column AND refuses the query outright — that refusal is
+    `test_native_constructs.test_native_minmax_needs_no_bound`, AND it is why an
     unbounded MIN/MAX reaches a model at all.
     """
     dump = decidb_cli_gurobi.dump_model(

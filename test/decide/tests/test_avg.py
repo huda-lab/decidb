@@ -147,7 +147,7 @@ def test_avg_with_when(
     sql = f"""
         SELECT name, value, tier, x FROM ({data_sql})
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) <= 6 WHEN tier = 'high'
+        SUCH THAT WHEN tier = 'high': AVG(x * value) <= 6
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
@@ -199,7 +199,7 @@ def test_avg_with_per(
     sql = f"""
         SELECT name, value, grp, x FROM ({data_sql})
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) <= 4 PER grp
+        SUCH THAT PER grp: AVG(x * value) BY (grp) <= 4
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
@@ -253,7 +253,7 @@ def test_avg_with_when_per(
     sql = f"""
         SELECT name, value, grp, tier, x FROM ({data_sql})
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) <= 5 WHEN tier = 'high' PER grp
+        SUCH THAT WHEN tier = 'high' PER grp: AVG(x * value) BY (grp) <= 5
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
@@ -528,7 +528,7 @@ def test_avg_not_equal_with_when(
         SELECT name, profit, weight, tier, x FROM ({data_sql})
         DECIDE x(BOOL)
         SUCH THAT SUM(x * weight) <= 20
-              AND AVG(x) <> 0.5 WHEN tier = 'high'
+              AND WHEN tier = 'high': AVG(x) <> 0.5
         MAXIMIZE SUM(x * profit)
     """
     t0 = time.perf_counter()

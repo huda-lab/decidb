@@ -203,6 +203,11 @@ static void insertSelectOptions(PGSelectStmt *stmt,
 static PGNode *makeSetOp(PGSetOperation op, bool all, PGNode *larg, PGNode *rarg);
 static PGNode *doNegate(PGNode *n, int location);
 static void doNegateFloat(PGValue *v);
+static PGNode *makeDecideScopedBody(PGDecidePrefix *prefix, PGNode *body, int location);
+static PGNode *makeDecideReducer(PGList *funcname, PGDecidePrefix *prefix, PGNode *body, PGList *more_args,
+								 PGList *by_keys, int location, int by_location);
+static PGNode *makeDecideReducerBy(PGNode *reducer, PGList *by_keys, int location);
+static char *makeDecideFrameAggName(PGList *funcname, int location, core_yyscan_t yyscanner);
 static PGNode *makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 								int body_location, core_yyscan_t yyscanner);
 static PGNode *makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location);

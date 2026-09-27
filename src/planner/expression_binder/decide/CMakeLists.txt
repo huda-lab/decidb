@@ -5,6 +5,7 @@ add_library_unity(
   decide_constraints_binder.cpp
   decide_declarations_binder.cpp
   decide_degree.cpp
+  decide_generation.cpp
   decide_objective_binder.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_expression_binder_decide>
