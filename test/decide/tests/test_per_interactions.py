@@ -20,7 +20,7 @@ Covered:
   - test_qp_objective_per_constraint: QP objective + PER constraint — QP path alongside PER
   - test_per_single_row_groups:      PER with |group| = 1 — degenerate group cardinality
   - test_per_zero_coefficient_group: PER where one group's aggregate is vacuous (all-zero coeffs)
-  - test_per_null_group_with_when:   NULL PER key + WHEN mask — NULL bucket interacts with WHEN→PER empty-skip
+  - test_per_null_group_with_when:   NULL PER key + WHEN mask — NULL rows bypass groups; empty groups are skipped
 """
 
 import time
@@ -28,6 +28,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
+from ._oracle_helpers import group_indices
 
 
 # ============================================================================
@@ -927,24 +928,22 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
-    """Row with NULL PER-key that passes the WHEN mask, combined with a
-    group whose only row fails the WHEN mask (empty WHEN-bucket).
+    """NULL PER-key rows bypass grouped constraints, including with WHEN.
 
-    Group NULL: an active row exists → constraint emitted.
-    Group 'B': only row is inactive → empty WHEN-bucket → default WHEN→PER
-               policy skips the constraint for that group.
-    This exercises the combination of NULL-grouping and empty-group skip.
+    The two active NULL-keyed rows must both be selected even though their
+    combined count exceeds the per-group cap. Group 'B' has only an inactive
+    row, so its empty WHEN bucket also emits no constraint.
     """
     sql = """
         SELECT id, grp, val, active, x FROM (
             VALUES (1, 'A', 10.0, true),
-                   (2, NULL, 5.0, true),
-                   (3, 'B', 8.0, false),
+                   (2, NULL, 8.0, true),
+                   (3, 'B', 6.0, false),
                    (4, 'A', 3.0, true),
-                   (5, NULL, 12.0, false)
+                   (5, NULL, 7.0, true)
         ) t(id, grp, val, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 10 WHEN active PER grp
+        SUCH THAT SUM(x) <= 1 WHEN active PER grp
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
@@ -953,10 +952,10 @@ def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
 
     data = [
         (1, 'A', 10.0, True),
-        (2, None, 5.0, True),
-        (3, 'B', 8.0, False),
+        (2, None, 8.0, True),
+        (3, 'B', 6.0, False),
         (4, 'A', 3.0, True),
-        (5, None, 12.0, False),
+        (5, None, 7.0, True),
     ]
     n = len(data)
 
@@ -967,18 +966,16 @@ def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
         oracle_solver.add_variable(vn, VarType.BINARY)
 
     # Per-group coefficients restricted to WHEN-active rows.
-    groups: dict = {}
-    for i, row in enumerate(data):
-        groups.setdefault(row[1], []).append(i)
+    groups = group_indices(data, lambda row: row[1])
     for g, idxs in groups.items():
         active_coeffs = {
-            vnames[i]: data[i][2] for i in idxs if data[i][3]
+            vnames[i]: 1.0 for i in idxs if data[i][3]
         }
         # Default WHEN→PER policy: skip groups with an empty WHEN-bucket.
         if not active_coeffs:
             continue
         oracle_solver.add_constraint(
-            active_coeffs, "<=", 10.0, name=f"per_when_{g}",
+            active_coeffs, "<=", 1.0, name=f"per_when_{g}",
         )
     oracle_solver.set_objective(
         {vnames[i]: data[i][2] for i in range(n)}, ObjSense.MAXIMIZE,
@@ -987,16 +984,21 @@ def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    val_idx = decidb_cols.index("val")
-    x_idx = decidb_cols.index("x")
+    ci = {name: i for i, name in enumerate(decidb_cols)}
+    val_idx = ci["val"]
+    x_idx = ci["x"]
     decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
         f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
     )
 
+    selection_by_id = {int(row[ci["id"]]): int(row[x_idx]) for row in decidb_rows}
+    assert selection_by_id == {1: 1, 2: 1, 3: 1, 4: 0, 5: 1}
+    assert decidb_obj == pytest.approx(31.0)
+
     perf_tracker.record(
         "per_null_group_with_when", decidb_time, build_time,
-        result.solve_time_seconds, n, n, 2,
+        result.solve_time_seconds, n, n, 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
