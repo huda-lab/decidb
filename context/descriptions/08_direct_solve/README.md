@@ -1,123 +1,101 @@
 # Direct Solve
 
-Direct solve is a proposed DECIDE optimization path. When DeciDB can prove that a
-problem has a supported mathematical shape, it can construct an optimal assignment
-with ordinary DuckDB relational operators instead of building and invoking a general
-solver model.
+Direct solve is a proposed DECIDE optimizer path. For a problem whose complete
+semantics match a proved rule, it constructs an optimal assignment with ordinary
+DuckDB relational operators instead of building and running a solver model. A
+miss keeps the existing solver path. **No direct rewrite is implemented yet.**
 
-This directory describes the researched translations. The optimizer does **not** yet
-select these rewrites in production.
+## Architecture in one minute
 
-## Start here
-
-| Goal | Reading path |
-|---|---|
-| Understand the idea | [Overview](01_overview.md) |
-| See every proposed translation | This page, then the linked family documents |
-| Find the boundary of the work | [Composition and boundaries](06_composition_and_boundaries.md) |
-| Audit the evidence | [Research notes](07_research_notes.md) |
-
-```mermaid
-flowchart LR
-    Q[DECIDE query] --> N[Normalize its mathematical meaning]
-    N --> P{Can DeciDB prove a supported shape?}
-    P -->|Yes| R[Build a relational assignment plan]
-    P -->|No| S[Keep the existing solver path]
+```text
+bound, canonical LogicalDecide
+  -> semantic adapter -> exact facts -> Match -> Prove
+                                        | miss: unchanged solver path
+                                        v
+                     select rule -> build and check complete plan
+                                        v
+                     relational operators -> DuckDB executor
 ```
 
-## Status vocabulary
+The shared harness owns policy, facts, rule registration, fallback, the external
+output contract, and explanation. A rule owns its shape proof and relational
+assignment. Matching and proof are separate. Estimates may rank already-proved
+plans, never justify eligibility. There is no generated SQL, S1-specific physical
+operator, or retry through a solver after execution begins.
 
-| Status | Meaning |
-|---|---|
-| **Exact translation** | Under its complete `Valid when` contract, feasibility and optimality are proved |
-| **Exact prototype** | The proof is exact, but an admission, numeric, or performance gate is not yet implementable |
-| **Research candidate** | A useful theorem or algorithm exists, but the full translation contract is incomplete |
-| **Solver only** | No suitable relational translation is currently proposed |
+The current design direction is a thin *logical-only* result boundary: it keeps
+DECIDE's external bindings and result schema while its child is an ordinary
+relational plan. It must block transformations that change the decision input,
+but still permit safe optimization inside the plan and safe column pruning. This
+is a design direction, not a verified implementation; the binding, validation,
+and optimizer invariants are explicit open gates in [design/todo.md](00_design/todo.md).
 
-"Exact" means that the relational plan returns a feasible assignment with the same
-optimal primary objective. It does not require the same tied decision vector as Gurobi
-or HiGHS. Every rule's **Valid when** section is its complete admission contract. The
-SQL block shows the central relational construction; it is exact only together with
-the guards, identity mapping, and outcome branches listed there.
+The first vertical slice is the global upper-cardinality part of S1. It is
+deliberately narrow and falls back on everything not proved. The class
+mathematics and other problem classes live **only** in the Word catalogue.
 
-## Translation map
+## Where to read and work
 
-| Family | Problem shape | Direct construction | Rules |
-|---|---|---|---|
-| Formula-based | Independent decisions or fixed-small components | Projection, endpoints, or finite candidates | A1, A3, A5 |
-| Shared value or geometry | Many rows summarized by one value, expression, or norm | Aggregates, scaling, thresholds, or prefix fill | A2, A4, A6, N1, N2 |
-| Boolean selection | Structured yes/no choices | Rank, TopN, or cost prefixes | S1--S4 |
-| One resource | Bounded allocation from one shared pool | Marginal ordering or water filling | R1--R4 |
-| Ordered matching | Two complete ordered sides | Rank matching or cumulative overlap | O1, O2 |
-| Decomposition | Independent components of any supported shape | Solve components and join assignments | D1 |
+- [00_design/](00_design/): architecture, agreed direction, source facts, and
+  pre-code gates. Read [architecture](00_design/architecture.md),
+  [decisions](00_design/decisions.md), [todo](00_design/todo.md), and
+  [done](00_design/done.md).
+- [01_harness/](01_harness/): adapter, facts, rule interface, coordinator,
+  boundary, policy, and explanation. [Todo](01_harness/todo.md) ·
+  [done](01_harness/done.md).
+- [02_first_rule/](02_first_rule/): narrow S1 admission, proof, and assignment.
+  Read the [contract](02_first_rule/spec.md), [todo](02_first_rule/todo.md), and
+  [done](02_first_rule/done.md).
+- [03_correctness/](03_correctness/): baseline corpus, differential/oracle tests,
+  and edge outcomes. [Todo](03_correctness/todo.md) ·
+  [done](03_correctness/done.md).
+- [04_performance/](04_performance/): end-to-end measurement and cost evidence.
+  [Todo](04_performance/todo.md) · [done](04_performance/done.md).
+- [05_follow_on/](05_follow_on/): second-rule reuse, wider S1, and ANR adapter.
+  [Todo](05_follow_on/todo.md) · [done](05_follow_on/done.md).
+- [Problem-class catalogue](decidb_direct_relational_rewrites.docx): the sole
+  source for class definitions, constructions, examples, and proofs. Leave the
+  Word document unchanged.
 
-## Catalogue
+Each work area has a `todo.md` for open work and a `done.md` for verified results.
+The design reference and first-rule contract are separate from both: a proposal
+is not marked done merely because it is written down.
 
-### Formula-based translations
+## Dependency order
 
-See [Formula-based translations](02_formula_based_translations.md).
+```text
+source facts + current-syntax baseline
+               |
+       design gates (DES)
+               |
+       shared harness (HAR)
+               |
+       first S1 rule (RULE)
+               |
+       correctness gate (VAL)
+         /-----+------\
+         |            |
+ performance (PERF)  second rule / wider coverage (NEXT)
 
-| ID | Problem | Status |
-|---|---|---|
-| A1 | Independent bounded linear or quadratic decision | Exact translation |
-| A2 | Shared mean, median, midpoint, or mode | Exact translation |
-| A3 | Fixed-small multi-affine box | Exact translation |
-| A4 | Bounded two-parameter least squares | Exact prototype |
-| A5 | Objective-aligned monotone corner | Exact translation |
-| A6 | One squared affine residual over a box | Exact translation |
-| N1 | Projection onto or support over L1/L2/Linf balls | Exact translation |
-| N2 | Linear support over a diagonal ellipsoid | Exact translation |
+stable language branch + HAR + VAL -> ANR adapter (NEXT)
+```
 
-### Boolean selection
+The [correctness baseline](03_correctness/todo.md) begins before feature code;
+correctness tests then grow alongside the harness and rule. The second rule
+tests reuse of the harness. ANR integration waits for the language branch to
+stabilize and must pass the same semantic adapter contract. Do not use a
+performance estimate as a substitute for a correctness proof.
 
-See [Selection translations](03_selection_translations.md).
+## Documentation rules
 
-| ID | Problem | Status |
-|---|---|---|
-| S1 | Top-k and cardinality intervals | Exact translation |
-| S2 | Nested upper quotas | Exact translation |
-| S3 | Maximum item count under one budget | Exact translation |
-| S4 | Exact count and budget, maximizing the best selected item | Exact translation |
-
-### Resource allocation
-
-See [Resource allocation](04_resource_allocation.md).
-
-| ID | Problem | Status |
-|---|---|---|
-| R1 | Continuous piecewise-linear allocation | Exact translation |
-| R2 | Bounded integer marginal-unit allocation | Exact translation |
-| R3 | Strictly convex quadratic allocation | Exact prototype |
-| R4 | Proportional max-min fairness | Exact translation |
-
-### Ordered matching and transport
-
-See [Ordered matching and transport](05_ordered_matching_and_transport.md).
-
-| ID | Problem | Status |
-|---|---|---|
-| O1 | Ordered complete assignment | Exact prototype |
-| O2 | Balanced one-dimensional Monge transport | Exact prototype |
-
-### Decomposition
-
-See [Composition and boundaries](06_composition_and_boundaries.md).
-
-| ID | Problem | Status |
-|---|---|---|
-| D1 | Exact keyed decomposition into supported components | Exact translation |
-
-## Documents
-
-- [Overview](01_overview.md) introduces the feature through three representative
-  translations and explains what must be true before any rewrite is valid.
-- [Formula-based translations](02_formula_based_translations.md) covers A1--A6 and
-  N1--N2.
-- [Selection translations](03_selection_translations.md) covers S1--S4.
-- [Resource allocation](04_resource_allocation.md) covers R1--R4.
-- [Ordered matching and transport](05_ordered_matching_and_transport.md) covers O1--O2.
-- [Composition and boundaries](06_composition_and_boundaries.md) covers D1, safe
-  composition, research candidates, and solver-only cases.
-- [Research notes](07_research_notes.md) preserves correctness, evidence, references,
-  and future implementation considerations without placing them in the main reading
-  path.
+- The [syntax reference](../00_project_overview/syntax_reference.md) owns current
+  DECIDE syntax. The Word catalogue owns all problem-class material. Markdown
+  here describes implementation scope, architecture, tests, and evidence only.
+- `todo.md` entries have stable IDs and dependencies. Move a shipped result to
+  the owning `done.md` in present tense; remove its TODO rather than checking it
+  off permanently.
+- Code and tests are the source of truth for implemented behavior. Mark a design
+  claim as proposed until its invariant has been checked. Do not infer ANR
+  compatibility from the current bound-tree adapter.
+- Prototype on a separate branch from a recorded `master` commit. Do not change
+  DECIDE syntax on that branch; the language merge happens through the adapter.

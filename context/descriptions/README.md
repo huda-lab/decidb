@@ -38,6 +38,7 @@ restating an entry.
 | `05_performance/` | Topic-owned pipeline profiling, measured findings and optimization questions; each focus folder has `done.md` / `todo.md` | You want to locate a measured bottleneck or plan performance work from reproducible evidence |
 | `06_issues/` | `bugs/todo.md` (open defects) and `code_quality/todo.md` (duplication, dead code, fragile patterns) | You hit an unexpected error, or want the known traps before touching grammar/solver/linearization code |
 | `07_query_diagnostics/` | Diagnosing failed solves (infeasible / unbounded) when a user asks with `DIAGNOSE`: the elastic relaxation engine, ray diagnosis, and the shared `foundations/` plumbing. Start at its `README.md`. (Slow solves moved to `01_pipeline/08_execution/slow_solves.md` — they are execution behaviour, not a diagnosis.) | You are turning a solver failure into an actionable, least-change diagnosis |
+| [`08_direct_solve/`](08_direct_solve/README.md) | Proposed exact DECIDE-to-relational optimizer path: shared harness, first-rule prototype, correctness, performance, and future language integration | You are planning or implementing a proved solver-bypassing rewrite; start at its README |
 
 ---
 
