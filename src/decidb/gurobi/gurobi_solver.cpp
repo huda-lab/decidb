@@ -10,7 +10,10 @@
 #include <string>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include "duckdb/common/decide_profile.hpp"
 #include <functional>
+#include <mutex>
 #include <thread>
 
 namespace duckdb {
@@ -20,11 +23,13 @@ struct GurobiGuard {
     void *model = nullptr;
     void *env = nullptr;
     ~GurobiGuard() {
+        DecideProfileScope phase("gurobi.free_model");
         auto &api = GurobiLoader::API();
         if (model) {
             api.freemodel(model);
         }
         if (env) {
+            phase.Next("gurobi.free_environment");
             api.freeenv(env);
         }
     }
@@ -34,6 +39,7 @@ bool GurobiSolver::IsAvailable() {
     // Result is cached for the process lifetime. A Gurobi license that expires
     // mid-session will not be detected until the next fresh process start.
     static bool available = []() {
+        DecideProfileScope phase("gurobi.availability_probe");
         if (!GurobiLoader::Load()) {
             return false;
         }
@@ -123,8 +129,9 @@ public:
 private:
     GurobiGuard guard;
     idx_t total_vars = 0;
-    //! When set (continuation only), a watcher thread polls this during optimize() and
-    //! calls GRBterminate() to cut the chunk short; empty = boundary-only (the default).
+    //! When set, a watcher thread polls this during optimize() and calls GRBterminate()
+    //! to cut the solve short; empty = boundary-only (the default). Ordinary execution
+    //! installs it for the initial solve as well as for every Continue() chunk.
     std::function<bool()> should_interrupt;
 
     void Load(const SolverModel &ilp);
@@ -132,6 +139,8 @@ private:
 };
 
 void GurobiSession::Load(const SolverModel &ilp) {
+    DecideProfileScope profile("gurobi.load");
+    DecideProfileScope phase("gurobi.environment");
     auto &api = GurobiLoader::API();
     total_vars = ilp.num_vars;
 
@@ -145,7 +154,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
                                 "Check that GUROBI_HOME is set and license is valid.",
                                 error);
     }
-    api.setintparam(guard.env, "OutputFlag", 0);
+    api.setintparam(guard.env, "OutputFlag", std::getenv("DECIDB_PROFILE_SOLVER_LOG") ? 1 : 0);
     // Note: the TimeLimit is NOT set here — it is a per-chunk budget applied in
     // RunAndReadback() (on the live model's env), so a warm Continue() can raise it
     // without a reload.
@@ -183,6 +192,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
     // against that ceiling, and an INTEGER column comes back at its integer limit
     // (2147483647) instead of the query being reported as unbounded. Translating here
     // keeps the sentinel local to each backend rather than forcing one on the model.
+    phase.Next("gurobi.variable_arrays");
     vector<double> col_lower(ilp.col_lower.begin(), ilp.col_lower.end());
     vector<double> col_upper(ilp.col_upper.begin(), ilp.col_upper.end());
     for (idx_t i = 0; i < total_vars; i++) {
@@ -205,6 +215,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
         }
     }
 
+    phase.Next("gurobi.new_model");
     error = api.newmodel(guard.env, &guard.model, "decidb_decide",
                          (int)total_vars,
                          const_cast<double *>(ilp.obj_coeffs.data()),
@@ -227,6 +238,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
     // 3. Add constraints
     //===--------------------------------------------------------------------===//
 
+    phase.Next("gurobi.linear_rows");
     for (auto &constr : ilp.constraints) {
         error = api.addconstr(guard.model, (int)constr.indices.size(),
                              const_cast<int *>(constr.indices.data()),
@@ -241,6 +253,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
     }
 
     // 3b. Add quadratic constraints (QCQP)
+    phase.Next("gurobi.quadratic_rows");
     for (auto &qc : ilp.quadratic_constraints) {
         if (!api.addqconstr) {
             throw InvalidInputException(
@@ -267,6 +280,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
     // GurobiSolver::Capabilities(), and that declaration is itself gated on the loader
     // having found the symbol. So an unknown kind or a null pointer here is a bug in
     // the gate, not a user error.
+    phase.Next("gurobi.general_constraints");
     for (auto &gc : ilp.general_constraints) {
         switch (gc.kind) {
         case GeneralConstraintKind::ABS: {
@@ -302,6 +316,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
 
     // 3b''. Indicator constraints — a row conditioned on a binary, rather than the
     // Big-M that would otherwise stand in for the implication.
+    phase.Next("gurobi.indicators");
     for (auto &ic : ilp.indicator_constraints) {
         D_ASSERT(api.addgenconstrIndicator);
         error = api.addgenconstrIndicator(guard.model, nullptr, ic.binary_column, ic.binary_value,
@@ -317,6 +332,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
     // 3c. Add quadratic objective terms (QP/MIQP)
     //===--------------------------------------------------------------------===//
 
+    phase.Next("gurobi.quadratic_objective");
     if (ilp.has_quadratic_obj && !ilp.q_vals.empty()) {
         error = api.addqpterms(guard.model,
                                (int)ilp.q_vals.size(),
@@ -366,6 +382,8 @@ static GurobiIncumbent ReadIncumbent(const GurobiAPI &api, void *model, idx_t to
 }
 
 SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
+    DecideProfileScope profile("gurobi.run_and_readback");
+    DecideProfileScope phase("gurobi.solve_setup");
     auto &api = GurobiLoader::API();
 
     //===--------------------------------------------------------------------===//
@@ -382,26 +400,48 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
     }
 
     // Mid-solve interrupt: while optimize() blocks, a watcher thread polls `should_interrupt`
-    // and calls GRBterminate() (thread-safe) to end the chunk early on Ctrl-C — otherwise the
+    // and calls GRBterminate() (thread-safe) to end the solve early on Ctrl-C — otherwise the
     // interrupt would only be seen at the next chunk boundary. Gated on the poll being set
-    // (continuation only) AND the optional terminate symbol being present; absent either, this
-    // is a no-op and the solve runs exactly as before. optimize() then returns status
-    // GRB_INTERRUPTED, mapped to TIME_LIMIT below (a stop-with-best-so-far, like a real limit).
+    // (ordinary execution sets it for the initial solve and every continuation chunk alike)
+    // AND the optional terminate symbol being present; absent either, this is a no-op and the
+    // solve runs exactly as before. optimize() then returns status GRB_INTERRUPTED, mapped to
+    // TIME_LIMIT below (a stop-with-best-so-far, like a real limit).
+    //
+    // The gap between polls is a timed wait rather than a plain sleep so that completion can
+    // wake the watcher at once: an answer Gurobi has already computed is never held back for
+    // the remainder of a poll interval nobody still needs.
     std::atomic<bool> solve_finished {false};
+    std::mutex watcher_mutex;
+    std::condition_variable watcher_cv;
     std::thread interrupt_watcher;
     if (should_interrupt && api.terminate) {
-        interrupt_watcher = std::thread([this, &api, &solve_finished]() {
-            while (!solve_finished.load(std::memory_order_relaxed)) {
-                if (should_interrupt()) {
-                    api.terminate(guard.model);
-                    return;
+        interrupt_watcher =
+            std::thread([this, &api, &solve_finished, &watcher_mutex, &watcher_cv]() {
+                while (!solve_finished.load(std::memory_order_acquire)) {
+                    // Polled without the lock held: `should_interrupt` runs caller code, and
+                    // the completing thread must never queue behind it to publish the flag.
+                    if (should_interrupt()) {
+                        api.terminate(guard.model);
+                        return;
+                    }
+                    std::unique_lock<std::mutex> lock(watcher_mutex);
+                    watcher_cv.wait_for(lock, std::chrono::milliseconds(25), [&solve_finished]() {
+                        return solve_finished.load(std::memory_order_acquire);
+                    });
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(25));
-            }
-        });
+            });
     }
+    phase.Next("gurobi.optimize");
     int error = api.optimize(guard.model);
-    solve_finished.store(true, std::memory_order_relaxed);
+    phase.Next("gurobi.watcher_join");
+    {
+        // Publish the flag under the same lock the watcher waits on. Without it, a store
+        // landing between the watcher's predicate check and its wait would be missed and the
+        // join would sit out the full interval anyway — the very stall this avoids.
+        std::lock_guard<std::mutex> lock(watcher_mutex);
+        solve_finished.store(true, std::memory_order_release);
+    }
+    watcher_cv.notify_one();
     if (interrupt_watcher.joinable()) {
         interrupt_watcher.join();
     }
@@ -414,6 +454,19 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
     // 5. Check status
     //===--------------------------------------------------------------------===//
 
+    phase.Next("gurobi.status_and_readback");
+    if (DecideProfileScope::Enabled()) {
+        int barrier_iterations;
+        if (api.getintattr(guard.model, "BarIterCount", &barrier_iterations) == 0) {
+            DecideProfileScope::Counter("BarIterCount", barrier_iterations);
+        }
+        for (const auto *attribute : {"Runtime", "IterCount", "NodeCount", "ObjVal", "ObjBound", "MIPGap"}) {
+            double value;
+            if (api.getdblattr(guard.model, attribute, &value) == 0 && std::isfinite(value)) {
+                DecideProfileScope::Counter(attribute, value);
+            }
+        }
+    }
     int status;
     error = api.getintattr(guard.model, GRB_INT_ATTR_STATUS, &status);
     if (error) {

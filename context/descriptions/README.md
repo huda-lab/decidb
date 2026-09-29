@@ -35,9 +35,10 @@ restating an entry.
 | `02_operations/` | Oracle testing methodology, release workflow, cross-platform portability, benchmarking, pip packaging | You need to run tests, cut a release, benchmark, build the wheel, or are about to break Windows |
 | `03_expressivity/` | The DECIQL surface — each keyword or construct a folder with `done.md`/`todo.md`. Also `problem_types/` (LP/ILP/QP classification), `explain/` and `diagnose/` | You want to know whether a construct is valid, or are implementing one |
 | `04_testing/` | Test coverage tracking — which scenarios are oracle-verified vs feasibility-only, and what gaps remain | You are adding tests, auditing coverage, or chasing a suspected regression |
-| `05_performance/` | Append-only log of applied performance work. One dated file per batch, with hypothesis and measured outcome | You want to know what has already been tried, or are about to commit a perf change |
+| `05_performance/` | Topic-owned pipeline profiling, measured findings and optimization questions; each focus folder has `done.md` / `todo.md` | You want to locate a measured bottleneck or plan performance work from reproducible evidence |
 | `06_issues/` | `bugs/todo.md` (open defects) and `code_quality/todo.md` (duplication, dead code, fragile patterns) | You hit an unexpected error, or want the known traps before touching grammar/solver/linearization code |
 | `07_query_diagnostics/` | Diagnosing failed solves (infeasible / unbounded) when a user asks with `DIAGNOSE`: the elastic relaxation engine, ray diagnosis, and the shared `foundations/` plumbing. Start at its `README.md`. (Slow solves moved to `01_pipeline/08_execution/slow_solves.md` — they are execution behaviour, not a diagnosis.) | You are turning a solver failure into an actionable, least-change diagnosis |
+| [`08_direct_solve/`](08_direct_solve/README.md) | Proposed exact DECIDE-to-relational optimizer path: shared harness, first-rule prototype, correctness, performance, and future language integration | You are planning or implementing a proved solver-bypassing rewrite; start at its README |
 
 ---
 

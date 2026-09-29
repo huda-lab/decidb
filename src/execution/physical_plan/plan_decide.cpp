@@ -1,3 +1,4 @@
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
@@ -16,6 +17,7 @@
 namespace duckdb {
 
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
+	DecideProfileScope profile("frontend.physical_decide");
     D_ASSERT(op.children.size() == 1);
     // The backend — and with it stage 05's decision about which constructs stay native —
     // was settled before any rewrite ran, so the rewrites and the solve agree on what is

@@ -1,4 +1,5 @@
 #include "duckdb/decidb/solver/ilp_solver.hpp"
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/decidb/solver/probe_models.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
@@ -470,6 +471,8 @@ static SolverResult SolveLexicographicStages(const SolverModel &model, SolverBac
 SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBackend backend,
                         const SolveModelOptions &options, SolverModel *retained_model,
                         unique_ptr<SolverSession> *retained_session) {
+	DecideProfileScope profile("solver.facade");
+	DecideProfileScope phase("solver.build_neutral_model");
 	SolverModel model;
 	try {
 		model = SolverModel::Build(input, indexer);
@@ -484,7 +487,21 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
 	}
+	phase.Next("solver.validate_and_dump");
 	AssertBackendAcceptsBuiltModel(model, backend);
+	if (DecideProfileScope::Enabled()) {
+		idx_t nonzeros = 0;
+		for (const auto &row : model.constraints) {
+			nonzeros += row.indices.size();
+		}
+		DecideProfileScope::Counter("model.variables", model.num_vars);
+		DecideProfileScope::Counter("model.linear_rows", model.constraints.size());
+		DecideProfileScope::Counter("model.linear_nonzeros", nonzeros);
+		DecideProfileScope::Counter("model.quadratic_rows", model.quadratic_constraints.size());
+		DecideProfileScope::Counter("model.objective_q_nonzeros", model.q_vals.size());
+		DecideProfileScope::Counter("model.general_constraints", model.general_constraints.size());
+		DecideProfileScope::Counter("model.indicators", model.indicator_constraints.size());
+	}
 	// Characterization oracle (no-op unless DECIDB_DUMP_MODEL is set). Emitted here,
 	// on the freshly built model, so diagnostic re-solves (probe / ray / elastic
 	// models built later) never pollute the dump.
@@ -536,6 +553,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	// uses the caller's requested limit, or the shared default when unset (<0).
 	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
 	SolveModelOptions diagnostic_options = MakeDiagnosticSolveOptions(options);
+	phase.Next("solver.session_create");
 	auto session = backend.CreateSession();
 	// Install the interrupt poll before the first solve so a user Ctrl-C cuts the
 	// *initial* solve short (not just continuation chunks). The poll is a session
@@ -543,7 +561,9 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	if (options.interrupt_poll) {
 		session->SetInterruptPoll(options.interrupt_poll);
 	}
+	phase.Next("solver.session_solve");
 	SolverResult result = session->Solve(model, time_limit);
+	phase.Next("solver.postsolve");
 	result = DisambiguateInfOrUnbd(model, backend, diagnostic_options, result);
 	result = RejectIntegerCeilingOptimum(model, result);
 	result = SolveLexicographicStages(model, backend, time_limit, options, std::move(result));
@@ -561,6 +581,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 		*retained_model = std::move(model);
 	}
 	result.model_constraint_rows = built_constraint_rows;
+	phase.Next("solver.cleanup");
 	return result;
 }
 

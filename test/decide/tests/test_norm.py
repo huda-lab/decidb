@@ -285,3 +285,167 @@ def test_norm_l0_tolerance_pragma(decidb_cli):
     # Below the floor is rejected up front.
     decidb_cli.assert_error("SET decide_l0_tolerance=1e-9;",
                             match=r"(?i)decide_l0_tolerance must be")
+
+
+# --- norm() inside arithmetic ---------------------------------------------
+#
+# A regularizer is normally written as one term of a larger objective —
+# `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. The marker the binder leaves
+# behind is a real SUM aggregate carrying the order in its alias, so a marker the
+# optimizer fails to lower does not fail loudly: it reads downstream as the plain
+# SUM it is built on, and the norm silently vanishes from the model. Each test
+# below therefore compares the *composed* objective against the same composition
+# written out by hand, which is the only spelling that can tell the two apart.
+
+# Deviations are large under the = 100 target (total l_quantity is 360), so the
+# second term is a genuine trade-off rather than a constant offset.
+_MIXED = """
+    SELECT l_orderkey, l_linenumber, l_quantity, new_qty
+    FROM lineitem WHERE l_orderkey <= 3
+    DECIDE new_qty(REAL)
+    SUCH THAT SUM(new_qty) = 100
+    MINIMIZE {obj}
+"""
+
+
+def _qty(rows, cols):
+    """new_qty for each row."""
+    i = cols.index("new_qty")
+    return [float(r[i]) for r in rows]
+
+
+def _assert_same_objective(cli, norm_obj, hand_obj, score, tol=1e-3):
+    """The norm spelling must reach the same objective value as the hand-written one."""
+    r1, c1 = cli.execute(_MIXED.format(obj=norm_obj))
+    r2, c2 = cli.execute(_MIXED.format(obj=hand_obj))
+    assert score(r1, c1) == pytest.approx(score(r2, c2), abs=tol)
+
+
+def _l1_plus_linear(rows, cols):
+    return sum(abs(d) for d in _devs(rows, cols)) + 0.5 * sum(_qty(rows, cols))
+
+
+@pytest.mark.correctness
+def test_norm_l1_in_arithmetic_objective(decidb_cli):
+    _assert_same_objective(
+        decidb_cli,
+        "norm(new_qty - l_quantity, 1) + 0.5 * SUM(new_qty)",
+        "SUM(ABS(new_qty - l_quantity)) + 0.5 * SUM(new_qty)",
+        _l1_plus_linear)
+
+
+@pytest.mark.correctness
+def test_norm_l2_in_arithmetic_objective(decidb_cli):
+    _assert_same_objective(
+        decidb_cli,
+        "norm(new_qty - l_quantity, 2) + 0.5 * SUM(new_qty)",
+        "SUM(POWER(new_qty - l_quantity, 2)) + 0.5 * SUM(new_qty)",
+        lambda r, c: sum(d * d for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)))
+
+
+@pytest.mark.correctness
+def test_norm_linf_in_arithmetic_objective(decidb_cli):
+    _assert_same_objective(
+        decidb_cli,
+        "norm(new_qty - l_quantity, 'inf') + 0.5 * SUM(new_qty)",
+        "MAX(ABS(new_qty - l_quantity)) + 0.5 * SUM(new_qty)",
+        lambda r, c: max(abs(d) for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)))
+
+
+@pytest.mark.correctness
+def test_norm_scaled_objective(decidb_cli):
+    """A norm under a bare multiplication, with nothing else in the objective."""
+    _assert_same_objective(
+        decidb_cli,
+        "2 * norm(new_qty - l_quantity, 1)",
+        "2 * SUM(ABS(new_qty - l_quantity))",
+        lambda r, c: 2 * sum(abs(d) for d in _devs(r, c)))
+
+
+@pytest.mark.correctness
+def test_norm_combined_l1_l2_objective(decidb_cli):
+    """Two norms of different orders in one objective (elastic-net shaped)."""
+    _assert_same_objective(
+        decidb_cli,
+        "norm(new_qty - l_quantity, 1) + 0.25 * norm(new_qty - l_quantity, 2)",
+        "SUM(ABS(new_qty - l_quantity)) + 0.25 * SUM(POWER(new_qty - l_quantity, 2))",
+        lambda r, c: sum(abs(d) for d in _devs(r, c))
+                     + 0.25 * sum(d * d for d in _devs(r, c)))
+
+
+@pytest.mark.correctness
+def test_norm_l0_in_arithmetic_objective(decidb_cli):
+    """L0 under arithmetic. The reducer returns an integer count where the marker
+    returned the deviation's DOUBLE, so this also pins the type change down."""
+    r1, c1 = decidb_cli.execute(_MIXED.format(
+        obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)"))
+    hand = """
+        SELECT l_orderkey, l_linenumber, l_quantity, new_qty
+        FROM lineitem WHERE l_orderkey <= 3
+        DECIDE new_qty(REAL), z(BOOL)
+        SUCH THAT SUM(new_qty) = 100 AND ABS(new_qty - l_quantity) <= 100 * z
+        MINIMIZE SUM(z) + 0.001 * SUM(new_qty)
+    """
+    r2, c2 = decidb_cli.execute(hand)
+    n1 = sum(1 for d in _devs(r1, c1) if abs(d) > 1e-6)
+    n2 = sum(1 for d in _devs(r2, c2) if abs(d) > 1e-6)
+    assert n1 == n2
+
+
+# A norm under arithmetic on the constraint side is the worse failure: the clause
+# is still enforced, but as the plain SUM, so it caps the signed total instead of
+# the norm. `= 400` leaves the deviations small enough for a tight cap to bind.
+_CAPPED = """
+    SELECT l_orderkey, l_linenumber, l_quantity, new_qty
+    FROM lineitem WHERE l_orderkey <= 3
+    DECIDE new_qty(REAL)
+    SUCH THAT SUM(new_qty) = 400 AND {cons}
+    MAXIMIZE SUM(new_qty * l_quantity)
+"""
+
+
+@pytest.mark.correctness
+def test_norm_scaled_constraint(decidb_cli):
+    rows, cols = decidb_cli.execute(
+        _CAPPED.format(cons="2 * norm(new_qty - l_quantity, 1) <= 100"))
+    assert 2 * sum(abs(d) for d in _devs(rows, cols)) <= 100 + 1e-4
+    hand, hc = decidb_cli.execute(
+        _CAPPED.format(cons="2 * SUM(ABS(new_qty - l_quantity)) <= 100"))
+    def obj(r, c):
+        nq, lq = c.index("new_qty"), c.index("l_quantity")
+        return sum(float(x[nq]) * float(x[lq]) for x in r)
+    assert obj(rows, cols) == pytest.approx(obj(hand, hc), abs=1e-3)
+
+
+@pytest.mark.correctness
+def test_norm_offset_constraint(decidb_cli):
+    """A constant added to the norm on the left of the comparison."""
+    rows, cols = decidb_cli.execute(
+        _CAPPED.format(cons="norm(new_qty - l_quantity, 1) + 5 <= 100"))
+    assert sum(abs(d) for d in _devs(rows, cols)) + 5 <= 100 + 1e-4
+
+
+@pytest.mark.correctness
+def test_norm_scaled_l0_constraint(decidb_cli):
+    """A scaled L0 count cap: at most three rows may move."""
+    rows, cols = decidb_cli.execute(
+        _CAPPED.format(cons="2 * norm(new_qty - l_quantity, 0, 1000) <= 6"))
+    assert sum(1 for d in _devs(rows, cols) if abs(d) > 1e-4) <= 3
+
+
+@pytest.mark.correctness
+def test_norm_in_arithmetic_on_highs(decidb_cli_highs):
+    """Both backends agree on the composed forms: L1 is an LP, L2 a QP, L0 a MILP."""
+    _assert_same_objective(
+        decidb_cli_highs,
+        "norm(new_qty - l_quantity, 1) + 0.5 * SUM(new_qty)",
+        "SUM(ABS(new_qty - l_quantity)) + 0.5 * SUM(new_qty)",
+        _l1_plus_linear)
+    _assert_same_objective(
+        decidb_cli_highs,
+        "norm(new_qty - l_quantity, 2) + 0.5 * SUM(new_qty)",
+        "SUM(POWER(new_qty - l_quantity, 2)) + 0.5 * SUM(new_qty)",
+        lambda r, c: sum(d * d for d in _devs(r, c)) + 0.5 * sum(_qty(r, c)))
+    rows, cols = decidb_cli_highs.execute(_MIXED.format(
+        obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)"))
+    assert rows  # solved and returned rows

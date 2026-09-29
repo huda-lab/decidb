@@ -14,7 +14,7 @@ All oracle-verified:
 
 - **Basic** (`test_per_clause.py`, `test_per_multi_column.py`): single-column PER with aggregate constraint, multi-column PER (2 and 3 columns), INT variables, PER + WHEN, PER + `<>`, NULL group keys (excluded), two PER constraints on different columns, WHEN filtering out an entire PER group.
 - **Auxiliary-variable interactions** (`test_per_interactions.py`): hard `MAX(>=K)` / hard `MIN(<=K)` (Big-M per group), equality `MAX(=K)` (easy + hard combined per group), ABS in aggregate constraint (ABS aux per group), multi-variable BOOL + INT, WHEN + PER + multi-variable (WHEN mask per group), QP objective + PER constraint.
-- **Degenerate / edge shapes**: single-row PER groups, zero-coefficient group (one group's aggregate vacuous), NULL PER-key + WHEN mask (NULL bucket with WHEN→PER empty-skip) — all `test_per_interactions.py`; PER equality constraint (two-sided bounds per group, `test_abs_linearization.py`); feasibility (no objective) + PER (`test_edge_cases.py`); uncorrelated scalar subquery as PER constraint RHS (`test_cons_subquery.py`).
+- **Degenerate / edge shapes**: single-row PER groups, zero-coefficient group (one group's aggregate vacuous), NULL PER-key + WHEN mask (NULL rows bypass grouping while empty WHEN groups are skipped) — all `test_per_interactions.py`; PER equality constraint (two-sided bounds per group, `test_abs_linearization.py`); feasibility (no objective) + PER (`test_edge_cases.py`); uncorrelated scalar subquery as PER constraint RHS (`test_cons_subquery.py`).
 
 ### PER on objectives (nested aggregate syntax)
 
