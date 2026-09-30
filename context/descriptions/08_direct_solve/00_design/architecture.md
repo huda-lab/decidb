@@ -1,7 +1,8 @@
 # Direct Solve Architecture
 
-This document owns the cross-cutting design. [Decisions](decisions.md) distinguishes
-agreed direction from unproved details; [todo.md](todo.md) holds the design gates.
+This document owns the cross-cutting design. [Decisions](decisions.md) states
+the first-build contract and [experiments](experiments.md) give its evidence;
+[todo.md](todo.md) tracks implementation checks.
 The Word catalogue at the directory root is the sole source for problem-class
 definitions and proofs.
 
@@ -55,38 +56,70 @@ direct plan starts, execution errors do not restart via a solver.
 
 ## Relational result boundary
 
-The preferred design is a small logical-only boundary around the generated
-ordinary operators. Its job is to expose the removed `LogicalDecide` node's
-external column bindings and positional schema, enforce the scope of legal
-optimizer transformations, and carry a structured decision record. It must not
-contain a class algorithm or become a physical direct-solve executor. Physical
-planning should lower it to its ordinary relational child.
+Use a small logical-only boundary around the generated ordinary operators.
+For each original DECIDE output slot, it owns an explicit mapping to a child
+slot, advertises the old binding and type to parents, enforces the scope of
+legal optimizer transformations, and carries a structured decision record.
+It contains no class algorithm and lowers to its already-resolved ordinary
+relational child. The first build may pin all mapped outputs and the blocking
+validation dependency. A later liveness pass can prune selectively through the
+same map; it cannot change the external binding contract.
 
-This boundary is **not** a blanket optimization fence. An outer filter that
-changes the decision input cannot cross a global ranking; harmless work inside
-the generated plan and safe removal of unused output columns should remain
-possible. The implementation must explicitly account for required score and
-guard dependencies under pruning. Current `LogicalDecide` conservatively marks
-everything referenced; copying that behavior wholesale would hide performance
-cost, not establish the right contract. If a transparent boundary cannot satisfy
-DuckDB's binding, serializer, and optimizer rules, use a verified boundary-scoped
-remap instead. Never use a global table-index substitution.
+The boundary blocks parent work that would change the decision input: a filter
+above a global rank cannot cross below it. Inner query optimization remains
+legal if it preserves the score, validation, and row-to-assignment mapping.
+The [bound-plan spike](experiments.md) showed that a wrapper advertising old
+bindings without child dependencies is unsafe: unused-column removal collapsed
+the child to one column. Explicit dependencies kept the plan sound. Retaining
+all outputs initially has a measurable cost; safe pruning is a follow-on
+optimization, not an implicit property of the wrapper. Never use a global
+table-index substitution or rerun binding resolution during child lowering.
 
 Each admitted plan must preserve input-row cardinality, source-column order and
 types, every user decision's SQL type and identity, and surrounding query
 semantics. Today a declared `BOOL` decision has a 0/1 domain but returns SQL
 `INTEGER`, not SQL `BOOLEAN`.
 
+## First rule in one query
+
+```sql
+SELECT id, profit, x
+FROM items
+DECIDE x(BOOL)
+SUCH THAT SUM(x) <= 1
+MAXIMIZE SUM(profit * x);
+```
+
+For `items = [(1, 9), (2, 10)]`, the optimal complete result is
+`[(1, 9, 0), (2, 10, 1)]`. The rule's generated bound operators implement
+this relational sketch; it is **not** SQL text to reparse:
+
+```text
+items
+  -> score = DOUBLE(typed profit expression)
+  -> assert score is non-NULL and finite for every consumed input row
+  -> rank every row by score DESC using global ROW_NUMBER
+  -> x = INTEGER(score > 0 AND rank <= 1)
+  -> return every original row with x through the output-slot boundary
+```
+
+For minimization, rank ascending and select only negative scores. An upper
+capacity never forces a zero or worsening score to be chosen. `ORDER BY ...
+LIMIT 1` alone would discard the unchosen row, so the window rank feeds a
+per-row `CASE` assignment instead. The boundary lets an outer `WHERE id = 1`
+observe `(1, 9, 0)` after the global decision is made.
+
 ## Runtime validation and outcomes
 
 The rule proof handles structural eligibility. Value-dependent conditions such
-as NULL and non-finite coefficients need a mandatory runtime check over the
-relevant input rows, even if the parent never projects the decision. A relational
-always-true-or-throw filter before ranking is the preferred candidate, not an
-assumed guarantee. The guard must be shown to survive pruning and remain after
-the DECIDE input's own filters. A generic validation primitive is acceptable
-only if existing operators cannot provide the required semantics; it must not
-contain S1's assignment algorithm.
+as NULL and non-finite coefficients need a runtime check over every S1 input
+row when DECIDE executes, even if the parent never projects the decision. A
+computed DOUBLE score feeds both an always-true-or-throw guard and the global
+rank. The guard sits after the DECIDE input's own filters and before the rank.
+The rank or an alternative blocking validator must remain live when `x` is
+unused or capacity is zero. A standalone filter can skip a late invalid row
+under a parent `LIMIT 1`, as the [experiment](experiments.md) showed. An outer
+`LIMIT 0` can avoid execution altogether, as on the current solver path.
 
 An admitted direct plan must return a feasible assignment with the same optimal
 primary objective, though tied assignments may differ. It must preserve output
@@ -96,17 +129,20 @@ No backend is selected, loaded, or invoked on a committed direct hit.
 
 ## Policy and explanation
 
-Use a DECIDE session setting with `off`, `auto`, and `require` modes. Default is
-`off` while evidence is incomplete. `auto` attempts a proof then falls back;
-`require` turns a miss into a reasoned test/user error. A forced solver bypasses
-`auto` and conflicts explicitly with `require`. Resolve the mode when the plan
-is built; prepared-statement behavior must be tested. No syntax change is needed.
+Use the `decide_direct_solve` session setting with `off`, `auto`, and `require`
+modes. Default is `off` while evidence is incomplete. `auto` attempts a proof
+then falls back; `require` turns a miss into a reasoned error. `DIAGNOSE` and a
+forced solver bypass `auto` and conflict explicitly with `require`. Resolve
+the mode when the plan is built; prepared plans retain their selection until
+rebound or replanned. No syntax change is needed.
 
-One structured decision record should carry mode, selected rule or miss reason,
+One structured decision record carries mode, selected rule or miss reason,
 exact proof facts, inserted guards, and whether solver work was skipped. It is
-the source for `EXPLAIN`, profiling, and `require` errors. A logical-only node's
-name is not sufficient by itself: default physical `EXPLAIN` may not show it.
-The exact rendering mechanism remains a design gate.
+the source for `EXPLAIN`, profiling, and `require` errors. The logical boundary
+owns it; physical lowering passes it to explain/profile metadata on an
+ordinary physical operator. A logical-only node's name alone is insufficient:
+default physical `EXPLAIN` does not retain it. The precise metadata API can be
+chosen while implementing this visible contract.
 
 ## Integration and growth
 

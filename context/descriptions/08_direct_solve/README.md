@@ -23,12 +23,13 @@ assignment. Matching and proof are separate. Estimates may rank already-proved
 plans, never justify eligibility. There is no generated SQL, S1-specific physical
 operator, or retry through a solver after execution begins.
 
-The current design direction is a thin *logical-only* result boundary: it keeps
-DECIDE's external bindings and result schema while its child is an ordinary
-relational plan. It must block transformations that change the decision input,
-but still permit safe optimization inside the plan and safe column pruning. This
-is a design direction, not a verified implementation; the binding, validation,
-and optimizer invariants are explicit open gates in [design/todo.md](00_design/todo.md).
+The first-build contract uses a thin *logical-only* result boundary with an
+explicit output-slot map. It keeps DECIDE's external bindings and schema while
+its child is an ordinary relational plan. The [design decisions](00_design/decisions.md)
+and [experiments](00_design/experiments.md) are sufficient to start building;
+the [implementation checks](00_design/todo.md) must still pass. The first
+version may retain all output columns to keep the mapping sound, with selective
+pruning measured and added later.
 
 The first vertical slice is the global upper-cardinality part of S1. It is
 deliberately narrow and falls back on everything not proved. The class
@@ -36,18 +37,18 @@ mathematics and other problem classes live **only** in the Word catalogue.
 
 ## Where to read and work
 
-- [00_design/](00_design/): architecture, agreed direction, source facts, and
-  pre-code gates. Read [architecture](00_design/architecture.md),
-  [decisions](00_design/decisions.md), [todo](00_design/todo.md), and
-  [done](00_design/done.md).
+- [00_design/](00_design/): architecture, first-build decisions, source facts,
+  experiments, and implementation checks. Read [architecture](00_design/architecture.md),
+  [decisions](00_design/decisions.md), [experiments](00_design/experiments.md),
+  [todo](00_design/todo.md), and [done](00_design/done.md).
 - [01_harness/](01_harness/): adapter, facts, rule interface, coordinator,
   boundary, policy, and explanation. [Todo](01_harness/todo.md) ·
   [done](01_harness/done.md).
 - [02_first_rule/](02_first_rule/): narrow S1 admission, proof, and assignment.
   Read the [contract](02_first_rule/spec.md), [todo](02_first_rule/todo.md), and
   [done](02_first_rule/done.md).
-- [03_correctness/](03_correctness/): baseline corpus, differential/oracle tests,
-  and edge outcomes. [Todo](03_correctness/todo.md) ·
+- [03_correctness/](03_correctness/): [baseline corpus](03_correctness/baseline.md),
+  differential/oracle tests, and edge outcomes. [Todo](03_correctness/todo.md) ·
   [done](03_correctness/done.md).
 - [04_performance/](04_performance/): end-to-end measurement and cost evidence.
   [Todo](04_performance/todo.md) · [done](04_performance/done.md).
@@ -64,9 +65,7 @@ is not marked done merely because it is written down.
 ## Dependency order
 
 ```text
-source facts + current-syntax baseline
-               |
-       design gates (DES)
+source facts + baseline + design decisions
                |
        shared harness (HAR)
                |
@@ -80,8 +79,8 @@ source facts + current-syntax baseline
 stable language branch + HAR + VAL -> ANR adapter (NEXT)
 ```
 
-The [correctness baseline](03_correctness/todo.md) begins before feature code;
-correctness tests then grow alongside the harness and rule. The second rule
+The [correctness baseline](03_correctness/baseline.md) records pre-feature
+solver behavior; permanent tests then grow alongside the harness and rule. The second rule
 tests reuse of the harness. ANR integration waits for the language branch to
 stabilize and must pass the same semantic adapter contract. Do not use a
 performance estimate as a substitute for a correctness proof.

@@ -10,8 +10,10 @@ use compatible workload, backend, and readback boundaries.
   readback. Compare against solver model construction, backend loading, solve,
   and readback on both supported backends. Include total wall time.
 - [ ] **PERF-02 — Scale and memory sweep.** Depends: PERF-01. Vary input rows,
-  capacity, sign mix, and tie density. Record peak memory, intermediate
-  cardinality, and planning overhead. Keep source query, configuration, and raw
+  capacity, sign mix, tie density, and source width. Record peak memory,
+  intermediate cardinality, planning overhead, and the cost of initially
+  retaining all mapped output columns. Add selective pruning only with a
+  binding/guard regression; keep source query, configuration, and raw
   measurements reproducible.
 - [ ] **PERF-03 — Selection policy evidence.** Depends: PERF-02. Determine when
   direct is materially better and when it is not. Do not enable automatic

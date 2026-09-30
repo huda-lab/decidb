@@ -1,42 +1,31 @@
-# Design — open work
+# Design — open implementation checks
 
-These gates close before feature C++ begins. Each needs a written mechanism,
-invariant, and concrete test design; the [decisions](decisions.md) document
-records the chosen direction. The implementation tests themselves run later
-under [correctness](../03_correctness/todo.md). Branch creation can happen
-earlier, but is not design approval.
+The first-build contract is in [decisions.md](decisions.md), grounded in
+[experiments.md](experiments.md) and the [solver baseline](../03_correctness/baseline.md).
+No unresolved design choice blocks starting feature C++. A failed check below
+may change the mechanism while keeping the external semantics fixed.
 
-- [ ] **BASE-01 — Record the prototype baseline.** Depends: documentation review.
-  Commit the documentation checkpoint, create a separate branch from a recorded
-  `master` SHA, and keep current DECIDE syntax fixed there. Do not merge the
-  concurrent language branch into the first rule.
-- [ ] **DES-01 — External output interface.** Depends: none. Specify how either
-  the logical-only boundary or a scoped remap preserves old bindings, positional
-  columns, and types. Audit the binding resolver, projection maps,
-  nested/correlated plans, serialization, pruning, and physical lowering; write
-  a test for each risk. Reject any design that could let a parent read the
-  wrong column.
-- [ ] **DES-02 — Mandatory value validation.** Depends: DES-01. Specify which
-  input rows the current solver validates, the direct operator placement that
-  must check them, and how to prevent skipped checks with unused decisions,
-  zero capacity, or parent filters. Decide the error category and deterministic
-  throwing-expression policy; list the tests that will verify the guarantee.
-- [ ] **DES-03 — Legal optimizer movement.** Depends: DES-01, DES-02. Audit the
-  remaining optimizer passes and list which transformations may cross the
-  boundary. Specify enforcement for input-changing outer filters and
-  guard-removing pruning while preserving safe inner optimization, plus tests.
-- [ ] **DES-04 — Explanation surface.** Depends: DES-01. Decide how the one
-  structured decision record appears in optimized logical and default physical
-  `EXPLAIN`, profiling, and `require` errors; do not infer a rule from `WINDOW`.
-- [ ] **DES-05 — Feature-setting contract.** Depends: none. Specify session
-  setting validation, `off`/`auto`/`require` behavior, `DECIDB_FORCE_SOLVER` and
-  `DIAGNOSE` precedence, and when prepared statements capture the mode.
-- [ ] **DES-06 — Numeric contract.** Depends: none. Fix the capacity range,
-  coefficient-to-DOUBLE conversion, zero comparison, NULL/non-finite errors,
-  and objective comparison tolerance for tests.
-- [ ] **DES-07 — Freeze the implementation contract.** Depends: DES-01 through
-  DES-06 and [VAL-00](../03_correctness/todo.md). Update the architecture and
-  rule contract with the resolved answers, then approve source implementation.
+- [ ] **DES-08 — Prove the production boundary under optimizer passes.**
+  Depends: HAR-03, RULE-03. Audit CTE filter pusher, join order,
+  unused-column removal, both column-lifetime runs, limit/TopN, late
+  materialization, statistics, and join-filter pushdown on the actual DECIDE
+  seam. Include parent filter, join, aggregate, nested/correlated case or an
+  explicit miss, empty input, serializer, and physical output order/type tests.
+  If the first retain-all map fails, repair the owning pass or use a scoped
+  remap; do not retain a wrong-column plan.
+- [ ] **DES-09 — Prove mandatory value reads at capacity zero and unused `x`.**
+  Depends: RULE-03, RULE-04. A 5,000-row late NULL/NaN and throwing expression
+  must report an error under outer `LIMIT 1`, filter, and `COUNT(*)`; an input
+  `WHERE` removing the row must succeed, and outer `LIMIT 0` should avoid
+  execution. Test the *actual* zero-capacity assignment; the temporary spike
+  used a fixed rank threshold. If a window can be removed, use a generic
+  blocking validator or let this case fall back until correct.
+- [ ] **DES-10 — Check explanation and prepared-plan lifetime.** Depends:
+  HAR-04, HAR-05. Show the same decision record in optimized logical and
+  default physical `EXPLAIN`, profiling, and `require` errors. Prepare with
+  one mode, change the setting, then execute before and after a real rebind to
+  verify the stated plan-capture contract.
 
-**Exit gate:** no open choice can change the harness/result boundary, admission
-meaning, runtime validation, or evidence standard after implementation starts.
+Selective output pruning is a performance follow-on after the retain-all
+implementation is correct. Measure its cost before changing the output map;
+keep guards and blocking validation live if `x` is unprojected.
