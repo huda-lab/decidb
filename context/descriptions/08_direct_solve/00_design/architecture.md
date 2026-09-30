@@ -138,9 +138,10 @@ rebound or replanned. No syntax change is needed.
 
 One structured decision record carries mode, selected rule or miss reason,
 exact proof facts, inserted guards, and whether solver work was skipped. It is
-the source for `EXPLAIN`, profiling, and `require` errors. The logical boundary
-owns it; physical lowering passes it to explain/profile metadata on an
-ordinary physical operator. A logical-only node's name alone is insufficient:
+the source for `EXPLAIN`, profiling, and `require` errors. On a hit the logical
+boundary owns it and physical lowering passes it to explain/profile metadata
+on an ordinary physical operator. On a miss the surviving logical and physical
+DECIDE operators carry it. A logical-only node's name alone is insufficient:
 default physical `EXPLAIN` does not retain it. The precise metadata API can be
 chosen while implementing this visible contract.
 

@@ -30,7 +30,8 @@ mathematics. Read [architecture](../00_design/architecture.md), the
   the design contract. A hit never selects a backend or constructs a model.
 - [ ] **HAR-05 — Structured explanation.** Depends: HAR-03. Produce
   one decision record for rule selection, proof facts, guards, and fallback.
-  Surface it through optimized logical and default physical `EXPLAIN` and
+  Attach it to the direct boundary on hits and to surviving DECIDE operators
+  on misses. Surface it through optimized logical and default physical `EXPLAIN` and
   profiling without adding an algorithm-specific physical operator. Complete
   [DES-10](../00_design/todo.md) before declaring this done.
 **Exit gate for the first rule:** an artificial proved proposal can replace a

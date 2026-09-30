@@ -80,10 +80,10 @@ stable language branch + HAR + VAL -> ANR adapter (NEXT)
 ```
 
 The [correctness baseline](03_correctness/baseline.md) records pre-feature
-solver behavior; permanent tests then grow alongside the harness and rule. The second rule
-tests reuse of the harness. ANR integration waits for the language branch to
-stabilize and must pass the same semantic adapter contract. Do not use a
-performance estimate as a substitute for a correctness proof.
+solver behavior; permanent tests then grow alongside the harness and rule.
+The second rule tests reuse of the harness. ANR integration waits for the
+language branch to stabilize and must pass the same semantic adapter
+contract. Do not use a performance estimate as a substitute for a correctness proof.
 
 ## Documentation rules
 

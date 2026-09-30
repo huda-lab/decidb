@@ -57,8 +57,10 @@ unused, or use an explicitly verified blocking validator.
 The existing solver path raised `Invalid Input Error` for NULL, NaN, and
 infinity with unused `x` and capacity zero; a bad cast raised `Conversion
 Error`. A late NULL was checked under outer `LIMIT 1`, `COUNT(*)`, and an outer
-filter, for both the host default and forced HiGHS. A source filter removing
-it succeeded. Outer `LIMIT 0` did not execute the DECIDE operator and did not
+filter on the default backend; forced HiGHS was also checked under `LIMIT 1`.
+A source filter removing it succeeded. A NULL in an unrelated projected source
+column was allowed.
+Outer `LIMIT 0` did not execute the DECIDE operator and did not
 raise a value error. The direct path should preserve that execution boundary.
 The initial guard need not reproduce the solver's row-numbered text, but must
 preserve invalid/NULL categories and ordinary expression errors; any message

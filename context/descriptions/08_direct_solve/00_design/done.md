@@ -1,6 +1,7 @@
 # Design — verified foundation
 
-This is source-grounded context, **not** a claim that direct solve is shipped.
+This is source-grounded and experimentally supported context, **not** a claim
+that direct solve is shipped.
 
 BASE-01: the prototype documentation checkpoint is on branch
 `direct-solve-prototype`, forked from recorded `master` SHA

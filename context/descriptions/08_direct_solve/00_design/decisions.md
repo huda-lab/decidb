@@ -53,7 +53,8 @@ and non-finite values before global ranking. Preserve DuckDB errors from
 deterministic score expressions that throw. The guard must execute over every
 DECIDE input row **when the DECIDE result is consumed**, including unused `x`,
 capacity zero, and a parent `LIMIT 1` or filter. An input `WHERE` can remove
-rows; an outer `LIMIT 0` can avoid executing the whole DECIDE result.
+rows; an outer `LIMIT 0` can avoid executing the whole DECIDE result. Unrelated
+source columns may be NULL and need no guard.
 
 Initially retain a blocking rank/validation dependency even if the assignment
 would be constant or `x` is unused. If optimizer tests show that a relational
@@ -89,19 +90,20 @@ Register one DECIDE session setting, `decide_direct_solve`, with validated
 instead of solving. `DIAGNOSE` always uses the solver in `off`/`auto` and
 conflicts explicitly with `require`. The test-only `DECIDB_FORCE_SOLVER`
 override bypasses `auto` and conflicts with `require`; an invalid forced name
-under `off`/`auto` must retain the current backend error. Resolve the mode when optimization
-builds a plan. A prepared plan keeps that selection until it is rebound or
-replanned; changing the setting alone does not silently replace its plan.
+under `off`/`auto` must retain the current backend error. Resolve the mode
+when optimization builds a plan. A prepared plan keeps that selection until
+it is rebound or replanned; changing the setting alone does not silently
+replace its plan.
 
 One structured record carries mode, selected rule or miss reason, proof facts,
 required guards, and whether backend/model work was skipped. Use it for
 `require` errors, optimized logical `EXPLAIN`, default physical `EXPLAIN`, and
-profiling. The logical boundary can own the record; physical lowering should
-attach the same data as generic explain/profile metadata to the ordinary
-child. The renderer and profiler must read the metadata explicitly because a
-logical-only boundary is absent from physical `EXPLAIN`. The exact metadata
-plumbing may change, but visible rule identity cannot be inferred from a
-`WINDOW` node alone.
+profiling. On a hit the logical boundary owns it, and physical lowering
+attaches it as explain/profile metadata to the ordinary child. On a miss the
+surviving logical and physical DECIDE operators carry the miss record. The
+renderer and profiler must read the metadata explicitly because a logical-only
+boundary is absent from physical `EXPLAIN`. The exact metadata plumbing may
+change, but visible rule identity cannot be inferred from a `WINDOW` node.
 
 ## 6. Numeric contract
 

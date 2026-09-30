@@ -11,7 +11,7 @@ this baseline.
 ## Small common fixture
 
 In the tables below, `R` stands for this **literal SQL text** (substitute it in
-each query), with two distinct row-scoped decisions:
+each query). Declaring `x(BOOL)` creates one row-scoped decision per input row:
 
 ```sql
 (VALUES (1, 9.0::DOUBLE), (2, 10.0::DOUBLE)) t(id, p)
@@ -90,6 +90,7 @@ near miss.
 | Bad cast | Use `CAST(p AS DOUBLE)` for two strings `'1.0'` and `'bad'`, with unused `x` and capacity zero | DuckDB `Conversion Error` |
 | Late NULL | 5,000 input rows with only `id=4999` having NULL score; outer `LIMIT 1`, `COUNT(*)`, or `WHERE id=0` | Error from invalid score; confirmed default and HiGHS under `LIMIT 1` |
 | Source filter | Same 5,000 rows, with input `WHERE id<4999` | Succeeds; removed row has no DECIDE obligation |
+| Unused NULL source column | Add `extra=NULL::INTEGER` to the first row while keeping finite `p`; select `id,extra,x` | `(1,NULL,0),(2,7,1)`; unrelated source NULL is allowed |
 | Outer `LIMIT 0` | Append `LIMIT 0` to the unused-`x` NULL query | No execution or error |
 
 The first-rule `BOOL` result type is SQL `INTEGER`, not `BOOLEAN`. Every input
