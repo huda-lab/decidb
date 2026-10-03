@@ -1462,72 +1462,6 @@ def test_s1_multiple_source_bounds_validate_bypassed_and_late_rows(decidb_cli):
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize(
-    "declaration,constraint,objective,reason",
-    [
-        ("x(BOOL), y(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("x(BOOL)", "SUM(x)<=1 AND x<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1 AND x<=cap", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1 PER id AND SUM(x)>=1 PER cap", "MAXIMIZE SUM(p*x)", "constraint_scope"),
-        ("x(BOOL)", "SUM(x)<>1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x+1)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(id*x)<=2", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=cap+1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1.5+cap", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("t.x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("t.x(BOOL)", "SUM(t: x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("x(BOOL)", "SUM(x)<=random()", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM((p+random())*x)", "coefficient_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)+SUM(CAST(cap::VARCHAR AS DOUBLE)*x)", "coefficient_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(MAX(p*x)) PER id", "objective_scope"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) WHEN id=1", "objective_scope"),
-        ("x(BOOL)", "SUM(x)<=1", "", "problem_shape"),
-        ("x(BOOL)", "SUM(x)<=9007199254740993", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "norm(x,'inf')<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "norm(x,1)<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) - norm(p*x,1)", "objective_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MINIMIZE norm(p*x,2)", "objective_shape"),
-    ],
-)
-def test_baseline_one_condition_away_misses(decidb_cli, declaration, constraint, objective, reason):
-    decide = f"""
-        FROM (VALUES (1, 9.0::DOUBLE, 1), (2, 10.0::DOUBLE, 1)) t(id,p,cap)
-        DECIDE {declaration} SUCH THAT {constraint} {objective}
-    """
-    sql = f"SELECT id FROM ({decide}) q"
-    required = _raw(decidb_cli, sql)
-    assert "decide_direct_solve=require:" in required.stderr, required.stderr
-    assert reason in required.stderr, required.stderr
-    plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto")
-    assert _has_decide_operator(plan.stdout) and "Direct solve" not in plan.stdout, plan.stderr
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "score_sql,message",
-    [
-        ("CASE WHEN i=4999 THEN NULL ELSE 1.0 END", 'column "score" is NULL'),
-        ("CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END", "invalid value (NaN or Infinity)"),
-        ("CASE WHEN i=4999 THEN 'Infinity'::DOUBLE ELSE 1.0 END", "invalid value (NaN or Infinity)"),
-    ],
-)
-def test_late_invalid_score_is_read_at_zero_capacity(decidb_cli, score_sql, message):
-    decide = f"""
-        FROM (SELECT i, {score_sql} AS score FROM range(5000) t(i)) s
-        DECIDE x(BOOL) SUCH THAT SUM(x) <= 0 MAXIMIZE SUM(score*x)
-    """
-    for outer in (
-        f"SELECT i FROM ({decide}) q LIMIT 1",
-        f"SELECT COUNT(*) FROM ({decide}) q",
-        f"SELECT i FROM ({decide}) q WHERE i=0",
-    ):
-        assert message in _raw(decidb_cli, outer).stderr
-    rows, _ = _run(decidb_cli, f"SELECT i FROM ({decide}) q LIMIT 0")
-    assert rows == []
-    assert message in _raw(decidb_cli, f"SELECT i FROM ({decide}) q ORDER BY i LIMIT 1").stderr
-
-
-@pytest.mark.correctness
 def test_throwing_cast_and_filter_scope(decidb_cli):
     source = """
         SELECT i, CASE WHEN i=4999 THEN 'bad' ELSE '1' END AS raw
@@ -1798,60 +1732,9 @@ def test_tiny_score_uses_exact_oracle_and_measured_backend_gap(
 
 
 @pytest.mark.correctness
-def test_serializer_explain_and_prepared_plan(decidb_cli, tmp_path):
-    sql = _source_query((2.0, 9.0, -1.0), 1)
-    rows, _ = _run(decidb_cli.with_verify_serializer(), sql)
-    assert [row[2] for row in rows] == [0, 1, 0]
-    logical = _raw(decidb_cli, f"PRAGMA explain_output='optimized_only'; EXPLAIN {sql}").stdout
-    physical = _raw(decidb_cli, f"EXPLAIN {sql}").stdout
-    profile = _raw(decidb_cli, f"EXPLAIN ANALYZE {sql}").stdout
-    for plan in (logical, physical, profile):
-        assert "Direct solve rule" in plan and "Direct solve proof" in plan
-
-    dump_path = tmp_path / "direct_model.txt"
-    _run(decidb_cli.with_env({"DECIDB_DUMP_MODEL": str(dump_path)}), sql)
-    assert not dump_path.exists()
-
-    prepared = _raw(decidb_cli, f"""
-        PREPARE direct_s1 AS {sql};
-        SET decide_direct_solve='off';
-        EXPLAIN EXECUTE direct_s1;
-    """).stdout
-    assert "Direct solve rule" in prepared and "require" in prepared
-
-    rebound = decidb_cli.execute_raw("""
-        CREATE TEMP TABLE direct_life(id INTEGER, score DOUBLE);
-        INSERT INTO direct_life VALUES (1,2),(2,9);
-        SET decide_direct_solve='require';
-        PREPARE direct_life_p AS SELECT id,x FROM (
-            FROM direct_life DECIDE x(BOOL)
-            SUCH THAT SUM(x)<=1 MAXIMIZE SUM(score*x)
-        ) q;
-        SET decide_direct_solve='off';
-        ALTER TABLE direct_life ADD COLUMN extra INTEGER;
-        EXPLAIN EXECUTE direct_life_p;
-    """).stdout
-    assert _has_decide_operator(rebound) and "Direct solve" not in rebound
-
-
-@pytest.mark.correctness
-def test_forced_solver_bypasses_auto(decidb_cli_highs):
-    sql = _source_query((2.0, 9.0, -1.0), 1)
-    plan = _raw(decidb_cli_highs, f"EXPLAIN {sql}", mode="auto").stdout
-    assert _has_decide_operator(plan) and "Direct solve" not in plan
-    rows, _ = _run(decidb_cli_highs, sql, mode="auto")
-    assert sum(row[2] for row in rows) <= 1
-    assert sum(row[1] * row[2] for row in rows) == 9.0
-    assert "conflicts with DECIDB_FORCE_SOLVER" in _raw(decidb_cli_highs, sql).stderr
-
-
-@pytest.mark.correctness
-def test_diagnose_and_invalid_forced_solver_policy(decidb_cli):
+def test_invalid_forced_solver_and_disabled_optimizer_policy(decidb_cli):
+    # DIAGNOSE and a valid forced backend are part of every rule's contract (test_direct_rule_contract.py).
     sql = _source_query((2.0, 9.0), 1)
-    assert "conflicts with DIAGNOSE" in _raw(decidb_cli, f"DIAGNOSE {sql}").stderr
-    diagnose_plan = _raw(decidb_cli, f"EXPLAIN DIAGNOSE {sql}", mode="auto").stdout
-    assert "DECIDE_DIAGNOSE" in diagnose_plan and "Direct solve" not in diagnose_plan
-
     invalid = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "unknown_backend"})
     error = _raw(invalid, sql, mode="auto").stderr
     assert "DECIDB_FORCE_SOLVER=unknown_backend" in error

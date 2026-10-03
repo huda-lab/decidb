@@ -81,4 +81,3 @@ source-clause order with the solver's wording (`DirectInvalidBoundMessage`). S1'
 ranking, pins and count limits stay in S1. S1's generated plans are unchanged: EXPLAIN
 of global, PER/WHEN, aggregate-local WHEN and equality-plus-pin queries is
 byte-identical before and after the move.
-

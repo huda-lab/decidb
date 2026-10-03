@@ -5,6 +5,10 @@ definition or proof of the class. The formal class catalogue is the
 [Word document](../decidb_direct_relational_rewrites.docx). If any condition
 below is unproved, the rule misses and DECIDE follows the solver path.
 
+The error classes and order, the all-rows read, the DOUBLE domain and the result
+types every rule shares are in the [solver input contract](../00_design/solver_input_contract.md);
+this page states what S1 admits.
+
 ## Admitted shape
 
 - Exactly one user decision variable, row-scoped and declared `BOOL`; no

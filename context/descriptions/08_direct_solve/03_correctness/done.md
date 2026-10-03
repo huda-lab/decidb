@@ -164,3 +164,12 @@ generated parser error
 fails the test. The last guard was added because the review-time fuzz wrote `PER g WHEN
 flag`, which the grammar rejects (`WHEN flag PER g` is correct), so every PER-with-WHEN
 query was a parser error on both paths and silently matched.
+
+The comparison itself is rule-independent: `compare_direct_with_solver` in
+`test/decide/tests/_direct_differential.py` runs a generator's queries on both paths and
+applies the checks above; S1 supplies only `_fuzz_query`. The user-facing contract every
+rule owes (schema and rows, the all-rows read under `LIMIT 1`, `COUNT(*)` and a parent
+filter, prepared-plan selection and rebinding, the serializer round trip, EXPLAIN and
+profiling records, `require` reasons, `off`, a forced backend, and `DIAGNOSE`) is
+`test_direct_rule_contract.py`, parametrized by each rule's `RuleFixture`. S1's earlier
+versions of those checks moved there unchanged.

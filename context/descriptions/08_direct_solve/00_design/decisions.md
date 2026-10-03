@@ -152,6 +152,10 @@ DECIDE query. A user who wants to know why a query was not proved sets
 
 ## 6. Numeric contract
 
+The rule-independent part of this section, with the error order and result types, is
+the [solver input contract](solver_input_contract.md). What follows records how the
+first rule arrived at it.
+
 The first build admitted an immutable upper capacity whose value was an
 integer in `[0, 2^53]`. The current rule normalizes strict, fractional, and
 negative finite consistently foldable numeric bounds to inclusive integer limits. It

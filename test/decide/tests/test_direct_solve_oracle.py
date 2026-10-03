@@ -13,12 +13,13 @@ or ``_build_oracle``, remove that test's entries from ``results/oracle_cache.jso
 """
 
 import random
-import re
 
 import pytest
 
 from comparison.compare import compare_solutions
 from decidb_cli import DecidBCliError
+
+from ._direct_differential import compare_direct_with_solver
 from solver.types import ObjSense, SolverStatus, VarType
 
 
@@ -184,24 +185,6 @@ _NORM_OBJECTIVES = {
     "SUM(score * x) - norm(score * x, 1)": "sum(score * x) - sum(abs(score * x))",
 }
 
-# (pattern, class). The first match wins; anything unmatched compares by text.
-_ERROR_CLASSES = [
-    (r"(?i)parser error|syntax error", "parser"),
-    (r"decide_direct_solve=require", "direct_miss"),
-    (r"(?i)infeasible", "infeasible"),
-    (r"(?i)empty row set|empty aggregate", "empty_aggregate"),
-    (r"(?i)is NULL|NULL or NaN|contains NULL", "null_bound"),
-    (r"(?i)varies", "equality_varies"),
-]
-
-
-def _error_class(message):
-    for pattern, name in _ERROR_CLASSES:
-        if re.search(pattern, message):
-            return name
-    return "other:" + message.strip().splitlines()[0][:80]
-
-
 def _fuzz_query(rng):
     """Returns the query and whether it was built as an S1 shape rather than a near miss."""
     near_miss = rng.choice([None] * 8 + ["clause", "objective"])
@@ -237,14 +220,6 @@ def _fuzz_query(rng):
     return sql, near_miss is None
 
 
-def _outcome(cli, mode, sql):
-    try:
-        rows, _ = cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
-    except DecidBCliError as error:
-        return "error", _error_class(str(error))
-    return "ok", rows[0]
-
-
 _FUZZ_SEEDS = [11, 12, 13, 14, 15, 16, 17, 18]
 _FUZZ_CASES_PER_SEED = 30
 
@@ -254,35 +229,4 @@ _FUZZ_CASES_PER_SEED = 30
 @pytest.mark.correctness
 @pytest.mark.parametrize("seed", _FUZZ_SEEDS)
 def test_direct_s1_seeded_fuzz_matches_solver_path(decidb_cli, seed):
-    rng = random.Random(seed)
-    shaped = shaped_hits = compared = 0
-    for _ in range(_FUZZ_CASES_PER_SEED):
-        sql, s1_shaped = _fuzz_query(rng)
-        shaped += s1_shaped
-        direct = _outcome(decidb_cli, "require", sql)
-        assert direct != ("error", "parser"), f"generator produced invalid syntax:\n{sql}"
-        if direct == ("error", "direct_miss"):
-            continue  # unproved shape: the solver path stays authoritative
-        shaped_hits += s1_shaped
-        solver = _outcome(decidb_cli, "off", sql)
-        assert solver != ("error", "parser"), f"generator produced invalid syntax:\n{sql}"
-        assert direct[0] == solver[0], f"direct {direct} vs solver {solver}\n{sql}"
-        if direct[0] == "error":
-            assert direct[1] == solver[1], f"error class differs: direct {direct[1]} vs solver {solver[1]}\n{sql}"
-            continue
-        compared += 1
-        direct_count, direct_objective = direct[1]
-        solver_count, solver_objective = solver[1]
-        # Row count and primary objective must agree. The selected count is not
-        # compared: a tied zero-contribution row may be chosen by only one path.
-        assert direct_count == solver_count, f"row count differs\n{sql}"
-        if direct_objective is None or solver_objective is None:
-            assert direct_objective == solver_objective, f"objective differs\n{sql}"
-        else:
-            assert direct_objective == pytest.approx(solver_objective, rel=1e-6, abs=1e-6), (
-                f"objective differs: direct {direct_objective} vs solver {solver_objective}\n{sql}"
-            )
-    # Guard against a generator drifting into vacuity: most S1-shaped queries must
-    # reach the direct path and a meaningful share must succeed on both paths.
-    assert shaped_hits >= 0.7 * shaped, f"only {shaped_hits} of {shaped} S1-shaped queries hit"
-    assert compared >= 0.2 * _FUZZ_CASES_PER_SEED, f"only {compared} successful comparisons"
+    compare_direct_with_solver(decidb_cli, _fuzz_query, random.Random(seed), _FUZZ_CASES_PER_SEED)

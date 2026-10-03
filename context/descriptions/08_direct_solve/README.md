@@ -104,14 +104,43 @@ Code is in `src/optimizer/decide/direct/`; headers are in
 
 The term splitter both the facts and the solver path use is `src/planner/decide/decide_term_split.cpp`.
 
-A second rule adds its own file and one line in `RegisteredDirectRules()`; the other
-files do not change.
+## Adding a rule
+
+A new problem class is its own rule file and touches no harness code. Check each item:
+
+1. **Rule file.** `src/optimizer/decide/direct/<name>_rule.cpp`, with every helper inside
+   `namespace direct_<name>` (unity builds merge anonymous namespaces across rule
+   files), a `Make<Name>Rule()` declared in `<name>_rule.hpp`, and the file listed in
+   that directory's `CMakeLists.txt`.
+2. **Registry.** One line in `RegisteredDirectRules()` (`direct_registry.cpp`). Rules
+   are tried in that order; the cheapest proved rule wins and a tie goes to the first.
+3. **Facts.** Read only `DirectProblemFacts` (`direct_rule.hpp`), never the bound
+   tree. Decline any unknown fact; `FirstUnknownReason()` names the clause.
+4. **Proof.** `Match` binds the shape; `Prove` certifies every constraint, objective
+   part, decision, runtime value obligation and output. Estimates appear only in
+   `Cost(proof, context)`.
+5. **Builders.** Aggregate scope semantics come from `DirectProjectScope`,
+   `DirectGuardEmptyAggregate` and `DirectValidateBounds`; a plan that could stream
+   rows uses `DirectValidationBarrier`. The proposal states its output slots, whether
+   each decision output may be skipped, and its validation slots.
+6. **Obligations.** Reproduce the [solver input contract](00_design/solver_input_contract.md):
+   the all-rows read, error classes and order, the DOUBLE domain, result types.
+7. **Tests.** A `RuleFixture` in `test/decide/tests/_direct_rule_fixtures.py` runs the
+   contract suite (`test_direct_rule_contract.py`); a generator for
+   `compare_direct_with_solver` (`_direct_differential.py`) runs the seeded differential
+   comparison; the rule's own mathematics gets its own test file with oracle checks on
+   both solvers.
+8. **Docs.** The class's definition and proof come from the Word catalogue, which
+   stays unchanged; add a spec beside
+   [the S1 contract](02_first_rule/spec.md), this page's source layout, and any new
+   policy in [decisions](00_design/decisions.md).
 
 ## Where to read and work
 
 - [00_design/](00_design/): architecture, first-build decisions, source facts,
   experiments, and implementation checks. Read [architecture](00_design/architecture.md),
-  [decisions](00_design/decisions.md), [experiments](00_design/experiments.md),
+  [decisions](00_design/decisions.md), the
+  [solver input contract](00_design/solver_input_contract.md), [experiments](00_design/experiments.md),
   [todo](00_design/todo.md), and [done](00_design/done.md).
 - [01_harness/](01_harness/): adapter, facts, rule interface, coordinator,
   boundary, policy, and explanation. [Todo](01_harness/todo.md) ·

@@ -1,7 +1,8 @@
 # Direct Solve Architecture
 
 This document owns the cross-cutting design. [Decisions](decisions.md) states
-the first-build contract and [experiments](experiments.md) give its evidence;
+the first-build contract, the [solver input contract](solver_input_contract.md)
+states what every rule must reproduce, and [experiments](experiments.md) give its evidence;
 [todo.md](todo.md) tracks implementation checks.
 The Word catalogue at the directory root is the sole source for problem-class
 definitions and proofs.
