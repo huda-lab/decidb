@@ -14,10 +14,13 @@ record. Logical and physical `EXPLAIN` and profiling render the record on hits. 
 under `auto` prints nothing, so the solver plan's `EXPLAIN` is unchanged. The
 physical hit is an ordinary projection, with the record carried as metadata.
 
-The first `DirectProblemFacts` adapter reads complete bound objective and
-constraint factors, source-clause attribution, decision domains/scopes, and source bindings before any
-solver-specific rewrite. Unsupported `PER`/`WHEN` wrappers yield unknown facts
-and a reasoned miss. `DirectSolveRule` separates Match, Prove, Cost, Explain,
+`DirectProblemFacts` reads the whole language before any solver-specific
+rewrite: decision domains and scopes, entity scopes, every constraint with its
+comparison or membership, left-side parts (reducer, filter, qualifier, factor,
+split terms), right side and its provenance, `PER`/`WHEN` scope, degree and
+written clause text, and the objective's parts and scope. Facts own their
+expressions. What the adapter cannot model is unknown per constraint or
+objective, with a reason. `DirectSolveRule` separates Match, Prove, Cost, Explain,
 and Rewrite; the coordinator selects only among proved candidates and maps a
 complete relational proposal through one shared result boundary. Its S1 proof
 records decision identity/domain, capacity, objective direction/coefficient,
@@ -25,13 +28,16 @@ and the all-row guard. The boundary validates slot types and retains the rank
 dependency. The 17-case baseline miss matrix and parent/CTE
 tests exercise these contracts through SQL.
 
-HAR-01: the read-only adapter reports complete factor membership,
-decision scope/domain, source bindings, and exact source-clause attribution for
-the first slice. Unsupported scoped wrappers remain ordinary unknown facts.
-Two C++ tests use real bound DECIDE plans to check attribution, deliberately
-missing provenance, and scoped wrapper status. Estimates never certify a fact.
-Broader fact vocabulary for other classes will be added as their proofs need
-it. HAR-02 remains open until a second rule demonstrates reuse.
+HAR-01: the read-only adapter models the construct table in
+[architecture](../00_design/architecture.md#semantic-facts), splitting bodies with
+the same `DecideTermSplitter` the solver path uses. S1 reads only facts:
+`s1_rule.cpp` no longer parses bound aggregates, comparisons or functions to
+understand the problem. `test_decidb_direct_facts.cpp` checks attribution and
+missing provenance, every decision domain and scope, comparisons, membership and
+right-side provenance, every reducer kind with filters, qualifiers, factors and
+norms, products, squares and nested objective reducers, and an unknown clause
+with its reason. Estimates never certify a fact. HAR-02 remains open until a
+second rule demonstrates reuse.
 
 The current boundary preserves original bindings and typed output, serializes
 dependencies, and passes the focused parent-context tests. Its built-in pass

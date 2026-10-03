@@ -68,7 +68,7 @@ error order. Anything not proved stays on the solver path.
     narrowing `CAST`, for example). Today only nonthrowing ones such as `COALESCE`
     and `TRY_CAST` are admitted.
   - Depends: the admitted keyed slice of NEXT-03 (done).
-  - Evidence and code: `SourceExpressionMayThrow` and `Prove` in `s1_rule.cpp`; the
+  - Evidence and code: `DirectMayThrow` (`direct_expression.cpp`) and `Prove` in `s1_rule.cpp`; the
     NEXT-07 progress already in done.md. A multi-term
     objective whose coefficient can throw also still misses; handle it here or leave
     it, but say which.
@@ -79,8 +79,9 @@ error order. Anything not proved stays on the solver path.
   - Goal: decide whether `SUM(x + c)` style bodies can be admitted as a count with a
     shifted bound.
   - Depends: none beyond the admitted S1 slice.
-  - Evidence and code: `IsUnitDecisionTerm` in `s1_rule.cpp`; only unit products such
-    as `SUM(1*x)` are admitted today.
+  - Evidence and code: `IsUnitContribution` in `s1_rule.cpp`; bodies whose terms add up
+    to exactly one `x` (`SUM(1*x)`, `SUM(2*x - x)`) are admitted today, and a constant
+    term in the split body (`DecideTermKind::CONSTANT`) misses.
   - Done when: either an exact proof and tests admit the form, or the near miss is
     pinned in a test as a permanent solver case with a reason.
   - Moves to: [done.md](done.md).

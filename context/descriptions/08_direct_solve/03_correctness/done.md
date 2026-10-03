@@ -26,7 +26,9 @@ fact-adapter and S1 proof-contract cases.
 Global lower, equality, and paired interval regressions compare complete
 assignments with independent enumeration and solver-path objective values. The
 matrix also checks intersection of several compatible count clauses,
-unit-contribution products such as `SUM(1*x)`,
+unit-contribution bodies such as `SUM(1*x)` (and, through the shared term split,
+`SUM((1+0)*x)` and `SUM(2*x - x)`, with scores written as `SUM(p*x*q)`,
+`SUM(-(p*x))` and `SUM((p + q) * x)`, each checked against both solvers),
 nonempty infeasibility through an outer aggregate and limit, the
 current solver's empty-input outcome, reversed comparison spelling, and
 source-clause attribution. The 5M-row performance sweep agrees with Gurobi

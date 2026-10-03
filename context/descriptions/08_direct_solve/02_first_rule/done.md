@@ -5,7 +5,7 @@ foldable numeric upper, lower, equality, or intersecting interval bounds,
 or multiple numeric source-valued bounds together with foldable bounds,
 optional per-row zero/one pins, and one or more signed, unfiltered linear
 `SUM(coefficient * x)` objective terms with an optional finite constant offset.
-The count term may be `SUM(x)` or an exact unit product such as `SUM(1*x)`.
+The count term may be `SUM(x)` or any body whose terms add up to exactly one `x`, such as `SUM(1*x)`.
 It admits global bounds and bounds keyed by source-column `PER` keys, with an
 optional deterministic source-only `WHEN`, either top-level or aggregate-local
 on `SUM(x)`. Every cardinality clause

@@ -43,7 +43,7 @@ decisions on the left and data on the right, and spells a reducer factor as
 | `x(BOOL/INT/REAL)` | `decide_variables[i]`, `is_boolean_var`, INTEGER/BIGINT/DOUBLE | domain, output type, index |
 | `T.x`, `scalar x` | `variable_scopes`, `entity_scopes`, `entity_key_expressions` | scope; entity scope with relations, key slots, role (declaration or qualifier) |
 | `AND`, `WHEN`, `PER` | untagged conjunction; WHEN-tagged `[c, cond]`; PER-tagged `[c, cols]` | ordered constraints; scope with PER keys as source slots and WHEN |
-| clause identity | `__source_clause_N__` | source clause id; several facts may share one (`BETWEEN`) |
+| clause identity | `__source_clause_N__` | source clause id and the written clause text; `BETWEEN` is two clauses |
 | `<= < >= > = <>` | canonical `BoundComparisonExpression` | comparison, left-hand parts, right-hand side |
 | `x IN (v, ...)` | `BoundOperatorExpression` COMPARE_IN | membership: variable and value expressions |
 | per-row or aggregate | reducer placement | `ClassifyCanonicalComparison` |

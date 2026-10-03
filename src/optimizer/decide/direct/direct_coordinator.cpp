@@ -125,7 +125,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 		throw InternalException("Direct solve expected one DECIDE input");
 	}
 	auto &source = *decide.children[0];
-	auto facts = DirectProblemFacts::Read(decide);
+	auto facts = DirectProblemFacts::Read(optimizer.context, decide);
 	struct ProvedCandidate {
 		const DirectSolveRule *rule;
 		unique_ptr<DirectRuleProof> proof;

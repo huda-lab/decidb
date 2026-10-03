@@ -21,7 +21,7 @@ Why: a flattened solver model is built later, and matching a familiar subtree
 can silently drop another term. The first rule's exact admitted shape is in
 [the S1 contract](../02_first_rule/spec.md).
 
-**Semantic facts (decided 2026-10-03, being implemented).** The adapter models
+**Semantic facts (decided and implemented 2026-10-03).** The adapter models
 everything the language can say, so a second rule never forces another interface
 break. Anything outside the model is `UNKNOWN`, and each constraint and objective
 part carries its own status and reason, so `require` can name the clause it could

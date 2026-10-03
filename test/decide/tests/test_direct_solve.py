@@ -756,6 +756,35 @@ def test_direct_solve_is_on_by_default(decidb_cli):
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
+    "constraint,objective,value",
+    [
+        ("SUM(2*x - x) <= 2", "MAXIMIZE SUM(p*x)", "p*x"),
+        ("SUM((1+0)*x) <= 2 AND 1*x <= 0 WHEN id = 1", "MAXIMIZE SUM(p*x)", "p*x"),
+        ("SUM(x) <= 2", "MAXIMIZE SUM(p*x*q)", "p*x*q"),
+        ("SUM(x) <= 2", "MINIMIZE SUM(-(p*x))", "-(p*x)"),
+        ("SUM(x) <= 2", "MAXIMIZE SUM((p + q) * x)", "(p + q) * x"),
+    ],
+)
+def test_s1_reads_terms_by_meaning(decidb_cli, decidb_cli_highs, decidb_cli_gurobi, constraint, objective, value):
+    # S1 reads the shared term split, so a count or score written differently but meaning the same is the same
+    # shape: unit contributions add up to one x, and every linear term in x scores.
+    sql = f"""
+        SELECT SUM({value}) FROM (
+            FROM (VALUES (1, 5.0::DOUBLE, 2.0::DOUBLE), (2, -1.0::DOUBLE, 3.0::DOUBLE),
+                         (3, 4.0::DOUBLE, 1.5::DOUBLE), (4, 2.0::DOUBLE, 0.5::DOUBLE)) t(id, p, q)
+            DECIDE x(BOOL) SUCH THAT {constraint} {objective}
+        ) q
+    """
+    plan = _raw(decidb_cli, f"EXPLAIN {sql}").stdout
+    assert "S1_CARDINALITY_INTERVAL" in plan, _raw(decidb_cli, sql).stderr
+    (direct,), _ = _run(decidb_cli, sql)
+    for solver in (decidb_cli_highs, decidb_cli_gurobi):
+        (expected,), _ = _run(solver, sql, mode="off")
+        assert direct[0] == pytest.approx(expected[0])
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
     "constraint,objective,value,quadratic",
     [
         # MAX(ABS(x)) <= 2 holds for every Boolean x; read as SUM(x) <= 2 it caps the count.
@@ -1450,8 +1479,8 @@ def test_s1_multiple_source_bounds_validate_bypassed_and_late_rows(decidb_cli):
         ("x(BOOL)", "SUM(x)<=random()", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM((p+random())*x)", "coefficient_shape"),
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)+SUM(CAST(cap::VARCHAR AS DOUBLE)*x)", "coefficient_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(MAX(p*x)) PER id", "objective_facts_unknown"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) WHEN id=1", "objective_facts_unknown"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(MAX(p*x)) PER id", "objective_scope"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) WHEN id=1", "objective_scope"),
         ("x(BOOL)", "SUM(x)<=1", "", "problem_shape"),
         ("x(BOOL)", "SUM(x)<=9007199254740993", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "norm(x,'inf')<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),

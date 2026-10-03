@@ -11,7 +11,10 @@ below is unproved, the rule misses and DECIDE follows the solver path.
   auxiliary, entity-scoped, or scalar decision. Its SQL output is `INTEGER` 0/1.
 - One or more cardinality clauses `SUM(x) <= U`, `< U`, `>= L`, `> L`, or
   `SUM(x) = K` over unqualified unit-contribution sums and identical
-  membership. `SUM(1*x)` is equivalent; weighted or offset sum bodies miss.
+  membership. A body is a unit contribution when its terms are all `x` times a
+  constant and the signed constants add up to exactly one, so `SUM(1*x)`,
+  `SUM((1+0)*x)` and `SUM(2*x - x)` are `SUM(x)`; weighted bodies, and offset
+  bodies with a constant term such as `SUM(x + 0)`, miss.
   `norm(e, p)` is never one of these sums. The binder carries it as a `SUM(e)`
   aggregate tagged with its order, so the rule reads the tag, and every norm
   order remains a solver case in constraints and in the objective.
@@ -21,8 +24,10 @@ below is unproved, the rule misses and DECIDE follows the solver path.
   evaluation cannot throw, or foldable constants.
   A finite folded constant may shift the objective without changing which
   assignment is optimal. The objective may contain one or more signed,
-  unfiltered `SUM(coefficient*x)` terms. Other objective forms remain solver
-  cases.
+  unfiltered `SUM(...)` reducers whose bodies split into linear terms in `x`;
+  every such term scores with its own signed coefficient, so `SUM((p + q) * x)`
+  scores `p` and `q`, and `SUM(p * x * q)` scores `p * q`. Objective `WHEN` or
+  `PER`, other reducers, and other objective forms remain solver cases.
 - A bound can be global, keyed by one or more source-column `PER` keys, or
   restricted by a top-level deterministic source-only `WHEN` predicate. A
   bound may instead use aggregate-local `WHEN` on `SUM(x)`. All
@@ -30,12 +35,13 @@ below is unproved, the rule misses and DECIDE follows the solver path.
   membership. NULL `PER` keys and rows outside the aggregate's
   `WHEN` bypass that bound but still obey any per-row pin. A nonempty source
   with no eligible row for a scoped aggregate raises DECIDE's empty-aggregate
-  error. Per-row Boolean pins `x=0`, `x<=0`,
+  error. Per-row Boolean pins (a left side that is one unit `x`, as above) `x=0`, `x<=0`,
   `x<1`, `x=1`, `x>=1`, or `x>0` may also appear, with an optional deterministic,
   source-only top-level `WHEN` and no `PER`. Any number of pins may overlap;
   contradictory active pins are infeasible. No reducer qualifier, frame,
-  nested reducer, other constraint, or `DIAGNOSE`. The matcher
-  examines the entire canonical trees, not original SQL text.
+  nested reducer, other constraint, or `DIAGNOSE`. The rule reads the
+  semantic facts of the whole problem (`architecture.md#semantic-facts`), never
+  the bound tree or SQL text; an unknown fact is a miss that names its clause.
 - Source-independent numeric bound expressions that DuckDB can fold
   consistently and convert exactly to finite DOUBLE, or deterministic
   source-only numeric expressions whose evaluation cannot throw. `TRY_CAST`

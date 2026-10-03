@@ -287,9 +287,6 @@ DecideCanonicalizer::FinalizeBoundProvenance(unique_ptr<BoundComparisonExpressio
 	return std::move(comparison);
 }
 
-//! Name an expression the way the user wrote it, for an error message. Everything the
-//! binder added is noise here: `CAST(weight AS DECIMAL(12,1))` is not what anyone
-//! typed, and neither is the `FILTER (WHERE w)` that an aggregate-local WHEN becomes.
 //! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm carries
 //! its order in a display tag, and an L0 norm is still the binder's marker.
 static const Expression *WrittenNormBody(const BoundAggregateExpression &aggregate, string &order) {
@@ -311,6 +308,9 @@ static const Expression *WrittenNormBody(const BoundAggregateExpression &aggrega
 	return definition.Cast<BoundFunctionExpression>().children[0].get();
 }
 
+//! Name an expression the way the user wrote it, for an error message. Everything the
+//! binder added is noise here: `CAST(weight AS DECIMAL(12,1))` is not what anyone
+//! typed, and neither is the `FILTER (WHERE w)` that an aggregate-local WHEN becomes.
 static string UserFacingName(const Expression &expr) {
 	const Expression *cur = StripCastsForIdentity(expr);
 	if (cur->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
