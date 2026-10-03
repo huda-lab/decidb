@@ -75,12 +75,17 @@ struct S1Proof final : DirectRuleProof {
 	bool scoped = false;
 };
 
+//! A `norm(e, p)` is bound as a `sum` aggregate whose alias names the norm, so the function name alone does not
+//! make an aggregate a sum.
 const BoundAggregateExpression *PlainSum(const Expression &expr, idx_t decide_index, bool allow_filter = false) {
 	auto root = UnwrapDecideCasts(expr, decide_index);
 	if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return nullptr;
 	}
 	auto &aggregate = root->Cast<BoundAggregateExpression>();
+	if (HasDecideTag(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX)) {
+		return nullptr;
+	}
 	if (StringUtil::Lower(aggregate.function.name) != "sum" || aggregate.children.size() != 1 ||
 	    (!allow_filter && aggregate.filter) || aggregate.order_bys || aggregate.IsDistinct()) {
 		return nullptr;

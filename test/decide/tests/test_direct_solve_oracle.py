@@ -177,6 +177,13 @@ _OBJECTIVES = {
     "SUM(score * x) - SUM(cap * x)": "sum(score * x) - sum(coalesce(cap, 0) * x)",
 }
 
+# Near misses: norm(e, p) is bound as a SUM(e) tagged with its order, so a path that reads only the aggregate's
+# name takes these for S1 shapes and answers a different question.
+_NORM_REDUCERS = ["norm(x, 'inf')", "norm(x, 1)", "norm(x, 0)"]
+_NORM_OBJECTIVES = {
+    "SUM(score * x) - norm(score * x, 1)": "sum(score * x) - sum(abs(score * x))",
+}
+
 # (pattern, class). The first match wins; anything unmatched compares by text.
 _ERROR_CLASSES = [
     (r"(?i)parser error|syntax error", "parser"),
@@ -196,6 +203,8 @@ def _error_class(message):
 
 
 def _fuzz_query(rng):
+    """Returns the query and whether it was built as an S1 shape rather than a near miss."""
+    near_miss = rng.choice([None] * 8 + ["clause", "objective"])
     rows = []
     for i in range(rng.randint(1, 9)):
         g = rng.choice(["'a'", "'b'", "'c'", "NULL"])
@@ -207,22 +216,25 @@ def _fuzz_query(rng):
     style = rng.choice(["none", "top", "local"])
     operators = rng.choice([("<=",), (">=",), ("=",), ("<=", ">="), ("<", "<=")])
     clauses = []
-    for op in operators:
+    for index, op in enumerate(operators):
         bound = rng.choice([str(rng.randint(0, 4)), f"{rng.randint(0, 3)}.5", "cap", "COALESCE(cap, 2)"])
         if op == "=" and "cap" in bound:
             bound = str(rng.randint(0, 3))
-        aggregate = "SUM(x) WHEN flag" if style == "local" else "SUM(x)"
+        reducer = rng.choice(_NORM_REDUCERS) if near_miss == "clause" and index == 0 else "SUM(x)"
+        aggregate = f"{reducer} WHEN flag" if style == "local" else reducer
         scope = " ".join(part for part in ("WHEN flag" if style == "top" else "", per) if part)
         clauses.append(f"{aggregate} {op} {bound} {scope}".strip())
     if rng.random() < 0.25:
         value = rng.choice([0, 1])
         clauses.append(f"x = {value} WHEN id = {rng.randint(0, 5)}")
-    objective = rng.choice(sorted(_OBJECTIVES))
+    objectives = _NORM_OBJECTIVES if near_miss == "objective" else _OBJECTIVES
+    objective = rng.choice(sorted(objectives))
     sense = rng.choice(["MAXIMIZE", "MINIMIZE"])
-    return (
+    sql = (
         f"WITH r AS (SELECT * FROM {source} DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)} "
-        f"{sense} {objective}) SELECT count(*), {_OBJECTIVES[objective]} FROM r"
+        f"{sense} {objective}) SELECT count(*), {objectives[objective]} FROM r"
     )
+    return sql, near_miss is None
 
 
 def _outcome(cli, mode, sql):
@@ -243,14 +255,15 @@ _FUZZ_CASES_PER_SEED = 30
 @pytest.mark.parametrize("seed", _FUZZ_SEEDS)
 def test_direct_s1_seeded_fuzz_matches_solver_path(decidb_cli, seed):
     rng = random.Random(seed)
-    hits = compared = 0
+    shaped = shaped_hits = compared = 0
     for _ in range(_FUZZ_CASES_PER_SEED):
-        sql = _fuzz_query(rng)
+        sql, s1_shaped = _fuzz_query(rng)
+        shaped += s1_shaped
         direct = _outcome(decidb_cli, "require", sql)
         assert direct != ("error", "parser"), f"generator produced invalid syntax:\n{sql}"
         if direct == ("error", "direct_miss"):
             continue  # unproved shape: the solver path stays authoritative
-        hits += 1
+        shaped_hits += s1_shaped
         solver = _outcome(decidb_cli, "off", sql)
         assert solver != ("error", "parser"), f"generator produced invalid syntax:\n{sql}"
         assert direct[0] == solver[0], f"direct {direct} vs solver {solver}\n{sql}"
@@ -269,7 +282,7 @@ def test_direct_s1_seeded_fuzz_matches_solver_path(decidb_cli, seed):
             assert direct_objective == pytest.approx(solver_objective, rel=1e-6, abs=1e-6), (
                 f"objective differs: direct {direct_objective} vs solver {solver_objective}\n{sql}"
             )
-    # Guard against a generator drifting into vacuity: most queries must reach
-    # the direct path and a meaningful share must succeed on both paths.
-    assert hits >= 0.7 * _FUZZ_CASES_PER_SEED, f"only {hits} direct hits"
+    # Guard against a generator drifting into vacuity: most S1-shaped queries must
+    # reach the direct path and a meaningful share must succeed on both paths.
+    assert shaped_hits >= 0.7 * shaped, f"only {shaped_hits} of {shaped} S1-shaped queries hit"
     assert compared >= 0.2 * _FUZZ_CASES_PER_SEED, f"only {compared} successful comparisons"

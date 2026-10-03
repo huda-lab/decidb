@@ -12,6 +12,9 @@ below is unproved, the rule misses and DECIDE follows the solver path.
 - One or more cardinality clauses `SUM(x) <= U`, `< U`, `>= L`, `> L`, or
   `SUM(x) = K` over unqualified unit-contribution sums and identical
   membership. `SUM(1*x)` is equivalent; weighted or offset sum bodies miss.
+  `norm(e, p)` is never one of these sums. The binder carries it as a `SUM(e)`
+  aggregate tagged with its order, so the rule reads the tag, and every norm
+  order remains a solver case in constraints and in the objective.
   Their inclusive limits intersect into one interval. The default lower bound
   is zero and a lower-only shape has no explicit upper bound. There are no
   other decision terms. Bounds may be numeric source-only expressions whose

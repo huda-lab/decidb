@@ -150,12 +150,15 @@ clear the entries.
 VAL-07: eight seeded fuzz tests in the same file generate random small S1 queries (NULL
 keys and bounds, ties, `PER`, top-level and aggregate-local `WHEN`, constant,
 fractional, and source-valued bounds, pins, three objectives, both senses) and run each
-under `require` (direct) and `off` (solver path). A shape the matcher does not prove is
+under `require` (direct) and `off` (solver path). About one query in five is a near miss
+that puts `norm(x, 'inf')`, `norm(x, 1)` or `norm(x, 0)` in a clause or `norm(score * x, 1)`
+in the objective; the binder spells each as a tagged `SUM`. A shape the matcher does not prove is
 skipped as a miss. Otherwise both paths must succeed or fail together, failures must have
 the same class (infeasible, empty aggregate, NULL bound, and so on), and successes must
 agree on row count and primary objective. The selected count is not compared, because a
 tied zero-contribution row can differ. Each seed must reach the direct path on at least
-70% of its queries and compare at least 20% successfully, and a generated parser error
+70% of its S1-shaped queries and compare at least 20% of all queries successfully, and a
+generated parser error
 fails the test. The last guard was added because the review-time fuzz wrote `PER g WHEN
 flag`, which the grammar rejects (`WHEN flag PER g` is correct), so every PER-with-WHEN
 query was a parser error on both paths and silently matched.

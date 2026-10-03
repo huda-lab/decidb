@@ -755,6 +755,39 @@ def test_direct_solve_is_on_by_default(decidb_cli):
 
 
 @pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint,objective,value,quadratic",
+    [
+        # MAX(ABS(x)) <= 2 holds for every Boolean x; read as SUM(x) <= 2 it caps the count.
+        ("norm(x,'inf') <= 2", "MAXIMIZE SUM(val*x)", "val*x", False),
+        ("SUM(x) <= 2", "MAXIMIZE SUM(val*x) - norm(val*x,1)", "val*x - ABS(val*x)", False),
+        ("SUM(x) <= 2", "MAXIMIZE SUM(val*x) - norm(val*x,0)", "val*x - (val*x <> 0)::INT", False),
+        # SUM(POWER(val*x, 2)) ranks rows by val^2, not by val.
+        ("SUM(x) >= 2", "MINIMIZE norm(val*x,2)", "POWER(val*x, 2)", True),
+    ],
+)
+def test_norm_is_not_read_as_a_sum(decidb_cli, decidb_cli_highs, decidb_cli_gurobi, constraint, objective, value,
+                                   quadratic):
+    # The binder carries norm(e, p) as a SUM(e) aggregate tagged with its order. Direct solve must refuse it under
+    # every order and leave the query to the solver, whose answer the default path then returns.
+    sql = f"""
+        SELECT SUM({value}) FROM (
+            FROM (VALUES (1, -5.0::DOUBLE), (2, 1.0::DOUBLE), (3, 2.0::DOUBLE), (4, 3.0::DOUBLE)) t(id, val)
+            DECIDE x(BOOL) SUCH THAT {constraint} {objective}
+        ) q
+    """
+    required = _raw(decidb_cli, sql)
+    assert "decide_direct_solve=require:" in required.stderr, required.stderr
+    plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto").stdout
+    assert _has_decide_operator(plan) and "Direct solve" not in plan
+    (default,), _ = _run(decidb_cli, sql, mode="auto")
+    solvers = (decidb_cli_gurobi,) if quadratic else (decidb_cli_highs, decidb_cli_gurobi)
+    for solver in solvers:
+        (expected,), _ = _run(solver, sql, mode="off")
+        assert default[0] == pytest.approx(expected[0])
+
+
+@pytest.mark.correctness
 @pytest.mark.parametrize("score", ["NULL::DOUBLE", "'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
 def test_invalid_score_error_matches_solver_wording(decidb_cli, score):
     # The direct path names a bad score the way the solver does, so a user sees one message whichever path ran.
@@ -1421,6 +1454,10 @@ def test_s1_multiple_source_bounds_validate_bypassed_and_late_rows(decidb_cli):
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) WHEN id=1", "objective_facts_unknown"),
         ("x(BOOL)", "SUM(x)<=1", "", "problem_shape"),
         ("x(BOOL)", "SUM(x)<=9007199254740993", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "norm(x,'inf')<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "norm(x,1)<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) - norm(p*x,1)", "objective_shape"),
+        ("x(BOOL)", "SUM(x)<=1", "MINIMIZE norm(p*x,2)", "objective_shape"),
     ],
 )
 def test_baseline_one_condition_away_misses(decidb_cli, declaration, constraint, objective, reason):
