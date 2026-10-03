@@ -9,9 +9,9 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/optimizer/decide/direct/direct_builder.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_boundary.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
-#include "duckdb/optimizer/decide/direct/s1_rule.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -60,13 +60,41 @@ void DirectSolveModeSetCallback(ClientContext &, SetScope, Value &parameter) {
 	parameter = Value(value);
 }
 
-} // namespace
-
-vector<unique_ptr<DirectSolveRule>> RegisteredDirectRules() {
-	vector<unique_ptr<DirectSolveRule>> rules;
-	rules.push_back(MakeS1CardinalityRule());
-	return rules;
+//! The rules this connection tries: the registered ones, unless a coordinator test installed its own.
+vector<unique_ptr<DirectSolveRule>> RulesFor(ClientContext &context) {
+	auto override_rules = context.registered_state->Get<DirectRuleOverride>(DIRECT_RULE_OVERRIDE_KEY);
+	return override_rules ? override_rules->make_rules() : RegisteredDirectRules();
 }
+
+struct CachedEstimate {
+	LogicalOperator *op;
+	bool has_estimate;
+	idx_t estimate;
+};
+
+void SaveEstimates(LogicalOperator &op, vector<CachedEstimate> &saved) {
+	saved.push_back({&op, op.has_estimated_cardinality, op.estimated_cardinality});
+	for (auto &child : op.children) {
+		SaveEstimates(*child, saved);
+	}
+}
+
+//! DuckDB's row estimate for the DECIDE input. Estimating caches a value on every operator it visits; this runs
+//! before join ordering, so a cached value would outlive the plan it described and reach EXPLAIN and physical
+//! planning. The cache is put back as it was.
+DirectCostContext MakeCostContext(ClientContext &context, LogicalOperator &source) {
+	vector<CachedEstimate> saved;
+	SaveEstimates(source, saved);
+	DirectCostContext result;
+	result.estimated_source_rows = source.EstimateCardinality(context);
+	for (auto &entry : saved) {
+		entry.op->has_estimated_cardinality = entry.has_estimate;
+		entry.op->estimated_cardinality = entry.estimate;
+	}
+	return result;
+}
+
+} // namespace
 
 void RegisterDirectSolve(DBConfig &config) {
 	config.AddExtensionOption("decide_direct_solve",
@@ -93,6 +121,10 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 		// A DIAGNOSE query or a forced backend keeps the solver path; there is nothing to report.
 		return op;
 	}
+	if (decide.children.size() != 1 || !decide.children[0]) {
+		throw InternalException("Direct solve expected one DECIDE input");
+	}
+	auto &source = *decide.children[0];
 	auto facts = DirectProblemFacts::Read(decide);
 	struct ProvedCandidate {
 		const DirectSolveRule *rule;
@@ -101,7 +133,8 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	};
 	vector<ProvedCandidate> proved;
 	vector<string> misses;
-	auto rules = RegisteredDirectRules();
+	unique_ptr<DirectCostContext> cost_context;
+	auto rules = RulesFor(optimizer.context);
 	for (auto &rule : rules) {
 		string reason;
 		auto match = rule->Match(facts, reason);
@@ -114,7 +147,10 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 			misses.push_back(rule->Name() + string(": ") + reason);
 			continue;
 		}
-		auto cost = rule->Cost(*proof);
+		if (!cost_context) {
+			cost_context = make_uniq<DirectCostContext>(MakeCostContext(optimizer.context, source));
+		}
+		auto cost = rule->Cost(*proof, *cost_context);
 		if (!std::isfinite(cost)) {
 			throw InternalException("Direct solve rule %s returned a non-finite cost", rule->Name());
 		}
@@ -129,6 +165,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 		// `require` is how a user asks why a query was not proved.
 		return op;
 	}
+	// min_element keeps the first of equal costs, which is the earlier registered rule.
 	auto selected = std::min_element(proved.begin(), proved.end(),
 	                                 [](const ProvedCandidate &left, const ProvedCandidate &right) {
 		                                 return left.cost < right.cost;
@@ -138,22 +175,28 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	record.rule = selected->rule->Name();
 	selected->rule->Explain(*selected->proof, record);
 	direct_profile.Next("optimizer.direct.construct");
-	if (decide.children.size() != 1) {
-		throw InternalException("Direct solve expected one DECIDE input");
+	// The replacement answers to the DECIDE node's identity: every source column, then one column per decision.
+	source.ResolveOperatorTypes();
+	auto output_bindings = source.GetColumnBindings();
+	auto output_types = source.types;
+	if (output_bindings.size() != output_types.size()) {
+		throw InternalException("Direct solve source bindings and types differ");
 	}
-	decide.children[0]->ResolveOperatorTypes();
-	auto output_bindings = decide.GetColumnBindings();
-	if (output_bindings != selected->proof->output_bindings) {
-		throw InternalException("Direct solve proof does not preserve DECIDE output bindings");
+	vector<uint8_t> prunable_sources;
+	for (auto &binding : output_bindings) {
+		prunable_sources.push_back(DirectCanSkipSourceOutput(source, binding) ? 1 : 0);
 	}
-	auto output_types = decide.children[0]->types;
-	for (auto &variable : decide.decide_variables) {
-		output_types.push_back(variable->return_type);
+	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
+		output_bindings.emplace_back(decide.decide_index, i);
+		output_types.push_back(decide.decide_variables[i]->return_type);
+	}
+	if (output_bindings != decide.GetColumnBindings()) {
+		throw InternalException("Direct solve derived bindings differ from the DECIDE output");
 	}
 	auto decide_index = decide.decide_index;
 	auto proposal = selected->rule->Rewrite(std::move(decide.children[0]), optimizer, *selected->proof);
-	return MapDirectResult(std::move(proposal), std::move(output_bindings), std::move(output_types), decide_index,
-	                       std::move(record));
+	return MapDirectResult(std::move(proposal), std::move(output_bindings), std::move(output_types),
+	                       std::move(prunable_sources), decide_index, std::move(record));
 }
 
 } // namespace duckdb

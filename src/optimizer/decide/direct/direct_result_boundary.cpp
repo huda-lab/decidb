@@ -18,9 +18,9 @@ namespace {
 constexpr const char *DIRECT_RESULT_EXTENSION = "decidb_direct_solve_result_v3";
 
 //! Preserve the bindings the DECIDE node advertised. The leading expressions
-//! map each output to a child binding; the suffix pins validation dependencies.
-//! Unused outputs can become typed NULL placeholders without dropping the
-//! suffix. Physical planning lowers this to an ordinary projection.
+//! map each output to a child binding; the optional suffix pins validation
+//! dependencies. Unused outputs can become typed NULL placeholders without
+//! dropping the suffix. Physical planning lowers this to an ordinary projection.
 class LogicalDirectSolveResult final : public LogicalExtensionOperator {
 public:
 	LogicalDirectSolveResult() = default;
@@ -44,7 +44,7 @@ public:
 	}
 	void PruneUnusedOutputs(const vector<bool> &referenced_outputs) override {
 		if (referenced_outputs.size() != output_types.size() || prunable_outputs.size() != output_types.size() ||
-		    expressions.size() != output_types.size() + required_dependency_count || !required_dependency_count) {
+		    expressions.size() != output_types.size() + required_dependency_count) {
 			throw InternalException("Direct solve result boundary has invalid output dependencies");
 		}
 		for (idx_t i = 0; i < referenced_outputs.size(); i++) {
@@ -97,7 +97,7 @@ public:
 	unique_ptr<PhysicalOperator> CreatePlan(ClientContext &, PhysicalPlanGenerator &generator) override {
 		if (children.size() != 1 || output_bindings.size() != output_types.size() ||
 		    prunable_outputs.size() != output_types.size() ||
-		    !required_dependency_count || expressions.size() != output_types.size() + required_dependency_count) {
+		    expressions.size() != output_types.size() + required_dependency_count) {
 			throw InternalException("Direct solve result boundary has an invalid output map");
 		}
 		auto child = generator.CreatePlanChild(*children[0]);
@@ -155,13 +155,16 @@ unique_ptr<OperatorExtension> MakeDirectResultExtension() {
 }
 
 unique_ptr<LogicalOperator> MapDirectResult(DirectRelationalProposal proposal, vector<ColumnBinding> output_bindings,
-                                           vector<LogicalType> output_types, idx_t decide_index,
-                                           DirectSolveDecisionRecord record) {
+                                           vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
+                                           idx_t decide_index, DirectSolveDecisionRecord record) {
 	if (!proposal.child || output_bindings.size() != output_types.size() ||
 	    proposal.output_slots.size() != output_bindings.size() ||
-	    proposal.prunable_outputs.size() != output_bindings.size() || proposal.required_slots.empty()) {
+	    prunable_sources.size() + proposal.prunable_decisions.size() != output_bindings.size()) {
 		throw InternalException("Direct solve rule returned an incomplete result proposal");
 	}
+	auto prunable_outputs = std::move(prunable_sources);
+	prunable_outputs.insert(prunable_outputs.end(), proposal.prunable_decisions.begin(),
+	                        proposal.prunable_decisions.end());
 	proposal.child->ResolveOperatorTypes();
 	auto child_bindings = proposal.child->GetColumnBindings();
 	auto &child_types = proposal.child->types;
@@ -174,20 +177,20 @@ unique_ptr<LogicalOperator> MapDirectResult(DirectRelationalProposal proposal, v
 			throw InternalException("Direct solve rule returned a mismatched output slot");
 		}
 	}
-	for (auto slot : proposal.required_slots) {
+	for (auto slot : proposal.validation_slots) {
 		if (slot >= child_types.size()) {
 			throw InternalException("Direct solve rule lost a required validation slot");
 		}
 	}
 	auto boundary = make_uniq<LogicalDirectSolveResult>(decide_index, std::move(output_bindings),
-	                                                   std::move(output_types), proposal.required_slots.size(),
-	                                                   std::move(proposal.prunable_outputs), std::move(record));
+	                                                   std::move(output_types), proposal.validation_slots.size(),
+	                                                   std::move(prunable_outputs), std::move(record));
 	// The positional map is materialized as one dependency per advertised output.
 	// The required suffix stays live even when all outputs are unused by a parent.
 	for (auto slot : proposal.output_slots) {
 		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
-	for (auto slot : proposal.required_slots) {
+	for (auto slot : proposal.validation_slots) {
 		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
 	boundary->children.push_back(std::move(proposal.child));

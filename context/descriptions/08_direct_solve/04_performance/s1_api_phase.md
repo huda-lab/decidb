@@ -501,8 +501,9 @@ command above to reproduce one.
 | 512 B | 0.5736 | 29.6506 | 8.2712 | 37.3544 |
 
 Sort buffers 511–538 MiB. Memory through the query: 855–861 MiB direct on narrow rows, 2,936–3,372
-MiB direct on wide rows, against 2,639 and 3,116 MiB for Gurobi. The variation leaves the wide
-memory tradeoff unresolved.
+MiB direct on wide rows, against 2,639 and 3,116 MiB for Gurobi. These whole-run figures vary too
+much to settle the wide-row tradeoff; the query-only sweep in the
+[benefit report](s1_benefit_report.md) does: direct is 16% below Gurobi on wide full output.
 
 ### Additive linear scores at scale
 

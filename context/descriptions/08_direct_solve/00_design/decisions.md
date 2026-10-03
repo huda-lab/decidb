@@ -19,8 +19,28 @@ prototype can select its sole proved rule without a cost model.
 
 Why: a flattened solver model is built later, and matching a familiar subtree
 can silently drop another term. The first rule's exact admitted shape is in
-[the S1 contract](../02_first_rule/spec.md). The adapter must be useful to a
-second rule, but only expose facts the first rule actually needs now.
+[the S1 contract](../02_first_rule/spec.md).
+
+**Semantic facts (decided 2026-10-03, being implemented).** The adapter models
+everything the language can say, so a second rule never forces another interface
+break. Anything outside the model is `UNKNOWN`, and each constraint and objective
+part carries its own status and reason, so `require` can name the clause it could
+not model. Facts own their expressions. The vocabulary is the construct table in
+[architecture](architecture.md#semantic-facts).
+
+- `norm(e, p)` has one meaning everywhere. The canonicalizer replaces L1, L2 and
+  L-infinity with their definitions (`SUM(ABS(e))`, `SUM(POWER(e, 2))`,
+  `MAX(ABS(e))`), the same ones the solver path used, and keeps the user's spelling
+  only in a display tag. L0 needs indicator variables, so it stays a marker and
+  the facts read it as a count-nonzero reducer with its tolerance and optional M.
+  Why: the binder's marker is a real `SUM(e)` whose alias changes its meaning; S1
+  read it as a sum and returned wrong answers under `auto` until it learned to
+  refuse it.
+- One term splitter serves the solver path and the facts. It lives beside the
+  canonicalizer, not inside it: the canonicalizer never opens a term, which is why
+  it is total and pure, while splitting distributes, collects like terms, and can
+  fail. The splitter reports `UNKNOWN` for a decision under a node it does not
+  recognise instead of reading `abs(x)` as `x`.
 
 ## 2. Result and binding boundary
 
@@ -65,11 +85,19 @@ capacity zero, and a parent `LIMIT 1` or filter. An input `WHERE` can remove
 rows; an outer `LIMIT 0` can avoid executing the whole DECIDE result. Unrelated
 source columns may be NULL and need no guard.
 
-Initially retain a blocking rank/validation dependency even if the assignment
-would be constant or `x` is unused. If optimizer tests show that a relational
-guard can be skipped, use a generic blocking validator or narrow admission
-until the obligation is proved. A standalone filter is insufficient: it skipped
-a late bad row under outer `LIMIT 1` in the experiment. The direct error should
+Retain a blocking validation dependency even if the assignment would be
+constant or `x` is unused. A standalone filter is insufficient: it skipped a
+late bad row under outer `LIMIT 1` in the experiment. The obligation is
+explicit in the rule contract. A proposal names its validation slots, which the
+result boundary keeps live; S1 names its rank, whose window reads every row
+before it emits one. A rule whose plan could stream uses the shared
+`DirectValidationBarrier`: a projection evaluates the truth-or-error predicate
+on every row and a whole-input window holds the rows until all are read. The
+predicate is a projected column, not a filter, so filter pushdown cannot move it
+below a join onto rows the DECIDE input never sees. Holding the rows costs
+memory only for a rule that would otherwise stream (decided 2026-10-03 over
+reading the input twice, which would recompute the source and need repeatable
+sources). The direct error should
 retain the `Invalid Input` category and distinguish NULL from non-finite
 coefficients; the solver's exact row-index text is not required. Conversion
 errors remain DuckDB conversion errors. No error triggers a solver retry after
@@ -196,3 +224,10 @@ Consequences already applied to the repository:
   default all pass.
 
 Cost-based choice between competing direct plans is a separate question (NEXT-05).
+Two limits on it are decided (2026-10-03):
+
+- `decide_direct_solve` stays the only control. There is no per-rule off switch.
+- `Cost` sees the proof and the estimated row count of the DECIDE input, never its
+  data, so no estimate can decide whether a rule applies. The estimate is DuckDB's
+  own before join ordering; reading it leaves the plan's cached estimates as they
+  were. The cheapest proved rule wins and equal costs go to the first registered.

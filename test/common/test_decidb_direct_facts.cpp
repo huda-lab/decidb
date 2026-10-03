@@ -63,7 +63,6 @@ TEST_CASE("Direct-solve facts retain complete bound-clause attribution", "[decid
 	REQUIRE(match != nullptr);
 	auto proof = s1->Prove(facts, *match, *con.context, reason);
 	REQUIRE(proof != nullptr);
-	REQUIRE(proof->output_bindings == decide->GetColumnBindings());
 	DirectSolveDecisionRecord record;
 	s1->Explain(*proof, record);
 	REQUIRE(record.proof.find("cardinality interval [0, 1]") != string::npos);

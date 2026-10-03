@@ -21,8 +21,8 @@ and a reasoned miss. `DirectSolveRule` separates Match, Prove, Cost, Explain,
 and Rewrite; the coordinator selects only among proved candidates and maps a
 complete relational proposal through one shared result boundary. Its S1 proof
 records decision identity/domain, capacity, objective direction/coefficient,
-the all-row guard, and external bindings. The boundary validates slot types and
-retains the rank dependency. The 17-case baseline miss matrix and parent/CTE
+and the all-row guard. The boundary validates slot types and retains the rank
+dependency. The 17-case baseline miss matrix and parent/CTE
 tests exercise these contracts through SQL.
 
 HAR-01: the read-only adapter reports complete factor membership,
@@ -38,7 +38,7 @@ dependencies, and passes the focused parent-context tests. Its built-in pass
 audit is in [optimizer_audit.md](../00_design/optimizer_audit.md).
 
 HAR-03: the shared boundary checks every original output binding and output
-slot type, retains mandatory validation dependencies, and lowers to one
+slot type, retains declared validation dependencies, and lowers to one
 ordinary physical projection. An unused-column hook replaces only outputs
 certified safe to skip with internal typed NULL placeholders. Stored columns,
 constants, and passthrough aliases through projections, filters, or inner
@@ -47,3 +47,19 @@ effects remain live. A miss leaves `LogicalDecide` to the solver;
 serializer and parent-query tests cover the accepted path. The optimizer audit
 checks that later built-in passes do not move parent filters or limits into the
 rank input.
+
+Rule contract (2026-10-03): the rule list lives in `direct_registry.cpp`, and a
+connection can replace it with `DirectRuleOverride`, which only tests install. The
+coordinator derives the external bindings, decides source-column prunability with
+`DirectCanSkipSourceOutput`, and resolves the input's types once; a proposal states
+only its output slots, whether each decision output may be skipped, and optional
+validation slots. `Cost(proof, context)` sees the estimated source row count, read
+without disturbing the plan's cached estimates; the cheapest proved rule wins and a
+tie goes to the first registered. `DirectValidationBarrier` builds the all-rows read
+for a rule whose plan could stream. Each rule keeps its helpers in a named namespace
+(`direct_s1`), because unity builds merge anonymous namespaces across rule files.
+`test_decidb_direct_coordinator.cpp` drives the whole path with stub rules: a hit, a
+fallback with every rule's reason under `require`, the cheaper rule, the tie, the
+estimate `Cost` sees, a non-finite cost and a mismatched output slot as internal
+errors, and the barrier raising a late NULL under `LIMIT 1` and `COUNT(*)` while a
+streaming check does not.

@@ -28,7 +28,9 @@
 
 namespace duckdb {
 
-namespace {
+//! Each rule keeps its helpers in its own named namespace: unity builds compile every rule file in one translation
+//! unit, where two anonymous namespaces would merge and same-named helpers would collide.
+namespace direct_s1 {
 
 constexpr const char *S1_RULE = "S1_CARDINALITY_INTERVAL";
 
@@ -328,15 +330,13 @@ public:
 		auto proof = make_uniq<S1Proof>();
 		proof->decide_index = facts.decide_index;
 		proof->sense = facts.sense;
-		proof->output_bindings = facts.source_bindings;
-		proof->output_bindings.emplace_back(facts.decide_index, 0);
 		if (!ProveScope(facts, match, *proof, reason) || !ProvePins(facts, match, context, *proof, reason) ||
 		    !ProveBounds(facts, match, context, *proof, reason) || !ProveObjective(facts, *proof, reason)) {
 			return nullptr;
 		}
 		return std::move(proof);
 	}
-	double Cost(const DirectRuleProof &) const override {
+	double Cost(const DirectRuleProof &, const DirectCostContext &) const override {
 		// The first rule has no competing proved alternative yet.
 		return 0.0;
 	}
@@ -646,9 +646,7 @@ class S1Rewriter {
 public:
 	S1Rewriter(const S1Proof &proof_p, Optimizer &optimizer_p, LogicalOperator &source)
 	    : proof(proof_p), optimizer(optimizer_p), binder(optimizer_p.binder) {
-		// The DECIDE optimizer runs before the physical planner's type-resolution
-		// pass. Resolve the unchanged input before constructing typed bound refs.
-		source.ResolveOperatorTypes();
+		// The coordinator hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
 		if (source_bindings.size() != source_types.size()) {
@@ -678,13 +676,6 @@ public:
 	}
 
 	DirectRelationalProposal Build(unique_ptr<LogicalOperator> source) const {
-		vector<uint8_t> prunable_outputs;
-		prunable_outputs.reserve(source_bindings.size() + 1);
-		for (auto &binding : source_bindings) {
-			prunable_outputs.push_back(DirectCanSkipSourceOutput(*source, binding) ? 1 : 0);
-		}
-		prunable_outputs.push_back(1); // x is pure once score validation and ranking remain live
-
 		ScopeState scope;
 		source = ProjectScopeState(std::move(source), scope);
 		source = GuardEmptyAggregate(std::move(source), scope);
@@ -695,8 +686,9 @@ public:
 		auto result = ProjectAssignment(std::move(ranked), bounds);
 
 		DirectRelationalProposal proposal;
-		proposal.prunable_outputs = std::move(prunable_outputs);
-		proposal.required_slots.push_back(source_bindings.size() + 1); // hidden rank enforces the score guard
+		proposal.prunable_decisions.push_back(1); // x is pure once score validation and ranking remain live
+		// The rank window reads every row before it emits one, so the hidden rank is this plan's validation barrier.
+		proposal.validation_slots.push_back(source_bindings.size() + 1);
 		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
 			proposal.output_slots.push_back(i);
 		}
@@ -1337,10 +1329,10 @@ DirectRelationalProposal S1CardinalityRule::Rewrite(unique_ptr<LogicalOperator> 
 	return rewriter.Build(std::move(source));
 }
 
-} // namespace
+} // namespace direct_s1
 
 unique_ptr<DirectSolveRule> MakeS1CardinalityRule() {
-	return make_uniq<S1CardinalityRule>();
+	return make_uniq<direct_s1::S1CardinalityRule>();
 }
 
 } // namespace duckdb

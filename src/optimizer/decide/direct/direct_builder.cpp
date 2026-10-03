@@ -6,6 +6,7 @@
 #include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -15,6 +16,7 @@
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
 
@@ -58,6 +60,32 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 	result->children = std::move(aggregate.children);
 	result->start = WindowBoundary::UNBOUNDED_PRECEDING;
 	result->end = WindowBoundary::UNBOUNDED_FOLLOWING;
+	return result;
+}
+
+DirectBarrier DirectValidationBarrier(Binder &binder, unique_ptr<LogicalOperator> input, unique_ptr<Expression> valid) {
+	input->ResolveOperatorTypes();
+	auto bindings = input->GetColumnBindings();
+	if (bindings.size() != input->types.size() || valid->return_type != LogicalType::BOOLEAN) {
+		throw InternalException("Direct solve validation barrier received an invalid input");
+	}
+	DirectBarrier result;
+	auto projection_index = binder.GenerateTableIndex();
+	vector<unique_ptr<Expression>> expressions;
+	for (idx_t i = 0; i < bindings.size(); i++) {
+		expressions.push_back(DirectColumn(input->types[i], bindings[i]));
+		result.input_bindings.emplace_back(projection_index, i);
+	}
+	expressions.push_back(std::move(valid));
+	auto projection = make_uniq<LogicalProjection>(projection_index, std::move(expressions));
+	projection->children.push_back(std::move(input));
+	auto window_index = binder.GenerateTableIndex();
+	auto window = make_uniq<LogicalWindow>(window_index);
+	window->expressions.push_back(
+	    DirectWindowMatchingCount(DirectColumn(LogicalType::BOOLEAN, ColumnBinding(projection_index, bindings.size()))));
+	window->children.push_back(std::move(projection));
+	result.barrier = ColumnBinding(window_index, 0);
+	result.plan = std::move(window);
 	return result;
 }
 

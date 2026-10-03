@@ -25,9 +25,46 @@ objective terms and direction; complete constraint factors and comparisons;
 reducer `PER`, `WHEN`, qualifier, and later frame semantics; data-valued
 expressions; source provenance; and the input plan's bindings. It does not carry
 solver choice, Big-M formulation, auxiliary solver variables, or evaluated
-coefficient vectors. The first adapter may expose only the facts needed by the
-first rule, but must report every unsupported construct as unknown rather than
-silently omit it. ANR compatibility needs its own adapter contract tests.
+coefficient vectors. The adapter models the whole language (see
+[Semantic facts](#semantic-facts)) and reports anything else as unknown rather
+than silently omitting it. ANR compatibility needs its own adapter contract tests.
+
+## Semantic facts
+
+The adapter's target vocabulary: every construct the bound, canonical tree can hold
+when the direct attempt runs, before `OptimizeDecide`. At that point there are no
+auxiliary variables, absorbed bounds, or `__minmax_*`, `__ne_*`, `__avg_rewrite__`
+and removal-group tags; those belong to the solver path. The canonical form puts
+decisions on the left and data on the right, and spells a reducer factor as
+`f * AGG` or `AGG / f`.
+
+| Construct | Bound tree | Fact |
+|---|---|---|
+| `x(BOOL/INT/REAL)` | `decide_variables[i]`, `is_boolean_var`, INTEGER/BIGINT/DOUBLE | domain, output type, index |
+| `T.x`, `scalar x` | `variable_scopes`, `entity_scopes`, `entity_key_expressions` | scope; entity scope with relations, key slots, role (declaration or qualifier) |
+| `AND`, `WHEN`, `PER` | untagged conjunction; WHEN-tagged `[c, cond]`; PER-tagged `[c, cols]` | ordered constraints; scope with PER keys as source slots and WHEN |
+| clause identity | `__source_clause_N__` | source clause id; several facts may share one (`BETWEEN`) |
+| `<= < >= > = <>` | canonical `BoundComparisonExpression` | comparison, left-hand parts, right-hand side |
+| `x IN (v, ...)` | `BoundOperatorExpression` COMPARE_IN | membership: variable and value expressions |
+| per-row or aggregate | reducer placement | `ClassifyCanonicalComparison` |
+| right-hand side | constant, source data, `__query_wide_value__`, `__row_varying_subquery__` | data expression with provenance constant, query-wide, or row-varying |
+| `SUM`, `AVG`, `MIN`, `MAX` | `BoundAggregateExpression` | reducer kind |
+| aggregate-local `WHEN` | `aggregate.filter` | part filter |
+| `SUM(D: e)` | alias `__qualified_by_k__` | part qualifier |
+| reducer factor | `TryMatchScaledAggregate` | part scale and whether it divides |
+| `norm(e, p)` | desugared by the canonicalizer; L0 stays a marker | as its definition; L0 as count-nonzero |
+| `x`, `c*x`, `x/c`, `-x` | arithmetic over a decision | linear term: variable and coefficient |
+| data term in a reducer | additive data node | constant term |
+| `x*y` | product of two decisions | product term |
+| `POWER(e, 2)`, `e**2`, `(e)*(e)` | power, `**`, self-product | square of a linear inner expression |
+| `ABS(e)` | `abs` | absolute value of a linear inner expression |
+| bare `scalar` decision beside a reducer | additive term | row-level part |
+| casts | decision casts transparent (`UnwrapDecideCasts`); data casts stay in the coefficient | none |
+| objective | sense, `objective_constant_offset`, additive parts, `WHEN`, `PER`, `OUTER(INNER(e)) PER k` | sense, offset, parts, scope; a nested part for `OUTER(INNER(e))` |
+| source | child bindings, `source_columns` | bindings and names |
+
+Degree comes from `DecideExpressionDegree`. Predicates over data expressions
+(`DirectMayThrow` and the like) stay in `direct_expression.cpp`.
 
 ## The harness and a rule
 
@@ -46,9 +83,16 @@ data cannot satisfy proof conditions; they belong only in Cost after proof.
 Rule order never establishes correctness. A cost model can wait until complete
 proofs genuinely compete.
 
-The coordinator keeps the original node untouched during Match and Prove. A
+The coordinator keeps the original node untouched during Match and Prove. It
+takes its rules from `direct_registry.cpp`, so adding a rule never edits the
+coordinator; tests replace the list per connection with `DirectRuleOverride`.
+`Cost` receives a `DirectCostContext` holding only the estimated source row count.
+The coordinator owns the rule-independent work: it derives the external bindings
+(source columns, then one per decision), decides which source columns a parent may
+skip, and resolves the input's types once before Rewrite. A
 proved candidate constructs a complete proposal: relational child plan, output
-mapping, required guards, and structured explanation. The harness checks that
+mapping, whether each decision output may be skipped, optional validation slots,
+and structured explanation. The harness checks that
 proposal's schema, types, identity, and guard obligations before committing it.
 An expected unsupported shape falls back before commit. An unexpected invariant
 or construction failure is an error, not a silently swallowed fallback. After a
@@ -173,7 +217,8 @@ rewrites → prepared model → PhysicalDecide`. On a hit, the generated subtree
 continues through DuckDB's remaining optimizer passes and existing execution
 operators. The DECIDE-specific call site should be small; new rule and harness
 code belongs under `src/optimizer/decide/direct/` where possible. Its files are
-`direct_problem.cpp` (facts), `direct_coordinator.cpp` (policy, registry, fallback),
+`direct_problem.cpp` (facts), `direct_coordinator.cpp` (policy, fallback),
+`direct_registry.cpp` (the rule list),
 `direct_result_boundary.cpp` (output boundary and slot map), `direct_builder.cpp`
 (rule-independent plan builders), and one file per rule (`s1_rule.cpp`). A logical
 boundary may require small owning-layer changes in planning and serialization.
