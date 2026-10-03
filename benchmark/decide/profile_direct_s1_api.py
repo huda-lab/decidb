@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Compare materialized and streamed S1 API delivery on stored inputs."""
+"""Compare materialized and streamed S1 API delivery on stored inputs.
+
+With ``--db-dir`` the source table is built once into a database file by a ``prepare`` run. Each measured
+run is a fresh process that only opens that file and runs the query, so its peak memory is query-only
+(``process_peak_through_query_mib``, against the open baseline ``process_peak_through_open_mib``).
+
+``--output-kinds consume`` reads every column that ``full`` returns but reduces them inside the query.
+Collection cost is the ``full`` wall time minus the ``consume`` wall time for the same shape and mode.
+"""
 
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ FIELDS = (
     "repeat", "status",
     "setup_s", "submit_s",
     "fetch_s", "query_collect_s", "api_readback_s", "process_s", "peak_rss_mib", "setup_rss_mib",
+    "stored_file", "open_rss_mib", "process_peak_through_open_mib",
     "process_peak_through_setup_mib", "process_peak_through_submit_mib", "post_submit_rss_mib",
     "process_peak_through_fetch_mib", "post_fetch_rss_mib", "process_peak_through_query_mib", "post_query_rss_mib",
     "result_rows", "output_rows", "chosen", "active_chosen", "objective", "payload_bytes", "window_input_rows",
@@ -40,15 +49,34 @@ FIELDS = (
 )
 
 
+def source_key(rows: int, width: int, source_kind: str, scope: str, pins: str, bound_kind: str) -> str:
+    return f"n{rows}_w{width}_{source_kind}_{scope}_{pins}_{bound_kind}"
+
+
+def prepare_source(binary: Path, db_path: Path, rows: int, width: int, source_kind: str, scope: str, pins: str,
+                   bound_kind: str, timeout: int) -> None:
+    """Build the stored source once. The source columns do not depend on mode, output, or delivery."""
+    db_path.unlink(missing_ok=True)
+    Path(f"{db_path}.wal").unlink(missing_ok=True)
+    cardinality = "interval" if bound_kind != "constant" else "upper"
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("DECIDB_")}
+    environment["S1_DB"] = str(db_path)
+    subprocess.run([str(binary), str(rows), str(width), source_kind, "prepare", "full", "materialized", cardinality,
+                    scope, pins, bound_kind], check=True, capture_output=True, text=True, env=environment,
+                   timeout=timeout)
+
+
 def run_one(binary: Path, rows: int, width: int, source_kind: str, output_kind: str, mode: str,
             delivery: str, cardinality: str, scope: str, pins: str, bound_kind: str,
-            repeat: int, timeout: int, raw_dir: Path) -> dict:
+            repeat: int, timeout: int, raw_dir: Path, db_path: Path | None = None) -> dict:
     environment = {key: value for key, value in os.environ.items() if not key.startswith("DECIDB_")}
+    if db_path is not None:
+        environment["S1_DB"] = str(db_path)
     environment["DECIDB_PROFILE"] = "1"
     if mode != "direct":
         environment["DECIDB_FORCE_SOLVER"] = mode
     name = (f"n{rows}_w{width}_{source_kind}_{output_kind}_{mode}_{delivery}_{cardinality}_{scope}_"
-            f"{pins}_{bound_kind}_r{repeat}")
+            f"{pins}_{bound_kind}_r{repeat}" + ("_stored" if db_path is not None else ""))
     status = "ok"
     started = time.monotonic()
     try:
@@ -109,6 +137,9 @@ def run_one(binary: Path, rows: int, width: int, source_kind: str, output_kind: 
         "api_readback_s": result.get("api_readback_s") if result else None,
         "process_s": process_s,
         "peak_rss_mib": round(resources.get("peak_rss_kb", 0) / 1024, 3) or None,
+        "stored_file": result.get("stored_file") if result else None,
+        "open_rss_mib": result.get("open_rss_mib") if result else None,
+        "process_peak_through_open_mib": result.get("process_peak_through_open_mib") if result else None,
         "setup_rss_mib": result.get("setup_rss_mib") if result else None,
         "process_peak_through_setup_mib": result.get("process_peak_through_setup_mib") if result else None,
         "process_peak_through_submit_mib": result.get("process_peak_through_submit_mib") if result else None,
@@ -138,7 +169,7 @@ def main() -> None:
     parser.add_argument("--rows", nargs="+", type=int, default=[1000000])
     parser.add_argument("--widths", nargs="+", type=int, default=[0])
     parser.add_argument("--source-kinds", nargs="+", choices=["stored", "stored_join"], default=["stored"])
-    parser.add_argument("--output-kinds", nargs="+", choices=["full", "aggregate"], default=["full"])
+    parser.add_argument("--output-kinds", nargs="+", choices=["full", "aggregate", "consume"], default=["full"])
     parser.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES))
     parser.add_argument("--deliveries", nargs="+", choices=DELIVERIES, default=["materialized"])
     parser.add_argument("--cardinalities", nargs="+", choices=CARDINALITIES, default=["upper"])
@@ -147,6 +178,9 @@ def main() -> None:
     parser.add_argument("--bound-kinds", nargs="+", choices=BOUND_KINDS, default=["constant"])
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--db-dir", type=Path,
+                        help="build each source once into a database file here and measure query-only memory")
+    parser.add_argument("--keep-db", action="store_true", help="keep the prepared database files")
     parser.add_argument("--binary", type=Path, default=DEFAULT_BINARY)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -163,12 +197,27 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     raw_dir = output.with_suffix("")
     manifest = {
-        "command": "profile_direct_s1_api.py", "arguments": vars(args), "binary": str(args.binary),
+        "command": "profile_direct_s1_api.py", "arguments": dict(vars(args)), "binary": str(args.binary),
         "platform": platform.platform(), "python": platform.python_version(), "generated_at_utc": stamp,
     }
     manifest["arguments"]["binary"] = str(args.binary)
     manifest["arguments"]["output"] = str(output)
+    manifest["arguments"]["db_dir"] = str(args.db_dir) if args.db_dir else None
     (output.parent / f"{output.stem}.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    prepared: dict[str, Path] = {}
+    if args.db_dir:
+        args.db_dir.mkdir(parents=True, exist_ok=True)
+        for rows in args.rows:
+            for width in args.widths:
+                for source_kind in args.source_kinds:
+                    for scope in args.scopes:
+                        for pins in args.pins:
+                            for bound_kind in args.bound_kinds:
+                                key = source_key(rows, width, source_kind, scope, pins, bound_kind)
+                                prepared[key] = args.db_dir / f"{key}.duckdb"
+                                prepare_source(args.binary, prepared[key], rows, width, source_kind, scope, pins,
+                                               bound_kind, args.timeout)
+                                print(f"prepared {key}", flush=True)
     with output.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
         writer.writeheader()
@@ -185,7 +234,9 @@ def main() -> None:
                                                 for bound_kind in args.bound_kinds:
                                                     row = run_one(args.binary, rows, width, source_kind, output_kind,
                                                                   mode, delivery, cardinality, scope, pins, bound_kind,
-                                                                  repeat, args.timeout, raw_dir)
+                                                                  repeat, args.timeout, raw_dir,
+                                                                  prepared.get(source_key(rows, width, source_kind,
+                                                                                          scope, pins, bound_kind)))
                                                     writer.writerow(row)
                                                     handle.flush()
                                                     print(f"{rows:>7} w={width:<4} {source_kind:<11} {output_kind:<9} "
@@ -193,6 +244,10 @@ def main() -> None:
                                                           f"{pins:<5} {bound_kind:<8} {row['status']:<18} "
                                                           f"submit={row['submit_s']}s fetch={row['fetch_s']}s",
                                                           flush=True)
+    if args.db_dir and not args.keep_db:
+        for path in prepared.values():
+            path.unlink(missing_ok=True)
+            Path(f"{path}.wal").unlink(missing_ok=True)
     print(output)
 
 

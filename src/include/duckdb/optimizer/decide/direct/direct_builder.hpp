@@ -32,9 +32,10 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 //! A BOOLEAN expression that raises the message as an error when evaluated.
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &message);
 
-//! Evaluates to true for a finite score and raises an error for a NULL or non-finite one.
+//! Evaluates to true for a finite score and raises an error for a NULL or non-finite one, worded as the solver
+//! words it. `null_column` names the source column the score is exactly; leave it empty for a computed score.
 unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const LogicalType &score_type,
-                                                 ColumnBinding score_binding);
+                                                 ColumnBinding score_binding, const string &null_column);
 
 //! The solver consumes every source output. Skipping an unreferenced output must not suppress a computed error
 //! or volatile expression. This proves only stored columns, constants, and their passthrough aliases safe,

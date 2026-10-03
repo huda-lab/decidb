@@ -400,9 +400,8 @@ CITATION.cff
 .sanitizer-thread-suppressions.txt
 
 # notes
-context/descriptions/todo.md
+# context/descriptions/todo.md
 context/presentations
-context/descriptions/00_project_overview/new_language
 
 
 # Claude Code session/lock files

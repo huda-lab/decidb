@@ -296,9 +296,12 @@ def run_single(query_sql: str, db_path: Path, timeout: int = 600) -> dict:
     try:
         env = os.environ.copy()
         time_flag = get_time_flag()
+        # This harness tracks the solver pipeline's stage timers. Direct solve is on by default and would
+        # take S1-shaped queries (p4) off that pipeline, so pin the solver path here.
         cmd = [
             "/usr/bin/time", time_flag,
             str(DECIDB_EXE), str(db_path), "-readonly",
+            "-cmd", "SET decide_direct_solve='off'",
         ]
 
         with open(sql_path) as sql_file:

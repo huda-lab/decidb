@@ -27,21 +27,28 @@ def _reset_explain_output(decidb_cli):
 
 
 # ── helpers ──────────────────────────────────────────────────────────
+#
+# These tests check how EXPLAIN renders the DECIDE operator. Direct solve is on by default and
+# replaces the operator with a relational plan for the shapes it proves, so every helper pins the
+# solver path to keep the operator in the plan whichever shapes direct solve takes.
+
+_SOLVER_PATH = "SET decide_direct_solve='off'; "
+
 
 def _explain(decidb_cli, sql: str) -> str:
-    result = decidb_cli.execute_raw(f"EXPLAIN {sql}")
+    result = decidb_cli.execute_raw(f"{_SOLVER_PATH}EXPLAIN {sql}")
     return result.stdout
 
 
 def _explain_json(decidb_cli, sql: str, *, logical: bool = False) -> str:
     if logical:
         decidb_cli.execute_raw("pragma explain_output='optimized_only'")
-    result = decidb_cli.execute_raw(f"EXPLAIN (FORMAT JSON) {sql}")
+    result = decidb_cli.execute_raw(f"{_SOLVER_PATH}EXPLAIN (FORMAT JSON) {sql}")
     return result.stdout
 
 
 def _explain_analyze(decidb_cli, sql: str) -> str:
-    result = decidb_cli.execute_raw(f"EXPLAIN ANALYZE {sql}")
+    result = decidb_cli.execute_raw(f"{_SOLVER_PATH}EXPLAIN ANALYZE {sql}")
     return result.stdout
 
 

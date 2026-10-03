@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   direct_builder.cpp
   direct_coordinator.cpp
+  direct_expression.cpp
   direct_problem.cpp
   direct_result_boundary.cpp
   s1_rule.cpp)

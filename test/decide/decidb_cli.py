@@ -37,6 +37,12 @@ def _extract_status(stderr: str) -> str | None:
 #: query this wrapper runs. See ``_verify_serializer_args``.
 _VERIFY_SERIALIZER_ENV = "DECIDB_VERIFY_SERIALIZER"
 
+#: Environment variable that sets ``decide_direct_solve`` for every query this wrapper runs
+#: (``off``, ``auto`` or ``require``). Direct solve is on by default, so
+#: ``DECIDB_TEST_DIRECT_SOLVE=off`` is how the whole suite is run against the solver alone,
+#: as ``DECIDB_FORCE_SOLVER`` runs it against one backend. A test that sets the mode itself wins.
+_DIRECT_SOLVE_ENV = "DECIDB_TEST_DIRECT_SOLVE"
+
 _MODEL_DUMP_BEGIN = "=== DECIDB MODEL DUMP ==="
 _MODEL_DUMP_END = "=== END MODEL DUMP ==="
 
@@ -150,6 +156,9 @@ class DecidBCli:
         argv = [self.exe, self.db, "-readonly"]
         if self.verify_serializer:
             argv += _verify_serializer_args()
+        direct_mode = (self.env or {}).get(_DIRECT_SOLVE_ENV, os.environ.get(_DIRECT_SOLVE_ENV))
+        if direct_mode:
+            argv += ["-cmd", f"SET decide_direct_solve='{direct_mode}';"]
         return argv + list(args)
 
     def _subprocess_env(self, *, status_markers: bool = False) -> dict[str, str] | None:

@@ -13,7 +13,6 @@
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
-#include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 
 namespace duckdb {
 
@@ -127,10 +126,6 @@ public:
     //! It is a property of the STATEMENT, not of the session. Nothing reads it back out
     //! of a setting; it travels parser → binder → here → PhysicalDecide.
     bool diagnose = false;
-
-    //! Set by the direct-solve coordinator after the pre-solver attempt. The
-    //! optimized solver plan is not serialized, so this is explain-only state.
-    DirectSolveDecisionRecord direct_solve_record;
 
     // Additive constant peeled from the objective body by
     // DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in

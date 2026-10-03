@@ -9,6 +9,7 @@
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
+#include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
@@ -255,9 +256,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         if (decide_op->input_column_names[i].empty()) {
             decide_op->input_column_names[i] = child_userwritten_names[i];
         }
-    }
-    if (op.direct_solve_record.attempted) {
-        decide_op->explain_metadata = make_uniq<InsertionOrderPreservingMap<string>>(op.direct_solve_record.Render());
     }
     return std::move(decide_op);
 }

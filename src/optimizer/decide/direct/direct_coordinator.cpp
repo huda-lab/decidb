@@ -20,25 +20,16 @@ namespace duckdb {
 InsertionOrderPreservingMap<string> DirectSolveDecisionRecord::Render() const {
 	InsertionOrderPreservingMap<string> result;
 	result["Direct solve mode"] = mode;
-	result["Direct solve rule"] = rule.empty() ? "none" : rule;
-	result["Direct solve decision"] = hit ? "hit" : "miss";
-	if (!reason.empty()) {
-		result["Direct solve reason"] = reason;
-	}
-	if (!proof.empty()) {
-		result["Direct solve proof"] = proof;
-	}
-	if (!guards.empty()) {
-		result["Direct solve guards"] = guards;
-	}
-	result["Solver skipped"] = skipped_solver ? "true" : "false";
+	result["Direct solve rule"] = rule;
+	result["Direct solve proof"] = proof;
+	result["Direct solve guards"] = guards;
 	return result;
 }
 
 DirectSolveMode GetDirectSolveMode(ClientContext &context) {
 	Value value;
 	if (!context.TryGetCurrentSetting("decide_direct_solve", value) || value.IsNull()) {
-		return DirectSolveMode::OFF;
+		return DirectSolveMode::AUTO;
 	}
 	auto mode = StringUtil::Lower(value.GetValue<string>());
 	if (mode == "auto") {
@@ -52,9 +43,9 @@ DirectSolveMode GetDirectSolveMode(ClientContext &context) {
 
 namespace {
 
-string RequireMissText(const DirectSolveDecisionRecord &record) {
-	return StringUtil::Format("%s (rule=%s; solver skipped=true)", record.reason,
-	                          record.rule.empty() ? "none" : record.rule);
+//! The `require` error for a query no rule proved: why each rule missed, and that no solver ran.
+string RequireMissText(const string &reason) {
+	return StringUtil::Format("%s (rule=none; solver skipped=true)", reason);
 }
 
 const char *ModeName(DirectSolveMode mode) {
@@ -78,8 +69,10 @@ vector<unique_ptr<DirectSolveRule>> RegisteredDirectRules() {
 }
 
 void RegisterDirectSolve(DBConfig &config) {
-	config.AddExtensionOption("decide_direct_solve", "DECIDE direct solve mode: off, auto, or require",
-	                          LogicalType::VARCHAR, Value("off"), DirectSolveModeSetCallback);
+	config.AddExtensionOption("decide_direct_solve",
+	                          "DECIDE direct solve mode: auto (default) uses a proved relational plan and otherwise the "
+	                          "solver; off always uses the solver; require errors when no relational plan is proved",
+	                          LogicalType::VARCHAR, Value("auto"), DirectSolveModeSetCallback);
 	config.operator_extensions.push_back(MakeDirectResultExtension());
 }
 
@@ -89,19 +82,15 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	}
 	DecideProfileScope direct_profile("optimizer.direct.analyze");
 	auto &decide = op->Cast<LogicalDecide>();
-	DirectSolveDecisionRecord record;
-	record.attempted = true;
-	record.mode = ModeName(mode);
 	auto forced_solver = std::getenv("DECIDB_FORCE_SOLVER");
 	if (decide.diagnose || (forced_solver && *forced_solver)) {
-		record.reason = decide.diagnose ? "policy_diagnose: DIAGNOSE requires the solver"
-		                               : "policy_forced_solver: DECIDB_FORCE_SOLVER is set";
 		if (mode == DirectSolveMode::REQUIRE) {
-			record.skipped_solver = true;
+			auto reason = decide.diagnose ? "policy_diagnose: DIAGNOSE requires the solver"
+			                              : "policy_forced_solver: DECIDB_FORCE_SOLVER is set";
 			throw InvalidInputException("decide_direct_solve=require conflicts with %s: %s",
-			                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER", RequireMissText(record));
+			                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER", RequireMissText(reason));
 		}
-		decide.direct_solve_record = std::move(record);
+		// A DIAGNOSE query or a forced backend keeps the solver path; there is nothing to report.
 		return op;
 	}
 	auto facts = DirectProblemFacts::Read(decide);
@@ -132,22 +121,22 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 		proved.push_back({rule.get(), std::move(proof), cost});
 	}
 	if (proved.empty()) {
-		record.reason = StringUtil::Join(misses, "; ");
 		if (mode == DirectSolveMode::REQUIRE) {
-			record.skipped_solver = true;
-			throw InvalidInputException("decide_direct_solve=require: %s", RequireMissText(record));
+			throw InvalidInputException("decide_direct_solve=require: %s",
+			                            RequireMissText(StringUtil::Join(misses, "; ")));
 		}
-		decide.direct_solve_record = std::move(record);
+		// A miss under auto leaves the DECIDE node, and its EXPLAIN output, exactly as the solver path has it.
+		// `require` is how a user asks why a query was not proved.
 		return op;
 	}
 	auto selected = std::min_element(proved.begin(), proved.end(),
 	                                 [](const ProvedCandidate &left, const ProvedCandidate &right) {
 		                                 return left.cost < right.cost;
 	                                 });
+	DirectSolveDecisionRecord record;
+	record.mode = ModeName(mode);
 	record.rule = selected->rule->Name();
 	selected->rule->Explain(*selected->proof, record);
-	record.hit = true;
-	record.skipped_solver = true;
 	direct_profile.Next("optimizer.direct.construct");
 	if (decide.children.size() != 1) {
 		throw InternalException("Direct solve expected one DECIDE input");

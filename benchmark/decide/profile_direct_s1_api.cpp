@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
@@ -72,8 +73,8 @@ void Run(Connection &connection, const std::string &sql) {
 
 int main(int argc, char **argv) {
 	if (argc < 5 || argc > 12) {
-		std::cerr << "usage: profile_direct_s1_api ROWS WIDTH stored|stored_join direct|gurobi|highs "
-		             "[full|aggregate] [materialized|stream] [upper|lower|exact|interval] "
+		std::cerr << "usage: profile_direct_s1_api ROWS WIDTH stored|stored_join direct|gurobi|highs|prepare "
+		             "[full|aggregate|consume] [materialized|stream] [upper|lower|exact|interval] "
 		             "[global|grouped|grouped_local_when] "
 		             "[free|fixed] [constant|source|source_double|source_pair|source_coalesce] "
 		             "[single|additive]\n";
@@ -92,8 +93,8 @@ int main(int argc, char **argv) {
 		std::string bound_kind(argc >= 11 ? argv[10] : "constant");
 		std::string objective_kind(argc == 12 ? argv[11] : "single");
 		if (!rows || (source_kind != "stored" && source_kind != "stored_join") ||
-		    (mode != "direct" && mode != "gurobi" && mode != "highs") ||
-		    (output_kind != "full" && output_kind != "aggregate") ||
+		    (mode != "direct" && mode != "gurobi" && mode != "highs" && mode != "prepare") ||
+		    (output_kind != "full" && output_kind != "aggregate" && output_kind != "consume") ||
 		    (delivery != "materialized" && delivery != "stream") ||
 		    (cardinality != "upper" && cardinality != "lower" && cardinality != "exact" && cardinality != "interval") ||
 		    (scope != "global" && scope != "grouped" && scope != "grouped_local_when") ||
@@ -105,7 +106,15 @@ int main(int argc, char **argv) {
 		    (objective_kind != "single" && objective_kind != "additive")) {
 			throw std::invalid_argument("Invalid rows, source kind, mode, output kind, delivery, cardinality, scope, or pins");
 		}
-		DuckDB database(nullptr);
+		// With S1_DB set, the source lives in a database file built once by a "prepare" run. A measured run
+		// then opens the file in a fresh process, so its peak memory covers only the query (plus the open).
+		auto database_path = std::getenv("S1_DB");
+		auto stored_file = database_path && *database_path;
+		bool prepare = mode == "prepare";
+		if (prepare && !stored_file) {
+			throw std::invalid_argument("prepare mode needs S1_DB");
+		}
+		DuckDB database(stored_file ? database_path : nullptr);
 		Connection connection(database);
 		Run(connection, "SET threads=4");
 		Run(connection, mode == "direct" ? "SET decide_direct_solve='require'" : "SET decide_direct_solve='off'");
@@ -134,21 +143,33 @@ int main(int argc, char **argv) {
 		                                ? ", (i % 10000 < 100) AS fixed_one, "
 		                                  "(i % 10000 BETWEEN 100 AND 199) AS fixed_zero"
 		                                : "";
+		auto open_memory = ReadMemory();
 		auto setup_start = Clock::now();
-		Run(connection, "CREATE TEMP TABLE source AS SELECT i, "
-		                "(((CAST(i AS BIGINT)*37)%10007)-5000)::DOUBLE / 10.0 AS score" +
-		                    payload + group + active + bound_column + fixed_columns +
-		                    " FROM range(" + std::to_string(rows) + ") t(i)");
+		auto create = stored_file ? "CREATE TABLE source AS SELECT i, " : "CREATE TEMP TABLE source AS SELECT i, ";
+		if (!stored_file || prepare) {
+			Run(connection, std::string(create) + "(((CAST(i AS BIGINT)*37)%10007)-5000)::DOUBLE / 10.0 AS score" +
+			                    payload + group + active + bound_column + fixed_columns + " FROM range(" +
+			                    std::to_string(rows) + ") t(i)");
+		}
 		std::string relation = "source";
 		if (source_kind == "stored_join") {
-			Run(connection, "CREATE TEMP TABLE weights AS SELECT k, "
-			                "1.0 + (k % 5)::DOUBLE / 20.0 AS weight FROM range(97) t(k)");
+			if (!stored_file || prepare) {
+				Run(connection, std::string(stored_file ? "CREATE TABLE weights AS SELECT k, "
+				                                         : "CREATE TEMP TABLE weights AS SELECT k, ") +
+				                    "1.0 + (k % 5)::DOUBLE / 20.0 AS weight FROM range(97) t(k)");
+			}
 			relation = "(SELECT s.i, s.score * w.weight AS score" + std::string(width ? ", s.payload" : "") +
 		           std::string(grouped ? ", s.dept" : "") + std::string(local_when ? ", s.active" : "") +
 		           std::string(bound_kind != "constant" ? ", s.cap" : "") +
 		           std::string(bound_kind == "source_pair" ? ", s.lower_cap" : "") +
 		           std::string(pins == "fixed" ? ", s.fixed_one, s.fixed_zero" : "") +
 		           " FROM source s JOIN weights w ON s.i % 97 = w.k) j";
+		}
+		if (prepare) {
+			Run(connection, "CHECKPOINT");
+			std::cout << "{\"prepared\":true,\"rows\":" << rows << ",\"width\":" << width
+			          << ",\"setup_s\":" << Seconds(setup_start, Clock::now()) << "}\n";
+			return 0;
 		}
 		auto setup_end = Clock::now();
 		auto setup_memory = ReadMemory();
@@ -194,6 +215,12 @@ int main(int argc, char **argv) {
 		               : "SELECT COUNT(*)::BIGINT, SUM(x)::BIGINT, SUM((score" +
 		                     std::string(objective_kind == "additive" ? "+i" : "") + ")*x)::DOUBLE" +
 		                     std::string(local_when ? ", SUM(x) FILTER (WHERE active)::BIGINT" : "") +
+		                     // "consume" reads every column the "full" output returns, but reduces them inside the
+		                     // query, so no row-sized result collector runs. Its wall time minus the "full" wall
+		                     // time estimates the cost of collecting the result.
+		                     std::string(output_kind == "consume" ? ", SUM(i)::BIGINT" : "") +
+		                     std::string(output_kind == "consume" && width ? ", SUM(length(payload))::BIGINT" : "") +
+		                     std::string(output_kind == "consume" && grouped ? ", SUM(dept)::BIGINT" : "") +
 		                     " FROM (" + decide + ") q";
 		std::cerr << "DECIDB_PROFILE_QUERY_BEGIN\n" << std::flush;
 		auto query_start = Clock::now();
@@ -220,7 +247,7 @@ int main(int argc, char **argv) {
 		while (auto chunk = result->Fetch()) {
 			for (idx_t row = 0; row < chunk->size(); row++) {
 				output_rows++;
-				if (output_kind == "aggregate") {
+				if (output_kind != "full") {
 					result_rows = static_cast<idx_t>(chunk->GetValue(0, row).GetValue<int64_t>());
 					chosen = static_cast<idx_t>(chunk->GetValue(1, row).GetValue<int64_t>());
 					objective = chunk->GetValue(2, row).GetValue<double>();
@@ -269,6 +296,9 @@ int main(int argc, char **argv) {
 		          << "\",\"setup_s\":" << Seconds(setup_start, setup_end)
 		          << ",\"submit_s\":" << Seconds(query_start, query_end)
 		          << ",\"fetch_s\":" << Seconds(readback_start, readback_end)
+		          << ",\"stored_file\":" << (stored_file ? "true" : "false")
+		          << ",\"open_rss_mib\":" << MiB(open_memory.resident_bytes)
+		          << ",\"process_peak_through_open_mib\":" << MiB(open_memory.process_peak_bytes)
 		          << ",\"setup_rss_mib\":" << MiB(setup_memory.resident_bytes)
 		          << ",\"process_peak_through_setup_mib\":" << MiB(setup_memory.process_peak_bytes)
 		          << ",\"process_peak_through_submit_mib\":" << MiB(post_submit_memory.process_peak_bytes)

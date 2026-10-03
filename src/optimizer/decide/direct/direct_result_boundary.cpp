@@ -15,7 +15,7 @@ namespace duckdb {
 
 namespace {
 
-constexpr const char *DIRECT_RESULT_EXTENSION = "decidb_direct_solve_result_v2";
+constexpr const char *DIRECT_RESULT_EXTENSION = "decidb_direct_solve_result_v3";
 
 //! Preserve the bindings the DECIDE node advertised. The leading expressions
 //! map each output to a child binding; the suffix pins validation dependencies.
@@ -76,11 +76,8 @@ public:
 		serializer.WriteProperty(205, "dependencies", expressions);
 		serializer.WriteProperty(206, "mode", record.mode);
 		serializer.WriteProperty(207, "rule", record.rule);
-		serializer.WriteProperty(208, "reason", record.reason);
 		serializer.WriteProperty(209, "proof", record.proof);
 		serializer.WriteProperty(210, "guards", record.guards);
-		serializer.WriteProperty(211, "skipped_solver", record.skipped_solver);
-		serializer.WriteProperty(212, "hit", record.hit);
 		serializer.WriteProperty(213, "prunable_outputs", prunable_outputs);
 	}
 	static unique_ptr<LogicalExtensionOperator> Read(Deserializer &deserializer) {
@@ -90,14 +87,10 @@ public:
 		result->output_types = deserializer.ReadProperty<vector<LogicalType>>(203, "output_types");
 		result->required_dependency_count = deserializer.ReadProperty<idx_t>(204, "required_dependency_count");
 		result->expressions = deserializer.ReadProperty<vector<unique_ptr<Expression>>>(205, "dependencies");
-		result->record.attempted = true;
 		result->record.mode = deserializer.ReadProperty<string>(206, "mode");
 		result->record.rule = deserializer.ReadProperty<string>(207, "rule");
-		result->record.reason = deserializer.ReadProperty<string>(208, "reason");
 		result->record.proof = deserializer.ReadProperty<string>(209, "proof");
 		result->record.guards = deserializer.ReadProperty<string>(210, "guards");
-		result->record.skipped_solver = deserializer.ReadProperty<bool>(211, "skipped_solver");
-		result->record.hit = deserializer.ReadProperty<bool>(212, "hit");
 		result->prunable_outputs = deserializer.ReadProperty<vector<uint8_t>>(213, "prunable_outputs");
 		return std::move(result);
 	}

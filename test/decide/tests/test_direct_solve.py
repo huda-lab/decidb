@@ -1,6 +1,7 @@
 """First S1 direct-solve path: admission, result contract, and solver fallback."""
 
 import itertools
+import re
 import math
 
 import pytest
@@ -30,6 +31,12 @@ def _run(cli, sql, mode="require"):
 
 def _raw(cli, sql, mode="require"):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}")
+
+
+def _has_decide_operator(plan):
+    # The operator's box title. A plain substring test would also match the DECIDE: prefix of the error text that
+    # a direct plan carries.
+    return re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan) is not None
 
 
 def _optimum(scores, capacity, sense):
@@ -712,19 +719,82 @@ def test_s1_scoped_bypass_infeasibility_and_scope_mismatch(decidb_cli, decidb_cl
     mismatch = _scoped_query("SUM(x)>=1 PER dept AND SUM(x)<=2 PER region")
     assert "constraint_scope" in _raw(decidb_cli, mismatch).stderr
     plan = _raw(decidb_cli, f"EXPLAIN {mismatch}", mode="auto").stdout
-    assert "DECIDE" in plan and "miss" in plan
+    assert _has_decide_operator(plan) and "Direct solve" not in plan
+
+
+@pytest.mark.correctness
+def test_direct_solve_is_on_by_default(decidb_cli):
+    # No SET anywhere in this test: it exercises what a user gets out of the box, so it opts out of the
+    # suite-wide DECIDB_TEST_DIRECT_SOLVE override.
+    decidb_cli = decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": ""})
+    default = decidb_cli.execute_raw("SELECT current_setting('decide_direct_solve')")
+    assert "auto" in default.stdout, default.stderr
+
+    s1 = _source_query((2.0, 9.0, -1.0), 1)
+    plan = decidb_cli.execute_raw(f"EXPLAIN {s1}").stdout
+    assert "Direct solve rule" in plan and "S1_CARDINALITY_INTERVAL" in plan and "WINDOW" in plan and not _has_decide_operator(plan)
+    rows, _ = decidb_cli.execute(s1)
+    assert sum(row[2] for row in rows) == 1 and sum(row[1] * row[2] for row in rows) == 9.0
+
+    # A shape direct solve does not prove keeps the solver plan and prints nothing about direct solve.
+    weighted = """
+        SELECT id, x FROM (
+            FROM (VALUES (1, 2.0, 3), (2, 9.0, 2)) t(id, score, weight)
+            DECIDE x(BOOL) SUCH THAT SUM(weight * x) <= 3
+            MAXIMIZE SUM(score * x)
+        ) q
+    """
+    plan = decidb_cli.execute_raw(f"EXPLAIN {weighted}").stdout
+    assert _has_decide_operator(plan) and "Direct solve" not in plan
+    rows, _ = decidb_cli.execute(weighted)
+    assert sorted(rows) == [(1, 0), (2, 1)]
+
+    # `off` still reaches the solver for a shape direct solve would take.
+    off = _raw(decidb_cli, f"EXPLAIN {s1}", mode="off").stdout
+    assert _has_decide_operator(off) and "Direct solve" not in off
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("score", ["NULL::DOUBLE", "'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
+def test_invalid_score_error_matches_solver_wording(decidb_cli, score):
+    # The direct path names a bad score the way the solver does, so a user sees one message whichever path ran.
+    # The solver also reports the row number; the direct plan has no row to report.
+    sql = f"""
+        SELECT id, x FROM (
+            FROM (VALUES (1, 2.0), (2, {score})) t(id, score)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(score * x)
+        ) q
+    """
+    solver = _raw(decidb_cli, sql, mode="off").stderr
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "Error" in direct, direct
+    assert re.sub(r" at row \d+", "", solver) == direct
+
+
+@pytest.mark.correctness
+def test_computed_score_error_does_not_name_a_column(decidb_cli):
+    # A score that is not one bare column has no single column to name; the message keeps the solver's generic
+    # wording and still points at the fix.
+    sql = """
+        SELECT id, x FROM (
+            FROM (VALUES (1, 2.0, 1.0), (2, NULL::DOUBLE, 1.0)) t(id, a, b)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM((a + b) * x)
+        ) q
+    """
+    error = _raw(decidb_cli, sql, mode="require").stderr
+    assert "a value used in the optimization is NULL" in error and "COALESCE()" in error, error
 
 
 @pytest.mark.correctness
 def test_path_selection_and_exact_capacity(decidb_cli):
     sql = _source_query((2.0, 9.0), 1)
     hit = _raw(decidb_cli, f"EXPLAIN {sql}").stdout
-    assert "Direct solve decision" in hit and "hit" in hit and "Solver skipped" in hit
-    assert "WINDOW" in hit and "DECIDE" not in hit
+    assert "Direct solve rule" in hit and "S1_CARDINALITY_INTERVAL" in hit
+    assert "WINDOW" in hit and not _has_decide_operator(hit)
     auto_hit = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto").stdout
-    assert "Direct solve decision" in auto_hit and "hit" in auto_hit
+    assert "Direct solve rule" in auto_hit
     off = _raw(decidb_cli, f"EXPLAIN {sql}", mode="off").stdout
-    assert "DECIDE" in off and "Direct solve decision" not in off
+    assert _has_decide_operator(off) and "Direct solve" not in off
 
     rows, _ = _run(decidb_cli, _source_query((2.0, 9.0), 9007199254740992))
     assert [row[2] for row in rows] == [1, 1]
@@ -739,9 +809,9 @@ def test_path_selection_and_exact_capacity(decidb_cli):
             MAXIMIZE SUM(score * x)
         ) q
     """
+    # A miss under auto leaves the solver plan exactly as it was: no direct-solve text in EXPLAIN.
     miss = _raw(decidb_cli, f"EXPLAIN {extra}", mode="auto").stdout
-    assert "DECIDE" in miss and "Direct solve decision" in miss and "miss" in miss
-    assert "Solver skipped: false" in " ".join(miss.split())
+    assert _has_decide_operator(miss) and "Direct solve" not in miss
     required_miss = _raw(decidb_cli, extra).stderr
     assert "constraint_shape" in required_miss and "solver skipped=true" in required_miss
 
@@ -1363,17 +1433,16 @@ def test_baseline_one_condition_away_misses(decidb_cli, declaration, constraint,
     assert "decide_direct_solve=require:" in required.stderr, required.stderr
     assert reason in required.stderr, required.stderr
     plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto")
-    assert "DECIDE" in plan.stdout and "Direct solve decision" in plan.stdout, plan.stderr
-    assert "miss" in plan.stdout and "Solver skipped: false" in " ".join(plan.stdout.split())
+    assert _has_decide_operator(plan.stdout) and "Direct solve" not in plan.stdout, plan.stderr
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "score_sql,message",
     [
-        ("CASE WHEN i=4999 THEN NULL ELSE 1.0 END", "coefficient is NULL"),
-        ("CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END", "coefficient is non-finite"),
-        ("CASE WHEN i=4999 THEN 'Infinity'::DOUBLE ELSE 1.0 END", "coefficient is non-finite"),
+        ("CASE WHEN i=4999 THEN NULL ELSE 1.0 END", 'column "score" is NULL'),
+        ("CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END", "invalid value (NaN or Infinity)"),
+        ("CASE WHEN i=4999 THEN 'Infinity'::DOUBLE ELSE 1.0 END", "invalid value (NaN or Infinity)"),
     ],
 )
 def test_late_invalid_score_is_read_at_zero_capacity(decidb_cli, score_sql, message):
@@ -1415,7 +1484,7 @@ def test_throwing_cast_and_filter_scope(decidb_cli):
         FROM range(5000) t(i)
     """
     null_decide = f"FROM ({null_source}) s DECIDE x(BOOL) SUCH THAT SUM(x)<=0 MAXIMIZE SUM(score*x)"
-    assert "coefficient is NULL" in _raw(decidb_cli, f"SELECT i FROM ({null_decide}) q WHERE i=0").stderr
+    assert 'column "score" is NULL' in _raw(decidb_cli, f"SELECT i FROM ({null_decide}) q WHERE i=0").stderr
     filtered = f"""
         FROM ({null_source}) s WHERE i<4999
         DECIDE x(BOOL) SUCH THAT SUM(x)<=0 MAXIMIZE SUM(score*x)
@@ -1497,7 +1566,7 @@ def test_materialized_result_filter_keeps_global_input_and_late_guard(decidb_cli
 
     invalid = sql.replace("i::DOUBLE AS score", "CASE WHEN i=4999 THEN NULL ELSE i::DOUBLE END AS score")
     for outer in (invalid, invalid + " LIMIT 1"):
-        assert "coefficient is NULL" in _raw(decidb_cli, outer).stderr
+        assert 'column "score" is NULL' in _raw(decidb_cli, outer).stderr
 
 
 @pytest.mark.correctness
@@ -1514,7 +1583,7 @@ def test_unused_wide_output_is_pruned_without_losing_rank_or_bindings(decidb_cli
     aggregate = f"SELECT COUNT(*), SUM(x), SUM(score*x) FROM ({decide}) q"
     plan = _raw(decidb_cli, setup + f"EXPLAIN {aggregate}").stdout
     scan = plan.rsplit("SEQ_SCAN", 1)[-1]
-    assert "Direct solve decision" in plan and "WINDOW" in plan
+    assert "Direct solve rule" in plan and "WINDOW" in plan
     assert "score" in scan and "payload" not in scan
 
     aliased = """
@@ -1535,7 +1604,7 @@ def test_unused_wide_output_is_pruned_without_losing_rank_or_bindings(decidb_cli
 
     invalid = setup.replace("(i % 101)::DOUBLE AS score", "CASE WHEN i=4999 THEN NULL ELSE 1.0 END AS score")
     count_only = f"SELECT COUNT(*) FROM ({decide.replace('<=500', '<=0')}) q"
-    assert "coefficient is NULL" in _raw(decidb_cli, invalid + count_only).stderr
+    assert 'column "score" is NULL' in _raw(decidb_cli, invalid + count_only).stderr
 
     throwing_source = """
         SELECT i, i::DOUBLE AS score,
@@ -1571,7 +1640,7 @@ def test_inner_join_passthrough_prunes_stored_payload_but_keeps_computed_errors(
     """
     aggregate = f"SELECT COUNT(*), SUM(x), SUM(score*x) FROM ({decide}) q"
     plan = _raw(decidb_cli, setup + f"EXPLAIN {aggregate}").stdout
-    assert "Direct solve decision" in plan and "HASH_JOIN" in plan and "WINDOW" in plan
+    assert "Direct solve rule" in plan and "HASH_JOIN" in plan and "WINDOW" in plan
     assert "payload" not in plan
 
     rows, _ = _run(decidb_cli.with_verify_serializer(), setup + aggregate)
@@ -1608,7 +1677,7 @@ def test_parent_join_filter_does_not_shrink_decide_input(decidb_cli):
     assert rows == [(2, 0)]
 
     invalid = decide.replace("(3,5.0)", "(3,NULL::DOUBLE)")
-    assert "coefficient is NULL" in _raw(decidb_cli, sql.replace(decide, invalid)).stderr
+    assert 'column "score" is NULL' in _raw(decidb_cli, sql.replace(decide, invalid)).stderr
 
 
 @pytest.mark.correctness
@@ -1671,7 +1740,7 @@ def test_serializer_explain_and_prepared_plan(decidb_cli, tmp_path):
     physical = _raw(decidb_cli, f"EXPLAIN {sql}").stdout
     profile = _raw(decidb_cli, f"EXPLAIN ANALYZE {sql}").stdout
     for plan in (logical, physical, profile):
-        assert "Direct solve decision" in plan and "Solver skipped" in plan
+        assert "Direct solve rule" in plan and "Direct solve proof" in plan
 
     dump_path = tmp_path / "direct_model.txt"
     _run(decidb_cli.with_env({"DECIDB_DUMP_MODEL": str(dump_path)}), sql)
@@ -1682,7 +1751,7 @@ def test_serializer_explain_and_prepared_plan(decidb_cli, tmp_path):
         SET decide_direct_solve='off';
         EXPLAIN EXECUTE direct_s1;
     """).stdout
-    assert "Direct solve decision" in prepared and "require" in prepared
+    assert "Direct solve rule" in prepared and "require" in prepared
 
     rebound = decidb_cli.execute_raw("""
         CREATE TEMP TABLE direct_life(id INTEGER, score DOUBLE);
@@ -1696,14 +1765,14 @@ def test_serializer_explain_and_prepared_plan(decidb_cli, tmp_path):
         ALTER TABLE direct_life ADD COLUMN extra INTEGER;
         EXPLAIN EXECUTE direct_life_p;
     """).stdout
-    assert "DECIDE" in rebound and "Direct solve decision" not in rebound
+    assert _has_decide_operator(rebound) and "Direct solve" not in rebound
 
 
 @pytest.mark.correctness
 def test_forced_solver_bypasses_auto(decidb_cli_highs):
     sql = _source_query((2.0, 9.0, -1.0), 1)
     plan = _raw(decidb_cli_highs, f"EXPLAIN {sql}", mode="auto").stdout
-    assert "DECIDE" in plan and "policy_forced_solver" in plan
+    assert _has_decide_operator(plan) and "Direct solve" not in plan
     rows, _ = _run(decidb_cli_highs, sql, mode="auto")
     assert sum(row[2] for row in rows) <= 1
     assert sum(row[1] * row[2] for row in rows) == 9.0
@@ -1715,7 +1784,7 @@ def test_diagnose_and_invalid_forced_solver_policy(decidb_cli):
     sql = _source_query((2.0, 9.0), 1)
     assert "conflicts with DIAGNOSE" in _raw(decidb_cli, f"DIAGNOSE {sql}").stderr
     diagnose_plan = _raw(decidb_cli, f"EXPLAIN DIAGNOSE {sql}", mode="auto").stdout
-    assert "DECIDE_DIAGNOSE" in diagnose_plan and "policy_diagnose" in diagnose_plan
+    assert "DECIDE_DIAGNOSE" in diagnose_plan and "Direct solve" not in diagnose_plan
 
     invalid = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "unknown_backend"})
     error = _raw(invalid, sql, mode="auto").stderr

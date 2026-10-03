@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -66,15 +67,26 @@ unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &
 }
 
 unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const LogicalType &score_type,
-                                                 ColumnBinding score_binding) {
+                                                 ColumnBinding score_binding, const string &null_column) {
+	string null_message =
+	    null_column.empty()
+	        ? "DECIDE: a value used in the optimization is NULL. Impute it with COALESCE(), or filter those rows "
+	          "out with a WHERE clause."
+	        : StringUtil::Format("DECIDE: column \"%s\" is NULL. Impute it with COALESCE(%s, 0) or filter those "
+	                             "rows out with a WHERE clause.",
+	                             null_column, null_column);
 	auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
 	is_null->children.push_back(DirectColumn(score_type, score_binding));
 	auto is_finite = optimizer.BindScalarFunction("isfinite", DirectColumn(score_type, score_binding));
 	auto finite_or_error = make_uniq<BoundCaseExpression>(
 	    std::move(is_finite), DirectConstantBool(true),
-	    DirectErrorPredicate(optimizer, "Direct solve coefficient is non-finite"));
-	return make_uniq<BoundCaseExpression>(std::move(is_null),
-	                                      DirectErrorPredicate(optimizer, "Direct solve coefficient is NULL"),
+	    DirectErrorPredicate(optimizer, "DECIDE objective coefficient contains invalid value (NaN or Infinity). "
+	                                    "Common causes:\n"
+	                                    "  • Division by zero in the expression\n"
+	                                    "  • Arithmetic overflow in calculations\n"
+	                                    "  • NULL values that propagated through math operations\n"
+	                                    "Check your expressions and input data."));
+	return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, null_message),
 	                                      std::move(finite_or_error));
 }
 

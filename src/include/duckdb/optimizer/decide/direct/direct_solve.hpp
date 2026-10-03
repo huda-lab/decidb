@@ -13,16 +13,13 @@ class Optimizer;
 
 enum class DirectSolveMode : uint8_t { OFF, AUTO, REQUIRE };
 
-//! A plan decision, shared by the hit boundary, solver fallback, and explanation.
+//! What EXPLAIN shows for a plan the direct solver built: the setting, the rule that was proved, and the proof and
+//! runtime guards it carries. A query the rules do not prove keeps its solver plan and has no record.
 struct DirectSolveDecisionRecord {
-	bool attempted = false;
 	string mode;
 	string rule;
-	string reason;
 	string proof;
 	string guards;
-	bool hit = false;
-	bool skipped_solver = false;
 
 	InsertionOrderPreservingMap<string> Render() const;
 };
