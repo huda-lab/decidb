@@ -36,12 +36,16 @@ def test_profile_sums_repeated_spans_and_reads_counters():
         {"event": "end", "id": 2, "parent": 1, "name": "child", "duration_ms": 3},
         {"event": "end", "id": 3, "parent": 1, "name": "child", "duration_ms": 2},
         {"event": "counter", "parent": 1, "name": "model.variables", "value": 500000},
+        {"event": "counter", "parent": 1, "name": "execution.window.sort_buffer_bytes", "value": 1024},
+        {"event": "counter", "parent": 1, "name": "execution.window.sort_buffer_bytes", "value": 2048},
     ]
     text = "\n".join("DECIDB_PROFILE: " + json.dumps(event) for event in events)
     result = PROFILE.parse_profile(text)
     assert result["phases"]["child"] == 5
     assert result["phases"]["root"] == 8
     assert result["counters"]["model.variables"] == 500000
+    assert result["counters"]["execution.window.sort_buffer_bytes"] == 2048
+    assert result["counter_totals"]["execution.window.sort_buffer_bytes"] == 3072
 
 
 def test_profile_folds_in_aggregate_totals():

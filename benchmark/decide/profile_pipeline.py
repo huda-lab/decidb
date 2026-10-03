@@ -92,7 +92,11 @@ def parse_profile(stderr: str) -> dict:
         if event["event"] in ("end", "aggregate"):
             phases[event["name"]] += event["duration_ms"]
     counters = {event["name"]: event["value"] for event in events if event["event"] == "counter"}
-    return {"phases": dict(phases), "counters": counters}
+    counter_totals = defaultdict(float)
+    for event in events:
+        if event["event"] == "counter":
+            counter_totals[event["name"]] += event["value"]
+    return {"phases": dict(phases), "counters": counters, "counter_totals": dict(counter_totals)}
 
 
 def classify(stderr: str) -> str:
