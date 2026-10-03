@@ -69,3 +69,16 @@ fallback with every rule's reason under `require`, the cheaper rule, the tie, th
 estimate `Cost` sees, a non-finite cost and a mismatched output slot as internal
 errors, and the barrier raising a late NULL under `LIMIT 1` and `COUNT(*)` while a
 streaming check does not.
+
+Shared DECIDE semantics (2026-10-03): `direct_builder.cpp` owns what every rule with
+aggregate constraints needs to match the solver. `DirectProjectScope` projects
+eligibility (WHEN true and no NULL PER key) with any per-row columns the rule adds;
+`DirectGuardEmptyAggregate` raises the empty-aggregate error before any value is
+validated; `DirectValidateBounds` checks each data-valued bound for NULL and NaN on
+every row, including bypassed ones, reduces it to its group MIN or MAX, refuses an
+equality bound that varies within a group, and raises the first failing clause in
+source-clause order with the solver's wording (`DirectInvalidBoundMessage`). S1's
+ranking, pins and count limits stay in S1. S1's generated plans are unchanged: EXPLAIN
+of global, PER/WHEN, aggregate-local WHEN and equality-plus-pin queries is
+byte-identical before and after the move.
+

@@ -94,12 +94,15 @@ Code is in `src/optimizer/decide/direct/`; headers are in
 
 | File | Role |
 | --- | --- |
-| `direct_problem.cpp` | Reads exact facts from the bound DECIDE tree |
-| `direct_coordinator.cpp` | Setting and mode, rule registry, Match/Prove/Cost/Explain/Rewrite, decision record, fallback and `require` errors |
+| `direct_problem.cpp` | Reads the semantic facts (`direct_rule.hpp`) from the bound, canonical DECIDE tree; the only file that knows its layout |
+| `direct_registry.cpp` | The rule list, `RegisteredDirectRules()` |
+| `direct_coordinator.cpp` | Setting and mode, Match/Prove/Cost/Explain/Rewrite, cost context, output bindings and prunability, decision record, fallback and `require` errors |
 | `direct_result_boundary.cpp` | Logical result boundary, output-slot map checks (`MapDirectResult`), serialization, unused-output hook |
 | `direct_expression.cpp` | Rule-independent questions about a bound expression (decision-free, source-only, may throw, foldable) and the lower/upper bound classification |
-| `direct_builder.cpp` | Rule-independent plan builders (windows, counts, error predicates, the score check) and the source-output pruning proof |
-| `s1_rule.cpp` | Everything specific to S1: `Match`, `Prove` in four steps (scope, pins, bounds, objective), explanation, and `Rewrite` in six stages |
+| `direct_builder.cpp` | Rule-independent plan builders (windows, counts, error predicates, the score check, the validation barrier), the DECIDE semantics every aggregate rule shares (`PER`/`WHEN` eligibility with NULL-key bypass, the empty-aggregate error, data-valued bound validation in source-clause order), and the source-output pruning proof |
+| `s1_rule.cpp` | Everything specific to S1: `Match`, `Prove` in four steps (scope, pins, bounds, objective), explanation, and `Rewrite` in six stages, the first three through the shared builders |
+
+The term splitter both the facts and the solver path use is `src/planner/decide/decide_term_split.cpp`.
 
 A second rule adds its own file and one line in `RegisteredDirectRules()`; the other
 files do not change.

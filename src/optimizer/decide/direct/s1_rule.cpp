@@ -600,23 +600,6 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, S1Proof 
 	return true;
 }
 
-//! The error for a NULL or NaN source-valued count bound, worded like the solver path: name the column when the
-//! bound is one, otherwise point at the bound expression. Only floating point values can be NaN.
-string InvalidSourceBoundMessage(const S1Proof::SourceBound &bound) {
-	auto type = bound.source_slot == DConstants::INVALID_INDEX ? bound.value->return_type : bound.source_type;
-	bool may_be_nan = type == LogicalType::FLOAT || type == LogicalType::DOUBLE;
-	auto problem = may_be_nan ? "NULL or NaN" : "NULL";
-	auto impute = may_be_nan ? "Impute NULLs" : "Impute it";
-	if (bound.column_name.empty()) {
-		return StringUtil::Format("DECIDE: the bound expression is %s. %s with COALESCE(), or filter those rows "
-		                          "out with a WHERE clause.",
-		                          problem, impute);
-	}
-	return StringUtil::Format("DECIDE: column \"%s\" is %s. %s with COALESCE(%s, 0) or filter those rows out "
-	                          "with a WHERE clause.",
-	                          bound.column_name, problem, impute, bound.column_name);
-}
-
 //! Builds the relational plan for one proved S1 problem. The constructor derives what every stage shares; each stage
 //! takes the plan built so far and returns it extended. Data a later stage needs travels in explicit structs.
 //!
@@ -659,7 +642,7 @@ public:
 		ScopeState scope;
 		source = ProjectScopeState(std::move(source), scope);
 		source = GuardEmptyAggregate(std::move(source), scope);
-		BoundChecks bounds(proof.source_bounds.size(), proof.source_pins.size());
+		BoundChecks bounds(proof.source_bounds.size());
 		source = ValidateBounds(std::move(source), scope, bounds);
 		source = ProjectScore(std::move(source), scope, bounds);
 		auto ranked = RankAndFilterFeasibility(std::move(source), bounds);
@@ -688,7 +671,6 @@ private:
 
 	//! Window slots of one source-valued count bound.
 	struct SourceBoundSlots {
-		idx_t invalid_window = DConstants::INVALID_INDEX;
 		idx_t min_window = DConstants::INVALID_INDEX;
 		idx_t max_window = DConstants::INVALID_INDEX;
 		//! Slots of the same extrema once the score projection forwards them.
@@ -696,17 +678,12 @@ private:
 		idx_t max_score = DConstants::INVALID_INDEX;
 	};
 
-	//! Windows computed for the source-valued bounds and pins, and the slots later stages read from them.
+	//! The window the source-valued bounds were validated in, and the slots later stages read from it.
 	struct BoundChecks {
-		BoundChecks(idx_t bound_count, idx_t pin_count)
-		    : slots(bound_count), pin_invalid_windows(pin_count, DConstants::INVALID_INDEX),
-		      equality_slots(bound_count, DConstants::INVALID_INDEX) {
+		explicit BoundChecks(idx_t bound_count) : slots(bound_count) {
 		}
 		idx_t window_index = DConstants::INVALID_INDEX;
-		idx_t equality_window_index = DConstants::INVALID_INDEX;
 		vector<SourceBoundSlots> slots;
-		vector<idx_t> pin_invalid_windows;
-		vector<idx_t> equality_slots;
 	};
 
 	//! Ranked, feasibility-checked rows and the window slots the assignment reads.
@@ -746,46 +723,21 @@ private:
 
 	//! Stage 1: pass the source through and append the per-row scope flags (group eligibility, pins).
 	unique_ptr<LogicalOperator> ProjectScopeState(unique_ptr<LogicalOperator> source, ScopeState &scope) const {
-		scope.input_bindings = source_bindings;
-		if (!proof.scoped && !has_fixes) {
-			return source;
-		}
-		scope.state_index = binder.GenerateTableIndex();
-		vector<unique_ptr<Expression>> state_expressions;
-		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			state_expressions.push_back(DirectColumn(source_types[i], source_bindings[i]));
-			scope.input_bindings[i] = ColumnBinding(scope.state_index, i);
-		}
-		if (proof.scoped) {
-			unique_ptr<Expression> eligible = proof.when_condition
-			                                      ? make_uniq<BoundCaseExpression>(proof.when_condition->Copy(),
-			                                                                       DirectConstantBool(true),
-			                                                                       DirectConstantBool(false))
-			                                      : DirectConstantBool(true);
-			for (idx_t i = 0; i < proof.group_key_slots.size(); i++) {
-				auto slot = proof.group_key_slots[i];
-				if (slot >= source_bindings.size()) {
-					throw InternalException("S1 direct solve received an invalid PER key slot");
-				}
-				auto is_null =
-				    make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
-				is_null->children.push_back(DirectColumn(source_types[slot], source_bindings[slot]));
-				eligible =
-				    make_uniq<BoundCaseExpression>(std::move(is_null), DirectConstantBool(false), std::move(eligible));
-			}
-			state_expressions.push_back(std::move(eligible));
-			scope.eligible_binding = ColumnBinding(scope.state_index, source_bindings.size());
-		}
+		vector<unique_ptr<Expression>> pins;
 		if (has_fixes) {
-			auto fixed_one_slot = state_expressions.size();
-			state_expressions.push_back(DirectAnyCondition(proof.fixed_one_conditions));
-			state_expressions.push_back(DirectAnyCondition(proof.fixed_zero_conditions));
-			scope.fixed_one_binding = ColumnBinding(scope.state_index, fixed_one_slot);
-			scope.fixed_zero_binding = ColumnBinding(scope.state_index, fixed_one_slot + 1);
+			pins.push_back(DirectAnyCondition(proof.fixed_one_conditions));
+			pins.push_back(DirectAnyCondition(proof.fixed_zero_conditions));
 		}
-		auto state = make_uniq<LogicalProjection>(scope.state_index, std::move(state_expressions));
-		state->children.push_back(std::move(source));
-		return std::move(state);
+		auto state = DirectProjectScope(binder, std::move(source), proof.scoped, proof.when_condition.get(),
+		                                proof.group_key_slots, std::move(pins));
+		scope.input_bindings = std::move(state.input_bindings);
+		scope.state_index = state.state_index;
+		scope.eligible_binding = state.eligible;
+		if (has_fixes) {
+			scope.fixed_one_binding = state.extra[0];
+			scope.fixed_zero_binding = state.extra[1];
+		}
+		return std::move(state.plan);
 	}
 
 	//! Stage 2: a scoped aggregate over no eligible row is DECIDE's empty-aggregate error.
@@ -793,179 +745,54 @@ private:
 		if (!proof.scoped) {
 			return source;
 		}
-		auto active_window_index = binder.GenerateTableIndex();
-		auto active_count = DirectWindowMatchingCount(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
-		auto active_window = make_uniq<LogicalWindow>(active_window_index);
-		active_window->expressions.push_back(std::move(active_count));
-		active_window->children.push_back(std::move(source));
-		auto has_active_rows = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHAN,
-		    DirectColumn(LogicalType::BIGINT, ColumnBinding(active_window_index, 0)),
-		    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
-		auto active_predicate = make_uniq<BoundCaseExpression>(
-		    std::move(has_active_rows), DirectConstantBool(true),
-		    DirectErrorPredicate(optimizer, "DECIDE empty row set for aggregate in constraint. "
-		                                    "An empty aggregate has no well-defined value; check your WHEN clause."));
-		auto active_guard = make_uniq<LogicalFilter>(std::move(active_predicate));
-		active_guard->children.push_back(std::move(active_window));
-		return std::move(active_guard);
+		return DirectGuardEmptyAggregate(optimizer, std::move(source), scope.eligible_binding);
 	}
 
-	//! Stage 3: validate source-valued bounds and pins. One window computes, per group, the invalid-value count and the
-	//! extrema of every bound; a filter then raises the first failing clause in source-clause order.
+	//! Stage 3: validate source-valued bounds and pins on every row, in source-clause order, and reduce each bound
+	//! to its group extremum.
 	unique_ptr<LogicalOperator> ValidateBounds(unique_ptr<LogicalOperator> source, const ScopeState &scope,
 	                                           BoundChecks &bounds) const {
-		if (proof.source_bounds.empty() && proof.source_pins.empty()) {
-			return source;
-		}
-		bounds.window_index = binder.GenerateTableIndex();
-		auto bound_window = BuildBoundWindow(scope, bounds);
-		bound_window->children.push_back(std::move(source));
-		unique_ptr<LogicalOperator> bounds_ready = std::move(bound_window);
-		bounds_ready = AddEqualityWindow(std::move(bounds_ready), scope, bounds);
-		auto bound_guard = make_uniq<LogicalFilter>(BuildBoundValidity(bounds));
-		bound_guard->children.push_back(std::move(bounds_ready));
-		return std::move(bound_guard);
-	}
-
-	//! Stage 3a: per-bound invalid count and group extrema, per-pin invalid count.
-	unique_ptr<LogicalWindow> BuildBoundWindow(const ScopeState &scope, BoundChecks &bounds) const {
-		auto bound_window = make_uniq<LogicalWindow>(bounds.window_index);
-		for (idx_t i = 0; i < proof.source_bounds.size(); i++) {
-			auto &bound = proof.source_bounds[i];
-			auto &slots = bounds.slots[i];
+		vector<DirectBoundSpec> specs;
+		for (auto &bound : proof.source_bounds) {
 			if (!bound.value || (bound.source_slot != DConstants::INVALID_INDEX &&
 			                     (bound.source_slot >= source_types.size() ||
 			                      source_types[bound.source_slot] != bound.source_type))) {
 				throw InternalException("S1 direct solve received an invalid source bound slot");
 			}
-			auto cap = [&]() {
-				auto value = CopyIntoState(*bound.value, scope, "bound");
-				return BoundCastExpression::AddCastToType(optimizer.context, std::move(value), LogicalType::DOUBLE);
-			};
-			auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
-			is_null->children.push_back(bound.source_slot == DConstants::INVALID_INDEX
-			                                ? cap()
-			                                : DirectColumn(bound.source_type, scope.input_bindings[bound.source_slot]));
-			unique_ptr<Expression> is_invalid = std::move(is_null);
-			if (bound.source_slot == DConstants::INVALID_INDEX || bound.source_type == LogicalType::FLOAT ||
-			    bound.source_type == LogicalType::DOUBLE) {
-				is_invalid = make_uniq<BoundCaseExpression>(std::move(is_invalid), DirectConstantBool(true),
-				                                            optimizer.BindScalarFunction("isnan", cap()));
+			DirectBoundSpec spec;
+			spec.source_clause_id = bound.source_clause_id;
+			spec.comparison = bound.comparison;
+			spec.value = CopyIntoState(*bound.value, scope, "bound");
+			if (bound.source_slot != DConstants::INVALID_INDEX) {
+				spec.is_column = true;
+				spec.column = scope.input_bindings[bound.source_slot];
+				spec.column_type = bound.source_type;
 			}
-			slots.invalid_window = bound_window->expressions.size();
-			bound_window->expressions.push_back(DirectWindowMatchingCount(std::move(is_invalid)));
-			auto add_extremum = [&](const char *name) {
-				unique_ptr<Expression> value = cap();
-				if (proof.scoped && !bound.rhs_all_group_rows) {
-					value = make_uniq<BoundCaseExpression>(
-					    DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding), std::move(value),
-					    make_uniq<BoundConstantExpression>(Value(LogicalType::DOUBLE)));
-				}
-				auto extremum = DirectWindowExtremum(optimizer, name, std::move(value));
-				if (proof.scoped && !bound.rhs_all_group_rows) {
-					extremum->partitions.push_back(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
-				}
-				for (auto slot : proof.group_key_slots) {
-					extremum->partitions.push_back(DirectColumn(source_types[slot], scope.input_bindings[slot]));
-				}
-				auto result_slot = bound_window->expressions.size();
-				bound_window->expressions.push_back(std::move(extremum));
-				return result_slot;
-			};
-			if (DirectIsUpperBound(bound.comparison)) {
-				slots.min_window = add_extremum("min");
-			}
-			if (DirectIsLowerBound(bound.comparison)) {
-				slots.max_window = add_extremum("max");
-			}
+			spec.all_group_rows = bound.rhs_all_group_rows;
+			spec.invalid_message = DirectInvalidBoundMessage(
+			    bound.column_name,
+			    bound.source_slot == DConstants::INVALID_INDEX ? bound.value->return_type : bound.source_type);
+			specs.push_back(std::move(spec));
 		}
-		for (idx_t i = 0; i < proof.source_pins.size(); i++) {
-			auto value = CopyIntoState(*proof.source_pins[i].value, scope, "Boolean pin");
-			auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
-			is_null->children.push_back(std::move(value));
-			bounds.pin_invalid_windows[i] = bound_window->expressions.size();
-			bound_window->expressions.push_back(DirectWindowMatchingCount(std::move(is_null)));
+		vector<DirectNotNullSpec> pins;
+		for (auto &pin : proof.source_pins) {
+			pins.push_back({pin.source_clause_id, CopyIntoState(*pin.value, scope, "Boolean pin"),
+			                "DECIDE per-row Boolean bound contains NULL"});
 		}
-		return bound_window;
-	}
-
-	//! Stage 3b: count rows where an equality bound's value differs from its group maximum.
-	unique_ptr<LogicalOperator> AddEqualityWindow(unique_ptr<LogicalOperator> bounds_ready, const ScopeState &scope,
-	                                              BoundChecks &bounds) const {
-		unique_ptr<LogicalWindow> equality_window;
-		for (idx_t i = 0; i < proof.source_bounds.size(); i++) {
-			if (proof.source_bounds[i].comparison != ExpressionType::COMPARE_EQUAL) {
-				continue;
-			}
-			if (!equality_window) {
-				bounds.equality_window_index = binder.GenerateTableIndex();
-				equality_window = make_uniq<LogicalWindow>(bounds.equality_window_index);
-			}
-			auto &slots = bounds.slots[i];
-			unique_ptr<Expression> varies = make_uniq<BoundComparisonExpression>(
-			    ExpressionType::COMPARE_NOTEQUAL,
-			    DirectColumn(LogicalType::DOUBLE, ColumnBinding(bounds.window_index, slots.min_window)),
-			    DirectColumn(LogicalType::DOUBLE, ColumnBinding(bounds.window_index, slots.max_window)));
-			if (proof.scoped) {
-				varies = make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding),
-				                                        std::move(varies), DirectConstantBool(false));
-			}
-			bounds.equality_slots[i] = equality_window->expressions.size();
-			equality_window->expressions.push_back(DirectWindowMatchingCount(std::move(varies)));
+		vector<ColumnBinding> keys;
+		vector<LogicalType> key_types;
+		for (auto slot : proof.group_key_slots) {
+			keys.push_back(scope.input_bindings[slot]);
+			key_types.push_back(source_types[slot]);
 		}
-		if (!equality_window) {
-			return bounds_ready;
+		auto validation = DirectValidateBounds(optimizer, std::move(source), specs, pins,
+		                                       proof.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
+		bounds.window_index = validation.window_index;
+		for (idx_t i = 0; i < bounds.slots.size(); i++) {
+			bounds.slots[i].min_window = validation.min_slots[i];
+			bounds.slots[i].max_window = validation.max_slots[i];
 		}
-		equality_window->children.push_back(std::move(bounds_ready));
-		return std::move(equality_window);
-	}
-
-	//! Stage 3c: one predicate that raises the first failing clause check, in source-clause order.
-	unique_ptr<Expression> BuildBoundValidity(const BoundChecks &bounds) const {
-		vector<pair<idx_t, unique_ptr<Expression>>> clause_checks;
-		for (idx_t i = 0; i < proof.source_bounds.size(); i++) {
-			auto &bound = proof.source_bounds[i];
-			auto &slots = bounds.slots[i];
-			auto no_invalid = make_uniq<BoundComparisonExpression>(
-			    ExpressionType::COMPARE_EQUAL,
-			    DirectColumn(LogicalType::BIGINT, ColumnBinding(bounds.window_index, slots.invalid_window)),
-			    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
-			unique_ptr<Expression> equality_valid = DirectConstantBool(true);
-			if (bound.comparison == ExpressionType::COMPARE_EQUAL) {
-				auto no_variation = make_uniq<BoundComparisonExpression>(
-				    ExpressionType::COMPARE_EQUAL,
-				    DirectColumn(LogicalType::BIGINT,
-				                 ColumnBinding(bounds.equality_window_index, bounds.equality_slots[i])),
-				    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
-				equality_valid = make_uniq<BoundCaseExpression>(
-				    std::move(no_variation), DirectConstantBool(true),
-				    DirectErrorPredicate(optimizer, "DECIDE source-valued equality bound varies within a group"));
-			}
-			auto clause_valid = make_uniq<BoundCaseExpression>(
-			    std::move(no_invalid), std::move(equality_valid),
-			    DirectErrorPredicate(optimizer, InvalidSourceBoundMessage(bound)));
-			clause_checks.emplace_back(bound.source_clause_id, std::move(clause_valid));
-		}
-		for (idx_t i = 0; i < proof.source_pins.size(); i++) {
-			auto no_invalid = make_uniq<BoundComparisonExpression>(
-			    ExpressionType::COMPARE_EQUAL,
-			    DirectColumn(LogicalType::BIGINT, ColumnBinding(bounds.window_index, bounds.pin_invalid_windows[i])),
-			    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
-			auto clause_valid = make_uniq<BoundCaseExpression>(
-			    std::move(no_invalid), DirectConstantBool(true),
-			    DirectErrorPredicate(optimizer, "DECIDE per-row Boolean bound contains NULL"));
-			clause_checks.emplace_back(proof.source_pins[i].source_clause_id, std::move(clause_valid));
-		}
-		std::sort(clause_checks.begin(), clause_checks.end(),
-		          [](const pair<idx_t, unique_ptr<Expression>> &left,
-		             const pair<idx_t, unique_ptr<Expression>> &right) { return left.first < right.first; });
-		unique_ptr<Expression> valid_bound = DirectConstantBool(true);
-		for (idx_t i = clause_checks.size(); i > 0; i--) {
-			valid_bound = make_uniq<BoundCaseExpression>(std::move(clause_checks[i - 1].second), std::move(valid_bound),
-			                                             DirectConstantBool(false));
-		}
-		return valid_bound;
+		return std::move(validation.plan);
 	}
 
 	//! Stage 4: the score projection. It forwards the source columns, the combined linear score, the scope and pin
