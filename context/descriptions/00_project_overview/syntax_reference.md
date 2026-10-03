@@ -619,3 +619,42 @@ columns.
 
 `EXPLAIN` plans without executing the decision query. `EXPLAIN ANALYZE` executes it and
 adds actual row counts and timing. JSON uses the same content in a structured plan.
+
+## 10. Direct Solve — simple problems without a solver
+
+Some DECIDE queries have a closed-form answer that DuckDB can compute with ordinary
+operators (windows, filters, projections). DeciDB detects those queries and answers them
+directly instead of building a model and calling Gurobi or HiGHS. It is on by default and
+needs no syntax change. A query it cannot prove takes the normal solver path, unchanged.
+
+Today it covers one row-scoped `BOOL` variable under limits on **how many rows are
+selected** (`SUM(x) <= k`, `<`, `>=`, `>`, `=`), globally or per `PER` group or `WHEN`
+filter, with a linear score `SUM(coefficient * x)` and optional per-row pins such as
+`x = 1 WHEN id = 7`. The limits can be constants or per-row columns.
+
+```sql
+-- Answered directly: pick the best three rows.
+SELECT id, x FROM items DECIDE x(BOOL)
+SUCH THAT SUM(x) <= 3
+MAXIMIZE SUM(score * x);
+```
+
+What you may notice:
+
+- When several assignments are equally optimal, you can get a different one than the solver
+  would have chosen. The objective value is the same.
+- `EXPLAIN` of a query it answers shows a window plan with `Direct solve` rows naming the
+  rule. `EXPLAIN` of every other DECIDE query is exactly as before.
+- Errors (infeasible, NULL bound, empty `WHEN`) are raised in the same situations and worded
+  the same way where possible; the text is not guaranteed identical.
+
+Controls:
+
+| setting | effect |
+| --- | --- |
+| `SET decide_direct_solve = 'auto'` | the default: answer directly when proved, otherwise use the solver |
+| `SET decide_direct_solve = 'off'` | always use the solver |
+| `SET decide_direct_solve = 'require'` | raise an error naming why the query was not proved, instead of solving |
+
+`DIAGNOSE` always uses the solver. A prepared statement keeps the choice it was planned
+with until it is re-planned.

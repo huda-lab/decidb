@@ -195,8 +195,9 @@ the solver collectors' for the same returned values. This identifies an
 output-materialization cost associated with the current wide direct plan;
 the measurements do not isolate how much of that difference comes from the
 window's vector layout, memory pressure, or another upstream effect. The
-separate relational and collector wall times and peak intermediate memory
-remain open measurements.
+separate relational and collector wall times and query-only peak memory were
+measured later with a consuming-aggregate control and a file-backed source; see
+[done.md](done.md#execution-versus-collection-perf-01).
 
 A separate five-million-row [`EXPLAIN ANALYZE` pair](raw/s1_explain_wide_vs_pruned.sql)
 and its [recorded plans](raw/s1_explain_wide_vs_pruned.txt) compare
@@ -361,54 +362,49 @@ put the empty-set guard after score evaluation and therefore had the wrong
 error order when both failed; its 0.309/0.325-second medians are also
 superseded.
 
+### How to read the grouped sweeps below
+
+Every sweep below uses five million stored rows, 100 `PER dept` groups, aggregate output, and a
+512-byte payload the aggregate does not read ("512 B" rows). Times are medians of two fresh direct
+processes against one or two fresh Gurobi processes, in seconds, for `query_collect_s`. Source
+creation and client readback are outside that timer. "Whole process" adds the source creation,
+about 7.6 s for the wide source. Memory figures are in-process high-water MiB through the query.
+The "sort buffers" figure sums the rank windows' allocation snapshots; it is not a simultaneous
+peak. External peak RSS was not measured in these sweeps: the sandbox denied the `sysctl` call in
+`/usr/bin/time`, so the executable was launched directly with `DECIDB_PROFILE=1`. Every completed
+run returned five million rows, and direct and Gurobi agreed on the selected count and primary
+objective. These are one-machine, few-repeat observations; they do not set a selection threshold.
+
 ### Fixed Boolean pins at scale
 
-A [two-repeat fixed-pin sweep](raw/s1_api_grouped_interval_5m_fixed_raw.csv) uses
-the same five-million-row stored source shape, 100 `PER` groups, 60–70%
-cardinality interval, and aggregate result. The source also stores two Boolean
-flags: 1% of rows are fixed selected and a disjoint 1% are fixed zero. The
-direct rule counts fixed selected and free rows within each group, subtracts
-fixed selected rows from the interval, and ranks free rows first. The runner
-created a fresh process per mode and repeat.
+Source: a 60–70% interval per group, with 1% of rows fixed selected and a disjoint 1% fixed zero.
+The plan counts fixed and free rows per group, subtracts the fixed selections from the interval,
+and ranks free rows first. [Raw runs](raw/s1_api_grouped_interval_5m_fixed_raw.csv); 3,000,000
+selections, objective 588,324,437.9.
 
-| Unused payload | Direct query/collection median | Gurobi query/collection median |
+| Unused payload | Direct | Gurobi |
 |---:|---:|---:|
-| 0 B | 0.330 s | 36.256 s |
-| 512 B | 0.326 s | 37.517 s |
+| 0 B | 0.330 | 36.256 |
+| 512 B | 0.326 | 37.517 |
 
-Every completed run returned five million rows, three million selections, and
-the same primary objective, 588,324,437.9. The direct rank-sort allocation
-snapshot was 276–282 MiB; this is not a simultaneous peak-memory figure.
-Process peak RSS includes source creation and cannot isolate query memory.
-The [current free-row sweep](raw/s1_api_grouped_interval_5m_free_current_raw.csv)
-gave direct medians of 0.268 and 0.276 seconds for narrow and unused-wide
-sources. Fixed-pin queries add source flag columns and count windows, so the
-times measure the whole admitted shape, not an isolated operator cost.
+Sort buffers 276–282 MiB. The [current free-row sweep](raw/s1_api_grouped_interval_5m_free_current_raw.csv)
+gave direct medians of 0.268 and 0.276. Pin queries add flag columns and count windows, so the times
+measure the whole admitted shape, not one operator.
 
 ### Source-valued group bounds at scale
 
-A [two-repeat sweep](raw/s1_api_grouped_source_bound_5m_raw.csv) used five million
-stored rows, 100 `PER dept` groups, `SUM(x)>=30000 PER dept`, and
-`SUM(x)<=cap PER dept`. Within every department, half the rows stored
-`cap=35000` and half stored `cap=35001`; the upper bound therefore requires a
-within-group MIN reduction. The 512-byte source payload was not selected by
-the aggregate result. Each mode and repeat ran in a fresh process.
+Source: `SUM(x)>=30000 PER dept` and `SUM(x)<=cap PER dept`; half of each group stores `cap=35000`
+and half `35001`, so the upper bound needs a within-group MIN. 3,000,000 selections, objective
+601,317,410.6. [Raw runs](raw/s1_api_grouped_source_bound_5m_raw.csv).
 
-| Unused payload | Direct query/collection median | Gurobi query/collection median |
+| Unused payload | Direct | Gurobi |
 |---:|---:|---:|
-| 0 B | 0.453 s | 32.018 s |
-| 512 B | 0.457 s | 32.670 s |
+| 0 B | 0.453 | 32.018 |
+| 512 B | 0.457 | 32.670 |
 
-All eight runs completed with five million result rows, three million
-selections, and the same primary objective, 601,317,410.6. The direct plan
-validates the bound column on every row, then reduces eligible values before
-score evaluation and ranking. Its summed window sort-buffer snapshots were
-550–578 MiB across the runs; these are not simultaneous peak query memory.
-Process peak RSS includes source creation. The earlier constant-bound interval
-sweep is a separate campaign with a different stored schema, so its timings
-do not isolate the cost of bound reduction.
-
-The runner command was:
+The plan validates the bound column on every row, then reduces eligible values before scoring and
+ranking. Sort buffers 550–578 MiB. The constant-bound interval sweep above used a different stored
+schema, so it does not isolate the cost of the reduction.
 
 ```sh
 python3 benchmark/decide/profile_direct_s1_api.py --rows 5000000 --widths 0 512 \
@@ -420,120 +416,71 @@ python3 benchmark/decide/profile_direct_s1_api.py --rows 5000000 --widths 0 512 
 ### Numeric source-bound widening
 
 After admitting fractional, infinite, and wider numeric source columns, a
-[fresh two-repeat sweep](raw/s1_api_numeric_source_bound_5m_raw.csv) reran the
-same five-million-row integer-cap workload in direct mode. Both widths and
-repeats returned five million rows, three million selections, and objective
-601,317,410.6, matching the earlier Gurobi runs. Query/collection medians
-were 0.5025 seconds with no payload and 0.5357 seconds with an unused
-512-byte payload. The prior narrower implementation measured 0.453 and
-0.457 seconds respectively. These small sweeps suggest a cost for the wider
-numeric handling; the direct path still finishes far ahead of the previously
-measured 32-second Gurobi runs. The summed window sort-buffer snapshots were
-550–568 MiB, not simultaneous query peak memory.
+[rerun of the integer-cap workload](raw/s1_api_numeric_source_bound_5m_raw.csv) measured direct at
+0.5025 s (no payload) and 0.5357 s (512 B), against 0.453 and 0.457 before the widening. The wider
+handling costs a little; direct is still far ahead of the 32 s Gurobi runs. Sort buffers 550–568 MiB.
 
-The current sandbox denied a `sysctl` call in `/usr/bin/time`, causing the
-wrapper to label otherwise completed runs as errors. The checked-in numeric
-sweep instead launched the benchmark executable directly in a fresh process
-for each width and repeat, with `DECIDB_PROFILE=1`, and checked its exit code,
-row count, selected count, and objective. It records the executable's own
-query/collection time and process memory snapshots; no external peak-RSS
-measurement is claimed. Reproduce one run with:
+The [fractional DOUBLE-cap sweep](raw/s1_api_double_source_bound_5m_raw.csv) alternates each
+group's cap between `35000.5` and `35001.5`. The inclusive upper count is still 35000; the tighter
+value requires MIN after DOUBLE conversion.
+
+| Unused payload | Direct | Gurobi |
+|---:|---:|---:|
+| 0 B | 0.4954 | 32.6941 |
+| 512 B | 0.5281 | 33.4266 |
+
+Reproduce one run with the executable directly (replace `source` with `source_double` for the
+fractional caps; the other forms below swap in `source_pair`, `source_coalesce`, or the `additive`
+objective the same way):
 
 ```sh
 DECIDB_PROFILE=1 benchmark/decide/results/profile_direct_s1_api \
   5000000 0 stored direct aggregate materialized interval grouped free source
 ```
 
-The [fractional DOUBLE-cap sweep](raw/s1_api_double_source_bound_5m_raw.csv) used
-the same stored rows and groups, with each group's cap alternating between
-`35000.5` and `35001.5`. The inclusive upper count is still 35000; the
-group's tighter value requires MIN after DOUBLE conversion. Two fresh direct
-runs per width and one fresh Gurobi run per width all returned five million
-rows, three million selections, and objective 601,317,410.6.
-
-| Unused payload | Direct query/collection median | Gurobi query/collection |
-|---:|---:|---:|
-| 0 B | 0.4954 s | 32.6941 s |
-| 512 B | 0.5281 s | 33.4266 s |
-
-These runs launched the executable directly, without `/usr/bin/time`; the
-CSV records setup, query/collection, client readback, and in-process memory
-snapshots separately. External peak RSS remains unmeasured in this sweep.
-Reproduce one fractional-cap run by replacing `source` with `source_double`
-in the command above.
+For the solver side, replace `direct` with `gurobi` and set `DECIDB_FORCE_SOLVER=gurobi`.
 
 ### Paired source bounds at scale
 
-The [paired-bound sweep](raw/s1_api_paired_source_bound_5m_raw.csv) used the same
-five million stored rows and 100 `PER dept` groups. Each group had an upper
-column alternating between 35000 and 35001, and a lower column alternating
-between 30000 and 29999. The correct interval is therefore [30000, 35000]
-per group. Both columns must be reduced before the inclusive limits intersect.
-Two fresh direct runs per width and one fresh Gurobi run per width all returned
-five million rows, three million selections, and objective 601,317,410.6.
+Source: an upper column alternating 35000/35001 and a lower column alternating 30000/29999, so the
+interval is [30000, 35000] per group once both columns are reduced. One bound-window stage serves
+both clauses. [Raw runs](raw/s1_api_paired_source_bound_5m_raw.csv); 3,000,000 selections.
 
-| Unused payload | Direct query/collection median | Gurobi query/collection |
+| Unused payload | Direct | Gurobi |
 |---:|---:|---:|
-| 0 B | 0.6549 s | 31.8961 s |
-| 512 B | 0.6783 s | 33.0310 s |
+| 0 B | 0.6549 | 31.8961 |
+| 512 B | 0.6783 | 33.0310 |
 
-The direct plan uses one bound-window stage for both clauses. Its summed
-window sort-buffer snapshots were 631–656 MiB; they are not simultaneous
-query peak memory. These runs used the executable's own phase timing and
-in-process memory snapshots, with no external peak-RSS claim. Reproduce one
-run by replacing `source` with `source_pair` in the command above.
+Sort buffers 631–656 MiB.
 
 ### Source-bound expressions at scale
 
-The [source-expression sweep](raw/s1_api_source_expression_5m_raw.csv) used five
-million stored rows and 100 `PER dept` groups. In each group, 25% of cap
-values were NULL, 25% were 35000, and 50% were 35001. The upper constraint
-used `COALESCE(cap,35001)`, so each group had a 35000 limit after taking the
-minimum. A static lower limit was 30000. Two fresh direct runs per width and
-one fresh Gurobi run per width all returned five million rows, three million
-selections, and objective 601,317,410.6.
+Source: `COALESCE(cap,35001)` as the upper bound, with 25% NULL, 25% 35000 and 50% 35001 caps per
+group, so each group's limit is 35000; a constant lower bound of 30000. 3,000,000 selections.
+[Raw runs](raw/s1_api_source_expression_5m_raw.csv).
 
-| Unused payload | Direct query/collection median | Gurobi query/collection | Direct whole process median | Gurobi whole process |
+| Unused payload | Direct | Gurobi | Direct whole process | Gurobi whole process |
 |---:|---:|---:|---:|---:|
-| 0 B | 0.5824 s | 32.1601 s | 0.7323 s | 32.3474 s |
-| 512 B | 0.5792 s | 32.4024 s | 8.2455 s | 40.1063 s |
+| 0 B | 0.5824 | 32.1601 | 0.7323 | 32.3474 |
+| 512 B | 0.5792 | 32.4024 | 8.2455 | 40.1063 |
 
-The wide process times include about 7.6 seconds to create the source table.
-The direct runs' summed window sort-buffer snapshots were 548–572 MiB, not
-simultaneous query peak memory. The executable was launched directly because
-the sandbox denied `/usr/bin/time`'s `sysctl` call; its phase timers and
-in-process memory snapshots are recorded, but external peak RSS is unmeasured.
-Reproduce one run with:
-
-```sh
-DECIDB_PROFILE=1 benchmark/decide/results/profile_direct_s1_api \
-  5000000 0 stored direct aggregate materialized interval grouped free source_coalesce
-```
+Sort buffers 548–572 MiB.
 
 ### Aggregate-local WHEN at scale
 
-The [aggregate-local `WHEN` sweep](raw/s1_api_local_when_5m_raw.csv) used five
-million stored rows, 100 `PER dept` groups, and a Boolean `active` column.
-Ten percent of each group was inactive. Both constant count bounds used
-`SUM(x) WHEN active`, with a 30000 lower and 35000 upper limit per group.
-Inactive rows were still free to be selected for their score. Two fresh direct
-runs per width and one fresh Gurobi run per width all returned five million
-rows, three million selected active rows, 3,250,121 selected rows overall, and
-objective 563,866,342.3.
+Source: a Boolean `active` column, 10% of each group inactive. Both constant bounds use
+`SUM(x) WHEN active` (30000 lower, 35000 upper). Inactive rows stay free to be selected. 3,000,000
+active selections, 3,250,121 overall, objective 563,866,342.3.
+[Raw runs](raw/s1_api_local_when_5m_raw.csv).
 
-| Unused payload | Direct query/collection median | Gurobi query/collection | Direct whole process median | Gurobi whole process |
+| Unused payload | Direct | Gurobi | Direct whole process | Gurobi whole process |
 |---:|---:|---:|---:|---:|
-| 0 B | 0.3018 s | 28.8805 s | 0.4446 s | 29.0565 s |
-| 512 B | 0.2979 s | 30.4114 s | 7.9870 s | 38.2439 s |
+| 0 B | 0.3018 | 28.8805 | 0.4446 | 29.0565 |
+| 512 B | 0.2979 | 30.4114 | 7.9870 | 38.2439 |
 
-The wide whole-process times include about 7.6 seconds of source creation.
-In-process high-water memory through the query was 666–689 MiB for narrow
-direct runs versus 2,922 MiB for Gurobi. With the unused 512-byte payload, it
-was 3,069–3,149 MiB for direct versus 2,972 MiB for Gurobi. The latter
-comparison shows a memory cost of the direct plan on this wide fixture even
-though its query time was lower. The direct summed window sort-buffer
-snapshots were 274–294 MiB; they are not a simultaneous peak or the full
-query footprint. External peak RSS remains unmeasured. Reproduce one run with:
+Sort buffers 274–294 MiB. Memory through the query: 666–689 MiB direct against 2,922 MiB Gurobi on
+the narrow source, but 3,069–3,149 MiB direct against 2,972 MiB Gurobi with the 512-byte payload.
+On the wide fixture direct pays a memory cost even though its query time is lower.
 
 ```sh
 DECIDB_PROFILE=1 benchmark/decide/results/profile_direct_s1_api \
@@ -542,66 +489,47 @@ DECIDB_PROFILE=1 benchmark/decide/results/profile_direct_s1_api \
 
 ### Source-valued aggregate-local WHEN at scale
 
-The [source-valued local-`WHEN` sweep](raw/s1_api_local_when_source_bound_5m_raw.csv)
-used the same five million rows, 100 groups, and 10% inactive rows per group.
-The lower bound was 30000; the upper bound came from a cap column alternating
-between 35000 and 35001 within each group. `SUM(x) WHEN active` counted only
-active rows, while the cap's group minimum included inactive rows. Two fresh
-direct runs per width and one fresh Gurobi run per width all returned five
-million rows, three million active selections, 3,250,121 total selections,
-and objective 563,866,342.3.
+Same rows and 10% inactive share. The lower bound is 30000; the upper comes from a cap column
+alternating 35000/35001. `SUM(x) WHEN active` counts only active rows, while the cap's group minimum
+includes inactive rows. 3,000,000 active selections, 3,250,121 overall, objective 563,866,342.3.
+[Raw runs](raw/s1_api_local_when_source_bound_5m_raw.csv). Replace `constant` with `source` in the
+command above to reproduce one.
 
-| Unused payload | Direct query/collection median | Gurobi query/collection | Direct whole process median | Gurobi whole process |
+| Unused payload | Direct | Gurobi | Direct whole process | Gurobi whole process |
 |---:|---:|---:|---:|---:|
-| 0 B | 0.5664 s | 28.8267 s | 0.7402 s | 29.0349 s |
-| 512 B | 0.5736 s | 29.6506 s | 8.2712 s | 37.3544 s |
+| 0 B | 0.5664 | 28.8267 | 0.7402 | 29.0349 |
+| 512 B | 0.5736 | 29.6506 | 8.2712 | 37.3544 |
 
-The direct summed window sort-buffer snapshots were 511–538 MiB. In-process
-high-water memory through the query was 855–861 MiB for narrow direct runs
-and 2,936–3,372 MiB for wide direct runs; Gurobi measured 2,639 and 3,116
-MiB respectively. This variation leaves the wide memory tradeoff unresolved.
-The sort snapshots are not simultaneous peak memory, and external peak RSS
-was not measured. Reproduce one run by replacing `constant` with `source` in
-the aggregate-local `WHEN` command above.
+Sort buffers 511–538 MiB. Memory through the query: 855–861 MiB direct on narrow rows, 2,936–3,372
+MiB direct on wide rows, against 2,639 and 3,116 MiB for Gurobi. The variation leaves the wide
+memory tradeoff unresolved.
 
 ### Additive linear scores at scale
 
-The [additive-score sweep](raw/s1_api_additive_objective_5m_raw.csv) used five
-million stored rows and 100 `PER` groups, with a 30000–35000 count interval
-per group. The objective was `SUM(score*x)+SUM(i*x)`, so each row's rank score
-adds two independently evaluated source coefficients in solver DOUBLE order.
-The parent returned one aggregate row; the unused 512-byte payload could be
-pruned in the wide case. Two fresh direct runs and one fresh Gurobi run per
-width all selected 3,500,000 rows and reported objective 11,374,999,356,200.
+Source: a 30000–35000 interval per group and the objective `SUM(score*x)+SUM(i*x)`, so each row's
+rank score adds two source coefficients in the solver's DOUBLE order. The parent returns one
+aggregate row, so the unused payload can be pruned. 3,500,000 selections, objective
+11,374,999,356,200. [Raw runs](raw/s1_api_additive_objective_5m_raw.csv).
 
-| Unused payload | Direct query/collection median | Gurobi query/collection | Direct whole-process median | Gurobi whole process |
+| Unused payload | Direct | Gurobi | Direct whole process | Gurobi whole process |
 |---:|---:|---:|---:|---:|
-| 0 B | 0.3051 s | 13.9740 s | 0.4156 s | 14.1100 s |
-| 512 B | 0.3192 s | 15.0499 s | 7.9498 s | 22.7124 s |
+| 0 B | 0.3051 | 13.9740 | 0.4156 | 14.1100 |
+| 512 B | 0.3192 | 15.0499 | 7.9498 | 22.7124 |
 
-Setup took about 0.085 seconds narrow and 7.5–7.6 seconds wide. Client
-readback of the one-row result took less than 0.00002 seconds. The profiled
-Gurobi runs spent 219–231 ms building the neutral model, 522–536 ms loading
-the backend, and 12.8–13.3 seconds optimizing; the direct analysis and
-construction phases were each below 0.04 ms. In-process high-water memory
-through the query was 680–693 MiB direct versus 2,943 MiB Gurobi narrow, and
-3,165–3,193 MiB direct versus 3,341 MiB Gurobi wide. The wide source had
-already reached about 2,643 MiB during setup. Summed direct window
-sort-buffer snapshots were 323–338 MiB; they are not a simultaneous peak.
-These are one-machine, few-repeat observations and do not establish a
-production selection threshold.
-
-Reproduce a direct run after building the API benchmark binary with:
-
-```sh
-DECIDB_PROFILE=1 benchmark/decide/results/profile_direct_s1_api \
-  5000000 0 stored direct aggregate materialized interval grouped free constant additive
-```
-
-For the solver comparison, use the same arguments with `direct` replaced by
-`gurobi` and set `DECIDB_FORCE_SOLVER=gurobi`.
+The profiled Gurobi runs spent 219–231 ms building the neutral model, 522–536 ms loading the
+backend, and 12.8–13.3 s optimizing; direct analysis and construction were each under 0.04 ms.
+Memory through the query: 680–693 MiB direct against 2,943 MiB Gurobi on narrow rows; 3,165–3,193
+MiB against 3,341 MiB on wide rows, where the source had already reached about 2,643 MiB during
+setup. Sort buffers 323–338 MiB.
 
 ## Reproduce
+
+Two runner options isolate what the older rows below could not. `--db-dir DIR` builds each
+source once into a database file and measures every query in a fresh process that only
+opens it, so `process_peak_through_query_mib` is query-only. `--output-kinds consume`
+returns one row of sums over every column `full` returns; `full` minus `consume` wall time
+estimates result-collection cost. The commands for those sweeps are in the
+[benefit report](s1_benefit_report.md#reproduce).
 
 From the repository root after `make release`:
 

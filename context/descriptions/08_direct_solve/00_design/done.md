@@ -1,6 +1,6 @@
 # Design — verified foundation
 
-This records the source-grounded foundation and the implemented opt-in S1
+This records the source-grounded foundation and the implemented S1
 prototype. The broader direct-solve gate is still open.
 
 BASE-01: the prototype documentation checkpoint is on branch

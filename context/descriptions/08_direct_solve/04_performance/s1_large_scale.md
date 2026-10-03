@@ -154,19 +154,21 @@ these large extremes, though their solver gaps were smaller than at 10%
 capacity. These are single runs; the 100,000-row wide counterexamples still
 show that a universal speedup claim is unsupported.
 
-## Decision and remaining measurement work
+## Decision
 
-Keep `decide_direct_solve=off` by default. These measurements establish a large
-benefit for the narrow S1 shape on large, narrow inputs, plus a source-width
-memory limit and small-workload counterexamples. `auto` remains an explicit
-opt-in: a cost estimate must never establish eligibility, and a production
-policy needs broader source plans and output-width cases before it can choose
-between a proved direct plan and the solver automatically.
+These measurements establish a large benefit for the narrow S1 shape on large,
+narrow inputs, plus a source-width memory limit and small-workload
+counterexamples. They were the first evidence for the default policy. Later
+query-only memory and collection measurements, and the resulting decision that
+`auto` is the default, are in the [benefit report](s1_benefit_report.md) and
+[decisions.md](../00_design/decisions.md#7-selection-policy). A cost estimate
+never establishes eligibility.
 
 The runner records direct analysis/construction and solver model-build,
 backend-load, solve, and solver-readback spans alongside total query time and
 peak RSS. It does not independently isolate relational execution from CTAS
 materialization or measure client streaming of all result rows. That phase
-accounting and broader stored-table workloads remain part of PERF-01 and
-PERF-02; these observations should not be described as the final production
-performance gate.
+accounting and query-only memory were measured later; see
+[execution versus collection](done.md#execution-versus-collection-perf-01) and
+[query-only peak memory](done.md#query-only-peak-memory-perf-02). The
+[benefit report](s1_benefit_report.md) gives the combined conclusions.

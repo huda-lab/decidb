@@ -149,21 +149,22 @@ No backend is selected, loaded, or invoked on a committed direct hit.
 
 ## Policy and explanation
 
-Use the `decide_direct_solve` session setting with `off`, `auto`, and `require`
-modes. Default is `off` while evidence is incomplete. `auto` attempts a proof
-then falls back; `require` turns a miss into a reasoned error. `DIAGNOSE` and a
+Use the `decide_direct_solve` session setting with `auto` (default), `off`, and
+`require` modes. `auto` attempts a proof then falls back; `require` turns a miss
+into a reasoned error. `DIAGNOSE` and a
 forced solver bypass `auto` and conflict explicitly with `require`. Resolve
 the mode when the plan is built; prepared plans retain their selection until
 rebound or replanned. No syntax change is needed.
 
-One structured decision record carries mode, selected rule or miss reason,
-exact proof facts, inserted guards, and whether solver work was skipped. It is
-the source for `EXPLAIN`, profiling, and `require` errors. On a hit the logical
-boundary owns it and physical lowering passes it to explain/profile metadata
-on an ordinary physical operator. On a miss the surviving logical and physical
-DECIDE operators carry it. A logical-only node's name alone is insufficient:
-default physical `EXPLAIN` does not retain it. The precise metadata API can be
-chosen while implementing this visible contract.
+One structured decision record carries the mode, the selected rule, its proof
+facts, and its inserted guards. It exists only for a hit and feeds `EXPLAIN` and
+profiling; a `require` miss raises its reason as an error instead. On a
+hit the logical boundary owns it and physical lowering passes it to
+explain/profile metadata on an ordinary physical operator. A logical-only
+node's name alone is insufficient: default physical `EXPLAIN` does not retain
+it. A miss under `auto` is silent: the DECIDE node and its `EXPLAIN` are
+exactly the solver path's, because with direct solve on by default a miss
+record would add internal text to every ordinary DECIDE query.
 
 ## Integration and growth
 

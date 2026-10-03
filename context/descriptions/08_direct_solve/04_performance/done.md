@@ -6,8 +6,9 @@ backends, capacities 0 through row count, score patterns with varying ties,
 and source widths 0 and 512 bytes. Every measured run completed; the large
 narrow sweep used three repeats. At five million narrow rows and 10% capacity,
 the direct path's median was 0.403 seconds versus 2.853 seconds for Gurobi and
-42.978 seconds for HiGHS on mixed scores. Wide rows reduce the advantage and
-can make direct peak memory higher than either solver path.
+42.978 seconds for HiGHS on mixed scores. Wide rows reduce the advantage. The peak RSS
+figures in these sweeps include building the source in the same process; the
+query-only peaks are in [Query-only peak memory](#query-only-peak-memory-perf-02).
 
 A separate narrow stored-table sweep at one and five million rows excludes
 source-table creation from the query timer. At five million rows with mixed
@@ -134,16 +135,17 @@ measured five million rows with 10% inactive rows per group. All six runs
 agreed on three million active selections, 3,250,121 total selections, and
 objective 563,866,342.3. Direct query/collection medians were 0.3018 seconds
 narrow and 0.2979 seconds with unused 512-byte payload, versus 28.8805 and
-30.4114 seconds for Gurobi. Direct in-process query high-water memory was
-666–689 MiB narrow versus Gurobi's 2,922 MiB, but 3,069–3,149 MiB wide
-versus Gurobi's 2,972 MiB. Rank-only peak memory remains unmeasured.
+30.4114 seconds for Gurobi. Direct in-process high-water memory was
+666–689 MiB narrow versus Gurobi's 2,922 MiB, and 3,069–3,149 MiB wide versus
+Gurobi's 2,972 MiB; the wide figures are dominated by building the source in the
+same process (see [query-only peak memory](#query-only-peak-memory-perf-02)).
 A [source-valued aggregate-local `WHEN` sweep](s1_api_phase.md#source-valued-aggregate-local-when-at-scale)
 kept the same five-million-row active quota with varying group caps. All six
 runs agreed on active count, total count, and objective. Direct query/collection
 medians were 0.5664 seconds narrow and 0.5736 seconds wide versus 28.8267
 and 29.6506 seconds for Gurobi. Wide direct in-process high-water memory
-varied from 2,936 to 3,372 MiB versus 3,116 MiB for Gurobi, so the memory
-tradeoff remains unresolved.
+varied from 2,936 to 3,372 MiB versus 3,116 MiB for Gurobi; that range reflects
+source creation in the same process, not the query.
 A [five-million-row additive-score sweep](s1_api_phase.md#additive-linear-scores-at-scale)
 tested two source coefficient terms with 100 grouped intervals. Direct
 query/collection medians were 0.3051 seconds narrow and 0.3192 seconds with
@@ -152,6 +154,59 @@ runs agreed on 3,500,000 selections and the reported objective. The in-process
 high-water through the query was 680–693 MiB direct versus 2,943 MiB Gurobi
 narrow, and 3,165–3,193 MiB direct versus 3,341 MiB Gurobi wide.
 
-Query-only peak memory is not measured for the fixed-pin, source-valued bound,
-paired-bound, or `COALESCE` sweeps; the figures above are sort-buffer snapshots or
-process high-water marks, not query-only peaks.
+The figures above are sort-buffer snapshots or process high-water marks that include
+source creation. Query-only peaks for the same shapes follow.
+
+## Execution versus collection (PERF-01)
+
+Five million stored rows, global upper bound, three runs per direct and Gurobi cell and
+two per HiGHS cell, all on a source read from a database file. `full` returns every row;
+`consume` reads the same columns but reduces them to one row of sums inside the query.
+Collection cost is the `full` wall time minus the `consume` wall time. This is a
+differential: the collector overlaps the plan's last stage, so no exact wall time exists
+for it, and streaming delivery is a different path that does not subtract either.
+
+| Payload | Mode | `full` | `consume` | Collection |
+|---:|---|---:|---:|---:|
+| 0 B | Direct | 0.169 s | 0.164 s | 0.005 s |
+| 0 B | Gurobi | 2.732 s | 2.804 s | none measurable |
+| 512 B | Direct | 1.996 s | 0.475 s | 1.52 s |
+| 512 B | Gurobi | 3.639 s | 3.177 s | 0.46 s |
+| 512 B | HiGHS | 43.943 s | 43.120 s | 0.82 s |
+
+For the wide source, direct's relational execution takes 0.475 s, and collecting the
+result takes about three times as long as it does for Gurobi. The cause is not isolated.
+Raw rows: [collection sweep](raw/s1_perf01_collection_5m_raw.csv). Method and caveats:
+[benefit report](s1_benefit_report.md#how-the-numbers-were-taken).
+
+## Query-only peak memory (PERF-02)
+
+The runner now builds each source once into a database file (`--db-dir`) and measures
+every query in a fresh process that only opens it. The open baseline is about 17 MiB and a
+plain scan peaks at 30–385 MiB ([scan floor](raw/s1_perf02_scan_floor_raw.csv)), so the
+peaks below are the mode's own working memory. Medians; Gurobi had two runs per cell.
+
+| Shape (5M rows) | Direct | Gurobi | HiGHS |
+|---|---:|---:|---:|
+| Narrow, full output | 1,005 MiB | 2,351 MiB | not run |
+| 512-byte payload, full output | 2,993 MiB | 3,566 MiB | 2,797 MiB |
+| 512-byte payload unused, aggregate | 773 MiB | 2,528 MiB | not run |
+| Grouped fixed pins | 529 MiB | 3,843 MiB | not run |
+| Grouped aggregate-local `WHEN` | 535 MiB | 3,001 MiB | not run |
+| Grouped aggregate-local `WHEN`, source-valued bound, wide source | 721 MiB | 3,074 MiB | not run |
+| Grouped source-valued bounds | 700 MiB | 3,436 MiB | not run |
+| Grouped paired source-valued bounds | 780 MiB | 3,338 MiB | not run |
+| Grouped `COALESCE` source-valued bound | 685 MiB | 3,109 MiB | not run |
+
+The wide direct plan is below Gurobi (by 16%) and above HiGHS (by 7%) for full output, and
+far below Gurobi when the payload is unused or the parent aggregates. The earlier
+indication that wide `WHEN` shapes cost direct more memory than Gurobi came from building
+the source in the same process. Peaks vary by roughly 10% between runs. Raw rows:
+[query-only sweep](raw/s1_perf02_query_memory_5m_raw.csv).
+
+## Benefit report and default policy (PERF-03)
+
+[The benefit report](s1_benefit_report.md) lists where direct wins, where it helps less,
+and what the evidence supports for the default. `decide_direct_solve` defaults to `auto`
+(decided 2026-10-03); the policy, what users can notice, and the benchmark pins that
+follow from it are in [decisions.md](../00_design/decisions.md#7-selection-policy).

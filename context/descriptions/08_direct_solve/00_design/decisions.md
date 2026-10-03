@@ -1,10 +1,11 @@
 # Prototype design decisions
 
-Status: **first opt-in prototype implemented**. These decisions remain the
+Status: **first rule implemented and on by default**. These decisions remain the
 acceptance criteria. The [experiments](experiments.md) explain why they were
 chosen; [correctness/done.md](../03_correctness/done.md) records current test
 evidence. The [current built-in optimizer audit](optimizer_audit.md) is complete;
-the performance and production selection gates remain open, so `off` is still the default.
+the performance evidence is in the [benefit report](../04_performance/s1_benefit_report.md), and
+`auto` is the default (section 7).
 
 ## 1. Detection and proof
 
@@ -93,8 +94,8 @@ evidence for this contract, not proof of every remaining optimizer pass.
 ## 5. Policy and explanation
 
 Register one DECIDE session setting, `decide_direct_solve`, with validated
-`off` (default), `auto`, and `require` values. `off` keeps the solver path;
-`auto` uses a proved rewrite or falls back; `require` gives a typed miss reason
+`auto` (default), `off`, and `require` values. `auto` uses a proved rewrite or
+falls back; `off` keeps the solver path; `require` gives a typed miss reason
 instead of solving. `DIAGNOSE` always uses the solver in `off`/`auto` and
 conflicts explicitly with `require`. The test-only `DECIDB_FORCE_SOLVER`
 override bypasses `auto` and conflicts with `require`; an invalid forced name
@@ -103,15 +104,21 @@ when optimization builds a plan. A prepared plan keeps that selection until
 it is rebound or replanned; changing the setting alone does not silently
 replace its plan.
 
-One structured record carries mode, selected rule or miss reason, proof facts,
-required guards, and whether backend/model work was skipped. Use it for
-`require` errors, optimized logical `EXPLAIN`, default physical `EXPLAIN`, and
-profiling. On a hit the logical boundary owns it, and physical lowering
-attaches it as explain/profile metadata to the ordinary child. On a miss the
-surviving logical and physical DECIDE operators carry the miss record. The
+One structured record carries the mode, the selected rule, its proof facts, and
+its required guards. It exists only for a hit, and feeds optimized logical `EXPLAIN`,
+default physical `EXPLAIN`, and profiling. A `require` miss raises the reason as an
+error and builds no record. The logical boundary owns the record, and physical
+lowering attaches it as explain/profile metadata to the ordinary child. The
 renderer and profiler must read the metadata explicitly because a logical-only
-boundary is absent from physical `EXPLAIN`. The exact metadata plumbing may
-change, but visible rule identity cannot be inferred from a `WINDOW` node.
+boundary is absent from physical `EXPLAIN`; visible rule identity cannot be
+inferred from a `WINDOW` node.
+
+A miss under `auto` is silent. The surviving DECIDE operator and its `EXPLAIN`
+are exactly what the solver path prints, with no direct-solve rows, and nothing
+is stored on the node. Because direct solve is on by default, a miss record
+would otherwise add internal rule text to the `EXPLAIN` of every ordinary
+DECIDE query. A user who wants to know why a query was not proved sets
+`decide_direct_solve='require'`, which raises the reason.
 
 ## 6. Numeric contract
 
@@ -145,3 +152,47 @@ oracle checks the direct rule; backend differential tests compare feasibility
 and primary objective with a measured tolerance, never exact tied vectors.
 The [baseline](../03_correctness/baseline.md) records the fixtures and leaves
 the final backend tolerance to the permanent test sweep.
+
+## 7. Selection policy
+
+Status: **decided 2026-10-03: `auto` is the default.**
+
+The [benefit report](../04_performance/s1_benefit_report.md) supports it for S1-proved
+shapes: direct is 16 to 100 times faster than Gurobi on five-million-row grouped and
+global sources with a fraction of the memory, 1.4 to 1.8 times faster on wide full output,
+and neutral on small inputs. The only measured loss is about 5% on 100,000 wide rows at
+trivial capacity. No completed comparison disagreed on a result.
+
+What a user can notice, by design:
+
+- A tied query may return a different, equally optimal assignment than the solver did.
+- Direct errors for NULL/NaN bounds and scores are worded like the solver's. A NULL score
+  names its column when the objective is one bare column, as the solver does. For a computed
+  score the solver can name whichever columns were NULL on the failing row; the direct plan
+  has no row to inspect and uses the solver's generic wording. The solver also reports the
+  row number of a non-finite score; the direct plan does not.
+- `EXPLAIN` of a query that direct solve proves shows the window plan and its decision
+  rows. `EXPLAIN` of any other DECIDE query is unchanged.
+
+Control and escape hatches: `SET decide_direct_solve='off'` always uses the solver;
+`'require'` errors with the reason when a query is not proved; `DIAGNOSE` and the test-only
+`DECIDB_FORCE_SOLVER` always use the solver (and conflict with `require`).
+
+Consequences already applied to the repository:
+
+- The tests that assert the solver plan (`test_explain.py`) and the solver reference side
+  of every differential test pin `decide_direct_solve='off'`, and tests that assert a hit
+  use `require`. Nothing relies on the default except `test_direct_solve_is_on_by_default`.
+- Goldens, the pipeline profiler, and the forced-backend suites already pin a backend, so
+  they never reach direct solve. `benchmark/decide/run_benchmarks.py` tracks the solver
+  pipeline's stage timers and pins `off`, because its `p4` query is an S1 shape.
+- The direct-solve benchmark runners pin `require` (direct) and `off` (solver) so a
+  measurement can never silently use the other path.
+- `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` sets the mode for every CLI call in the
+  suite, as `DECIDB_FORCE_SOLVER` pins a backend. With the default, an S1-shaped query in the
+  wider suite runs through direct solve and no longer reaches the solver, so both runs
+  are needed. Under `require` for every call, 614 of the 1,860 tests pass (an upper bound on
+  how many reach direct solve, since non-DECIDE tests pass too); under `off` and under the
+  default all pass.
+
+Cost-based choice between competing direct plans is a separate question (NEXT-05).

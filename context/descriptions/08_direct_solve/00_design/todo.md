@@ -7,5 +7,5 @@ may change the mechanism while keeping the external semantics fixed.
 
 No first-build design checks remain open. The current built-in pass audit is in
 [optimizer_audit.md](optimizer_audit.md). The first selective-output pruning
-check is recorded in [done.md](done.md); [PERF-02](../04_performance/todo.md)
-still needs intermediate-memory and broader workload evidence.
+check is recorded in [done.md](done.md); query-only memory evidence is in the
+[benefit report](../04_performance/s1_benefit_report.md).

@@ -1,17 +1,18 @@
 # Shared Harness — completed work
 
-HAR-04: `decide_direct_solve` is a validated session setting with `off`
-(default), `auto`, and `require`. A proved hit replaces `LogicalDecide` before
+HAR-04: `decide_direct_solve` is a validated session setting with `auto`
+(default), `off`, and `require`. A proved hit replaces `LogicalDecide` before
 solver selection. An `auto` miss leaves the original node for the solver. A
 forced backend or `DIAGNOSE` bypasses `auto` and conflicts with `require`;
 invalid forced backend names keep their prior error. Prepared selection is
 captured until a real rebind. `require` also fails closed when the DECIDE
 optimizer is disabled.
 
-HAR-05: one decision record supplies rule identity, miss reason, proof facts,
-runtime guards, and solver-skipped state. Logical and physical `EXPLAIN` and
-profiling render it on hits and misses. The physical hit is an ordinary
-projection, with the record carried as metadata.
+HAR-05: one decision record supplies rule identity, proof facts, and runtime
+guards on a hit. A `require` miss raises its reason as an error and builds no
+record. Logical and physical `EXPLAIN` and profiling render the record on hits. A miss
+under `auto` prints nothing, so the solver plan's `EXPLAIN` is unchanged. The
+physical hit is an ordinary projection, with the record carried as metadata.
 
 The first `DirectProblemFacts` adapter reads complete bound objective and
 constraint factors, source-clause attribution, decision domains/scopes, and source bindings before any

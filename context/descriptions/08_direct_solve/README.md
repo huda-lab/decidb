@@ -1,6 +1,6 @@
 # Direct Solve
 
-Direct solve is an opt-in DECIDE optimizer prototype. When a problem matches its
+Direct solve is a DECIDE optimizer feature that is on by default. When a problem matches its
 first rule exactly, it builds an optimal assignment from ordinary DuckDB operators
 (windows, filters, projections) instead of building and running a solver model. A
 problem it cannot prove keeps the existing solver path.
@@ -12,8 +12,9 @@ column or source-only expression that varies by row. Exact zero/one pins on sing
 rows are allowed. The objective is a signed sum of per-row coefficients times `x`.
 The [first-rule contract](02_first_rule/spec.md) lists the exact forms. A semantic
 fact adapter and a rule coordinator keep recognition, proof, cost, explanation,
-relational construction, and output mapping separate. A second rule and the final
-performance gate remain open; the current built-in optimizer audit is recorded in
+relational construction, and output mapping separate. A second rule remains open (the
+[benefit report](04_performance/s1_benefit_report.md) holds the performance evidence behind the
+`auto` default); the current built-in optimizer audit is recorded in
 [optimizer_audit.md](00_design/optimizer_audit.md).
 
 ## Architecture in one minute
@@ -66,9 +67,10 @@ test this partitioned plan at scale.
 
 The first vertical slice is deliberately narrow and falls back on everything
 not proved. The class mathematics and other problem classes live **only** in
-the Word catalogue. The setting `decide_direct_solve` is `off` by default;
-`auto` tries the rule and falls back; `require` reports why it missed. For a
-small worked query, use:
+the Word catalogue. The setting `decide_direct_solve` defaults to `auto`: it
+tries the rule and falls back to the solver on a miss. `off` always uses the
+solver; `require` reports why a query was not proved. This example uses
+`require` so a miss fails loudly:
 
 ```sql
 SET decide_direct_solve = 'require';
@@ -81,9 +83,9 @@ EXPLAIN SELECT id, x FROM (
 ```
 
 The plan ranks all three scores, assigns `x=1` to id 3, and returns all three
-rows. A miss in `require` is an error before solver work; use `auto` to retain
-solver fallback. Both optimized logical and physical `EXPLAIN` display the
-decision record.
+rows. A miss in `require` is an error before solver work. Under the default
+`auto`, a hit shows its decision record in optimized logical and physical
+`EXPLAIN`, and a miss leaves `EXPLAIN` exactly as the solver path prints it.
 
 ## Source layout
 
@@ -95,8 +97,9 @@ Code is in `src/optimizer/decide/direct/`; headers are in
 | `direct_problem.cpp` | Reads exact facts from the bound DECIDE tree |
 | `direct_coordinator.cpp` | Setting and mode, rule registry, Match/Prove/Cost/Explain/Rewrite, decision record, fallback and `require` errors |
 | `direct_result_boundary.cpp` | Logical result boundary, output-slot map checks (`MapDirectResult`), serialization, unused-output hook |
-| `direct_builder.cpp` | Rule-independent expression and window builders; the source-output pruning proof |
-| `s1_rule.cpp` | Everything specific to S1: proof, `Prove`, explanation, and `Rewrite` in six stages |
+| `direct_expression.cpp` | Rule-independent questions about a bound expression (decision-free, source-only, may throw, foldable) and the lower/upper bound classification |
+| `direct_builder.cpp` | Rule-independent plan builders (windows, counts, error predicates, the score check) and the source-output pruning proof |
+| `s1_rule.cpp` | Everything specific to S1: `Match`, `Prove` in four steps (scope, pins, bounds, objective), explanation, and `Rewrite` in six stages |
 
 A second rule adds its own file and one line in `RegisteredDirectRules()`; the other
 files do not change.

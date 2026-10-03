@@ -1,0 +1,11 @@
+width,scope,repeat,scan_peak_mib
+0,global,1,30
+0,global,2,30
+512,global,1,377
+512,global,2,377
+0,grouped,1,35
+0,grouped,2,35
+0,grouped_local_when,1,36
+0,grouped_local_when,2,36
+512,grouped_local_when,1,384
+512,grouped_local_when,2,385

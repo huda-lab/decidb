@@ -1,6 +1,6 @@
 # First S1 Rule — completed work
 
-The opt-in S1 slice recognizes one row-scoped Boolean, finite consistently
+The S1 slice recognizes one row-scoped Boolean, finite consistently
 foldable numeric upper, lower, equality, or intersecting interval bounds,
 or multiple numeric source-valued bounds together with foldable bounds,
 optional per-row zero/one pins, and one or more signed, unfiltered linear
@@ -71,5 +71,5 @@ parent-context tests cover both senses, zero/worsening scores, ties, empty
 input, grouped and `WHEN` membership, NULL keys, intersecting cardinality
 clauses, per-row pins, and infeasible nonempty inputs. The shared result
 boundary preserves output position and type. The full S1 class still needs
-further fixed and scoped forms. The production performance gate remains open;
-this is still a one-rule prototype.
+further fixed and scoped forms. The performance evidence is in the
+[benefit report](../04_performance/s1_benefit_report.md); this is still a one-rule prototype.

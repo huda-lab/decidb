@@ -47,7 +47,7 @@ error order. Anything not proved stays on the solver path.
   - Moves to: [done.md](done.md).
 - [ ] **NEXT-05 — Cost choice among direct plans.**
   - Goal: pick between competing proved direct plans by cost.
-  - Depends: NEXT-01 and [PERF-03](../04_performance/todo.md).
+  - Depends: NEXT-01.
   - Evidence and code: `Cost` in `direct_rule.hpp`; the coordinator already picks the
     cheapest proved candidate.
   - Done when: two proved plans compete on a real workload and cost decides between
@@ -93,9 +93,9 @@ a semantic reason and a workload benefit.
 
 | Batch | Tasks | Why together |
 | --- | --- | --- |
-| A | NEXT-06, NEXT-07, NEXT-08 | Same `Prove` function, same error-order rule; do after [VAL-07](../03_correctness/todo.md) so the fuzz test covers them |
+| A | NEXT-06, NEXT-07, NEXT-08 | Same `Prove` function, same error-order rule. The seeded fuzz test exists, so extend its generator to cover each form you admit |
 | B | NEXT-01 | Needs a design choice first; then it stands alone |
-| C | NEXT-03, NEXT-04, NEXT-05 | Wait on other work (language branch, PERF-03); not for now |
+| C | NEXT-03, NEXT-04, NEXT-05 | Wait on other work (language branch, a second rule); not for now |
 
 **Exit gate for each item:** independent proof, behavior tests, and performance
 evidence; merely finding a relational expression in the catalogue is not enough.

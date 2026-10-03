@@ -12,11 +12,13 @@ parent/materialized-CTE contexts, serializer round trips, logical and physical
 explanation, profiling, prepared selection and real rebind, forced solver
 policy, nested/correlated decisions, and direct/HiGHS/Gurobi primary-objective
 agreement on separated scores and tiny-score backend gaps. The latest full
-DECIDE run passed 1,833 tests; the serializer-verification run passed the same
-1,833 tests.
+DECIDE run passed 1,856 tests; the serializer-verification run passed the same
+1,856 tests. Direct solve is on by default (`auto`), so that run exercises it:
+`test_direct_solve_is_on_by_default` issues no `SET`, and every other test that
+needs a specific path pins `require` (assert a hit) or `off` (the solver reference).
 The [built-in optimizer audit](../00_design/optimizer_audit.md) records the
 pass-by-pass boundary argument and discriminating parent tests.
-An earlier forced-HiGHS suite passed 1,670 tests and retained its one unrelated
+The latest forced-HiGHS suite passed 1,855 tests and retained its one unrelated
 `test_norm_combined_l1_l2_objective` failure: that MIQP objective needs Gurobi.
 The DECIDE C++ suite passed 698 assertions in 20 cases, including direct
 fact-adapter and S1 proof-contract cases.
@@ -108,6 +110,11 @@ input `WHERE` removes an invalid row; outer `LIMIT 0` can skip execution. The
 parent join fixture has a higher-scoring row and a late invalid row outside the
 join result, making a pushed join filter observably wrong.
 
+VAL-03 also pins the wording: for NULL, NaN, and infinite scores the direct error equals the
+solver's text (a NULL score names its column; the solver's "at row N" is the one difference),
+so a user sees one message whichever path ran. A computed score such as `(a + b) * x` keeps the
+solver's generic NULL wording because the plan has no failing row to inspect.
+
 VAL-04: optimized logical and default physical plans and profiling expose the
 selected rule. Serializer-verification and prepared-rebind cases preserve
 binding, type, and selection behavior. A direct hit has a window and ordinary
@@ -125,3 +132,30 @@ the primary semantic checks.
 
 The historical scratch validators remain
 research evidence only.
+
+VAL-06: `test_direct_solve_oracle.py` checks 13 direct results against the project's
+independent ILP oracle (`oracle_solver`), which builds its model straight from the rows.
+The cases cover global upper, lower, fractional, and interval bounds, exact and
+`PER`-grouped bounds, `WHEN` membership, `PER` with `WHEN`, source-valued bounds (the
+oracle adds one constraint per row, so it never computes the group minimum or
+maximum the direct rule uses), and per-row pins with group and source-valued bounds,
+under both objective senses. Each compares schema, row count, primary objective, and
+the decision vector (alternate optima are accepted). One more case checks that an
+infeasible group is infeasible for the oracle and raises DECIDE infeasibility on the
+direct path. A mutation check (forcing the SQL sense to MAXIMIZE) made exactly the three
+MINIMIZE cases fail. The oracle cache keys on the test function's source only, so editing
+the case table or model builder does not invalidate it; the file's docstring says how to
+clear the entries.
+
+VAL-07: eight seeded fuzz tests in the same file generate random small S1 queries (NULL
+keys and bounds, ties, `PER`, top-level and aggregate-local `WHEN`, constant,
+fractional, and source-valued bounds, pins, three objectives, both senses) and run each
+under `require` (direct) and `off` (solver path). A shape the matcher does not prove is
+skipped as a miss. Otherwise both paths must succeed or fail together, failures must have
+the same class (infeasible, empty aggregate, NULL bound, and so on), and successes must
+agree on row count and primary objective. The selected count is not compared, because a
+tied zero-contribution row can differ. Each seed must reach the direct path on at least
+70% of its queries and compare at least 20% successfully, and a generated parser error
+fails the test. The last guard was added because the review-time fuzz wrote `PER g WHEN
+flag`, which the grammar rejects (`WHEN flag PER g` is correct), so every PER-with-WHEN
+query was a parser error on both paths and silently matched.
