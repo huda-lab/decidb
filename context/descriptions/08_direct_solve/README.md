@@ -1,27 +1,19 @@
 # Direct Solve
 
-Direct solve is an opt-in DECIDE optimizer prototype. For a problem whose
-complete semantics match its first rule, it constructs an optimal assignment
-with ordinary DuckDB relational operators instead of building and running a
-solver model. A miss keeps the existing solver path. The implemented slice is
-the cardinality-interval part of S1: upper, lower, exact, and intersecting
-bounds, globally or with proved `PER` groups and matching `WHEN`
-membership. Strict and finite fractional/negative foldable bounds normalize
-to inclusive count limits or proved infeasibility. Numeric source-valued
-bounds can vary by row, including deterministic nonthrowing source-only
-expressions such as `COALESCE` and `TRY_CAST`. The rule validates NULL/NaN
-before scoring, reduces DOUBLE-converted values within each eligible group, and intersects their
-limits. Bounds may use aggregate-local `WHEN` on `SUM(x)`; source-valued bounds
-under that filter reduce over all group rows, including rows excluded from the
-count. Exact per-row zero/one pins with optional
-source-only `WHEN` adjust each group's remaining limits. Wider fixed and
-scoped forms remain open. A finite constant objective offset is
-allowed because it leaves the optimal assignment unchanged. Signed additive
-linear objective terms are admitted when each coefficient is proved safe to
-evaluate. A first semantic fact adapter and
-rule coordinator now separate recognition, proof, cost, explanation, relational
-construction, and output mapping. A second rule and the final performance gate
-remain open; the current built-in optimizer audit is recorded in
+Direct solve is an opt-in DECIDE optimizer prototype. When a problem matches its
+first rule exactly, it builds an optimal assignment from ordinary DuckDB operators
+(windows, filters, projections) instead of building and running a solver model. A
+problem it cannot prove keeps the existing solver path.
+
+The first rule, S1, covers one row-scoped Boolean variable under count bounds on
+`SUM(x)`: upper, lower, equal, or several combined, applied globally or per `PER`
+group and optionally limited by `WHEN`. A bound can be a constant or a numeric source
+column or source-only expression that varies by row. Exact zero/one pins on single
+rows are allowed. The objective is a signed sum of per-row coefficients times `x`.
+The [first-rule contract](02_first_rule/spec.md) lists the exact forms. A semantic
+fact adapter and a rule coordinator keep recognition, proof, cost, explanation,
+relational construction, and output mapping separate. A second rule and the final
+performance gate remain open; the current built-in optimizer audit is recorded in
 [optimizer_audit.md](00_design/optimizer_audit.md).
 
 ## Architecture in one minute
@@ -93,6 +85,22 @@ rows. A miss in `require` is an error before solver work; use `auto` to retain
 solver fallback. Both optimized logical and physical `EXPLAIN` display the
 decision record.
 
+## Source layout
+
+Code is in `src/optimizer/decide/direct/`; headers are in
+`src/include/duckdb/optimizer/decide/direct/`.
+
+| File | Role |
+| --- | --- |
+| `direct_problem.cpp` | Reads exact facts from the bound DECIDE tree |
+| `direct_coordinator.cpp` | Setting and mode, rule registry, Match/Prove/Cost/Explain/Rewrite, decision record, fallback and `require` errors |
+| `direct_result_boundary.cpp` | Logical result boundary, output-slot map checks (`MapDirectResult`), serialization, unused-output hook |
+| `direct_builder.cpp` | Rule-independent expression and window builders; the source-output pruning proof |
+| `s1_rule.cpp` | Everything specific to S1: proof, `Prove`, explanation, and `Rewrite` in six stages |
+
+A second rule adds its own file and one line in `RegisteredDirectRules()`; the other
+files do not change.
+
 ## Where to read and work
 
 - [00_design/](00_design/): architecture, first-build decisions, source facts,
@@ -111,7 +119,8 @@ decision record.
 - [04_performance/](04_performance/): end-to-end measurement and cost evidence.
   [Large-scale S1 measurements](04_performance/s1_large_scale.md) ·
   [API phase measurements](04_performance/s1_api_phase.md) ·
-  [todo](04_performance/todo.md) · [done](04_performance/done.md).
+  [todo](04_performance/todo.md) · [done](04_performance/done.md) ·
+  [raw runs](04_performance/raw/).
 - [05_follow_on/](05_follow_on/): second-rule reuse, wider S1, and ANR adapter.
   [Todo](05_follow_on/todo.md) · [done](05_follow_on/done.md).
 - [Problem-class catalogue](decidb_direct_relational_rewrites.docx): the sole

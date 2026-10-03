@@ -12,8 +12,8 @@ parent/materialized-CTE contexts, serializer round trips, logical and physical
 explanation, profiling, prepared selection and real rebind, forced solver
 policy, nested/correlated decisions, and direct/HiGHS/Gurobi primary-objective
 agreement on separated scores and tiny-score backend gaps. The latest full
-DECIDE run passed 1,832 tests; the serializer-verification run passed the same
-1,832 tests.
+DECIDE run passed 1,833 tests; the serializer-verification run passed the same
+1,833 tests.
 The [built-in optimizer audit](../00_design/optimizer_audit.md) records the
 pass-by-pass boundary argument and discriminating parent tests.
 An earlier forced-HiGHS suite passed 1,670 tests and retained its one unrelated

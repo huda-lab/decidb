@@ -28,7 +28,8 @@ The relevant code is `src/optimizer/cte_filter_pusher.cpp`,
 `src/optimizer/late_materialization.cpp`, `src/optimizer/empty_result_pullup.cpp`,
 `src/optimizer/statistics_propagator.cpp`,
 `src/optimizer/join_filter_pushdown_optimizer.cpp`, and
-`src/optimizer/decide/direct/direct_solve.cpp`.
+`src/optimizer/decide/direct/direct_result_boundary.cpp` and
+`src/optimizer/decide/direct/direct_builder.cpp`.
 
 This audit covers the current built-in optimizer pipeline. Any future pass that
 crosses logical extensions must preserve the boundary's full-input validation

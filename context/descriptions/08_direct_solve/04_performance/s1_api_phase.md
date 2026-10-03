@@ -6,8 +6,8 @@ library, four DuckDB threads, and successive uncommitted direct-solve builds ove
 [CTAS scale report](s1_large_scale.md) measures a separate output path. This
 API experiment uses [`profile_direct_s1_api.cpp`](../../../../benchmark/decide/profile_direct_s1_api.cpp)
 and its [runner](../../../../benchmark/decide/profile_direct_s1_api.py).
-The original [narrow raw runs](s1_api_stored_narrow_raw.csv) have two repeats
-per configuration; the original [wide raw runs](s1_api_stored_wide_raw.csv)
+The original [narrow raw runs](raw/s1_api_stored_narrow_raw.csv) have two repeats
+per configuration; the original [wide raw runs](raw/s1_api_stored_wide_raw.csv)
 have one. They predate selective output pruning. All runs in these two files
 completed with five million or fewer rows, exactly
 10% selected, and equal primary objectives across modes.
@@ -85,7 +85,7 @@ case; the large win primarily avoids backend loading and optimization.
 
 ## Unused wide source column before pruning
 
-A separate [pre-pruning aggregate sweep](s1_api_stored_aggregate_raw.csv) uses the
+A separate [pre-pruning aggregate sweep](raw/s1_api_stored_aggregate_raw.csv) uses the
 same stored source and 10% capacity, but asks the outer query only for
 `COUNT(*)`, `SUM(x)`, and `SUM(score*x)`. The 512-byte payload is not in the
 returned result. All eight direct/Gurobi runs completed, returned one
@@ -144,7 +144,7 @@ direct path. The new direct/solver regression checks this case.
 With the safe pruning build, two fresh five-million-row, 512-byte stored-source
 aggregate runs took 0.218 and 0.190 seconds for direct query/collection
 (median 0.204 seconds), versus 0.968 seconds in the single original run.
-The [post-pruning raw runs](s1_api_stored_aggregate_safe_pruned_raw.csv) returned
+The [post-pruning raw runs](raw/s1_api_stored_aggregate_safe_pruned_raw.csv) returned
 the same count, selected count, and objective as the original run. The wide
 aggregate's `EXPLAIN` now scans only `score`; it retains the global window and
 score guard. This is strong evidence for removing the unnecessary payload
@@ -158,7 +158,7 @@ memory still needs separate evidence.
 The focused S1 suite, full serializer-verification suite, and C++ DECIDE
 regressions pass with the safe pruning rule.
 
-A [two-repeat five-million-row aggregate memory sweep](s1_api_memory_aggregate_raw.csv)
+A [two-repeat five-million-row aggregate memory sweep](raw/s1_api_memory_aggregate_raw.csv)
 adds snapshots around the timed query. Every run returned one aggregate row
 and the same count, selected count, and objective. Narrow setup current RSS
 was about 118 MiB, and the process high-water through the query reached 862
@@ -171,7 +171,7 @@ measure the rank's peak intermediate footprint.
 
 ## Collector phase check on full output
 
-A fresh [profiled six-run sweep](s1_api_phase_components_raw.csv) on the safe
+A fresh [profiled six-run sweep](raw/s1_api_phase_components_raw.csv) on the safe
 pruning build returned the full result for five million stored rows, once per
 width and mode. Every run completed and matched row count, selected count,
 objective, and output bytes. The 512-byte payload therefore remained live in
@@ -198,8 +198,8 @@ window's vector layout, memory pressure, or another upstream effect. The
 separate relational and collector wall times and peak intermediate memory
 remain open measurements.
 
-A separate five-million-row [`EXPLAIN ANALYZE` pair](s1_explain_wide_vs_pruned.sql)
-and its [recorded plans](s1_explain_wide_vs_pruned.txt) compare
+A separate five-million-row [`EXPLAIN ANALYZE` pair](raw/s1_explain_wide_vs_pruned.sql)
+and its [recorded plans](raw/s1_explain_wide_vs_pruned.txt) compare
 `SELECT i, score, payload, x` with `SELECT i, score, x`. Both rank all five
 million rows. The wide plan scanned the
 payload and reported 1.74 seconds of `WINDOW` operator time and 0.69 seconds
@@ -218,7 +218,7 @@ by a `WINDOW` sort at sink finalization. This is a window-specific storage
 snapshot: it excludes later merge buffers, output collection, and the source
 table, so it is **not** a peak-memory estimate. Every row below passed through
 the window and produced the same selected count and objective within its
-source kind. The [stored-source raw runs](s1_window_storage_5m_raw.csv) each
+source kind. The [stored-source raw runs](raw/s1_window_storage_5m_raw.csv) each
 ran once at five million rows:
 
 | Stored source | Requested output | Window input | Window sort buffers | Query and internal collection |
@@ -233,14 +233,14 @@ wide aggregate rank. The latter no longer reads or carries the unused payload.
 The full and aggregate queries have different output collection costs, so
 their total query times are not a rank-only comparison.
 
-The first [joined-source runs before join passthrough pruning](s1_window_join_aggregate_before_raw.csv)
+The first [joined-source runs before join passthrough pruning](raw/s1_window_join_aggregate_before_raw.csv)
 showed a remaining liveness gap. A stored 512-byte payload passed through an
 inner join and was unused by the outer aggregate, yet the window held 2,804
 MiB and the direct query took 0.754 seconds. The S1 source-output proof
 now follows a binding through an inner comparison join only when exactly one
 child supplies it and that child's output is already proved safe to skip.
 It still rejects computed outputs and other join kinds. Two
-[post-change runs](s1_window_join_aggregate_after_raw.csv) of the same wide
+[post-change runs](raw/s1_window_join_aggregate_after_raw.csv) of the same wide
 joined aggregate took 0.218 and 0.218 seconds, with 191 MiB of window sort
 buffers and the same row count, selected count, and objective. The narrow
 joined aggregate remained around 0.19–0.22 seconds. A permanent differential
@@ -249,7 +249,7 @@ an unused computed payload that must still raise on direct and solver paths.
 
 ## Materialized and streamed full output
 
-A [five-million-row delivery sweep](s1_api_delivery_5m_raw.csv) ran both API
+A [five-million-row delivery sweep](raw/s1_api_delivery_5m_raw.csv) ran both API
 delivery modes on narrow and 512-byte stored rows, once per solver mode. All
 twelve runs completed and agreed on row count, selected count, objective, and
 payload bytes. Times below add `submit_s` and `fetch_s`; source creation is
@@ -264,7 +264,7 @@ outside the sum.
 | 512 B | Gurobi | 5.892 s | 5.390 s |
 | 512 B | HiGHS | 46.401 s | 45.662 s |
 
-Three additional [paired wide direct repeats](s1_api_delivery_direct_wide_repeats_raw.csv)
+Three additional [paired wide direct repeats](raw/s1_api_delivery_direct_wide_repeats_raw.csv)
 gave median totals of 5.648 seconds materialized and 3.421 seconds streamed.
 Materialized result-collector append work varied from 8.25 to 19.24 summed
 worker-seconds in those trials; streaming avoided that collector and used a
@@ -283,7 +283,7 @@ count guards nonempty inputs with too few rows; the rank selects the first
 `L` rows plus improving rows through `U`. An `EXPLAIN` of the paired form
 shows one `WINDOW` containing both `ROW_NUMBER` and the full-partition count.
 
-The [narrow stored-source sweep](s1_api_cardinality_5m_narrow_raw.csv) used
+The [narrow stored-source sweep](raw/s1_api_cardinality_5m_narrow_raw.csv) used
 five million rows and aggregate output, two fresh runs per form and mode.
 Upper used 10% capacity; lower and equality required 60%; the paired interval
 was 60–70%. Every run completed. Direct and Gurobi agreed on selected count
@@ -302,7 +302,7 @@ time or sort-buffer snapshot on this source. Gurobi's exact and paired cases
 were substantially slower than its upper and lower cases in these runs; this
 is a measured workload effect, not a rule-selection threshold.
 
-A separate [512-byte stored-source interval sweep](s1_api_cardinality_5m_wide_raw.csv)
+A separate [512-byte stored-source interval sweep](raw/s1_api_cardinality_5m_wide_raw.csv)
 ran once per output shape and mode at five million rows. Full output took
 2.176 seconds direct query/collection plus 1.954 seconds API readback,
 versus 12.632 plus 1.893 seconds for Gurobi. Direct window sort buffers
@@ -327,11 +327,11 @@ Small independent-enumeration and solver-differential tests check those
 semantics. This performance sweep exercises the `PER` path on 100 groups,
 without a `WHEN` filter.
 
-The [paired 5M-row aggregate sweep](s1_api_grouped_interval_5m_raw.csv) uses
+The [paired 5M-row aggregate sweep](raw/s1_api_grouped_interval_5m_raw.csv) uses
 stored rows with `dept = id % 100` and a 60–70% cardinality interval in each
 group. It ran twice per width and mode in fresh processes. All eight runs
 completed, but the direct version in that sweep lacked the empty-active-set
-check. Its direct timings are superseded. A [new two-repeat direct sweep](s1_api_grouped_interval_5m_guard_order_raw.csv)
+check. Its direct timings are superseded. A [new two-repeat direct sweep](raw/s1_api_grouped_interval_5m_guard_order_raw.csv)
 uses the corrected plan on the same stored source. All four new direct runs
 completed; both modes selected 3,000,000 rows with primary objective
 601,317,410.6. Source creation and API readback are outside the query timer.
@@ -352,18 +352,18 @@ rows. The sort-buffer counter is an allocation snapshot across groups, not a
 simultaneous peak-memory measurement. Source setup and allocator reuse affect
 process RSS, so the peak RSS columns cannot isolate query memory.
 
-The [earlier direct sort-counter sweep](s1_api_grouped_interval_5m_sort_raw.csv)
+The [earlier direct sort-counter sweep](raw/s1_api_grouped_interval_5m_sort_raw.csv)
 recorded lower timings but also lacked the active-set check. The original
 paired sweep's zero sort-buffer values were a separate sampling error: it
 sampled before grouped sorting began. Neither old direct result is a current
-S1 timing. A later [intermediate active-guard sweep](s1_api_grouped_interval_5m_active_guard_raw.csv)
+S1 timing. A later [intermediate active-guard sweep](raw/s1_api_grouped_interval_5m_active_guard_raw.csv)
 put the empty-set guard after score evaluation and therefore had the wrong
 error order when both failed; its 0.309/0.325-second medians are also
 superseded.
 
 ### Fixed Boolean pins at scale
 
-A [two-repeat fixed-pin sweep](s1_api_grouped_interval_5m_fixed_raw.csv) uses
+A [two-repeat fixed-pin sweep](raw/s1_api_grouped_interval_5m_fixed_raw.csv) uses
 the same five-million-row stored source shape, 100 `PER` groups, 60–70%
 cardinality interval, and aggregate result. The source also stores two Boolean
 flags: 1% of rows are fixed selected and a disjoint 1% are fixed zero. The
@@ -380,14 +380,14 @@ Every completed run returned five million rows, three million selections, and
 the same primary objective, 588,324,437.9. The direct rank-sort allocation
 snapshot was 276–282 MiB; this is not a simultaneous peak-memory figure.
 Process peak RSS includes source creation and cannot isolate query memory.
-The [current free-row sweep](s1_api_grouped_interval_5m_free_current_raw.csv)
+The [current free-row sweep](raw/s1_api_grouped_interval_5m_free_current_raw.csv)
 gave direct medians of 0.268 and 0.276 seconds for narrow and unused-wide
 sources. Fixed-pin queries add source flag columns and count windows, so the
 times measure the whole admitted shape, not an isolated operator cost.
 
 ### Source-valued group bounds at scale
 
-A [two-repeat sweep](s1_api_grouped_source_bound_5m_raw.csv) used five million
+A [two-repeat sweep](raw/s1_api_grouped_source_bound_5m_raw.csv) used five million
 stored rows, 100 `PER dept` groups, `SUM(x)>=30000 PER dept`, and
 `SUM(x)<=cap PER dept`. Within every department, half the rows stored
 `cap=35000` and half stored `cap=35001`; the upper bound therefore requires a
@@ -420,7 +420,7 @@ python3 benchmark/decide/profile_direct_s1_api.py --rows 5000000 --widths 0 512 
 ### Numeric source-bound widening
 
 After admitting fractional, infinite, and wider numeric source columns, a
-[fresh two-repeat sweep](s1_api_numeric_source_bound_5m_raw.csv) reran the
+[fresh two-repeat sweep](raw/s1_api_numeric_source_bound_5m_raw.csv) reran the
 same five-million-row integer-cap workload in direct mode. Both widths and
 repeats returned five million rows, three million selections, and objective
 601,317,410.6, matching the earlier Gurobi runs. Query/collection medians
@@ -444,7 +444,7 @@ DECIDB_PROFILE=1 benchmark/decide/results/profile_direct_s1_api \
   5000000 0 stored direct aggregate materialized interval grouped free source
 ```
 
-The [fractional DOUBLE-cap sweep](s1_api_double_source_bound_5m_raw.csv) used
+The [fractional DOUBLE-cap sweep](raw/s1_api_double_source_bound_5m_raw.csv) used
 the same stored rows and groups, with each group's cap alternating between
 `35000.5` and `35001.5`. The inclusive upper count is still 35000; the
 group's tighter value requires MIN after DOUBLE conversion. Two fresh direct
@@ -464,7 +464,7 @@ in the command above.
 
 ### Paired source bounds at scale
 
-The [paired-bound sweep](s1_api_paired_source_bound_5m_raw.csv) used the same
+The [paired-bound sweep](raw/s1_api_paired_source_bound_5m_raw.csv) used the same
 five million stored rows and 100 `PER dept` groups. Each group had an upper
 column alternating between 35000 and 35001, and a lower column alternating
 between 30000 and 29999. The correct interval is therefore [30000, 35000]
@@ -485,7 +485,7 @@ run by replacing `source` with `source_pair` in the command above.
 
 ### Source-bound expressions at scale
 
-The [source-expression sweep](s1_api_source_expression_5m_raw.csv) used five
+The [source-expression sweep](raw/s1_api_source_expression_5m_raw.csv) used five
 million stored rows and 100 `PER dept` groups. In each group, 25% of cap
 values were NULL, 25% were 35000, and 50% were 35001. The upper constraint
 used `COALESCE(cap,35001)`, so each group had a 35000 limit after taking the
@@ -512,7 +512,7 @@ DECIDB_PROFILE=1 benchmark/decide/results/profile_direct_s1_api \
 
 ### Aggregate-local WHEN at scale
 
-The [aggregate-local `WHEN` sweep](s1_api_local_when_5m_raw.csv) used five
+The [aggregate-local `WHEN` sweep](raw/s1_api_local_when_5m_raw.csv) used five
 million stored rows, 100 `PER dept` groups, and a Boolean `active` column.
 Ten percent of each group was inactive. Both constant count bounds used
 `SUM(x) WHEN active`, with a 30000 lower and 35000 upper limit per group.
@@ -542,7 +542,7 @@ DECIDB_PROFILE=1 benchmark/decide/results/profile_direct_s1_api \
 
 ### Source-valued aggregate-local WHEN at scale
 
-The [source-valued local-`WHEN` sweep](s1_api_local_when_source_bound_5m_raw.csv)
+The [source-valued local-`WHEN` sweep](raw/s1_api_local_when_source_bound_5m_raw.csv)
 used the same five million rows, 100 groups, and 10% inactive rows per group.
 The lower bound was 30000; the upper bound came from a cap column alternating
 between 35000 and 35001 within each group. `SUM(x) WHEN active` counted only
@@ -566,7 +566,7 @@ the aggregate-local `WHEN` command above.
 
 ### Additive linear scores at scale
 
-The [additive-score sweep](s1_api_additive_objective_5m_raw.csv) used five
+The [additive-score sweep](raw/s1_api_additive_objective_5m_raw.csv) used five
 million stored rows and 100 `PER` groups, with a 30000–35000 count interval
 per group. The objective was `SUM(score*x)+SUM(i*x)`, so each row's rank score
 adds two independently evaluated source coefficients in solver DOUBLE order.
@@ -625,7 +625,7 @@ python3 benchmark/decide/profile_direct_s1_api.py --rows 5000000 --widths 0 512 
 python3 benchmark/decide/profile_direct_s1_api.py --rows 5000000 --widths 0 512 --source-kinds stored --output-kinds aggregate --modes direct --deliveries materialized --cardinalities interval --scopes grouped --repeats 2 --timeout 180
 python3 benchmark/decide/profile_direct_s1_api.py --rows 5000000 --widths 0 512 --source-kinds stored --output-kinds aggregate --modes direct gurobi --deliveries materialized --cardinalities interval --scopes grouped --pins fixed --repeats 2 --timeout 180
 python3 benchmark/decide/profile_direct_s1_api.py --rows 5000000 --widths 0 512 --source-kinds stored --output-kinds aggregate --modes direct --deliveries materialized --cardinalities interval --scopes grouped --pins free --repeats 2 --timeout 180
-build/release/decidb -f context/descriptions/08_direct_solve/04_performance/s1_explain_wide_vs_pruned.sql
+build/release/decidb -f context/descriptions/08_direct_solve/04_performance/raw/s1_explain_wide_vs_pruned.sql
 ```
 
 The runner starts a fresh process per mode and uses `/usr/bin/time -l` for

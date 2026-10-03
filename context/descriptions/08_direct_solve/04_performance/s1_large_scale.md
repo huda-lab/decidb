@@ -18,13 +18,13 @@ five-million-row trials below reached the process limit and are excluded from
 completed comparisons.
 
 The reproducible runner is [`benchmark/decide/profile_direct_s1.py`](../../../../benchmark/decide/profile_direct_s1.py).
-The recorded raw observations are [the scale sweep](s1_scale_raw.csv),
-[the large narrow sweep](s1_large_narrow_raw.csv), [one-million-row wide runs](s1_million_wide_raw.csv),
-and [five-million-row wide runs](s1_five_million_wide_raw.csv), plus the
-[large capacity extremes](s1_large_extremes_raw.csv),
-[stored-table sweep](s1_stored_large_raw.csv) and
-[stored-table wide runs](s1_stored_wide_raw.csv), plus the
-[stored-join sweep](s1_stored_join_raw.csv). Run from the
+The recorded raw observations are [the scale sweep](raw/s1_scale_raw.csv),
+[the large narrow sweep](raw/s1_large_narrow_raw.csv), [one-million-row wide runs](raw/s1_million_wide_raw.csv),
+and [five-million-row wide runs](raw/s1_five_million_wide_raw.csv), plus the
+[large capacity extremes](raw/s1_large_extremes_raw.csv),
+[stored-table sweep](raw/s1_stored_large_raw.csv) and
+[stored-table wide runs](raw/s1_stored_wide_raw.csv), plus the
+[stored-join sweep](raw/s1_stored_join_raw.csv). Run from the
 repository root after `make release`:
 
 ```sh

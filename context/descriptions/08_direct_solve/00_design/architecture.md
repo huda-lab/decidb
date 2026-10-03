@@ -171,7 +171,10 @@ On a miss, the existing path remains `ChooseDecideSolver → solver-specific
 rewrites → prepared model → PhysicalDecide`. On a hit, the generated subtree
 continues through DuckDB's remaining optimizer passes and existing execution
 operators. The DECIDE-specific call site should be small; new rule and harness
-code belongs under `src/optimizer/decide/direct/` where possible. A logical
+code belongs under `src/optimizer/decide/direct/` where possible. Its files are
+`direct_problem.cpp` (facts), `direct_coordinator.cpp` (policy, registry, fallback),
+`direct_result_boundary.cpp` (output boundary and slot map), `direct_builder.cpp`
+(rule-independent plan builders), and one file per rule (`s1_rule.cpp`). A logical
 boundary may require small owning-layer changes in planning and serialization.
 
 Build only the shared abstractions exercised by the first rule. A second,

@@ -4,51 +4,98 @@ These items are **not** part of the first S1 vertical slice. Each promotion
 requires a credible workload, exact admission proof, permanent differential
 tests, and end-to-end benefit evidence. The Word catalogue owns class details.
 
-- [ ] **NEXT-01 — Prove harness reuse with a second rule.** Depends: HAR-01
-  through HAR-05 and VAL-05. Choose a different plan shape. It must use the
-  existing adapter, coordinator, result contract, policy, and explanation path
-  without copied control flow or S1-specific changes to shared code.
-- [ ] **NEXT-03 — Wider keyed application.** Depends: VAL-05. The admitted
-  row-scoped Boolean slice with source-column `PER` keys, matching top-level
-  `WHEN`, aggregate-local `WHEN`, NULL-key bypass, and paired
-  bounds is complete. Extend to other
-  keyed shapes only after exact component independence and row/entity identity
-  are proved and tested. Estimates never establish independence.
-- [ ] **NEXT-04 — New-language / ANR adapter.** Depends: stable language branch,
-  HAR-01, VAL-05. Map the new expression semantics into the shared problem and
-  exact-fact vocabulary. Run the same adapter contract and direct/solver tests
-  against both syntaxes where comparable; extend facts when semantics genuinely
-  change, not by teaching rules parser spelling.
-- [ ] **NEXT-05 — Cost choice among direct plans.** Depends: NEXT-01 and
-  PERF-03. Introduce cost-based candidate selection only when two proved plans
-  compete on real workloads. Cost cannot repair a missing proof.
-- [ ] **NEXT-06 — Fixed Boolean decisions.** Depends: the admitted keyed
-  slice of NEXT-03. The exact zero/one per-row pin slice now proves fixed
-  selected/free row identity, adjusts each group's residual interval, retains
-  every row and tested DECIDE errors, and covers `WHEN` bypass and NULL keys
-  against both solvers. Source-valued row bounds such as `x<=pin` still miss;
-  extend to them only when their bound and error semantics are proved from the
-  complete plan. Do not infer
-  fixed status from a sample.
-- [ ] **NEXT-07 — Complete S1 semantic admission.** Depends: NEXT-02 and the
-  admitted keyed slice of NEXT-03. Strict, fractional, negative, crossed,
-  consistently foldable, and intersecting count bounds now have an exact
-  proof. Numeric source-valued bounds are now admitted with solver-style
-  DOUBLE group reduction, all-row NULL/NaN validation, and intersection of
-  multiple dynamic limits. Deterministic, nonthrowing source-only expressions
-  such as `COALESCE` and `TRY_CAST` are included. The matcher still declines
-  throwing source expressions,
-  offset count bodies such as `SUM(x+0)`. Independently scoped clauses such as
-  quotas on two potentially overlapping subsets require a separate class,
-  not a wider S1 matcher. Prove the exact solver semantics and
-  error order for any form promoted. Keep unproved constraints on the solver
-  path; do not add syntax cases without a semantic reason and workload benefit.
-  In the current solver, a NULL source-valued bound raises even on a row whose
-  `WHEN` is false or whose `PER` key is NULL; an empty scoped aggregate can
-  raise before that bound error. Each wider promotion must retain that order.
-  Signed additive linear objective terms are now admitted when each per-row
-  coefficient is nonthrowing; a multi-term objective with a throwing
-  coefficient still uses the solver path.
+Each task below can be picked up on its own. When a task is done, its result moves
+to [done.md](done.md) and the task is deleted from this file.
+
+**Shared rule for NEXT-06 through NEXT-08.** The solver raises a NULL source-valued
+bound even on a row whose `WHEN` is false or whose `PER` key is NULL, and an empty
+scoped aggregate can raise before that bound error. Every wider admission keeps that
+error order. Anything not proved stays on the solver path.
+
+- [ ] **NEXT-01 — Second rule that proves harness reuse.**
+  - Goal: register a materially different rule through the existing adapter,
+    coordinator, result boundary, policy, and explanation path.
+  - Depends: HAR-01 through HAR-05 and VAL-05 (done).
+  - Evidence and code: `src/optimizer/decide/direct/` (`direct_coordinator.cpp`,
+    `direct_result_boundary.cpp`, `direct_builder.cpp` are the shared parts;
+    `s1_rule.cpp` is the model rule), contract in `direct_rule.hpp`. This is the same
+    gate as HAR-02 in [01_harness/todo.md](../01_harness/todo.md). Choosing the
+    plan shape is a design decision to make with the user.
+  - Done when: the new rule is added to `RegisteredDirectRules()` with no edit to the
+    coordinator logic, builder, or result boundary beyond that registration; it has
+    its own proof and tests for a hit, a miss that falls back to the solver, and the
+    `require` message.
+  - Moves to: [done.md](done.md), and closes HAR-02 in [01_harness/done.md](../01_harness/done.md).
+- [ ] **NEXT-03 — Wider keyed application.**
+  - Goal: extend beyond the admitted row-scoped Boolean slice (source-column `PER`,
+    matching top-level `WHEN`, aggregate-local `WHEN`, NULL-key bypass, paired bounds)
+    to other keyed shapes.
+  - Depends: VAL-05 (done).
+  - Evidence and code: [NEXT-03 slice in done.md](done.md), `s1_rule.cpp`.
+  - Done when: component independence and row/entity identity are proved and tested
+    for the new shape. Estimates never establish independence.
+  - Moves to: [done.md](done.md).
+- [ ] **NEXT-04 — New-language / ANR adapter.**
+  - Goal: map the new language's expression semantics into the shared problem and
+    exact-fact vocabulary.
+  - Depends: a stable language branch, HAR-01, VAL-05.
+  - Evidence and code: `src/optimizer/decide/direct/direct_problem.cpp` (current
+    bound-tree adapter), [architecture](../00_design/architecture.md).
+  - Done when: the same adapter contract and direct/solver tests run against both
+    syntaxes where comparable. Facts are extended when semantics change, not by
+    teaching rules parser spelling.
+  - Moves to: [done.md](done.md).
+- [ ] **NEXT-05 — Cost choice among direct plans.**
+  - Goal: pick between competing proved direct plans by cost.
+  - Depends: NEXT-01 and [PERF-03](../04_performance/todo.md).
+  - Evidence and code: `Cost` in `direct_rule.hpp`; the coordinator already picks the
+    cheapest proved candidate.
+  - Done when: two proved plans compete on a real workload and cost decides between
+    them. Cost never repairs a missing proof.
+  - Moves to: [done.md](done.md).
+- [ ] **NEXT-06 — Numeric source-valued per-row pins.**
+  - Goal: admit a per-row bound such as `x <= pin_col` where `pin_col` is a numeric
+    source column. BOOLEAN-typed source pins and exact zero/one pins already work.
+  - Depends: the admitted keyed slice of NEXT-03 (done).
+  - Evidence and code: pin handling in `s1_rule.cpp` (`Prove`), fixed-pin results in
+    [done.md](done.md).
+  - Done when: the bound and error semantics are proved from the complete plan, and
+    tests cover global and grouped use, `WHEN` bypass, NULL pin values, and both
+    solvers. Fixed status is never inferred from a sample.
+  - Moves to: [done.md](done.md).
+- [ ] **NEXT-07 — Throwing source expressions as bounds.**
+  - Goal: admit source-only bound expressions that can raise at runtime (a plain
+    narrowing `CAST`, for example). Today only nonthrowing ones such as `COALESCE`
+    and `TRY_CAST` are admitted.
+  - Depends: the admitted keyed slice of NEXT-03 (done).
+  - Evidence and code: `SourceExpressionMayThrow` and `Prove` in `s1_rule.cpp`; the
+    NEXT-07 progress already in done.md. A multi-term
+    objective whose coefficient can throw also still misses; handle it here or leave
+    it, but say which.
+  - Done when: the error and its order match the solver on every row, including rows
+    that bypass the bound, and tests cover both solvers.
+  - Moves to: [done.md](done.md).
+- [ ] **NEXT-08 — Offset count bodies such as `SUM(x+0)`.**
+  - Goal: decide whether `SUM(x + c)` style bodies can be admitted as a count with a
+    shifted bound.
+  - Depends: none beyond the admitted S1 slice.
+  - Evidence and code: `IsUnitDecisionTerm` in `s1_rule.cpp`; only unit products such
+    as `SUM(1*x)` are admitted today.
+  - Done when: either an exact proof and tests admit the form, or the near miss is
+    pinned in a test as a permanent solver case with a reason.
+  - Moves to: [done.md](done.md).
+
+Independently scoped clauses, such as quotas on two potentially overlapping subsets,
+need a separate class and are not a wider S1 matcher. Do not add syntax cases without
+a semantic reason and a workload benefit.
+
+## Suggested batches
+
+| Batch | Tasks | Why together |
+| --- | --- | --- |
+| A | NEXT-06, NEXT-07, NEXT-08 | Same `Prove` function, same error-order rule; do after [VAL-07](../03_correctness/todo.md) so the fuzz test covers them |
+| B | NEXT-01 | Needs a design choice first; then it stands alone |
+| C | NEXT-03, NEXT-04, NEXT-05 | Wait on other work (language branch, PERF-03); not for now |
 
 **Exit gate for each item:** independent proof, behavior tests, and performance
 evidence; merely finding a relational expression in the catalogue is not enough.

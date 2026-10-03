@@ -30,7 +30,9 @@ result value. At five million narrow stored rows, direct query/collection
 and API readback medians were 0.186 and 0.236 seconds. The wide source took
 2.382 and 1.886 seconds in one direct run. A separate aggregate-output sweep
 measured 0.173 seconds direct on a five-million-row narrow source versus
-0.968 seconds with an unused 512-byte payload. `EXPLAIN` shows the wide
+0.968 seconds with an unused 512-byte payload. A 100,000-row
+`EXPLAIN ANALYZE` shows full cardinality through the rank, and a five-million-row
+pair shows the payload adds both scan and window work. `EXPLAIN` shows the wide
 payload remained in the original scan and global-rank plan. Safe output
 pruning now omits stored columns that the parent never reads, while retaining
 computed columns that may raise errors. Two new five-million-row wide
@@ -54,6 +56,8 @@ the same returned values. The query wall timers were 1.901, 4.209, and 44.318
 seconds. A [paired `EXPLAIN ANALYZE`](s1_api_phase.md#collector-phase-check-on-full-output)
 shows that carrying the payload through the global rank also increases window
 and scan operator time.
+Streaming uses a bounded result buffer and can continue execution during fetch, so
+it is an end-to-end alternative to materialization, not an exact phase subtraction.
 
 A [window sort-buffer snapshot](s1_api_phase.md#window-sort-storage-and-joined-source-pruning)
 now measures distinct buffer allocations owned by the rank at sink
@@ -147,5 +151,7 @@ an unused 512-byte payload; Gurobi took 13.9740 and 15.0499 seconds. All six
 runs agreed on 3,500,000 selections and the reported objective. The in-process
 high-water through the query was 680–693 MiB direct versus 2,943 MiB Gurobi
 narrow, and 3,165–3,193 MiB direct versus 3,341 MiB Gurobi wide.
-PERF-01 through PERF-03 remain open for valid execution and collection wall
-accounting, peak rank memory, and a production selection policy.
+
+Query-only peak memory is not measured for the fixed-pin, source-valued bound,
+paired-bound, or `COALESCE` sweeps; the figures above are sort-buffer snapshots or
+process high-water marks, not query-only peaks.
