@@ -139,6 +139,24 @@ anything else -> one atomic term
 Indivisible atoms include `x`, `price * x`, `POWER(x - target, 2)`,
 `SUM(x * price)`, `MAX(x * value)`, `SUM(x) WHEN condition`.
 
+`ReadCanonicalAtoms` reads these atoms back from a canonical side, with each sign
+and any reducer factor, by the same spine walk `Decompose` uses. Readers of
+canonical trees (the solver path's prepared linear form, direct solve's facts) use
+it instead of walking `+` and `-` themselves.
+
+### 3.3a One spelling per meaning: `norm`
+
+The binder spells `norm(e, p)` as a `SUM(e)` aggregate whose alias names the order,
+so the aggregate does not mean what it says. This stage replaces orders 1, 2 and
+'inf' with their definitions: `SUM(ABS(e))`, `SUM(POWER(e, 2))` and
+`MAX(ABS(e))`, keeping the aggregate-local filter and every other tag. The new
+aggregate carries `__written_norm_<p>__`, which only rendering reads, so the
+canonical text and diagnostics still show `NORM(e, p)`; `RewriteNorm` drops the tag
+before the optimizer formulates the clause. This swaps one atom for another and
+opens nothing, so the pass stays total. L0 needs indicator variables, which are
+formulation, so its marker stays for `RewriteNorm`. `VerifyCanonical` (debug builds)
+fails if an L1, L2 or 'inf' marker survives.
+
 ### 3.4 Placement
 
 ```text
@@ -386,8 +404,10 @@ pins both the debug-mode throwing behavior and the release-mode no-op via a
 - expand products or powers;
 - combine like terms;
 - fold constants;
-- rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, `norm()` or `IN`;
-- look inside reducer bodies;
+- rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, L0 `norm()` or `IN`;
+- look inside reducer bodies. Splitting a body into `coefficient * variable` terms
+  opens terms and can fail, so it lives beside this stage in `DecideTermSplitter`
+  (`decide_term_split.cpp`), which reads canonical atoms;
 - evaluate data, reducers, `WHEN`, `PER` or qualifiers;
 - choose a solver formulation.
 
@@ -461,6 +481,7 @@ raising, so a single statement is enough and nothing has to survive an error.
 | Concern | Location |
 |---|---|
 | Canonical transformation (constraints and objective) | `src/planner/decide/decide_canonicalizer.cpp` |
+| Term splitting of canonical atoms | `src/planner/decide/decide_term_split.cpp` |
 | Contract, in code | `src/include/duckdb/planner/decide/decide_canonicalizer.hpp` |
 | Cast policy and unwrapping | `src/planner/decide/decide_cast_policy.cpp` |
 | Cast-policy interface | `src/include/duckdb/planner/decide/decide_cast_policy.hpp` |

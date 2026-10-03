@@ -28,7 +28,7 @@ part carries its own status and reason, so `require` can name the clause it coul
 not model. Facts own their expressions. The vocabulary is the construct table in
 [architecture](architecture.md#semantic-facts).
 
-- `norm(e, p)` has one meaning everywhere. The canonicalizer replaces L1, L2 and
+- `norm(e, p)` has one meaning everywhere (in place). The canonicalizer replaces L1, L2 and
   L-infinity with their definitions (`SUM(ABS(e))`, `SUM(POWER(e, 2))`,
   `MAX(ABS(e))`), the same ones the solver path used, and keeps the user's spelling
   only in a display tag. L0 needs indicator variables, so it stays a marker and
@@ -36,7 +36,9 @@ not model. Facts own their expressions. The vocabulary is the construct table in
   Why: the binder's marker is a real `SUM(e)` whose alias changes its meaning; S1
   read it as a sum and returned wrong answers under `auto` until it learned to
   refuse it.
-- One term splitter serves the solver path and the facts. It lives beside the
+- One term splitter serves the solver path and the facts (in place;
+  `decide_term_split.cpp`). Its output is a neutral term type that the solver path
+  adapts into its unchanged prepared structures. It lives beside the
   canonicalizer, not inside it: the canonicalizer never opens a term, which is why
   it is total and pure, while splitting distributes, collects like terms, and can
   fail. The splitter reports `UNKNOWN` for a decision under a node it does not

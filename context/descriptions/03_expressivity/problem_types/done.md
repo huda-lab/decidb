@@ -346,7 +346,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
   - These flags determine whether the solver treats the problem as LP, ILP, or MILP
 
 - **Quadratic objective detection**: `src/execution/operator/decide/physical_decide.cpp`
-  - `DetectQuadraticPattern` (in `src/optimizer/decide/decide_linear_form.cpp`, invoked from `ExtractLinearAndBilinearTerms` at every additive node) matches `POWER(expr, 2)`, `(expr) * (expr)` self-product, and negated / constant-scaled forms. Returns `{inner_linear_expr, sign}`.
+  - `DetectQuadraticPattern` (in `src/planner/decide/decide_term_split.cpp`, invoked by `DecideTermSplitter::Split` at every additive node) matches `POWER(expr, 2)`, `(expr) * (expr)` self-product, and negated / constant-scaled forms. Returns `{inner_linear_expr, sign}`.
   - Extracts inner linear expression terms into `Objective::squared_terms` with `quadratic_sign` (scalar; sign combines negation and constant scaling).
   - **Degree guard**: `IsLinearInDecideVars` (same file) is invoked on the inner of every POWER / self-product pattern and on each side of a bilinear `*`. Inputs whose total decision-variable degree would exceed 2 (e.g. `POWER(x,2)*POWER(x,2)`, `POWER(x,2)*POWER(y,2)`, `a*POWER(x,2)`, `POWER(POWER(x,2),2)`) are rejected with a clear `InvalidInputException` rather than silently misclassified as a lower-degree Q term. Same guard runs in the constraint path (`TryDetectConstraintQuadratic` and the constraint bilinear branch).
 
@@ -371,7 +371,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
   - Rejects `POWER(expr, N)` for N != 2, triple or higher products, non-constant exponents
 
 - **Quadratic constraint extraction**: `src/execution/operator/decide/physical_decide.cpp`
-  - `ExtractConstraintTerms` detects `POWER(expr, 2)`, `expr ** 2`, `(expr)*(expr)` self-products, and scaled forms
+  - `DecideTermSplitter::Split` detects `POWER(expr, 2)`, `expr ** 2`, `(expr)*(expr)` self-products, and scaled forms; `ExtractConstraintTerms` turns each into a quadratic group
   - `TryDetectConstraintQuadratic` (local lambda) handles pattern matching for all syntax forms
   - Populates `DecideConstraint::QuadraticGroup` with inner linear terms and sign
 

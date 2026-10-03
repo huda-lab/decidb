@@ -63,8 +63,12 @@ decisions on the left and data on the right, and spells a reducer factor as
 | objective | sense, `objective_constant_offset`, additive parts, `WHEN`, `PER`, `OUTER(INNER(e)) PER k` | sense, offset, parts, scope; a nested part for `OUTER(INNER(e))` |
 | source | child bindings, `source_columns` | bindings and names |
 
-Degree comes from `DecideExpressionDegree`. Predicates over data expressions
-(`DirectMayThrow` and the like) stay in `direct_expression.cpp`.
+The adapter reads additive atoms with `ReadCanonicalAtoms` and splits each body with
+`DecideTermSplitter` (`src/planner/decide/`), the same splitter the solver path's
+prepared linear form uses, so the two cannot read one term differently. An unknown
+split term is an unknown fact. Degree comes from `DecideExpressionDegree`.
+Predicates over data expressions (`DirectMayThrow` and the like) stay in
+`direct_expression.cpp`.
 
 ## The harness and a rule
 

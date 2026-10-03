@@ -92,7 +92,7 @@ but a qualified reducer whose entire body is scalars/constants is still rejected
 same "nothing to reduce over" reason.
 
 **Formulation (stage 05/06).** Term extraction (`decide_linear_form.cpp`) was already
-scope-agnostic — `FindDecideVariable`/`ExtractTerms` don't special-case a variable's
+scope-agnostic — `FindDecideVariable`/`SplitLinear` don't special-case a variable's
 scope, so `opening_cost * cap` correctly extracts to `DecideTerm{var=cap,
 coefficient=opening_cost}` regardless of `cap`'s scope. The bug was one layer down, in
 the **accumulator** that folds per-row-evaluated coefficients into the flat solver
@@ -457,7 +457,7 @@ MINIMIZE SUM(POWER(x / weight - 1, 2))     -- OK: data-column divisor in QP
 
 **Code**:
 - Bind-time validation: `IsAllowedNameOverDecideVar` and the dedicated `/`-arm of `ValidateDecideNoNonLinearScalar` (per-row pre-pass) and `ValidateSumArgumentInternal` (SUM/POWER inner) in `src/planner/expression_binder/decide/decide_binder.cpp` reject any `/` whose divisor contains a decide variable.
-- Per-row extraction: `ExtractTerms` at `src/optimizer/decide/decide_linear_form.cpp` walks `/` by recursing into the numerator and wrapping each emitted coefficient as `coef / divisor`.
+- Per-row extraction: `DecideTermSplitter::SplitLinear` in `src/planner/decide/decide_term_split.cpp` walks `/` by recursing into the numerator and wrapping each emitted coefficient as `coef / divisor`.
 - QP linearity check: `IsLinearInDecideVars` in the same file accepts `/` when the divisor is decide-var-free, so quadratic patterns like `POWER(x/2 - 1, 2)` reach the QP extractor.
 
 ### Data-only operators and named functions the algebra doesn't model (`%`, bitwise, `mod()`, `floor()`, …)
@@ -497,7 +497,7 @@ SUCH THAT 2 * x + 3 <= 11      -- x <= 4
 SUCH THAT x / 2 + 1 <= 3       -- x <= 4
 ```
 
-**Code**: `ExtractTerms` in `src/optimizer/decide/decide_linear_form.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`. `ExtractConstraintTerms` delegates there. In `src/decidb/formulation/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
+**Code**: `DecideTermSplitter::SplitLinear` in `src/planner/decide/decide_term_split.cpp` handles `+`, `-` (binary and unary), `*`, `/` (divisor must be decide-var-free), and `CAST`; a decision under anything else is an unknown term, never read as a plain variable. `ExtractConstraintTerms` delegates there. In `src/decidb/formulation/ilp_model_builder.cpp`, the per-row constraint loop subtracts LHS terms whose `variable_index == INVALID_INDEX` (constants / row-data) from the per-row RHS instead of silently dropping them.
 
 **Tests**: `test/decide/tests/test_cons_perrow.py` — `test_perrow_linear_lhs_upper_bound` (parametrized over `x+c`, `x-c`, `x/c`, `c*x+c`, `x/c+c`, `x+c-c`), `test_perrow_unary_minus_lower_bound`, `test_perrow_data_column_in_lhs`, all oracle-verified.
 
@@ -582,16 +582,19 @@ Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combi
 
 ---
 
-## norm(expr, p) — L_p Regularization (Desugared at Bind Time)
+## norm(expr, p) — L_p Regularization (Desugared at Canonicalization)
 
 `norm(expr, p)` exposes a lasso/ridge-style regularization term over a
 decision-variable expression. The user supplies the weight as an ordinary
-coefficient, e.g. `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. It is
-kept as a DECIDE marker through binding and lowered by
-`DecideOptimizer::RewriteNorm` (p = 1 / 2 / 'inf' and the p = 0 indicator
-links), so it inherits all downstream handling (ABS / MAX / POWER
-linearization, WHEN, PER) and works in both objectives and constraints. Lowering
-after binding means types, scopes and casts are already resolved.
+coefficient, e.g. `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. The binder
+keeps it as an aggregate-shaped marker. Canonicalization replaces p = 1 / 2 /
+'inf' with the definitions in the table below, keeping a display-only tag so
+canonical text and diagnostics still read `NORM(...)`; `DecideOptimizer::RewriteNorm`
+lowers p = 0 to its indicator links. So norm inherits all downstream handling
+(ABS / MAX / POWER linearization, WHEN, PER) and works in both objectives and
+constraints, and no later reader sees an aggregate whose meaning differs from what
+it says. Desugaring after binding means types, scopes and casts are already
+resolved.
 
 | `p` | desugars to | meaning | class |
 | --- | ----------- | ------- | ----- |
@@ -635,8 +638,8 @@ after binding means types, scopes and casts are already resolved.
 - **Composes with arithmetic anywhere.** A norm is a scalar, so it may sit under
   `+`, `*` or a cast at any depth on either side — `MINIMIZE SUM(cost*x) + 0.5 *
   norm(x - base, 1)`, `MINIMIZE norm(e, 1) + 0.25 * norm(e, 2)` (elastic-net
-  shaped), `SUCH THAT 2 * norm(e, 1) <= K`. `RewriteNorm` descends every container
-  to reach it. Until 2026-09-08 it descended only comparisons and conjunctions, so
+  shaped), `SUCH THAT 2 * norm(e, 1) <= K`. Canonicalization and `RewriteNorm`
+  descend every container to reach it. Until 2026-09-08 it descended only comparisons and conjunctions, so
   a marker under arithmetic was left in place and read downstream as the plain
   `SUM(e)` the marker is built on: no error, and the norm silently absent from the
   model. `VerifyNormMarkersLowered` now fails the query rather than let a marker

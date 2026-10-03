@@ -150,7 +150,7 @@ short fails loudly instead of handing a backend a model it cannot load.
 
 | # | Pass | Why here |
 |---|---|---|
-| 1 | `RewriteNorm` | Lowers bound NORM markers before later passes see their ABS, POWER, MAX, or L0 links. |
+| 1 | `RewriteNorm` | Lowers L0 NORM markers to their indicator links and drops the display tag canonicalization left on desugared L1/L2/infinity norms, before later passes see them. |
 | 2 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to their indicator formulation. |
 | 3 | `TagAbsConstraintsForBigM` | Marks the ABS nodes that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
 | 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
@@ -279,9 +279,13 @@ that deciding sign per row at execution time is not warranted.
 ### NORM and IN — `RewriteNorm` / `RewriteInDomain`
 
 The binder keeps `norm(...)` as an aggregate-shaped DECIDE marker so normal
-aggregate-local `WHEN` and `PER` binding remains available. The optimizer lowers
-L1, L2, and infinity norms to `SUM(ABS)`, `SUM(POWER(_, 2))`, and `MAX(ABS)`;
-L0 emits its existing Boolean indicator and exact forward/reverse links.
+aggregate-local `WHEN` and `PER` binding remains available. Canonicalization (stage
+04) replaces L1, L2, and infinity norms with `SUM(ABS)`, `SUM(POWER(_, 2))`, and
+`MAX(ABS)`, tagged with their written order for display only; `RewriteNorm` drops
+that tag, so every layer after it shows the definition the solver receives. L0
+needs indicator variables, so it reaches this pass as a marker and emits its
+Boolean indicator and exact forward/reverse links. A desugarable marker reaching
+this pass is an internal error.
 
 **A marker is lowered wherever it stands.** `RewriteNorm` descends through every
 expression container, not only comparisons and conjunctions, because a norm is a
@@ -557,17 +561,16 @@ stage 07.
 - Judge the polynomial degree of an expression — stage 02, which owns the one
   definition (`DecideExpressionDegree`) and refuses degree > 2 on the bound tree
   before any pass here runs. This stage *calls* that definition, never a copy of
-  it, and only to assert: `AssertSquaredInnerIsLinear` throws `InternalException`
-  when the inner expression of a `POWER(..., 2)` or a self-product is not linear,
-  and `ClassifyNormalizedProduct` does the same for a product with more than two
-  decision factors. Both were `InvalidInputException` and reachable by a user —
+  it, and only to assert: the term splitter (`decide_term_split.cpp`) reports an
+  internal error when the inner expression of a `POWER(..., 2)` or a self-product
+  is not linear, and for a product with more than two decision factors. Both were `InvalidInputException` and reachable by a user —
   that was the leak, since a per-row constraint bypassed stage 02's gate
   entirely. They are kept because the passes here synthesize their own
   expressions (the `IN` expansion, ABS linearization, `norm` lowering) that stage
   02 never saw, so nothing upstream can vouch for them; an assertion is the only
   thing that can. See [`../02_binder/done.md`](../02_binder/done.md) §2.
 
-  Two refusals in `ClassifyNormalizedProduct` stay user-facing and are *not*
+  Two refusals in the splitter's `ClassifyProduct` stay user-facing and are *not*
   degree: a product factor that is not a bare decision (`ABS(x) * y`) and a
   same-variable product outside the recognised quadratic patterns (`x * (2*x)`).
   Both are degree 2, which stage 02 legitimately admits — they are formulation

@@ -259,10 +259,17 @@ static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_co
 static constexpr const char *ABSORBED_BOUND_TAG = "__absorbed_bound__";
 
 //! A private aggregate marker emitted by the DECIDE binder for norm(expr, p).
-//! The marker is only a transport representation: DecideOptimizer must lower it
-//! before physical planning. Its payload is one of `1`, `2`, `inf`, `0_auto`,
-//! or `0_<positive-double>`.
+//! The marker is only a transport representation: canonicalization replaces the
+//! orders `1`, `2` and `inf` with their definitions, and DecideOptimizer lowers the
+//! L0 orders `0_auto` and `0_<positive-double>` before physical planning.
 static constexpr const char *NORM_MARKER_TAG_PREFIX = "__decide_norm_";
+
+//! Display-only spelling on an aggregate canonicalization built from `norm(e, p)`:
+//! `SUM(ABS(e))` for `1`, `SUM(POWER(e, 2))` for `2`, `MAX(ABS(e))` for `inf`. The
+//! tree means what it says; the tag only lets the canonical text read as the user
+//! wrote it. RewriteNorm strips it before the optimizer formulates the clause. Its
+//! prefix must not contain NORM_MARKER_TAG_PREFIX.
+static constexpr const char *WRITTEN_NORM_TAG_PREFIX = "__written_norm_";
 
 //! Semantic provenance stamped on the flattened value produced by an UNCORRELATED
 //! scalar subquery. Shape alone cannot distinguish that query-wide column ref from

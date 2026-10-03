@@ -107,12 +107,11 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
    - For Non-Boolean x Non-Boolean: left in place for Q matrix path
    - Uses `is_boolean_var` vector (not `return_type`) to detect boolean status
 
-4. **Physical Operator** (`physical_decide.cpp`):
-   - `ExtractLinearAndBilinearTerms()`: separates linear and bilinear terms in objectives
-   - `ExtractConstraintTerms()`: same for constraints
-   - `ClassifyNormalizedProduct()`: flattens any nested `*` tree into leaf factors, partitions them into decide-variable indices (`decide_factors`) and data expressions (`coefficient_factors`). Handles arbitrary groupings like `(a*b)*(x*y)` and `a*b*x*y` identically.
-   - `BuildCoefficientFromFactors()`: rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms. Each binary `*` is re-bound through `RebindOperator` for the operands actually present — reusing the original multiply's signature over a reshaped factor list silently reinterprets the operands' physical representation (see `../../01_pipeline/05_optimizer/done.md` §1a).
-   - Linear terms (`decide_factors.size() == 1`) fall through to `ExtractTerms` (uses `ExtractCoefficientWithoutVariable` on the original tree for type-safe coefficient extraction). All three live in `src/optimizer/decide/decide_linear_form.cpp`.
+4. **Term splitting and the prepared model**:
+   - `DecideTermSplitter::Split` (`src/planner/decide/decide_term_split.cpp`) splits a reducer body into constant, linear, product, square and ABS terms. `ExtractLinearAndBilinearTerms()` (objective) and `ExtractConstraintTerms()` (constraints) in `src/optimizer/decide/decide_linear_form.cpp` turn those terms into prepared linear, bilinear and quadratic terms.
+   - `ClassifyProduct()` flattens any nested `*` tree into leaf factors, partitions them into decide-variable indices (`decide_factors`) and data expressions (`coefficient_factors`). Handles arbitrary groupings like `(a*b)*(x*y)` and `a*b*x*y` identically.
+   - `BuildCoefficientFromFactors()` rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms. Each binary `*` is re-bound through `DecideRebindOperator` for the operands actually present — reusing the original multiply's signature over a reshaped factor list silently reinterprets the operands' physical representation (see `../../01_pipeline/05_optimizer/done.md` §1a).
+   - Linear terms (`decide_factors.size() == 1`) go to `SplitLinear` (uses `ExtractCoefficientWithoutVariable` on the original tree for type-safe coefficient extraction).
    - McCormick generation: uses `BilinearLink` metadata + resolved bounds to emit the envelope corners `w <= U*b`, `w >= x - U*(1-b)`, `w <= x - L*(1-b)`, and (only when `L < 0`) `w >= L*b`; widens the aux's lower bound to `L` for signed `x`
    - Evaluates bilinear coefficients per-row, applies WHEN mask
 
@@ -143,7 +142,8 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
 - **Optimizer rewrite**: `src/optimizer/decide/decide_rewrite_bilinear.cpp` — `RewriteBilinear()`, `FindAndReplaceBilinear()`
 - **Boolean type tracking**: `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — `is_boolean_var`
 - **Bilinear link struct**: `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — `BilinearLink`
-- **Physical execution**: `src/execution/operator/decide/physical_decide.cpp` — `ExtractLinearAndBilinearTerms()`, `ExtractConstraintTerms()`, `ClassifyNormalizedProduct()`, `BuildCoefficientFromFactors()`, McCormick Big-M generation
+- **Term splitting**: `src/planner/decide/decide_term_split.cpp` — `ClassifyProduct()`, `BuildCoefficientFromFactors()`; prepared terms in `src/optimizer/decide/decide_linear_form.cpp` — `ExtractLinearAndBilinearTerms()`, `ExtractConstraintTerms()`
+- **Physical execution**: `src/execution/operator/decide/physical_decide.cpp` — McCormick Big-M generation
 - **Model builder**: `src/decidb/formulation/ilp_model_builder.cpp` — Q matrix off-diagonal entries, `QuadraticConstraint` building
 - **Gurobi quadratic constraints**: `src/decidb/gurobi/gurobi_solver.cpp` — `GRBaddqconstr` loop
 - **HiGHS rejection**: `src/decidb/naive/deterministic_naive.cpp` — quadratic constraint check

@@ -65,6 +65,14 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		if (!expr) return;
 		auto clause_alias = DescendSourceAlias(*expr, source_alias);
 		string payload;
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		    ExtractDecideTagPayload(expr->GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
+			// The canonical text has been rendered; from here the clause is formulated, and every layer after this
+			// one shows the definition the solver receives rather than the norm it came from.
+			auto alias = expr->GetAlias();
+			RemoveDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + payload + "__");
+			expr->SetAlias(std::move(alias));
+		}
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
 		    !TryParseNormMarker(expr->GetAlias(), payload)) {
 			// A marker stands wherever a scalar may stand. Under a comparison, but just
@@ -92,18 +100,10 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			if (aggregate.filter) result->Cast<BoundAggregateExpression>().filter = aggregate.filter->Copy();
 			return result;
 		};
-		if (payload == "1") {
-			expr = make_aggregate("sum", optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()));
-			return;
-		}
-		if (payload == "2") {
-			expr = make_aggregate("sum", optimizer.BindScalarFunction(
-			    "power", aggregate.children[0]->Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
-			return;
-		}
-		if (payload == "inf") {
-			expr = make_aggregate("max", optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()));
-			return;
+		if (payload == "1" || payload == "2" || payload == "inf") {
+			throw InternalException("DECIDE norm of order %s reached the optimizer; canonicalization replaces it "
+			                        "with its definition",
+			                        payload);
 		}
 		bool auto_m = payload == "0_auto";
 		if (!auto_m && payload.rfind("0_", 0) != 0) {

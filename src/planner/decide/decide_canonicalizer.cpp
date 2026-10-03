@@ -1,6 +1,9 @@
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
@@ -80,6 +83,52 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 	result.function = &func;
 	result.divides = is_div;
 	return true;
+}
+
+//! The additive spine: `+`, binary and unary `-`, and binder casts over decision algebra. Every other node is a
+//! term, handed to `callback` with its accumulated sign. Decompose and ReadCanonicalAtoms both walk it, so the
+//! terms a reader sees are the ones canonicalization placed.
+template <class IS_DECISION, class CALLBACK>
+static void WalkAdditiveSpine(const Expression &expr, int sign, IS_DECISION &&is_decision, CALLBACK &&callback) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (func.function.name == "+" && !func.children.empty()) {
+			for (auto &child : func.children) {
+				WalkAdditiveSpine(*child, sign, is_decision, callback);
+			}
+			return;
+		}
+		if (func.function.name == "-" && func.children.size() == 2) {
+			WalkAdditiveSpine(*func.children[0], sign, is_decision, callback);
+			WalkAdditiveSpine(*func.children[1], -sign, is_decision, callback);
+			return;
+		}
+		if (func.function.name == "-" && func.children.size() == 1) {
+			WalkAdditiveSpine(*func.children[0], -sign, is_decision, callback);
+			return;
+		}
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST && is_decision(expr)) {
+		// The parsed boundary rejected every user-authored decision cast. Anything left here was inserted by
+		// binding and is transparent in the solver's single DOUBLE domain. Data-only casts stay atomic.
+		WalkAdditiveSpine(*expr.Cast<BoundCastExpression>().child, sign, is_decision, callback);
+		return;
+	}
+	callback(sign, expr);
+}
+
+vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_index) {
+	vector<CanonicalAtom> atoms;
+	WalkAdditiveSpine(
+	    side, 1, [&](const Expression &expr) { return BoundExpressionReferencesDecide(expr, decide_index); },
+	    [&](int sign, const Expression &term) {
+		    CanonicalAtom atom;
+		    atom.sign = sign;
+		    atom.term = &term;
+		    atom.scaled = TryMatchScaledAggregate(term, decide_index, atom.scale);
+		    atoms.push_back(atom);
+	    });
+	return atoms;
 }
 
 [[noreturn]] static void CanonicalInvariantFailure(const string &rule, const string &detail,
@@ -241,10 +290,35 @@ DecideCanonicalizer::FinalizeBoundProvenance(unique_ptr<BoundComparisonExpressio
 //! Name an expression the way the user wrote it, for an error message. Everything the
 //! binder added is noise here: `CAST(weight AS DECIMAL(12,1))` is not what anyone
 //! typed, and neither is the `FILTER (WHERE w)` that an aggregate-local WHEN becomes.
+//! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm carries
+//! its order in a display tag, and an L0 norm is still the binder's marker.
+static const Expression *WrittenNormBody(const BoundAggregateExpression &aggregate, string &order) {
+	if (aggregate.children.size() != 1) {
+		return nullptr;
+	}
+	if (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
+		order = order == "0_auto" ? "0" : order.rfind("0_", 0) == 0 ? "0, " + order.substr(2) : order;
+		return aggregate.children[0].get();
+	}
+	if (!ExtractDecideTagPayload(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order)) {
+		return nullptr;
+	}
+	auto &definition = *aggregate.children[0];
+	if (definition.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION ||
+	    definition.Cast<BoundFunctionExpression>().children.empty()) {
+		return nullptr;
+	}
+	return definition.Cast<BoundFunctionExpression>().children[0].get();
+}
+
 static string UserFacingName(const Expression &expr) {
 	const Expression *cur = StripCastsForIdentity(expr);
 	if (cur->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = cur->Cast<BoundAggregateExpression>();
+		string order;
+		if (auto body = WrittenNormBody(agg, order)) {
+			return "NORM(" + UserFacingName(*body) + ", " + order + ")";
+		}
 		if (agg.children.size() == 1) {
 			return StringUtil::Upper(agg.function.name) + "(" + UserFacingName(*agg.children[0]) + ")";
 		}
@@ -403,43 +477,95 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 }
 
 void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause) const {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (func.function.name == "+" && func.children.size() == 2) {
-			Decompose(*func.children[0], sign, out, clause);
-			Decompose(*func.children[1], sign, out, clause);
-			return;
-		}
-		if (func.function.name == "-" && func.children.size() == 2) {
-			Decompose(*func.children[0], sign, out, clause);
-			Decompose(*func.children[1], -sign, out, clause);
-			return;
-		}
-		if (func.function.name == "-" && func.children.size() == 1) {
-			Decompose(*func.children[0], -sign, out, clause);
-			return;
-		}
+	WalkAdditiveSpine(
+	    expr, sign, [&](const Expression &node) { return ReferencesDecideVar(node); },
+	    [&](int term_sign, const Expression &whole) {
+		    // Every other node is a term boundary -- but a factor sitting on a reducer is
+		    // peeled off it first, so the term the rest of the pipeline sees is the bare
+		    // reducer and the factor travels beside it.
+		    unique_ptr<Expression> scale;
+		    bool divides = false;
+		    auto &term = PeelScale(whole, scale, divides, clause);
+		    // Classify on the whole original term. The factors are decision-free and
+		    // reducer-free by construction, so this agrees with classifying `term` -- stated
+		    // rather than assumed, because Classify is the part that was wrong twice before.
+		    out.push_back(Atom {term_sign, &term, Classify(whole), std::move(scale), divides});
+	    });
+}
+
+//! Whether `expr` is a norm marker whose order has an expression for a definition (1, 2 or 'inf'). L0 does not:
+//! its count needs indicator variables, which only the optimizer can add.
+static bool IsDesugarableNorm(const Expression &expr, string &order) {
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	       ExtractDecideTagPayload(expr.GetAlias(), NORM_MARKER_TAG_PREFIX, order) &&
+	       (order == "1" || order == "2" || order == "inf");
+}
+
+static bool ContainsDesugarableNorm(const Expression &expr) {
+	string order;
+	if (IsDesugarableNorm(expr, order)) {
+		return true;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		auto &cast = expr.Cast<BoundCastExpression>();
-		if (ReferencesDecideVar(expr)) {
-			// The parsed boundary rejected every user-authored decision cast.
-			// Anything left here was inserted by binding and is transparent in the
-			// solver's single DOUBLE domain. Data-only casts stay atomic.
-			Decompose(*cast.child, sign, out, clause);
-			return;
-		}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		found = found || ContainsDesugarableNorm(child);
+	});
+	return found;
+}
+
+unique_ptr<Expression> DecideCanonicalizer::DesugarNorms(const Expression &expr) const {
+	if (!ContainsDesugarableNorm(expr)) {
+		return nullptr;
 	}
-	// Every other node is a term boundary -- but a factor sitting on a reducer is
-	// peeled off it first, so the term the rest of the pipeline sees is the bare
-	// reducer and the factor travels beside it.
-	unique_ptr<Expression> scale;
-	bool divides = false;
-	auto &term = PeelScale(expr, scale, divides, clause);
-	// Classify on the whole original term. The factors are decision-free and
-	// reducer-free by construction, so this agrees with classifying `term` -- stated
-	// rather than assumed, because Classify is the part that was wrong twice before.
-	out.push_back(Atom {sign, &term, Classify(expr), std::move(scale), divides});
+	auto result = expr.Copy();
+	DesugarNormsInPlace(result);
+	return result;
+}
+
+void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) const {
+	string order;
+	if (!IsDesugarableNorm(*expr, order)) {
+		// A marker stands wherever a scalar may: under a comparison, `+`, `*` or a cast.
+		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { DesugarNormsInPlace(child); });
+		return;
+	}
+	auto &marker = expr->Cast<BoundAggregateExpression>();
+	if (marker.children.size() != 1) {
+		throw InternalException("DECIDE norm marker must contain one bound expression");
+	}
+	auto &body = *marker.children[0];
+	unique_ptr<Expression> definition;
+	if (order == "2") {
+		definition = BindAggregate("sum", BindOp("power", body.Copy(),
+		                                         make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
+	} else {
+		definition = BindAggregate(order == "1" ? "sum" : "max", BindOp("abs", body.Copy()));
+	}
+	auto alias = marker.GetAlias();
+	RemoveDecideTag(alias, string(NORM_MARKER_TAG_PREFIX) + order + "__");
+	AddDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + order + "__");
+	definition->SetAlias(std::move(alias));
+	if (marker.filter) {
+		definition->Cast<BoundAggregateExpression>().filter = marker.filter->Copy();
+	}
+	expr = std::move(definition);
+}
+
+unique_ptr<Expression> DecideCanonicalizer::BindAggregate(const string &name, unique_ptr<Expression> child) const {
+	auto &entry = Catalog::GetSystemCatalog(context)
+	                  .GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, DEFAULT_SCHEMA, name)
+	                  .Cast<AggregateFunctionCatalogEntry>();
+	FunctionBinder function_binder(context);
+	ErrorData error;
+	vector<LogicalType> argument_types {child->return_type};
+	auto best = function_binder.BindFunction(entry.name, entry.functions, argument_types, error);
+	if (!best.IsValid()) {
+		throw InternalException("DECIDE canonicalizer failed to bind aggregate '%s': %s", name, error.Message());
+	}
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(child));
+	return function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(best.GetIndex()),
+	                                             std::move(children));
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> left,
@@ -502,6 +628,11 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
+	auto desugared = DesugarNorms(expr);
+	return CanonicalizeComparisonInternal(desugared ? *desugared : expr);
+}
+
+unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const Expression &expr) const {
 	DecideProfileScope profile("canonicalize.comparison");
 	auto &cmp = expr.Cast<BoundComparisonExpression>();
 
@@ -609,6 +740,12 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
                                                                   double &out_constant_offset) const {
+	auto desugared = DesugarNorms(objective);
+	return CanonicalizeObjectiveInternal(desugared ? *desugared : objective, out_constant_offset);
+}
+
+unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const Expression &objective,
+                                                                          double &out_constant_offset) const {
 	DecideProfileScope profile("canonicalize.objective");
 	// A WHEN/PER wrapper carries no algebra: recurse into the objective child and copy
 	// the condition or grouping columns unchanged. Identical rule to C0, and the same
@@ -617,7 +754,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expressi
 		auto &conjunction = objective.Cast<BoundConjunctionExpression>();
 		if (IsConstraintWrapper(conjunction) && !conjunction.children.empty()) {
 			auto result = make_uniq<BoundConjunctionExpression>(conjunction.type);
-			result->children.push_back(CanonicalizeObjective(*conjunction.children[0], out_constant_offset));
+			result->children.push_back(CanonicalizeObjectiveInternal(*conjunction.children[0], out_constant_offset));
 			for (idx_t i = 1; i < conjunction.children.size(); i++) {
 				result->children.push_back(conjunction.children[i]->Copy());
 			}
@@ -886,6 +1023,10 @@ void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objecti
 void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) const {
 #ifdef DEBUG
 	try {
+		if (ContainsDesugarableNorm(objective)) {
+			CanonicalInvariantFailure("C8", "a norm of order 1, 2 or 'inf' was not replaced by its definition",
+			                          objective);
+		}
 		VerifyCanonicalObjectiveBody(objective);
 		if (!ReferencesDecideVar(objective)) {
 			return;
@@ -915,6 +1056,10 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) 
 void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
 #ifdef DEBUG
 	try {
+		if (ContainsDesugarableNorm(constraints)) {
+			CanonicalInvariantFailure("C8", "a norm of order 1, 2 or 'inf' was not replaced by its definition",
+			                          constraints);
+		}
 		VerifyCanonicalTree(constraints);
 		auto fixed_point = CanonicalizeTreeInternal(constraints);
 		if (!CanonicalTreesEqual(constraints, *fixed_point)) {
@@ -947,13 +1092,14 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 		return std::move(result);
 	}
 	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		return CanonicalizeComparison(constraints);
+		return CanonicalizeComparisonInternal(constraints);
 	}
 	return constraints.Copy();
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &constraints) const {
-	auto result = CanonicalizeTreeInternal(constraints);
+	auto desugared = DesugarNorms(constraints);
+	auto result = CanonicalizeTreeInternal(desugared ? *desugared : constraints);
 	ValidateCanonicalTree(*result);
 	return result;
 }

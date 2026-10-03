@@ -102,10 +102,6 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const vector<
 		}
 		body += RenderSource(*agg.children[i], fragments, entity_scopes);
 	}
-	idx_t scope_idx;
-	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < entity_scopes.size()) {
-		body = entity_scopes[scope_idx].table_alias + ": " + body;
-	}
 	string result;
 	string norm_payload;
 	auto marker_pos = agg.GetAlias().find(NORM_MARKER_TAG_PREFIX);
@@ -115,6 +111,20 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const vector<
 		if (end != string::npos) {
 			norm_payload = agg.GetAlias().substr(begin, end - begin);
 		}
+	} else if (ExtractDecideTagPayload(agg.GetAlias(), WRITTEN_NORM_TAG_PREFIX, norm_payload)) {
+		// Canonicalization replaced the norm with its definition, ABS(e) or POWER(e, 2), and kept the order as a
+		// display tag. Read the body back out of the definition so the clause reads as written.
+		auto definition = agg.children.size() == 1 ? agg.children[0].get() : nullptr;
+		if (definition && definition->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+		    !definition->Cast<BoundFunctionExpression>().children.empty()) {
+			body = RenderSource(*definition->Cast<BoundFunctionExpression>().children[0], fragments, entity_scopes);
+		} else {
+			norm_payload.clear();
+		}
+	}
+	idx_t scope_idx;
+	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < entity_scopes.size()) {
+		body = entity_scopes[scope_idx].table_alias + ": " + body;
 	}
 	if (!norm_payload.empty()) {
 		if (norm_payload == "0_auto") {

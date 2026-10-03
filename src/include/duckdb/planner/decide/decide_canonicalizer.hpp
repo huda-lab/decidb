@@ -20,6 +20,17 @@
 // constants, or distribute. Validation subsequently inspects reducer placement,
 // variable scope, and query-wide provenance without rewriting the term.
 //
+// ONE SPELLING PER MEANING. Two inputs that mean the same thing leave this pass
+// spelled the same way, so no consumer has to know both. A reducer factor is always
+// `factor * AGG` or `AGG / factor` (see PeelScale). `norm(e, p)` arrives from the
+// binder as a SUM(e) aggregate whose alias names the order -- an aggregate whose
+// meaning is not what it says -- and leaves as its definition: `SUM(ABS(e))` for
+// p = 1, `SUM(POWER(e, 2))` for p = 2, `MAX(ABS(e))` for 'inf', each carrying a
+// display-only WRITTEN_NORM_TAG_PREFIX tag so its text still reads as written. This
+// replaces one atom with another and opens nothing. The L0 order needs indicator
+// variables, which are formulation rather than meaning, so its marker stays for
+// DecideOptimizer::RewriteNorm.
+//
 // That restriction is the whole design. A quadratic `POWER(x-t,2)`, a composed
 // `MAX(x*v)`, and a filtered `SUM(x) WHEN c` are all simply decision-bearing
 // terms here, indistinguishable from `x`. The symbolic layer this replaced had to
@@ -110,6 +121,21 @@ struct ScaledAggregateMatch {
 };
 
 bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledAggregateMatch &result);
+
+//! One additive term of a canonical side, read back as canonicalization decomposed it.
+struct CanonicalAtom {
+	int sign;
+	//! Borrowed from the side that was read.
+	const Expression *term;
+	//! True when canonicalization left a factor on a reducer; `scale` then names the reducer and the factor.
+	bool scaled = false;
+	ScaledAggregateMatch scale;
+};
+
+//! The additive terms of a canonical constraint side or objective body, without rebuilding anything. It descends
+//! through `+`, `-` and binder casts over decision algebra by the same rule canonicalization decomposes with, so a
+//! reader of canonical trees cannot disagree with the pass that built them.
+vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_index);
 
 //! The semantic row shape of a canonical DECIDE comparison. INVALID means the
 //! tree mixes reduced values with row/entity-varying decision algebra and cannot
@@ -299,6 +325,15 @@ private:
 	void ValidateCanonicalTree(const Expression &constraints) const;
 	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const;
 	void VerifyCanonicalTree(const Expression &constraints) const;
+	//! A copy of `expr` with every norm marker of order 1, 2 or 'inf' replaced by its
+	//! definition, or nullptr when there is none to replace.
+	unique_ptr<Expression> DesugarNorms(const Expression &expr) const;
+	void DesugarNormsInPlace(unique_ptr<Expression> &expr) const;
+	unique_ptr<Expression> BindAggregate(const string &name, unique_ptr<Expression> child) const;
+	unique_ptr<Expression> CanonicalizeComparisonInternal(const Expression &comparison) const;
+	unique_ptr<Expression> CanonicalizeObjectiveInternal(const Expression &objective,
+	                                                     double &out_constant_offset) const;
+
 	//! Wrapper-aware structural half of VerifyCanonicalObjective. Runs before the
 	//! fixed-point check so a malformed body is reported as the invariant it breaks,
 	//! rather than as whatever CanonicalizeObjective would have thrown re-reading it.
