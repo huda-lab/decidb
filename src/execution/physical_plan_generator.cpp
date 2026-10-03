@@ -42,6 +42,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(unique_ptr<Logica
 	return plan;
 }
 
+unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlanChild(LogicalOperator &logical) {
+	return CreatePlan(logical);
+}
+
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalOperator &op) {
 	op.estimated_cardinality = op.EstimateCardinality(context);
 	unique_ptr<PhysicalOperator> plan = nullptr;

@@ -375,7 +375,7 @@ void OperatorProfiler::StartOperator(optional_ptr<const PhysicalOperator> phys_o
 	if (!settings.empty()) {
 		if (ProfilingInfo::Enabled(settings, MetricsType::EXTRA_INFO)) {
 			auto &info = GetOperatorInfo(*active_operator);
-			auto params = active_operator->ParamsToString();
+			auto params = active_operator->GetExplainInfo();
 			info.extra_info = params;
 		}
 
@@ -776,7 +776,7 @@ unique_ptr<ProfilingNode> QueryProfiler::CreateTree(const PhysicalOperator &root
 		info.AddToMetric<uint8_t>(MetricsType::OPERATOR_TYPE, static_cast<uint8_t>(root_p.type));
 	}
 	if (info.Enabled(info.settings, MetricsType::EXTRA_INFO)) {
-		info.extra_info = root_p.ParamsToString();
+		info.extra_info = root_p.GetExplainInfo();
 	}
 
 	tree_map.insert(make_pair(reference<const PhysicalOperator>(root_p), reference<ProfilingNode>(*node)));

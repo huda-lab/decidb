@@ -1,6 +1,8 @@
 #include "duckdb/execution/operator/aggregate/physical_window.hpp"
 
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/sort/partition_state.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/function/window/window_aggregate_function.hpp"
 #include "duckdb/function/window/window_executor.hpp"
 #include "duckdb/function/window/window_rank_function.hpp"
@@ -115,6 +117,7 @@ private:
 };
 
 class WindowPartitionGlobalSinkState;
+static idx_t WindowSortBufferBytes(const PartitionGlobalHashGroup &hash_group);
 
 class WindowGlobalSinkState : public GlobalSinkState {
 public:
@@ -153,6 +156,10 @@ public:
 
 	void OnSortedPartition(const idx_t group_idx) override {
 		PartitionGlobalSinkState::OnSortedPartition(group_idx);
+		if (DecideProfileScope::Enabled()) {
+			DecideProfileScope::Counter("execution.window.sort_buffer_bytes",
+			                            static_cast<double>(WindowSortBufferBytes(*hash_groups[group_idx])));
+		}
 		window_hash_groups[group_idx] = make_uniq<WindowHashGroup>(gsink, group_idx);
 	}
 
@@ -278,6 +285,45 @@ unique_ptr<GlobalSinkState> PhysicalWindow::GetGlobalSinkState(ClientContext &co
 	return make_uniq<WindowGlobalSinkState>(*this, context);
 }
 
+static idx_t WindowSortBufferBytes(const PartitionGlobalHashGroup &hash_group) {
+	unordered_set<const BlockHandle *> seen;
+	idx_t bytes = 0;
+	auto add_blocks = [&](const vector<unique_ptr<RowDataBlock>> &blocks) {
+		for (auto &row_block : blocks) {
+			if (row_block && row_block->block && seen.insert(row_block->block.get()).second) {
+				bytes += row_block->block->GetMemoryUsage();
+			}
+		}
+	};
+	auto add_sorted_block = [&](const SortedBlock &block) {
+		add_blocks(block.radix_sorting_data);
+		if (block.blob_sorting_data) {
+			add_blocks(block.blob_sorting_data->data_blocks);
+			add_blocks(block.blob_sorting_data->heap_blocks);
+		}
+		if (block.payload_data) {
+			add_blocks(block.payload_data->data_blocks);
+			add_blocks(block.payload_data->heap_blocks);
+		}
+	};
+	if (hash_group.global_sort) {
+		auto &sort = *hash_group.global_sort;
+		for (auto &block : sort.sorted_blocks) {
+			add_sorted_block(*block);
+		}
+		for (auto &round : sort.sorted_blocks_temp) {
+			for (auto &block : round) {
+				add_sorted_block(*block);
+			}
+		}
+		if (sort.odd_one_out) {
+			add_sorted_block(*sort.odd_one_out);
+		}
+		add_blocks(sort.heap_blocks);
+	}
+	return bytes;
+}
+
 SinkFinalizeType PhysicalWindow::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
 	auto &state = input.global_state.Cast<WindowGlobalSinkState>();
@@ -285,6 +331,14 @@ SinkFinalizeType PhysicalWindow::Finalize(Pipeline &pipeline, Event &event, Clie
 	//	Did we get any data?
 	if (!state.global_partition->count) {
 		return SinkFinalizeType::NO_OUTPUT_POSSIBLE;
+	}
+	if (DecideProfileScope::Enabled()) {
+		if (!state.global_partition->grouping_data && !state.global_partition->hash_groups.empty()) {
+			DecideProfileScope::Counter("execution.window.sort_buffer_bytes",
+			                            static_cast<double>(WindowSortBufferBytes(*state.global_partition->hash_groups[0])));
+		}
+		DecideProfileScope::Counter("execution.window.input_rows",
+		                            static_cast<double>(state.global_partition->count.load()));
 	}
 
 	// Do we have any sorting to schedule?

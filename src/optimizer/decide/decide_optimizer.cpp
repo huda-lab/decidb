@@ -9,6 +9,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
+#include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -53,6 +54,10 @@ unique_ptr<LogicalOperator> DecideOptimizer::Optimize(unique_ptr<LogicalOperator
 
 	// If this is a LogicalDecide node, apply DECIDE-specific optimizations
 	if (op->type == LogicalOperatorType::LOGICAL_DECIDE) {
+		op = TryDirectSolve(std::move(op), optimizer, GetDirectSolveMode(optimizer.context));
+		if (op->type != LogicalOperatorType::LOGICAL_DECIDE) {
+			return op;
+		}
 		auto &decide = op->Cast<LogicalDecide>();
 		OptimizeDecide(decide);
 	}

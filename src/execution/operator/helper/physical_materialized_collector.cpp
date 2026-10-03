@@ -12,12 +12,14 @@ PhysicalMaterializedCollector::PhysicalMaterializedCollector(PreparedStatementDa
 SinkResultType PhysicalMaterializedCollector::Sink(ExecutionContext &context, DataChunk &chunk,
                                                    OperatorSinkInput &input) const {
 	auto &lstate = input.local_state.Cast<MaterializedCollectorLocalState>();
+	DecideProfileSample profile(lstate.profile_append);
 	lstate.collection->Append(lstate.append_state, chunk);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
 SinkCombineResultType PhysicalMaterializedCollector::Combine(ExecutionContext &context,
                                                              OperatorSinkCombineInput &input) const {
+	DecideProfileScope profile("execution.result_collect_combine");
 	auto &gstate = input.global_state.Cast<MaterializedCollectorGlobalState>();
 	auto &lstate = input.local_state.Cast<MaterializedCollectorLocalState>();
 	if (lstate.collection->Count() == 0) {
@@ -48,6 +50,7 @@ unique_ptr<LocalSinkState> PhysicalMaterializedCollector::GetLocalSinkState(Exec
 }
 
 unique_ptr<QueryResult> PhysicalMaterializedCollector::GetResult(GlobalSinkState &state) {
+	DecideProfileScope profile("execution.result_collect_finalize");
 	auto &gstate = state.Cast<MaterializedCollectorGlobalState>();
 	if (!gstate.collection) {
 		gstate.collection = make_uniq<ColumnDataCollection>(Allocator::DefaultAllocator(), types);

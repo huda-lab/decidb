@@ -53,6 +53,8 @@ public:
 	vector<LogicalType> types;
 	//! The estimated cardinality of this physical operator
 	idx_t estimated_cardinality;
+	//! Plan annotations supplied by logical-only operators during lowering.
+	unique_ptr<InsertionOrderPreservingMap<string>> explain_metadata;
 
 	//! The global sink state of this operator
 	unique_ptr<GlobalSinkState> sink_state;
@@ -66,6 +68,7 @@ public:
 	virtual InsertionOrderPreservingMap<string> ParamsToString() const {
 		return InsertionOrderPreservingMap<string>();
 	}
+	InsertionOrderPreservingMap<string> GetExplainInfo() const;
 	static void SetEstimatedCardinality(InsertionOrderPreservingMap<string> &result, idx_t estimated_cardinality);
 	virtual string ToString(ExplainFormat format = ExplainFormat::DEFAULT) const;
 	void Print() const;

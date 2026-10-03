@@ -39,6 +39,8 @@ public:
 	//! Creates a plan from the logical operator. This involves resolving column bindings and generating physical
 	//! operator nodes.
 	unique_ptr<PhysicalOperator> CreatePlan(unique_ptr<LogicalOperator> logical);
+	//! Lower a child of an extension operator after the complete tree's bindings and types were resolved.
+	unique_ptr<PhysicalOperator> CreatePlanChild(LogicalOperator &logical);
 
 	//! Whether or not we can (or should) use a batch-index based operator for executing the given sink
 	static bool UseBatchIndex(ClientContext &context, PhysicalOperator &plan);

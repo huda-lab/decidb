@@ -120,6 +120,11 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
+	if (direct_solve_record.attempted) {
+		for (auto &entry : direct_solve_record.Render()) {
+			result[entry.first] = entry.second;
+		}
+	}
 
 	// Variables (exclude auxiliary variables)
 	string vars_info;

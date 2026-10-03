@@ -92,7 +92,7 @@ static unique_ptr<RenderTreeNode> CreateNode(const LogicalOperator &op) {
 }
 
 static unique_ptr<RenderTreeNode> CreateNode(const PhysicalOperator &op) {
-	return make_uniq<RenderTreeNode>(op.GetName(), op.ParamsToString());
+	return make_uniq<RenderTreeNode>(op.GetName(), op.GetExplainInfo());
 }
 
 static unique_ptr<RenderTreeNode> CreateNode(const PipelineRenderNode &op) {

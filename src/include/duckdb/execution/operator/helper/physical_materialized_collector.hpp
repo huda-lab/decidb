@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/execution/operator/helper/physical_result_collector.hpp"
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/types/column/column_data_scan_states.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 
@@ -47,6 +48,7 @@ public:
 
 class MaterializedCollectorLocalState : public LocalSinkState {
 public:
+	DecideProfileTotals profile_append {"execution.result_collect_append"};
 	unique_ptr<ColumnDataCollection> collection;
 	ColumnDataAppendState append_state;
 };

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/execution/operator/helper/physical_result_collector.hpp"
+#include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/types/batched_data_collection.hpp"
 
 namespace duckdb {
@@ -58,5 +59,6 @@ public:
 	}
 
 	BatchedDataCollection data;
+	DecideProfileTotals profile_append {"execution.result_collect_append"};
 };
 } // namespace duckdb

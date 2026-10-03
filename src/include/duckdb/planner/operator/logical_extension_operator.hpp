@@ -32,6 +32,10 @@ public:
 	virtual unique_ptr<PhysicalOperator> CreatePlan(ClientContext &context, PhysicalPlanGenerator &generator) = 0;
 
 	virtual void ResolveColumnBindings(ColumnBindingResolver &res, vector<ColumnBinding> &bindings);
+	//! Called by unused-column removal before visiting expressions. Extensions that
+	//! preserve their output bindings may drop dependencies for unreferenced outputs.
+	virtual void PruneUnusedOutputs(const vector<bool> &) {
+	}
 	virtual string GetExtensionName() const;
 };
 } // namespace duckdb

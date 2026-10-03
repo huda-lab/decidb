@@ -13,6 +13,7 @@
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_distinct.hpp"
+#include "duckdb/planner/operator/logical_extension_operator.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
@@ -327,6 +328,18 @@ void RemoveUnusedColumns::VisitOperator(LogicalOperator &op) {
         decide.EnumerateExpressions([&](unique_ptr<Expression> *expr) { VisitExpression(expr); });
         everything_referenced = true;
         break;
+	}
+	case LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR: {
+		if (!everything_referenced) {
+			auto bindings = op.GetColumnBindings();
+			vector<bool> referenced_outputs;
+			referenced_outputs.reserve(bindings.size());
+			for (auto &binding : bindings) {
+				referenced_outputs.push_back(column_references.find(binding) != column_references.end());
+			}
+			op.Cast<LogicalExtensionOperator>().PruneUnusedOutputs(referenced_outputs);
+		}
+		break;
 	}
 	default:
 		break;

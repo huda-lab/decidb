@@ -19,6 +19,29 @@ string PhysicalOperator::GetName() const {
 	return PhysicalOperatorToString(type);
 }
 
+InsertionOrderPreservingMap<string> PhysicalOperator::GetExplainInfo() const {
+	auto params = ParamsToString();
+	InsertionOrderPreservingMap<string> result;
+	// The text renderer stops at cardinality. Keep extension annotations before
+	// that terminal field while retaining the usual projection/scan details.
+	for (auto &entry : params) {
+		if (entry.first != RenderTreeNode::ESTIMATED_CARDINALITY && entry.first != RenderTreeNode::CARDINALITY) {
+			result[entry.first] = entry.second;
+		}
+	}
+	if (explain_metadata) {
+		for (auto &entry : *explain_metadata) {
+			result[entry.first] = entry.second;
+		}
+	}
+	for (auto &entry : params) {
+		if (entry.first == RenderTreeNode::ESTIMATED_CARDINALITY || entry.first == RenderTreeNode::CARDINALITY) {
+			result[entry.first] = entry.second;
+		}
+	}
+	return result;
+}
+
 string PhysicalOperator::ToString(ExplainFormat format) const {
 	auto renderer = TreeRenderer::CreateRenderer(format);
 	stringstream ss;

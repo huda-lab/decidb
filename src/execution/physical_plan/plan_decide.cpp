@@ -18,6 +18,10 @@ namespace duckdb {
 
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
 	DecideProfileScope profile("frontend.physical_decide");
+    if (GetDirectSolveMode(context) == DirectSolveMode::REQUIRE) {
+        throw InvalidInputException(
+            "decide_direct_solve=require: DECIDE optimizer did not run; direct solve was not attempted");
+    }
     D_ASSERT(op.children.size() == 1);
     // The backend — and with it stage 05's decision about which constructs stay native —
     // was settled before any rewrite ran, so the rewrites and the solve agree on what is
@@ -251,6 +255,9 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         if (decide_op->input_column_names[i].empty()) {
             decide_op->input_column_names[i] = child_userwritten_names[i];
         }
+    }
+    if (op.direct_solve_record.attempted) {
+        decide_op->explain_metadata = make_uniq<InsertionOrderPreservingMap<string>>(op.direct_solve_record.Render());
     }
     return std::move(decide_op);
 }

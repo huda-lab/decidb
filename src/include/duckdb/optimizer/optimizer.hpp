@@ -44,13 +44,11 @@ public:
 	// helper functions
 	unique_ptr<Expression> BindScalarFunction(const string &name, unique_ptr<Expression> c1);
 	unique_ptr<Expression> BindScalarFunction(const string &name, unique_ptr<Expression> c1, unique_ptr<Expression> c2);
+	unique_ptr<Expression> BindScalarFunction(const string &name, vector<unique_ptr<Expression>> children);
 	unique_ptr<Expression> BindAggregateFunction(const string &name, vector<unique_ptr<Expression>> children);
 
 private:
 	unique_ptr<LogicalOperator> plan;
-
-private:
-	unique_ptr<Expression> BindScalarFunction(const string &name, vector<unique_ptr<Expression>> children);
 };
 
 } // namespace duckdb
