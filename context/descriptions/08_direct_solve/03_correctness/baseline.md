@@ -4,9 +4,9 @@ This is the pre-feature solver baseline on `direct-solve-prototype` at
 `721d49ba43d10fd4e9e15572508f10a873970c3b`, built with `make release
 BUILD_JOBS=4`. Run each complete SQL string with `build/release/decidb -csv -c
 "SQL"`; `DECIDB_FORCE_SOLVER=highs` or `gurobi` pins a backend. The default,
-HiGHS, and Gurobi all ran on this host. These observations become permanent
-path-and-result tests when the harness exists; no direct implementation is in
-this baseline.
+HiGHS, and Gurobi all ran on this host. These are historical solver-only
+observations; the permanent direct path tests now live in
+`test/decide/tests/test_direct_solve.py`.
 
 ## Small common fixture
 
@@ -48,11 +48,12 @@ DECIDE x(BOOL) SUCH THAT SUM(x)<=1 MAXIMIZE SUM(p*x);
 
 ### One-condition-away cases
 
-These are valid current DECIDE queries. Each must be a **reasoned miss** for
-the narrow first rule, followed by the existing solver path in `auto`. The
-table names the changed part; all unspecified parts use P1.
+These are valid DECIDE queries recorded before the direct rule. The table
+preserves the initial narrow rule's admission decisions; several shapes were
+subsequently proved and promoted. The current near-miss tests are in
+`test/decide/tests/test_direct_solve.py`. All unspecified parts use P1.
 
-| ID | Change to P1 | Current solver result | Miss reason |
+| ID | Change to P1 | Solver result | Initial miss reason |
 |---|---|---|---|
 | M1 | Add `y(BOOL)` to the declaration; select `id,x,y` | Observed `(1,0,0),(2,1,0)`; `y` is unconstrained by the objective | Two decisions |
 | M2 | Add `AND x<=1` | `(1,0),(2,1)` | Extra constraint, even if redundant |
@@ -68,15 +69,15 @@ table names the changed part; all unspecified parts use P1.
 | M12 | Write capacity `-1` | Infeasible error | Negative bound |
 | M13 | Use `SUM((p+random())*x)` as the objective | Observed `(1,0),(2,1)`; the fixture's score intervals do not overlap | Volatile score |
 | M14 | Use `SUM(MAX(p*x)) PER id` as the objective | `(1,0),(2,1)` | Nested reducer |
-| M15 | Add `+SUM(x)` to the objective | `(1,0),(2,1)` | Additional objective factor |
+| M15 | Add `+SUM(x)` to the objective | `(1,0),(2,1)` | Additional objective factor; now admitted |
 | M16 | Omit the objective | Observed `(1,0),(2,0)`; any feasible vector is allowed | Feasibility problem, not S1 optimization |
 | M17 | Write capacity `9007199254740993` (`2^53+1`) | `(1,1),(2,1)` on two rows | Beyond the first rule's reliable DOUBLE admission |
 
 M1–M17 ran on the default backend. M8, M12, and M17 also ran with forced HiGHS and
 Gurobi. M10 is one additional change from M9; the other rows are one change
-from P1. The first implementation should test matching on the **complete
-canonical trees**. It must not accept M2, M5, M11, or M15 merely because a familiar
-`SUM(x)` or `SUM(p*x)` subtree exists. M10 requires the table-scoped
+from P1. The rule tests matching on the **complete canonical trees**. Shapes
+such as M11 and M15 were admitted only after their whole objective was proved;
+a familiar `SUM(x)` or `SUM(p*x)` subtree is insufficient. M10 requires the table-scoped
 declaration; `DECIDE x(BOOL)` with `SUM(t: x)` is a binder error, not a valid
 near miss.
 

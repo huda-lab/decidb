@@ -1,39 +1,97 @@
 # Direct Solve
 
-Direct solve is a proposed DECIDE optimizer path. For a problem whose complete
-semantics match a proved rule, it constructs an optimal assignment with ordinary
-DuckDB relational operators instead of building and running a solver model. A
-miss keeps the existing solver path. **No direct rewrite is implemented yet.**
+Direct solve is an opt-in DECIDE optimizer prototype. For a problem whose
+complete semantics match its first rule, it constructs an optimal assignment
+with ordinary DuckDB relational operators instead of building and running a
+solver model. A miss keeps the existing solver path. The implemented slice is
+the cardinality-interval part of S1: upper, lower, exact, and intersecting
+bounds, globally or with proved `PER` groups and matching `WHEN`
+membership. Strict and finite fractional/negative foldable bounds normalize
+to inclusive count limits or proved infeasibility. Numeric source-valued
+bounds can vary by row, including deterministic nonthrowing source-only
+expressions such as `COALESCE` and `TRY_CAST`. The rule validates NULL/NaN
+before scoring, reduces DOUBLE-converted values within each eligible group, and intersects their
+limits. Bounds may use aggregate-local `WHEN` on `SUM(x)`; source-valued bounds
+under that filter reduce over all group rows, including rows excluded from the
+count. Exact per-row zero/one pins with optional
+source-only `WHEN` adjust each group's remaining limits. Wider fixed and
+scoped forms remain open. A finite constant objective offset is
+allowed because it leaves the optimal assignment unchanged. Signed additive
+linear objective terms are admitted when each coefficient is proved safe to
+evaluate. A first semantic fact adapter and
+rule coordinator now separate recognition, proof, cost, explanation, relational
+construction, and output mapping. A second rule and the final performance gate
+remain open; the current built-in optimizer audit is recorded in
+[optimizer_audit.md](00_design/optimizer_audit.md).
 
 ## Architecture in one minute
 
 ```text
 bound, canonical LogicalDecide
-  -> semantic adapter -> exact facts -> Match -> Prove
-                                        | miss: unchanged solver path
-                                        v
-                     select rule -> build and check complete plan
-                                        v
-                     relational operators -> DuckDB executor
+  -> mode/policy -> exact/unknown facts -> rule Match and Prove
+                      | miss: unchanged solver path (or require error)
+                      v
+                proved rule selection -> relational proposal
+                      v
+      scoped active check -> score guard -> free-row rank/count -> 0/1 assignment
+                     v
+             binding-preserving result boundary
+                     v
+             ordinary DuckDB physical operators
 ```
 
-The shared harness owns policy, facts, rule registration, fallback, the external
-output contract, and explanation. A rule owns its shape proof and relational
-assignment. Matching and proof are separate. Estimates may rank already-proved
-plans, never justify eligibility. There is no generated SQL, S1-specific physical
-operator, or retry through a solver after execution begins.
+The adapter inspects the complete bound DECIDE trees. Its first rule produces
+a typed S1 proof before building a relational assignment. A coordinator calls
+Match, Prove, Cost, Explain, and Rewrite; its shared Map step verifies the
+output-slot contract. A second class is still needed to demonstrate that these
+interfaces are reusable. Estimates cannot justify eligibility. There is no
+generated SQL, S1-specific physical operator, or retry through a solver after
+execution begins.
 
-The first-build contract uses a thin *logical-only* result boundary with an
-explicit output-slot map. It keeps DECIDE's external bindings and schema while
-its child is an ordinary relational plan. The [design decisions](00_design/decisions.md)
-and [experiments](00_design/experiments.md) are sufficient to start building;
-the [implementation checks](00_design/todo.md) must still pass. The first
-version may retain all output columns to keep the mapping sound, with selective
-pruning measured and added later.
+The implemented *logical-only* result boundary has an explicit output-slot
+map. It keeps DECIDE's external bindings and schema while its child is an
+ordinary relational plan. Its unused-column hook prunes only source outputs
+proved safe to skip: stored table columns, constants, and passthrough aliases
+through projections, filters, or inner comparison joins.
+Potentially observable computed outputs stay live. A hidden rank keeps
+validation live when `x` is unused or the upper bound is zero. The
+[optimizer audit](00_design/optimizer_audit.md) covers the current built-in
+passes; [performance measurements](04_performance/s1_api_phase.md#window-sort-storage-and-joined-source-pruning)
+record the wide-row and joined-source gains, rank sort-buffer size, and peak
+memory uncertainty.
 
-The first vertical slice is the global upper-cardinality part of S1. It is
-deliberately narrow and falls back on everything not proved. The class
-mathematics and other problem classes live **only** in the Word catalogue.
+The current S1 proof accepts source-column `PER` keys and a deterministic,
+source-only top-level `WHEN` or aggregate-local `WHEN` on the count.
+Paired bounds require identical membership.
+Numeric source-valued count bounds can vary by row; each is converted to
+DOUBLE before its group limit is reduced, with every NULL/NaN checked.
+Rows with NULL `PER` keys or a false aggregate `WHEN` bypass that bound but may
+still obey per-row pins; score validation covers every row. If no row is eligible
+for a scoped aggregate on a nonempty source, the direct plan raises DECIDE's
+empty-aggregate error. The [grouped five-million-row
+measurements](04_performance/s1_api_phase.md#grouped-cardinality-intervals)
+test this partitioned plan at scale.
+
+The first vertical slice is deliberately narrow and falls back on everything
+not proved. The class mathematics and other problem classes live **only** in
+the Word catalogue. The setting `decide_direct_solve` is `off` by default;
+`auto` tries the rule and falls back; `require` reports why it missed. For a
+small worked query, use:
+
+```sql
+SET decide_direct_solve = 'require';
+EXPLAIN SELECT id, x FROM (
+  FROM (VALUES (1, 2.0), (2, -1.0), (3, 5.0)) t(id, score)
+  DECIDE x(BOOL)
+  SUCH THAT SUM(x) <= 1
+  MAXIMIZE SUM(score * x)
+) q;
+```
+
+The plan ranks all three scores, assigns `x=1` to id 3, and returns all three
+rows. A miss in `require` is an error before solver work; use `auto` to retain
+solver fallback. Both optimized logical and physical `EXPLAIN` display the
+decision record.
 
 ## Where to read and work
 
@@ -51,7 +109,9 @@ mathematics and other problem classes live **only** in the Word catalogue.
   differential/oracle tests, and edge outcomes. [Todo](03_correctness/todo.md) ·
   [done](03_correctness/done.md).
 - [04_performance/](04_performance/): end-to-end measurement and cost evidence.
-  [Todo](04_performance/todo.md) · [done](04_performance/done.md).
+  [Large-scale S1 measurements](04_performance/s1_large_scale.md) ·
+  [API phase measurements](04_performance/s1_api_phase.md) ·
+  [todo](04_performance/todo.md) · [done](04_performance/done.md).
 - [05_follow_on/](05_follow_on/): second-rule reuse, wider S1, and ANR adapter.
   [Todo](05_follow_on/todo.md) · [done](05_follow_on/done.md).
 - [Problem-class catalogue](decidb_direct_relational_rewrites.docx): the sole

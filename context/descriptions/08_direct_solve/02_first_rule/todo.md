@@ -3,26 +3,8 @@
 Read the [prototype contract](spec.md) before editing this rule. The Word
 catalogue owns the class proof. This TODO owns only the implementation slice.
 
-- [ ] **RULE-01 — Complete matcher.** Depends: HAR-01. Recognize the
-  admitted bound/canonical shape from semantic facts; reject every extra
-  objective/constraint factor, scope, grouping, filter, qualifier, frame, and
-  unsupported expression. Return a stable reason for each one-condition-away
-  miss. Do not use data samples or estimates.
-- [ ] **RULE-02 — Eligibility proof.** Depends: RULE-01, HAR-02. Produce
-  a proof object containing variable identity/domain, capacity, objective
-  direction and coefficient, guard obligations, and output identity. The
-  builder cannot run from an incomplete proof.
-- [ ] **RULE-03 — Relational assignment.** Depends: RULE-02, HAR-03. Build bound
-  DuckDB operators for DOUBLE score evaluation, global ranking, and complete
-  `INTEGER` 0/1 output. Handle maximize/minimize, zero/worsening coefficients,
-  ties, empty input, and capacity above row count without dropping source rows.
-- [ ] **RULE-04 — Runtime guard.** Depends: RULE-03. Insert the mandatory
-  NULL/non-finite check after typed-score conversion and before the global
-  rank. Keep a blocking validation dependency at capacity zero and with unused
-  `x`; preserve deterministic expression errors. Complete
-  [DES-09](../00_design/todo.md) before declaring this done. A direct plan that
-  leaves a solver-read value unchecked is not eligible.
-
-**Exit gate:** every positive case has a complete structural proof and ordinary
-relational assignment; every near miss falls back before plan mutation. Final
-acceptance still depends on [correctness](../03_correctness/todo.md).
+No first-rule implementation tasks remain. The accepted slice is documented
+in [done.md](done.md). The [correctness gate](../03_correctness/done.md) is
+complete for admitted global, scoped, and pinned forms. Wider fixed-decision
+and S1 forms are tracked in [follow-on work](../05_follow_on/todo.md). Final
+promotion still depends on [performance](../04_performance/todo.md).

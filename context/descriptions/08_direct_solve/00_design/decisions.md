@@ -1,10 +1,10 @@
 # Prototype design decisions
 
-Status: **ready to begin the first implementation**, with the invariants below
-as acceptance criteria. The [experiments](experiments.md) provide the evidence
-and its limits. These choices define behavior and ownership; specific DuckDB
-classes and optimizer hooks may change when the implementation tests demand it.
-No direct rewrite is shipped yet.
+Status: **first opt-in prototype implemented**. These decisions remain the
+acceptance criteria. The [experiments](experiments.md) explain why they were
+chosen; [correctness/done.md](../03_correctness/done.md) records current test
+evidence. The [current built-in optimizer audit](optimizer_audit.md) is complete;
+the performance and production selection gates remain open, so `off` is still the default.
 
 ## 1. Detection and proof
 
@@ -40,6 +40,14 @@ correct physical-lowering entry point. Exposing the general planner overload
 publicly was only a spike expedient. Serializer and parent-context regressions
 are required before the boundary is considered implemented.
 
+The later pruning implementation keeps the same external map and required
+validation dependency. It prunes only unreferenced outputs whose source
+evaluation is proved skippable: stored columns, constants, and passthrough
+aliases through projections, filters, or inner comparison joins. Computed
+outputs remain live by default because the solver path can
+raise an error while evaluating an unused column. A direct/solver regression
+uses `error('payload boom')` to enforce this distinction.
+
 Why: `LogicalDecide` currently exposes child bindings plus decision bindings.
 An ordinary projection allocates new bindings. The first spike's transparent
 wrapper let the optimizer prune its child to one `42` column while a parent
@@ -49,7 +57,7 @@ still read column 2. Explicit mapping/dependencies fixed the spike.
 
 For S1, construct one typed score slot per input row, then convert its result
 to the solver's DOUBLE domain. A truth-or-error guard checks NULL
-and non-finite values before global ranking. Preserve DuckDB errors from
+and non-finite values before ranking within the proved scope. Preserve DuckDB errors from
 deterministic score expressions that throw. The guard must execute over every
 DECIDE input row **when the DECIDE result is consumed**, including unused `x`,
 capacity zero, and a parent `LIMIT 1` or filter. An input `WHERE` can remove
@@ -69,10 +77,10 @@ execution begins.
 ## 4. Optimizer movement
 
 The boundary blocks parent transformations that change source rows, cardinality,
-or the scope of the global rank. Optimizers may still work *inside* its child
+or the scope of the rank. Optimizers may still work *inside* its child
 when they preserve the score, validation, and row-to-assignment mapping. The
-first version pins required outputs explicitly; it does not claim that generic
-projection pruning understands the new boundary. Audit the passes after the
+initial version pinned every output explicitly; the current unused-column
+pass calls the boundary's opt-in pruning hook. Audit the passes after the
 DECIDE optimizer (CTE filter pusher, join order, unused columns, column
 lifetime, limit/TopN, late materialization, and later filter rewrites) with
 parent filter, join, aggregate, nested, and serializer tests. Any pass that
@@ -107,9 +115,24 @@ change, but visible rule identity cannot be inferred from a `WINDOW` node.
 
 ## 6. Numeric contract
 
-Admit an immutable, bound constant capacity whose value is an integer in
-`[0, 2^53]`, exactly convertible to DOUBLE and to the window rank's `BIGINT`.
-Other bounds remain solver cases in this first slice. Evaluate data-only score
+The first build admitted an immutable upper capacity whose value was an
+integer in `[0, 2^53]`. The current rule normalizes strict, fractional, and
+negative finite consistently foldable numeric bounds to inclusive integer limits. It
+admits global bounds and proved source-only `PER`/`WHEN` scopes. Values must
+round-trip exactly through DOUBLE and limits must fit within `2^53`;
+numeric source-valued bounds can also vary by row. Deterministic, nonthrowing
+source-only numeric expressions such as `COALESCE` and `TRY_CAST` are admitted.
+Each converts through the
+same DOUBLE domain as the solver, validates NULL/NaN before scoring, and
+reduces eligible group values. Their limits intersect. Throwing source
+expressions remain solver cases because their error order is not yet proved
+through the shared window stage.
+An aggregate-local `WHEN` on unit `SUM(x)` uses the same count membership as
+top-level `WHEN`. For a source-valued RHS, the solver reduces it over all group
+rows, including those excluded from the count. Each bound records whether its
+MIN/MAX window uses that full group or the top-level `WHEN` membership; the
+ranking window always follows the count membership.
+Evaluate data-only score
 casts with DuckDB semantics before DOUBLE conversion; guard the converted
 value. Compare that finite DOUBLE value with zero and rank by it. Keep each
 input row's own decision, including duplicate-valued rows. Ties may choose

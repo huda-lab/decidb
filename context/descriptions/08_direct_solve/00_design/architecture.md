@@ -61,19 +61,25 @@ For each original DECIDE output slot, it owns an explicit mapping to a child
 slot, advertises the old binding and type to parents, enforces the scope of
 legal optimizer transformations, and carries a structured decision record.
 It contains no class algorithm and lowers to its already-resolved ordinary
-relational child. The first build may pin all mapped outputs and the blocking
-validation dependency. A later liveness pass can prune selectively through the
-same map; it cannot change the external binding contract.
+relational child. The initial build pinned all mapped outputs. The current
+unused-column pass prunes an unreferenced output dependency only with a
+source-evaluation proof, while always retaining the blocking validation
+dependency. The external binding contract does not change.
 
 The boundary blocks parent work that would change the decision input: a filter
-above a global rank cannot cross below it. Inner query optimization remains
+above a rank cannot cross below it. Inner query optimization remains
 legal if it preserves the score, validation, and row-to-assignment mapping.
 The [bound-plan spike](experiments.md) showed that a wrapper advertising old
 bindings without child dependencies is unsafe: unused-column removal collapsed
-the child to one column. Explicit dependencies kept the plan sound. Retaining
-all outputs initially has a measurable cost; safe pruning is a follow-on
-optimization, not an implicit property of the wrapper. Never use a global
-table-index substitution or rerun binding resolution during child lowering.
+the child to one column. Explicit dependencies kept the plan sound. The
+current shared boundary has one dependency per advertised output plus a
+mandatory suffix for validation. An unreferenced output becomes an internal
+typed NULL placeholder only when skipping its evaluation is proved safe;
+otherwise its original dependency stays live. This preserves errors from
+computed source columns while allowing unused stored columns to leave a wide
+rank through passthrough projections, filters, and inner comparison joins.
+Never use a global table-index substitution or rerun binding resolution during
+child lowering.
 
 Each admitted plan must preserve input-row cardinality, source-column order and
 types, every user decision's SQL type and identity, and surrounding query
@@ -103,19 +109,33 @@ items
   -> return every original row with x through the output-slot boundary
 ```
 
-For minimization, rank ascending and select only negative scores. An upper
-capacity never forces a zero or worsening score to be chosen. `ORDER BY ...
-LIMIT 1` alone would discard the unchosen row, so the window rank feeds a
-per-row `CASE` assignment instead. The boundary lets an outer `WHERE id = 1`
-observe `(1, 9, 0)` after the global decision is made.
+For minimization, rank ascending and select only negative scores under an
+upper-only bound. The current interval rule selects the first `L` free ranks
+when a lower bound forces them, then improving scores through `U`, after
+subtracting fixed selected rows. Partitioned windows handle proved `PER`
+groups. A full-partition count checks a positive lower bound against a
+nonempty eligible group. `ORDER BY ... LIMIT 1` alone would
+discard the unchosen row, so the window rank feeds a per-row `CASE`
+assignment instead. The boundary lets an outer `WHERE id = 1` observe
+`(1, 9, 0)` after the global decision is made.
 
 ## Runtime validation and outcomes
 
 The rule proof handles structural eligibility. Value-dependent conditions such
 as NULL and non-finite coefficients need a runtime check over every S1 input
 row when DECIDE executes, even if the parent never projects the decision. A
-computed DOUBLE score feeds both an always-true-or-throw guard and the global
-rank. The guard sits after the DECIDE input's own filters and before the rank.
+computed DOUBLE score feeds both an always-true-or-throw guard and the rank.
+For scoped aggregates, a separate active-row check precedes score evaluation
+so the solver's empty-aggregate error has the same priority. Admitted
+source-valued count bounds use blocking all-row NULL/NaN checks and grouped
+MIN/MAX reduction between the active check and score evaluation. An equality
+bound adds a clause-wide variation count before the ordered validation guard,
+preserving error order across different groups. The score guard
+sits after the DECIDE input's own filters and before the rank.
+Aggregate-local `WHEN` on `SUM(x)` filters the count membership. A
+source-valued RHS under that filter reduces over every group row, so its bound
+window omits the active partition while ranking keeps it. This distinction is
+recorded per source-valued bound.
 The rank or an alternative blocking validator must remain live when `x` is
 unused or capacity is zero. A standalone filter can skip a late invalid row
 under a parent `LIMIT 1`, as the [experiment](experiments.md) showed. An outer
