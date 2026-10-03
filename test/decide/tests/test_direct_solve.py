@@ -941,6 +941,29 @@ def test_s1_source_integer_bound_validates_bypassed_rows(decidb_cli, scope, firs
 
 
 @pytest.mark.correctness
+def test_s1_null_source_bound_error_names_the_column(decidb_cli):
+    """A NULL bound column is reported like the solver path: the column, then COALESCE or WHERE."""
+
+    def error(cap_type, cap, bound="cap", mode="require"):
+        sql = f"""
+            SELECT x FROM (
+                FROM (VALUES (1,{cap}::{cap_type},9.0)) t(id,cap,score)
+                DECIDE x(BOOL) SUCH THAT SUM(x)<={bound} MAXIMIZE SUM(score*x)
+            ) q
+        """
+        return _raw(decidb_cli, sql, mode=mode).stderr
+
+    plain = 'DECIDE: column "cap" is NULL. Impute it with COALESCE(cap, 0) or filter those rows out with a WHERE'
+    assert plain in error("INTEGER", "NULL", mode="off")
+    assert plain in error("INTEGER", "NULL")
+    floating = 'DECIDE: column "cap" is NULL or NaN. Impute NULLs with COALESCE(cap, 0) or filter those rows out'
+    assert floating in error("DOUBLE", "NULL")
+    assert floating in error("DOUBLE", "'NaN'")
+    computed = error("VARCHAR", "'bad'", bound="TRY_CAST(cap AS INTEGER)")
+    assert "DECIDE: the bound expression is NULL. Impute it with COALESCE(), or filter those rows out" in computed
+
+
+@pytest.mark.correctness
 def test_s1_source_integer_bound_error_order_and_late_validation(decidb_cli):
     late = """
         SELECT x FROM (

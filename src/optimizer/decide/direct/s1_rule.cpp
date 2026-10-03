@@ -46,6 +46,8 @@ struct S1Proof final : DirectRuleProof {
 		ExpressionType comparison;
 		unique_ptr<Expression> value;
 		bool rhs_all_group_rows;
+		//! Name of the source column when the bound is exactly one; empty for a computed bound.
+		string column_name;
 	};
 	struct SourcePin {
 		idx_t source_clause_id;
@@ -180,7 +182,7 @@ bool FiniteExactFoldableDouble(ClientContext &context, const Expression &expr, d
 }
 
 bool SourceNumericColumnBound(const Expression &expr, const vector<ColumnBinding> &source_bindings, idx_t &slot,
-                              LogicalType &type) {
+                              LogicalType &type, string &name) {
 	const Expression *current = &expr;
 	while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		if (!current->return_type.IsNumeric() || current->CanThrow()) {
@@ -201,6 +203,7 @@ bool SourceNumericColumnBound(const Expression &expr, const vector<ColumnBinding
 	}
 	slot = found - source_bindings.begin();
 	type = ref.return_type;
+	name = ref.GetAlias();
 	return true;
 }
 
@@ -561,14 +564,16 @@ public:
 			auto type = comparison.GetExpressionType();
 			idx_t source_slot = DConstants::INVALID_INDEX;
 			LogicalType source_type;
-			bool source_column = SourceNumericColumnBound(*comparison.right, facts.source_bindings,
-			                                             source_slot, source_type);
+			string source_name;
+			bool source_column = SourceNumericColumnBound(*comparison.right, facts.source_bindings, source_slot,
+			                                              source_type, source_name);
 			if (!comparison.right->IsFoldable() &&
 			    (source_column || SourceNumericExpressionBound(*comparison.right, facts.decide_index,
 			                                                    facts.source_bindings))) {
 				proof->source_bounds.push_back({factor->source_clause_id, source_slot,
 				                                source_column ? source_type : comparison.right->return_type, type,
-				                                comparison.right->Copy(), sum->filter != nullptr});
+				                                comparison.right->Copy(), sum->filter != nullptr,
+				                                source_column ? source_name : string()});
 				continue;
 			}
 			if (type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
@@ -700,6 +705,23 @@ public:
 	DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
 	                                 const DirectRuleProof &candidate) const override;
 };
+
+//! The error for a NULL or NaN source-valued count bound, worded like the solver path: name the column when the
+//! bound is one, otherwise point at the bound expression. Only floating point values can be NaN.
+string InvalidSourceBoundMessage(const S1Proof::SourceBound &bound) {
+	auto type = bound.source_slot == DConstants::INVALID_INDEX ? bound.value->return_type : bound.source_type;
+	bool may_be_nan = type == LogicalType::FLOAT || type == LogicalType::DOUBLE;
+	auto problem = may_be_nan ? "NULL or NaN" : "NULL";
+	auto impute = may_be_nan ? "Impute NULLs" : "Impute it";
+	if (bound.column_name.empty()) {
+		return StringUtil::Format("DECIDE: the bound expression is %s. %s with COALESCE(), or filter those rows "
+		                          "out with a WHERE clause.",
+		                          problem, impute);
+	}
+	return StringUtil::Format("DECIDE: column \"%s\" is %s. %s with COALESCE(%s, 0) or filter those rows out "
+	                          "with a WHERE clause.",
+	                          bound.column_name, problem, impute, bound.column_name);
+}
 
 //! Builds the relational plan for one proved S1 problem. The constructor derives what every stage shares; each stage
 //! takes the plan built so far and returns it extended. Data a later stage needs travels in explicit structs.
@@ -1038,7 +1060,7 @@ private:
 			}
 			auto clause_valid = make_uniq<BoundCaseExpression>(
 			    std::move(no_invalid), std::move(equality_valid),
-			    DirectErrorPredicate(optimizer, "DECIDE constraint right-hand side contains NULL or NaN"));
+			    DirectErrorPredicate(optimizer, InvalidSourceBoundMessage(bound)));
 			clause_checks.emplace_back(bound.source_clause_id, std::move(clause_valid));
 		}
 		for (idx_t i = 0; i < proof.source_pins.size(); i++) {
