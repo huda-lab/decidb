@@ -6,6 +6,44 @@
 static void
 base_yyerror(YYLTYPE *yylloc, core_yyscan_t yyscanner, const char *msg)
 {
+	/*
+	 * DecidB: inside a DECIDE clause the lexer turns a few words into DECIDE
+	 * tokens, and a syntax error landing on one is usually a name clash (a
+	 * column called `per`) or DuckDB's if(...) function. Say what the word
+	 * means there and how to write the name instead.
+	 */
+	const char *hint = NULL;
+	switch (pg_yyget_extra(yyscanner)->decide_last_token) {
+	case PER_DECIDE:
+		hint = "inside DECIDE, PER opens a key prefix (PER k:); a column named per is written \"per\" or t.per";
+		break;
+	case WITHIN_DECIDE:
+		hint = "inside DECIDE, WITHIN names a frame's partition (OVER (t WITHIN k)); a column named within is "
+		       "written \"within\" or t.within";
+		break;
+	case IF_DECIDE:
+		hint = "inside DECIDE, IF opens a guard (IF b:); the if(...) function is not available there, so compute "
+		       "the value in a CTE before the DECIDE clause";
+		break;
+	case AT_DECIDE:
+		hint = "inside DECIDE, AT( opens a frame; a decision or column named at is written \"at\"";
+		break;
+	case BY_DECIDE:
+		hint = "inside DECIDE, BY ( names a reducer's group; a decision or column named by is written \"by\"";
+		break;
+	case OVER_DECIDE:
+		hint = "inside DECIDE, OVER ( orders a frame; a decision or column named over is written \"over\"";
+		break;
+	default:
+		break;
+	}
+	if (hint) {
+		const char *loc = pg_yyget_extra(yyscanner)->core_yy_extra.scanbuf + *yylloc;
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("%s at or near \"%s\": %s", msg, loc, hint),
+				 parser_errposition(*yylloc)));
+	}
 	parser_yyerror(msg);
 }
 
@@ -602,6 +640,15 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 					 parser_errposition(body_location)));
 		return body;
 	}
+
+	/* Both slots declared: the one query cannot carry two declarations. Judged here,
+	 * on this query's own two slots, so a DECIDE subquery in its FROM / WHERE (which
+	 * parses between them) cannot be mistaken for a second declaration. */
+	if (clause->variables != NULL)
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("DECIDE appears twice; declare the variables either before FROM or with SUCH THAT, not both"),
+				 parser_errposition(body_location)));
 
 	clause->variables = decl;
 	return body;

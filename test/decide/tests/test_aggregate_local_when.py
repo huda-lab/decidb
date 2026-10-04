@@ -668,19 +668,33 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
 @pytest.mark.edge_case
 @pytest.mark.error_infeasible
 def test_aggregate_local_when_all_filtered_out(decidb_cli):
-    """Mixed aggregate-local WHEN with one term's mask all-false — rejected
-    pre-solver per the "reject all empty aggregate sets" rule. Previously the
-    empty term was allowed to contribute 0 while the unmasked term still
-    bound; the strict rule catches it."""
-    decide_sql = """
+    """Mixed aggregate-local WHEN with one term's mask all-false: a reducer over
+    no rows has no value and contributes nothing beside a term that does read
+    rows (syntax_reference §4, 2026-09-29), so the clause is `SUM(x * value) <= 23`
+    and every row can be taken (10 + 5 + 8 = 23). A rule that read the empty
+    term as an error would refuse the query; one that read it as NULL for the
+    whole body would impose nothing and still give 23, so the bound is what
+    discriminates: with a cap of 20 the empty-term reading must drop a row."""
+    rows, cols = decidb_cli.execute("""
         SELECT name, value, flag, x FROM (
             VALUES ('a', 10, false), ('b', 5, false), ('c', 8, false)
         ) t(name, value, flag)
         DECIDE x(BOOL)
         SUCH THAT SUM(WHEN flag: x * value) + SUM(x * value) <= 23
         MAXIMIZE SUM(x * value)
-    """
-    decidb_cli.assert_error(decide_sql, match=r"empty|WHEN")
+    """)
+    xi, vi = cols.index("x"), cols.index("value")
+    assert sum(int(r[xi]) * int(r[vi]) for r in rows) == 23
+    rows, cols = decidb_cli.execute("""
+        SELECT name, value, flag, x FROM (
+            VALUES ('a', 10, false), ('b', 5, false), ('c', 8, false)
+        ) t(name, value, flag)
+        DECIDE x(BOOL)
+        SUCH THAT SUM(WHEN flag: x * value) + SUM(x * value) <= 20
+        MAXIMIZE SUM(x * value)
+    """)
+    xi, vi = cols.index("x"), cols.index("value")
+    assert sum(int(r[xi]) * int(r[vi]) for r in rows) == 18
 
 
 @pytest.mark.when
@@ -1717,7 +1731,7 @@ def test_when_with_data_column_scalar_left_rejected(decidb_cli):
         SUCH THAT col * (SUM(WHEN w: x)) <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
-    """, match=r"'col' varies per row, so it cannot multiply SUM\(x\)")
+    """, match=r"'col' varies across the rows SUM\(x\) reduces")
 
 
 @pytest.mark.when
@@ -1735,7 +1749,7 @@ def test_when_with_data_column_scalar_right_rejected(decidb_cli):
         SUCH THAT (SUM(WHEN w: x)) * col <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
-    """, match=r"'col' varies per row, so it cannot multiply SUM\(x\)")
+    """, match=r"'col' varies across the rows SUM\(x\) reduces")
 
 
 @pytest.mark.when
@@ -1753,7 +1767,7 @@ def test_when_divided_by_data_column_rejected(decidb_cli):
         SUCH THAT (SUM(WHEN w: x)) / col <= 5
             AND x <= 10
         MAXIMIZE SUM(x)
-    """, match=r"'col' varies per row, so it cannot divide SUM\(x\)")
+    """, match=r"'col' varies across the rows SUM\(x\) reduces")
 
 
 @pytest.mark.when

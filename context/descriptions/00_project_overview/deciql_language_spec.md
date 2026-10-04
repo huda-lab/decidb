@@ -24,13 +24,28 @@
 > (§9 #9's `sum(... max(...) by (c)) by (d) <= cap`; only the objective form
 > `MAX(PER k: SUM(e) BY (k))` is formulated), a frame inside a reducer or a
 > reducer inside a frame's body ("nested frame aggregation"), range frames
-> reducing with `MIN`/`MAX`/`AVG` (only `SUM` and `AT`), `ABS` over a frame term,
-> a non-constant `ELSE` value, `IF` guards on MIN/MAX/`<>`/ABS/quadratic/bilinear
-> bodies, a comparison inside an `AND`/`OR` guard (pure `AND`/`OR` of BOOL
-> decisions is supported), guards comparing a `REAL` decision, `=`/`<>` guards,
-> and frames or TEXT decisions inside an objective. Each is refused with a
-> message naming the restriction. Variant Signature (§7.2) is not implemented:
-> the FD rule of §6.3 rejects instead.
+> reducing with `MIN`/`MAX`/`AVG` (only `SUM` and `AT`), `ABS` or `POWER` over a
+> frame term, a non-constant `ELSE` value, `IF` guards on
+> MIN/MAX/`<>`/ABS/quadratic/bilinear/`IN` bodies (except an easy MIN/MAX over the
+> instance's own group, `per k if b: max(x) by (k) <= K`), a comparison inside an `AND`/`OR`
+> guard (pure `AND`/`OR` of BOOL decisions is supported), guards comparing a
+> `REAL` decision, `=`/`<>` guards, frames or TEXT decisions inside an objective,
+> and MIN/MAX, `<>`, ABS, quadratic or bilinear bodies in a constraint that reads
+> rows outside its own instance (a reducer keyed differently from `PER`, a reducer
+> beside a per-row term, a frame; an easy MIN/MAX against a bound-side reducer, as
+> in `max(x) <= min(cap)`, is supported), a MIN/MAX compared with a frame, and a
+> sum or difference of MIN/MAX terms under a `when`/`per` prefix. Each is refused with a message naming the
+> restriction. Variant Signature (§7.2) is not implemented: the FD rule of §6.3
+> rejects instead.
+>
+> Reviewed against the deck on 2026-09-29: the explicit default `per row` (§6.1,
+> deck p16) is accepted as `PER ROW`; `else NULL` (deck p43) as the spelled
+> default; a parenthesized key (`PER (a, b)`) as the same key; deck example 5's
+> data factor on a reducer (p21) binds when the reducer's `BY` key determines it;
+> deck p52's `per T.productID: at(first ...)` binds (an absolute selector needs
+> only the `WITHIN` partition determined). Two amendments to §6.2/§6.3 are marked
+> *2026-09-29* below: NULL is a key value for generation too, and a reducer over
+> no rows has no value rather than being an error.
 >
 > Reading order: §1 principles → §3–4 grammar → §6–7 semantics → §8 lowering →
 > §9 conformance examples.
@@ -289,11 +304,15 @@ Frame partition `π`: `∅` if `WITHIN` omitted, else the given `P`.
 
 Rules carried from today (still hold): `INT` result is `BIGINT`; `<>` / strict
 `<` / `>` require a provably integer LHS; a NULL in any value the solver reads
-is an error, not a zero. A NULL in a **key** is not a value the solver reads:
-a generation key (`PER K`) generates no instance for a NULL key; an aggregation
-key (`BY`) puts NULL-keyed rows in a group of their own; a frame's order key puts
-a NULL-keyed row on no timeline (its instance is skipped); a decision keyed on
-NULL exists and reads back.
+is an error, not a zero. A NULL in a **key** is not a value the solver reads: it
+is a key value of its own, as in SQL's `GROUP BY` (*2026-09-29*: generation
+included — a `PER K` constraint imposes its instance on the NULL-keyed rows, and
+`WHEN K IS NOT NULL` excludes them; the earlier rule that a NULL generation key
+produced no instance left the NULL-keyed decision unconstrained by every keyed
+clause). An aggregation key (`BY`) and a frame partition (`WITHIN`) put
+NULL-keyed rows in a group of their own; a frame's order key puts a NULL-keyed
+row on no timeline (its instance is skipped); a decision keyed on NULL exists and
+reads back.
 
 A `SEMI` range whose floor is a *data* column that is negative on some rows
 needs an explicit negative constant bound as well (`x(SEMIINT) BETWEEN lo AND hi
@@ -310,9 +329,14 @@ Implementation note: a column is also determined by a key when it belongs to a
 base table whose `PRIMARY KEY` / `UNIQUE` columns all lie in the key — the
 schema's own functional dependency, which is how `PER S.shipmentID: ... BY
 (S.depotID, S.day)` is admitted when `shipmentID` is the table's key and refused
-over an unkeyed `VALUES` list. A reducer over an **empty** row set (a `WHEN`
-that admits nothing, a `BY` group with no rows) is an error naming the
-reducer, not 0 and not NULL.
+over an unkeyed `VALUES` list; a decision is determined the same way (its own key
+inside the generation key, or covered by a table key of its relation — for a
+per-row decision, a table key of every relation in `FROM`). A reducer over an
+**empty** row set (a `WHEN` that admits nothing, a `BY` group with no rows) has
+no value (*2026-09-29*: the deck's NULL policy of §7.3 applied to reducers): the
+instance is not imposed; beside another reducer that does read rows it
+contributes nothing; a reduced constraint none of whose instances reads a row
+is refused naming its prefix; in an objective it is an error.
 
 For **every** scoped expression reached recursively — with filtered relation
 `Rθ`, resolved key `κ`, direct tuple terms `eᵢ`, reducer groups `γⱼ`, frame

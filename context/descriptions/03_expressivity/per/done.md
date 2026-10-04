@@ -129,3 +129,20 @@ The number of generated constraints equals `|distinct_values| x |PER_constraints
 - `src/planner/binder/query_node/bind_select_node.cpp` — nested aggregate detection for PER objectives
 - `src/execution/operator/decide/physical_decide.cpp` — unified WHEN+PER evaluation
 - `src/decidb/formulation/ilp_model_builder.cpp` — group-aware constraint builder
+
+## Syntax review of 2026-09-29
+
+- **NULL keys.** A NULL in a `PER` key is a key value, as in SQL's `GROUP BY`: the
+  NULL-keyed rows share one decision and one constraint instance; `WHEN k IS NOT
+  NULL PER k: ...` excludes them. (The retired rule excluded them from generation
+  only, which left a NULL-keyed decision unconstrained by every keyed clause.)
+- **Spellings.** `PER ROW` is the explicit default; `PER (a, b)` is the same key as
+  `PER a, b`; a `JOIN ... USING (col)` column is one column in a key.
+- **Determination through table keys.** A decision is determined by a generation
+  key that covers a `PRIMARY KEY` / `UNIQUE` of its relation (a row decision:
+  of every relation in `FROM`), so `PER d.id: x <= cap` over a keyed table binds
+  with a row-scoped `x`.
+- **Several `BY` keys in one body** with decisions (`PER g: SUM(x) BY (g) <= 0.5 *
+  SUM(x) BY ()`) are distinct terms; a factor the reducer's `BY` key determines may
+  scale it (`D.share * SUM(ship) BY (D)`).
+- **A prefix over `BETWEEN`** governs both comparisons.

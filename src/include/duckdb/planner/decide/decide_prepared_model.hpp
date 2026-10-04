@@ -99,6 +99,12 @@ struct DecideConstraint {
 	//! one instance per row, each reading its own row and the reducers' groups.
 	bool has_reduced_terms = false;
 	bool was_minmax_easy = false;    // True if optimizer stripped an easy-direction MIN/MAX (MINMAX_EASY_REWRITE_TAG). Lets Site 1 enforce empty-WHEN rejection on user-written MIN/MAX even though the LHS is now per-row.
+	//! The stripped reducer's BY key (MINMAX_EASY_BY_TAG_PREFIX): a row's bound is the
+	//! tightest one among the instances of its own group. INVALID means `BY ()`.
+	idx_t minmax_easy_by_scope = DConstants::INVALID_INDEX;
+	//! The stripped reducer's own WHEN (MINMAX_EASY_FILTER_TAG): the rows it bounds.
+	//! Unlike `when_condition` it does not select the instances whose bounds apply.
+	unique_ptr<Expression> minmax_easy_filter;
 	idx_t minmax_clause_idx = DConstants::INVALID_INDEX; // index into LogicalDecide::minmax_clause_labels
 	string minmax_agg_type;                                 // "min" or "max" (empty if not minmax)
 	idx_t ne_clause_idx = DConstants::INVALID_INDEX;     // index into LogicalDecide::ne_clause_labels

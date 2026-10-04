@@ -82,7 +82,7 @@ def test_mixed_compound_guard_is_named(decidb_cli):
         DECIDE o(BOOL), x(INT) BETWEEN 0 AND 9
         SUCH THAT IF o AND cap > 5: x <= 1
         MAXIMIZE SUM(x)
-    """, match=r"combines BOOL decisions with AND or OR.*comparison inside the combination is not supported yet")
+    """, match=r"reads known data.*WHEN")
 
 
 @pytest.mark.error

@@ -587,7 +587,7 @@ def test_foreign_column_inside_qualified_reducer_rejected(decidb_cli):
 def test_row_scoped_decision_inside_qualified_reducer_rejected(decidb_cli):
     """A row-scoped decision belongs to no relation, so it cannot be de-duplicated
     by one — the message points at declaring it on the qualified relation."""
-    with pytest.raises(DecidBCliError, match="is not determined by the generation key"):
+    with pytest.raises(DecidBCliError, match=r"decision 'y'.*PER n"):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls=", y(INT)",
             constraint="y <= 5",

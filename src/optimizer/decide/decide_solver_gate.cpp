@@ -19,18 +19,19 @@ bool IsIntegralColumnType(const LogicalType &type) {
 }
 
 //! Could the built model contain an integral column? True for a declared `x(INT)` or
-//! `x(BOOL)`, and true whenever the query uses a construct that gets an auxiliary
-//! column, since every DeciDB auxiliary is either a Big-M indicator (binary) or a
-//! continuous partner of one.
+//! `x(BOOL)`, and for every construct whose formulation adds a binary switch.
 //!
-//! The auxiliary half is deliberately coarse. Some auxiliaries are appended to
-//! `decide_variables` by stage 05 and counted in `num_auxiliary_vars`; others are
-//! added to the global block during execution, when the Big-M constants are known.
-//! Rather than enumerate the second group — a list that would silently rot as
-//! constructs are added — this treats *any* construct that reaches execution with
-//! work left to do as producing one. Over-reporting costs a refused query that a
-//! quadratic-capable solver would have run anyway; under-reporting would hand a
-//! backend a model it cannot load, which is the failure this gate exists to prevent.
+//! Two kinds of auxiliary exist. Those stage 05 creates (an ABS sign switch, an IN
+//! indicator, an L0 switch, a bilinear product) are appended to `decide_variables`
+//! with their exact type, so the loop below reads them like any declared decision:
+//! an ABS bound on a REAL expression is a continuous column and makes nothing
+//! integral. Those added during execution, when the Big-M constants are known, come
+//! from a hard MIN/MAX clause, a `<>` clause, a comparison guard and the MIN/MAX
+//! objectives; each is named here by the plan field that records it. (A comparison
+//! guard and `<>` already need integer decisions, which the loop sees.) Counting any
+//! auxiliary as integral, as this once did, refused a convex continuous QP such as
+//! `SUM(ABS(e)) + SUM(POWER(e, 2))` on HiGHS, while a hard `MAX(x) >= 5` slipped
+//! through and reached the backend as an internal error.
 bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	for (idx_t var = 0; var < op.decide_variables.size(); var++) {
 		if (var < op.is_boolean_var.size() && op.is_boolean_var[var]) {
@@ -40,7 +41,7 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 			return true;
 		}
 	}
-	if (op.num_auxiliary_vars > 0) {
+	if (!op.minmax_clause_labels.empty() || !op.ne_clause_labels.empty()) {
 		return true;
 	}
 	if (!op.composed_minmax_constraints.empty() || !op.composed_minmax_objective_terms.empty()) {
@@ -109,9 +110,29 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 		        op.decide_sense == DecideSense::MAXIMIZE
 		            ? "MINIMIZE the squared terms instead, or use a linear objective"
 		            : "MINIMIZE the squared terms without negating them, or use a linear objective"};
-	case SolverModelClassGap::MIQP:
-		return {"the objective squares decision variables that are not continuous",
-		        "declare those variables REAL, as in x(REAL), or use a linear objective"};
+	case SolverModelClassGap::MIQP: {
+		// Say where the integers come from: a squared decision that is INT or BOOL, or a
+		// construct elsewhere in the query that adds binary switches beside a squared
+		// REAL decision.
+		bool squares_integral = false;
+		if (op.prepared.objective) {
+			for (auto &term : op.prepared.objective->squared_terms) {
+				idx_t var = term.variable_index;
+				if (var == DConstants::INVALID_INDEX || var >= op.decide_variables.size()) {
+					continue;
+				}
+				squares_integral |= (var < op.is_boolean_var.size() && op.is_boolean_var[var]) ||
+				                    IsIntegralColumnType(op.decide_variables[var]->return_type);
+			}
+		}
+		if (squares_integral) {
+			return {"the objective squares decision variables that are not continuous",
+			        "declare those variables REAL, as in x(REAL), or use a linear objective"};
+		}
+		return {"the objective is quadratic and the query also needs integer switches (an INT or BOOL "
+		        "decision, or a MIN/MAX, ABS, <>, IN or guard that adds them)",
+		        "use a linear objective, or state the switching part without them"};
+	}
 	case SolverModelClassGap::SINGULAR_QUADRATIC:
 		// The remedy deliberately does not offer "square each variable separately":
 		// stage 05 allows only one quadratic group per objective, so

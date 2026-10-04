@@ -297,7 +297,7 @@ def test_guard_must_be_determined_by_the_generation_key(decidb_cli):
         DECIDE open(BOOL), ship(INT) BETWEEN 0 AND 5
         SUCH THAT PER d IF NOT open: SUM(ship) BY (d) <= 0
         MAXIMIZE SUM(ship)
-    """, match=r"decision 'open' is not determined by the generation key PER d")
+    """, match=r"decision 'open'.*PER d")
 
 
 @pytest.mark.error

@@ -364,6 +364,32 @@ static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
 //! per-row. Set on the BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 
+//! The easy per-row form of `MAX(e) BY (k) <= K` keeps the reducer's BY key on the
+//! comparison: every instance bounds every row of ITS k-group, so a row's bound is the
+//! tightest K among the instances of its own group, not of the whole input. Format:
+//! "__minmax_easy_by_<scope_idx>__". Absent means `BY ()`: the tightest K overall.
+static constexpr const char *MINMAX_EASY_BY_TAG_PREFIX = "__minmax_easy_by_";
+
+inline string MakeMinMaxEasyByTag(idx_t scope_idx) {
+	return string(MINMAX_EASY_BY_TAG_PREFIX) + to_string(scope_idx) + "__";
+}
+
+inline bool TryParseMinMaxEasyByTag(const string &alias, idx_t &scope_idx) {
+	string digits;
+	if (!ExtractDecideTagPayload(alias, MINMAX_EASY_BY_TAG_PREFIX, digits) ||
+	    digits.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	scope_idx = static_cast<idx_t>(std::stoull(digits));
+	return true;
+}
+
+//! Marks the WHEN wrapper the easy MIN/MAX rewrite puts around its per-row form to
+//! carry the reducer's OWN filter (`MAX(WHEN f: e) <= K`). It selects the rows that are
+//! bounded, not the instances that bound them, so it must not replace or narrow the
+//! clause's WHEN: the bound is still the tightest K over every instance of the group.
+static constexpr const char *MINMAX_EASY_FILTER_TAG = "__minmax_easy_filter__";
+
 //! Tag marking optimizer-generated helper constraints that define auxiliaries or
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
@@ -389,6 +415,11 @@ static constexpr const char *NORM_MARKER_TAG_PREFIX = "__decide_norm_";
 //! scalar subquery. Shape alone cannot distinguish that query-wide column ref from
 //! ordinary row data after PlanSubqueries.
 static constexpr const char *QUERY_WIDE_VALUE_TAG = "__query_wide_value__";
+//! A factor on a reducer that the binder proved to be one value per group the
+//! reducer reads (its BY key determines it: `D.share * SUM(ship) BY (D)`). The
+//! canonicalizer admits such a factor beside a query-wide one; it folds into the
+//! reducer's per-row coefficients exactly, since it is constant on every group.
+static constexpr const char *GROUP_WIDE_FACTOR_TAG = "__group_wide_factor__";
 
 //! Semantic provenance stamped on a flattened CORRELATED scalar subquery. It remains
 //! row-varying; the tag exists so downstream diagnostics never quote DuckDB's internal

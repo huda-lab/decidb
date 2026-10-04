@@ -1,6 +1,8 @@
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/decide/decide_declaration.hpp"
 #include "duckdb/parser/decide/decide_frame_spec.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
@@ -14,7 +16,7 @@ namespace duckdb {
 // resolves a name or decides a shape.
 
 void Transformer::TransformDecideScope(duckdb_libpgquery::PGDecideScope *scope, DecideScopeKind &kind,
-                                       vector<unique_ptr<ParsedExpression>> &key) {
+                                       vector<unique_ptr<ParsedExpression>> &key, bool row_spelling) {
 	key.clear();
 	if (!scope) {
 		kind = DecideScopeKind::ROW;
@@ -32,6 +34,18 @@ void Transformer::TransformDecideScope(duckdb_libpgquery::PGDecideScope *scope, 
 		for (auto cell = scope->keys->head; cell != nullptr; cell = cell->next) {
 			auto node = PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value);
 			key.push_back(TransformExpression(node));
+		}
+		// `PER ROW` is the spec's explicit spelling of the default (one instance per
+		// row, spec §6.1). ROW is a keyword that also reads as a plain identifier, so
+		// it reaches here as a one-element key; a column literally named `row` is
+		// keyed as `t.row`. Only a generation key (`PER`) has that spelling: a frame's
+		// `WITHIN row` and a reducer's `BY (row)` name the column.
+		if (row_spelling && key.size() == 1 && key[0]->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+			auto &colref = key[0]->Cast<ColumnRefExpression>();
+			if (colref.column_names.size() == 1 && StringUtil::CIEquals(colref.column_names[0], "row")) {
+				key.clear();
+				kind = DecideScopeKind::ROW;
+			}
 		}
 		return;
 	}
@@ -186,18 +200,30 @@ unique_ptr<ParsedExpression> Transformer::TransformDecideFrame(duckdb_libpgquery
 	spec.cyclic = root.cyclic;
 	spec.has_within = root.within != nullptr;
 
+	// `ELSE NULL` is the deck's spelling of the default policy (a missing position
+	// reads nothing), not a fill value of NULL.
+	unique_ptr<ParsedExpression> else_value;
+	if (root.else_value) {
+		else_value = TransformExpression(root.else_value);
+		if (else_value->GetExpressionClass() == ExpressionClass::CONSTANT &&
+		    else_value->Cast<ConstantExpression>().value.IsNull()) {
+			else_value.reset();
+			spec.policy = DecideFramePolicy::ELSE_NULL;
+		}
+	}
+
 	vector<unique_ptr<ParsedExpression>> children;
 	children.push_back(TransformExpression(root.expr));
 	children.push_back(make_uniq<ConstantExpression>(Value(spec.Encode())));
 	children.push_back(TransformExpression(root.order_key));
-	if (root.else_value) {
-		children.push_back(TransformExpression(root.else_value));
+	if (else_value) {
+		children.push_back(std::move(else_value));
 	} else {
 		children.push_back(make_uniq<ConstantExpression>(Value()));
 	}
 	DecideScopeKind within_kind;
 	vector<unique_ptr<ParsedExpression>> within;
-	TransformDecideScope(root.within, within_kind, within);
+	TransformDecideScope(root.within, within_kind, within, /*row_spelling=*/false);
 	for (auto &column : within) {
 		children.push_back(std::move(column));
 	}

@@ -20,7 +20,7 @@ Covered:
   - test_qp_objective_per_constraint: QP objective + PER constraint — QP path alongside PER
   - test_per_single_row_groups:      PER with |group| = 1 — degenerate group cardinality
   - test_per_zero_coefficient_group: PER where one group's aggregate is vacuous (all-zero coeffs)
-  - test_per_null_group_with_when:   NULL PER key + WHEN mask — NULL rows bypass groups; empty groups are skipped
+  - test_per_null_group_with_when:   NULL PER key + WHEN mask — NULL is a group of its own; empty groups are skipped
 """
 
 import time
@@ -928,11 +928,11 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
-    """NULL PER-key rows bypass grouped constraints, including with WHEN.
+    """NULL is a PER-key value of its own, including with WHEN.
 
-    The two active NULL-keyed rows must both be selected even though their
-    combined count exceeds the per-group cap. Group 'B' has only an inactive
-    row, so its empty WHEN bucket also emits no constraint.
+    The two active NULL-keyed rows share one capped instance, so only the more
+    valuable (8.0) is selected. Group 'B' has only an inactive row, so its
+    empty WHEN bucket emits no instance and row 3 is free.
     """
     sql = """
         SELECT id, grp, val, active, x FROM (
@@ -993,8 +993,8 @@ def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
     )
 
     selection_by_id = {int(row[ci["id"]]): int(row[x_idx]) for row in decidb_rows}
-    assert selection_by_id == {1: 1, 2: 1, 3: 1, 4: 0, 5: 1}
-    assert decidb_obj == pytest.approx(31.0)
+    assert selection_by_id == {1: 1, 2: 1, 3: 1, 4: 0, 5: 0}
+    assert decidb_obj == pytest.approx(24.0)
 
     perf_tracker.record(
         "per_null_group_with_when", decidb_time, build_time,

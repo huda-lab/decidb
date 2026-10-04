@@ -216,6 +216,28 @@ decide_scope:
 					n->location = @1;
 					$$ = (PGNode *) n;
 				}
+			/* `PER (a, b)`: the parenthesized spelling a user who just wrote `BY (a, b)`
+			 * reaches for. The same key. */
+			| '(' decide_scope_list ')'
+				{
+					PGDecideScope *n = makeNode(PGDecideScope);
+					n->kind = PG_DECIDE_SCOPE_KEY;
+					n->keys = $2;
+					n->location = @1;
+					$$ = (PGNode *) n;
+				}
+		;
+
+/* Domain words a SQL user reaches for that are not DECIDE domains; each names the list. */
+decide_unknown_domain:
+			INTEGER											{ $$ = "INTEGER"; }
+			| BOOLEAN_P										{ $$ = "BOOLEAN"; }
+			| DOUBLE_P										{ $$ = "DOUBLE"; }
+			| FLOAT_P										{ $$ = "FLOAT"; }
+			| BIGINT										{ $$ = "BIGINT"; }
+			| SMALLINT										{ $$ = "SMALLINT"; }
+			| VARCHAR										{ $$ = "VARCHAR"; }
+			| IDENT											{ $$ = $1; }
 		;
 
 decide_domain:
@@ -233,9 +255,8 @@ decide_string_list:
 
 /* Declaration-level bounds. The lower bound of BETWEEN is a b_expr, as in SQL's
  * own BETWEEN, so the AND that separates the bounds is not read as a conjunction. */
-decide_declarator_bounds:
-			/* EMPTY */										{ $$ = NULL; }
-			| BETWEEN b_expr AND a_expr
+decide_declarator_bounds_written:
+			BETWEEN b_expr AND a_expr
 				{
 					$$ = (PGNode *) list_make2($2, $4);
 				}
@@ -247,6 +268,11 @@ decide_declarator_bounds:
 				{
 					$$ = (PGNode *) list_make2($2, NULL);
 				}
+		;
+
+decide_declarator_bounds:
+			/* EMPTY */										{ $$ = NULL; }
+			| decide_declarator_bounds_written				{ $$ = $1; }
 		;
 
 /* A single declarator:
@@ -310,6 +336,49 @@ typed_decide_variable:
 					ereport(ERROR,
 							(errcode(PG_ERRCODE_SYNTAX_ERROR),
 							 errmsg("DECIDE variable \"%s\": a TEXT decision lists its values; write %s(TEXT IN ['a', 'b', ...])", $1, $1),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
+			/* The deck's trailing key (`ship(INT) BETWEEN 0 AND cap PER T.routeID`);
+			 * the key is a prefix here. */
+			| ColId '(' decide_domain ')' decide_declarator_bounds PER_DECIDE decide_scope_elem
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("the key of DECIDE variable \"%s\" goes before its name: write PER <key>: %s(...) [bounds]", $1, $1),
+							 parser_errposition(@6)));
+					$$ = NULL;
+				}
+			| ColId '(' TEXT_P IN_P '[' decide_string_list ']' ')' decide_declarator_bounds_written
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("DECIDE variable \"%s\" is TEXT: its values are the list, so it takes no BETWEEN, <= or >= bound", $1),
+							 parser_errposition(@9)));
+					$$ = NULL;
+				}
+			| ColId '(' decide_unknown_domain ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("DECIDE variable \"%s\": \"%s\" is not a DECIDE domain; write INT, REAL, BOOL, SEMIINT, SEMIREAL or TEXT IN ['a', 'b', ...]", $1, $3),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
+			| ColId '(' TEXT_P IN_P '(' decide_string_list ')' ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("DECIDE variable \"%s\": a TEXT decision lists its values in brackets; write %s(TEXT IN ['a', 'b', ...])", $1, $1),
+							 parser_errposition(@5)));
+					$$ = NULL;
+				}
+			/* A key without its colon. */
+			| PER_DECIDE decide_scope ColId '(' decide_domain ')' decide_declarator_bounds
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("a key ends in a colon: write PER <key>: %s(...)", $3),
 							 parser_errposition(@3)));
 					$$ = NULL;
 				}
@@ -415,6 +484,47 @@ decide_constraint_prefix:
 					n->location = @1;
 					$$ = (PGNode *) n;
 				}
+			/* Prefixes out of order: name the order, not the token. */
+			| PER_DECIDE decide_scope WHEN_DECIDE a_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("constraint prefixes are written WHEN <filter> PER <key> IF <guard>: ...; put WHEN before PER"),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
+			| PER_DECIDE decide_scope IF_DECIDE a_expr WHEN_DECIDE
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("constraint prefixes are written WHEN <filter> PER <key> IF <guard>: ...; put WHEN first"),
+							 parser_errposition(@5)));
+					$$ = NULL;
+				}
+			| IF_DECIDE a_expr PER_DECIDE
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("constraint prefixes are written WHEN <filter> PER <key> IF <guard>: ...; put PER before IF"),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
+			| IF_DECIDE a_expr WHEN_DECIDE
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("constraint prefixes are written WHEN <filter> PER <key> IF <guard>: ...; put WHEN before IF"),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
+			| WHEN_DECIDE a_expr decide_prefix_per_opt IF_DECIDE a_expr PER_DECIDE
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("constraint prefixes are written WHEN <filter> PER <key> IF <guard>: ...; put PER before IF"),
+							 parser_errposition(@6)));
+					$$ = NULL;
+				}
 		;
 
 /* A constraint: `[prefixes] : body` or a bare body. The wrappers nest
@@ -428,6 +538,32 @@ decide_constraint_item:
 				{ $$ = $2; }
 			| decide_item_expr
 				{ $$ = $1; }
+			/* The retired postfix spellings, kept only to name the prefix form. */
+			| decide_item_expr PER_DECIDE decide_scope_elem
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("PER is a prefix: write PER <key>: <constraint>, and reduce with BY (<key>) inside it, e.g. PER depot: SUM(ship) BY (depot) <= cap"),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+			| decide_item_expr WHEN_DECIDE a_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("WHEN is a prefix: write WHEN <condition>: <constraint>"),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+			/* A key without its colon: `PER k body`. */
+			| PER_DECIDE decide_scope decide_item_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("a constraint prefix ends in a colon: write PER <key>: <constraint>"),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
 		;
 
 decide_constraint_list:
@@ -490,12 +626,68 @@ decide_objective:
 							 parser_errposition(@2)));
 					$$ = NULL;
 				}
+			| MAXIMIZE PER_DECIDE '(' decide_scope_list ')' ':' decide_item_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("an objective is generated once, so it takes no key: write MAXIMIZE PER (): ... or drop the PER, and reduce per key inside it, e.g. MAX(PER k: SUM(...) BY (k))"),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+			| MINIMIZE PER_DECIDE '(' decide_scope_list ')' ':' decide_item_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("an objective is generated once, so it takes no key: write MINIMIZE PER (): ... or drop the PER, and reduce per key inside it, e.g. MIN(PER k: SUM(...) BY (k))"),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+			| MAXIMIZE PER_DECIDE '(' ')' decide_item_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("PER () ends in a colon: write MAXIMIZE PER (): ..."),
+							 parser_errposition(@5)));
+					$$ = NULL;
+				}
+			| MINIMIZE PER_DECIDE '(' ')' decide_item_expr
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("PER () ends in a colon: write MINIMIZE PER (): ..."),
+							 parser_errposition(@5)));
+					$$ = NULL;
+				}
+			| MAXIMIZE decide_item_expr PER_DECIDE decide_scope_elem
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("an objective is generated once, so it takes no key; reduce per key inside it, e.g. MAXIMIZE MAX(PER k: SUM(...) BY (k))"),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
+			| MINIMIZE decide_item_expr PER_DECIDE decide_scope_elem
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("an objective is generated once, so it takes no key; reduce per key inside it, e.g. MINIMIZE MIN(PER k: SUM(...) BY (k))"),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
 		;
 
 /* `MAXIMIZE a THEN MINIMIZE b THEN ...`: lexicographic, first stage first. */
 decide_objective_list:
 			decide_objective								{ $$ = list_make1($1); }
 			| decide_objective_list THEN_DECIDE decide_objective	{ $$ = lappend($1, $3); }
+			| decide_objective_list decide_objective
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("objective stages are chained with THEN: MAXIMIZE ... THEN MINIMIZE ..."),
+							 parser_errposition(@2)));
+					$$ = NIL;
+				}
 		;
 
 /* DecidB: the constraints and optional objective. Shared by both clause
@@ -531,6 +723,40 @@ decide_tail:
                     n->objectives = NIL;
                     $$ = (PGNode *)n;
                 }
+			/* SATISFY and objective stages are mutually exclusive. */
+			| SUCH THAT decide_constraint_list decide_objective_list SATISFY
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("SATISFY asks for any feasible assignment and cannot follow an objective; drop SATISFY, or drop the objective stages"),
+							 parser_errposition(@5)));
+					$$ = NULL;
+				}
+			| SUCH THAT decide_constraint_list SATISFY THEN_DECIDE
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("SATISFY is complete on its own; to optimize, replace it with MAXIMIZE or MINIMIZE stages chained with THEN"),
+							 parser_errposition(@5)));
+					$$ = NULL;
+				}
+			| SUCH THAT decide_constraint_list decide_objective_list THEN_DECIDE SATISFY
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("SATISFY is not a THEN stage; the stages before it already ask for an optimum"),
+							 parser_errposition(@6)));
+					$$ = NULL;
+				}
+			/* SUCH THAT with no constraint. */
+			| SUCH THAT decide_objective_list
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("SUCH THAT needs at least one constraint before the objective (write SUCH THAT x <= 9 if nothing else applies)"),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
 		;
 
 /* SUCH is not in this rule's follow set, so the empty alternative adds no
@@ -546,11 +772,8 @@ decide_clause:
 			DECIDE typed_decide_variable_list opt_decide_tail
                 {
                     PGDecideClause *n;
-                    if (pg_yyget_extra(yyscanner)->decide_declared_before_from)
-                        ereport(ERROR,
-                                (errcode(PG_ERRCODE_SYNTAX_ERROR),
-                                 errmsg("DECIDE appears twice; declare the variables either before FROM or with SUCH THAT, not both"),
-                                 parser_errposition(@1)));
+                    /* A declaration in both slots is reported by makeDecideClause,
+                     * which sees this query's two slots together. */
                     if ($3 == NULL)
                         ereport(ERROR,
                                 (errcode(PG_ERRCODE_SYNTAX_ERROR),
@@ -561,6 +784,15 @@ decide_clause:
                     n->variables = $2;
                     $$ = (PGNode *)n;
                 }
+			/* Clauses in the wrong place after the declaration. */
+			| DECIDE typed_decide_variable_list decide_objective_list
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("the objective goes after SUCH THAT: DECIDE ... SUCH THAT <constraints> MAXIMIZE ..."),
+							 parser_errposition(@3)));
+					$$ = NULL;
+				}
 		;
 
 /* DecidB: declaration slot. Sits between the target list and FROM, giving the
@@ -664,6 +896,32 @@ decide_reducer:
 			| func_application decide_by_keys
 				{
 					$$ = makeDecideReducerBy($1, $2, @2);
+				}
+			/* The retired `agg(K: e)`: a reducer's key is written with PER. */
+			| func_name '(' func_arg_list ':' a_expr ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("a reducer's key is written with PER: SUM(PER K: e) counts one term per distinct K"),
+							 parser_errposition(@4)));
+					$$ = NULL;
+				}
+			/* The retired postfix spellings inside a reducer. */
+			| func_name '(' func_arg_list WHEN_DECIDE a_expr ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("a reducer's filter is a prefix: write SUM(WHEN <condition>: e)"),
+							 parser_errposition(@4)));
+					$$ = NULL;
+				}
+			| func_name '(' func_arg_list PER_DECIDE decide_scope ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("a reducer's key is a prefix: write SUM(PER K: e)"),
+							 parser_errposition(@4)));
+					$$ = NULL;
 				}
 		;
 
@@ -787,6 +1045,23 @@ decide_frame:
 					n->expr = $10;
 					n->location = @1;
 					$$ = (PGNode *) n;
+				}
+			/* A frame without its OVER, and a range with one endpoint. */
+			| AT_DECIDE '(' decide_frame_selector decide_frame_else_opt ':' a_expr ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("a frame navigates a timeline: write AT(...) OVER (<order key> [ASC | DESC] [CYCLIC] [WITHIN <partition>])"),
+							 parser_errposition(@7)));
+					$$ = NULL;
+				}
+			| func_name '(' FROM decide_frame_selector decide_frame_every_opt decide_frame_policy_opt ':' a_expr ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("a range names both endpoints: write FROM <selector> TO <selector>"),
+							 parser_errposition(@4)));
+					$$ = NULL;
 				}
 		;
 

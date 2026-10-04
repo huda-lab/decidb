@@ -57,6 +57,11 @@ string CheckDeterminedByGeneration(const Expression &expr, DecideGenerationScope
 void ValidateDecideGenerationTree(const Expression &constraints, const DecideQualifierContext &ctx,
                                   BindContext &bind_context);
 
+//! Tag every decision-free factor on a `BY (k)` reducer that the key `k` determines
+//! (GROUP_WIDE_FACTOR_TAG), so the canonicalizer admits it as the reducer's scale.
+void TagGroupWideReducerFactors(Expression &constraints, const DecideQualifierContext &ctx,
+                                BindContext &bind_context);
+
 //! Renders a generation key for messages: `()` for global, the written key otherwise.
 string DescribeGenerationScope(DecideGenerationScope scope, const DecideQualifierContext &ctx);
 

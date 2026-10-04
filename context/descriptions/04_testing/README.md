@@ -33,6 +33,7 @@ Each subdirectory corresponds to a feature area and contains:
 | `constraints/` | Comparison operators (`=`, `<`, `<=`, `>`, `>=`, `<>`, BETWEEN, IN), per-row vs aggregate | `test_cons_*.py` |
 | `when/` | WHEN clause (expression-level and aggregate-local) | `test_when_*.py`, `test_aggregate_local_when.py` |
 | `per/` | PER clause (grouped constraints and nested-aggregate objectives) | `test_per_*.py` |
+| `deciql/` | The DeciQL surface as combinations: `WHEN` × `PER` × `IF` prefixes, `BY` groups, keys and the FD rule, declarations, frames, objectives, and the deck's conformance examples | `test_deciql_*.py` |
 | `min_max/` | MIN/MAX linearization (easy/hard cases, nested with PER) | `test_min_max.py`, `test_per_objective.py` |
 | `avg/` | AVG aggregate (execution-time coefficient scaling) | `test_avg.py` |
 | `abs/` | ABS linearization | `test_abs_linearization.py` |

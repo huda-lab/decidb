@@ -45,7 +45,10 @@ former.
   the first objective. `RewriteAvgToSum` runs on the stages too.
 - The nested objective `OUTER(PER k: INNER(e) BY (k))` is recognised by the outer
   reducer's qualified tag and the inner's BY tag (`decide_rewrite_minmax.cpp`) and lowered
-  through the existing PATH B machinery keyed by `per_inner_scope_idx`.
+  through the existing PATH B machinery keyed by `per_inner_scope_idx`. The outer
+  reducer's own `WHEN` is ANDed into the inner reducer's filter before the outer one
+  is stripped (it used to be dropped), so both levels read the filtered rows and a
+  key left with none generates no term.
 - The hard MIN/MAX rewrite keeps the reducer's BY tag on the SUM it builds (and drops the
   relation qualifier, whose de-duplication would put a spurious 0 among the candidates).
 
@@ -353,7 +356,20 @@ direction creates a Boolean indicator per active row and rewrites to
 `SUM` + linking rows (`EmitHardMinMaxClause`). Equality splits into both
 directions. `WHEN` / `PER` wrappers are preserved; `out_was_easy` tells the caller
 whether `PER` should be stripped, since an easy rewrite has already become
-per-row.
+per-row. The per-row form keeps what the reducer meant: its `BY` scope as
+`__minmax_easy_by_<k>__` on the comparison (each row is bounded by the tightest
+instance of its group, reduced in the executor), and its own `WHEN` as a WHEN
+wrapper tagged `MINMAX_EASY_FILTER_TAG`, which the linear form keeps apart from the
+clause's `WHEN` (it picks the bounded rows, not the instances). The easy half of an
+equality is appended at the top level, so it is re-wrapped in the clause's `WHEN`
+conditions, which the rewrite collects on its way down.
+
+The composed path refuses two shapes it would otherwise misread: a MIN/MAX term
+beside a frame (the frame, moved left by the canonicalizer, was read as a sum over
+every row), and a sum *or difference* of MIN/MAX terms under a `WHEN`/`PER` wrapper
+(only `+` was checked, so `PER g: MAX(x) BY (g) - MIN(x) BY (g) <= 2` lost its
+`PER`). `RewriteInDomain` refuses an `IN` list under an `IF` guard, since its
+one-hot rows are appended as constraints of their own and the guard fell away.
 
 **Objectives.** Flat and nested-`PER` patterns are detected and the easy/hard
 classification is precomputed into typed metadata — `flat_objective_agg` /
@@ -625,3 +641,24 @@ stage 07.
 | Canonicalizing entry points | `src/planner/operator/decide/logical_decide.cpp` |
 | Per-function user-facing semantics | `../../03_expressivity/sql_functions/done.md` |
 | Bilinear semantics | `../../03_expressivity/bilinear/done.md` |
+
+## 6. Syntax review of 2026-09-29
+
+- **Like-term identity includes the group and the frame.** `TermsAreLike` also
+  compares `group_scope_idx`, `frame_idx` and `frame_fill`: `SUM(x) BY (grp)` and
+  `SUM(x) BY ()` in one body, two frames of one decision with different orders,
+  or a frame beside a reducer of the same decision, are distinct contributions.
+  They used to be summed into one term keeping the first term's grouping, which
+  silently turned the deck's "several keys in one body" pattern into a wrong
+  model.
+- **Casts around frames are transparent** in `ExtractConstraintTerms` and
+  `ExtractAggregateConstraintTerms`, as casts around decision algebra are; a
+  per-row term beside two decision reducers, one scaled, no longer reaches the
+  aggregate extractor through a cast and fails as a non-reducer term.
+- **`AnalyzeConstraint` asserts** that no prefix is in force at a plain
+  conjunction (the canonicalizer distributes them).
+- **BOOL absorption clamps** a written floor at 0 and a ceiling at 1
+  (`AbsorptionTarget::Absorb`); `o >= -1` used to widen the column into a general
+  integer in `[-1, 1]`.
+- **A frame in an `IF` guard** is refused as a frame, not as "a reducer such as
+  `sum(x)`".

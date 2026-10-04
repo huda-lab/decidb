@@ -21,6 +21,7 @@
 #include "duckdb/planner/query_node/bound_select_node.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -315,6 +316,13 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 			break;
 		case DecideScopeKind::KEY: {
 			string error;
+			for (auto &elem : declaration.scope_key) {
+				if (ExpressionContainsDecideVariable(*elem, decide_variable_names)) {
+					throw BinderException("DECIDE variable '%s': '%s' is a decision; a key generates one decision "
+					                      "per value of known data, so it names columns or relations",
+					                      name, elem->ToString());
+				}
+			}
 			auto scope_idx =
 			    FindOrCreateKeyScope(bind_context, declaration.scope_key, entity_scopes, table_scope_map, error);
 			if (scope_idx == DConstants::INVALID_INDEX) {
@@ -369,7 +377,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 			}
 		}
 		if (declaration.domain == DecideDomain::TEXT) {
-			case_insensitive_set_t seen;
+			// Values compare exactly (case-sensitive), so 'a' and 'A' are two values.
+			std::unordered_set<string> seen;
 			for (auto &value : declaration.text_values) {
 				if (!seen.insert(value).second) {
 					throw BinderException("DECIDE variable '%s': TEXT value '%s' is listed twice", name, value);
@@ -613,6 +622,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 			// function of the key that generated it (spec §6.3); proved from the schema.
 			ValidateDecideGenerationTree(*result.decide_constraints, qualifier_context, bind_context);
 			ValidateDecideNoNestedReducers(*result.decide_constraints);
+			// A factor on a reducer that its BY key determines is one value per reduced
+			// group; proved here, admitted as a scale by the canonicalizer.
+			TagGroupWideReducerFactors(*result.decide_constraints, qualifier_context, bind_context);
 			result.decide_constraint_sources = InitializeConstraintSourceInfo(
 			    *result.decide_constraints, decide_source_fragments, entity_scopes, result.decide_index);
 			result.decide_source_fragments = decide_source_fragments;
@@ -634,6 +646,10 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 			auto error = CheckDeterminedByGeneration(*bound, DecideGenerationScope::Global(), qualifier_context,
 			                                         bind_context);
 			if (!error.empty()) {
+				// The generation repair shared with `PER ()` constraints offers a key; an
+				// objective has none to offer, so its repair is the nested reducer.
+				error = StringUtil::Replace(error, "or generate PER a key that determines it",
+				                            "or reduce it per key inside a nested reducer, e.g. MAX(PER k: SUM(...) BY (k))");
 				throw BinderException(*bound, "%s objective: %s",
 				                      objective_clause.sense == DecideSense::MAXIMIZE ? "MAXIMIZE" : "MINIMIZE",
 				                      error);

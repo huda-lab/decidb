@@ -1,11 +1,31 @@
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
+
+//! True when a frame (a FRAME_TAG-marked aggregate) sits anywhere in `expr`. A frame is
+//! engine algebra like a decision: a cast the binder wraps around it (`0.5 * x <=
+//! AT(...)` lifts the frame's sum to DOUBLE) is transparent the same way.
+bool BoundExpressionContainsFrame(const Expression &expr) {
+	idx_t frame_idx;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	    TryParseFrameRefTag(expr.GetAlias(), frame_idx)) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!found) {
+			found = BoundExpressionContainsFrame(child);
+		}
+	});
+	return found;
+}
 
 bool BoundExpressionReferencesDecide(const Expression &expr, idx_t decide_index) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -23,7 +43,7 @@ bool BoundExpressionReferencesDecide(const Expression &expr, idx_t decide_index)
 const Expression *UnwrapDecideCasts(const Expression &expr, idx_t decide_index) {
 	const Expression *current = &expr;
 	while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST &&
-	       BoundExpressionReferencesDecide(*current, decide_index)) {
+	       (BoundExpressionReferencesDecide(*current, decide_index) || BoundExpressionContainsFrame(*current))) {
 		current = current->Cast<BoundCastExpression>().child.get();
 	}
 	return current;
@@ -32,7 +52,7 @@ const Expression *UnwrapDecideCasts(const Expression &expr, idx_t decide_index) 
 Expression *UnwrapDecideCasts(Expression &expr, idx_t decide_index) {
 	Expression *current = &expr;
 	while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST &&
-	       BoundExpressionReferencesDecide(*current, decide_index)) {
+	       (BoundExpressionReferencesDecide(*current, decide_index) || BoundExpressionContainsFrame(*current))) {
 		current = current->Cast<BoundCastExpression>().child.get();
 	}
 	return current;

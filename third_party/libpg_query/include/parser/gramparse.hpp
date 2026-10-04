@@ -84,6 +84,12 @@ typedef struct base_yy_extra_type {
 	 * own DECIDE / SUCH token (its mark depth is saved with the rest of the state).
 	 */
 	int decide_paren_depth;
+	/*
+	 * DecidB: the token handed to the grammar just before the current one. A
+	 * DECIDE-only word after a '.' is a qualified column (`t.per`, `t.within`)
+	 * and keeps its ordinary keyword token.
+	 */
+	int decide_last_token;
 	int decide_sql_marks[PG_DECIDE_SQL_MARK_MAX];
 	int decide_sql_mark_depth;
 

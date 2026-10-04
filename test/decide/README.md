@@ -38,6 +38,18 @@ DECIDE_TEST_JOBS=0 ./test/decide/run_tests.sh   # serial, for readable output
 Run serially when you need a single test's stdout/stderr uninterleaved, or when
 bisecting an order-dependent failure.
 
+### Both backends
+
+An unforced run uses Gurobi when the CLI can load it and HiGHS otherwise. To judge
+a change, run the suite once as is and once pinned to HiGHS; both should pass in
+full. Tests that need one backend pin it themselves (`decidb_cli_gurobi`,
+`decidb_cli_highs`), so the pin below only moves the ordinary tests.
+
+```bash
+./test/decide/run_tests.sh                               # Gurobi when available
+DECIDB_FORCE_SOLVER=highs ./test/decide/run_tests.sh     # every unpinned query on HiGHS
+```
+
 ## Setup (Manual)
 
 ```bash
@@ -164,6 +176,30 @@ make decide-test
 |--------|------|-------|--------|
 | `per_clause` | `test_per_clause.py` | 3 | passing |
 
+### DeciQL Surface (`PER` / `BY` / `WHEN` / `IF`)
+
+One file per dimension of the DeciQL syntax
+(`context/descriptions/00_project_overview/syntax_reference.md`). They carry the
+ordinary markers (`per_clause`, `when_constraint`, `min_max`, ...), so
+`./test/decide/run_tests.sh -k deciql` selects them together. Every correctness test
+has an independent gurobipy oracle and data chosen so that dropping the construct
+under test changes the answer; every refusal asserts a short topic phrase.
+
+| File | Tests | Covers |
+|------|-------|--------|
+| `test_deciql_prefix_grid.py` | 38 | The `{WHEN, PER, IF}` subsets × `PER` spellings × body kinds, prefix order and postfix refusals |
+| `test_deciql_generation_keys.py` | 39 | The functional-dependency rule, key refinement, NULL as a key value |
+| `test_deciql_declarations.py` | 37 | Declaration scope, shared keys, bounds, `BOOL`/`SEMI`/`TEXT` domains |
+| `test_deciql_declarations_edges.py` | 24 | Key spellings, `D.x`, table keys, `SEMI`/`TEXT` edges, serializer round-trip |
+| `test_deciql_reducers_by.py` | 31 | Reducer prefixes, `BY` keys, factors, reducers over no rows, `COUNT`, `norm` |
+| `test_deciql_minmax_easy.py` | 23 | Easy `MIN`/`MAX` bounded per `BY` group, reducer vs clause `WHEN`, `= K`, `IF` |
+| `test_deciql_frames_matrix.py` | 212 | Frame selectors × policies × `CYCLIC` × `DESC` × `WITHIN` × prefixes |
+| `test_deciql_objectives.py` | 26 | `THEN` holding, nested objectives, `PER ()` arithmetic, `SATISFY`, refusals |
+| `test_deciql_combinations.py` | 48 | Pairs of declaration scope × prefix × body × objective the other files leave open |
+| `test_deciql_deck_conformance.py` | 42 | The design deck's examples end to end |
+| `test_deciql_lexing_errors.py` | 76 | DECIDE words as identifiers, nesting, and the catalogue of named errors |
+| `test_deciql_restrictions.py` | 19 | The "not yet implemented" list, refused by name |
+
 ### EXPLAIN Output
 
 | Marker | File | Tests | Status |
@@ -226,9 +262,11 @@ test run, the cache is checked before invoking the real solver:
 
 Invalidation:
 
-- **Per-test**: a hash of the test function's source code + database checksum.
-  Changing a query, constraint, or any logic in the test invalidates only that
-  entry.
+- **Per-test**: a hash of the test module's source, the test function's source
+  and the database checksum. Editing anything in a test file (a query, a
+  module-level case table or dataset, a helper) invalidates that file's entries
+  only; hashing the function alone let an edited case table reuse a stale oracle
+  result.
 - **Global**: the database file's size and modification time. Rebuilding
   `decidb.db` invalidates the entire cache.
 - **GC**: stale entries (deleted/renamed tests) are pruned automatically on

@@ -121,9 +121,11 @@ private:
 
 	//! Helper: recursively walk bound constraint tree, classifying and rewriting MIN/MAX.
 	//! out_was_easy is set when the rewrite produced a per-row constraint (used for PER stripping).
+	//! `clause_when` holds the conditions of the WHEN wrappers above `expr`, so a half split
+	//! off into `new_constraints` keeps the clause's WHEN.
 	void RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                               vector<unique_ptr<Expression>> &new_constraints,
-	                               bool &out_was_easy);
+	                               bool &out_was_easy, vector<const Expression *> clause_when = {});
 
 	//! Objective-side MIN/MAX detection and rewriting.
 	//! Handles flat (non-PER) and nested PER objectives.

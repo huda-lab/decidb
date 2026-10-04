@@ -178,6 +178,18 @@ static bool ResolveKeyElement(BindContext &bind_context, const ParsedExpression 
 		}
 		return true;
 	}
+	// A column merged by `JOIN ... USING (col)` is one column in SQL, read from the
+	// join's primary side, exactly as the SELECT list resolves it.
+	auto using_set = bind_context.GetUsingBinding(names[0]);
+	if (using_set) {
+		ErrorData using_error;
+		auto primary = bind_context.GetBinding(using_set->primary_binding, using_error);
+		column_t col_idx;
+		if (primary && primary->TryGetBindingIndex(names[0], col_idx)) {
+			AppendBindingColumn(*primary, col_idx, out);
+			return true;
+		}
+	}
 	auto matches = bind_context.GetMatchingBindings(names[0]);
 	if (matches.empty()) {
 		error = StringUtil::Format("'%s' is neither a column nor a relation in the FROM clause", names[0]);
@@ -909,6 +921,20 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 	});
 }
 
+bool ParsedExpressionContainsFrame(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<FunctionExpression>();
+		if (func.is_operator && func.function_name == FRAME_TAG) {
+			return true;
+		}
+	}
+	bool found = false;
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		found = found || ParsedExpressionContainsFrame(child);
+	});
+	return found;
+}
+
 const char *DecideCaseUnsupportedMessage() {
 	return "CASE expressions are not supported inside DECIDE constraints or "
 	       "objectives. Use a WHEN prefix to gate on a row predicate "
@@ -1224,6 +1250,14 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		return true;
 	}
 	if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
+		// The reducer's own WHEN filters known rows; judged before the body, so a
+		// decision inside it is named as such rather than as a body reading no decision.
+		if (func.filter && ExpressionContainsDecideVariable(*func.filter, variables)) {
+			error_msg = "A reducer's WHEN filters rows before the solve, so it cannot reference a decision; "
+			            "to impose a constraint only when a decision holds, write IF <condition>: on the constraint";
+			result = DecideExpression::INVALID;
+			return true;
+		}
 		if (!func.children.empty() && IsRowInvariantExpression(*func.children.front())) {
 			auto body_text = func.children.front()->ToString();
 			error_msg = StringUtil::Format(
@@ -1643,9 +1677,36 @@ BindResult DecideBinder::BindFrame(FunctionExpression &frame_expr, idx_t depth) 
 	return BindResult(std::move(body_result.expression));
 }
 
+//! True when a frame (a FRAME_TAG-marked aggregate) sits anywhere in `expr`.
+static bool BoundContainsFrame(const Expression &expr) {
+	idx_t frame_idx;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	    TryParseFrameRefTag(expr.GetAlias(), frame_idx)) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		found = found || BoundContainsFrame(child);
+	});
+	return found;
+}
+
 void ValidateDecideNoNestedReducers(const Expression &constraints) {
 	std::function<void(const Expression &, const BoundAggregateExpression *)> walk =
 	    [&](const Expression &node, const BoundAggregateExpression *outer) {
+		    // A frame is a term on its own, or scaled by a constant; ABS, POWER or a norm
+		    // over it has no formulation yet, and is refused here by name rather than
+		    // downstream as an aggregate/per-row mix the user never wrote.
+		    if (node.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+			    auto &func = node.Cast<BoundFunctionExpression>();
+			    auto name = StringUtil::Lower(func.function.name);
+			    if ((name == "abs" || name == "power" || name == "pow" || name == "**") && BoundContainsFrame(node)) {
+				    throw BinderException(node, "%s over a frame (AT / FROM .. TO .. OVER) is not available yet. "
+				                                "State the navigated value through a decision, e.g. prev = "
+				                                "AT(PREVIOUS: x) OVER (t), and use that decision instead.",
+				                          StringUtil::Upper(name));
+			    }
+		    }
 		    if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			    auto &agg = node.Cast<BoundAggregateExpression>();
 			    if (outer) {

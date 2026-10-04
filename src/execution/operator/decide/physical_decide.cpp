@@ -271,10 +271,17 @@ static string DescribeNullSource(const NullSourceContext *ctx, idx_t row) {
 //! validator accepts a non-finite rhs and rejects only NaN, and the constant and
 //! absorbed-bound RHS paths have always passed infinities straight through. A
 //! coefficient has no such reading, so every other caller stays strict.
+//!
+//! `admitted`, when given, is asked about each row's absolute index (the position it
+//! takes in `out`): a row it refuses is one no instance reads -- a `WHEN` excluded it,
+//! or its reducer's own filter did -- so its value is never a value the solver reads.
+//! Such a row contributes 0 and is exempt from the NULL and NaN checks; otherwise a
+//! NULL in a row the query itself filtered away would refuse the query.
 static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
                                 vector<double> &out, const char *err_context,
                                 bool allow_infinite = false,
-                                const NullSourceContext *null_ctx = nullptr) {
+                                const NullSourceContext *null_ctx = nullptr,
+                                const std::function<bool(idx_t)> *admitted = nullptr) {
 	if (count == 0) {
 		return;
 	}
@@ -291,6 +298,10 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
 	auto data = UnifiedVectorFormat::GetData<double>(format);
 	for (idx_t i = 0; i < count; i++) {
 		idx_t idx = format.sel->get_index(i);
+		if (admitted && !(*admitted)(out.size())) {
+			out.push_back(0.0);
+			continue;
+		}
 		if (!format.validity.RowIsValid(idx)) {
 			throw InvalidInputException(DescribeNullSource(null_ctx, i));
 		}
@@ -480,9 +491,10 @@ static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, idx_t gid
 //! decision variables use is the partition here; nothing re-hashes the key. Ids are
 //! assigned in encounter order with no holes, and a group is labelled by its key.
 //!
-//! `null_excludes` is generation's rule: an instance keyed on a NULL is not generated
-//! (the group is skipped), the same way SQL's GROUP BY on a NULL key would not drive
-//! a constraint. Aggregation keeps such rows in their own group.
+//! `null_excludes` skips the rows whose key holds a NULL. No keyed role uses it any
+//! more: a NULL key is a value of its own everywhere, as in SQL's GROUP BY -- a
+//! decision keyed on NULL exists, a constraint generated PER that key imposes its
+//! instance, and a reducer's BY puts the NULL-keyed rows in a group of their own.
 //!
 //! `loose_row_filter` / `out_loose_row_group_ids` give a second map over the SAME
 //! numbering but a looser row filter. The right-hand side needs this: its reducers
@@ -602,6 +614,7 @@ static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, co
     }
 }
 
+
 // Reduce an aggregate constraint's right-hand side to one value per group.
 //
 // A reduced constraint emits ONE row per group, but the RHS is still a column, so a
@@ -630,13 +643,13 @@ static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, co
 // rather than over the a-rows. Reducing over the looser map is safe for the broadcast
 // too: it is a superset of the strict map, so every row a reader reaches is written.
 static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
-                                       const vector<idx_t> &group_ids, idx_t num_rows,
+                                       const vector<idx_t> &group_ids, idx_t group_count, idx_t num_rows,
                                        const string &rhs_text) {
     if (ec.rhs_values.IsUniform() || ec.rhs_values.Size() == 0) {
         return; // one value for every row already
     }
     const bool has_groups = !group_ids.empty();
-    const idx_t num_groups = has_groups ? ec.num_groups : 1;
+    const idx_t num_groups = has_groups ? group_count : 1;
     if (num_groups == 0) {
         return;
     }
@@ -848,7 +861,8 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
                                                  const vector<idx_t> &group_ids, idx_t num_groups,
                                                  const vector<EntityMapping> &entity_mappings,
                                                  ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                                 ColumnDataCollection &data, idx_t num_rows) {
+                                                 ColumnDataCollection &data, idx_t num_rows,
+                                                 vector<bool> &out_has_value) {
     const bool has_groups = !group_ids.empty();
     const idx_t groups = has_groups ? num_groups : 1;
     auto group_of = [&](idx_t row) -> idx_t {
@@ -924,9 +938,17 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
             // this value back, so `MAX(cap) - MIN(cap)` over infinities is
             // still caught.
             NullSourceContext null_ctx {agg.children[0].get(), &in_chunk};
+            // A row the reducer's own WHEN (or the clause's) leaves out is never read.
+            std::function<bool(idx_t)> admitted = [&](idx_t row) {
+                if (!keep.empty() && (row >= keep.size() || !keep[row])) {
+                    return false;
+                }
+                idx_t g = group_of(row);
+                return g != DConstants::INVALID_INDEX && g < groups;
+            };
             ExtractDoubleColumn(out_chunk.data[0], in_chunk.size(), 1.0, values,
                                 "constraint right-hand side aggregate",
-                                /*allow_infinite=*/true, &null_ctx);
+                                /*allow_infinite=*/true, &null_ctx, &admitted);
         }
     }
 
@@ -955,10 +977,15 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
         }
         counts[g]++;
     }
+    // A reducer over no rows has no value, like SQL's SUM, AVG, MIN and MAX over an
+    // empty set; the caller skips the instance that reads it. COUNT over no rows is 0.
+    out_has_value.assign(groups, false);
     for (idx_t g = 0; g < groups; g++) {
-        // An empty reducer has no value — MIN(∅) and MAX(∅) are not representable
-        // and AVG(∅) is undefined. Same rule the left-hand side already enforces.
-        RejectEmptyAggregate(counts[g], "aggregate", "constraint right-hand side");
+        if (counts[g] == 0) {
+            out_has_value[g] = is_count;
+            continue;
+        }
+        out_has_value[g] = true;
         if (is_avg) {
             acc[g] /= static_cast<double>(counts[g]);
         }
@@ -1149,6 +1176,7 @@ string PhysicalDecide::GetName() const {
 InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 
+	// One renderer's rule with the logical node: each variable with its generation scope.
 	string vars_info;
 	idx_t user_var_count = decide_variables.size() - num_auxiliary_vars;
 	for (idx_t i = 0; i < user_var_count; i++) {
@@ -1156,6 +1184,13 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 			vars_info += "\n";
 		}
 		vars_info += decide_variables[i]->GetName();
+		if (i < variable_scopes.size()) {
+			if (variable_scopes[i].IsScalar()) {
+				vars_info += " PER ()";
+			} else if (variable_scopes[i].IsEntity() && variable_scopes[i].entity_scope_idx < entity_scopes.size()) {
+				vars_info += " PER " + entity_scopes[variable_scopes[i].entity_scope_idx].table_alias;
+			}
+		}
 	}
 	result["Variables"] = vars_info;
 
@@ -1179,7 +1214,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 			                       StringUtil::Join(stage_strs, " ");
 		}
 	} else {
-		result["Objective"] = "FEASIBILITY";
+		result["Objective"] = "SATISFY";
 	}
 
 	// Same layered grouping as the logical node -- one renderer, so the two plans agree.
@@ -1921,8 +1956,26 @@ static void BuildFrameRows(ClientContext &context, DecideGlobalSinkState &gstate
 		if (!spec.is_range) {
 			wanted.push_back(raw(spec.from_selector));
 		} else {
+			// A relative pair is normalised (`FROM PREVIOUS TO 2 PREVIOUS` reads the same
+			// positions as `FROM 2 PREVIOUS TO PREVIOUS`) and a pair that straddles the
+			// instance's own position includes it. An absolute endpoint (FIRST / LAST)
+			// pins one end of the walk instead: `FROM FIRST TO PREVIOUS` is every position
+			// before this one, which at the first position is no position at all, not
+			// the instance's own row.
+			auto is_absolute = [](const DecideFrameSelector &selector) {
+				return selector.kind == DecideFrameSelectorKind::FIRST || selector.kind == DecideFrameSelectorKind::LAST;
+			};
 			int64_t a = raw(spec.from_selector), b = raw(spec.to_selector);
-			int64_t lo = MinValue<int64_t>(a, b), hi = MaxValue<int64_t>(a, b);
+			int64_t lo, hi;
+			if (is_absolute(spec.from_selector) || is_absolute(spec.to_selector)) {
+				const bool spelled_from_far_end = spec.from_selector.kind == DecideFrameSelectorKind::LAST ||
+				                                  spec.to_selector.kind == DecideFrameSelectorKind::FIRST;
+				lo = spelled_from_far_end ? b : a;
+				hi = spelled_from_far_end ? a : b;
+			} else {
+				lo = MinValue<int64_t>(a, b);
+				hi = MaxValue<int64_t>(a, b);
+			}
 			for (int64_t i = lo; i <= hi; i += static_cast<int64_t>(spec.every)) {
 				wanted.push_back(i);
 			}
@@ -1949,22 +2002,23 @@ static void BuildFrameRows(ClientContext &context, DecideGlobalSinkState &gstate
 				out.rows.push_back(peers[0]);
 			}
 		}
-		if (missing > 0) {
-			switch (spec.policy) {
-			case DecideFramePolicy::ELSE_VALUE:
-				out.else_values[g] = fill * static_cast<double>(missing);
-				break;
-			case DecideFramePolicy::ALL:
+		switch (spec.policy) {
+		case DecideFramePolicy::ELSE_VALUE:
+			out.else_values[g] = fill * static_cast<double>(missing);
+			break;
+		case DecideFramePolicy::ALL:
+			if (missing > 0) {
 				instance_dropped[g] = true;
-				break;
-			case DecideFramePolicy::ELSE_NULL:
-				// A reduced NULL is ignored while any position remains; a value that is
-				// nothing but NULL skips the instance.
-				if (present == 0) {
-					instance_dropped[g] = true;
-				}
-				break;
 			}
+			break;
+		case DecideFramePolicy::ELSE_NULL:
+			// A reduced NULL is ignored while any position remains; a value that is
+			// nothing but NULL -- or a range that selects no position at all -- skips
+			// the instance.
+			if (present == 0) {
+				instance_dropped[g] = true;
+			}
+			break;
 		}
 		out.offsets.push_back(out.rows.size());
 	}
@@ -2159,6 +2213,24 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             coef_results.Initialize(context, coef_result_types);
         }
 
+        // The clause's WHEN, evaluated before any coefficient is read: a row it
+        // excludes is one no instance reads, so a NULL there is not the solver's
+        // business (`WHEN cap IS NOT NULL: x <= cap`).
+        const bool has_when = (constraint->when_condition != nullptr);
+        vector<bool> when_mask;
+        if (has_when) {
+            when_mask = EvaluateBooleanMask(*constraint->when_condition, chunk_expr_cache, context,
+                                            gstate.data, num_rows);
+        }
+        // An easy MIN/MAX's own reducer WHEN (`MAX(WHEN f: x) <= K`): the rows it bounds.
+        // The clause's WHEN above still decides which instances' bounds apply.
+        const bool has_easy_filter = (constraint->minmax_easy_filter != nullptr);
+        vector<bool> easy_filter_mask;
+        if (has_easy_filter) {
+            easy_filter_mask = EvaluateBooleanMask(*constraint->minmax_easy_filter, chunk_expr_cache, context,
+                                                   gstate.data, num_rows);
+        }
+
         idx_t coefficient_row_base = 0;
         while (gstate.data.Scan(scan_state, chunk)) {
             if (constraint->lhs_terms.empty()) {
@@ -2169,11 +2241,22 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
                 auto &col = eval_const.row_coefficients[term_idx].MutableDense();
                 NullSourceContext null_ctx {constraint->lhs_terms[term_idx].coefficient.get(), &chunk};
+                // A row the clause's WHEN or this term's own WHEN leaves out is never read.
+                std::function<bool(idx_t)> admitted = [&](idx_t row) {
+                    if (has_when && (row >= when_mask.size() || !when_mask[row])) {
+                        return false;
+                    }
+                    if (has_easy_filter && (row >= easy_filter_mask.size() || !easy_filter_mask[row])) {
+                        return false;
+                    }
+                    auto &tf = term_filters[term_idx];
+                    return !tf.has_filter || (row < tf.mask.size() && tf.mask[row]);
+                };
                 ExtractDoubleColumn(coef_results.data[term_idx], chunk.size(),
                                     constraint->lhs_terms[term_idx].sign,
                                     col,
                                     "constraint coefficient",
-                                    /*allow_infinite=*/false, &null_ctx);
+                                    /*allow_infinite=*/false, &null_ctx, &admitted);
                 eval_const.row_coefficients[term_idx].SyncSize();
             }
         }
@@ -2198,12 +2281,11 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         //     instances of one group are identical -- and just ONE instance when every
         //     reducer is global, which is the classic aggregate constraint.
         //   - `PER ()`: one instance for the query.
-        //   - `PER k`: one instance per distinct key value (a NULL key generates none).
+        //   - `PER k`: one instance per distinct key value (NULL is a value of its own).
         // Aggregation is each reducer's BY: its rows are the instance's own when the
         // BY key is the generation key (CLASS), every WHEN-admitted row for `BY ()`
         // (ALL), and the key's group containing the instance otherwise (KEYED).
         clause_phase.Next("extraction.when_per_and_qualifiers");
-        bool has_when = (constraint->when_condition != nullptr);
         const bool gen_key = constraint->gen_kind == DecideScopeKind::KEY;
         const bool gen_global = constraint->gen_kind == DecideScopeKind::GLOBAL;
         const bool reduced_only = constraint->lhs_is_aggregate;
@@ -2222,7 +2304,15 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // generated per row below rather than collapsed onto the reducers' groups.
         bool guard_varies_by_row = false;
         if (constraint->guard_spec) {
-            if (constraint->minmax_clause_idx != DConstants::INVALID_INDEX ||
+            // An easy MIN/MAX is stated per row, which carries the guard only when the
+            // instance IS the reducer's group (`PER k IF b: MAX(x) BY (k) <= K`): then
+            // every row of the group reads the same guard. Otherwise one instance's
+            // guard would have to switch the bound on rows of other instances.
+            const bool guarded_easy_is_per_row =
+                constraint->was_minmax_easy && gen_key &&
+                constraint->minmax_easy_by_scope == constraint->gen_scope_idx;
+            if ((constraint->was_minmax_easy && !guarded_easy_is_per_row) ||
+                constraint->minmax_clause_idx != DConstants::INVALID_INDEX ||
                 constraint->ne_clause_idx != DConstants::INVALID_INDEX ||
                 constraint->abs_aux_idx != DConstants::INVALID_INDEX || constraint->has_quadratic ||
                 constraint->has_bilinear) {
@@ -2271,16 +2361,14 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             eval_const.qualifier = parts.empty() ? string() : StringUtil::Join(parts, " ") + ":";
         }
 
-        vector<bool> when_mask;
-        if (has_when) {
-            when_mask = EvaluateBooleanMask(*constraint->when_condition, chunk_expr_cache, context,
-                                            gstate.data, num_rows);
-        }
         auto row_is_included = [&](idx_t row) {
             if (has_when && !when_mask[row]) {
                 return false;
             }
             if (has_local_filters && !local_row_active[row]) {
+                return false;
+            }
+            if (has_easy_filter && !easy_filter_mask[row]) {
                 return false;
             }
             return true;
@@ -2351,14 +2439,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             // A BY group with no instance (every one of its rows has a NULL generation
             // key, or none is admitted) generates nothing.
             auto &by_mapping = entity_mappings[shared_by_scope];
-            auto &gen_mapping = entity_mappings[constraint->gen_scope_idx];
-            auto gen_key_is_null = [&](idx_t row) {
-                idx_t entity = gen_mapping.row_to_entity[row];
-                return entity < gen_mapping.entity_key_has_null.size() && gen_mapping.entity_key_has_null[entity];
-            };
             vector<bool> group_has_instance(by_mapping.num_entities, false);
             for (idx_t row = 0; row < num_rows; row++) {
-                if (rhs_row_is_included(row) && !gen_key_is_null(row)) {
+                if (rhs_row_is_included(row)) {
                     group_has_instance[by_mapping.row_to_entity[row]] = true;
                 }
             }
@@ -2366,15 +2449,17 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 return row_is_included(row) && group_has_instance[by_mapping.row_to_entity[row]];
             };
             std::function<bool(idx_t)> rhs_filter = [&](idx_t row) {
-                return rhs_row_is_included(row) && !gen_key_is_null(row);
+                return rhs_row_is_included(row);
             };
             BuildScopeGroupIds(by_mapping, num_rows, /*null_excludes=*/false, lhs_filter,
                                eval_const.row_group_ids, eval_const.num_groups, &eval_const.group_labels,
                                &rhs_filter, &rhs_row_group_ids);
-            RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+            // No instance: the clause imposes nothing (a reducer over no rows has no value).
         } else if (gen_key) {
+            // A NULL key is a value of its own, as in SQL's GROUP BY: it generates its
+            // instance like any other, and `WHEN k IS NOT NULL` is how a row is excluded.
             BuildScopeGroupIds(entity_mappings[constraint->gen_scope_idx], num_rows,
-                               /*null_excludes=*/true, row_is_included,
+                               /*null_excludes=*/false, row_is_included,
                                eval_const.row_group_ids, eval_const.num_groups,
                                &eval_const.group_labels, &rhs_row_is_included, &rhs_row_group_ids);
             // PER: individual empty instances are skipped silently, but a reduced body
@@ -2382,14 +2467,14 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             // matching zero rows is a valid no-op. Easy-direction MIN/MAX have been
             // rewritten to per-row form but still count as reduced for rejection.
             if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
-                RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+                // No instance: the clause imposes nothing (a reducer over no rows has no value).
             }
         } else if (instances_are_by_groups) {
             BuildScopeGroupIds(entity_mappings[shared_by_scope], num_rows,
                                /*null_excludes=*/false, row_is_included,
                                eval_const.row_group_ids, eval_const.num_groups,
                                &eval_const.group_labels, &rhs_row_is_included, &rhs_row_group_ids);
-            RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+            // No instance: the clause imposes nothing (a reducer over no rows has no value).
         } else if (row_instances) {
             eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
             rhs_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -2401,12 +2486,17 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 if (reduced_only && !row_is_included(row)) {
                     continue;
                 }
+                // An easy MIN/MAX's own WHEN keeps the row from being bounded; its bound
+                // still counts toward its group's through the easy reduction below.
+                if (has_easy_filter && !easy_filter_mask[row]) {
+                    continue;
+                }
                 eval_const.row_group_ids[row] = eval_const.num_groups;
                 rhs_row_group_ids[row] = eval_const.num_groups;
                 eval_const.num_groups++;
             }
             if (reduced_only) {
-                RejectEmptyAggregate(eval_const.num_groups, "aggregate", "constraint");
+                // No instance: the clause imposes nothing (a reducer over no rows has no value).
             }
         } else if (gen_global && !reduced_only) {
             // One instance for the query, read off one admitted row.
@@ -2421,7 +2511,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                     break;
                 }
             }
-        } else if (has_when || gen_global || has_local_filters) {
+        } else if (has_when || gen_global || has_local_filters || has_easy_filter) {
             eval_const.row_group_ids.resize(num_rows);
             rhs_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
             // WHEN and/or aggregate-local WHEN (no PER): one instance for the matching rows
@@ -2436,7 +2526,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
             eval_const.num_groups = 1;
             if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
-                RejectEmptyAggregate(included_rows, "aggregate", "constraint");
+                (void)included_rows; // no admitted row: the clause imposes nothing
             }
         }
 
@@ -2536,19 +2626,25 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 eval_const.term_groupings.push_back(grouping);
             }
             if (general) {
+                // An easy MIN/MAX is a direct per-row term; beside a bound-side reducer
+                // it is general only in name while each row is its own instance, and the
+                // bound reduction below takes the tightest per BY group as usual. Keyed
+                // instances would read their direct term at one representative row.
                 bool unsupported = constraint->has_bilinear || constraint->has_quadratic ||
                                    constraint->minmax_clause_idx != DConstants::INVALID_INDEX ||
                                    constraint->ne_clause_idx != DConstants::INVALID_INDEX ||
-                                   constraint->was_minmax_easy || constraint->abs_aux_idx != DConstants::INVALID_INDEX;
+                                   (constraint->was_minmax_easy && !row_instances) ||
+                                   constraint->abs_aux_idx != DConstants::INVALID_INDEX;
                 for (auto &term : constraint->lhs_terms) {
                     unsupported |= term.reduction == LinearTermReduction::SUM &&
                                    term.qualifier_scope_idx != DConstants::INVALID_INDEX;
                 }
                 if (unsupported) {
                     throw NotImplementedException(
-                        "DECIDE: a reducer whose BY key differs from the constraint's generation is supported "
-                        "for SUM and AVG over linear terms only; MIN/MAX, <>, ABS, quadratic, bilinear and "
-                        "PER-keyed reducers still need BY to match PER.");
+                        "DECIDE: a constraint that reads rows outside its own instance (a reducer keyed "
+                        "differently from PER, a reducer beside a per-row term, or a frame) is supported for SUM "
+                        "and AVG over linear terms only; MIN/MAX, <>, ABS, quadratic, bilinear and PER-keyed "
+                        "reducers are not available in that shape yet.");
                 }
             } else {
                 eval_const.term_groupings.clear();
@@ -2590,7 +2686,15 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             idx_t cnt = 0;
             auto &mask = term_filters[term_idx].mask;
             for (bool m : mask) if (m) cnt++;
-            RejectEmptyAggregate(cnt, "aggregate term", "constraint");
+            // A SUM or AVG term whose WHEN admits no row contributes nothing (its
+            // coefficients are zero-masked below, and ScaleAvgRows leaves an empty
+            // group at zero): a reducer over no rows has no value, and the rest of the
+            // body still reads its rows. A MIN/MAX term's auxiliary would float free
+            // with nothing to pin it, so that is refused (a formulation limit).
+            if (cnt == 0 && (constraint->minmax_clause_idx != DConstants::INVALID_INDEX ||
+                             constraint->was_minmax_easy)) {
+                RejectEmptyAggregate(cnt, "MIN/MAX term", "constraint");
+            }
         }
         for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
             if (!bilinear_filters[term_idx].has_filter) continue;
@@ -2611,6 +2715,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // RHS can be a constant, an aggregate (scalar), or a row-varying expression (for row-wise constraints)
 
         clause_phase.Next("extraction.rhs");
+        // Rows whose bound reads a reducer over no rows: that bound has no value, so the
+        // instance reading it is not imposed (spec §4, the deck's NULL policy p50).
+        vector<bool> bound_missing;
+        bool any_bound_missing = false;
         if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
             auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
             double rhs_constant = const_expr.value.GetValue<double>();
@@ -2675,9 +2783,23 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                     BuildScopeGroupIds(entity_mappings[by_scope], num_rows, /*null_excludes=*/false,
                                        rhs_row_is_included, reducer_map, reducer_groups, /*out_group_labels=*/nullptr);
                 }
+                vector<bool> has_value;
                 reducer_values.push_back(EvaluateRhsReducerPerGroup(
                     agg, reducer_map, reducer_groups, entity_mappings,
-                    chunk_expr_cache, context, gstate.data, num_rows));
+                    chunk_expr_cache, context, gstate.data, num_rows, has_value));
+                for (idx_t row = 0; row < num_rows; row++) {
+                    if (!rhs_row_is_included(row)) {
+                        continue;
+                    }
+                    idx_t g = reducer_map.empty() ? 0 : reducer_map[row];
+                    if (g < has_value.size() && !has_value[g]) {
+                        if (bound_missing.empty()) {
+                            bound_missing.assign(num_rows, false);
+                        }
+                        bound_missing[row] = true;
+                        any_bound_missing = true;
+                    }
+                }
                 reducer_maps.push_back(std::move(reducer_map));
                 agg_substitutions.emplace(rhs_reducers[i], data_columns + i);
             }
@@ -2750,9 +2872,58 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 NullSourceContext null_ctx {constraint->rhs_expr.get(), eval_chunk};
                 ExtractDoubleColumn(rhs_result.data[0], scan_chunk.size(), 1.0, rhs_col,
                                     "constraint right-hand side", /*allow_infinite=*/true,
-                                    &null_ctx);
+                                    &null_ctx, &rhs_row_is_included);
                 eval_const.rhs_values.SyncSize();
                 scanned += scan_chunk.size();
+            }
+        }
+
+        // An instance whose bound has no value is not imposed. A per-row body with no PER
+        // is one instance per row, so the row goes. Otherwise the instance is a group,
+        // dropped when none of its rows carries a bound; a group keeping some (a finer
+        // generation key coarsened onto a BY group) reduces over those alone, and its
+        // other rows are handed that bound after the reduction below.
+        vector<idx_t> bound_donor;
+        // (An easy MIN/MAX bounds a row by its group's other instances too; that case is
+        // settled in its own reduction below.)
+        if (any_bound_missing && !constraint->was_minmax_easy) {
+            const bool rows_are_instances = !reduced_only && !gen_key && !gen_global && !row_instances;
+            if (eval_const.row_group_ids.empty()) {
+                eval_const.row_group_ids.assign(num_rows, 0);
+                eval_const.num_groups = MaxValue<idx_t>(eval_const.num_groups, 1);
+            }
+            auto &instance_ids = eval_const.row_group_ids;
+            if (rows_are_instances) {
+                for (idx_t row = 0; row < num_rows; row++) {
+                    if (bound_missing[row]) {
+                        instance_ids[row] = DConstants::INVALID_INDEX;
+                    }
+                }
+            } else {
+                const bool has_rhs_map = !rhs_row_group_ids.empty();
+                auto instance_of = [&](idx_t row) {
+                    idx_t g = has_rhs_map ? rhs_row_group_ids[row] : instance_ids[row];
+                    return g < eval_const.num_groups ? g : DConstants::INVALID_INDEX;
+                };
+                bound_donor.assign(eval_const.num_groups, DConstants::INVALID_INDEX);
+                for (idx_t row = 0; row < num_rows; row++) {
+                    idx_t g = instance_of(row);
+                    if (g != DConstants::INVALID_INDEX && rhs_row_is_included(row) && !bound_missing[row] &&
+                        bound_donor[g] == DConstants::INVALID_INDEX) {
+                        bound_donor[g] = row;
+                    }
+                }
+                for (idx_t row = 0; row < num_rows; row++) {
+                    idx_t own = instance_ids[row];
+                    if (own != DConstants::INVALID_INDEX && own < bound_donor.size() &&
+                        bound_donor[own] == DConstants::INVALID_INDEX) {
+                        instance_ids[row] = DConstants::INVALID_INDEX;
+                    }
+                    if (has_rhs_map && bound_missing[row]) {
+                        // Contributes no bound to its group's reduction.
+                        rhs_row_group_ids[row] = DConstants::INVALID_INDEX;
+                    }
+                }
             }
         }
 
@@ -2772,8 +2943,79 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             } else {
                 rhs_text = "`" + rhs_text + "`";
             }
-            ReduceAggregateRhsPerGroup(eval_const, rhs_row_group_ids, num_rows, rhs_text);
-
+            if (constraint->was_minmax_easy) {
+                // `MAX(e) BY (k) <= K` stated per row: each instance bounds every row of
+                // its own k-group, so a row takes the tightest K among the instances of
+                // its group -- the rows the clause's WHEN admits, whatever the reducer's
+                // own WHEN keeps. `BY ()` is one group: the tightest K overall.
+                vector<idx_t> easy_groups_of;
+                idx_t easy_group_count = 0;
+                if (constraint->minmax_easy_by_scope != DConstants::INVALID_INDEX) {
+                    BuildScopeGroupIds(entity_mappings[constraint->minmax_easy_by_scope], num_rows,
+                                       /*null_excludes=*/false, rhs_row_is_included, easy_groups_of,
+                                       easy_group_count, /*out_group_labels=*/nullptr);
+                } else {
+                    easy_groups_of.assign(num_rows, DConstants::INVALID_INDEX);
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        if (rhs_row_is_included(row)) {
+                            easy_groups_of[row] = 0;
+                            easy_group_count = 1;
+                        }
+                    }
+                }
+                // An instance whose bound reads a reducer over no rows bounds nothing: it
+                // leaves the reduction, and a row whose group keeps no bounding instance
+                // is not bounded at all. The others take the group's bound.
+                vector<idx_t> reduce_map = easy_groups_of;
+                vector<idx_t> donor;
+                if (any_bound_missing) {
+                    donor.assign(easy_group_count, DConstants::INVALID_INDEX);
+                    for (idx_t row = 0; row < num_rows; row++) {
+                        idx_t g = reduce_map[row];
+                        if (g == DConstants::INVALID_INDEX) {
+                            continue;
+                        }
+                        if (bound_missing[row]) {
+                            reduce_map[row] = DConstants::INVALID_INDEX;
+                        } else if (donor[g] == DConstants::INVALID_INDEX) {
+                            donor[g] = row;
+                        }
+                    }
+                }
+                ReduceAggregateRhsPerGroup(eval_const, reduce_map, easy_group_count, num_rows, rhs_text);
+                if (any_bound_missing) {
+                    if (eval_const.row_group_ids.empty()) {
+                        eval_const.row_group_ids.assign(num_rows, 0);
+                        eval_const.num_groups = MaxValue<idx_t>(eval_const.num_groups, 1);
+                    }
+                    auto &col = eval_const.rhs_values.MutableDense();
+                    for (idx_t row = 0; row < num_rows && row < col.size(); row++) {
+                        idx_t g = easy_groups_of[row];
+                        if (g == DConstants::INVALID_INDEX) {
+                            continue;
+                        }
+                        if (donor[g] == DConstants::INVALID_INDEX) {
+                            eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
+                        } else if (bound_missing[row]) {
+                            col[row] = col[donor[g]];
+                        }
+                    }
+                }
+            } else {
+                ReduceAggregateRhsPerGroup(eval_const, rhs_row_group_ids, eval_const.num_groups, num_rows, rhs_text);
+            }
+        }
+        if (!bound_donor.empty()) {
+            // Rows of an imposed instance whose own bound had no value read the one the
+            // instance kept, so whichever row the builder reads the bound from agrees.
+            auto &col = eval_const.rhs_values.MutableDense();
+            for (idx_t row = 0; row < num_rows && row < col.size(); row++) {
+                idx_t own = eval_const.row_group_ids[row];
+                if (bound_missing[row] && own != DConstants::INVALID_INDEX && own < bound_donor.size() &&
+                    bound_donor[own] != DConstants::INVALID_INDEX) {
+                    col[row] = col[bound_donor[own]];
+                }
+            }
         }
 
 
@@ -3123,10 +3365,18 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                     int term_sign = (*b.src_terms)[term_idx].sign;
                     NullSourceContext null_ctx {(*b.src_terms)[term_idx].coefficient.get(),
                                                 &obj_chunk};
+                    // A row the objective's WHEN or this term's own WHEN leaves out is never read.
+                    std::function<bool(idx_t)> admitted = [&](idx_t row) {
+                        if (objective_has_when && (row >= objective_when_mask.size() || !objective_when_mask[row])) {
+                            return false;
+                        }
+                        auto &tf = (*b.out_term_filters)[term_idx];
+                        return !tf.has_filter || (row < tf.mask.size() && tf.mask[row]);
+                    };
                     ExtractDoubleColumn(obj_results.data[j], obj_chunk.size(),
                                         static_cast<double>(term_sign), out,
                                         "objective coefficient",
-                                        /*allow_infinite=*/false, &null_ctx);
+                                        /*allow_infinite=*/false, &null_ctx, &admitted);
                     (*b.out_coeffs)[term_idx].SyncSize();
                 }
             }
@@ -3279,7 +3529,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
         };
 
         BuildScopeGroupIds(entity_mappings[gstate.objective->per_scope_idx], num_rows,
-                           /*null_excludes=*/true, obj_row_is_included,
+                           /*null_excludes=*/false, obj_row_is_included,
                            result.objective_row_group_ids, result.objective_num_groups,
                            /*out_group_labels=*/nullptr);
     }

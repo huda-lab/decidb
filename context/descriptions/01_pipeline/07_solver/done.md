@@ -466,6 +466,14 @@ MIP search on a repeat `run()`.
 **Model classes it cannot take** — quadratic constraints, a non-convex objective,
 MIQP, and a rank-deficient Q — are declared `false` in its capability table and refused
 at **plan time** (`RequireDecideSolverSupport`, stage 05), before the query reads a row.
+The MIQP prediction (`MayHaveIntegralColumn`) reads each declared decision's and each
+stage-05 auxiliary's own type, plus the plan fields of the constructs that add binary
+switches during execution (hard MIN/MAX clauses, `<>`, MIN/MAX objectives, composed
+MIN/MAX). Until 2026-10-03 it counted every auxiliary as integral, which refused a
+convex continuous QP beside an `ABS` bound on HiGHS, while a hard `MAX(x) >= 5` beside a
+squared REAL objective slipped past and failed at load as an internal error. When the
+squared decisions are themselves REAL, the refusal names the integer switches rather
+than the squared variables.
 The last differs in kind from the other three: HiGHS *loads* a rank-deficient Q happily,
 it just answers it wrong (see stage 05's note on `singular_quadratic`), so the refusal
 is a judgement about answer quality rather than about what the API accepts. In practice
@@ -517,3 +525,18 @@ evaluation, or model building is required.
 | Gurobi backend | `src/decidb/gurobi/gurobi_solver.cpp` |
 | Gurobi dynamic loading | `src/decidb/gurobi/gurobi_loader.cpp` |
 | HiGHS backend | `src/decidb/naive/deterministic_naive.cpp` |
+
+## 6. Syntax review of 2026-09-29
+
+`SolveLexicographicStages` holds a solved stage exactly when its objective is
+integer-valued (every column it reads is integer and every coefficient whole):
+the frozen row admits half a unit, which no other integer value reaches. A
+`1e-6` relative slack applied at `3e6` had let a later stage move an integer
+optimum by three units. A continuous stage keeps the relative slack. A
+quadratic first stage (`SUM(POWER(...))`, `norm(e, 2)`) is held by a
+`QuadraticConstraint` built from the objective's `Q` and linear coefficients
+(same coefficient convention), on a backend whose capabilities declare
+quadratic constraints; HiGHS refuses by name. The staged model clears
+`has_quadratic_obj` and `q_*` so no later stage optimizes the Hessian plus its
+own coefficients, which had produced `x = 1.4999985` for a unique optimum of 3
+and an internal HiGHS failure for a `MAXIMIZE` stage.

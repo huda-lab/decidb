@@ -721,6 +721,12 @@ private:
 	//!   are not summable before that scaling happens.
 	//! - `qualifier_scope_idx` selects a de-duplication mask (`sum(D: ...)`), which is
 	//!   again a statement about which rows contribute.
+	//! - `group_scope_idx` is the reducer's `BY (k)`: `SUM(x) BY (grp)` and `SUM(x) BY ()`
+	//!   in one body read different row sets (the deck's "several keys in one body"),
+	//!   so `SUM(x) BY (grp) <= 0.5 * SUM(x) BY ()` keeps two terms of `x`.
+	//! - `frame_idx` / `frame_fill` name the navigated rows a frame term reads: two
+	//!   frames of one decision with different orders (deck p47), or a frame beside a
+	//!   reducer of the same decision, are distinct contributions.
 	//!
 	//! Constants (`INVALID_INDEX`) are deliberately left alone: they are a fixed
 	//! offset folded into the RHS, not a repeated column, and they are not what any
@@ -730,7 +736,8 @@ private:
 			return false;
 		}
 		if (a.reduction != b.reduction || a.avg_scale != b.avg_scale ||
-		    a.qualifier_scope_idx != b.qualifier_scope_idx) {
+		    a.qualifier_scope_idx != b.qualifier_scope_idx || a.group_scope_idx != b.group_scope_idx ||
+		    a.frame_idx != b.frame_idx || a.frame_fill != b.frame_fill) {
 			return false;
 		}
 		if ((a.filter == nullptr) != (b.filter == nullptr)) {
@@ -959,7 +966,9 @@ private:
 
 	void ExtractAggregateConstraintTerms(const Expression &expr, DecideConstraint &constraint, int sign) {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-			if (FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
+			// A cast over decision algebra, or over a frame (a term whatever it reads),
+			// is binder-inserted and transparent; the terms live under it.
+			if (FindDecideVariable(expr) != DConstants::INVALID_INDEX || ContainsFrameAggregate(expr)) {
 				ExtractAggregateConstraintTerms(*expr.Cast<BoundCastExpression>().child, constraint, sign);
 			} else {
 				idx_t before = constraint.lhs_terms.size();
@@ -1091,6 +1100,16 @@ private:
 	//! Extract linear and bilinear terms from a SUM argument in a constraint.
 	void ExtractConstraintTerms(const Expression &expr, DecideConstraint &constr, int sign,
 	                            const Expression *filter = nullptr) {
+		// A cast the binder wrapped around decision algebra is transparent: `x + SUM(x)
+		// BY () + 0.5 * SUM(x) BY (grp)` lifts the integer sum `x + SUM(x)` to DOUBLE,
+		// and the terms live under that cast. The decomposer and the aggregate
+		// extractor see through such casts the same way; a user-written cast over a
+		// decision never binds.
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST &&
+		    (FindDecideVariable(expr) != DConstants::INVALID_INDEX || ContainsFrameAggregate(expr))) {
+			ExtractConstraintTerms(*expr.Cast<BoundCastExpression>().child, constr, sign, filter);
+			return;
+		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 			auto &func = expr.Cast<BoundFunctionExpression>();
 			string fname = func.function.name;
@@ -1217,6 +1236,8 @@ private:
 	//! The prefixes gathered on the way down to a comparison.
 	struct ConstraintPrefixes {
 		unique_ptr<Expression> when_condition;
+		//! The own WHEN of a reducer the easy MIN/MAX rewrite stripped (MINMAX_EASY_FILTER_TAG).
+		unique_ptr<Expression> easy_filter;
 		vector<unique_ptr<Expression>> per_columns;
 		DecideScopeKind gen_kind = DecideScopeKind::ROW;
 		idx_t gen_scope_idx = DConstants::INVALID_INDEX;
@@ -1285,6 +1306,11 @@ private:
 				                      "Guard on a BOOL decision instead.",
 				                      StripDecideTags(guard_expr.ToString()));
 			}
+			if (ContainsFrameAggregate(comp)) {
+				throw BinderException("An IF guard reads the instance's own decisions; a frame (AT / FROM .. TO .. "
+				                      "OVER) reads another row's and cannot guard it. State the navigated value "
+				                      "through a decision of its own, or compare it in the constraint body.");
+			}
 			if (BoundExpressionContainsAggregate(comp)) {
 				throw BinderException("An IF guard reads the instance's own decisions; a reducer such as '%s' "
 				                      "cannot guard it.",
@@ -1330,7 +1356,19 @@ private:
 			}
 			// DecidB: WHEN wrapper -- child[0] the constraint, child[1] the condition
 			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-				prefixes.when_condition = conj.children[1]->Copy();
+				// The easy MIN/MAX rewrite's reducer filter selects the rows that are
+				// bounded; the clause's WHEN selects the instances that bound them. They
+				// are kept apart, and nested filters of one kind all apply.
+				auto &slot = HasDecideTag(conj.GetAlias(), MINMAX_EASY_FILTER_TAG) ? prefixes.easy_filter
+				                                                                    : prefixes.when_condition;
+				auto condition = conj.children[1]->Copy();
+				if (slot) {
+					auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+					both->children.push_back(std::move(slot));
+					both->children.push_back(std::move(condition));
+					condition = std::move(both);
+				}
+				slot = std::move(condition);
 				AnalyzeConstraint(conj.children[0], std::move(prefixes));
 				break;
 			}
@@ -1340,7 +1378,14 @@ private:
 				AnalyzeConstraint(conj.children[0], std::move(prefixes));
 				break;
 			}
-			// Regular conjunction: recursively analyze each child
+			// Regular conjunction: recursively analyze each child. The canonicalizer
+			// distributes every prefix over a plain AND, so none is in force here; a
+			// prefix over a conjunction would otherwise be dropped from its conjuncts.
+			if (prefixes.when_condition || prefixes.easy_filter || prefixes.guard ||
+			    prefixes.gen_kind != DecideScopeKind::ROW) {
+				throw InternalException("DECIDE constraint prefix reached a plain conjunction after canonicalization: %s",
+				                        expr.ToString());
+			}
 			for (auto &child : conj.children) {
 				AnalyzeConstraint(child);
 			}
@@ -1389,7 +1434,13 @@ private:
 			// Detect easy-direction MIN/MAX optimizer rewrite (see decide.hpp).
 			if (HasDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG)) {
 				constraint->was_minmax_easy = true;
+				TryParseMinMaxEasyByTag(comp.alias, constraint->minmax_easy_by_scope);
 			}
+			if (prefixes.easy_filter && !constraint->was_minmax_easy) {
+				throw InternalException("DECIDE: a reducer filter reached '%s', which is not an easy MIN/MAX form",
+				                        comp.ToString());
+			}
+			constraint->minmax_easy_filter = std::move(prefixes.easy_filter);
 
 			// DecidB: the prefixes, as gathered on the way down
 			constraint->when_condition = std::move(prefixes.when_condition);

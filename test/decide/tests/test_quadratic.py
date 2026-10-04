@@ -2031,6 +2031,124 @@ class TestHighsRejection:
             comparison_status="optimal",
         )
 
+class TestQuadraticBesideSwitches:
+    """A quadratic objective beside a construct that may add integer switches.
+
+    The plan-time gate predicts whether the built model holds an integer column,
+    which decides MIQP (Gurobi only) against convex QP (HiGHS too). An ABS bound in
+    its easy direction is a continuous auxiliary, so HiGHS takes it beside a squared
+    objective; it used to be refused there because every auxiliary counted as
+    integral. A hard MAX adds binary switches during execution; HiGHS used to reach
+    the backend with it and fail with an internal error, and now refuses it by name,
+    while Gurobi solves it.
+    """
+
+    _T = "(VALUES (1, 3), (2, 7), (3, 2)) t(id, cap)"
+    _CAP = {1: 3.0, 2: 7.0, 3: 2.0}
+
+    def _xs(self, oracle_solver, name):
+        oracle_solver.create_model(name)
+        for i in self._CAP:
+            oracle_solver.add_variable(f"x{i}", VarType.CONTINUOUS, lb=0.0, ub=10.0)
+
+    def _squared_distance_to_three(self, oracle_solver):
+        # SUM((x - 3)^2) = SUM(x^2) - 6 SUM(x) + 27
+        oracle_solver.set_quadratic_objective(
+            {f"x{i}": -6.0 for i in self._CAP},
+            {(f"x{i}", f"x{i}"): 1.0 for i in self._CAP},
+            ObjSense.MINIMIZE, constant=27.0)
+
+    @staticmethod
+    def _x(rows, cols):
+        return {r[cols.index("id")]: float(r[cols.index("x")]) for r in rows}
+
+    @pytest.mark.correctness
+    @pytest.mark.quadratic
+    @pytest.mark.var_real
+    def test_highs_takes_a_squared_objective_beside_an_easy_abs(self, decidb_cli_highs, oracle_solver):
+        """`ABS(x - cap) <= 1` boxes each x in [cap - 1, cap + 1], a continuous
+        auxiliary; MINIMIZE SUM(POWER(x - 3, 2)) then picks 3, 6, 3 (value 9)."""
+        self._xs(oracle_solver, "abs_box_qp")
+        for i, cap in self._CAP.items():
+            oracle_solver.add_constraint({f"x{i}": 1.0}, ">=", cap - 1)
+            oracle_solver.add_constraint({f"x{i}": 1.0}, "<=", cap + 1)
+        self._squared_distance_to_three(oracle_solver)
+        result = oracle_solver.solve()
+        assert result.status == SolverStatus.OPTIMAL
+        rows, cols = decidb_cli_highs.execute(f"""
+            SELECT id, x FROM {self._T} DECIDE x(REAL) BETWEEN 0 AND 10
+            SUCH THAT ABS(x - cap) <= 1 MINIMIZE SUM(POWER(x - 3, 2))
+        """)
+        x = self._x(rows, cols)
+        assert [round(x[i], 4) for i in (1, 2, 3)] == [3.0, 6.0, 3.0]
+        assert sum((v - 3) ** 2 for v in x.values()) == pytest.approx(result.objective_value, abs=1e-4)
+
+    @pytest.mark.correctness
+    @pytest.mark.quadratic
+    @pytest.mark.var_real
+    def test_highs_takes_an_l1_plus_squared_objective(self, decidb_cli_highs, oracle_solver):
+        """`SUM(ABS(x - cap)) + 0.25 * SUM(POWER(x - cap, 2))` under SUM(x) = 10 is a
+        convex continuous QP: the 2 units come off every row alike (2/3 each, value
+        7/3). HiGHS used to refuse it as squaring non-continuous decisions."""
+        self._xs(oracle_solver, "l1_l2_qp")
+        linear, quadratic, constant = {}, {}, 0.0
+        for i, cap in self._CAP.items():
+            oracle_solver.add_variable(f"t{i}", VarType.CONTINUOUS, lb=0.0, ub=20.0)
+            oracle_solver.add_constraint({f"t{i}": 1.0, f"x{i}": -1.0}, ">=", -cap)
+            oracle_solver.add_constraint({f"t{i}": 1.0, f"x{i}": 1.0}, ">=", cap)
+            linear[f"t{i}"] = 1.0
+            linear[f"x{i}"] = -0.5 * cap
+            quadratic[(f"x{i}", f"x{i}")] = 0.25
+            constant += 0.25 * cap * cap
+        oracle_solver.add_constraint({f"x{i}": 1.0 for i in self._CAP}, "=", 10.0)
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE, constant=constant)
+        result = oracle_solver.solve()
+        assert result.status == SolverStatus.OPTIMAL
+        rows, cols = decidb_cli_highs.execute(f"""
+            SELECT id, x FROM {self._T} DECIDE x(REAL) BETWEEN 0 AND 10
+            SUCH THAT PER (): SUM(x) = 10
+            MINIMIZE SUM(ABS(x - cap)) + 0.25 * SUM(POWER(x - cap, 2))
+        """)
+        x = self._x(rows, cols)
+        value = sum(abs(x[i] - c) + 0.25 * (x[i] - c) ** 2 for i, c in self._CAP.items())
+        assert value == pytest.approx(result.objective_value, abs=1e-4) == pytest.approx(7 / 3, abs=1e-4)
+        assert [round(x[i], 4) for i in (1, 2, 3)] == [round(c - 2 / 3, 4) for c in (3.0, 7.0, 2.0)]
+
+    @pytest.mark.error
+    @pytest.mark.quadratic
+    @pytest.mark.min_max
+    def test_highs_refuses_a_squared_objective_beside_a_hard_max_by_name(self, decidb_cli_highs):
+        """A hard MAX adds binary switches, so the model is MIQP: refused by name at
+        plan time, not as an internal error after the build."""
+        decidb_cli_highs.assert_error(f"""
+            SELECT id, x FROM {self._T} DECIDE x(REAL) BETWEEN 0 AND 10
+            SUCH THAT MAX(x) >= 5 MINIMIZE SUM(POWER(x - 3, 2))
+        """, match=r"integer switches")
+
+    @pytest.mark.correctness
+    @pytest.mark.quadratic
+    @pytest.mark.min_max
+    def test_gurobi_solves_a_squared_objective_beside_a_hard_max(self, decidb_cli_gurobi, oracle_solver):
+        """The same query on Gurobi: one row reaches 5, the others stay at 3 (value 4).
+        Which row is not unique, so only the value and the MAX are asserted."""
+        self._xs(oracle_solver, "hard_max_qp")
+        for i in self._CAP:
+            oracle_solver.add_variable(f"z{i}", VarType.BINARY)
+            oracle_solver.add_indicator_constraint(f"z{i}", 1, {f"x{i}": 1.0}, ">=", 5.0)
+        oracle_solver.add_constraint({f"z{i}": 1.0 for i in self._CAP}, ">=", 1.0)
+        self._squared_distance_to_three(oracle_solver)
+        result = oracle_solver.solve()
+        assert result.status == SolverStatus.OPTIMAL
+        rows, cols = decidb_cli_gurobi.execute(f"""
+            SELECT id, x FROM {self._T} DECIDE x(REAL) BETWEEN 0 AND 10
+            SUCH THAT MAX(x) >= 5 MINIMIZE SUM(POWER(x - 3, 2))
+        """)
+        x = self._x(rows, cols)
+        assert max(x.values()) >= 5 - 1e-6
+        assert sum((v - 3) ** 2 for v in x.values()) == pytest.approx(result.objective_value, abs=1e-4) \
+            == pytest.approx(4.0, abs=1e-4)
+
+
 # ---------------------------------------------------------------------------
 # HiGHS-solved QP correctness (require DECIDB_FORCE_SOLVER=highs)
 # ---------------------------------------------------------------------------

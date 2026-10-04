@@ -317,7 +317,8 @@ static string PrescribeCap(const VarEscape &ve) {
 	vector<string> scope;
 	for (const auto &r : ve.rules) {
 		if (r.covers_scope) {
-			scope.push_back(r.column + " = '" + r.value + "'");
+			// A NULL key is a group of its own; `k = 'NULL'` would match no row.
+			scope.push_back(r.value == "NULL" ? r.column + " IS NULL" : r.column + " = '" + r.value + "'");
 		}
 	}
 	if (scope.empty()) {
@@ -371,7 +372,7 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 			// answers "how many instances in it".
 			for (const auto &r : ve.rules) {
 				DiagnosticFinding f = base;
-				f.group = r.column + " = '" + r.value + "'";
+				f.group = r.value == "NULL" ? r.column + " IS NULL" : r.column + " = '" + r.value + "'";
 				f.has_amount = true;
 				f.amount = static_cast<double>(r.escaping);
 				f.has_total = true;

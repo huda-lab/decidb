@@ -1573,19 +1573,23 @@ def test_entity_scoped_var_in_when_condition_error(decidb_cli):
 @pytest.mark.error_infeasible
 @pytest.mark.when_constraint
 def test_entity_scoped_when_entity_invisible(decidb_cli):
-    """Entity-scoped aggregate constraint with WHEN matching no rows on the
-    given data — now rejected pre-solver per the "reject all empty aggregate
-    sets" rule."""
-    sql = """
-        SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0
-        DECIDE PER n: keepN(BOOL)
-        SUCH THAT WHEN c.c_acctbal > 9998: SUM(keepN * c.c_acctbal) <= 50000
-          AND SUM(keepN) <= 10
-        MAXIMIZE SUM(keepN)
-    """
-    decidb_cli.assert_error(sql, match=r"empty|WHEN")
+    """An entity-scoped aggregate constraint whose WHEN admits no row generates
+    no instance and imposes nothing (syntax_reference §4): only the row cap
+    `SUM(keepN) <= 10` binds, exactly as when the filtered clause is absent."""
+    def objective(extra):
+        rows, cols = decidb_cli.execute(f"""
+            SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
+            FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+            WHERE n.n_regionkey = 0
+            DECIDE PER n: keepN(BOOL)
+            SUCH THAT {extra} SUM(keepN) <= 10
+            MAXIMIZE SUM(keepN)
+        """)
+        ki = cols.index("keepN")
+        return sum(int(r[ki]) for r in rows)
+
+    filtered = objective("WHEN c.c_acctbal > 9998: SUM(keepN * c.c_acctbal) <= 50000 AND")
+    assert filtered == objective("")
 
 
 # ---------------------------------------------------------------------------
@@ -2442,12 +2446,12 @@ def test_entity_scoped_over_cte_of_base_table(
 def test_entity_scoped_vs_per_null_semantics(
     decidb_cli, duckdb_conn, oracle_solver
 ):
-    """Side-by-side: NULLs collapse into one entity, but PER drops NULL groups.
+    """Side-by-side: NULL is one key value for a decision and for a PER key alike.
 
     Two queries over the same synthetic-NULL shape. The entity-scope form
     shares a single variable across all NULL-key rows (so turning it on
-    costs `num_null_rows` against the count cap). The PER form excludes
-    NULL-keyed rows from groups entirely, letting them float free.
+    costs `num_null_rows` against the count cap). The PER form generates one
+    capped instance for the NULL group, so at most one NULL-keyed row is picked.
     """
     base_cte = """
         WITH t(rk, val) AS (
@@ -2510,7 +2514,7 @@ def test_entity_scoped_vs_per_null_semantics(
         f"(A) NULL-keyed rows should share an entity, got: {null_keeps}"
     )
 
-    # --- (B) Row-scope + PER rk: one picked row per non-NULL group; NULLs free ---
+    # --- (B) Row-scope + PER rk: one picked row per group, the NULL group included ---
     sql_per = base_cte + """
         SELECT t.rk, t.val, keep
         FROM t
@@ -2520,19 +2524,17 @@ def test_entity_scoped_vs_per_null_semantics(
     """
     rows_per, cols_per = decidb_cli.execute(sql_per)
 
-    # Oracle for (B): one variable per row. NULL rows are free of the PER cap.
+    # Oracle for (B): one variable per row; one SUM<=1 per rk value, NULL being one.
     oracle_solver.create_model("entity_null_vs_per_B")
     row_vars = []
     for i, (rk, val) in enumerate(data):
         vn = f"keep_row_{i}"
         oracle_solver.add_variable(vn, VarType.BINARY)
         row_vars.append((vn, rk, float(val)))
-    # PER rk excludes NULL rows; one SUM<=1 per non-NULL rk
-    non_null_rks = sorted({rk for _, rk, _ in row_vars if rk is not None})
-    for rk in non_null_rks:
+    for rk in sorted({_key(rk) for _, rk, _ in row_vars}):
         oracle_solver.add_constraint(
-            {vn: 1.0 for vn, r, _ in row_vars if r == rk},
-            "<=", 1.0, name=f"cap_r{rk}",
+            {vn: 1.0 for vn, r, _ in row_vars if _key(r) == rk},
+            "<=", 1.0, name=f"cap_{rk}",
         )
     oracle_solver.set_objective(
         {vn: c for vn, _, c in row_vars}, ObjSense.MAXIMIZE,
@@ -2547,12 +2549,11 @@ def test_entity_scoped_vs_per_null_semantics(
         f"(B) PER: DecidB obj={obj_b}, oracle={res_b.objective_value}"
     )
 
-    # Divergence check: the two semantics should give different optima on
-    # this shape (NULL rows free in PER, constrained in entity-scope).
-    assert obj_b > obj_a, (
-        f"Expected PER obj > entity-scope obj (NULL rows free under PER), "
-        f"got entity={obj_a}, per={obj_b}"
-    )
+    # The NULL group is one capped instance under PER: at most one NULL-keyed
+    # row is picked, where the entity form picks all of them or none.
+    rk_idx_b = cols_per.index("rk")
+    null_picks = sum(int(r[keep_idx_b]) for r in rows_per if r[rk_idx_b] is None)
+    assert null_picks <= 1, f"(B) the NULL group must hold one pick, got {null_picks}"
 
 
 # ---------------------------------------------------------------------------

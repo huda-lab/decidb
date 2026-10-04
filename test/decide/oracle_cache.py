@@ -7,7 +7,7 @@ solve() returns the cached SolverResult instantly.
 
 Cache file: results/oracle_cache.json
 Invalidation:
-  - Per-test: hash of inspect.getsource(test_fn) + db checksum
+  - Per-test: hash of the test module's source + the test's source + db checksum
   - Global:   db checksum (size + mtime) stored at top level
   - GC:       stale entries pruned on full (unfiltered) test runs that passed
 
@@ -45,8 +45,19 @@ def _file_checksum(path: str) -> str:
 
 
 def _source_hash(fn: Callable, db_checksum: str) -> str:
+    """Hash of everything a test's oracle can depend on in its own file.
+
+    The whole module is hashed, not just the test function: parametrized case
+    tables, datasets and helpers live at module level, and hashing the function
+    alone let an edited case reuse the oracle result of its old data.
+    """
     src = inspect.getsource(fn)
-    return hashlib.sha256(f"{db_checksum}\n{src}".encode()).hexdigest()[:16]
+    module = inspect.getmodule(fn)
+    try:
+        module_src = inspect.getsource(module) if module is not None else ""
+    except (OSError, TypeError):
+        module_src = ""
+    return hashlib.sha256(f"{db_checksum}\n{module_src}\n{src}".encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------

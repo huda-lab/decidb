@@ -685,3 +685,20 @@ after binding means types, scopes and casts are already resolved.
 | `AND` (constraint sep.) | Yes | N/A | N/A |
 | `AND` / `OR` (logical) | N/A | N/A | Yes |
 | Any other scalar (`SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND`, trig, ...) over a DECIDE variable | **Rejected** (non-linear) | **Rejected** (non-linear) | Yes (over data columns) |
+
+## Frames — review of 2026-09-29
+
+- A frame is a term wherever it appears: a constant scale on a data frame
+  (`2 * AT(...)`, `AT(...) / 2`) is peeled like a reducer's, a cast the binder wraps
+  around it (`0.5 * x <= AT(...)`) is transparent, and the frame is read per
+  instance on either side of the comparison. Before, either spelling sent the
+  frame to the bound side, where it was read as a reducer over every row.
+- `ELSE NULL` spells the default policy. A range with an absolute endpoint pins
+  that end: `FROM FIRST TO PREVIOUS` at the first position selects no position
+  (`ELSE v` adds nothing, no `ELSE` skips the instance, `ALL` is vacuously
+  complete). A `CYCLIC` range longer than the ring reads repeated positions.
+- Under `PER K`, `FIRST` / `LAST` need only the `WITHIN` partition determined by
+  the key; `PREVIOUS` / `NEXT` also need the order key.
+- Refused by name: a frame inside `WHEN`, inside an `IF` guard, under `ABS` /
+  `POWER`, as a decision-free comparison, and `<>` over a frame (the general path
+  takes `SUM` / `AVG` of linear terms only).

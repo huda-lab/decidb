@@ -718,3 +718,53 @@ The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
 | The `DIAGNOSE` operator (sink the rows, emit the findings) | `src/execution/operator/decide/physical_decide_diagnose.cpp` |
 | Its plan-generator case | `src/execution/physical_plan/plan_decide_diagnose.cpp` |
 | Slow solves: report, continuation, Ctrl-C | [`slow_solves.md`](slow_solves.md) |
+
+## 12. Syntax review of 2026-09-29
+
+- **NULL is a key value everywhere.** `BuildScopeGroupIds` is called with
+  `null_excludes = false` for a constraint's `PER` and a nested objective's `PER`,
+  as it already was for decisions and `BY`: the NULL-keyed rows form one instance,
+  and `WHEN k IS NOT NULL` excludes them. The earlier rule (no instance for a NULL
+  generation key) left the NULL-keyed decision unconstrained by every keyed
+  clause while bound absorption still bounded it, so the same constraint written
+  as `x <= 5` and as `2 * x <= 10` disagreed.
+- **A reducer over no rows has no value, uniformly** (`syntax_reference.md` §4):
+  a constraint with no instance imposes nothing, an instance whose reducer reads
+  no row is skipped, and a linear term whose own `WHEN` admits no row
+  contributes nothing. The constraint-side `RejectEmptyAggregate` calls went;
+  the objective-side ones and the MIN/MAX / bilinear / quadratic term checks
+  stay (a formulation limit). An `AVG` term over no rows follows the same rule as
+  `SUM` (`ScaleAvgRows` leaves an empty group at zero), so it is no longer refused.
+- **A bound whose reducer reads no row is not imposed.** `EvaluateRhsReducerPerGroup`
+  reports which groups have a value (`COUNT` over no rows is 0; SUM, AVG, MIN, MAX
+  have none) instead of refusing. Before the bound reduction, a per-row body with
+  no `PER` drops the row; otherwise an instance group none of whose rows carries a
+  bound is dropped (its rows leave `row_group_ids`, materialised when it was empty),
+  and a group keeping some (a finer generation key coarsened onto a `BY` group)
+  reduces over those alone, its other rows copying the kept bound afterwards so
+  every row the builder may read agrees.
+- **The easy MIN/MAX bound is reduced per `BY` group.** The optimizer leaves the
+  stripped reducer's `BY` scope (`minmax_easy_by_scope`) and own `WHEN`
+  (`minmax_easy_filter`) on the prepared constraint. The executor bounds only the
+  rows the filter keeps (`row_is_included`, and the coefficient admission
+  predicate), and takes each row's bound as the tightest among the instances of its
+  `BY` group -- the rows the clause's `WHEN` admits -- or of the whole input for
+  `BY ()`. `ReduceAggregateRhsPerGroup` takes its group count explicitly for this.
+  An `IF` guard on an easy form is admitted only when the clause's `PER` key is the
+  reducer's `BY` key; otherwise it is refused with the other guarded MIN/MAX shapes.
+  The general path admits an easy form while each row is its own instance, so
+  `MAX(x) <= MIN(cap)` and `MAX(x) BY (grp) <= SUM(WHEN f: cap) BY (grp)` solve: the
+  bound reduction leaves out instances whose bound has no value, and a row whose
+  group keeps no bounding instance is not bounded.
+- **A `WHEN`-excluded row is never read.** `ExtractDoubleColumn` takes an
+  optional admission predicate (the clause's WHEN mask and the term's own filter
+  mask, evaluated before extraction; the objective's likewise), so a NULL in a
+  row the query filtered away is not an error.
+- **Frame ranges with an absolute endpoint** are not normalised by min / max:
+  `FROM FIRST TO PREVIOUS` at the first position selects no position (it used to
+  read the instance's own row). The missing-position policies apply to an empty
+  selection too: `ELSE v` adds nothing, `ELSE NULL` skips the instance, `ALL` is
+  vacuously complete.
+- **The general-path refusal** names every shape that reads rows outside its
+  instance (a reducer keyed differently from `PER`, a reducer beside a per-row
+  term, a frame), since a frame reaches it too.

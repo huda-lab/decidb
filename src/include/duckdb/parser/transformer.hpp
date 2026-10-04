@@ -243,8 +243,10 @@ private:
 	// DecidB: the DECIDE clause's own parse nodes (transform_decide.cpp)
 	void TransformDecideClause(duckdb_libpgquery::PGDecideClause &clause, SelectNode &result);
 	DecideDeclaration TransformDecideDeclarator(duckdb_libpgquery::PGDecideDeclarator &root);
+	//! `row_spelling`: whether a lone bare `row` is the ROW default (a PER key) rather
+	//! than a column (a frame's WITHIN).
 	void TransformDecideScope(duckdb_libpgquery::PGDecideScope *scope, DecideScopeKind &kind,
-	                          vector<unique_ptr<ParsedExpression>> &key);
+	                          vector<unique_ptr<ParsedExpression>> &key, bool row_spelling = true);
 	unique_ptr<ParsedExpression> TransformDecideScopeWrapper(const char *tag, duckdb_libpgquery::PGNode *body,
 	                                                         duckdb_libpgquery::PGNode *scope_node);
 	unique_ptr<ParsedExpression> TransformDecideReducerBy(duckdb_libpgquery::PGNode *reducer,

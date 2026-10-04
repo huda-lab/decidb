@@ -81,6 +81,10 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 //! in front of all of them instead of leaking `ExpressionClass::CASE`.
 const char *DecideCaseUnsupportedMessage();
 
+//! True when a frame (the parser's FRAME_TAG operator: `AT(...) OVER (...)` or a range)
+//! sits anywhere in the parsed `expr`. Shared by the constraint and objective binders.
+bool ParsedExpressionContainsFrame(const ParsedExpression &expr);
+
 //! Reject a user-written CAST/TRY_CAST/:: whose child contains a DECIDE variable.
 //!
 //! This must run on the parsed tree before any DECIDE rewrite or binding. After

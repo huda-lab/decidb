@@ -386,7 +386,7 @@ def test_row_varying_factor_rejected(decidb_cli):
         DECIDE x(INT)
         SUCH THAT w * SUM(x) <= 4
         MAXIMIZE SUM(x)
-    """, match=r"'w' varies per row, so it cannot multiply SUM\(x\)")
+    """, match=r"'w' varies across the rows SUM\(x\) reduces")
 
 
 @pytest.mark.min_max
@@ -400,7 +400,7 @@ def test_row_varying_factor_on_minmax_rejected(decidb_cli):
         DECIDE x(INT)
         SUCH THAT x <= 9 AND w * MAX(x) <= 4
         MAXIMIZE SUM(x)
-    """, match=r"'w' varies per row, so it cannot multiply MAX\(x\)")
+    """, match=r"'w' varies across the rows MAX\(x\) reduces")
 
 
 @pytest.mark.cons_aggregate

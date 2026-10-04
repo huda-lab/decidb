@@ -455,3 +455,68 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Objective binding | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
 | Entity scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Scope enum and DECIDE tags | `src/include/duckdb/common/enums/decide.hpp` |
+
+## 8. Syntax review of 2026-09-29
+
+- **Decisions are determined through table keys** (`decide_generation.cpp`,
+  `DecisionDetermined`): a keyed decision is determined by a generation key that
+  determines its key columns the way a reducer's `BY` key is (literally, through a
+  whole relation, or through a `PRIMARY KEY` / `UNIQUE` of its table); a row
+  decision by a key that covers a table key of every relation in `FROM`. The
+  repair text is decision-specific (`RepairDecision`: declare it at the key, drop
+  the `PER`, or reduce it), key-specific for a `BY` group or a frame partition
+  (`RepairKey`), and the `PRIMARY KEY` repair is offered only for a base-table
+  column (`RepairColumn`).
+- **Absolute frame selectors.** `FIRST` / `LAST` (and a range between them) read
+  the same position for every row of a timeline, so under `PER K` only the
+  `WITHIN` partition must be determined; `PREVIOUS` / `NEXT` count from the
+  instance's own position and still need the order key determined (deck p52).
+- **Group-wide reducer factors.** `TagGroupWideReducerFactors` runs after the
+  generation proof: a decision-free, non-constant factor on a `BY (k)` reducer
+  that `k` determines is tagged `GROUP_WIDE_FACTOR_TAG`, which the canonicalizer
+  admits as the reducer's scale (deck example 5). The proof is this layer's; the
+  fold is exact because the factor is constant on every group it scales.
+- **Keys never name a decision.** A constraint `PER` (`BindPerConstraint`) and a
+  declarator key refuse a decision by name, as a reducer's `BY` already did; one
+  used to reach physical planning and fail with an internal cast error.
+- **`USING` columns.** `ResolveKeyElement` reads a `JOIN ... USING (col)` column
+  from the join's primary binding, as the SELECT list does, instead of reporting
+  it ambiguous.
+- **TEXT values** de-duplicate exactly (`std::unordered_set<string>`), matching
+  the case-sensitive comparison.
+- **Objectives** over `PER ()` decisions alone accept linear arithmetic
+  (`DecideObjectiveBinder::GetExpressionType`: an additive / scalar composition
+  that is row-invariant); a data column, a constant or any other non-objective
+  gets an SQL-level message instead of an enum name.
+- **Frames refused by name** where they cannot go: inside `WHEN`
+  (`BindWhenConstraint`), inside an `IF` guard (the linear-form guard analysis),
+  as a decision-free comparison (`GetExpressionType`), and under `ABS` / `POWER`
+  (`ValidateDecideNoNestedReducers`).
+
+### 8.1 Follow-up of 2026-09-30
+
+- `OR` between constraints is refused by name (`BindConjunction`): every clause
+  holds, and reading `OR` as `AND` imposed both sides silently. The message
+  points at BOOL-guarded alternatives and at `IN` domains.
+- A decision inside a reducer's own `WHEN` is named as such before the body is
+  judged (`ClassifyReducerCall`), a known-data leaf in an `AND`/`OR` guard is
+  sent to `WHEN ... IF ...:`, a constant or data-only body says a constraint
+  reads a decision, and a frame under an objective reducer is named a frame.
+- A NULL literal in an `IN` list is refused at the optimizer's IN rewrite
+  (`decide_rewrite_norm_in.cpp`), where the list is read, rather than reaching
+  a coefficient.
+- A reduced constraint's bound that is not one value per instance is named in SQL
+  terms (`BindComparison`): a `CASE` there gets the CASE refusal, a decision in it
+  (a subquery reading `x`) says a bound reads no decision, and anything else lists
+  what a bound may be. The message no longer echoes the internal `FILTER (WHERE
+  ...)` form of a prefixed reducer.
+- A data `COUNT` takes its own `WHEN` like the other reducers
+  (`COUNT(WHEN cap > 5: cap) BY (k)`); its filter is checked for decisions, not
+  validated as a value.
+- A frame anywhere in an objective is refused by the objective classifier
+  (`ParsedExpressionContainsFrame`, shared with the constraints binder), not only
+  a frame that is the whole objective: `SUM(x) - 3 * AT(FIRST: x) OVER (t)` used
+  to bind and read the frame as each row's own `x`.
+- A `BY` group or `WITHIN` partition the generation key does not determine
+  (`RepairKey`) is told to add its columns to the key or to use the key's own
+  columns there; it used to suggest the `PER` key already in force.

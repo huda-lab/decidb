@@ -54,6 +54,7 @@ PGList *raw_parser(const char *str) {
 	yyextra.have_lookahead = false;
 	yyextra.in_decide_clause = false;
 	yyextra.decide_paren_depth = 0;
+	yyextra.decide_last_token = 0;
 	yyextra.decide_sql_mark_depth = 0;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
@@ -115,6 +116,7 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
 	yyextra.have_lookahead = false;
 	yyextra.in_decide_clause = false;
 	yyextra.decide_paren_depth = 0;
+	yyextra.decide_last_token = 0;
 	yyextra.decide_sql_mark_depth = 0;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
@@ -192,7 +194,7 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
  * the core_YYSTYPE and YYSTYPE representations (which are really the
  * same thing anyway, but notationally they're different).
  */
-int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
+static int base_yylex_filtered(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 	base_yy_extra_type *yyextra = pg_yyget_extra(yyscanner);
 	int cur_token;
 	int next_token;
@@ -266,11 +268,12 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		} else if (cur_token == END_P) {
 			if (yyextra->decide_case_depth > 0)
 				yyextra->decide_case_depth--;
-		} else if (!suppressed) {
+		} else if (!suppressed && yyextra->decide_last_token != '.') {
 			/*
 			 * Keep WHEN / THEN that belong to a CASE...END as ordinary tokens so
 			 * the CASE still parses (DecidB rejects CASE-in-DECIDE later, with a
-			 * friendly error). Only a bare DECIDE prefix (depth 0) is rewritten.
+			 * friendly error). Only a bare DECIDE prefix (depth 0) is rewritten,
+			 * and never a word right after '.', which is a qualified column name.
 			 */
 			switch (cur_token) {
 			case WHEN:
@@ -415,6 +418,14 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 	}
 
 	return cur_token;
+}
+
+/* DecidB: the filter above, remembering each token it hands to the grammar so a
+ * DECIDE-only word after '.' is read as the qualified column it is. */
+int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
+	int token = base_yylex_filtered(lvalp, llocp, yyscanner);
+	pg_yyget_extra(yyscanner)->decide_last_token = token;
+	return token;
 }
 
 }

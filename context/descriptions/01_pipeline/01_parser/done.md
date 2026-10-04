@@ -318,3 +318,58 @@ continuation cases outside the materializing verifier. The guarded release run p
 | DECIDE statement rendering | `src/parser/query_node/select_node.cpp`, `src/parser/expression/function_expression.cpp` |
 | Parsed reparse verifier boundary | `src/verification/parsed_statement_verifier.cpp`, `src/main/client_verify.cpp` |
 | Parse-error hint | `src/parser/decide/decide_parse_hints.cpp` |
+
+## 7. Syntax review of 2026-09-29
+
+What the grammar and transformer gained after an adversarial review of the
+PER / BY / WHEN / IF surface against the deck (`../../00_project_overview/deciql_language_spec.md`
+records the language-level decisions; `syntax_reference.md` the shipped spellings).
+
+- **`PER ROW`.** `ROW` is a column-name keyword, so `PER ROW:` reaches the
+  transformer as a one-element key; `TransformDecideScope` reads a lone bare
+  `row` (any case) as `DecideScopeKind::ROW`, the spec's explicit spelling of the
+  default (§6.1). A column literally named `row` is keyed as `t.row`.
+- **Parenthesized keys.** `decide_scope: '(' decide_scope_list ')'` accepts
+  `PER (a, b)` / `WITHIN (p)` as the same key as the bare list, the spelling a
+  user who just wrote `BY (a, b)` reaches for.
+- **`ELSE NULL`.** `TransformDecideFrame` maps a NULL constant `ELSE` value to
+  the `ELSE_NULL` policy (the deck's spelled default, p43) instead of a fill value
+  the executor would refuse.
+- **Named errors.** Productions whose only job is a message: the trailing key
+  `x(INT) [bounds] PER k` ("goes before its name"); a bound after a `TEXT`
+  declarator (`decide_declarator_bounds_written`); `decide_unknown_domain`
+  (`INTEGER`, `BOOLEAN_P`, `DOUBLE_P`, `FLOAT_P`, `BIGINT`, `SMALLINT`, `VARCHAR`,
+  `IDENT`) naming the six domains; prefixes out of order (`PER k WHEN c`, `IF b
+  PER k`, `IF b WHEN c`, `WHEN c IF b PER k`, `PER k IF b WHEN c`) naming the order;
+  the retired postfix `body PER k` / `body WHEN c` and `agg(K: e)`; `MAXIMIZE PER ()
+  e` (missing colon), `MAXIMIZE PER (k):` / `MAXIMIZE e PER k` (no key on an
+  objective), two stages without `THEN`, and `SATISFY` beside a stage.
+- **Conflict lesson.** An error production that ends in `decide_scope` where a
+  comma may follow (a declarator list, a constraint list) is a shift/reduce
+  conflict with `decide_scope_list ',' ...`; the trailing-key and postfix-PER
+  productions therefore end in `decide_scope_elem`. `%expect 6` is unchanged.
+
+### 7.1 Follow-up of 2026-09-30
+
+- The duplicate-declaration check moved from `decide_clause`'s action to
+  `makeDecideClause`, which sees one query's two slots together. The lexer flag
+  `decide_declared_before_from` reduced before a `FROM`/`WHERE` subquery was
+  parsed, so a split-order DECIDE subquery inside a single-block DECIDE query
+  was refused as "DECIDE appears twice".
+- `base_yylex` remembers the token it last handed to the grammar
+  (`decide_last_token`); a DECIDE-only word after `.` keeps its ordinary
+  keyword token, so `t.per` / `t.within` name columns inside a DECIDE body.
+- A lone bare `row` is the ROW default only in a `PER` key
+  (`TransformDecideScope(..., row_spelling)`); `WITHIN row` and `BY (row)` name
+  the column.
+- More named errors: a key without its colon (`PER k x(INT)`, `PER k body`), a
+  TEXT list in parentheses, `SUM(x WHEN c)` / `SUM(x PER k)`, `AT(...)` without
+  `OVER`, a range with one endpoint, `SUCH THAT` with no constraint before the
+  objective, an objective before `SUCH THAT`, `THEN SATISFY`. Productions that
+  collided with `SATISFY` / `ALL` as identifiers or operators, or with plain
+  `BY` after a function, were not added; those stay bare syntax errors.
+- `base_yyerror` (`grammar.cpp`) adds a hint when the token a syntax error lands
+  on is one the lexer rewrote into a DECIDE token (`PER`, `WITHIN`, `IF`, `AT(`,
+  `BY (`, `OVER (`): a column named `per`, DuckDB's `if(...)` or a decision
+  named `at` then reads as "inside DECIDE, PER opens a key prefix ...; a column
+  named per is written "per" or t.per". Other syntax errors are unchanged.

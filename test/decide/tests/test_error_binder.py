@@ -254,22 +254,20 @@ class TestBinderErrors:
                 DECIDE x(INT)
                 SUCH THAT SUM(x) <= 3
                 MAXIMIZE l_quantity LIMIT 1
-            """, match=r"does not support")
+            """, match=r"is a data column, not a decision")
 
     def test_subquery_rhs_non_scalar(self, decidb_cli):
         """Subquery RHS that references DECIDE variables.
 
-        DecidB surfaces this via the same "not a scalar or aggregate without
-        DECIDE variables" binder path; the tightened match anchors to that
-        wording so a regression (e.g. a less-informative generic scalar
-        check) would fail.
+        The refusal names the rule a bound breaks here, that it may not read a
+        decision (a generic "not a scalar" check would say less).
         """
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x) <= (SELECT l_quantity+x FROM lineitem)
                 MAXIMIZE SUM(x) LIMIT 1
-            """, match=r"SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables")
+            """, match=r"cannot read a decision")
 
     def test_subquery_rhs_returns_multiple_rows(self, decidb_cli):
         """A non-aggregated subquery RHS that yields more than one row must error.

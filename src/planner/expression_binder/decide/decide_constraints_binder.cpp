@@ -30,6 +30,18 @@ DecideConstraintsBinder::DecideConstraintsBinder(Binder &binder, ClientContext &
 static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
                                                  const case_insensitive_map_t<idx_t> &variables);
 
+//! True when a CASE (or DuckDB's `if(...)`, which parses as one) sits anywhere in `expr`.
+static bool ContainsCaseExpression(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::CASE) {
+		return true;
+	}
+	bool found = false;
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		found = found || ContainsCaseExpression(child);
+	});
+	return found;
+}
+
 static bool IsSupportedComparison(ExpressionType type) {
     switch (type) {
     case ExpressionType::COMPARE_EQUAL:
@@ -139,7 +151,9 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
                     return false;
                 }
             }
-            if (func.filter && !IsAllowedDecisionFreeBoundExpression(*func.filter, variables)) {
+            // A reducer's own WHEN (`COUNT(WHEN c: cap)`) is a predicate over known rows,
+            // exactly as for SUM/AVG/MIN/MAX above, not a value on this side.
+            if (func.filter && ExpressionContainsDecideVariable(*func.filter, variables)) {
                 return false;
             }
             return true;
@@ -209,9 +223,26 @@ BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> 
             return IsAllowedDecisionFreeBoundExpression(side, variables) &&
                    !ExpressionContainsDecideVariable(side, variables);
         };
-        if ((!IsDecideSide(left_type) && !IsValidBound(*comp.left)) ||
-            (!IsDecideSide(right_type) && !IsValidBound(*comp.right))) {
-            return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUM cannot be compared to an expression that is not a scalar or aggregate without DECIDE variables, found '%s'", expr.ToString())));
+        const ParsedExpression *bad_bound = nullptr;
+        if (!IsDecideSide(left_type) && !IsValidBound(*comp.left)) {
+            bad_bound = comp.left.get();
+        } else if (!IsDecideSide(right_type) && !IsValidBound(*comp.right)) {
+            bad_bound = comp.right.get();
+        }
+        if (bad_bound) {
+            if (ContainsCaseExpression(*bad_bound)) {
+                return BindResult(BinderException::Unsupported(expr, DecideCaseUnsupportedMessage()));
+            }
+            if (ExpressionContainsDecideVariable(*bad_bound, variables)) {
+                return BindResult(BinderException::Unsupported(
+                    expr, "The bound of a reduced constraint reads no decision, and this one does. Move every "
+                          "decision term to the reducer's side (for example SUM(x) - SUM(y) <= 5); a subquery "
+                          "in a bound cannot read a decision."));
+            }
+            return BindResult(BinderException::Unsupported(
+                expr, "The bound of a reduced constraint is one value per instance: a constant, a column, a data "
+                      "reducer such as MIN(cap) BY (k) or COUNT(*) BY (k), or a scalar subquery. Compute anything "
+                      "else in a CTE before the DECIDE clause."));
         }
     }
     is_top_expression = false;
@@ -233,6 +264,11 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
                 return BindResult(BinderException::Unsupported(expr,
                     "IN domain constraints on DECIDE variables are not yet supported. "
                     "The values in the IN list must be constants or table columns, not DECIDE variables."));
+            }
+            if (op.children[i]->GetExpressionClass() == ExpressionClass::CONSTANT &&
+                op.children[i]->Cast<ConstantExpression>().value.IsNull()) {
+                return BindResult(BinderException::Unsupported(expr,
+                    "an IN list holds a NULL, which no value equals; remove it from the list."));
             }
         }
         // Keep the native bound operator as an optimizer marker. DuckDB binds its
@@ -270,6 +306,15 @@ BindResult DecideConstraintsBinder::BindBetween(unique_ptr<ParsedExpression> &ex
 BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &conj = expr.Cast<ConjunctionExpression>();
+    // Every clause of SUCH THAT holds; OR does not connect constraints, and reading it
+    // as AND would impose both sides. A choice between cases is a BOOL decision with
+    // IF guards, or a domain (`x IN (...)`).
+    if (conj.GetExpressionType() == ExpressionType::CONJUNCTION_OR) {
+        return BindResult(BinderException::Unsupported(
+            expr, "OR does not connect constraints: every SUCH THAT clause holds. To allow either case, "
+                  "guard each on a BOOL decision (IF pick: x <= 1 AND IF NOT pick: x >= 5), or list the "
+                  "allowed values (x IN (0, 1, 5, 6))."));
+    }
     // first try to bind the children of the case expression
     ErrorData error;
     for (idx_t i = 0; i < conj.children.size(); i++) {
@@ -319,6 +364,12 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
 		return BindResult(BinderException::Unsupported(*expr_ptr,
 		    "A WHEN condition filters rows before the solve, so it cannot reference a decision; "
 		    "to impose the constraint only when a decision holds, write IF <condition>: instead."));
+	}
+	// It reads each row's own known data; a frame reads another row's.
+	if (ParsedExpressionContainsFrame(*func.children[1])) {
+		return BindResult(BinderException::Unsupported(*expr_ptr,
+		    "A WHEN condition reads a row's own known data; a frame (AT / FROM .. TO .. OVER) reads another "
+		    "row's and cannot filter. Compare the frame in the constraint body instead."));
 	}
 
 	// Bind the constraint (child[0]) through normal DECIDE constraint dispatch
@@ -413,6 +464,13 @@ BindResult DecideConstraintsBinder::BindIfConstraint(unique_ptr<ParsedExpression
 				leaf = leaf->Cast<OperatorExpression>().children[0].get();
 			}
 			if (leaf->GetExpressionClass() != ExpressionClass::COLUMN_REF || !IsVariableExpression(*leaf, variables)) {
+				// A leaf over known data belongs in the filter, not the guard.
+				if (!ExpressionContainsDecideVariable(*child, variables)) {
+					return BindResult(BinderException::Unsupported(
+					    *expr_ptr, StringUtil::Format("'%s' reads known data, so it filters rows rather than guarding "
+					                                  "the instance: write WHEN %s IF <decisions>: ... instead.",
+					                                  child->ToString(), child->ToString())));
+				}
 				simple = false;
 				break;
 			}
@@ -485,6 +543,14 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
 		}
 		vector<unique_ptr<ParsedExpression>> key;
 		for (idx_t i = 1; i < func.children.size(); i++) {
+			// A key partitions known rows, so it names columns or relations; a decision
+			// has no value before the solve and cannot be generated over.
+			if (ExpressionContainsDecideVariable(*func.children[i], variables)) {
+				return BindResult(BinderException::Unsupported(
+				    *expr_ptr, StringUtil::Format("PER key: '%s' is a decision; a key generates one instance per "
+				                                  "value of known data, so it names columns or relations",
+				                                  func.children[i]->ToString())));
+			}
 			key.push_back(func.children[i]->Copy());
 		}
 		string error;
@@ -622,6 +688,10 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
             // are treated as per-row multi-variable constraints
             // (e.g., z_1 + z_2 + z_3 from IN rewrite, or d - x from ABS linearization)
             return DecideExpression::VARIABLE;
+        } else if (ParsedExpressionContainsFrame(expr)) {
+            error_msg = "a frame (AT / FROM .. TO .. OVER) reads known data at another row; on its own it decides "
+                        "nothing. Compare a decision with it, e.g. x <= AT(PREVIOUS: cap) OVER (t).";
+            return DecideExpression::INVALID;
         } else {
             error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
             return DecideExpression::INVALID;
@@ -635,7 +705,9 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
         return GetExpressionType(*cast.child, error_msg);
     }
     default: {
-        error_msg = StringUtil::Format("The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());
+        error_msg = StringUtil::Format("a constraint reads a decision; '%s' reads none. Compare a decision or a reducer over "
+                                       "decisions (x <= cap, SUM(x) <= 10) with a bound.",
+                                       expr.ToString());
     	return DecideExpression::INVALID;
     }
     }

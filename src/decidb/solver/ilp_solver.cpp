@@ -417,30 +417,90 @@ static void AssertBackendAcceptsBuiltModel(const SolverModel &model, SolverBacke
 //! is the answer; the reported objective value stays the first stage's, which is what the
 //! query names first. A staged solve is what every backend can do; a backend's own
 //! multi-objective API would be a faster route to the same answer, not a different one.
+//! Whether an objective vector can only take whole-numbered values: every column it
+//! reads is integer and every coefficient is whole. Such a stage is frozen at exactly
+//! its optimum (any value within half a unit of an integer is that integer), so a
+//! later stage can never move it -- the guarantee the syntax reference makes for
+//! integer-valued objectives, at any magnitude.
+static bool ObjectiveIsIntegerValued(const SolverModel &model, const vector<double> &coeffs) {
+	for (idx_t col = 0; col < coeffs.size(); col++) {
+		if (coeffs[col] == 0.0) {
+			continue;
+		}
+		if (col >= model.is_integer.size() || !model.is_integer[col]) {
+			return false;
+		}
+		if (coeffs[col] != std::floor(coeffs[col])) {
+			return false;
+		}
+	}
+	return true;
+}
+
 static SolverResult SolveLexicographicStages(const SolverModel &model, SolverBackend backend, double time_limit,
                                              const SolveModelOptions &options, SolverResult first) {
 	if (model.objective_stages.empty() || first.status != SolverStatus::OPTIMAL) {
 		return first;
 	}
 	SolverModel staged = model;
+	// Every later stage is linear. The first stage's quadratic part, if any, is frozen
+	// below as a quadratic row; it must not stay in the objective of the stages that
+	// follow, which would then optimize the Hessian plus their own coefficients.
+	bool freeze_quadratic = model.has_quadratic_obj && !model.q_vals.empty();
+	staged.has_quadratic_obj = false;
+	staged.q_rows.clear();
+	staged.q_cols.clear();
+	staged.q_vals.clear();
 	const double primary_value = first.objective_value;
 	SolverResult result = std::move(first);
 	const vector<double> *frozen_obj = &model.obj_coeffs;
 	bool frozen_maximize = model.maximize;
 	for (auto &stage : model.objective_stages) {
-		ModelConstraint row;
-		for (idx_t col = 0; col < frozen_obj->size(); col++) {
-			if ((*frozen_obj)[col] != 0.0) {
-				row.indices.push_back(static_cast<int>(col));
-				row.coefficients.push_back((*frozen_obj)[col]);
-			}
-		}
 		const double value = result.objective_value;
-		const double tolerance = 1e-6 * MaxValue<double>(1.0, std::fabs(value));
-		row.sense = frozen_maximize ? '>' : '<';
-		row.rhs = frozen_maximize ? value - tolerance : value + tolerance;
-		row.provenance.kind = ConstraintKind::STRUCTURAL;
-		staged.constraints.push_back(std::move(row));
+		// An integer-valued stage is frozen exactly; a continuous one within a relative
+		// slack, which is the solver's own notion of optimal.
+		const bool integer_valued = !freeze_quadratic && ObjectiveIsIntegerValued(model, *frozen_obj);
+		const double tolerance = integer_valued ? 0.5 : 1e-6 * MaxValue<double>(1.0, std::fabs(value));
+		const char sense = frozen_maximize ? '>' : '<';
+		const double rhs = frozen_maximize ? value - tolerance : value + tolerance;
+		if (freeze_quadratic) {
+			if (!backend.Capabilities().model_classes.quadratic_constraints) {
+				throw NotImplementedException(
+				    "DECIDE optimization: holding a quadratic first objective at its optimum for a THEN stage "
+				    "needs a quadratic constraint, which %s does not take; use Gurobi, or make the first "
+				    "stage linear.",
+				    backend.Name());
+			}
+			SolverModel::QuadraticConstraint qc;
+			for (idx_t col = 0; col < frozen_obj->size(); col++) {
+				if ((*frozen_obj)[col] != 0.0) {
+					qc.linear_indices.push_back(static_cast<int>(col));
+					qc.linear_coefficients.push_back((*frozen_obj)[col]);
+				}
+			}
+			// Same coefficient convention as the objective's Q (the plain coefficient of
+			// each monomial, lower triangle), which is what the quadratic-row path stores.
+			qc.q_rows = model.q_rows;
+			qc.q_cols = model.q_cols;
+			qc.q_coefficients = model.q_vals;
+			qc.sense = sense;
+			qc.rhs = rhs;
+			qc.provenance.kind = ConstraintKind::STRUCTURAL;
+			staged.quadratic_constraints.push_back(std::move(qc));
+			freeze_quadratic = false;
+		} else {
+			ModelConstraint row;
+			for (idx_t col = 0; col < frozen_obj->size(); col++) {
+				if ((*frozen_obj)[col] != 0.0) {
+					row.indices.push_back(static_cast<int>(col));
+					row.coefficients.push_back((*frozen_obj)[col]);
+				}
+			}
+			row.sense = sense;
+			row.rhs = rhs;
+			row.provenance.kind = ConstraintKind::STRUCTURAL;
+			staged.constraints.push_back(std::move(row));
+		}
 		staged.obj_coeffs = stage.obj_coeffs;
 		staged.maximize = stage.maximize;
 

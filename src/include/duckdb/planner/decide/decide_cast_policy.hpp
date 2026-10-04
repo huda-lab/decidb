@@ -86,6 +86,10 @@ class BoundColumnRefExpression;
 //! True when `expr` references a variable from the LogicalDecide binding.
 bool BoundExpressionReferencesDecide(const Expression &expr, idx_t decide_index);
 
+//! True when a frame (a FRAME_TAG-marked aggregate: `AT(...) OVER (...)` or a range)
+//! sits anywhere in `expr`.
+bool BoundExpressionContainsFrame(const Expression &expr);
+
 //! Look through outer cast wrappers only while the wrapper belongs to
 //! decision-bearing solver algebra. These casts were inserted by DuckDB after the
 //! parsed boundary rejected every user-written decision cast, so they are type

@@ -146,7 +146,8 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 
-	// Variables (exclude auxiliary variables)
+	// Variables (exclude auxiliary variables), each with its generation scope, so a
+	// reader sees that `PER grp: x(INT), y(INT)` keys x alone.
 	string vars_info;
 	idx_t user_var_count = decide_variables.size() - num_auxiliary_vars;
 	for (idx_t i = 0; i < user_var_count; i++) {
@@ -154,6 +155,13 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 			vars_info += "\n";
 		}
 		vars_info += decide_variables[i]->GetName();
+		if (i < variable_scopes.size()) {
+			if (variable_scopes[i].IsScalar()) {
+				vars_info += " PER ()";
+			} else if (variable_scopes[i].IsEntity() && variable_scopes[i].entity_scope_idx < entity_scopes.size()) {
+				vars_info += " PER " + entity_scopes[variable_scopes[i].entity_scope_idx].table_alias;
+			}
+		}
 	}
 	result["Variables"] = vars_info;
 
@@ -177,7 +185,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 			                       StringUtil::Join(stage_strs, " ");
 		}
 	} else {
-		result["Objective"] = "FEASIBILITY";
+		result["Objective"] = "SATISFY";
 	}
 
 	// Constraints: one group per user clause -- as written, then the canonical reading

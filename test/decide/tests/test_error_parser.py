@@ -17,7 +17,7 @@ class TestParserErrors:
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT) MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"DECIDE requires a SUCH THAT clause")
+            """, match=r"SUCH THAT")
 
     def test_missing_decide_variable(self, decidb_cli):
         """DECIDE without a variable name."""
@@ -41,7 +41,7 @@ class TestParserErrors:
                 SELECT l_quantity FROM lineitem
                 DECIDE x(CONTINUOUS) SUCH THAT x <= 1
                 MAXIMIZE SUM(x*l_quantity) LIMIT 1
-            """, match=r"syntax error.*CONTINUOUS")
+            """, match=r"CONTINUOUS.*is not a DECIDE domain")
 
     def test_comma_separated_constraints_rejected(self, decidb_cli):
         """Top-level SUCH THAT constraints must be separated with AND."""

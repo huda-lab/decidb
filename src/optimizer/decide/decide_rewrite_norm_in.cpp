@@ -48,6 +48,18 @@ static unique_ptr<Expression> WrapWithWhen(unique_ptr<Expression> constraint, co
 	return std::move(wrapper);
 }
 
+//! True when an IN domain marker (`x IN (...)`, a COMPARE_IN operator) sits in `expr`.
+static bool ContainsInMarker(const Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR && expr.type == ExpressionType::COMPARE_IN) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		found = found || ContainsInMarker(child);
+	});
+	return found;
+}
+
 static bool IsWhenWrapper(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
 		return false;
@@ -164,7 +176,16 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			return;
 		}
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			for (auto &child : expr->Cast<BoundConjunctionExpression>().children) rewrite(child, when, clause_alias);
+			auto &conj = expr->Cast<BoundConjunctionExpression>();
+			// The one-hot rows below are appended as constraints of their own, so a
+			// guard over the IN would silently fall away; refuse it like the other
+			// bodies a guard cannot switch yet.
+			if (IsIfConstraintWrapper(conj) && !conj.children.empty() && ContainsInMarker(*conj.children[0])) {
+				throw NotImplementedException(
+				    "DECIDE: an IF guard is supported on linear constraints only; an IN list cannot be guarded yet. "
+				    "Choose among the values with BOOL decisions instead (IF pick_a: x = 2).");
+			}
+			for (auto &child : conj.children) rewrite(child, when, clause_alias);
 			return;
 		}
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR || expr->type != ExpressionType::COMPARE_IN) return;
@@ -173,6 +194,14 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		auto *target = GetBareDecideColumnRef(*in.children[0], decide.decide_index);
 		if (!target) throw InternalException("DECIDE IN marker target is not a decision variable");
 		idx_t k = in.children.size() - 1;
+		for (idx_t i = 1; i <= k; i++) {
+			if (in.children[i]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+			    in.children[i]->Cast<BoundConstantExpression>().value.IsNull()) {
+				throw BinderException("DECIDE constraint: the IN list of '%s' holds a NULL, which no value equals; "
+				                      "remove it from the list.",
+				                      target->GetName());
+			}
+		}
 		if (target->binding.column_index < decide.is_boolean_var.size() && decide.is_boolean_var[target->binding.column_index] && k == 2) {
 			double a, b;
 			if (TryEvaluateFoldableDoubleNoThrow(optimizer.context, *in.children[1], a) &&

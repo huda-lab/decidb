@@ -236,6 +236,16 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 	out_terms.push_back(std::move(term));
 }
 
+//! A MIN/MAX term reduced beside a frame: the composed encoding knows reducers and
+//! per-row terms, not navigated positions, and read the frame as a sum over every row.
+static void ThrowIfMinMaxBesideFrame(const BoundComparisonExpression &comp) {
+	if (BoundExpressionContainsFrame(comp)) {
+		throw NotImplementedException(
+		    "DECIDE: a MIN/MAX compared with a frame (AT / FROM .. TO .. OVER) is not available yet. Bound the "
+		    "MIN/MAX by a column or a data reducer, or state the bound per row (x <= AT(...) OVER (...)).");
+	}
+}
+
 void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide) {
 	if (!expr) {
 		return;
@@ -250,11 +260,14 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 				auto &inner = *conj.children[0];
 				if (inner.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 					auto &cmp = inner.Cast<BoundComparisonExpression>();
+					// `+` and `-` alike: `MAX(x) - AT(...)` (a frame the canonicalizer moved
+					// left) or `MAX(x) - MIN(x)` would otherwise lose the prefix silently.
 					if (cmp.left && AdditiveContainsMinMax(*cmp.left, decide.decide_index) &&
-					    IsAddNode(*cmp.left, decide.decide_index)) {
+					    (IsAddNode(*cmp.left, decide.decide_index) || IsSubNode(*cmp.left, decide.decide_index))) {
+						ThrowIfMinMaxBesideFrame(cmp);
 						throw BinderException(
-						    "Composed MIN/MAX in DECIDE v1 does not support outer WHEN/PER wrappers. "
-						    "Remove the WHEN/PER or restructure the constraint.");
+						    "A sum of MIN/MAX terms does not support outer WHEN/PER prefixes yet. Write it without "
+						    "the prefix, or split it into one MIN/MAX per clause.");
 					}
 				}
 				RewriteComposedMinMaxInConstraint(conj.children[0], decide);
@@ -307,6 +320,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 			return;
 		}
 	}
+	ThrowIfMinMaxBesideFrame(comp);
 
 	auto cmp_type = comp.type;
 	// An equality has no cheap direction: it holds the LHS from both sides, so every
@@ -438,7 +452,7 @@ void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
 
 void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                                 vector<unique_ptr<Expression>> &new_constraints,
-                                                bool &out_was_easy) {
+                                                bool &out_was_easy, vector<const Expression *> clause_when) {
 	if (!expr) {
 		return;
 	}
@@ -449,7 +463,10 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		if (IsWhenConstraintWrapper(conj)) {
 			// Recurse into the wrapped constraint (child[0])
 			if (!conj.children.empty()) {
-				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy);
+				if (conj.children.size() == 2) {
+					clause_when.push_back(conj.children[1].get());
+				}
+				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy, clause_when);
 			}
 			return;
 		}
@@ -458,7 +475,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		if (IsPerConstraintWrapper(conj)) {
 			// Recurse into the wrapped constraint (child[0])
 			if (!conj.children.empty()) {
-				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy);
+				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy, clause_when);
 				// Easy MIN/MAX (e.g., MAX(e) <= C, MIN(e) >= C) are vacuously true over
 				// empty sets. Strip PER — the per-row form skips WHEN-excluded rows.
 				if (out_was_easy) {
@@ -470,7 +487,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// Regular AND conjunction — recurse into all children
 		for (auto &child : conj.children) {
 			bool child_easy = false;
-			RewriteMinMaxInConstraint(child, decide, new_constraints, child_easy);
+			RewriteMinMaxInConstraint(child, decide, new_constraints, child_easy, clause_when);
 		}
 		return;
 	}
@@ -561,6 +578,28 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		throw BinderException("DECIDE does not support <> comparison with MIN/MAX aggregates.");
 	}
 
+	// The per-row form `e <= K` keeps what the stripped reducer meant. Its BY key: each
+	// instance bounds every row of its own group, so the executor takes the tightest K
+	// among a group's instances rather than the whole input's. Its own WHEN: a wrapper
+	// tagged apart from the clause's WHEN, since it picks the rows that are bounded, not
+	// the instances whose bounds apply. Read before `comp.left` is replaced below.
+	idx_t easy_by_scope = DConstants::INVALID_INDEX;
+	TryParseReduceByTag(agg.GetAlias(), easy_by_scope);
+	auto tag_easy = [&](string &alias) {
+		AddDecideTag(alias, MINMAX_EASY_REWRITE_TAG);
+		if (easy_by_scope != DConstants::INVALID_INDEX) {
+			AddDecideTag(alias, MakeMinMaxEasyByTag(easy_by_scope));
+		}
+	};
+	auto wrap_reducer_filter = [](unique_ptr<Expression> easy, unique_ptr<Expression> filter) {
+		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		wrapper->children.push_back(std::move(easy));
+		wrapper->children.push_back(std::move(filter));
+		wrapper->alias = WHEN_CONSTRAINT_TAG;
+		AddDecideTag(wrapper->alias, MINMAX_EASY_FILTER_TAG);
+		return unique_ptr<Expression>(std::move(wrapper));
+	};
+
 	// Re-attach the peeled factor to whatever form is emitted below. `scale * e` keeps
 	// the factor on the left, matching the one spelling canonicalization produces.
 	auto apply_scale = [&](unique_ptr<Expression> inner) -> unique_ptr<Expression> {
@@ -587,12 +626,17 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		    easy_cmp_type,
 		    apply_scale(agg.children[0]->Copy()), comp.right->Copy());
 		easy->alias = comp.alias;
-		AddDecideTag(easy->alias, MINMAX_EASY_REWRITE_TAG);
-		// Preserve aggregate-local WHEN filter as a per-row WHEN wrapper
+		tag_easy(easy->alias);
 		if (agg.filter) {
+			easy = wrap_reducer_filter(std::move(easy), agg.filter->Copy());
+		}
+		// This half leaves the clause's wrappers behind: PER is dropped as for any easy
+		// form (the BY tag carries the grouping), but the clause's WHEN must come along,
+		// or `WHEN c: MAX(x) = 2` would bound the rows c excludes.
+		for (auto it = clause_when.rbegin(); it != clause_when.rend(); ++it) {
 			auto when_wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 			when_wrapper->children.push_back(std::move(easy));
-			when_wrapper->children.push_back(agg.filter->Copy());
+			when_wrapper->children.push_back((*it)->Copy());
 			when_wrapper->alias = WHEN_CONSTRAINT_TAG;
 			easy = std::move(when_wrapper);
 		}
@@ -626,17 +670,11 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// getting from the aggregate to `MAX(e) <op'> K/s`, once dividing by s -- so
 		// the two cancel. The classification above is what consumed the sign.)
 		comp.left = apply_scale(agg.children[0]->Copy());
-		// Tag the comparison so physical_decide.cpp can enforce empty-WHEN
-		// rejection on constraints the user wrote as MIN/MAX, even after the
-		// optimizer strips the aggregate.
-		AddDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG);
-		// Preserve aggregate-local WHEN filter as a per-row WHEN wrapper
+		// Tag the comparison so physical_decide.cpp knows it was a MIN/MAX: its bound
+		// is the tightest among the instances of each BY group.
+		tag_easy(comp.alias);
 		if (saved_filter) {
-			auto when_wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-			when_wrapper->children.push_back(std::move(expr));
-			when_wrapper->children.push_back(std::move(saved_filter));
-			when_wrapper->alias = WHEN_CONSTRAINT_TAG;
-			expr = std::move(when_wrapper);
+			expr = wrap_reducer_filter(std::move(expr), std::move(saved_filter));
 		}
 		out_was_easy = true;
 		return;
@@ -752,6 +790,34 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	bool has_per = false;
 	if ((outer_name == "sum" || outer_name == "min" || outer_name == "max" || outer_name == "avg") &&
 	    outer_agg.children.size() == 1) {
+		// A constant factor on the inner reducer folds into its body, as it does in a
+		// constraint: `SUM(PER k: 2 * SUM(x) BY (k))` is `SUM(PER k: SUM(2 * x) BY (k))`.
+		// Done before the pattern is read so the factor never reaches the linear form
+		// as a product over a reducer.
+		{
+			ScaledAggregateMatch scaled;
+			if (TryMatchScaledAggregate(*outer_agg.children[0], decide.decide_index, scaled) &&
+			    scaled.scale->IsFoldable() && outer_agg.children[0]->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+				auto &product = outer_agg.children[0]->Cast<BoundFunctionExpression>();
+				idx_t agg_child = scaled.divides ? 0 : 1;
+				auto scale = product.children[1 - agg_child]->Copy();
+				auto inner = std::move(product.children[agg_child]);
+				Expression *bare = inner.get();
+				while (bare->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+					bare = bare->Cast<BoundCastExpression>().child.get();
+				}
+				if (bare->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+					auto &agg = bare->Cast<BoundAggregateExpression>();
+					if (agg.children.size() == 1) {
+						auto body = std::move(agg.children[0]);
+						agg.children[0] = scaled.divides
+						                      ? optimizer.BindScalarFunction("/", std::move(body), std::move(scale))
+						                      : optimizer.BindScalarFunction("*", std::move(scale), std::move(body));
+					}
+				}
+				outer_agg.children[0] = std::move(inner);
+			}
+		}
 		// Unwrap cast on inner child if present
 		Expression *inner_expr = outer_agg.children[0].get();
 		if (inner_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -765,6 +831,11 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 			has_per = TryParseQualifiedReducerTag(outer_agg.alias, inner_per_scope);
 			TryParseReduceByTag(inner_agg.alias, inner_by_scope);
 
+			idx_t inner_frame_idx;
+			if (TryParseFrameRefTag(inner_agg.alias, inner_frame_idx)) {
+				throw BinderException("A frame (AT / FROM .. TO .. OVER) navigates from an instance's position, and "
+				                      "an objective has none; use it in a constraint.");
+			}
 			if ((inner_name == "sum" || inner_name == "min" || inner_name == "max" || inner_name == "avg") &&
 			    inner_agg.children.size() == 1 &&
 			    BoundExpressionReferencesDecide(*inner_agg.children[0], decide.decide_index)) {
@@ -822,6 +893,24 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 					}
 					// Replace inner aggregate within the outer
 					outer_agg.children[0] = std::move(new_sum);
+				}
+				// The outer reducer's own WHEN (`SUM(WHEN c PER k: MAX(e) BY (k))`) filters the
+				// relation both levels read (deck p29-30): each inner group is a class of the
+				// filtered rows, and a key with no such row generates no term. The inner
+				// reducer's filter already means exactly that (an emptied group is skipped),
+				// so the outer one is ANDed into it before the outer reducer is stripped.
+				if (outer_agg.filter) {
+					Expression *inner_node = outer_agg.children[0].get();
+					while (inner_node->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+						inner_node = inner_node->Cast<BoundCastExpression>().child.get();
+					}
+					auto &inner_reducer = inner_node->Cast<BoundAggregateExpression>();
+					if (inner_reducer.filter) {
+						inner_reducer.filter = make_uniq<BoundConjunctionExpression>(
+						    ExpressionType::CONJUNCTION_AND, outer_agg.filter->Copy(), std::move(inner_reducer.filter));
+					} else {
+						inner_reducer.filter = outer_agg.filter->Copy();
+					}
 				}
 				// Strip outer wrapper: replace OUTER(INNER(expr)) with INNER(expr)
 				*obj_owner = std::move(outer_agg.children[0]);

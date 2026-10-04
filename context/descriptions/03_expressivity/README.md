@@ -38,6 +38,8 @@ navigation (frames) are separate constructs, and a constraint reads as
 | `x(TEXT IN ['a', 'b'])` | Yes | one-hot indicators, VARCHAR readback; `=`, `<>`, `IN` only |
 | `PER K: x(D)` (keyed decision, any column list or relation) | Yes | replaces `T.x(TYPE)` |
 | `PER (): x(D)` (query-wide decision) | Yes | replaces `scalar x(TYPE)` |
+| `PER ROW:` (explicit default), `PER (a, b)` (parenthesized key), `WITHIN (p)` | Yes | the same scopes as the bare spellings; NULL is a key value everywhere (SQL `GROUP BY`) |
+| A `BY`-determined data factor on a reducer (`D.share * SUM(ship) BY (D)`) | Yes | deck example 5; a factor varying within the group is refused |
 | Declaration bounds `BETWEEN lo AND hi` / `<= hi` / `>= lo` | Yes | constants or key-determined columns |
 | `SUCH THAT` with `=`, `<`, `<=`, `>`, `>=`, `<>`, BETWEEN, IN | Yes | |
 | `WHEN θ:` filter prefix | Yes | known data only |

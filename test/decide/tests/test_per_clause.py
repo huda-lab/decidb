@@ -8,7 +8,7 @@ Also covers:
   - PER with <> operator (Big-M disjunction per group)
   - PER with <> and a bound that itself varies within a group (C3): every
     excluded value is kept, not collapsed to one
-  - NULL values in PER column (excluded from all groups)
+  - NULL values in PER column (NULL is a key value: one group of its own)
   - Two PER constraints on different grouping columns
 """
 
@@ -305,7 +305,10 @@ def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_so
 def test_per_null_group_key(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """NULL values in PER column should be excluded from all groups."""
+    """NULL values in the PER column form a group of their own (SQL GROUP BY
+    semantics): the two NULL-keyed rows share one `SUM(x) BY (grp) <= 1` instance,
+    so only the more valuable of them (50) is selected. Under the retired rule
+    that excluded NULL keys both would be free and both selected."""
     data_sql = """
         SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
         SELECT 2, NULL, 50.0 UNION ALL

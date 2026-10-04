@@ -24,15 +24,14 @@ def group_indices(
 ) -> dict[Hashable, list[int]]:
     """Return {group_value: [row_index, ...]} in order of first appearance.
 
-    Rows where ``key_fn`` returns ``None`` are dropped — matching DECIDE's
-    PER semantics, which excludes NULL-keyed rows from every group.
+    A ``None`` key is a group of its own — matching DECIDE's key semantics,
+    where NULL is a key value like any other (as in SQL's GROUP BY): a
+    constraint generated ``PER k`` imposes its instance on the NULL-keyed rows
+    too, and ``WHEN k IS NOT NULL`` is how they are excluded.
     """
     groups: dict = defaultdict(list)
     for i, row in enumerate(data):
-        k = key_fn(row)
-        if k is None:
-            continue
-        groups[k].append(i)
+        groups[key_fn(row)].append(i)
     return groups
 
 

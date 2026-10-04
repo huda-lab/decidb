@@ -488,3 +488,33 @@ raising, so a single statement is enough and nothing has to survive an error.
 | Verification at physical-plan entry | `src/execution/physical_plan/plan_decide.cpp` |
 | Canonical model corpus | `test/decide/golden/` |
 | Behavior tests | `test/decide/tests/test_canonicalize_*.py` |
+
+## 9. Syntax review of 2026-09-29
+
+- **A prefix over a plain AND is distributed.** A `BETWEEN` body binds to two
+  comparisons, so `WHEN c PER k IF b: x BETWEEN 1 AND 4` arrived as
+  `PER(WHEN(IF(AND(a, b))))`, and every later stage that walks a plain AND read
+  the conjuncts as unprefixed. `CanonicalizeTreeInternal` canonicalizes a
+  wrapper's constraint child first and, when that child is an untagged
+  conjunction, rebuilds the wrapper on each conjunct (`AND(W(a), W(b))`). Rule C0
+  now also refuses a wrapper whose constraint child is a plain conjunction, and
+  the linear form asserts it never meets one.
+- **Frames are terms through casts and scales.** `Classify` places any
+  frame-bearing expression left; `Decompose` sees through a cast around a frame
+  the way it does around decision algebra (a fractional factor on the decision
+  side lifts the frame's sum to `DOUBLE`); `PeelScale` peels a constant scale off
+  a data frame like off a reducer. Before, `0.5 * x <= AT(...)`, `x <= 2 * AT(...)`
+  and `x <= AT(...) / 2` sent the frame to the bound side, where it was read as a
+  reducer over every row. `UnwrapDecideCasts` (`decide_cast_policy.cpp`) unwraps
+  casts around frames for the same reason.
+- **Group-wide factors.** `PeelScale` admits a factor carrying
+  `GROUP_WIDE_FACTOR_TAG` beside a query-wide one; the refusal for any other
+  row-varying factor names what a factor may be and suggests dividing the bound
+  (`SUM(x) <= K / cap`) rather than `SUM(x * cap)`, which is a different constraint.
+- **`ValidateCanonicalComparison`** names a frame under `ABS` / `POWER` / another
+  function by that restriction rather than as an aggregate/per-row mix.
+- **A factor on a frame is named as a frame.** A frame binds as a SUM aggregate, so
+  `x <= cap * AT(PREVIOUS ELSE 0: x) OVER (t)` used to be refused as varying across
+  "the rows SUM(x) reduces". The refusal now says a factor on a frame is a constant
+  or a `PER ()` decision and suggests dividing the other side (`x / cap <= AT(...)`);
+  a decision factor on a frame names the frame likewise.

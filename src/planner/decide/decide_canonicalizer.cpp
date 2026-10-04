@@ -82,6 +82,20 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 	return true;
 }
 
+//! True when a frame (a FRAME_TAG-marked aggregate) sits anywhere in `expr`.
+static bool ContainsFrameRef(const Expression &expr) {
+	idx_t frame_idx;
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	    TryParseFrameRefTag(expr.GetAlias(), frame_idx)) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		found = found || ContainsFrameRef(child);
+	});
+	return found;
+}
+
 [[noreturn]] static void CanonicalInvariantFailure(const string &rule, const string &detail,
                                                    const Expression &expr) {
 	throw InternalException("DECIDE canonical invariant %s violated: %s. Expression: %s", rule, detail,
@@ -126,10 +140,11 @@ DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &e
 		return Placement::LEFT;
 	}
 	// A frame reads rows other than the instance's own, which only the left side's
-	// per-term row sets can express -- so it stays a term even when it reads data alone.
-	idx_t frame_idx;
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-	    TryParseFrameRefTag(expr.GetAlias(), frame_idx)) {
+	// per-term row sets can express -- so it stays a term even when it reads data
+	// alone, and so does a constant scale on it (`2 * AT(...)`, peeled like a
+	// reducer's) or a cast the binder wrapped around it. On the bound side it would
+	// be read as a reducer over every row.
+	if (ContainsFrameRef(expr)) {
 		return Placement::LEFT;
 	}
 	// Everything decision-free is a bound, including a data-only reducer. The left
@@ -300,9 +315,10 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 
 	// Only a DECISION-BEARING reducer is scaled here: a data-only reducer
 	// (`2 * AVG(price)` as a bound) is the RHS evaluator's business, and reaching into
-	// it would reject shapes this pass has no stake in.
+	// it would reject shapes this pass has no stake in. A frame is the exception: it
+	// is a term whatever it reads (Classify), so its scale is peeled like a reducer's.
 	auto is_scalable = [&](const Expression &e) {
-		return ContainsReducer(e) && ReferencesDecideVar(e);
+		return ContainsReducer(e) && (ReferencesDecideVar(e) || ContainsFrameRef(e));
 	};
 
 	// Factors are gathered by role, not in encounter order, so that one composition
@@ -350,13 +366,26 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 		// multiplying it must also be one number. Each nesting level is judged
 		// separately, so the message names the factor the user actually has to fix.
 		const char *verb = factor_divides ? "divide" : "multiply";
+		// A frame binds as an aggregate, but its SUM(...) spelling is the engine's, not
+		// the user's; name it for what was written.
+		const Expression *term_node = term;
+		while (term_node->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+			term_node = term_node->Cast<BoundCastExpression>().child.get();
+		}
+		idx_t frame_ref;
+		const bool term_is_frame = term_node->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		                           TryParseFrameRefTag(term_node->GetAlias(), frame_ref);
+		const string term_name = term_is_frame ? string("a frame (AT / FROM .. TO .. OVER)") : UserFacingName(*term);
 		if (ReferencesDecideVar(*factor)) {
 			throw BinderException(
 			    "%s: '%s' is a decision, so it cannot %s %s. "
-			    "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.",
-			    clause_name, UserFacingName(*factor), verb, UserFacingName(*term));
+			    "Only constants and query-wide values can scale SUM/AVG/MIN/MAX or a frame.",
+			    clause_name, UserFacingName(*factor), verb, term_name);
 		}
-		if (!IsQueryWideConstant(*factor)) {
+		// A factor is one number per reduced value when it is query-wide, or when the
+		// binder proved the reducer's BY key determines it (GROUP_WIDE_FACTOR_TAG):
+		// `D.share * SUM(ship) BY (D)` scales each depot's sum by that depot's share.
+		if (!IsQueryWideConstant(*factor) && !HasDecideTag(factor->GetAlias(), GROUP_WIDE_FACTOR_TAG)) {
 			// A correlated subquery has no SQL identifier to quote -- flattening left it a
 			// column ref named "SUBQUERY" -- so name it for what the user wrote instead of
 			// echoing an internal name and suggesting `SUM(x * SUBQUERY)`, which is not
@@ -368,11 +397,20 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 				    "SUM(x %s (SELECT ...)).",
 				    clause_name, verb, UserFacingName(*term), factor_divides ? "/" : "*");
 			}
+			if (term_is_frame) {
+				throw BinderException(
+				    "%s: '%s' varies from row to row, so it cannot %s %s. A factor on a frame is a constant or "
+				    "a PER () decision; to scale by a per-row value, %s the other side instead (x %s %s <= AT(...)).",
+				    clause_name, UserFacingName(*factor), verb, term_name, factor_divides ? "multiply" : "divide",
+				    factor_divides ? "*" : "/", UserFacingName(*factor));
+			}
 			throw BinderException(
-			    "%s: '%s' varies per row, so it cannot %s %s. "
-			    "Move it inside the aggregate, e.g. SUM(x %s %s).",
-			    clause_name, UserFacingName(*factor), verb, UserFacingName(*term),
-			    factor_divides ? "/" : "*", UserFacingName(*factor));
+			    "%s: '%s' varies across the rows %s reduces, so it cannot %s it. A factor on a reducer "
+			    "is one value per reduced group: a constant, a PER () decision, or a column the "
+			    "reducer's BY key determines. To scale a per-row bound instead, %s the bound: "
+			    "SUM(x) <= K %s %s.",
+			    clause_name, UserFacingName(*factor), UserFacingName(*term), verb,
+			    factor_divides ? "multiply" : "divide", factor_divides ? "*" : "/", UserFacingName(*factor));
 		}
 
 		(factor_divides ? divisors : multipliers).push_back(factor);
@@ -429,10 +467,12 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		auto &cast = expr.Cast<BoundCastExpression>();
-		if (ReferencesDecideVar(expr)) {
+		if (ReferencesDecideVar(expr) || ContainsFrameRef(expr)) {
 			// The parsed boundary rejected every user-authored decision cast.
 			// Anything left here was inserted by binding and is transparent in the
-			// solver's single DOUBLE domain. Data-only casts stay atomic.
+			// solver's single DOUBLE domain. A cast around a frame (`0.5 * x <= AT(...)`
+			// lifts the frame's sum to DOUBLE) is binder-inserted too: the frame is a
+			// term, and must reach the term boundary bare. Data-only casts stay atomic.
 			Decompose(*cast.child, sign, out, clause);
 			return;
 		}
@@ -768,6 +808,13 @@ void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpre
 			    "SUM/AVG/MIN/MAX.",
 			    UserFacingName(*atom.expr));
 		}
+		if (ContainsFrameRef(comparison)) {
+			throw BinderException(
+			    "DECIDE constraint: a frame (AT / FROM .. TO .. OVER) is a term of a constraint on its own, "
+			    "or scaled by a constant; ABS, POWER or another function over it is not available yet. "
+			    "State the navigated value through a decision, e.g. prev = AT(PREVIOUS: x) OVER (t), and "
+			    "use that decision instead.");
+		}
 		throw BinderException(
 		    "DECIDE constraint mixes aggregate and per-row decision expressions. "
 		    "Every row-varying decision term in an aggregate constraint must be inside "
@@ -861,6 +908,14 @@ void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) con
 				                          expression);
 			}
 		}
+		if (IsConstraintWrapper(conjunction) && !conjunction.children.empty() &&
+		    conjunction.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
+		    !IsConstraintWrapper(conjunction.children[0]->Cast<BoundConjunctionExpression>())) {
+			// CanonicalizeTreeInternal distributes a prefix over a plain AND.
+			CanonicalInvariantFailure("C0", "a WHEN/PER/IF prefix must sit on each comparison it governs, "
+			                                "not over a conjunction",
+			                          expression);
+		}
 		return true;
 	};
 	VisitConstraintTree(constraints, verify);
@@ -944,6 +999,33 @@ void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expression &constraints) const {
 	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = constraints.Cast<BoundConjunctionExpression>();
+
+		// A prefix over a plain AND is distributed over the conjuncts: a BETWEEN body
+		// binds to two comparisons, and `WHEN c PER k IF b: x BETWEEN 1 AND 4` is
+		// exactly `WHEN c PER k IF b: x >= 1 AND WHEN c PER k IF b: x <= 4`. The prefix
+		// then sits directly on every comparison it governs, the one shape every
+		// later stage reads; a prefix left over a conjunction would be read by the
+		// first stage that walks a plain AND as though the conjuncts had none. The
+		// constraint child is canonicalized first, since an inner prefix's own
+		// distribution is what turns it into a plain AND (`PER k: WHEN c: BETWEEN`).
+		if (IsConstraintWrapper(conj) && !conj.children.empty()) {
+			auto body = CanonicalizeTreeInternal(*conj.children[0]);
+			if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
+			    !IsConstraintWrapper(body->Cast<BoundConjunctionExpression>())) {
+				auto &conjuncts = body->Cast<BoundConjunctionExpression>();
+				auto distributed = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+				for (auto &conjunct : conjuncts.children) {
+					auto wrapper = make_uniq<BoundConjunctionExpression>(conj.type);
+					wrapper->SetAlias(conj.GetAlias());
+					wrapper->children.push_back(conjunct->Copy());
+					for (idx_t i = 1; i < conj.children.size(); i++) {
+						wrapper->children.push_back(conj.children[i]->Copy());
+					}
+					distributed->children.push_back(std::move(wrapper));
+				}
+				return CanonicalizeTreeInternal(*distributed);
+			}
+		}
 
 		auto result = make_uniq<BoundConjunctionExpression>(conj.type);
 		result->SetAlias(conj.GetAlias());

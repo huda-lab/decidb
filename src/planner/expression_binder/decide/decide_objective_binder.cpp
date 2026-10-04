@@ -77,7 +77,22 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
                                      "is generated once (PER ()); reduce it, e.g. SUM(%s), or declare it PER ().",
                                      expr.ToString(), expr.ToString())));
     }
-    return BindResult(BinderException::Unsupported(expr, StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support '%s'(ExpressionClass::%s)", expr.ToString(), EnumUtil::ToString(expr.GetExpressionClass()))));
+    if (expr.GetExpressionClass() == ExpressionClass::CONSTANT) {
+        return BindResult(BinderException::Unsupported(
+            expr, StringUtil::Format("MAXIMIZE/MINIMIZE objective: '%s' reads no decision, so there is nothing to "
+                                     "optimize; write SATISFY for any feasible assignment.",
+                                     expr.ToString())));
+    }
+    if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+        return BindResult(BinderException::Unsupported(
+            expr, StringUtil::Format("MAXIMIZE/MINIMIZE objective: '%s' is a data column, not a decision; an "
+                                     "objective reads decisions, e.g. SUM(x * %s).",
+                                     expr.ToString(), expr.ToString())));
+    }
+    return BindResult(BinderException::Unsupported(
+        expr, StringUtil::Format("MAXIMIZE/MINIMIZE objective: '%s' is not an objective; write a reducer over "
+                                 "decisions (SUM, AVG, MIN, MAX) or a PER () decision.",
+                                 expr.ToString())));
 }
 
 DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
@@ -88,6 +103,16 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
+		// A frame anywhere in the objective, beside a reducer as much as alone
+		// (`SUM(x) - 3 * AT(FIRST: x) OVER (t)`): it navigates from an instance's
+		// position and an objective has none. Checked before the additive shape is
+		// accepted, which would otherwise read the frame as each row's own term.
+		if (ParsedExpressionContainsFrame(expr)) {
+			error_msg = "A frame expression (AT / FROM .. TO .. OVER) navigates from an instance's position, "
+			            "and an objective has none: the position of a frame is not determined there. "
+			            "Use it in a constraint.";
+			return DecideExpression::INVALID;
+		}
 		DecideExpression reducer_result;
 		if (ClassifyReducerCall(func, reducer_result, error_msg)) {
 			return reducer_result;
@@ -108,18 +133,19 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
         if (is_additive_or_scalar && ContainsDecideAggregate(expr)) {
             return DecideExpression::SUM;
         }
+        // Linear arithmetic over query-wide decisions alone (`2 * c + 1`, `c + d`,
+        // `-c`): every term is one value for the query, so the objective is
+        // generated once without a reducer, exactly like a bare PER () decision.
+        if (is_additive_or_scalar && ExpressionContainsDecideVariable(expr, variables) &&
+            IsRowInvariantExpression(expr)) {
+            return DecideExpression::SUM;
+        }
         if (ContainsDecideAggregate(expr)) {
             error_msg = StringUtil::Format(
                 "[MAXIMIZE|MINIMIZE] does not support wrapping an aggregate in '%s'. "
                 "The aggregate must be the outermost function. "
                 "For quadratic objectives use SUM(POWER(expr, 2)), not %s(AGG(expr), ...).",
                 func.function_name, StringUtil::Upper(func.function_name));
-            return DecideExpression::INVALID;
-        }
-        if (func.is_operator && func.function_name == FRAME_TAG) {
-            error_msg = "A frame expression (AT / FROM .. TO .. OVER) navigates from an instance's position, "
-                        "and an objective has none: the position of a frame is not determined there. "
-                        "Use it in a constraint.";
             return DecideExpression::INVALID;
         }
         error_msg = StringUtil::Format("[MAXIMIZE|MINIMIZE] clause does not support function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);

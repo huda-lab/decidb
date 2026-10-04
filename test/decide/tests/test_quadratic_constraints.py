@@ -1264,11 +1264,13 @@ class TestQuadraticConstraintVarTypes:
     def test_table_scoped_variables(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
-        """Table-scoped x with quadratic constraint.
+        """Keyed x with quadratic constraint.
 
-        Each distinct ``item`` value yields one x variable; all rows of the
-        same item share that x. The inner SUM(POWER(x - target, 2)) then
-        touches the same x across rows of the same item.
+        Each distinct ``item`` value yields one x variable (``PER item``); all
+        rows of the same item share that x. The inner SUM(POWER(x - target, 2))
+        then touches the same x across rows of the same item. ``PER items``
+        would key on the whole tuple (item, target), one x per row, and reach
+        72.94 instead of 72.
         """
         sql = """
             WITH items AS (
@@ -1278,7 +1280,7 @@ class TestQuadraticConstraintVarTypes:
                 SELECT 'B', 22.0
             )
             SELECT item, ROUND(x, 4) AS x, target FROM items
-            DECIDE PER items: x(REAL)
+            DECIDE PER item: x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 20
             MAXIMIZE SUM(x)

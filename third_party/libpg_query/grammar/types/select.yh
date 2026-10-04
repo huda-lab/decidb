@@ -8,7 +8,8 @@
 %type <node> decide_scope decide_scope_elem
 %type <list> decide_scope_list decide_string_list
 %type <ival> decide_domain
-%type <node> decide_declarator_bounds
+%type <str> decide_unknown_domain
+%type <node> decide_declarator_bounds decide_declarator_bounds_written
 %type <node> decide_constraint_list
 %type <node> decide_constraint_item
 %type <node> decide_constraint_prefix decide_prefix_per_opt decide_prefix_if_opt

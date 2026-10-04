@@ -55,12 +55,27 @@ If the `WHEN` condition evaluates to NULL for a row, that row is treated as **no
 
 ## Empty Row Sets
 
-A `WHEN` filter that matches zero rows on an aggregate (SUM, AVG, MIN, MAX) is **rejected pre-solver** with `InvalidInputException`:
+The rule (stated for users in `syntax_reference.md` §4, reviewed 2026-09-30): a
+reducer over no rows has no value — the deck's NULL policy (p50) applied to
+reducers, and SQL's `SUM` over an empty set. In a **constraint** that means
+skipping at every level: an instance whose only reducer reads no row is not
+imposed; a reducer that reads no row beside one that does contributes nothing
+(its coefficients are zero-masked); a clause with no instance at all imposes
+nothing. The older "reject every empty aggregate set" rule was a typo safety
+net; it also made a defensive `WHEN k IS NULL PER k` an error on data without
+NULL keys, while the per-row twin was silently fine, so it went. What is still
+rejected pre-solver with `InvalidInputException`: an empty reducer in an
+**objective** (nothing to optimize), and `MIN`/`MAX` (composed or hard),
+bilinear and quadratic terms over no rows, whose auxiliaries would float free:
 
 ```
-DECIDE empty row set for {aggregate|min|max|sum|avg} in {constraint|objective|composed constraint|composed objective}.
+DECIDE empty row set for {aggregate term|min|max|sum|avg} in {objective|composed constraint|composed objective}.
 An empty aggregate has no well-defined value; check your WHEN clause.
 ```
+
+A row a `WHEN` excludes — the clause's, a reducer's own, or the objective's — is
+never read, so a NULL in it is not an error (`ExtractDoubleColumn` takes the
+admission predicate); a NULL in a value an instance does read still is.
 
 **Scope** — rejected cases:
 - Constraint- or objective-level `WHEN` that filters every row: `SUM(x*v) <= K WHEN false_condition`.

@@ -272,18 +272,28 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 @pytest.mark.obj_maximize
 @pytest.mark.error_infeasible
 def test_when_no_rows_match(decidb_cli):
-    """Aggregate constraint with WHEN matching no rows — now rejected pre-solver
-    per the "reject all empty aggregate sets" rule."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem
-        WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT WHEN l_returnflag = 'Z': SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    decidb_cli.assert_error(sql, match=r"empty|WHEN")
+    """An aggregate constraint whose WHEN admits no row generates no instance and
+    imposes nothing (syntax_reference §4): the answer equals the query without
+    the clause. Applied to every row, the cap of 100 on quantity would leave
+    most of the 500-odd lineitems unselected."""
+    def objective(constraint):
+        rows, cols = decidb_cli.execute(f"""
+            SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
+                   l_returnflag, x
+            FROM lineitem
+            WHERE l_orderkey < 100
+            DECIDE x(BOOL)
+            SUCH THAT {constraint}
+            MAXIMIZE SUM(x * l_extendedprice)
+        """)
+        xi, pi = cols.index("x"), cols.index("l_extendedprice")
+        return sum(int(r[xi]) * float(r[pi]) for r in rows)
+
+    filtered = objective("WHEN l_returnflag = 'Z': SUM(x * l_quantity) <= 100")
+    free = objective("x <= 1")
+    capped = objective("SUM(x * l_quantity) <= 100")
+    assert filtered == pytest.approx(free)
+    assert capped < free
 
 
 @pytest.mark.when_constraint

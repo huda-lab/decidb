@@ -77,15 +77,20 @@ struct AbsorptionTarget {
 	//! Tighten one side of the box and record the bound, in the one order that is always
 	//! correct: tighten unconditionally (a BOOLEAN restatement is a harmless no-op against
 	//! the intrinsic box), record only when ShouldRecord agrees.
+	//!
+	//! A BOOL's domain is {0, 1} whatever is written beside it: `o >= -1` restates the
+	//! box and `o BETWEEN -3 AND 3` restates it twice. The floor is clamped at 0 here
+	//! because the model builder reads an absorbed lower bound as the column's box, and
+	//! a negative floor would turn the decision into a general integer in [-1, 1].
 	void Absorb(char sense, double k, bool strict, double typed_k, idx_t source_clause_id,
 	            idx_t removal_group_id) const {
 		auto &lower = decide->absorbed_lower_bounds[var_idx];
 		auto &upper = decide->absorbed_upper_bounds[var_idx];
 		if (sense != '>') {
-			upper = std::min(upper, k); // '<' and '='
+			upper = std::min(upper, is_boolean ? std::min(k, 1.0) : k); // '<' and '='
 		}
 		if (sense != '<') {
-			lower = std::max(lower, k); // '>' and '='
+			lower = std::max(lower, is_boolean ? std::max(k, 0.0) : k); // '>' and '='
 		}
 		if (ShouldRecord(sense, k)) {
 			decide->user_absorbed_bounds.push_back(

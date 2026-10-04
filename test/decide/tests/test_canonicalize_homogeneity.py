@@ -145,4 +145,4 @@ def test_data_only_reducer_cannot_make_per_row_constraint_eligible_for_per(decid
         DECIDE x(INT)
         SUCH THAT PER grp: SUM(p) BY (grp) + x <= 10
         MAXIMIZE SUM(x)
-    """, match=r"Binder Error: decision 'x' is not determined by the generation key PER grp")
+    """, match=r"Binder Error: decision 'x' is generated once per row, which PER grp does not identify")

@@ -272,10 +272,12 @@ def test_zero_rows_empty_input(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-@pytest.mark.error_infeasible
-def test_avg_constraint_when_filters_all_rows(decidb_cli):
-    """AVG(...) WHEN <cond> where no row matches — now rejected pre-solver.
-    AVG(∅) is undefined (divide by zero); caught by the empty-aggregate guard."""
+@pytest.mark.correctness
+def test_avg_constraint_when_filters_all_rows(decidb_cli, oracle_solver):
+    """AVG(WHEN <cond>: ...) where no row matches has no value, like SQL's AVG over an
+    empty set, so the constraint is not imposed (syntax_reference §4, the rule SUM
+    already follows): every x is 1, objective 34. It used to be refused as an empty
+    aggregate; read as 0 the bound `0 >= 1` would make the query infeasible."""
     sql = """
         SELECT id, val, flag, x FROM (
             VALUES (1, 10.0, 'A'),
@@ -284,10 +286,19 @@ def test_avg_constraint_when_filters_all_rows(decidb_cli):
                    (4, 12.0, 'B')
         ) t(id, val, flag)
         DECIDE x(BOOL)
-        SUCH THAT AVG(WHEN (flag = 'Z'): x * val) <= 1
+        SUCH THAT AVG(WHEN (flag = 'Z'): x * val) >= 1
         MAXIMIZE SUM(x * val)
     """
-    decidb_cli.assert_error(sql, match=r"empty|WHEN")
+    vals = {1: 10.0, 2: 7.0, 3: 5.0, 4: 12.0}
+    oracle_solver.create_model("avg_all_filtered")
+    for i in vals:
+        oracle_solver.add_variable(f"x{i}", VarType.BINARY)
+    oracle_solver.set_objective({f"x{i}": v for i, v in vals.items()}, ObjSense.MAXIMIZE)
+    expected = oracle_solver.solve()
+    rows, cols = decidb_cli.execute(sql)
+    x = {r[cols.index("id")]: r[cols.index("x")] for r in rows}
+    assert sum(vals[i] * x[i] for i in vals) == pytest.approx(expected.objective_value) == 34.0
+    assert all(x[i] == 1 for i in vals)
 
 
 @pytest.mark.edge_case
@@ -417,13 +428,21 @@ def test_maximize_sum_max_per_with_empty_when_group(
 @pytest.mark.min_max
 @pytest.mark.when_constraint
 @pytest.mark.error_infeasible
-def test_min_geq_constraint_when_empty(decidb_cli):
-    """MIN(...) >= K WHEN <never> — easy case.
+def _objective_of(decidb_cli, sql):
+    """Σ x · val over the rows a query returns (all data here has an `x` and a `val`)."""
+    rows, cols = decidb_cli.execute(sql)
+    xi, vi = cols.index("x"), cols.index("val")
+    return sum(float(r[xi]) * float(r[vi]) for r in rows)
 
-    DecidB rejects empty aggregate sets before reaching the solver. An empty
-    MIN/MAX has no well-defined value (MIN(∅) = +∞, MAX(∅) = −∞); per the
-    project decision to "reject all cases of an empty set," even the easy
-    direction (previously trivially-satisfied) now raises.
+
+def test_min_geq_constraint_when_empty(decidb_cli):
+    """MIN(...) >= K under a WHEN that admits no row — easy case.
+
+    A reducer over no rows has no value (syntax_reference §4, the deck's NULL
+    policy p50): the clause generates no instance and imposes nothing, so every
+    row is taken (21). The retired "reject every empty aggregate" rule raised
+    here; a rule that read MIN(∅) as +∞ would also take every row, so the hard
+    direction below is the discriminating twin.
     """
     sql = """
         SELECT id, val, x FROM (
@@ -433,7 +452,7 @@ def test_min_geq_constraint_when_empty(decidb_cli):
         SUCH THAT WHEN val > 100: MIN(x * val) >= 5
         MAXIMIZE SUM(x * val)
     """
-    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    assert _objective_of(decidb_cli, sql) == pytest.approx(21.0)
 
 
 @pytest.mark.edge_case
@@ -441,7 +460,9 @@ def test_min_geq_constraint_when_empty(decidb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.error_infeasible
 def test_min_leq_constraint_when_empty(decidb_cli):
-    """MIN(...) <= K WHEN <never> — hard case, now rejected pre-solver."""
+    """MIN(...) <= K under a WHEN that admits no row — hard case. No instance is
+    generated, so nothing is imposed (21); a rule reading MIN(∅) as +∞ would make
+    `+∞ <= 3` infeasible instead."""
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -450,7 +471,7 @@ def test_min_leq_constraint_when_empty(decidb_cli):
         SUCH THAT WHEN val > 100: MIN(x * val) <= 3
         MAXIMIZE SUM(x * val)
     """
-    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    assert _objective_of(decidb_cli, sql) == pytest.approx(21.0)
 
 
 @pytest.mark.edge_case
@@ -458,7 +479,9 @@ def test_min_leq_constraint_when_empty(decidb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.error_infeasible
 def test_max_leq_constraint_when_empty(decidb_cli):
-    """MAX(...) <= K WHEN <never> — easy case, now rejected pre-solver."""
+    """MAX(...) <= K under a WHEN that admits no row — easy case: no instance,
+    nothing imposed (21). Applied to every row, `MAX(x * val) <= 2` would force
+    every x to 0 (objective 0)."""
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -467,7 +490,7 @@ def test_max_leq_constraint_when_empty(decidb_cli):
         SUCH THAT WHEN val > 100: MAX(x * val) <= 2
         MAXIMIZE SUM(x * val)
     """
-    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    assert _objective_of(decidb_cli, sql) == pytest.approx(21.0)
 
 
 @pytest.mark.edge_case
@@ -475,7 +498,9 @@ def test_max_leq_constraint_when_empty(decidb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.error_infeasible
 def test_max_geq_constraint_when_empty(decidb_cli):
-    """MAX(...) >= K WHEN <never> — hard case, now rejected pre-solver."""
+    """MAX(...) >= K under a WHEN that admits no row — hard case: no instance,
+    nothing imposed (21). Applied to every row, `MAX(x * val) >= 999` is
+    infeasible."""
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -484,7 +509,7 @@ def test_max_geq_constraint_when_empty(decidb_cli):
         SUCH THAT WHEN val > 100: MAX(x * val) >= 999
         MAXIMIZE SUM(x * val)
     """
-    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    assert _objective_of(decidb_cli, sql) == pytest.approx(21.0)
 
 
 @pytest.mark.edge_case
@@ -604,14 +629,13 @@ def test_maximize_max_objective_when_empty(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
 def test_mixed_empty_and_populated_when_terms_constraint(decidb_cli):
-    """Mixed aggregate-local WHEN with one empty term — now rejected.
+    """Mixed aggregate-local WHEN with one empty term.
 
-    ``SUM(x*v) WHEN <never> + SUM(x*v) WHEN <sometimes> <= K`` — previously
-    the empty term contributed 0 and the populated term still bound. Per the
-    project decision to reject every empty aggregate (strictly applied to
-    SUM/AVG as well as MIN/MAX), this shape now raises before reaching the
-    solver. Users with data-dependent WHEN predicates that might match zero
-    rows must guard against that case in their query.
+    ``SUM(WHEN <never>: x*v) + SUM(WHEN w2: x*v) <= 8``: a reducer over no rows
+    has no value and contributes nothing beside a term that reads rows
+    (syntax_reference §4), so the clause is `10 x1 + 5 x2 <= 8`: x2 and the
+    unfiltered x3 are taken (12). Reading the empty term as an error refuses the
+    query; reading the whole body as NULL would impose nothing and give 22.
     """
     sql = """
         SELECT id, val, x FROM (
@@ -624,7 +648,7 @@ def test_mixed_empty_and_populated_when_terms_constraint(decidb_cli):
                 + SUM(WHEN w2: x * val) <= 8
         MAXIMIZE SUM(x * val)
     """
-    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    assert _objective_of(decidb_cli, sql) == pytest.approx(12.0)
 
 
 @pytest.mark.edge_case
@@ -750,9 +774,8 @@ def test_sum_plus_max_when_empty_silently_vacates_constraint(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
 def test_sum_when_empty_rejected(decidb_cli):
-    """`SUM(x*val) <= K WHEN <never>` — SUM(∅) = 0 is mathematically defined
-    but the "reject all empty sets" directive catches this too. Surfaces the
-    likely WHEN-typo rather than silently making the constraint vacuous."""
+    """`WHEN <never>: SUM(x * val) <= 5` generates no instance and imposes
+    nothing (21). Applied to every row the cap of 5 would admit only row 3 (4)."""
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -761,7 +784,7 @@ def test_sum_when_empty_rejected(decidb_cli):
         SUCH THAT WHEN val > 100: SUM(x * val) <= 5
         MAXIMIZE SUM(x * val)
     """
-    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    assert _objective_of(decidb_cli, sql) == pytest.approx(21.0)
 
 
 @pytest.mark.edge_case
@@ -770,8 +793,11 @@ def test_sum_when_empty_rejected(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.error_infeasible
 def test_avg_when_empty_rejected(decidb_cli):
-    """`AVG(x*val) <= K WHEN <never>` — AVG(∅) is undefined (divide by zero
-    row count); rejected pre-solver."""
+    """`WHEN <never>: AVG(x * val) <= 5` generates no instance and imposes
+    nothing (21): with no instance there is no denominator to divide by. (An
+    aggregate-local `AVG(WHEN <never>: ...)` beside other terms is still
+    refused, see test_avg_constraint_when_filters_all_rows.) Applied to every row
+    the cap would drop row 1."""
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -780,7 +806,7 @@ def test_avg_when_empty_rejected(decidb_cli):
         SUCH THAT WHEN val > 100: AVG(x * val) <= 5
         MAXIMIZE SUM(x * val)
     """
-    decidb_cli.assert_error(sql, match=_EMPTY_WHEN_ERROR_REGEX)
+    assert _objective_of(decidb_cli, sql) == pytest.approx(21.0)
 
 
 @pytest.mark.edge_case

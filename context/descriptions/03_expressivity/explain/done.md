@@ -251,3 +251,11 @@ and the `N Rows` in `EXPLAIN ANALYZE` match the scan's cardinality.
 | Clause id carried onto emitted rows | `MarkFormulationConstraint`, `CopyClauseProvenanceTags`, `DescendSourceAlias` in `src/optimizer/decide/decide_optimizer.cpp` (shared via `decide_optimizer_internal.hpp`) |
 | Objective snapshots captured | `src/planner/binder/query_node/plan_select_node.cpp`, around `CanonicalizeObjective` |
 | Tests | `test/decide/tests/test_explain.py` — 35 cases over TPC-H, including `test_explain_renders_user_casts_only`, `test_explain_objective_when_postfix`, and the layered-rendering group; plus `test_diagnosis_written_clause.py::test_explain_leads_with_the_written_clause` |
+
+## Review of 2026-09-29
+
+- The `Variables:` list shows each decision with its generation scope (`x PER grp`,
+  `cap PER ()`, a bare name for one per row), so `PER grp: x(INT), y(INT)` visibly
+  keys `x` alone. The logical and physical nodes render it the same way.
+- An omitted objective and `SATISFY` both render as `Objective: SATISFY` (was
+  `FEASIBILITY`), the language's own word.
