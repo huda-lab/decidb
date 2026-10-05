@@ -116,11 +116,12 @@ struct DirectBoundSpec {
 	string invalid_message;
 };
 
-//! One clause's data-valued expression that must not be NULL on any row.
+//! One clause's data-valued expression that must not be NULL on any row, nor NaN when `reject_nan` is set.
 struct DirectNotNullSpec {
 	idx_t source_clause_id;
 	unique_ptr<Expression> value;
 	string message;
+	bool reject_nan = false;
 };
 
 //! Where the validated group extrema live.

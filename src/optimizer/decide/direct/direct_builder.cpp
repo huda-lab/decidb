@@ -392,8 +392,15 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
 	for (auto &check : not_null) {
 		auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
 		is_null->children.push_back(check.value->Copy());
+		unique_ptr<Expression> is_invalid = std::move(is_null);
+		if (check.reject_nan) {
+			auto as_double =
+			    BoundCastExpression::AddCastToType(optimizer.context, check.value->Copy(), LogicalType::DOUBLE);
+			is_invalid = make_uniq<BoundCaseExpression>(std::move(is_invalid), DirectConstantBool(true),
+			                                            optimizer.BindScalarFunction("isnan", std::move(as_double)));
+		}
 		null_slots.push_back(window->expressions.size());
-		window->expressions.push_back(DirectWindowMatchingCount(std::move(is_null)));
+		window->expressions.push_back(DirectWindowMatchingCount(std::move(is_invalid)));
 	}
 	window->children.push_back(std::move(input));
 	unique_ptr<LogicalOperator> ready = std::move(window);

@@ -47,9 +47,12 @@ struct S1Proof final : DirectRuleProof {
 		//! Name of the source column when the bound is exactly one; empty for a computed bound.
 		string column_name;
 	};
+	//! A pin whose value comes from the row: it must be neither NULL nor, for a floating point value, NaN.
 	struct SourcePin {
 		idx_t source_clause_id;
 		unique_ptr<Expression> value;
+		string invalid_message;
+		bool reject_nan;
 	};
 	struct ObjectivePart {
 		int sign;
@@ -162,42 +165,62 @@ bool NormalizeCapacity(ClientContext &context, const Expression &expr, Expressio
 	return true;
 }
 
-bool FixedBooleanValue(ClientContext &context, const DirectConstraintFact &fact, idx_t &fixed_value) {
-	double bound;
-	if (!DirectFiniteFoldableDouble(context, *fact.rhs, bound) || (bound != 0.0 && bound != 1.0)) {
-		return false;
-	}
-	switch (fact.comparison) {
+//! Which of the values 0 and 1 a per-row bound on `x` leaves allowed. Neither allowed means no row it covers can
+//! satisfy it.
+struct PinDomain {
+	bool zero = true;
+	bool one = true;
+};
+
+bool SatisfiesComparison(ExpressionType comparison, double value, double bound) {
+	switch (comparison) {
 	case ExpressionType::COMPARE_EQUAL:
-		fixed_value = bound == 1.0 ? 1 : 0;
-		return true;
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		if (bound == 0.0) {
-			fixed_value = 0;
-			return true;
-		}
-		return false;
+		return value == bound;
+	case ExpressionType::COMPARE_NOTEQUAL:
+		return value != bound;
 	case ExpressionType::COMPARE_LESSTHAN:
-		if (bound == 1.0) {
-			fixed_value = 0;
-			return true;
-		}
-		return false;
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		if (bound == 1.0) {
-			fixed_value = 1;
-			return true;
-		}
-		return false;
+		return value < bound;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return value <= bound;
 	case ExpressionType::COMPARE_GREATERTHAN:
-		if (bound == 0.0) {
-			fixed_value = 1;
-			return true;
-		}
-		return false;
+		return value > bound;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return value >= bound;
 	default:
-		return false;
+		throw InternalException("S1 direct solve received a pin comparison it did not match");
 	}
+}
+
+//! Reads `x <comparison> bound` as the values of {0, 1} it allows.
+//!
+//! The solver reads a bound with a WHEN as a per-row constraint and applies plain arithmetic to it. A bound without a
+//! WHEN is a bound on the variable itself, and the solver reads some spellings of those differently from arithmetic on
+//! a Boolean: a negative lower bound makes `x` signed, so the result can hold -3; a strict bound against a fraction
+//! moves by a whole unit (`x > 0.5` becomes `x >= 1.5`); and a bound that cannot hold raises a message naming the
+//! clause rather than DECIDE's infeasible error. Those spellings stay on the solver. False for them.
+bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain &domain) {
+	auto comparison = fact.comparison;
+	if (!fact.scope.when && comparison != ExpressionType::COMPARE_NOTEQUAL) {
+		bool strict =
+		    comparison == ExpressionType::COMPARE_GREATERTHAN || comparison == ExpressionType::COMPARE_LESSTHAN;
+		if (strict && bound != std::floor(bound)) {
+			return false;
+		}
+		bool has_lower = comparison == ExpressionType::COMPARE_GREATERTHAN ||
+		                 comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
+		                 comparison == ExpressionType::COMPARE_EQUAL;
+		bool has_upper = comparison == ExpressionType::COMPARE_LESSTHAN ||
+		                 comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+		                 comparison == ExpressionType::COMPARE_EQUAL;
+		double lower = comparison == ExpressionType::COMPARE_GREATERTHAN ? bound + 1.0 : bound;
+		double upper = comparison == ExpressionType::COMPARE_LESSTHAN ? bound - 1.0 : bound;
+		if ((has_lower && (lower < 0.0 || lower > 1.0)) || (has_upper && upper < 0.0)) {
+			return false;
+		}
+	}
+	domain.zero = SatisfiesComparison(comparison, 0.0, bound);
+	domain.one = SatisfiesComparison(comparison, 1.0, bound);
+	return true;
 }
 
 const Expression *SourceBooleanPinValue(const Expression &expr, idx_t decide_index,
@@ -418,38 +441,78 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 			reason = "constraint_scope: Boolean pin WHEN must be deterministic and source-only";
 			return false;
 		}
-		idx_t fixed_value;
-		if (FixedBooleanValue(context, *factor, fixed_value)) {
-			auto condition = when ? when->Copy() : make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-			if (fixed_value) {
-				proof.fixed_one_conditions.push_back(std::move(condition));
-			} else {
-				proof.fixed_zero_conditions.push_back(std::move(condition));
+		double constant;
+		if (DirectFiniteFoldableDouble(context, *factor->rhs, constant)) {
+			PinDomain domain;
+			if (!ConstantPinDomain(*factor, constant, domain)) {
+				reason =
+				    "constraint_shape: an unconditional bound on x that the solver reads differently from a Boolean "
+				    "(negative lower bound, fractional strict bound, or a bound that cannot hold)";
+				return false;
+			}
+			// Both values allowed is no constraint. Neither allowed fixes the row to both, which the plan reports as
+			// DECIDE's infeasible error.
+			if (!domain.zero || !domain.one) {
+				auto condition = [&]() {
+					return when ? when->Copy() : make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+				};
+				if (!domain.zero) {
+					proof.fixed_one_conditions.push_back(condition());
+				}
+				if (!domain.one) {
+					proof.fixed_zero_conditions.push_back(condition());
+				}
 			}
 			continue;
 		}
-		auto source_value = SourceBooleanPinValue(*factor->rhs, facts.decide_index, facts.source_bindings);
 		auto type = factor->comparison;
-		if (!source_value || (type != ExpressionType::COMPARE_EQUAL &&
-		                      type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
-		                      type != ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
-			reason = "constraint_shape: expected a Boolean pin at zero or one or a source Boolean equality/bound";
-			return false;
-		}
 		auto active = [&](unique_ptr<Expression> value) -> unique_ptr<Expression> {
 			return when ? make_uniq<BoundCaseExpression>(when->Copy(), std::move(value),
 			                                             make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))
 			            : std::move(value);
 		};
-		if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-			proof.fixed_one_conditions.push_back(active(source_value->Copy()));
+		auto source_value = SourceBooleanPinValue(*factor->rhs, facts.decide_index, facts.source_bindings);
+		if (source_value &&
+		    (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+		     type == ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
+			if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
+				proof.fixed_one_conditions.push_back(active(source_value->Copy()));
+			}
+			if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+				proof.fixed_zero_conditions.push_back(active(
+				    make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, source_value->Copy(),
+				                                         make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))));
+			}
+			proof.source_pins.push_back(
+			    {factor->source_clause_id, source_value->Copy(), "DECIDE per-row Boolean bound contains NULL", false});
+			continue;
 		}
-		if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-			proof.fixed_zero_conditions.push_back(active(make_uniq<BoundComparisonExpression>(
-			    ExpressionType::COMPARE_EQUAL, source_value->Copy(),
-			    make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))));
+		// A numeric value from the row: the row allows 0 when `0 <comparison> value` holds and 1 when `1 <comparison>
+		// value` holds, as the solver reads it (with a WHEN or not), so the row is fixed to the one value it allows
+		// and is infeasible when it allows neither.
+		auto &value = *factor->rhs;
+		if (value.IsFoldable() || !DirectIsSourceOnlyNumeric(value, facts.decide_index, facts.source_bindings)) {
+			reason = "constraint_shape: a bound on x must be a finite constant, a source column, or a deterministic "
+			         "nonthrowing numeric expression over source columns";
+			return false;
 		}
-		proof.source_pins.push_back({factor->source_clause_id, source_value->Copy()});
+		idx_t column_slot;
+		LogicalType column_type;
+		string column_name;
+		bool is_column = DirectSourceNumericColumn(value, facts.source_bindings, column_slot, column_type, column_name);
+		auto invalid_type = is_column ? column_type : value.return_type;
+		auto disallows = [&](double allowed_value) -> unique_ptr<Expression> {
+			auto as_double = BoundCastExpression::AddCastToType(context, value.Copy(), LogicalType::DOUBLE);
+			auto allowed = make_uniq<BoundComparisonExpression>(
+			    type, make_uniq<BoundConstantExpression>(Value::DOUBLE(allowed_value)), std::move(as_double));
+			return make_uniq<BoundCaseExpression>(std::move(allowed), DirectConstantBool(false),
+			                                      DirectConstantBool(true));
+		};
+		proof.fixed_one_conditions.push_back(active(disallows(0.0)));
+		proof.fixed_zero_conditions.push_back(active(disallows(1.0)));
+		proof.source_pins.push_back({factor->source_clause_id, value.Copy(),
+		                             DirectInvalidBoundMessage(is_column ? column_name : string(), invalid_type),
+		                             invalid_type == LogicalType::FLOAT || invalid_type == LogicalType::DOUBLE});
 	}
 	return true;
 }
@@ -737,8 +800,8 @@ private:
 		}
 		vector<DirectNotNullSpec> pins;
 		for (auto &pin : proof.source_pins) {
-			pins.push_back({pin.source_clause_id, CopyIntoState(*pin.value, scope, "Boolean pin"),
-			                "DECIDE per-row Boolean bound contains NULL"});
+			pins.push_back({pin.source_clause_id, CopyIntoState(*pin.value, scope, "per-row pin"), pin.invalid_message,
+			                pin.reject_nan});
 		}
 		vector<ColumnBinding> keys;
 		vector<LogicalType> key_types;

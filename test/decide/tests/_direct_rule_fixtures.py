@@ -59,11 +59,14 @@ S1 = RuleFixture(
     near_miss_column="id",
     near_misses=(
         ("x(BOOL), y(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("x(BOOL)", "SUM(x)<=1 AND x<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1 AND x<=cap", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "SUM(x)<=1 AND x>=-3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "SUM(x)<=1 AND x<=cap+1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=1 PER id AND SUM(x)>=1 PER cap", "MAXIMIZE SUM(p*x)", "constraint_scope"),
         ("x(BOOL)", "SUM(x)<>1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x+1)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        # Out of scope by decision: a negated count body, and a bound that can raise (use TRY_CAST).
+        ("x(BOOL)", "SUM(1-x)<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "SUM(x)<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(id*x)<=2", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=cap+1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=1.5+cap", "MAXIMIZE SUM(p*x)", "constraint_shape"),

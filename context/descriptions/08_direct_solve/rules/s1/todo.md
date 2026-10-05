@@ -1,37 +1,50 @@
 # S1 (top-k and cardinality intervals) — open work
 
-What S1 does today is in `done.md`. The class definition is in `definition.md`. Each task is independent. When one
-ships, its result moves to `done.md` and the task is deleted from here.
+What S1 does today is in `done.md`. The class definition is in `definition.md`. Each task is independent unless it says
+otherwise. When one ships, its result moves to `done.md` and the task is deleted from here. Estimates are rough guesses,
+not measurements.
 
-**Shared rule for S1-01 to S1-03.** The solver raises a NULL source-valued bound even on a row whose `WHEN` is false or
+**Suggested batches.** B: S1-06. C: S1-07. S1-04 and S1-05 are not part of closing S1 and wait for a decision (see their
+entries). Batch A (per-row bounds on `x` and the out-of-scope tests) shipped and is in `done.md`.
+
+**Shared rule for S1-06 and S1-07.** The solver raises a NULL source-valued bound even on a row whose `WHEN` is false or
 whose `PER` key is NULL, and an empty scoped aggregate can raise before that bound error. Every wider admission keeps that
-error order. Anything not proved stays on the solver path. These three touch the same `Prove` function; the seeded
-differential generator (`_direct_differential.py` via `_fuzz_query`) should be extended to produce each form admitted.
+error order. Anything not proved stays on the solver path. Both touch the same `Prove` function; the seeded differential
+generator (`_direct_differential.py` via `_fuzz_query`) is extended to produce each form admitted.
 
-## S1-01 — Numeric source-valued per-row pins (was NEXT-06)
+## S1-06 — Scaled objective terms
 
-- **Goal.** Admit `x <= pin_col` where `pin_col` is a numeric source column. Boolean-typed source pins and exact zero/one
-  pins already work.
-- **Code.** Pin handling in `s1_rule.cpp` (`Prove`).
-- **Done when.** The bound and error semantics are proved from the complete plan, and tests cover global and grouped use,
-  `WHEN` bypass, NULL pin values, and both solvers. Fixed status is never inferred from a sample.
+- **Problem.** `MAXIMIZE 2 * SUM(score*x)` and `SUM(score*x) / 2` miss, although the objective is still linear. Canonicalization
+  leaves a query-wide factor on the part (`part.scale`, `scale_divides` in `DirectPart`), and `ProveObjective` rejects any part
+  that has one.
+- **Goal.** Admit a scale that is a finite foldable constant: multiply or divide that part's coefficients by it. Apply the
+  scale to the coefficients, not to the objective sense, because parts can carry different scales
+  (`2 * SUM(a*x) - 3 * SUM(b*x)`) and a negative scale changes the sign of its own part only.
+- **Check on the solver first.** Zero scale, division by zero, NULL, non-finite, a product that overflows to infinity, and a
+  non-foldable scale such as a scalar subquery (the sign is unknown at plan time, so it stays a miss unless proved).
+- **Code.** `ProveObjective` in `s1_rule.cpp`; `ProjectScore` builds the combined score.
+- **Test.** Oracle and differential cases for positive, negative, fractional and divided scales, both senses, and the error
+  cases above.
+- **Done when.** Results and errors match the solver on every case, and a scale that stays a miss has a named reason. About
+  0.5 day.
 
-## S1-02 — Throwing source expressions as bounds (was NEXT-07)
+## S1-07 — Bounds that count rows, such as `SUM(x) <= COUNT(*) / 2`
 
-- **Goal.** Admit source-only bound expressions that can raise at runtime (a plain narrowing `CAST`). Today only nonthrowing
-  ones such as `COALESCE` and `TRY_CAST` are admitted. A multi-term objective whose coefficient can throw also misses;
-  handle it here or leave it, but say which.
-- **Code.** `DirectMayThrow` (`direct_expression.cpp`) and `Prove` in `s1_rule.cpp`.
-- **Done when.** The error and its order match the solver on every row, including rows that bypass the bound, and tests
-  cover both solvers.
-
-## S1-03 — Offset count bodies such as `SUM(x + 0)` (was NEXT-08)
-
-- **Goal.** Decide whether `SUM(x + c)` can be admitted as a count with a shifted bound. Bodies whose terms add up to
-  exactly one `x` (`SUM(1*x)`, `SUM(2*x - x)`) are admitted; a constant term misses.
-- **Code.** `IsUnitContribution` in `s1_rule.cpp`.
-- **Done when.** Either an exact proof and tests admit the form, or the near miss is pinned in a test as a permanent solver
-  case with a reason.
+- **Meaning, checked on the solver 2026-10-05.** `COUNT(*)` counts the rows in scope: after the clause-level `WHEN`, within
+  each `PER` group. A group of 5 rows with 3 active, bound `COUNT(*) / 2`: `PER dept` gives a cap of 2; `WHEN active PER dept`
+  gives a cap of 1 (3 / 2 = 1.5), and the 2 inactive rows skip the bound and are picked if their score is positive.
+- **Not yet checked.** `COUNT(*)` when the `WHEN` is aggregate-local (`SUM(x) FILTER ...`); other aggregates on the right
+  (`AVG(cap)`, `SUM(col)`); and how the facts layer holds an aggregate in `DirectConstraintFact::rhs`. Read that first, since
+  it decides the estimate.
+- **Goal.** Admit a bound that is a decision-free expression of `COUNT(*)` and constants (`COUNT(*) / 2`, `COUNT(*) * 0.1`,
+  `COUNT(*) - 1`). Other aggregates stay on the solver until checked the same way.
+- **Plan.** The plan already counts the eligible rows per group in a window. Feed that count into the bound expression and
+  reuse the per-group source-bound path (`SourceLimit`: rounding, strict and fractional limits, NULL checks).
+- **Code.** `ProveBounds` in `s1_rule.cpp`; `DirectIsSourceOnlyNumeric` and `DirectFiniteFoldableDouble`
+  (`direct_expression.cpp`); `DirectValidateBounds` (`direct_builder.cpp`).
+- **Test.** Global, `PER`, `WHEN` and `WHEN` with `PER`; fractions that round both ways; an empty scope (the empty-aggregate
+  error comes first); both solvers; oracle; fuzz generator.
+- **Done when.** Results and errors match the solver, and the bounds that stay a miss have a named reason. About 1 day.
 
 ## S1-04 — Wider keyed application (was NEXT-03)
 
@@ -39,6 +52,7 @@ differential generator (`_direct_differential.py` via `_fuzz_query`) should be e
 - **Done when.** Component independence and row/entity identity are proved and tested for the new shape. Estimates never
   establish independence. Independently scoped clauses, such as quotas on two overlapping subsets, are a separate class
   (see `../s2/todo.md`), not a wider S1 matcher.
+- **Status.** Undecided. `PER` on an expression is a parser error today, so there is no S1 shape known to be missing.
 
 ## S1-05 — Why returning wide rows is slow (was PERF-WIDE)
 

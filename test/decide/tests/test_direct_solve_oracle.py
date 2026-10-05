@@ -66,6 +66,11 @@ def _sql(case):
     clauses = [f"SUM(x) {op} {bound} {scope}".strip() for op, bound in case["bounds"]]
     for value, ids in case.get("pins", ()):
         clauses.extend(f"x = {value} WHEN id = {i}" for i in ids)
+    for op, constant, ids in case.get("rowbounds", ()):
+        if ids is None:
+            clauses.append(f"x {op} {constant}")
+        else:
+            clauses.extend(f"x {op} {constant} WHEN id = {i}" for i in ids)
     return f"""
         SELECT id, g, score, x FROM (
             FROM (VALUES {_values(_ROWS)}) t(id, g, score, cap, flag)
@@ -104,6 +109,9 @@ def _build_oracle(oracle_solver, case):
     for value, ids in case.get("pins", ()):
         for i in ids:
             oracle_solver.add_constraint({names[i]: 1.0}, "=", float(value))
+    for op, constant, ids in case.get("rowbounds", ()):
+        for i in range(len(_ROWS)) if ids is None else ids:
+            oracle_solver.add_constraint({names[i]: 1.0}, op, float(constant))
     sense = ObjSense.MAXIMIZE if case.get("sense", "MAXIMIZE") == "MAXIMIZE" else ObjSense.MINIMIZE
     oracle_solver.set_objective({names[i]: float(_ROWS[i][2]) for i in range(len(_ROWS))}, sense)
 
@@ -129,6 +137,27 @@ _CASES = {
         "bounds": [(">=", 1), ("<=", "cap")],
         "per": True,
         "pins": [(1, [2]), (0, [1])],
+    },
+    # Per-row bounds on x against a constant: (comparison, constant, ids or None for every row). Restating the
+    # BOOL domain changes nothing; a fraction fixes the row to the value it allows; a bound beyond the domain under a
+    # WHEN leaves its row free.
+    "rowbounds_restate_domain": {
+        "bounds": [("<=", 3)],
+        "rowbounds": [("<=", 1, None), (">=", 0, None)],
+    },
+    "rowbounds_fraction_fixes": {
+        "bounds": [("<=", 2)],
+        "rowbounds": [(">=", 0.5, [2, 6]), ("<=", 0.5, [0])],
+    },
+    "rowbounds_beyond_domain_under_when": {
+        "bounds": [("<=", 2)],
+        "rowbounds": [("<=", 5, [0]), (">=", -3, [6]), ("<=", 1.5, [3])],
+    },
+    "rowbounds_with_groups": {
+        "bounds": [(">=", 1), ("<=", 2)],
+        "per": True,
+        "rowbounds": [("=", 1, [2]), ("<=", 0.5, [0]), ("<=", 1, None)],
+        "sense": "MINIMIZE",
     },
 }
 
@@ -168,6 +197,93 @@ def test_direct_s1_infeasible_agrees_with_oracle(decidb_cli, oracle_solver):
         decidb_cli.execute(f"SET decide_direct_solve='require'; {_sql(case)}")
 
 
+# Per-row bounds whose values come from the row: (id, g, score, lo, hi) with `x >= lo AND x <= hi`. Row 1 is fixed to
+# 1 (lo 0.5), row 2 to 0 (hi 0.5), row 4 to 1 (lo = hi = 1); rows 0, 3 and 5 are free, and row 2 scores well so a
+# plain top-k would take it.
+_PIN_COLUMN_ROWS = [
+    (0, "a", 9.0, 0.0, 1.0),
+    (1, "a", 5.0, 0.5, 2.0),
+    (2, "a", 8.0, 0.0, 0.5),
+    (3, "b", -2.0, -1.0, 5.0),
+    (4, "b", 3.0, 1.0, 1.0),
+    (5, "b", 6.0, 0.0, 1.0),
+]
+_PIN_COLUMN_CASES = {
+    "global_upper": {"bounds": ["<= 3"], "sense": "MAXIMIZE"},
+    "global_minimize": {"bounds": ["<= 3"], "sense": "MINIMIZE"},
+    "per_group_interval": {"bounds": [">= 1", "<= 2"], "per": True, "sense": "MAXIMIZE"},
+}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(_PIN_COLUMN_CASES))
+def test_direct_s1_numeric_column_pins_match_independent_oracle(decidb_cli, oracle_solver, name):
+    case = _PIN_COLUMN_CASES[name]
+    values = ", ".join(
+        f"({i}, '{g}', CAST({score} AS DOUBLE), CAST({lo} AS DOUBLE), CAST({hi} AS DOUBLE))"
+        for i, g, score, lo, hi in _PIN_COLUMN_ROWS
+    )
+    scope = " PER g" if case.get("per") else ""
+    clauses = " AND ".join(["x >= lo", "x <= hi"] + [f"SUM(x) {bound}{scope}" for bound in case["bounds"]])
+    sql = f"""
+        SELECT id, g, score, x FROM (
+            FROM (VALUES {values}) t(id, g, score, lo, hi)
+            DECIDE x(BOOL) SUCH THAT {clauses} {case['sense']} SUM(score * x)
+        ) q ORDER BY id
+    """
+    rows, columns = decidb_cli.execute(f"SET decide_direct_solve='require'; {sql}")
+
+    oracle_solver.create_model("s1_numeric_pin_oracle")
+    names = [f"x_{i}" for i, *_ in _PIN_COLUMN_ROWS]
+    for var in names:
+        oracle_solver.add_variable(var, VarType.BINARY)
+    for (i, _, _, lo, hi), var in zip(_PIN_COLUMN_ROWS, names):
+        oracle_solver.add_constraint({var: 1.0}, ">=", float(lo))
+        oracle_solver.add_constraint({var: 1.0}, "<=", float(hi))
+    groups = {}
+    for (i, g, *_), var in zip(_PIN_COLUMN_ROWS, names):
+        groups.setdefault(g if case.get("per") else None, []).append(var)
+    for members in groups.values():
+        for bound in case["bounds"]:
+            op, limit = bound.split()
+            oracle_solver.add_constraint({var: 1.0 for var in members}, op, float(limit))
+    sense = ObjSense.MAXIMIZE if case["sense"] == "MAXIMIZE" else ObjSense.MINIMIZE
+    oracle_solver.set_objective({var: row[2] for var, row in zip(names, _PIN_COLUMN_ROWS)}, sense)
+    result = oracle_solver.solve()
+    comparison = compare_solutions(
+        rows,
+        columns,
+        result,
+        [(i, g, float(score)) for i, g, score, _, _ in _PIN_COLUMN_ROWS],
+        ["x"],
+        coeff_fn=lambda row: {"x": float(row[columns.index("score")])},
+    )
+    assert comparison.status in ("identical", "optimal")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error_infeasible
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rowbound",
+    [
+        (">=", 2, [3]),
+        ("<=", -1, [3]),
+        ("=", 0.5, [1]),
+        ("=", 2, [0, 1]),
+    ],
+)
+def test_direct_s1_impossible_rowbound_agrees_with_oracle(decidb_cli, oracle_solver, rowbound):
+    # A bound no 0/1 value can meet, on rows a WHEN selects, is infeasible.
+    case = {"bounds": [("<=", 5)], "rowbounds": [rowbound]}
+    _build_oracle(oracle_solver, case)
+    assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
+    with pytest.raises(DecidBCliError, match=r"(?i)infeasible"):
+        decidb_cli.execute(f"SET decide_direct_solve='require'; {_sql(case)}")
+
+
 # ---------------------------------------------------------------------------
 # VAL-07: seeded differential fuzz, solver path vs direct path
 # ---------------------------------------------------------------------------
@@ -184,6 +300,27 @@ _NORM_REDUCERS = ["norm(x, 'inf')", "norm(x, 1)", "norm(x, 0)"]
 _NORM_OBJECTIVES = {
     "SUM(score * x) - norm(score * x, 1)": "sum(score * x) - sum(abs(score * x))",
 }
+
+# Spellings of the BOOL domain with no WHEN. Other unconditional bounds are left out: the solver reads some of them as
+# a different problem, and direct solve leaves those to it (see test_direct_solve.py).
+_DOMAIN_RESTATEMENTS = ["x <= 1", "x >= 0", "x < 2", "x > -1", "x <> 2", "x BETWEEN 0 AND 1"]
+
+
+def _fuzz_rowbound(rng):
+    """One per-row bound on x: a 0/1 pin, a restated domain, or any constant bound on one row."""
+    kind = rng.choice(["pin", "pin", "restate", "constant", "column"])
+    if kind == "restate":
+        return rng.choice(_DOMAIN_RESTATEMENTS)
+    if kind == "column":
+        # The per-row `cap` column is NULL on some rows, which both paths must reject the same way.
+        when = " WHEN flag" if rng.random() < 0.4 else ""
+        return f"x {rng.choice(['<=', '<', '>=', '>', '=', '<>'])} cap{when}"
+    row = rng.randint(0, 5)
+    if kind == "pin":
+        return f"x = {rng.choice([0, 1])} WHEN id = {row}"
+    op = rng.choice(["<=", "<", ">=", ">", "=", "<>"])
+    return f"x {op} {rng.choice(['-1', '-0.5', '0', '0.5', '1', '1.5', '2'])} WHEN id = {row}"
+
 
 def _fuzz_query(rng):
     """Returns the query and whether it was built as an S1 shape rather than a near miss."""
@@ -208,8 +345,7 @@ def _fuzz_query(rng):
         scope = " ".join(part for part in ("WHEN flag" if style == "top" else "", per) if part)
         clauses.append(f"{aggregate} {op} {bound} {scope}".strip())
     if rng.random() < 0.25:
-        value = rng.choice([0, 1])
-        clauses.append(f"x = {value} WHEN id = {rng.randint(0, 5)}")
+        clauses.append(_fuzz_rowbound(rng))
     objectives = _NORM_OBJECTIVES if near_miss == "objective" else _OBJECTIVES
     objective = rng.choice(sorted(objectives))
     sense = rng.choice(["MAXIMIZE", "MINIMIZE"])

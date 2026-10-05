@@ -6,6 +6,7 @@ import math
 
 import pytest
 
+from decidb_cli import DecidBCliError
 
 @pytest.fixture(autouse=True)
 def _allow_direct_path(monkeypatch):
@@ -526,6 +527,210 @@ def test_s1_boolean_pin_late_infeasibility_survives_outer_limit(decidb_cli):
         assert "DECIDE optimization is infeasible" in _raw(decidb_cli, sql, mode=mode).stderr
 
 
+_ROWBOUND_SCORES = ((1, 9.0), (2, 5.0), (3, -2.0), (4, 8.0), (5, 1.0))
+_ROWBOUND_OPS = ("<=", "<", ">=", ">", "=", "<>")
+_ROWBOUND_CONSTANTS = ("-3", "-1", "-0.5", "0", "0.5", "1", "1.5", "2")
+
+# Bounds with no WHEN that stay on the solver. The solver reads these as bounds on the variable, not as arithmetic on
+# a Boolean: a negative lower bound makes x signed (the result holds -3, -1, ...), a strict bound against a fraction
+# moves by a whole unit, and a bound that cannot hold raises a message naming the clause.
+_UNCONDITIONAL_SOLVER_CASES = {
+    ("<=", "-3"),
+    ("<=", "-1"),
+    ("<=", "-0.5"),
+    ("<", "-3"),
+    ("<", "-1"),
+    ("<", "-0.5"),
+    ("<", "0"),
+    ("<", "0.5"),
+    ("<", "1.5"),
+    (">=", "-3"),
+    (">=", "-1"),
+    (">=", "-0.5"),
+    (">=", "1.5"),
+    (">=", "2"),
+    (">", "-3"),
+    (">", "-0.5"),
+    (">", "0.5"),
+    (">", "1"),
+    (">", "1.5"),
+    (">", "2"),
+    ("=", "-3"),
+    ("=", "-1"),
+    ("=", "-0.5"),
+    ("=", "1.5"),
+    ("=", "2"),
+}
+
+
+def _rowbound_query(clause, capacity):
+    values = ", ".join(f"({row_id}, CAST('{score}' AS DOUBLE))" for row_id, score in _ROWBOUND_SCORES)
+    return f"""
+        SELECT id, x FROM (
+            FROM (VALUES {values}) t(id, score)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= {capacity} AND {clause}
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """
+
+
+def _rowbound_outcome(cli, sql, mode):
+    try:
+        return _run(cli, sql, mode=mode)[0]
+    except DecidBCliError as error:
+        message = str(error)
+        if "decide_direct_solve=require" in message:
+            return "miss"
+        return "infeasible" if "infeasible" in message else "error: " + message.strip()[:100]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("op", _ROWBOUND_OPS)
+def test_s1_constant_bound_on_x_with_when_is_boolean_arithmetic(decidb_cli, op):
+    # With a WHEN the solver applies plain arithmetic to the row, so every comparison and constant is admitted and
+    # must give the solver's answer: the row is left free, fixed to 0 or 1, or infeasible.
+    for constant in _ROWBOUND_CONSTANTS:
+        for row_id in (1, 2):
+            sql = _rowbound_query(f"x {op} {constant} WHEN id = {row_id}", 2)
+            direct = _rowbound_outcome(decidb_cli, sql, "require")
+            assert direct != "miss", (op, constant, row_id)
+            assert direct == _rowbound_outcome(decidb_cli, sql, "off"), (op, constant, row_id)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("op", _ROWBOUND_OPS)
+def test_s1_constant_bound_on_x_without_when_hits_only_where_the_solver_agrees(decidb_cli, op):
+    for constant in _ROWBOUND_CONSTANTS:
+        sql = _rowbound_query(f"x {op} {constant}", 5)
+        solver = _rowbound_outcome(decidb_cli, sql, "off")
+        direct = _rowbound_outcome(decidb_cli, sql, "require")
+        if (op, constant) in _UNCONDITIONAL_SOLVER_CASES:
+            assert direct == "miss", (op, constant)
+            # Under auto the query still runs, and gives the solver's answer.
+            assert _rowbound_outcome(decidb_cli, sql, "auto") == solver, (op, constant)
+        else:
+            assert direct == solver, (op, constant)
+
+
+@pytest.mark.correctness
+def test_s1_restating_the_boolean_domain_is_admitted_and_changes_nothing(decidb_cli):
+    plain = _rowbound_query("x <= 5", 2).replace("AND x <= 5", "")
+    for clause in ("x <= 1", "x >= 0", "x >= 0 AND x <= 1", "x BETWEEN 0 AND 1", "x < 2", "x > -1", "x <> 2"):
+        sql = _rowbound_query(clause, 2)
+        assert _run(decidb_cli, sql)[0] == _run(decidb_cli, plain, mode="off")[0], clause
+        assert "Direct solve rule" in _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto").stdout, clause
+
+
+# Pin values from the row. Values within about 1e-5 of 0 or 1 are left out on purpose: direct solve reads them exactly,
+# the solver reads them with its feasibility tolerance and the two backends differ (done.md, "Known difference").
+_PIN_COLUMN_VALUES = ("-3", "-1", "-0.5", "0", "0.5", "1", "1.5", "2", "'Infinity'", "'-Infinity'")
+
+
+def _pin_column_query(clause, pin, capacity):
+    values = ", ".join(
+        f"({row_id}, CAST('{score}' AS DOUBLE), CAST({pin} AS DOUBLE))" for row_id, score in _ROWBOUND_SCORES
+    )
+    return f"""
+        SELECT id, x FROM (
+            FROM (VALUES {values}) t(id, score, pin)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= {capacity} AND {clause}
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("op", _ROWBOUND_OPS)
+def test_s1_numeric_column_pin_matches_the_solver(decidb_cli, op):
+    # The same pin value on every row, so each case is a bound the whole input obeys or one row obeys (WHEN).
+    for pin in _PIN_COLUMN_VALUES:
+        for clause, capacity in ((f"x {op} pin", 5), (f"x {op} pin WHEN id = 1", 2), (f"x {op} pin WHEN id = 2", 2)):
+            sql = _pin_column_query(clause, pin, capacity)
+            direct = _rowbound_outcome(decidb_cli, sql, "require")
+            assert direct != "miss", (clause, pin)
+            assert direct == _rowbound_outcome(decidb_cli, sql, "off"), (clause, pin)
+
+
+@pytest.mark.correctness
+def test_s1_numeric_column_pin_varies_by_row_and_by_group(decidb_cli):
+    # Different pins per row: row 2 fixed to 1, row 3 to 0, row 4 free, row 5 fixed to 1 (a source expression).
+    sql = """
+        SELECT id, x FROM (
+            FROM (VALUES (1,'a',9.0,0.0,1.0),(2,'a',5.0,0.5,2.0),(3,'b',8.0,0.0,0.5),(4,'b',-2.0,0.0,5.0),(5,'b',1.0,0.5,1.5))
+                t(id,g,score,lo,hi)
+            DECIDE x(BOOL) SUCH THAT x >= lo AND x <= COALESCE(hi, 1) AND SUM(x) <= 1 PER g
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """
+    expected = _run(decidb_cli, sql, mode="off")[0]
+    assert _run(decidb_cli, sql)[0] == expected
+    assert [row[1] for row in expected] == [0, 1, 0, 0, 1]
+
+
+@pytest.mark.correctness
+def test_s1_numeric_column_pin_errors_follow_the_solver(decidb_cli):
+    def query(first_pin, second_pin, when="", score="9.0"):
+        return f"""
+            SELECT id, x FROM (
+                FROM (VALUES (1, {score}, {first_pin}), (2, 5.0, {second_pin})) t(id, score, pin)
+                DECIDE x(BOOL) SUCH THAT SUM(x) <= 2 AND x <= pin {when} MAXIMIZE SUM(score * x)
+            ) q
+        """
+
+    null = "CAST(NULL AS DOUBLE)"
+    nan = "CAST('NaN' AS DOUBLE)"
+    cases = [
+        # NULL on a row the WHEN excludes still raises, and names the column.
+        (query("1.0", null, "WHEN id = 1"), 'column "pin" is NULL'),
+        (query(null, "1.0"), 'column "pin" is NULL'),
+        # A pin error precedes a NULL score error.
+        (query(null, "1.0", score=null), 'column "pin" is NULL'),
+        (query(nan, "1.0"), "NaN"),
+        (query("1.0", nan, "WHEN id = 1"), "NaN"),
+    ]
+    for sql, needle in cases:
+        for mode in ("require", "off"):
+            assert needle in _raw(decidb_cli, sql, mode=mode).stderr, (mode, sql)
+
+
+@pytest.mark.correctness
+def test_s1_numeric_column_pin_misses_when_it_can_raise(decidb_cli):
+    sql = """
+        SELECT x FROM (
+            FROM (VALUES (1, 9.0, 1), (2, 5.0, 2)) t(id, score, pin)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 2 AND x <= CAST(pin AS TINYINT) MAXIMIZE SUM(score * x)
+        ) q
+    """
+    assert "constraint_shape" in _raw(decidb_cli, sql).stderr
+    assert _run(decidb_cli, sql, mode="auto")[0] == _run(decidb_cli, sql, mode="off")[0]
+
+
+@pytest.mark.correctness
+def test_s1_direct_reads_bounds_exactly_near_an_integer(decidb_cli):
+    # Decided 2026-10-05 (S1-09): direct solve reads a bound exactly and does not copy the solver's feasibility
+    # tolerance, which differs between backends. This pins that choice so a change is deliberate. The solver would
+    # select 2 rows here (it accepts 1.9999999 as 2); direct selects 1.
+    sql = """
+        SELECT id, x FROM (
+            FROM (VALUES (1, 9.0), (2, 5.0), (3, 8.0)) t(id, score)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1.9999999 MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """
+    assert [row[1] for row in _run(decidb_cli, sql)[0]] == [1, 0, 0]
+
+
+@pytest.mark.correctness
+def test_s1_impossible_bound_with_when_is_infeasible_only_when_a_row_is_selected(decidb_cli):
+    for mode in ("require", "off"):
+        assert (
+            "DECIDE optimization is infeasible"
+            in _raw(decidb_cli, _rowbound_query("x >= 2 WHEN id = 3", 5), mode=mode).stderr
+        )
+        # No row matches the WHEN, so no row is bound.
+        rows = _run(decidb_cli, _rowbound_query("x >= 2 WHEN id = 99", 5), mode=mode)[0]
+        assert [row[1] for row in rows] == [1, 1, 0, 1, 1]
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "constraint,lower,upper,keys,when,sense",
@@ -910,7 +1115,7 @@ def test_path_selection_and_exact_capacity(decidb_cli):
     extra = """
         SELECT x FROM (
             FROM (VALUES (1, 2), (2, 9)) t(id, score)
-            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 AND x <= 1
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 AND x >= -3
             MAXIMIZE SUM(score * x)
         ) q
     """
@@ -937,6 +1142,34 @@ def test_structural_near_misses(decidb_cli):
         """
         error = _raw(decidb_cli, sql).stderr
         assert "decide_direct_solve=require:" in error, (clause, error)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint,objective,reason",
+    [
+        ("SUM(x + 0) <= 2", "MAXIMIZE SUM(score * x)", "expected SUM(x) with unit contribution"),
+        ("SUM(1 - x) <= 4", "MAXIMIZE SUM(score * x)", "expected SUM(x) with unit contribution"),
+        ("SUM(x) <= CAST(cap AS TINYINT)", "MAXIMIZE SUM(score * x)", "deterministic nonthrowing"),
+        ("SUM(x) = 2", "", "problem_shape"),
+    ],
+)
+def test_s1_out_of_scope_shapes_stay_on_the_solver_and_still_answer(decidb_cli, constraint, objective, reason):
+    # Decided out of scope (done.md): each misses under `require` with its reason, and runs on the solver under `auto`.
+    sql = f"""
+        SELECT id, x FROM (
+            FROM (VALUES (1, 9.0, 3), (2, 5.0, 3), (3, -2.0, 3), (4, 8.0, 3)) t(id, score, cap)
+            DECIDE x(BOOL) SUCH THAT {constraint} {objective}
+        ) q ORDER BY id
+    """
+    assert reason in _raw(decidb_cli, sql).stderr
+    rows, _ = _run(decidb_cli, sql, mode="auto")
+    assert [row[0] for row in rows] == [1, 2, 3, 4]
+    if objective:
+        assert rows == _run(decidb_cli, sql, mode="off")[0]
+    else:
+        # No objective: any assignment with two selected rows is an answer.
+        assert sum(row[1] for row in rows) == 2
 
 
 @pytest.mark.correctness

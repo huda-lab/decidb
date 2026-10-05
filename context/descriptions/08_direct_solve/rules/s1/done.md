@@ -1,8 +1,9 @@
 # S1 (top-k and cardinality intervals) — what works today
 
-Verified at `a1ac47407e` on 2026-10-05 with `make decide-test` (1,883 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and
-`DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (1,882 passed, 1 unrelated failure that needs
-Gurobi), and `build/release/test/unittest "[decidb]"` (907 assertions).
+Verified on 2026-10-05 on the working tree after `c86298c9e8`, with the per-row bound change not yet committed: `make decide-test` (1,924
+passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make
+decide-test` (1,923 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (907
+assertions). Re-stamp with the commit hash when it lands.
 Code: `src/optimizer/decide/direct/s1_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
@@ -17,8 +18,15 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 - **Scope:** global, or `PER` one or more source columns, optionally with a deterministic source-only `WHEN` (top level or
   inside the aggregate). All count clauses must share identical membership. Rows with a NULL `PER` key or a false aggregate
   `WHEN` bypass the bound but still obey per-row pins.
-- **Pins:** per-row `x = 0`, `x <= 0`, `x < 1`, `x = 1`, `x >= 1`, `x > 0` with an optional source-only `WHEN`. Contradictory
-  active pins are infeasible.
+- **Per-row bounds on `x`:** any comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`) against a foldable constant, a numeric source
+  column, or a deterministic nonthrowing numeric expression over source columns (`COALESCE`, `TRY_CAST` of a column), with
+  an optional source-only `WHEN`. Each row's value is read as the set of {0, 1} it allows. Both allowed means no
+  constraint (`x <= 1`, `x >= 0`, `x BETWEEN 0 AND 1`, `x <> 2`); one allowed fixes the row to that value (`x >= 0.5`
+  fixes to 1); none allowed makes the row infeasible. A bound with a `WHEN` takes any constant. A constant bound without a
+  `WHEN` takes only the spellings where the solver's own reading matches Boolean arithmetic (see the out-of-scope table);
+  a column value is read as arithmetic with or without a `WHEN`, as the solver does. A source Boolean column is also a pin
+  value (`x = flag`). Contradictory active bounds are infeasible. A NULL or NaN column value raises on every row,
+  including rows the `WHEN` excludes, and names the column.
 - **Objective:** a signed sum of per-row coefficients times `x`, `MAXIMIZE` or `MINIMIZE`, plus an optional finite constant.
   Coefficients are numeric, decision-free, deterministic; several terms must be non-throwing.
 
@@ -26,19 +34,52 @@ It matches the solver on errors and order: empty scoped aggregate, invalid or NU
 or non-finite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1` or `COUNT(*)`.
 When scores tie it may pick different rows than the solver, with the same objective.
 
+**Known difference, decided 2026-10-05: values within the solver's tolerance of an integer.** Direct solve reads every
+bound exactly: counts, constants and column values. The solver accepts a violation of about 1e-6, and the two backends
+differ from each other, so there is no single behavior to copy. `SUM(x) <= 1.9999999` selects 2 rows on the solver and 1 on
+direct; `x >= 0.000001 WHEN id = 2` fixes the row on Gurobi but not on HiGHS, and `x <= 0.999999` fails inside HiGHS. A
+column value computed in floating point (`0.1 * 10`) can land just under 1 and be read as below 1 by direct and as 1 by the
+solver. Chosen over declining near-integer bounds because a column value is only known at run time, where the plan cannot
+decline it. To avoid the difference, round the bound. `test_s1_direct_reads_bounds_exactly_near_an_integer` pins the
+behavior, so changing it is deliberate.
+
+**Error wording that differs from the solver.** A NaN column value raises `DECIDE: column "pin" is NULL or NaN. Impute NULLs
+with COALESCE(pin, 0) or filter those rows out with a WHERE clause.`; the solver raises its general right-hand-side message
+with `at row N`, which direct does not copy (see `H-05` in `../_harness/todo.md`). A NULL in a floating point column reads
+`is NULL or NaN` on direct and `is NULL` on the solver. Both paths raise on the same inputs.
+
 ## What it does not admit (falls back to the solver)
 
-Weighted constraints such as `SUM(w * x) <= B`; `INT` and `REAL` variables; more than one decision; entity or scalar
-decisions; objective `PER` or `WHEN`; other reducers (`MIN`, `MAX`, `AVG`); `norm`; `DIAGNOSE`; throwing source expressions as
-bounds; numeric source-valued per-row pins; offset count bodies such as `SUM(x + 0)`. Open work: `todo.md`.
+A miss never changes the answer: the query runs on the solver and `require` names the clause.
+
+**Not yet admitted, planned** (`todo.md`):
+
+| Shape | Task |
+|---|---|
+| Scaled objective terms: `2 * SUM(score*x)`, `SUM(score*x) / 2` | S1-06 |
+| Bounds that count rows: `SUM(x) <= COUNT(*) / 2` | S1-07 |
+
+**Explicitly out of scope** (decided 2026-10-05; these stay on the solver on purpose):
+
+| Shape | Why it is out | How to reopen it |
+|---|---|---|
+| `SUM(x + c)`, `SUM(1 - x)` (an offset or negated count body; was S1-03) | The definition says each selected item contributes exactly 1 to the count. A constant term makes the bound depend on the group size (`count + n*c <= B`), and `1 - x` flips the direction. The user can write the same limit as `SUM(x) >= n - k`. Bodies whose terms add up to exactly one `x` (`SUM(1*x)`, `SUM(2*x - x)`) are admitted | Admit `a*x + c` with `a = ±1` and a constant `c`: shift the per-group limit by `n*c` and flip the side when `a = -1`. About 0.5 day. Worth doing if users ask for "at most k rejected" |
+| A bound expression that can raise at runtime, such as a narrowing `CAST` (was S1-02) | The solver raises on every row, including rows a `WHEN` or NULL `PER` key excludes, and the error must come in the solver's order after the empty-aggregate error. Admitting it means proving DuckDB neither skips nor reorders the check. Nonthrowing forms (`COALESCE`, `TRY_CAST`) are admitted, so `TRY_CAST` is the workaround. A multi-term objective whose coefficient can throw misses for the same reason | Prove the evaluation order of the validation stage, then admit expressions that can only raise a cast or overflow error. Low value and costly |
+| No objective (constraints only) | The definition requires a linear objective, and few queries are written this way | Treat every score as 0 so the plan picks only the rows a lower bound requires. About 1 hour: accept the missing objective in `Match` |
+| A bound on `x` with no `WHEN` that the solver reads as a bound on the variable, not as Boolean arithmetic: a lower bound below 0 (`x >= -3`, `x > -3`, `x = -1`), a strict bound against a fraction (`x > 0.5`, `x < 1.5`), an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`) | A negative lower bound makes `x` signed, so the solver's result holds -3, -1 or -2 where direct would give 0 or 1. A strict bound against a fraction moves by a whole unit (`x > 0.5` becomes `x >= 1.5`), which gives an error or the wrong answer. A bound that cannot hold raises a message naming the clause, not DECIDE's infeasible error. Direct solve cannot match all three without copying the quirks. The same bound with a `WHEN` is plain arithmetic on the solver and is admitted | Fix the solver to treat these as Boolean arithmetic, then admit them. Not a direct-solve change |
+
+**Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
+`REAL` variables (A1 and the R classes); more than one decision, entity or scalar decisions (D1); lower and upper bounds with
+different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); bounds that are infinite, NaN or above 2^53
+(not exactly representable); objective `PER` or `WHEN`, other reducers (`MIN`, `MAX`, `AVG`), `norm`; `DIAGNOSE`.
 
 ## Verified by
 
 | Check | What it covers |
 |---|---|
-| `test_direct_solve.py` (209 tests) | Path selection, independent enumeration of small optima, exact bounds and strict/fractional normalization, `PER`/`WHEN`/NULL-key cases, pins, signed objectives, near misses with reasons, parent and CTE contexts, late errors, wide-output pruning, direct vs both solvers |
-| `test_direct_solve_oracle.py` (22 tests) | Direct results against the independent ILP oracle (`oracle_solver`) and 8 seeded differential fuzz tests (direct under `require` vs solver under `off`) |
-| `test_direct_rule_contract.py` (31 tests) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, near misses, `off`, forced backend, `DIAGNOSE` |
+| `test_direct_solve.py` (237 tests) | Path selection, independent enumeration of small optima, exact bounds and strict/fractional normalization, `PER`/`WHEN`/NULL-key cases, pins, signed objectives, near misses with reasons, parent and CTE contexts, late errors, wide-output pruning, direct vs both solvers. Per-row bounds: every comparison against eight constants, with and without a `WHEN`, direct against the solver (and the exact list of spellings that stay on the solver); numeric column pins against the solver for every comparison, NULL, NaN and infinite values, and per-row and per-group variation; the out-of-scope shapes still answer on the solver |
+| `test_direct_solve_oracle.py` (33 tests) | Direct results against the independent ILP oracle (`oracle_solver`), including per-row bounds with fractions and out-of-domain constants, numeric column pins and impossible bounds, and 8 seeded differential fuzz tests (direct under `require` vs solver under `off`) that also generate per-row constant and column bounds |
+| `test_direct_rule_contract.py` (33 tests) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, near misses, `off`, forced backend, `DIAGNOSE` |
 | Tiny-score fixture | Direct against the exact finite-DOUBLE optimum from 5e-324 to 1e-6. The two solvers disagree with each other near 1e-9, so backend comparisons allow a measured gap of 1e-7 |
 | C++ `[decidb]` | S1 proof contract, facts, coordinator |
 
