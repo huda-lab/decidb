@@ -4,7 +4,8 @@ What S1 does today is in `done.md`. The class definition is in `definition.md`. 
 otherwise. When one ships, its result moves to `done.md` and the task is deleted from here. Estimates are rough guesses,
 not measurements.
 
-**What is left.** Nothing is needed to close S1's definition. The three tasks below are deferred. This layer stays lean
+**S1 is closed (2026-10-05).** The class definition is met and nothing is needed to close it. The three tasks below are
+deferred. This layer stays lean
 (`../../architecture/rules.md`), so a task comes off the deferred list only when there is evidence a user needs it.
 Batches A (per-row bounds on `x`, out-of-scope tests), B (scaled objective) and C (row-count bounds) shipped and are in
 `done.md`.

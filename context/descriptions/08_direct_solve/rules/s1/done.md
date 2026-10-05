@@ -1,9 +1,8 @@
 # S1 (top-k and cardinality intervals) — what works today
 
-Verified on 2026-10-05 on the working tree after `00ff19dc8b`, with the row-count bound and the consolidated tests not yet
-committed: `make decide-test` (1,957 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`),
-`DECIDB_FORCE_SOLVER=highs make decide-test` (1,956 passed, 1 unrelated failure that needs Gurobi), and
-`build/release/test/unittest "[decidb]"` (907 assertions). Re-stamp with the commit hash when this lands.
+Verified on 2026-10-05 at `8c9420edb2`: `make decide-test` (1,957 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and
+`DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (1,956 passed, 1 unrelated failure that needs
+Gurobi), and `build/release/test/unittest "[decidb]"` (907 assertions). Later commits touch only a comment and docs.
 Code: `src/optimizer/decide/direct/s1_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits

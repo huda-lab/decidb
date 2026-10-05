@@ -96,7 +96,8 @@ struct DirectScopeFact {
 struct DirectConstraintFact {
 	DirectFactStatus status = DirectFactStatus::KNOWN;
 	string reason;
-	//! Index into the source-clause registry, so errors can follow the order the user wrote.
+	//! Index into the source-clause registry: the user's clause this constraint came from, shared by the constraints
+	//! one clause expands into.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	//! The clause as the user wrote it, for messages that name it.
 	string clause_text;
