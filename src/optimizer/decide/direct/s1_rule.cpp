@@ -63,8 +63,10 @@ struct S1Proof final : DirectRuleProof {
 	bool impossible = false;
 	DecideSense sense;
 	vector<ObjectivePart> objective_parts;
-	//! Name of the source column the score is exactly (one term, a bare column); empty for a computed score.
-	string score_column;
+	//! The source columns the score reads, for a NULL score to name; and, for a single-term score, the term as the user
+	//! wrote it, which a NULL that no column explains quotes instead.
+	vector<DirectNullSource> score_sources;
+	string score_text;
 	vector<idx_t> group_key_slots;
 	unique_ptr<Expression> when_condition;
 	vector<unique_ptr<Expression>> fixed_one_conditions;
@@ -547,11 +549,14 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, S1Proof 
 			proof.objective_parts.push_back({part.sign * term.sign, term.coefficient->Copy()});
 		}
 	}
-	// A single term is NULL exactly when its coefficient is, so a bare column can be named in the error.
+	// The score is NULL when any term is, so a NULL score names whichever of these columns is NULL on that row. With
+	// several terms the solver quotes the failing term; there is no single term to quote here, so the message stays
+	// generic when no column is NULL.
+	for (auto &part : proof.objective_parts) {
+		DirectCollectNullSources(*part.coefficient, facts.source_bindings, proof.score_sources);
+	}
 	if (proof.objective_parts.size() == 1) {
-		if (auto column = DirectBareNumericColumn(*proof.objective_parts[0].coefficient)) {
-			proof.score_column = column->GetAlias();
-		}
+		proof.score_text = proof.objective_parts[0].coefficient->ToString();
 	}
 	return true;
 }
@@ -902,8 +907,14 @@ private:
 	//! Stage 5: validate the score, rank rows within their scope, and raise the infeasibility error when the
 	//! bounds, pins, and row counts cannot all hold.
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, const BoundChecks &bounds) const {
-		auto guard = make_uniq<LogicalFilter>(DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, score_binding,
-		                                          proof.score_column));
+		// The score projection forwards every source column at its own slot, so a source column is read from there.
+		vector<DirectNullColumn> null_columns;
+		for (auto &source : proof.score_sources) {
+			null_columns.push_back(
+			    {ColumnBinding(score_index, source.slot), source_types[source.slot], source.name});
+		}
+		auto guard = make_uniq<LogicalFilter>(
+		    DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, score_binding, null_columns, proof.score_text));
 		guard->children.push_back(std::move(score));
 		auto rank = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr,
 		                                             nullptr);

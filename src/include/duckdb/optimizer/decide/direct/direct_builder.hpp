@@ -33,10 +33,24 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 //! A BOOLEAN expression that raises the message as an error when evaluated.
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &message);
 
+//! The same, with a message computed per row. The message is evaluated only on a row where the predicate is reached.
+unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message);
+
+//! A source column the score reads, as it can be referenced from the plan the score predicate runs over.
+struct DirectNullColumn {
+	ColumnBinding binding;
+	LogicalType type;
+	string name;
+};
+
 //! Evaluates to true for a finite score and raises an error for a NULL or non-finite one, worded as the solver
-//! words it. `null_column` names the source column the score is exactly; leave it empty for a computed score.
+//! words it. A NULL score names whichever of `null_columns` is NULL on the failing row, in the solver's one-column
+//! and several-column wordings. When none is NULL, or `null_columns` is empty, the message quotes `score_text`, or
+//! stays generic if that is empty too. The message is built per row but only evaluated on the row that fails.
 unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const LogicalType &score_type,
-                                                 ColumnBinding score_binding, const string &null_column);
+                                                 ColumnBinding score_binding,
+                                                 const vector<DirectNullColumn> &null_columns,
+                                                 const string &score_text);
 
 //! A plan that releases no row before `valid` has been evaluated on every input row.
 struct DirectBarrier {

@@ -23,6 +23,17 @@ bool DirectReferencesOnlySource(const Expression &expr, const vector<ColumnBindi
 //! True when the expression mentions at least one column.
 bool DirectHasColumnReference(const Expression &expr);
 
+//! A source column an expression reads: its slot in the source and the name the user wrote.
+struct DirectNullSource {
+	idx_t slot;
+	string name;
+};
+
+//! Appends the source columns the expression reads, in tree order, skipping a name already in `out`. A column with no
+//! name to print is left out. These are the candidates for the column a NULL value came from.
+void DirectCollectNullSources(const Expression &expr, const vector<ColumnBinding> &source_bindings,
+                              vector<DirectNullSource> &out);
+
 //! Re-points every source column reference at the same position in a projection over the source. Returns false,
 //! leaving the expression partly rewritten, when a reference is not a source column.
 bool DirectRemapSourceReferences(Expression &expr, const vector<ColumnBinding> &source_bindings,

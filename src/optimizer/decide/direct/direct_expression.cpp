@@ -50,6 +50,26 @@ bool DirectHasColumnReference(const Expression &expr) {
 	return found;
 }
 
+void DirectCollectNullSources(const Expression &expr, const vector<ColumnBinding> &source_bindings,
+                              vector<DirectNullSource> &out) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		ExpressionIterator::EnumerateChildren(
+		    expr, [&](const Expression &child) { DirectCollectNullSources(child, source_bindings, out); });
+		return;
+	}
+	auto &ref = expr.Cast<BoundColumnRefExpression>();
+	auto found = std::find(source_bindings.begin(), source_bindings.end(), ref.binding);
+	if (ref.depth != 0 || found == source_bindings.end() || ref.GetAlias().empty()) {
+		return;
+	}
+	for (auto &seen : out) {
+		if (seen.name == ref.GetAlias()) {
+			return;
+		}
+	}
+	out.push_back({static_cast<idx_t>(found - source_bindings.begin()), ref.GetAlias()});
+}
+
 bool DirectRemapSourceReferences(Expression &expr, const vector<ColumnBinding> &source_bindings,
                                  idx_t projection_index) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {

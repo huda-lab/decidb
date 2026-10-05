@@ -834,17 +834,60 @@ def test_invalid_score_error_matches_solver_wording(decidb_cli, score):
 
 
 @pytest.mark.correctness
-def test_computed_score_error_does_not_name_a_column(decidb_cli):
-    # A score that is not one bare column has no single column to name; the message keeps the solver's generic
-    # wording and still points at the fix.
-    sql = """
+@pytest.mark.parametrize(
+    "row, objective, wording",
+    [
+        # One NULL column inside a computed score.
+        ("(2, NULL::DOUBLE, 1.0, 1.0)", "SUM((a + b) * x)", 'column "a" is NULL. Impute it with COALESCE(a, 0)'),
+        # The column that is NULL is named even when it is not the first one the score reads.
+        ("(2, 1.0, NULL::DOUBLE, 1.0)", "SUM((a + b) * x)", 'column "b" is NULL. Impute it with COALESCE(b, 0)'),
+        # Two and three NULL columns use the several-column wording.
+        ("(2, NULL::DOUBLE, NULL::DOUBLE, 1.0)", "SUM((a + b) * x)", 'columns "a" and "b" are NULL. Impute them'),
+        ("(2, NULL::DOUBLE, NULL::DOUBLE, NULL::DOUBLE)", "SUM((a + b + c) * x)", 'columns "a", "b" and "c" are NULL'),
+        # NULL terms in separate SUMs are named together.
+        ("(2, NULL::DOUBLE, NULL::DOUBLE, 1.0)", "SUM(a * x) + SUM(b * x)", 'columns "a" and "b" are NULL. Impute them'),
+    ],
+)
+def test_computed_score_null_error_names_the_columns(decidb_cli, row, objective, wording):
+    # A NULL in a computed score names the NULL columns on the failing row, as the solver does.
+    sql = f"""
         SELECT id, x FROM (
-            FROM (VALUES (1, 2.0, 1.0), (2, NULL::DOUBLE, 1.0)) t(id, a, b)
-            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM((a + b) * x)
+            FROM (VALUES (1, 2.0, 1.0, 1.0), {row}) t(id, a, b, c)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE {objective}
         ) q
     """
-    error = _raw(decidb_cli, sql, mode="require").stderr
-    assert "a value used in the optimization is NULL" in error and "COALESCE()" in error, error
+    solver = _raw(decidb_cli, sql, mode="off").stderr
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert wording in direct, direct
+    assert solver == direct
+
+
+@pytest.mark.correctness
+def test_null_score_no_column_explains_quotes_the_score(decidb_cli):
+    # TRY_CAST turns a bad string into NULL while its source column is not NULL, so no column can be named. Both
+    # paths quote the score instead.
+    sql = """
+        SELECT id, x FROM (
+            FROM (VALUES (1, '2.0'), (2, 'bad')) t(id, s)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(TRY_CAST(s AS DOUBLE) * x)
+        ) q
+    """
+    solver = _raw(decidb_cli, sql, mode="off").stderr
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "TRY_CAST(s AS DOUBLE) is NULL. Impute it with COALESCE()" in direct, direct
+    assert solver == direct
+
+
+@pytest.mark.correctness
+def test_null_score_message_is_not_built_when_no_row_is_null(decidb_cli):
+    # The message expression reads columns, so it must only run on the failing row. A clean input has to solve.
+    sql = """
+        SELECT id, x FROM (
+            FROM (VALUES (1, 2.0, 1.0), (2, 3.0, 1.0)) t(id, a, b)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM((a + b) * x)
+        ) q ORDER BY id
+    """
+    assert _raw(decidb_cli, sql, mode="require").stdout == _raw(decidb_cli, sql, mode="off").stdout
 
 
 @pytest.mark.correctness
