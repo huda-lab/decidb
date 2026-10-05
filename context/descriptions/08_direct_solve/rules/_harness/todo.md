@@ -30,12 +30,3 @@ Old IDs are in parentheses so earlier notes still make sense.
   candidate, but only one rule exists.
 - **Depends.** H-01.
 - **Done when.** Two proved plans compete on a real workload and cost decides. Cost never repairs a missing proof.
-
-## H-05 — The "at row N" part of the non-finite score error (was ERR-02)
-
-- **Problem.** The solver says `... invalid value (NaN or Infinity) at row N`; direct has no row number.
-- **Finding.** The solver's N is its running count of rows read (`out.size()` in `ExtractDoubleColumn`). It is a position
-  in scan order, not a key. Whether it is stable across parallel scans is unchecked.
-- **Recommendation.** Do not copy it. Record the difference as intentional in `../../architecture/policy.md`. If the
-  goal is "tell me which row", name the offending columns on both paths instead, as the NULL message now does.
-- **Decision needed.** Keep the difference, or add a stable row identifier to both paths.

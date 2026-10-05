@@ -41,16 +41,33 @@ for production use. If any required condition cannot be proved, the query stays 
 - **Every input row is read.** A bad value on the last of 5,000 rows must raise even under `LIMIT 1` or
   `COUNT(*)`. A plan that could stream wraps its checks in `DirectValidationBarrier`; a rank window already reads
   everything. Only `LIMIT 0` may skip the read.
-- **Errors, in the solver's order:** empty scoped aggregate; invalid data-valued bounds and pins (in source-clause
-  order, including rows a `WHEN` or NULL `PER` key excludes); invalid objective coefficients (NULL, NaN, infinity);
-  infeasibility.
+- **An error on the same inputs.** Where the solver raises, direct solve raises: empty scoped aggregate; invalid
+  data-valued bounds and pins (including rows a `WHEN` or NULL `PER` key excludes); invalid objective coefficients
+  (NULL, NaN, infinity); infeasibility. Silently answering where the solver refuses is a wrong answer. What the rule
+  does **not** owe: the solver's message text, or the solver's choice among several errors in one query. Any one
+  of the applicable errors is enough, and a generic message that names the clause is enough.
 - **One numeric domain.** Values are evaluated with DuckDB's semantics, then converted to DOUBLE. Counts are exact only
   up to 2^53, and a rule declines anything it cannot represent exactly.
 - **Results.** Every source column in order, then one column per decision: `INTEGER` 0/1 for `BOOL`, `BIGINT` for
   `INT`, `DOUBLE` for `REAL`. Duplicate rows stay separate rows. When several assignments are optimal, a rule may
   return a different one than the solver.
 - **User-facing wording.** Name the object the user wrote and the smallest edit. Internal detail belongs in `require`
-  reasons and `EXPLAIN`.
+  reasons and `EXPLAIN`. Wording is not copied from the solver. If a message needs a plan of its own to build (for
+  example, one that names which columns of a computed value are NULL), use the plainer message.
+
+## Keep the layer lean
+
+A rule exists to be a light shortcut. Before adding code to a rule or to the shared engine, check it against these:
+
+- **Does it protect the answer or the speedup?** If not (error order, message wording, a nicer diagnostic), leave
+  it out.
+- **Is the proof short?** If admitting a shape needs a long proof, a new range argument or a parity check against
+  solver quirks, decline the shape. The solver handles it correctly, only more slowly. A decline is cheap and a bug
+  in a proof is a wrong answer.
+- **Does a second rule need it?** Keep helpers inside the rule until a second rule uses them, then move them to the
+  shared builders.
+- **Is the test proportionate?** One test per behavior. Do not pin an incidental detail, such as which of two errors
+  comes first.
 
 ## The standard tests every rule ships
 
@@ -65,10 +82,10 @@ test, adding one is a task in that rule's `todo.md`.
    solver (`oracle_solver`) built straight from the rows, on the solver path (`off`), and on the direct path
    (`require`, so a miss fails). All three must agree: both DeciDB runs must satisfy every constraint and reach the
    oracle's objective, or all must say infeasible. Inputs with no oracle model (bad data) go in the error table, where
-   `off` and `require` must fail with the same error class, and values the oracle cannot hold (infinities, 2^53) go in
-   the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
+   `off` and `require` must both fail (the message and the choice among several errors need not match), and values
+   the oracle cannot hold (infinities, 2^53) go in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
 3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
-   generator. Direct (`require`) and solver (`off`) must succeed or fail together with the same error class and agree on
+   generator. Direct (`require`) and solver (`off`) must succeed or fail together (any error counts) and agree on
    row count and primary objective. It finds interactions between shapes that no table lists.
 4. **C++ cases** (`test/common/`) for the rule's proof and for facts it relies on.
 

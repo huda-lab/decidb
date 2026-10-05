@@ -40,7 +40,6 @@ struct S1Match final : DirectRuleMatch {
 
 struct S1Proof final : DirectRuleProof {
 	struct SourceBound {
-		idx_t source_clause_id;
 		idx_t source_slot;
 		LogicalType source_type;
 		ExpressionType comparison;
@@ -53,7 +52,6 @@ struct S1Proof final : DirectRuleProof {
 	};
 	//! A pin whose value comes from the row: it must be neither NULL nor, for a floating point value, NaN.
 	struct SourcePin {
-		idx_t source_clause_id;
 		unique_ptr<Expression> value;
 		string invalid_message;
 		bool reject_nan;
@@ -74,9 +72,7 @@ struct S1Proof final : DirectRuleProof {
 	bool impossible = false;
 	DecideSense sense;
 	vector<ObjectivePart> objective_parts;
-	//! The source columns the score reads, for a NULL score to name; and, for a single-term score, the term as the user
-	//! wrote it, which a NULL that no column explains quotes instead.
-	vector<DirectNullSource> score_sources;
+	//! For a single-term score, the term as the user wrote it, which a NULL score quotes.
 	string score_text;
 	vector<idx_t> group_key_slots;
 	unique_ptr<Expression> when_condition;
@@ -612,7 +608,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 				                                         make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))));
 			}
 			proof.source_pins.push_back(
-			    {factor->source_clause_id, source_value->Copy(), "DECIDE per-row Boolean bound contains NULL", false});
+			    {source_value->Copy(), "DECIDE per-row Boolean bound contains NULL", false});
 			continue;
 		}
 		// A numeric value from the row: the row allows 0 when `0 <comparison> value` holds and 1 when `1 <comparison>
@@ -638,8 +634,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 		};
 		proof.fixed_one_conditions.push_back(active(disallows(0.0)));
 		proof.fixed_zero_conditions.push_back(active(disallows(1.0)));
-		proof.source_pins.push_back({factor->source_clause_id, value.Copy(),
-		                             DirectInvalidBoundMessage(is_column ? column_name : string(), invalid_type),
+		proof.source_pins.push_back({value.Copy(), DirectInvalidBoundMessage(is_column ? column_name : string()),
 		                             invalid_type == LogicalType::FLOAT || invalid_type == LogicalType::DOUBLE});
 	}
 	return true;
@@ -683,15 +678,15 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 				         problem + ")";
 				return false;
 			}
-			proof.source_bounds.push_back({factor->source_clause_id, DConstants::INVALID_INDEX, bound.return_type, type,
-			                               bound.Copy(), sum->filter != nullptr, string(), true});
+			proof.source_bounds.push_back({DConstants::INVALID_INDEX, bound.return_type, type, bound.Copy(),
+			                               sum->filter != nullptr, string(), true});
 			continue;
 		}
 		if (!bound.IsFoldable() &&
 		    (source_column || DirectIsSourceOnlyNumeric(bound, facts.decide_index, facts.source_bindings))) {
-			proof.source_bounds.push_back({factor->source_clause_id, source_slot,
-			                               source_column ? source_type : bound.return_type, type, bound.Copy(),
-			                               sum->filter != nullptr, source_column ? source_name : string()});
+			proof.source_bounds.push_back({source_slot, source_column ? source_type : bound.return_type, type,
+			                               bound.Copy(), sum->filter != nullptr,
+			                               source_column ? source_name : string()});
 			continue;
 		}
 		if (DirectIsLowerBound(type)) {
@@ -763,12 +758,6 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, ClientCo
 			proof.objective_parts.push_back(
 			    {part.sign * term.sign, term.coefficient->Copy(), part.scale != nullptr, scale, part.scale_divides});
 		}
-	}
-	// The score is NULL when any term is, so a NULL score names whichever of these columns is NULL on that row. With
-	// several terms the solver quotes the failing term; there is no single term to quote here, so the message stays
-	// generic when no column is NULL.
-	for (auto &part : proof.objective_parts) {
-		DirectCollectNullSources(*part.coefficient, facts.source_bindings, proof.score_sources);
 	}
 	if (proof.objective_parts.size() == 1) {
 		proof.score_text = proof.objective_parts[0].coefficient->ToString();
@@ -977,8 +966,7 @@ private:
 		return std::move(window);
 	}
 
-	//! Stage 3: validate source-valued bounds and pins on every row, in source-clause order, and reduce each bound
-	//! to its group extremum.
+	//! Stage 3: validate source-valued bounds and pins on every row, and reduce each bound to its group extremum.
 	unique_ptr<LogicalOperator> ValidateBounds(unique_ptr<LogicalOperator> source, const ScopeState &scope,
 	                                           const RowCounts &counts, BoundChecks &bounds) const {
 		vector<DirectBoundSpec> specs;
@@ -989,7 +977,6 @@ private:
 				throw InternalException("S1 direct solve received an invalid source bound slot");
 			}
 			DirectBoundSpec spec;
-			spec.source_clause_id = bound.source_clause_id;
 			spec.comparison = bound.comparison;
 			spec.value = CopyIntoState(*bound.value, scope, "bound");
 			if (bound.counts_rows) {
@@ -1002,15 +989,12 @@ private:
 				spec.column_type = bound.source_type;
 			}
 			spec.all_group_rows = bound.rhs_all_group_rows;
-			spec.invalid_message = DirectInvalidBoundMessage(
-			    bound.column_name,
-			    bound.source_slot == DConstants::INVALID_INDEX ? bound.value->return_type : bound.source_type);
+			spec.invalid_message = DirectInvalidBoundMessage(bound.column_name);
 			specs.push_back(std::move(spec));
 		}
 		vector<DirectNotNullSpec> pins;
 		for (auto &pin : proof.source_pins) {
-			pins.push_back({pin.source_clause_id, CopyIntoState(*pin.value, scope, "per-row pin"), pin.invalid_message,
-			                pin.reject_nan});
+			pins.push_back({CopyIntoState(*pin.value, scope, "per-row pin"), pin.invalid_message, pin.reject_nan});
 		}
 		vector<ColumnBinding> keys;
 		vector<LogicalType> key_types;
@@ -1183,14 +1167,8 @@ private:
 	//! Stage 5: validate the score, rank rows within their scope, and raise the infeasibility error when the
 	//! bounds, pins, and row counts cannot all hold.
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, const BoundChecks &bounds) const {
-		// The score projection forwards every source column at its own slot, so a source column is read from there.
-		vector<DirectNullColumn> null_columns;
-		for (auto &source : proof.score_sources) {
-			null_columns.push_back(
-			    {ColumnBinding(score_index, source.slot), source_types[source.slot], source.name});
-		}
 		auto guard = make_uniq<LogicalFilter>(
-		    DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, score_binding, null_columns, proof.score_text));
+		    DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, score_binding, proof.score_text));
 		guard->children.push_back(std::move(score));
 		auto rank = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr,
 		                                             nullptr);

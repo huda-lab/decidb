@@ -1,8 +1,8 @@
 # S1 (top-k and cardinality intervals) — what works today
 
 Verified on 2026-10-05 on the working tree after `00ff19dc8b`, with the row-count bound and the consolidated tests not yet
-committed: `make decide-test` (1,969 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`),
-`DECIDB_FORCE_SOLVER=highs make decide-test` (1,968 passed, 1 unrelated failure that needs Gurobi), and
+committed: `make decide-test` (1,957 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`),
+`DECIDB_FORCE_SOLVER=highs make decide-test` (1,956 passed, 1 unrelated failure that needs Gurobi), and
 `build/release/test/unittest "[decidb]"` (907 assertions). Re-stamp with the commit hash when this lands.
 Code: `src/optimizer/decide/direct/s1_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -40,9 +40,10 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   that part's coefficients: a negative one reverses the part, zero makes every row score 0, and each part keeps its own.
   The factor must be a finite foldable constant, and a divisor must not be zero.
 
-It matches the solver on errors and order: empty scoped aggregate, invalid or NULL bounds (including on bypassed rows), NULL
-or non-finite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1` or `COUNT(*)`.
-When scores tie it may pick different rows than the solver, with the same objective.
+It raises an error wherever the solver does: empty scoped aggregate, invalid or NULL bounds (including on bypassed rows),
+NULL or non-finite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1` or
+`COUNT(*)`. When a query has several errors, direct may report a different one than the solver. When scores tie it may pick
+different rows than the solver, with the same objective.
 
 **Known difference, decided 2026-10-05: values within the solver's tolerance of an integer.** Direct solve reads every
 bound exactly: counts, constants and column values. The solver accepts a violation of about 1e-6, and the two backends
@@ -53,10 +54,11 @@ solver. Chosen over declining near-integer bounds because a column value is only
 decline it. To avoid the difference, round the bound. `test_s1_direct_reads_bounds_exactly_near_an_integer` pins the
 behavior, so changing it is deliberate.
 
-**Error wording that differs from the solver.** A NaN column value raises `DECIDE: column "pin" is NULL or NaN. Impute NULLs
-with COALESCE(pin, 0) or filter those rows out with a WHERE clause.`; the solver raises its general right-hand-side message
-with `at row N`, which direct does not copy (see `H-05` in `../_harness/todo.md`). A NULL in a floating point column reads
-`is NULL or NaN` on direct and `is NULL` on the solver. Both paths raise on the same inputs.
+**Error wording that differs from the solver** (on purpose; `../../architecture/policy.md`). A NULL or NaN bound column
+raises `DECIDE: column "cap" has an invalid value (NULL or NaN). Impute it with COALESCE(cap, 0), or filter those rows out
+with a WHERE clause.` for every column type; the solver words it by type and adds `at row N`. A NULL score quotes the score
+expression (`DECIDE: score is NULL. Impute it with COALESCE(), ...`); the solver names the NULL columns of a computed
+score. The empty-aggregate, non-finite score and infeasible messages are the solver's. Both paths raise on the same inputs.
 
 ## What it does not admit (falls back to the solver)
 
@@ -73,7 +75,7 @@ A miss never changes the answer: the query runs on the solver and `require` name
 | Shape | Why it is out | How to reopen it |
 |---|---|---|
 | `SUM(x + c)`, `SUM(1 - x)` (an offset or negated count body; was S1-03) | The definition says each selected item contributes exactly 1 to the count. A constant term makes the bound depend on the group size (`count + n*c <= B`), and `1 - x` flips the direction. The user can write the same limit as `SUM(x) >= n - k`. Bodies whose terms add up to exactly one `x` (`SUM(1*x)`, `SUM(2*x - x)`) are admitted | Admit `a*x + c` with `a = ±1` and a constant `c`: shift the per-group limit by `n*c` and flip the side when `a = -1`. About 0.5 day. Worth doing if users ask for "at most k rejected" |
-| A bound expression that can raise at runtime, such as a narrowing `CAST` (was S1-02) | The solver raises on every row, including rows a `WHEN` or NULL `PER` key excludes, and the error must come in the solver's order after the empty-aggregate error. Admitting it means proving DuckDB neither skips nor reorders the check. Nonthrowing forms (`COALESCE`, `TRY_CAST`) are admitted, so `TRY_CAST` is the workaround. A multi-term objective whose coefficient can throw misses for the same reason | Prove the evaluation order of the validation stage, then admit expressions that can only raise a cast or overflow error. Low value and costly |
+| A bound expression that can raise at runtime, such as a narrowing `CAST` (was S1-02) | The solver raises on every row, including rows a `WHEN` or NULL `PER` key excludes, and direct solve must raise on the same inputs. Admitting it means proving DuckDB does not skip the check on a row the solver reads. Nonthrowing forms (`COALESCE`, `TRY_CAST`) are admitted, so `TRY_CAST` is the workaround. A multi-term objective whose coefficient can throw misses for the same reason | Prove the validation stage evaluates every row, then admit expressions that can only raise a cast or overflow error. Low value and costly |
 | A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
 | No objective (constraints only) | The definition requires a linear objective, and few queries are written this way | Treat every score as 0 so the plan picks only the rows a lower bound requires. About 1 hour: accept the missing objective in `Match` |
 | A bound on `x` with no `WHEN` that the solver reads as a bound on the variable, not as Boolean arithmetic: a lower bound below 0 (`x >= -3`, `x > -3`, `x = -1`), a strict bound against a fraction (`x > 0.5`, `x < 1.5`), an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`) | A negative lower bound makes `x` signed, so the solver's result holds -3, -1 or -2 where direct would give 0 or 1. A strict bound against a fraction moves by a whole unit (`x > 0.5` becomes `x >= 1.5`), which gives an error or the wrong answer. A bound that cannot hold raises a message naming the clause, not DECIDE's infeasible error. Direct solve cannot match all three without copying the quirks. The same bound with a `WHEN` is plain arithmetic on the solver and is admitted | Fix the solver to treat these as Boolean arithmetic, then admit them. Not a direct-solve change |
@@ -87,10 +89,10 @@ different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); boun
 
 | Check | What it covers |
 |---|---|
-| `test_direct_three_way.py` (250 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so a miss fails); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. 170 cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `PER` and NULL keys, top and aggregate-local `WHEN`, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic), pins and per-row bounds on `x` (a generated grid with and without `WHEN`), column pins, 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, tied scores, and infeasible problems. 10 parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. 28 error cases that must fail alike on both paths, in the same order (bad scores, empty aggregates, bad bounds on rows the problem does not read, late rows under `LIMIT` and `COUNT`, pins). 27 boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum |
+| `test_direct_three_way.py` (245 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so a miss fails); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. 170 cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `PER` and NULL keys, top and aggregate-local `WHEN`, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic), pins and per-row bounds on `x` (a generated grid with and without `WHEN`), column pins, 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, tied scores, and infeasible problems. 10 parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. 23 error cases that must fail on both paths (bad scores, empty aggregates, bad bounds on rows the problem does not read, late rows under `LIMIT` and `COUNT`, pins). 27 boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum |
 | `test_direct_rule_contract.py` (73 tests) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced backend, `DIAGNOSE`, and 64 near misses, each of which must name its reason, keep the solver plan, and answer under `auto` as under `off` (this is where the shapes S1 leaves on the solver are tested) |
 | `test_direct_fuzz.py` (8 tests) | Seeded differential fuzz: random small S1 queries, direct (`require`) against solver (`off`), over per-row bounds, scaled objectives and row-count bounds. Finds interactions the tables do not list |
-| `test_direct_user_facing.py` (17 tests) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer (`S1-09`), error wording that names the column, unused wide columns pruned, forced-backend and binder-error policy |
+| `test_direct_user_facing.py` (10 tests) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer (`S1-09`), error wording that names the column, unused wide columns pruned, forced-backend and binder-error policy |
 | C++ `[decidb]` | S1 proof contract, facts, coordinator |
 
 ## Performance

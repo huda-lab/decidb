@@ -4,11 +4,20 @@ What S1 does today is in `done.md`. The class definition is in `definition.md`. 
 otherwise. When one ships, its result moves to `done.md` and the task is deleted from here. Estimates are rough guesses,
 not measurements.
 
-**What is left.** Nothing here is needed to close S1's definition: S1-08 widens what the solver-accepted right-hand side
-reads, and S1-04 and S1-05 wait for a decision (see their entries). Batches A (per-row bounds on `x`, out-of-scope tests),
-B (scaled objective) and C (row-count bounds) shipped and are in `done.md`.
+**What is left.** Nothing is needed to close S1's definition. The three tasks below are deferred. This layer stays lean
+(`../../architecture/rules.md`), so a task comes off the deferred list only when there is evidence a user needs it.
+Batches A (per-row bounds on `x`, out-of-scope tests), B (scaled objective) and C (row-count bounds) shipped and are in
+`done.md`.
 
-## S1-08 — Other aggregates on the right-hand side of a count bound
+## Deferred
+
+| Task | Why deferred |
+|---|---|
+| S1-08, other aggregates on the right of a count bound | No evidence anyone writes these. Each reducer needs its NULL, empty-group and typing behavior checked on the solver first, and the solver already handles the shape correctly. |
+| S1-04, wider keyed application | No known missing shape: `PER` on an expression is a parser error today. |
+| S1-05, why wide rows are slow | A performance question about result collection, not a missing shape, and shared by every rule. Run experiment 3 (plain DuckDB, no DECIDE) first. |
+
+### S1-08 — Other aggregates on the right-hand side of a count bound
 
 - **Problem.** Only a plain `COUNT(*)` is admitted on the right. The solver also accepts `AVG`, `SUM`, `MIN`, `MAX` and
   `COUNT(col)` of data columns, evaluated to one value per group (`03_expressivity/sql_functions/done.md`, "Reducers as a
@@ -27,7 +36,7 @@ B (scaled objective) and C (row-count bounds) shipped and are in `done.md`.
   value, and the ones left on the solver have a named reason. About 1 day. Worth doing if users write "at most the group's
   average" style bounds; not needed to close S1.
 
-## S1-04 — Wider keyed application (was NEXT-03)
+### S1-04 — Wider keyed application (was NEXT-03)
 
 - **Goal.** Extend past source-column `PER` with matching top-level or aggregate-local `WHEN` to other keyed shapes.
 - **Done when.** Component independence and row/entity identity are proved and tested for the new shape. Estimates never
@@ -35,7 +44,7 @@ B (scaled objective) and C (row-count bounds) shipped and are in `done.md`.
   (see `../s2/todo.md`), not a wider S1 matcher.
 - **Status.** Undecided. `PER` on an expression is a parser error today, so there is no S1 shape known to be missing.
 
-## S1-05 — Why returning wide rows is slow (was PERF-WIDE)
+### S1-05 — Why returning wide rows is slow (was PERF-WIDE)
 
 - **Problem.** On 5M rows with a 512-byte payload returned in full, the direct plan runs in about 0.5 s but the whole query
   takes about 2 s. The extra time is result collection: roughly three times what Gurobi spends. This limits the wide-row

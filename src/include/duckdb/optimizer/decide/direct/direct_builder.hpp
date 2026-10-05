@@ -36,21 +36,10 @@ unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &
 //! The same, with a message computed per row. The message is evaluated only on a row where the predicate is reached.
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message);
 
-//! A source column the score reads, as it can be referenced from the plan the score predicate runs over.
-struct DirectNullColumn {
-	ColumnBinding binding;
-	LogicalType type;
-	string name;
-};
-
-//! Evaluates to true for a finite score and raises an error for a NULL or non-finite one, worded as the solver
-//! words it. A NULL score names whichever of `null_columns` is NULL on the failing row, in the solver's one-column
-//! and several-column wordings. When none is NULL, or `null_columns` is empty, the message quotes `score_text`, or
-//! stays generic if that is empty too. The message is built per row but only evaluated on the row that fails.
+//! Evaluates to true for a finite score and raises an error for a NULL or non-finite one. A NULL score's message
+//! quotes `score_text`, or stays generic when that is empty.
 unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const LogicalType &score_type,
-                                                 ColumnBinding score_binding,
-                                                 const vector<DirectNullColumn> &null_columns,
-                                                 const string &score_text);
+                                                 ColumnBinding score_binding, const string &score_text);
 
 //! A plan that releases no row before `valid` has been evaluated on every input row.
 struct DirectBarrier {
@@ -101,7 +90,6 @@ unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, uniq
 //! One clause's data-valued bound, reduced per group: an upper bound takes the group MIN, a lower bound the group
 //! MAX, and an equality both, which must agree.
 struct DirectBoundSpec {
-	idx_t source_clause_id;
 	ExpressionType comparison;
 	//! The bound over the plan's columns, in its own SQL type.
 	unique_ptr<Expression> value;
@@ -118,7 +106,6 @@ struct DirectBoundSpec {
 
 //! One clause's data-valued expression that must not be NULL on any row, nor NaN when `reject_nan` is set.
 struct DirectNotNullSpec {
-	idx_t source_clause_id;
 	unique_ptr<Expression> value;
 	string message;
 	bool reject_nan = false;
@@ -142,9 +129,9 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
                                            const ColumnBinding *eligible, const vector<ColumnBinding> &keys,
                                            const vector<LogicalType> &key_types);
 
-//! The error for a NULL or NaN source-valued bound, worded like the solver path: name the column when the bound is
-//! one, otherwise point at the bound expression. Only floating point values can be NaN.
-string DirectInvalidBoundMessage(const string &column_name, const LogicalType &type);
+//! The error for a NULL or NaN source-valued bound: name the column when the bound is one, otherwise point at the
+//! bound expression.
+string DirectInvalidBoundMessage(const string &column_name);
 
 //! The solver consumes every source output. Skipping an unreferenced output must not suppress a computed error
 //! or volatile expression. This proves only stored columns, constants, and their passthrough aliases safe,

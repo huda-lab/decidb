@@ -166,7 +166,7 @@ S1 = RuleFixture(
             message,
         )
         for score_sql, message in (
-            ("CASE WHEN i=4999 THEN NULL ELSE 1.0 END", 'column "score" is NULL'),
+            ("CASE WHEN i=4999 THEN NULL ELSE 1.0 END", "is NULL"),
             ("CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END", "invalid value (NaN or Infinity)"),
             ("CASE WHEN i=4999 THEN 'Infinity'::DOUBLE ELSE 1.0 END", "invalid value (NaN or Infinity)"),
         )

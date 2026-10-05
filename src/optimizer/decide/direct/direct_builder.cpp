@@ -117,76 +117,11 @@ static unique_ptr<Expression> DirectIsNull(unique_ptr<Expression> value) {
 
 //! The NULL message for a score, as an expression over the row it is evaluated on. It spells out what the solver
 //! prints for the same row: the NULL column, or the NULL columns, or the score's own text when no column is NULL.
-static unique_ptr<Expression> DirectNullScoreMessage(Optimizer &optimizer, const vector<DirectNullColumn> &columns,
-                                                     const string &score_text) {
-	const string advice = "Impute it with COALESCE(), or filter those rows out with a WHERE clause.";
-	auto generic = DirectVarchar(score_text.empty() ? "DECIDE: a value used in the optimization is NULL. " + advice
-	                                                : StringUtil::Format("DECIDE: %s is NULL. %s", score_text, advice));
-	if (columns.empty()) {
-		return generic;
-	}
-	// Each column's quoted name when it is NULL on this row, else NULL.
-	vector<unique_ptr<Expression>> quoted;
-	for (auto &column : columns) {
-		quoted.push_back(make_uniq<BoundCaseExpression>(
-		    DirectIsNull(DirectColumn(column.type, column.binding)), DirectVarchar("\"" + column.name + "\""),
-		    make_uniq<BoundConstantExpression>(Value(LogicalType::VARCHAR))));
-	}
-	// concat_ws skips NULLs, so `names` is the NULL columns joined by ", ". The several-column wording sets the last
-	// one off with "and"; that is the last non-NULL entry, so COALESCE over the reversed list finds it.
-	vector<unique_ptr<Expression>> joined;
-	joined.push_back(DirectVarchar(", "));
-	auto last_of = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, LogicalType::VARCHAR);
-	for (idx_t i = 0; i < quoted.size(); i++) {
-		joined.push_back(quoted[i]->Copy());
-		last_of->children.push_back(quoted[quoted.size() - 1 - i]->Copy());
-	}
-	unique_ptr<Expression> last = std::move(last_of);
-	auto names = optimizer.BindScalarFunction("concat_ws", std::move(joined));
-	auto length = [&](const Expression &text) { return optimizer.BindScalarFunction("length", text.Copy()); };
-	auto concat = [&](vector<unique_ptr<Expression>> parts) {
-		return optimizer.BindScalarFunction("concat", std::move(parts));
-	};
-	auto slice = [&](const Expression &text, int64_t start, unique_ptr<Expression> count) {
-		vector<unique_ptr<Expression>> args;
-		args.push_back(text.Copy());
-		args.push_back(DirectBigint(start));
-		args.push_back(std::move(count));
-		return optimizer.BindScalarFunction("substring", std::move(args));
-	};
-
-	// One NULL column: `names` is exactly the last name. Its quotes come off by position, so a quote inside the
-	// column's own name is left alone.
-	vector<unique_ptr<Expression>> one_column;
-	one_column.push_back(DirectVarchar("DECIDE: column "));
-	one_column.push_back(last->Copy());
-	one_column.push_back(DirectVarchar(" is NULL. Impute it with COALESCE("));
-	one_column.push_back(slice(*last, 2, optimizer.BindScalarFunction("-", length(*last), DirectBigint(2))));
-	one_column.push_back(DirectVarchar(", 0) or filter those rows out with a WHERE clause."));
-
-	// Several: every name but the last, then " and " and the last.
-	vector<unique_ptr<Expression>> many_columns;
-	many_columns.push_back(DirectVarchar("DECIDE: columns "));
-	many_columns.push_back(slice(*names, 1,
-	                             optimizer.BindScalarFunction("-", optimizer.BindScalarFunction("-", length(*names),
-	                                                                                          length(*last)),
-	                                                          DirectBigint(2))));
-	many_columns.push_back(DirectVarchar(" and "));
-	many_columns.push_back(last->Copy());
-	many_columns.push_back(DirectVarchar(" are NULL. Impute them with COALESCE(), or filter those rows out with a "
-	                                     "WHERE clause."));
-
-	auto only_one = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, names->Copy(), last->Copy());
-	return make_uniq<BoundCaseExpression>(
-	    DirectIsNull(last->Copy()), std::move(generic),
-	    make_uniq<BoundCaseExpression>(std::move(only_one), concat(std::move(one_column)),
-	                                   concat(std::move(many_columns))));
-}
-
 unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const LogicalType &score_type,
-                                                 ColumnBinding score_binding,
-                                                 const vector<DirectNullColumn> &null_columns,
-                                                 const string &score_text) {
+                                                 ColumnBinding score_binding, const string &score_text) {
+	const string advice = "Impute it with COALESCE(), or filter those rows out with a WHERE clause.";
+	auto null_message = score_text.empty() ? "DECIDE: a value used in the optimization is NULL. " + advice
+	                                       : StringUtil::Format("DECIDE: %s is NULL. %s", score_text, advice);
 	auto is_null = DirectIsNull(DirectColumn(score_type, score_binding));
 	auto is_finite = optimizer.BindScalarFunction("isfinite", DirectColumn(score_type, score_binding));
 	auto finite_or_error = make_uniq<BoundCaseExpression>(
@@ -197,10 +132,8 @@ unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const Log
 	                                    "  • Arithmetic overflow in calculations\n"
 	                                    "  • NULL values that propagated through math operations\n"
 	                                    "Check your expressions and input data."));
-	return make_uniq<BoundCaseExpression>(
-	    std::move(is_null),
-	    DirectErrorPredicate(optimizer, DirectNullScoreMessage(optimizer, null_columns, score_text)),
-	    std::move(finite_or_error));
+	return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, null_message),
+	                                      std::move(finite_or_error));
 }
 
 bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
@@ -319,18 +252,14 @@ unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, uniq
 	return std::move(active_guard);
 }
 
-string DirectInvalidBoundMessage(const string &column_name, const LogicalType &type) {
-	bool may_be_nan = type == LogicalType::FLOAT || type == LogicalType::DOUBLE;
-	auto problem = may_be_nan ? "NULL or NaN" : "NULL";
-	auto impute = may_be_nan ? "Impute NULLs" : "Impute it";
+string DirectInvalidBoundMessage(const string &column_name) {
+	const string advice = "or filter those rows out with a WHERE clause.";
 	if (column_name.empty()) {
-		return StringUtil::Format("DECIDE: the bound expression is %s. %s with COALESCE(), or filter those rows "
-		                          "out with a WHERE clause.",
-		                          problem, impute);
+		return "DECIDE: the bound expression has an invalid value (NULL or NaN). Impute it with COALESCE(), " + advice;
 	}
-	return StringUtil::Format("DECIDE: column \"%s\" is %s. %s with COALESCE(%s, 0) or filter those rows out "
-	                          "with a WHERE clause.",
-	                          column_name, problem, impute, column_name);
+	return StringUtil::Format("DECIDE: column \"%s\" has an invalid value (NULL or NaN). Impute it with "
+	                          "COALESCE(%s, 0), %s",
+	                          column_name, column_name, advice);
 }
 
 DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
@@ -433,13 +362,13 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
 		ready = std::move(equality_window);
 	}
 
-	// One predicate raises the first failing clause, in source-clause order.
+	// One predicate raises an error when any clause fails. Which failing clause is named is not specified.
 	auto none = [&](idx_t window_index, idx_t slot) {
 		return make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL,
 		                                            DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, slot)),
 		                                            make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
 	};
-	vector<pair<idx_t, unique_ptr<Expression>>> clause_checks;
+	vector<unique_ptr<Expression>> clause_checks;
 	for (idx_t i = 0; i < bounds.size(); i++) {
 		unique_ptr<Expression> equality_valid = DirectConstantBool(true);
 		if (bounds[i].comparison == ExpressionType::COMPARE_EQUAL) {
@@ -447,24 +376,18 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
 			    none(equality_window_index, equality_slots[i]), DirectConstantBool(true),
 			    DirectErrorPredicate(optimizer, "DECIDE source-valued equality bound varies within a group"));
 		}
-		auto clause_valid =
+		clause_checks.push_back(
 		    make_uniq<BoundCaseExpression>(none(result.window_index, invalid_slots[i]), std::move(equality_valid),
-		                                   DirectErrorPredicate(optimizer, bounds[i].invalid_message));
-		clause_checks.emplace_back(bounds[i].source_clause_id, std::move(clause_valid));
+		                                   DirectErrorPredicate(optimizer, bounds[i].invalid_message)));
 	}
 	for (idx_t i = 0; i < not_null.size(); i++) {
-		auto clause_valid =
+		clause_checks.push_back(
 		    make_uniq<BoundCaseExpression>(none(result.window_index, null_slots[i]), DirectConstantBool(true),
-		                                   DirectErrorPredicate(optimizer, not_null[i].message));
-		clause_checks.emplace_back(not_null[i].source_clause_id, std::move(clause_valid));
+		                                   DirectErrorPredicate(optimizer, not_null[i].message)));
 	}
-	std::sort(clause_checks.begin(), clause_checks.end(),
-	          [](const pair<idx_t, unique_ptr<Expression>> &left, const pair<idx_t, unique_ptr<Expression>> &right) {
-		          return left.first < right.first;
-	          });
 	unique_ptr<Expression> valid = DirectConstantBool(true);
 	for (idx_t i = clause_checks.size(); i > 0; i--) {
-		valid = make_uniq<BoundCaseExpression>(std::move(clause_checks[i - 1].second), std::move(valid),
+		valid = make_uniq<BoundCaseExpression>(std::move(clause_checks[i - 1]), std::move(valid),
 		                                       DirectConstantBool(false));
 	}
 	auto guard = make_uniq<LogicalFilter>(std::move(valid));

@@ -30,8 +30,11 @@ path prints. To learn why a query missed, set `require`.
 
 - **Ties.** A tied query can return a different, equally optimal assignment than the solver. Tests compare row count
   and primary objective, never the tied vector.
-- **Some error wording.** NULL, NaN and infinite score errors read like the solver's, with one difference: direct omits
-  the solver's "at row N" on a non-finite score. That is an open decision in `rules/_harness/todo.md` (H-05).
+- **Error wording and error choice.** Decided 2026-10-05: direct solve owes an error on the same inputs, not the
+  solver's text or the solver's pick among several errors (see `rules.md`). S1 keeps the solver's fixed messages (empty
+  aggregate, non-finite score, infeasible) and words the rest plainly: a NULL score quotes the score expression, and a
+  bad bound names its column. Direct omits the solver's "at row N" on purpose: N is a position in scan order, not a
+  key. New rules do not copy wording.
 - **Numeric edge cases.** Scores are compared to zero in the finite DOUBLE domain with no epsilon. Both solvers
   disagreed with each other near 1e-9, so the oracle and exact enumeration are the reference, and backend comparisons
   allow a measured gap.

@@ -37,8 +37,13 @@ and the test-only `DECIDB_FORCE_SOLVER` always use the solver. Details: `policy.
 
 - **Prove, don't guess.** Estimates and sampled data never decide eligibility. They only choose between rules that
   are already proved.
-- **Same answer, same errors.** A user must not be able to tell from errors, types or row counts which path ran.
-  Tied optima may differ. Details: `rules.md`.
+- **Same answer, and an error on the same inputs.** Direct solve returns the answer the solver would, and raises an
+  error whenever the solver does. It need not use the solver's message, or pick the same error when several apply.
+  Types and row counts match. Tied optima may differ. Details: `rules.md`.
+- **Lean.** This layer is a light shortcut that detects some problems and solves them faster than a solver. It is
+  not a second solver. It takes only shapes where the proof is short and the win is large, and everything else stays
+  on the solver path. A feature, error format or check earns its place only if it protects the answer or the speedup.
+  When matching the solver is hard, or costs more than it protects, give it up and let the solver take the shape.
 - **Rules are separate from the engine.** The shared engine knows nothing about any problem class. A new class is a
   new rule, registered in one place.
 
