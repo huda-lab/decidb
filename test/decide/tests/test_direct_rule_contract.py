@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from ._direct_rule_fixtures import RULE_FIXTURES
+from ._direct_rule_fixtures import RULE_FIXTURES, late_error_cases, near_miss_cases
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +38,20 @@ def _has_decide_operator(plan):
 _RULES = pytest.mark.parametrize("fixture", RULE_FIXTURES, ids=lambda fixture: fixture.rule)
 
 
+def _case_ids(cases):
+    # Numbered within each rule, so a failure names the rule and the case.
+    counts = {}
+    ids = []
+    for fixture, _ in cases:
+        counts[fixture.rule] = counts.get(fixture.rule, -1) + 1
+        ids.append(f"{fixture.rule}-{counts[fixture.rule]:02d}")
+    return ids
+
+
+_NEAR_MISSES = near_miss_cases()
+_LATE_ERRORS = late_error_cases()
+
+
 @pytest.mark.correctness
 @_RULES
 def test_hit_keeps_the_decide_schema_and_rows(decidb_cli, fixture):
@@ -57,19 +71,19 @@ def test_unused_outputs_keep_the_row_count(decidb_cli, fixture):
 
 
 @pytest.mark.correctness
-@_RULES
-def test_every_input_row_is_read_before_any_row_is_released(decidb_cli, fixture):
+@pytest.mark.parametrize("fixture,case", _LATE_ERRORS, ids=_case_ids(_LATE_ERRORS))
+def test_every_input_row_is_read_before_any_row_is_released(decidb_cli, fixture, case):
     # The solver reads every row before it returns, so a bad value on the last row raises however little of the
     # result a parent reads. Only LIMIT 0, which reads nothing, may skip it.
-    for decide, message in fixture.late_errors:
-        for outer in (
-            f"SELECT {fixture.late_column} FROM ({decide}) q LIMIT 1",
-            f"SELECT COUNT(*) FROM ({decide}) q",
-            f"SELECT {fixture.late_column} FROM ({decide}) q WHERE {fixture.late_column}=0",
-        ):
-            assert message in _raw(decidb_cli, outer).stderr
-        rows, _ = _run(decidb_cli, f"SELECT {fixture.late_column} FROM ({decide}) q LIMIT 0")
-        assert rows == []
+    decide, message = case
+    for outer in (
+        f"SELECT {fixture.late_column} FROM ({decide}) q LIMIT 1",
+        f"SELECT COUNT(*) FROM ({decide}) q",
+        f"SELECT {fixture.late_column} FROM ({decide}) q WHERE {fixture.late_column}=0",
+    ):
+        assert message in _raw(decidb_cli, outer).stderr, outer
+    rows, _ = _run(decidb_cli, f"SELECT {fixture.late_column} FROM ({decide}) q LIMIT 0")
+    assert rows == []
 
 
 @pytest.mark.correctness
@@ -111,16 +125,19 @@ def test_prepared_plan_keeps_its_selection_until_rebound(decidb_cli, fixture):
 
 
 @pytest.mark.correctness
-@_RULES
-def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixture):
-    for declaration, constraint, objective, reason in fixture.near_misses:
-        sql = f"SELECT id FROM ({fixture.near_miss_source} DECIDE {declaration} SUCH THAT {constraint} {objective}) q"
-        required = _raw(decidb_cli, sql).stderr
-        assert "decide_direct_solve=require:" in required, (sql, required)
-        assert f"{fixture.rule}: " in required and reason in required, (sql, required)
-        assert "solver skipped=true" in required, (sql, required)
-        plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto")
-        assert _has_decide_operator(plan.stdout) and "Direct solve" not in plan.stdout, (sql, plan.stderr)
+@pytest.mark.parametrize("fixture,case", _NEAR_MISSES, ids=_case_ids(_NEAR_MISSES))
+def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixture, case):
+    declaration, constraint, objective, reason = case
+    sql = (
+        f"SELECT {fixture.near_miss_column} FROM ({fixture.near_miss_source} "
+        f"DECIDE {declaration} SUCH THAT {constraint} {objective}) q"
+    )
+    required = _raw(decidb_cli, sql).stderr
+    assert "decide_direct_solve=require:" in required, (sql, required)
+    assert f"{fixture.rule}: " in required and reason in required, (sql, required)
+    assert "solver skipped=true" in required, (sql, required)
+    plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto")
+    assert _has_decide_operator(plan.stdout) and "Direct solve" not in plan.stdout, (sql, plan.stderr)
 
 
 @pytest.mark.correctness

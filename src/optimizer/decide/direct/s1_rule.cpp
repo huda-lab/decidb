@@ -74,8 +74,6 @@ struct S1Proof final : DirectRuleProof {
 	bool scoped = false;
 };
 
-//! A `norm(e, p)` is bound as a `sum` aggregate whose alias names the norm, so the function name alone does not
-//! make an aggregate a sum.
 //! Every term is the decision times a coefficient.
 bool OnlyDecisionTerms(const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
@@ -114,48 +112,6 @@ const vector<DecideSplitTerm> *PinTerms(const DirectConstraintFact &fact) {
 		return nullptr;
 	}
 	return &part.terms;
-}
-
-//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested. Its filter is
-//! allowed only when `allow_filter`.
-const DirectPart *SumPart(const DirectConstraintFact &fact, bool allow_filter) {
-	if (!fact.aggregate || fact.lhs.size() != 1) {
-		return nullptr;
-	}
-	auto &part = fact.lhs[0];
-	if (part.sign != 1 || part.scale || part.reducer != DirectReducer::SUM ||
-	    part.qualifier != DConstants::INVALID_INDEX || part.inner || (!allow_filter && part.filter)) {
-		return nullptr;
-	}
-	return &part;
-}
-
-bool SafeCoefficient(const Expression &expr, idx_t decide_index) {
-	return expr.return_type.IsNumeric() && DirectIsDecisionFreeDeterministic(expr, decide_index);
-}
-
-//! A source column used exactly as a count bound: its slot in the source, its type, and the name the user wrote.
-bool SourceNumericColumnBound(const Expression &expr, const vector<ColumnBinding> &source_bindings, idx_t &slot,
-                              LogicalType &type, string &name) {
-	auto ref = DirectBareNumericColumn(expr);
-	if (!ref) {
-		return false;
-	}
-	auto found = std::find(source_bindings.begin(), source_bindings.end(), ref->binding);
-	if (found == source_bindings.end()) {
-		return false;
-	}
-	slot = found - source_bindings.begin();
-	type = ref->return_type;
-	name = ref->GetAlias();
-	return true;
-}
-
-bool SourceNumericExpressionBound(const Expression &expr, idx_t decide_index,
-                                  const vector<ColumnBinding> &source_bindings) {
-	return expr.return_type.IsNumeric() && !DirectMayThrow(expr) &&
-	       DirectIsDecisionFreeDeterministic(expr, decide_index) && DirectReferencesOnlySource(expr, source_bindings) &&
-	       DirectHasColumnReference(expr);
 }
 
 //! Turns `SUM(x) <comparison> expr` into an inclusive count limit in [0, 2^53]. A bound below zero on an upper
@@ -259,7 +215,7 @@ const Expression *SourceBooleanPinValue(const Expression &expr, idx_t decide_ind
 //! The membership filter of one bound factor: the aggregate-local WHEN on `SUM(x)` or the clause-level WHEN, never
 //! both. Null when the bound has none; `ok` is false when the factor is not a plain `SUM(x)` with one filter.
 const Expression *BoundMembership(const DirectConstraintFact &fact, bool &ok) {
-	auto sum = SumPart(fact, true);
+	auto sum = fact.PlainSum(true);
 	ok = sum && !(sum->filter && fact.scope.when);
 	if (!ok) {
 		return nullptr;
@@ -512,7 +468,7 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 		return true;
 	};
 	for (auto factor : match.bound_factors) {
-		auto sum = SumPart(*factor, true);
+		auto sum = factor->PlainSum(true);
 		if (!sum || !IsUnitContribution(context, sum->terms)) {
 			reason = "constraint_shape: expected SUM(x) with unit contribution";
 			return false;
@@ -522,10 +478,10 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 		idx_t source_slot = DConstants::INVALID_INDEX;
 		LogicalType source_type;
 		string source_name;
-		bool source_column = SourceNumericColumnBound(bound, facts.source_bindings, source_slot, source_type,
+		bool source_column = DirectSourceNumericColumn(bound, facts.source_bindings, source_slot, source_type,
 		                                              source_name);
 		if (!bound.IsFoldable() &&
-		    (source_column || SourceNumericExpressionBound(bound, facts.decide_index, facts.source_bindings))) {
+		    (source_column || DirectIsSourceOnlyNumeric(bound, facts.decide_index, facts.source_bindings))) {
 			proof.source_bounds.push_back({factor->source_clause_id, source_slot,
 			                               source_column ? source_type : bound.return_type, type, bound.Copy(),
 			                               sum->filter != nullptr, source_column ? source_name : string()});
@@ -579,7 +535,7 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, S1Proof 
 	}
 	for (auto &part : parts) {
 		for (auto &term : part.terms) {
-			if (!SafeCoefficient(*term.coefficient, facts.decide_index)) {
+			if (!DirectIsNumericDecisionFree(*term.coefficient, facts.decide_index)) {
 				reason = "coefficient_shape: expected a deterministic numeric expression without decisions";
 				return false;
 			}

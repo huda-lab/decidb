@@ -15,12 +15,17 @@ error order. Anything not proved stays on the solver path.
 - [ ] **NEXT-01 — Second rule that proves harness reuse.**
   - Goal: register a materially different rule through the existing adapter,
     coordinator, result boundary, policy, and explanation path.
-  - Depends: HAR-01 through HAR-05 and VAL-05 (done).
+  - Depends: HAR-01 through HAR-06, VAL-05 and VAL-08 (done).
+  - Chosen class (2026-10-04): **A1, independent bounded decisions**, from the Word
+    catalogue. It exercises what S1 does not: `INT`/`REAL` domains, per-row bounds, a
+    quadratic objective, and a plan that streams and so needs `DirectValidationBarrier`.
+    The step-by-step queue is the scratchpad `context/descriptions/todo.md`; its
+    decisions and findings move into tracked docs as each step lands.
   - Evidence and code: `src/optimizer/decide/direct/` (`direct_coordinator.cpp`,
     `direct_result_boundary.cpp`, `direct_builder.cpp` are the shared parts;
-    `s1_rule.cpp` is the model rule), contract in `direct_rule.hpp`. This is the same
-    gate as HAR-02 in [01_harness/todo.md](../01_harness/todo.md). Choosing the
-    plan shape is a design decision to make with the user.
+    `s1_rule.cpp` is the model rule), contract in `direct_rule.hpp`, the
+    [add-a-rule checklist](../README.md#adding-a-rule). This is the same
+    gate as HAR-02 in [01_harness/todo.md](../01_harness/todo.md).
   - Done when: the new rule is added to `RegisteredDirectRules()` with no edit to the
     coordinator logic, builder, or result boundary beyond that registration; it has
     its own proof and tests for a hit, a miss that falls back to the solver, and the
@@ -95,7 +100,7 @@ a semantic reason and a workload benefit.
 | Batch | Tasks | Why together |
 | --- | --- | --- |
 | A | NEXT-06, NEXT-07, NEXT-08 | Same `Prove` function, same error-order rule. The seeded fuzz test exists, so extend its generator to cover each form you admit |
-| B | NEXT-01 | Needs a design choice first; then it stands alone |
+| B | NEXT-01 | A1 is chosen; follow the queue in `context/descriptions/todo.md` |
 | C | NEXT-03, NEXT-04, NEXT-05 | Wait on other work (language branch, a second rule); not for now |
 
 **Exit gate for each item:** independent proof, behavior tests, and performance

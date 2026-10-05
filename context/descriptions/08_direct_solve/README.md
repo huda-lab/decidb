@@ -94,11 +94,11 @@ Code is in `src/optimizer/decide/direct/`; headers are in
 
 | File | Role |
 | --- | --- |
-| `direct_problem.cpp` | Reads the semantic facts (`direct_rule.hpp`) from the bound, canonical DECIDE tree; the only file that knows its layout |
+| `direct_problem.cpp` | Reads the semantic facts (`direct_rule.hpp`) from the bound, canonical DECIDE tree; the only file that knows its layout. Also the queries on facts (`FirstUnknownReason`, `DirectConstraintFact::PlainSum`) |
 | `direct_registry.cpp` | The rule list, `RegisteredDirectRules()` |
 | `direct_coordinator.cpp` | Setting and mode, Match/Prove/Cost/Explain/Rewrite, cost context, output bindings and prunability, decision record, fallback and `require` errors |
 | `direct_result_boundary.cpp` | Logical result boundary, output-slot map checks (`MapDirectResult`), serialization, unused-output hook |
-| `direct_expression.cpp` | Rule-independent questions about a bound expression (decision-free, source-only, may throw, foldable) and the lower/upper bound classification |
+| `direct_expression.cpp` | Rule-independent questions about a bound expression (decision-free, source-only, may throw, foldable), which coefficients and data-valued bounds a rule may admit (`DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`, `DirectIsSourceOnlyNumeric`), and the lower/upper bound classification |
 | `direct_builder.cpp` | Rule-independent plan builders (windows, counts, error predicates, the score check, the validation barrier), the DECIDE semantics every aggregate rule shares (`PER`/`WHEN` eligibility with NULL-key bypass, the empty-aggregate error, data-valued bound validation in source-clause order), and the source-output pruning proof |
 | `s1_rule.cpp` | Everything specific to S1: `Match`, `Prove` in four steps (scope, pins, bounds, objective), explanation, and `Rewrite` in six stages, the first three through the shared builders |
 
@@ -117,8 +117,10 @@ A new problem class is its own rule file and touches no harness code. Check each
 3. **Facts.** Read only `DirectProblemFacts` (`direct_rule.hpp`), never the bound
    tree. Decline any unknown fact; `FirstUnknownReason()` names the clause.
 4. **Proof.** `Match` binds the shape; `Prove` certifies every constraint, objective
-   part, decision, runtime value obligation and output. Estimates appear only in
-   `Cost(proof, context)`.
+   part, decision, runtime value obligation and output. Ask whether a coefficient or
+   data-valued bound is admissible with the shared predicates in
+   `direct_expression.hpp`, so every rule admits the same values. Estimates appear
+   only in `Cost(proof, context)`.
 5. **Builders.** Aggregate scope semantics come from `DirectProjectScope`,
    `DirectGuardEmptyAggregate` and `DirectValidateBounds`; a plan that could stream
    rows uses `DirectValidationBarrier`. The proposal states its output slots, whether

@@ -81,3 +81,12 @@ source-clause order with the solver's wording (`DirectInvalidBoundMessage`). S1'
 ranking, pins and count limits stay in S1. S1's generated plans are unchanged: EXPLAIN
 of global, PER/WHEN, aggregate-local WHEN and equality-plus-pin queries is
 byte-identical before and after the move.
+
+Shared admission predicates (HAR-06, 2026-10-04): the answers to "is this a value a rule
+may use" no longer live in S1. `direct_expression.cpp` has `DirectIsNumericDecisionFree`
+(a numeric, deterministic, decision-free coefficient), `DirectSourceNumericColumn` (the
+source column a bound is exactly, with its slot, type and the name errors use) and
+`DirectIsSourceOnlyNumeric` (a numeric, nonthrowing, deterministic, source-only bound that
+`DirectValidateBounds` can check per row). `DirectConstraintFact::PlainSum` answers "is the
+left side one plain `SUM`". The bodies moved verbatim from `s1_rule.cpp`; S1's pin
+helpers and count normalization stay in S1. The full matrix passes unchanged.

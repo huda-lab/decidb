@@ -80,7 +80,7 @@ No source-row uniqueness claim is needed. A row-scoped decision belongs to each
 input row even when two rows have identical data. Exact identity and fan-out
 must be preserved by the result contract.
 
-## Proposed construction
+## Construction
 
 ```text
 DECIDE input (including its own WHERE)

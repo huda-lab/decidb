@@ -111,6 +111,10 @@ struct DirectConstraintFact {
 	vector<unique_ptr<Expression>> members;
 	DirectScopeFact scope;
 	idx_t degree = 0;
+
+	//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested; null
+	//! otherwise. Its aggregate-local WHEN is allowed only when `allow_filter`.
+	const DirectPart *PlainSum(bool allow_filter) const;
 };
 
 struct DirectObjectiveFact {

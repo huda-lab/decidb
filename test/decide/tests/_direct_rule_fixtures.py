@@ -25,6 +25,8 @@ class RuleFixture:
     #: condition away from a hit. The rule must decline it with that reason.
     near_misses: tuple
     near_miss_source: str
+    #: A column of `near_miss_source` the near-miss queries select.
+    near_miss_column: str
     #: (DECIDE subquery text, error substring): a problem whose last of 5,000 rows is invalid. The error must
     #: raise however little of the result a parent reads; `LIMIT 0` may skip it.
     late_errors: tuple
@@ -54,6 +56,7 @@ S1 = RuleFixture(
     """,
     table_change="ALTER TABLE direct_life ADD COLUMN extra INTEGER;",
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 1), (2, 10.0::DOUBLE, 1)) t(id,p,cap)",
+    near_miss_column="id",
     near_misses=(
         ("x(BOOL), y(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
         ("x(BOOL)", "SUM(x)<=1 AND x<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
@@ -97,3 +100,13 @@ S1 = RuleFixture(
 
 
 RULE_FIXTURES = (S1,)
+
+
+def near_miss_cases():
+    """One (fixture, case) pair per near miss, so each is its own test item."""
+    return [(fixture, case) for fixture in RULE_FIXTURES for case in fixture.near_misses]
+
+
+def late_error_cases():
+    """One (fixture, case) pair per late-error problem."""
+    return [(fixture, case) for fixture in RULE_FIXTURES for case in fixture.late_errors]

@@ -421,4 +421,16 @@ string DirectProblemFacts::FirstUnknownReason() const {
 	return string();
 }
 
+const DirectPart *DirectConstraintFact::PlainSum(bool allow_filter) const {
+	if (!aggregate || lhs.size() != 1) {
+		return nullptr;
+	}
+	auto &part = lhs[0];
+	if (part.sign != 1 || part.scale || part.reducer != DirectReducer::SUM ||
+	    part.qualifier != DConstants::INVALID_INDEX || part.inner || (!allow_filter && part.filter)) {
+		return nullptr;
+	}
+	return &part;
+}
+
 } // namespace duckdb

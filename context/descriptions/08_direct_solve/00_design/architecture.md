@@ -122,7 +122,8 @@ The [bound-plan spike](experiments.md) showed that a wrapper advertising old
 bindings without child dependencies is unsafe: unused-column removal collapsed
 the child to one column. Explicit dependencies kept the plan sound. The
 current shared boundary has one dependency per advertised output plus a
-mandatory suffix for validation. An unreferenced output becomes an internal
+suffix for the rule's validation slots, which stays live even when no parent
+reads any output and is empty when the plan has nothing to keep live. An unreferenced output becomes an internal
 typed NULL placeholder only when skipping its evaluation is proved safe;
 otherwise its original dependency stays live. This preserves errors from
 computed source columns while allowing unused stored columns to leave a wide
@@ -224,11 +225,14 @@ operators. The DECIDE-specific call site should be small; new rule and harness
 code belongs under `src/optimizer/decide/direct/` where possible. Its files are
 `direct_problem.cpp` (facts), `direct_coordinator.cpp` (policy, fallback),
 `direct_registry.cpp` (the rule list),
-`direct_result_boundary.cpp` (output boundary and slot map), `direct_builder.cpp`
-(rule-independent plan builders), and one file per rule (`s1_rule.cpp`). A logical
-boundary may require small owning-layer changes in planning and serialization.
+`direct_result_boundary.cpp` (output boundary and slot map), `direct_expression.cpp`
+(rule-independent questions about a bound expression), `direct_builder.cpp`
+(rule-independent plan builders and the DECIDE semantics aggregate rules share), and
+one file per rule (`s1_rule.cpp`). A logical boundary may require small owning-layer
+changes in planning and serialization.
 
-Build only the shared abstractions exercised by the first rule. A second,
-different rule is the reusability test: it must register without rewriting the
-coordinator or copying fallback/output-contract logic. Its own mathematical
-proof and plan remain its responsibility.
+The facts model the whole language, so a new rule never forces an interface break;
+the plan builders hold only what S1 exercises plus the DECIDE semantics every
+aggregate rule shares. A second, different rule is the reusability test: it must
+register without rewriting the coordinator or copying fallback/output-contract
+logic. Its own mathematical proof and plan remain its responsibility.

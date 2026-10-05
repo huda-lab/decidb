@@ -5,23 +5,24 @@ VAL-00 is the **pre-feature, current-syntax solver baseline** in
 representative cases. The temporary boundary probe and its limits are in
 [design/experiments.md](../00_design/experiments.md).
 
-The permanent `test/decide/tests/test_direct_solve.py` checks direct path
-selection, independent enumeration of small optima, exact capacities, all 17
-documented structural near misses, unknown fact wrappers, late runtime errors,
-parent/materialized-CTE contexts, serializer round trips, logical and physical
-explanation, profiling, prepared selection and real rebind, forced solver
-policy, nested/correlated decisions, and direct/HiGHS/Gurobi primary-objective
-agreement on separated scores and tiny-score backend gaps. The latest full
-DECIDE run passed 1,856 tests; the serializer-verification run passed the same
-1,856 tests. Direct solve is on by default (`auto`), so that run exercises it:
+The permanent `test/decide/tests/test_direct_solve.py` checks S1 path selection,
+independent enumeration of small optima, exact capacities, unknown fact wrappers,
+parent/materialized-CTE contexts, nested/correlated decisions, and
+direct/HiGHS/Gurobi primary-objective agreement on separated scores and tiny-score
+backend gaps. The checks every rule owes (near misses, late runtime errors, serializer,
+explanation, profiling, prepared selection and rebind, forced-solver and `DIAGNOSE`
+policy) are in the rule contract suite described below. The latest full DECIDE run
+(2026-10-04) passed 1,877 tests, as did the serializer-verification and solver-only
+(`DECIDB_TEST_DIRECT_SOLVE=off`) runs.
+Direct solve is on by default (`auto`), so that run exercises it:
 `test_direct_solve_is_on_by_default` issues no `SET`, and every other test that
 needs a specific path pins `require` (assert a hit) or `off` (the solver reference).
 The [built-in optimizer audit](../00_design/optimizer_audit.md) records the
 pass-by-pass boundary argument and discriminating parent tests.
-The latest forced-HiGHS suite passed 1,855 tests and retained its one unrelated
+The latest forced-HiGHS suite passed 1,876 tests and retained its one unrelated
 `test_norm_combined_l1_l2_objective` failure: that MIQP objective needs Gurobi.
-The DECIDE C++ suite passed 698 assertions in 20 cases, including direct
-fact-adapter and S1 proof-contract cases.
+The DECIDE C++ suite passed 907 assertions in 34 cases, including direct
+fact-adapter, coordinator and S1 proof-contract cases.
 
 Global lower, equality, and paired interval regressions compare complete
 assignments with independent enumeration and solver-path objective values. The
@@ -172,4 +173,7 @@ rule owes (schema and rows, the all-rows read under `LIMIT 1`, `COUNT(*)` and a 
 filter, prepared-plan selection and rebinding, the serializer round trip, EXPLAIN and
 profiling records, `require` reasons, `off`, a forced backend, and `DIAGNOSE`) is
 `test_direct_rule_contract.py`, parametrized by each rule's `RuleFixture`. S1's earlier
-versions of those checks moved there unchanged.
+versions of those checks moved there unchanged. Each near miss and each late-error
+problem is its own test item, named by rule and case number
+(`[S1_CARDINALITY_INTERVAL-07]`), so one failing case does not hide the rest; the
+column a near-miss query selects comes from the fixture (`near_miss_column`).

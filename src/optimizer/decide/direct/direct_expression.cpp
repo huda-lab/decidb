@@ -128,6 +128,33 @@ const BoundColumnRefExpression *DirectBareNumericColumn(const Expression &expr) 
 	return ref.depth == 0 && ref.return_type.IsNumeric() ? &ref : nullptr;
 }
 
+bool DirectIsNumericDecisionFree(const Expression &expr, idx_t decide_index) {
+	return expr.return_type.IsNumeric() && DirectIsDecisionFreeDeterministic(expr, decide_index);
+}
+
+bool DirectSourceNumericColumn(const Expression &expr, const vector<ColumnBinding> &source_bindings, idx_t &slot,
+                               LogicalType &type, string &name) {
+	auto ref = DirectBareNumericColumn(expr);
+	if (!ref) {
+		return false;
+	}
+	auto found = std::find(source_bindings.begin(), source_bindings.end(), ref->binding);
+	if (found == source_bindings.end()) {
+		return false;
+	}
+	slot = found - source_bindings.begin();
+	type = ref->return_type;
+	name = ref->GetAlias();
+	return true;
+}
+
+bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
+                               const vector<ColumnBinding> &source_bindings) {
+	return expr.return_type.IsNumeric() && !DirectMayThrow(expr) &&
+	       DirectIsDecisionFreeDeterministic(expr, decide_index) && DirectReferencesOnlySource(expr, source_bindings) &&
+	       DirectHasColumnReference(expr);
+}
+
 bool DirectIsLowerBound(ExpressionType comparison) {
 	return comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
 	       comparison == ExpressionType::COMPARE_GREATERTHAN || comparison == ExpressionType::COMPARE_EQUAL;
