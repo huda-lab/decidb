@@ -7,6 +7,7 @@
 
 namespace duckdb {
 
+class BoundCastExpression;
 class BoundColumnRefExpression;
 class ClientContext;
 
@@ -42,6 +43,9 @@ bool DirectRemapSourceReferences(Expression &expr, const vector<ColumnBinding> &
 //! True when evaluating the expression can raise at run time. TRY_CAST turns a failed conversion into NULL, so it
 //! does not count.
 bool DirectMayThrow(const Expression &expr);
+
+//! True for a cast that can fail on some value: a narrowing cast that is not TRY_CAST. This node only, not its child.
+bool DirectCastMayThrow(const BoundCastExpression &cast);
 
 //! A deterministic, nonthrowing BOOLEAN expression over source columns only: a predicate that can be evaluated for
 //! every row without changing which rows raise an error.

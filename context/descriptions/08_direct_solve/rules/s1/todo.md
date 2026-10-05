@@ -4,31 +4,28 @@ What S1 does today is in `done.md`. The class definition is in `definition.md`. 
 otherwise. When one ships, its result moves to `done.md` and the task is deleted from here. Estimates are rough guesses,
 not measurements.
 
-**Suggested batches.** C: S1-07. S1-04 and S1-05 are not part of closing S1 and wait for a decision (see their entries).
-Batches A (per-row bounds on `x`, out-of-scope tests) and B (scaled objective) shipped and are in `done.md`.
+**What is left.** Nothing here is needed to close S1's definition: S1-08 widens what the solver-accepted right-hand side
+reads, and S1-04 and S1-05 wait for a decision (see their entries). Batches A (per-row bounds on `x`, out-of-scope tests),
+B (scaled objective) and C (row-count bounds) shipped and are in `done.md`.
 
-**Shared rule for S1-07.** The solver raises a NULL source-valued bound even on a row whose `WHEN` is false or
-whose `PER` key is NULL, and an empty scoped aggregate can raise before that bound error. Every wider admission keeps that
-error order. Anything not proved stays on the solver path. It touches the `Prove` function; the seeded differential
-generator (`_direct_differential.py` via `_fuzz_query`) is extended to produce each form admitted.
+## S1-08 — Other aggregates on the right-hand side of a count bound
 
-## S1-07 — Bounds that count rows, such as `SUM(x) <= COUNT(*) / 2`
-
-- **Meaning, checked on the solver 2026-10-05.** `COUNT(*)` counts the rows in scope: after the clause-level `WHEN`, within
-  each `PER` group. A group of 5 rows with 3 active, bound `COUNT(*) / 2`: `PER dept` gives a cap of 2; `WHEN active PER dept`
-  gives a cap of 1 (3 / 2 = 1.5), and the 2 inactive rows skip the bound and are picked if their score is positive.
-- **Not yet checked.** `COUNT(*)` when the `WHEN` is aggregate-local (`SUM(x) FILTER ...`); other aggregates on the right
-  (`AVG(cap)`, `SUM(col)`); and how the facts layer holds an aggregate in `DirectConstraintFact::rhs`. Read that first, since
-  it decides the estimate.
-- **Goal.** Admit a bound that is a decision-free expression of `COUNT(*)` and constants (`COUNT(*) / 2`, `COUNT(*) * 0.1`,
-  `COUNT(*) - 1`). Other aggregates stay on the solver until checked the same way.
-- **Plan.** The plan already counts the eligible rows per group in a window. Feed that count into the bound expression and
-  reuse the per-group source-bound path (`SourceLimit`: rounding, strict and fractional limits, NULL checks).
-- **Code.** `ProveBounds` in `s1_rule.cpp`; `DirectIsSourceOnlyNumeric` and `DirectFiniteFoldableDouble`
-  (`direct_expression.cpp`); `DirectValidateBounds` (`direct_builder.cpp`).
-- **Test.** Global, `PER`, `WHEN` and `WHEN` with `PER`; fractions that round both ways; an empty scope (the empty-aggregate
-  error comes first); both solvers; oracle; fuzz generator.
-- **Done when.** Results and errors match the solver, and the bounds that stay a miss have a named reason. About 1 day.
+- **Problem.** Only a plain `COUNT(*)` is admitted on the right. The solver also accepts `AVG`, `SUM`, `MIN`, `MAX` and
+  `COUNT(col)` of data columns, evaluated to one value per group (`03_expressivity/sql_functions/done.md`, "Reducers as a
+  Bound"), and a right-hand aggregate with its own `WHEN`.
+- **Checked on the solver 2026-10-05.** `COUNT(*)` follows the clause-level `WHEN` and `PER`; an aggregate-local `WHEN` on the
+  left does not narrow it. A trailing `WHEN` on a *bare* right-hand aggregate (`SUM(x) <= COUNT(*) WHEN active`) is
+  aggregate-local to that aggregate: the count is over the active rows while the left side sums every row. The same `WHEN`
+  on `COUNT(*) / 2` is clause-level. S1 declines the bare form today, so it cannot be misread.
+- **Plan.** The count stage (`CountRows` in `s1_rule.cpp`) is one window per count flavor. Another reducer is one more window
+  aggregate over the same partitions, with a `FILTER` for the right-hand `WHEN`. The bound expression, its range proof,
+  and the per-group limit are reused.
+- **Not known.** How the solver treats NULLs inside `SUM`, `AVG`, `MIN` and `MAX`; an empty group; DECIMAL and integer
+  typing of `SUM(col)` (the range proof needs a bound on the column, which a count does not); and relation-qualified
+  reducers (`SUM(D: cost)`), which stay out. Check each on the solver before coding.
+- **Done when.** Each admitted reducer matches the solver for every comparison and scope, the range proof covers its
+  value, and the ones left on the solver have a named reason. About 1 day. Worth doing if users write "at most the group's
+  average" style bounds; not needed to close S1.
 
 ## S1-04 — Wider keyed application (was NEXT-03)
 

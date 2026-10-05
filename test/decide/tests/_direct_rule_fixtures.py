@@ -9,6 +9,38 @@ suite checks all of it. Adding a rule means adding one `RuleFixture` to `RULE_FI
 
 from dataclasses import dataclass
 
+# Per-row bounds on x with no WHEN that S1 leaves on the solver, as (comparison, constant). The solver reads these as
+# bounds on the variable, not as arithmetic on a Boolean: a negative lower bound makes x signed (the result holds
+# -3, -1, ...), a strict bound against a fraction moves by a whole unit, and a bound that cannot hold raises a message
+# naming the clause. The same bounds with a WHEN are plain arithmetic and are admitted.
+S1_SOLVER_ONLY_ROW_BOUNDS = {
+    ("<=", "-3"),
+    ("<=", "-1"),
+    ("<=", "-0.5"),
+    ("<", "-3"),
+    ("<", "-1"),
+    ("<", "-0.5"),
+    ("<", "0"),
+    ("<", "0.5"),
+    ("<", "1.5"),
+    (">=", "-3"),
+    (">=", "-1"),
+    (">=", "-0.5"),
+    (">=", "1.5"),
+    (">=", "2"),
+    (">", "-3"),
+    (">", "-0.5"),
+    (">", "0.5"),
+    (">", "1"),
+    (">", "1.5"),
+    (">", "2"),
+    ("=", "-3"),
+    ("=", "-1"),
+    ("=", "-0.5"),
+    ("=", "1.5"),
+    ("=", "2"),
+}
+
 
 @dataclass(frozen=True)
 class RuleFixture:
@@ -69,6 +101,8 @@ S1 = RuleFixture(
         ("x(BOOL)", "SUM(x)<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(id*x)<=2", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=cap+1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        # The WHEN scopes only the count here, while the left side still sums every row.
+        ("x(BOOL)", "SUM(x)<=COUNT(*) WHEN (id>0)", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=1.5+cap", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("t.x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
         ("t.x(BOOL)", "SUM(t: x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
@@ -83,6 +117,45 @@ S1 = RuleFixture(
         ("x(BOOL)", "norm(x,1)<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) - norm(p*x,1)", "objective_shape"),
         ("x(BOOL)", "SUM(x)<=1", "MINIMIZE norm(p*x,2)", "objective_shape"),
+        ("x(BOOL)", "SUM(x)<='Infinity'::DOUBLE", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        # A per-row bound that can raise at runtime.
+        ("x(BOOL)", "SUM(x)<=2 AND x<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        # A constant factor that is not usable: the solver reads a NULL factor as an objective of zeros, and a subquery
+        # factor has no known sign when the plan is built.
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)/0", "objective_shape"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE CAST(NULL AS DOUBLE)*SUM(p*x)", "objective_shape"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT 2)*SUM(p*x)", "objective_shape"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT -2)*SUM(p*x)", "objective_shape"),
+        # A bound that counts rows, but not as a plain COUNT(*) over a constant nonzero divisor.
+        (
+            "x(BOOL)",
+            "SUM(x)<=(COUNT(*) WHEN (id>0))/2",
+            "MAXIMIZE SUM(p*x)",
+            "an aggregate other than a plain COUNT(*)",
+        ),
+        ("x(BOOL)", "SUM(x)<=COUNT(p)/2", "MAXIMIZE SUM(p*x)", "an aggregate other than a plain COUNT(*)"),
+        ("x(BOOL)", "SUM(x)<=AVG(p)", "MAXIMIZE SUM(p*x)", "an aggregate other than a plain COUNT(*)"),
+        ("x(BOOL)", "SUM(x)<=COUNT(*)/0", "MAXIMIZE SUM(p*x)", "a divisor that is not a nonzero constant"),
+        ("x(BOOL)", "SUM(x)<=COUNT(*)/COUNT(*)", "MAXIMIZE SUM(p*x)", "a divisor that is not a nonzero constant"),
+        ("x(BOOL)", "SUM(x)<=abs(COUNT(*)-5)", "MAXIMIZE SUM(p*x)", "the function abs"),
+        # 2^53 rows times 2^76 can leave the range of HUGEINT. 1e23 is not a double, so its exact value is not what a
+        # double-based bound would read.
+        (
+            "x(BOOL)",
+            "SUM(x)<=COUNT(*)*75557863725914323419136",
+            "MAXIMIZE SUM(p*x)",
+            "a value that can leave the range of its type",
+        ),
+        (
+            "x(BOOL)",
+            "SUM(x)<=COUNT(*)*100000000000000000000000",
+            "MAXIMIZE SUM(p*x)",
+            "a constant that is not finite or not exact",
+        ),
+    )
+    + tuple(
+        ("x(BOOL)", f"SUM(x)<=2 AND x{op}{constant}", "MAXIMIZE SUM(p*x)", "constraint_shape")
+        for op, constant in sorted(S1_SOLVER_ONLY_ROW_BOUNDS, key=lambda bound: (bound[0], float(bound[1])))
     ),
     late_errors=tuple(
         (

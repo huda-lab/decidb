@@ -29,7 +29,7 @@ Design: `../../architecture/`.
   (`DirectNullScoreMessage` in `direct_builder.cpp`) that `error()` evaluates only on the failing row. A multi-term score
   with no NULL column stays generic, since the solver quotes one failing term and direct sums the terms. Tests:
   `test_computed_score_null_error_names_the_columns`, `test_null_score_no_column_explains_quotes_the_score`,
-  `test_null_score_message_is_not_built_when_no_row_is_null` in `test_direct_solve.py`. The cost on clean data is not
+  `test_null_score_message_is_not_built_when_no_row_is_null` in `test_direct_user_facing.py`. The cost on clean data is not
   measured.
 - **Decision record.** On a hit, mode, rule, proof and guards appear in logical and physical `EXPLAIN` and profiling. A
   miss under `auto` prints nothing.
@@ -40,7 +40,7 @@ Design: `../../architecture/`.
   fallback with every reason, cheaper rule, tie, cost context, non-finite cost, mismatched slot, barrier under
   `LIMIT 1` and `COUNT(*)`).
 - Python: `test_direct_rule_contract.py` (31 tests, all through S1's fixture: schema, all-rows read, serializer, prepared
-  plans, near misses, `off`, forced backend, `DIAGNOSE`) and `test_direct_solve.py` parent-context cases.
+  plans, near misses, `off`, forced backend, `DIAGNOSE`) and the parent-context rows of `test_direct_three_way.py`.
 
 ## Not yet true
 

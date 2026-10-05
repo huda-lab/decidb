@@ -11,6 +11,7 @@
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -18,6 +19,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
@@ -46,6 +48,8 @@ struct S1Proof final : DirectRuleProof {
 		bool rhs_all_group_rows;
 		//! Name of the source column when the bound is exactly one; empty for a computed bound.
 		string column_name;
+		//! The bound is built from `COUNT(*)`, which the plan replaces by the row count of the clause's group.
+		bool counts_rows = false;
 	};
 	//! A pin whose value comes from the row: it must be neither NULL nor, for a floating point value, NaN.
 	struct SourcePin {
@@ -252,6 +256,120 @@ const Expression *BoundMembership(const DirectConstraintFact &fact, bool &ok) {
 	return sum->filter ? sum->filter.get() : fact.scope.when.get();
 }
 
+//! `COUNT(*)` with nothing attached: no DISTINCT, ORDER BY, FILTER or qualifier. A FILTER on the right-hand count
+//! scopes the count apart from the left side (`SUM(x) <= COUNT(*) WHEN active` counts the active rows while the left
+//! side sums every row), which this rule does not model.
+bool IsPlainCountStar(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return false;
+	}
+	auto &aggregate = expr.Cast<BoundAggregateExpression>();
+	idx_t qualifier;
+	return aggregate.function.name == "count_star" && aggregate.children.empty() && !aggregate.filter &&
+	       !aggregate.IsDistinct() && !aggregate.order_bys &&
+	       !TryParseQualifiedReducerTag(aggregate.GetAlias(), qualifier);
+}
+
+//! The largest value a type can hold, or 0 for a type the proof below does not reason about.
+long double TypeCapacity(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+		return 127.0L;
+	case LogicalTypeId::SMALLINT:
+		return 32767.0L;
+	case LogicalTypeId::INTEGER:
+		return 2147483647.0L;
+	case LogicalTypeId::BIGINT:
+		return 9223372036854775807.0L;
+	case LogicalTypeId::HUGEINT:
+		return 1.7e38L;
+	case LogicalTypeId::FLOAT:
+		return 3.4e38L;
+	case LogicalTypeId::DOUBLE:
+		return 1.7e308L;
+	case LogicalTypeId::DECIMAL:
+		return powl(10.0L, static_cast<long double>(DecimalType::GetWidth(type) - DecimalType::GetScale(type)));
+	default:
+		return 0.0L;
+	}
+}
+
+//! Why a bound is not a row-count expression, or empty when it is one: plain `COUNT(*)`, finite constants, numeric
+//! casts, and `+ - * / //` over them, where a divisor is a nonzero constant. `magnitude` is an upper bound on the value
+//! of `expr` for any row count. The expression can only raise by leaving the range of one of its types, and the proof
+//! is that no node can: a group has at most 2^53 rows (the limit this rule already puts on every count; that many rows
+//! would need petabytes of memory), and every node's bound stays inside its own type.
+string RowCountBoundProblem(ClientContext &context, const Expression &expr, bool &has_count, long double &magnitude) {
+	auto fits = [&]() {
+		return magnitude <= TypeCapacity(expr.return_type) ? string() : "a value that can leave the range of its type";
+	};
+	if (IsPlainCountStar(expr)) {
+		has_count = true;
+		magnitude = 9007199254740992.0L;
+		return fits();
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		return "an aggregate other than a plain COUNT(*)";
+	}
+	double constant;
+	if (expr.IsFoldable() && !expr.IsAggregate()) {
+		if (!DirectFiniteFoldableDouble(context, expr, constant)) {
+			return "a constant that is not finite or not exact";
+		}
+		magnitude = std::fabs(constant);
+		return string();
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		auto &cast = expr.Cast<BoundCastExpression>();
+		if (!expr.return_type.IsNumeric() || !cast.child->return_type.IsNumeric()) {
+			return "a cast that is not numeric";
+		}
+		auto problem = RowCountBoundProblem(context, *cast.child, has_count, magnitude);
+		if (!problem.empty()) {
+			return problem;
+		}
+		return DirectCastMayThrow(cast) ? "a narrowing cast" : fits();
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &function = expr.Cast<BoundFunctionExpression>();
+		auto &name = function.function.name;
+		bool division = name == "/" || name == "//";
+		bool negation = name == "-" && function.children.size() == 1;
+		if (!negation && (function.children.size() != 2 || (!division && name != "+" && name != "-" && name != "*"))) {
+			return "the function " + name;
+		}
+		vector<long double> magnitudes(function.children.size());
+		for (idx_t i = 0; i < function.children.size(); i++) {
+			auto problem = RowCountBoundProblem(context, *function.children[i], has_count, magnitudes[i]);
+			if (!problem.empty()) {
+				return problem;
+			}
+		}
+		if (division) {
+			if (!DirectFiniteFoldableDouble(context, *function.children[1], constant) || constant == 0.0) {
+				return "a divisor that is not a nonzero constant";
+			}
+			magnitude = magnitudes[0] / std::fabs(constant);
+		} else if (negation) {
+			magnitude = magnitudes[0];
+		} else {
+			magnitude = name == "*" ? magnitudes[0] * magnitudes[1] : magnitudes[0] + magnitudes[1];
+		}
+		return fits();
+	}
+	return "an expression other than COUNT(*), constants and arithmetic";
+}
+
+//! The bound with each plain `COUNT(*)` replaced by a read of the row-count column.
+unique_ptr<Expression> ReplaceCountStar(unique_ptr<Expression> expr, const ColumnBinding &count_binding) {
+	if (IsPlainCountStar(*expr)) {
+		return DirectColumn(LogicalType::BIGINT, count_binding);
+	}
+	ExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<Expression> &child) { child = ReplaceCountStar(std::move(child), count_binding); });
+	return expr;
+}
+
 class S1CardinalityRule final : public DirectSolveRule {
 public:
 	const char *Name() const override {
@@ -350,6 +468,12 @@ public:
 			for (auto &bound : proof.source_bounds) {
 				if (bound.rhs_all_group_rows) {
 					record.proof += "; aggregate-local count filter with full-group RHS reduction";
+					break;
+				}
+			}
+			for (auto &bound : proof.source_bounds) {
+				if (bound.counts_rows) {
+					record.proof += "; bound from the group's row count";
 					break;
 				}
 			}
@@ -549,6 +673,20 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 		string source_name;
 		bool source_column = DirectSourceNumericColumn(bound, facts.source_bindings, source_slot, source_type,
 		                                              source_name);
+		if (!bound.IsFoldable() && bound.IsAggregate()) {
+			bool counts_rows = false;
+			long double magnitude = 0;
+			auto problem = RowCountBoundProblem(context, bound, counts_rows, magnitude);
+			if (!problem.empty()) {
+				reason = "constraint_shape: a bound with an aggregate must be COUNT(*) combined with constants by + - "
+				         "* / // (" +
+				         problem + ")";
+				return false;
+			}
+			proof.source_bounds.push_back({factor->source_clause_id, DConstants::INVALID_INDEX, bound.return_type, type,
+			                               bound.Copy(), sum->filter != nullptr, string(), true});
+			continue;
+		}
 		if (!bound.IsFoldable() &&
 		    (source_column || DirectIsSourceOnlyNumeric(bound, facts.decide_index, facts.source_bindings))) {
 			proof.source_bounds.push_back({factor->source_clause_id, source_slot,
@@ -680,8 +818,10 @@ public:
 		ScopeState scope;
 		source = ProjectScopeState(std::move(source), scope);
 		source = GuardEmptyAggregate(std::move(source), scope);
+		RowCounts counts;
+		source = CountRows(std::move(source), scope, counts);
 		BoundChecks bounds(proof.source_bounds.size());
-		source = ValidateBounds(std::move(source), scope, bounds);
+		source = ValidateBounds(std::move(source), scope, counts, bounds);
 		source = ProjectScore(std::move(source), scope, bounds);
 		auto ranked = RankAndFilterFeasibility(std::move(source), bounds);
 		auto result = ProjectAssignment(std::move(ranked), bounds);
@@ -714,6 +854,15 @@ private:
 		//! Slots of the same extrema once the score projection forwards them.
 		idx_t min_score = DConstants::INVALID_INDEX;
 		idx_t max_score = DConstants::INVALID_INDEX;
+	};
+
+	//! Where the per-group row counts a `COUNT(*)` bound reads live.
+	struct RowCounts {
+		idx_t window_index = DConstants::INVALID_INDEX;
+		//! The rows the clause covers in each group: the eligible ones.
+		idx_t eligible_slot = DConstants::INVALID_INDEX;
+		//! Every row of each group, for a bound whose left side has an aggregate-local WHEN.
+		idx_t group_slot = DConstants::INVALID_INDEX;
 	};
 
 	//! The window the source-valued bounds were validated in, and the slots later stages read from it.
@@ -786,10 +935,52 @@ private:
 		return DirectGuardEmptyAggregate(optimizer, std::move(source), scope.eligible_binding);
 	}
 
+	//! Stage 2b: the row count each `COUNT(*)` bound reads. `COUNT(*)` counts the rows the clause covers in each group,
+	//! so a WHEN or a NULL PER key narrows it. When the left side's WHEN is aggregate-local, the right side is not
+	//! narrowed by it and counts every row of the group. Nothing is added when no bound counts rows.
+	unique_ptr<LogicalOperator> CountRows(unique_ptr<LogicalOperator> source, const ScopeState &scope,
+	                                      RowCounts &counts) const {
+		bool eligible_needed = false;
+		bool group_needed = false;
+		for (auto &bound : proof.source_bounds) {
+			if (bound.counts_rows) {
+				(bound.rhs_all_group_rows ? group_needed : eligible_needed) = true;
+			}
+		}
+		if (!eligible_needed && !group_needed) {
+			return source;
+		}
+		counts.window_index = binder.GenerateTableIndex();
+		auto window = make_uniq<LogicalWindow>(counts.window_index);
+		auto add_count = [&](bool narrowed_by_eligibility) {
+			auto count =
+			    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, LogicalType::BIGINT,
+			                                     make_uniq<AggregateFunction>(CountStarFun::GetFunction()), nullptr);
+			count->start = WindowBoundary::UNBOUNDED_PRECEDING;
+			count->end = WindowBoundary::UNBOUNDED_FOLLOWING;
+			if (narrowed_by_eligibility && proof.scoped) {
+				count->partitions.push_back(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
+			}
+			for (auto slot : proof.group_key_slots) {
+				count->partitions.push_back(DirectColumn(source_types[slot], scope.input_bindings[slot]));
+			}
+			window->expressions.push_back(std::move(count));
+			return window->expressions.size() - 1;
+		};
+		if (eligible_needed) {
+			counts.eligible_slot = add_count(true);
+		}
+		if (group_needed) {
+			counts.group_slot = add_count(false);
+		}
+		window->children.push_back(std::move(source));
+		return std::move(window);
+	}
+
 	//! Stage 3: validate source-valued bounds and pins on every row, in source-clause order, and reduce each bound
 	//! to its group extremum.
 	unique_ptr<LogicalOperator> ValidateBounds(unique_ptr<LogicalOperator> source, const ScopeState &scope,
-	                                           BoundChecks &bounds) const {
+	                                           const RowCounts &counts, BoundChecks &bounds) const {
 		vector<DirectBoundSpec> specs;
 		for (auto &bound : proof.source_bounds) {
 			if (!bound.value || (bound.source_slot != DConstants::INVALID_INDEX &&
@@ -801,6 +992,10 @@ private:
 			spec.source_clause_id = bound.source_clause_id;
 			spec.comparison = bound.comparison;
 			spec.value = CopyIntoState(*bound.value, scope, "bound");
+			if (bound.counts_rows) {
+				auto slot = bound.rhs_all_group_rows ? counts.group_slot : counts.eligible_slot;
+				spec.value = ReplaceCountStar(std::move(spec.value), ColumnBinding(counts.window_index, slot));
+			}
 			if (bound.source_slot != DConstants::INVALID_INDEX) {
 				spec.is_column = true;
 				spec.column = scope.input_bindings[bound.source_slot];

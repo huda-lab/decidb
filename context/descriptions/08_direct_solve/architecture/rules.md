@@ -59,11 +59,17 @@ test, adding one is a task in that rule's `todo.md`.
 
 1. **Contract suite** (`test_direct_rule_contract.py`): add a `RuleFixture` in `_direct_rule_fixtures.py`. It checks
    schema and rows, the all-rows read, prepared-plan selection, serializer round trip, `EXPLAIN` and profiling,
-   `require` reasons, `off`, a forced backend, `DIAGNOSE`, and near misses.
-2. **Differential comparison** (`_direct_differential.py`): supply a seeded query generator. Direct (`require`) and
-   solver (`off`) must succeed or fail together with the same error class and agree on row count and primary objective.
-3. **Oracle test**: compare the result to an independent solver (`oracle_solver`) built straight from the rows, so the
-   two DeciDB paths cannot share a mistake. Cover both objective senses.
+   `require` reasons, `off`, a forced backend, `DIAGNOSE`, and near misses. Each near miss must also answer under `auto`
+   exactly as it does under `off`.
+2. **Three-way table** (`test_direct_three_way.py`): add rows for the rule's shapes. Each row runs on an independent
+   solver (`oracle_solver`) built straight from the rows, on the solver path (`off`), and on the direct path
+   (`require`, so a miss fails). All three must agree: both DeciDB runs must satisfy every constraint and reach the
+   oracle's objective, or all must say infeasible. Inputs with no oracle model (bad data) go in the error table, where
+   `off` and `require` must fail with the same error class, and values the oracle cannot hold (infinities, 2^53) go in
+   the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
+3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
+   generator. Direct (`require`) and solver (`off`) must succeed or fail together with the same error class and agree on
+   row count and primary objective. It finds interactions between shapes that no table lists.
 4. **C++ cases** (`test/common/`) for the rule's proof and for facts it relies on.
 
 Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),

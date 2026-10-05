@@ -17,10 +17,13 @@ from decidb_cli import DecidBCliError
 ERROR_CLASSES = [
     (r"(?i)parser error|syntax error", "parser"),
     (r"decide_direct_solve=require", "direct_miss"),
+    # Before "infeasible": the solver's wording for this error ends "so this DECIDE query is infeasible".
+    # The direct path says "varies"; the solver path says "more than one value".
+    (r"(?i)varies|more than one value", "equality_varies"),
     (r"(?i)infeasible", "infeasible"),
     (r"(?i)empty row set|empty aggregate", "empty_aggregate"),
-    (r"(?i)is NULL|NULL or NaN|contains NULL", "null_bound"),
-    (r"(?i)varies", "equality_varies"),
+    # A NaN bound reads "contains invalid value (NaN)" on the solver path.
+    (r"(?i)is NULL|NULL or NaN|contains NULL|invalid value \(NaN\)", "null_bound"),
 ]
 
 

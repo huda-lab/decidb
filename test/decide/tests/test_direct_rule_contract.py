@@ -139,6 +139,13 @@ def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixt
     plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto")
     assert _has_decide_operator(plan.stdout) and "Direct solve" not in plan.stdout, (sql, plan.stderr)
 
+    # A decline is invisible to the user: under `auto` the query still answers, exactly as it does under `off`. (A
+    # query that calls random() has no fixed answer, so only the way it ends is compared.)
+    auto, off = _raw(decidb_cli, sql, mode="auto"), _raw(decidb_cli, sql, mode="off")
+    assert bool(auto.stderr.strip()) == bool(off.stderr.strip()), (sql, auto.stderr, off.stderr)
+    if "random()" not in sql:
+        assert (auto.stdout, auto.stderr) == (off.stdout, off.stderr), sql
+
 
 @pytest.mark.correctness
 @_RULES

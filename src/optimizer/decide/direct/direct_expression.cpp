@@ -88,20 +88,21 @@ bool DirectRemapSourceReferences(Expression &expr, const vector<ColumnBinding> &
 	return valid;
 }
 
-bool DirectMayThrow(const Expression &expr) {
+bool DirectCastMayThrow(const BoundCastExpression &cast) {
 	// TRY_CAST turns conversion failures into NULL; the solver validates that result on every row.
 	// BoundCastExpression::CanThrow conservatively treats it like a regular narrowing cast.
+	return !cast.try_cast && cast.return_type.id() != cast.child->return_type.id() &&
+	       LogicalType::ForceMaxLogicalType(cast.return_type, cast.child->return_type) == cast.child->return_type.id();
+}
+
+bool DirectMayThrow(const Expression &expr) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
 	    expr.Cast<BoundFunctionExpression>().function.errors == FunctionErrors::CAN_THROW_RUNTIME_ERROR) {
 		return true;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		auto &cast = expr.Cast<BoundCastExpression>();
-		if (!cast.try_cast && cast.return_type.id() != cast.child->return_type.id() &&
-		    LogicalType::ForceMaxLogicalType(cast.return_type, cast.child->return_type) ==
-		        cast.child->return_type.id()) {
-			return true;
-		}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST &&
+	    DirectCastMayThrow(expr.Cast<BoundCastExpression>())) {
+		return true;
 	}
 	bool may_throw = false;
 	ExpressionIterator::EnumerateChildren(

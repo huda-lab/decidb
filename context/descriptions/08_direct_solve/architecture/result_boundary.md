@@ -39,4 +39,5 @@ A declared `BOOL` decision has a 0/1 domain but returns SQL `INTEGER`, as on the
 
 Details: `direct_result_boundary.cpp` (map checks, serialization, pruning hook) and `direct_builder.cpp` (barrier and
 pruning proof). The optimizer passes that run after DECIDE were audited for parent filter, join, aggregate, nested, and
-serializer cases; the tests in `test_direct_solve.py` keep those guarded.
+serializer cases; the parent-context rows in `test_direct_three_way.py` and the pruning tests in
+`test_direct_user_facing.py` keep those guarded.
