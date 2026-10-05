@@ -1,8 +1,8 @@
 # S1 (top-k and cardinality intervals) — what works today
 
-Verified on 2026-10-05 on the working tree after `c86298c9e8`, with the per-row bound change not yet committed: `make decide-test` (1,924
-passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make
-decide-test` (1,923 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (907
+Verified on 2026-10-05 on the working tree after `6ce1f3d9aa`, with the scaled objective not yet committed: `make decide-test`
+(2,000 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make
+decide-test` (1,999 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (907
 assertions). Re-stamp with the commit hash when it lands.
 Code: `src/optimizer/decide/direct/s1_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -28,7 +28,10 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   value (`x = flag`). Contradictory active bounds are infeasible. A NULL or NaN column value raises on every row,
   including rows the `WHEN` excludes, and names the column.
 - **Objective:** a signed sum of per-row coefficients times `x`, `MAXIMIZE` or `MINIMIZE`, plus an optional finite constant.
-  Coefficients are numeric, decision-free, deterministic; several terms must be non-throwing.
+  Coefficients are numeric, decision-free, deterministic; several terms must be non-throwing. Each `SUM(...)` may carry a
+  constant factor or divisor (`2 * SUM(score*x)`, `SUM(score*x) / 2`, `-1.5 * SUM(...)`, `(1 + 1) * SUM(...)`) that scales
+  that part's coefficients: a negative one reverses the part, zero makes every row score 0, and each part keeps its own.
+  The factor must be a finite foldable constant, and a divisor must not be zero.
 
 It matches the solver on errors and order: empty scoped aggregate, invalid or NULL bounds (including on bypassed rows), NULL
 or non-finite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1` or `COUNT(*)`.
@@ -56,7 +59,6 @@ A miss never changes the answer: the query runs on the solver and `require` name
 
 | Shape | Task |
 |---|---|
-| Scaled objective terms: `2 * SUM(score*x)`, `SUM(score*x) / 2` | S1-06 |
 | Bounds that count rows: `SUM(x) <= COUNT(*) / 2` | S1-07 |
 
 **Explicitly out of scope** (decided 2026-10-05; these stay on the solver on purpose):
@@ -65,6 +67,7 @@ A miss never changes the answer: the query runs on the solver and `require` name
 |---|---|---|
 | `SUM(x + c)`, `SUM(1 - x)` (an offset or negated count body; was S1-03) | The definition says each selected item contributes exactly 1 to the count. A constant term makes the bound depend on the group size (`count + n*c <= B`), and `1 - x` flips the direction. The user can write the same limit as `SUM(x) >= n - k`. Bodies whose terms add up to exactly one `x` (`SUM(1*x)`, `SUM(2*x - x)`) are admitted | Admit `a*x + c` with `a = ±1` and a constant `c`: shift the per-group limit by `n*c` and flip the side when `a = -1`. About 0.5 day. Worth doing if users ask for "at most k rejected" |
 | A bound expression that can raise at runtime, such as a narrowing `CAST` (was S1-02) | The solver raises on every row, including rows a `WHEN` or NULL `PER` key excludes, and the error must come in the solver's order after the empty-aggregate error. Admitting it means proving DuckDB neither skips nor reorders the check. Nonthrowing forms (`COALESCE`, `TRY_CAST`) are admitted, so `TRY_CAST` is the workaround. A multi-term objective whose coefficient can throw misses for the same reason | Prove the evaluation order of the validation stage, then admit expressions that can only raise a cast or overflow error. Low value and costly |
+| A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
 | No objective (constraints only) | The definition requires a linear objective, and few queries are written this way | Treat every score as 0 so the plan picks only the rows a lower bound requires. About 1 hour: accept the missing objective in `Match` |
 | A bound on `x` with no `WHEN` that the solver reads as a bound on the variable, not as Boolean arithmetic: a lower bound below 0 (`x >= -3`, `x > -3`, `x = -1`), a strict bound against a fraction (`x > 0.5`, `x < 1.5`), an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`) | A negative lower bound makes `x` signed, so the solver's result holds -3, -1 or -2 where direct would give 0 or 1. A strict bound against a fraction moves by a whole unit (`x > 0.5` becomes `x >= 1.5`), which gives an error or the wrong answer. A bound that cannot hold raises a message naming the clause, not DECIDE's infeasible error. Direct solve cannot match all three without copying the quirks. The same bound with a `WHEN` is plain arithmetic on the solver and is admitted | Fix the solver to treat these as Boolean arithmetic, then admit them. Not a direct-solve change |
 
@@ -77,10 +80,10 @@ different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); boun
 
 | Check | What it covers |
 |---|---|
-| `test_direct_solve.py` (237 tests) | Path selection, independent enumeration of small optima, exact bounds and strict/fractional normalization, `PER`/`WHEN`/NULL-key cases, pins, signed objectives, near misses with reasons, parent and CTE contexts, late errors, wide-output pruning, direct vs both solvers. Per-row bounds: every comparison against eight constants, with and without a `WHEN`, direct against the solver (and the exact list of spellings that stay on the solver); numeric column pins against the solver for every comparison, NULL, NaN and infinite values, and per-row and per-group variation; the out-of-scope shapes still answer on the solver |
-| `test_direct_solve_oracle.py` (33 tests) | Direct results against the independent ILP oracle (`oracle_solver`), including per-row bounds with fractions and out-of-domain constants, numeric column pins and impossible bounds, and 8 seeded differential fuzz tests (direct under `require` vs solver under `off`) that also generate per-row constant and column bounds |
+| `test_direct_solve.py` (273 tests) | Path selection, independent enumeration of small optima, exact bounds and strict/fractional normalization, `PER`/`WHEN`/NULL-key cases, pins, signed objectives, near misses with reasons, parent and CTE contexts, late errors, wide-output pruning, direct vs both solvers. Per-row bounds: every comparison against eight constants, with and without a `WHEN`, direct against the solver (and the exact list of spellings that stay on the solver); numeric column pins against the solver for every comparison, NULL, NaN and infinite values, and per-row and per-group variation; scaled objectives against the solver for both senses, with bounds, pins and groups, plus overflow and the factors that stay on the solver; the out-of-scope shapes still answer on the solver |
+| `test_direct_solve_oracle.py` (39 tests) | Direct results against the independent ILP oracle (`oracle_solver`), including per-row bounds with fractions and out-of-domain constants, numeric column pins, impossible bounds and scaled objectives (factors, divisors, parts with different factors, both senses), and 8 seeded differential fuzz tests (direct under `require` vs solver under `off`) that also generate per-row constant and column bounds and scaled objectives |
 | `test_direct_rule_contract.py` (33 tests) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, near misses, `off`, forced backend, `DIAGNOSE` |
-| Tiny-score fixture | Direct against the exact finite-DOUBLE optimum from 5e-324 to 1e-6. The two solvers disagree with each other near 1e-9, so backend comparisons allow a measured gap of 1e-7 |
+| Tiny-score fixture | Direct against the exact finite-DOUBLE optimum from 5e-324 to 1e-6. The two solvers disagree with each other near 1e-9, so backend comparisons allow a measured gap of 1e-7. A factor can make scores that small (`1e-320 * SUM(score*x)` selects nothing on the solver and the positive rows on direct), the same difference |
 | C++ `[decidb]` | S1 proof contract, facts, coordinator |
 
 ## Performance

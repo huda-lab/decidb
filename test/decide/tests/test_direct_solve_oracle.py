@@ -263,6 +263,67 @@ def test_direct_s1_numeric_column_pins_match_independent_oracle(decidb_cli, orac
     assert comparison.status in ("identical", "optimal")
 
 
+# Scaled objectives: (sign, factor, divides, column) terms, as `+ 2 * SUM(score * x)` or `- SUM(b * x) / 4`. The oracle
+# gets each row's coefficient straight from the row and the terms.
+_SCALE_ORACLE_ROWS = [(0, 9.0, 1.0), (1, 5.0, -3.0), (2, -2.0, 4.0), (3, 8.0, 2.0), (4, 1.0, -1.0), (5, 6.0, 0.5)]
+_SCALE_ORACLE_CASES = {
+    "positive_factor": ("MAXIMIZE", [(1, 2, False, "score")]),
+    "negative_factor": ("MAXIMIZE", [(1, -1.5, False, "score")]),
+    "divisor": ("MAXIMIZE", [(1, 4, True, "score")]),
+    "negative_divisor_minimize": ("MINIMIZE", [(1, -2, True, "score")]),
+    "two_parts_with_different_factors": ("MAXIMIZE", [(1, 2, False, "score"), (-1, 3, False, "b")]),
+    "factor_and_divisor": ("MINIMIZE", [(1, 0.5, False, "score"), (1, 2, True, "b")]),
+}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(_SCALE_ORACLE_CASES))
+def test_direct_s1_scaled_objective_matches_independent_oracle(decidb_cli, oracle_solver, name):
+    sense, terms = _SCALE_ORACLE_CASES[name]
+    parts = []
+    for sign, factor, divides, column in terms:
+        body = f"SUM({column} * x)"
+        parts.append(("- " if sign < 0 else "+ ") + (f"{body} / {factor}" if divides else f"{factor} * {body}"))
+    objective = " ".join(parts).lstrip("+ ")
+    values = ", ".join(f"({i}, CAST({score} AS DOUBLE), CAST({b} AS DOUBLE))" for i, score, b in _SCALE_ORACLE_ROWS)
+    sql = f"""
+        SELECT id, score, b, x FROM (
+            FROM (VALUES {values}) t(id, score, b)
+            DECIDE x(BOOL) SUCH THAT SUM(x) >= 1 AND SUM(x) <= 3 {sense} {objective}
+        ) q ORDER BY id
+    """
+    rows, columns = decidb_cli.execute(f"SET decide_direct_solve='require'; {sql}")
+
+    def coefficient(row):
+        value = {"score": row[1], "b": row[2]}
+        return sum(
+            sign * (value[column] / factor if divides else factor * value[column])
+            for sign, factor, divides, column in terms
+        )
+
+    oracle_solver.create_model("s1_scaled_objective_oracle")
+    names = [f"x_{i}" for i, *_ in _SCALE_ORACLE_ROWS]
+    for var in names:
+        oracle_solver.add_variable(var, VarType.BINARY)
+    oracle_solver.add_constraint({var: 1.0 for var in names}, ">=", 1.0)
+    oracle_solver.add_constraint({var: 1.0 for var in names}, "<=", 3.0)
+    oracle_solver.set_objective(
+        {var: coefficient(row) for var, row in zip(names, _SCALE_ORACLE_ROWS)},
+        ObjSense.MAXIMIZE if sense == "MAXIMIZE" else ObjSense.MINIMIZE,
+    )
+    comparison = compare_solutions(
+        rows,
+        columns,
+        oracle_solver.solve(),
+        [(i, float(score), float(b)) for i, score, b in _SCALE_ORACLE_ROWS],
+        ["x"],
+        coeff_fn=lambda row: {"x": coefficient(row)},
+    )
+    assert comparison.status in ("identical", "optimal")
+
+
 @pytest.mark.var_boolean
 @pytest.mark.error_infeasible
 @pytest.mark.correctness
@@ -292,6 +353,9 @@ _OBJECTIVES = {
     "SUM(score * x)": "sum(score * x)",
     "SUM(score * x) + SUM(id * x)": "sum(score * x) + sum(id * x)",
     "SUM(score * x) - SUM(cap * x)": "sum(score * x) - sum(coalesce(cap, 0) * x)",
+    "-2 * SUM(score * x)": "-2 * sum(score * x)",
+    "SUM(score * x) / 4 - 3 * SUM(id * x)": "sum(score * x) / 4 - 3 * sum(id * x)",
+    "0.5 * SUM(score * x) + SUM(id * x) / -2": "0.5 * sum(score * x) + sum(id * x) / -2",
 }
 
 # Near misses: norm(e, p) is bound as a SUM(e) tagged with its order, so a path that reads only the aggregate's

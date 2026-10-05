@@ -57,6 +57,10 @@ struct S1Proof final : DirectRuleProof {
 	struct ObjectivePart {
 		int sign;
 		unique_ptr<Expression> coefficient;
+		//! A constant factor the part's objective term is multiplied by, or divided by when `divides`.
+		bool scaled = false;
+		double scale = 1.0;
+		bool divides = false;
 	};
 
 	idx_t decide_index;
@@ -324,7 +328,7 @@ public:
 		proof->decide_index = facts.decide_index;
 		proof->sense = facts.objective.sense;
 		if (!ProveScope(facts, match, *proof, reason) || !ProvePins(facts, match, context, *proof, reason) ||
-		    !ProveBounds(facts, match, context, *proof, reason) || !ProveObjective(facts, *proof, reason)) {
+		    !ProveBounds(facts, match, context, *proof, reason) || !ProveObjective(facts, context, *proof, reason)) {
 			return nullptr;
 		}
 		return std::move(proof);
@@ -381,7 +385,7 @@ private:
 	               string &reason) const;
 	bool ProveBounds(const DirectProblemFacts &facts, const S1Match &match, ClientContext &context, S1Proof &proof,
 	                 string &reason) const;
-	bool ProveObjective(const DirectProblemFacts &facts, S1Proof &proof, string &reason) const;
+	bool ProveObjective(const DirectProblemFacts &facts, ClientContext &context, S1Proof &proof, string &reason) const;
 };
 
 //! Every bound counts the same rows: one `SUM(x)` per bound with the same PER keys and the same WHEN membership.
@@ -579,13 +583,14 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 }
 
 //! The objective: a signed sum of `SUM(coefficient * x)` terms. Each coefficient must be evaluable per source row.
-bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, S1Proof &proof, string &reason) const {
+bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, ClientContext &context, S1Proof &proof,
+                                       string &reason) const {
 	// Every linear term in x scores separately: `SUM((p + q) * x)` splits into `p * x` and `q * x`, and the score
 	// adds the signed coefficients in order, as the solver's like-term collection does.
 	auto &parts = facts.objective.parts;
 	idx_t term_count = 0;
 	for (auto &part : parts) {
-		if (part.reducer != DirectReducer::SUM || part.filter || part.scale || part.inner ||
+		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
 		    part.qualifier != DConstants::INVALID_INDEX) {
 			reason = "objective_shape: expected unfiltered SUM(coefficient * x) terms";
 			return false;
@@ -599,6 +604,14 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, S1Proof 
 		term_count += part.terms.size();
 	}
 	for (auto &part : parts) {
+		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
+		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
+		double scale = 1.0;
+		if (part.scale &&
+		    (!DirectFiniteFoldableDouble(context, *part.scale, scale) || (part.scale_divides && scale == 0.0))) {
+			reason = "objective_shape: a factor on SUM(...) must be a finite constant (not zero when dividing)";
+			return false;
+		}
 		for (auto &term : part.terms) {
 			if (!DirectIsNumericDecisionFree(*term.coefficient, facts.decide_index)) {
 				reason = "coefficient_shape: expected a deterministic numeric expression without decisions";
@@ -609,7 +622,8 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, S1Proof 
 				reason = "coefficient_shape: multiple terms need nonthrowing source-only numeric coefficients";
 				return false;
 			}
-			proof.objective_parts.push_back({part.sign * term.sign, term.coefficient->Copy()});
+			proof.objective_parts.push_back(
+			    {part.sign * term.sign, term.coefficient->Copy(), part.scale != nullptr, scale, part.scale_divides});
 		}
 	}
 	// The score is NULL when any term is, so a NULL score names whichever of these columns is NULL on that row. With
@@ -845,6 +859,10 @@ private:
 			if (part.sign < 0) {
 				term = optimizer.BindScalarFunction("*", std::move(term),
 				                                    make_uniq<BoundConstantExpression>(Value::DOUBLE(-1.0)));
+			}
+			if (part.scaled) {
+				term = optimizer.BindScalarFunction(part.divides ? "/" : "*", std::move(term),
+				                                    make_uniq<BoundConstantExpression>(Value::DOUBLE(part.scale)));
 			}
 			combined_score = combined_score ? optimizer.BindScalarFunction("+", std::move(combined_score), std::move(term))
 			                                : std::move(term);

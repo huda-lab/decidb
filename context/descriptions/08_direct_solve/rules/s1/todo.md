@@ -4,29 +4,13 @@ What S1 does today is in `done.md`. The class definition is in `definition.md`. 
 otherwise. When one ships, its result moves to `done.md` and the task is deleted from here. Estimates are rough guesses,
 not measurements.
 
-**Suggested batches.** B: S1-06. C: S1-07. S1-04 and S1-05 are not part of closing S1 and wait for a decision (see their
-entries). Batch A (per-row bounds on `x` and the out-of-scope tests) shipped and is in `done.md`.
+**Suggested batches.** C: S1-07. S1-04 and S1-05 are not part of closing S1 and wait for a decision (see their entries).
+Batches A (per-row bounds on `x`, out-of-scope tests) and B (scaled objective) shipped and are in `done.md`.
 
-**Shared rule for S1-06 and S1-07.** The solver raises a NULL source-valued bound even on a row whose `WHEN` is false or
+**Shared rule for S1-07.** The solver raises a NULL source-valued bound even on a row whose `WHEN` is false or
 whose `PER` key is NULL, and an empty scoped aggregate can raise before that bound error. Every wider admission keeps that
-error order. Anything not proved stays on the solver path. Both touch the same `Prove` function; the seeded differential
+error order. Anything not proved stays on the solver path. It touches the `Prove` function; the seeded differential
 generator (`_direct_differential.py` via `_fuzz_query`) is extended to produce each form admitted.
-
-## S1-06 — Scaled objective terms
-
-- **Problem.** `MAXIMIZE 2 * SUM(score*x)` and `SUM(score*x) / 2` miss, although the objective is still linear. Canonicalization
-  leaves a query-wide factor on the part (`part.scale`, `scale_divides` in `DirectPart`), and `ProveObjective` rejects any part
-  that has one.
-- **Goal.** Admit a scale that is a finite foldable constant: multiply or divide that part's coefficients by it. Apply the
-  scale to the coefficients, not to the objective sense, because parts can carry different scales
-  (`2 * SUM(a*x) - 3 * SUM(b*x)`) and a negative scale changes the sign of its own part only.
-- **Check on the solver first.** Zero scale, division by zero, NULL, non-finite, a product that overflows to infinity, and a
-  non-foldable scale such as a scalar subquery (the sign is unknown at plan time, so it stays a miss unless proved).
-- **Code.** `ProveObjective` in `s1_rule.cpp`; `ProjectScore` builds the combined score.
-- **Test.** Oracle and differential cases for positive, negative, fractional and divided scales, both senses, and the error
-  cases above.
-- **Done when.** Results and errors match the solver on every case, and a scale that stays a miss has a named reason. About
-  0.5 day.
 
 ## S1-07 — Bounds that count rows, such as `SUM(x) <= COUNT(*) / 2`
 

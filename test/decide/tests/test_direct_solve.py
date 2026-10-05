@@ -719,6 +719,89 @@ def test_s1_direct_reads_bounds_exactly_near_an_integer(decidb_cli):
     assert [row[1] for row in _run(decidb_cli, sql)[0]] == [1, 0, 0]
 
 
+_SCALE_ROWS = ((1, 9.0, 1.0), (2, 5.0, -3.0), (3, -2.0, 4.0), (4, 8.0, 2.0), (5, 1.0, -1.0))
+
+
+def _scaled_objective_query(sense, objective, capacity=2):
+    values = ", ".join(f"({i}, CAST('{score}' AS DOUBLE), CAST('{b}' AS DOUBLE))" for i, score, b in _SCALE_ROWS)
+    return f"""
+        SELECT id, x FROM (
+            FROM (VALUES {values}) t(id, score, b)
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= {capacity}
+            {sense} {objective}
+        ) q ORDER BY id
+    """
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
+@pytest.mark.parametrize(
+    "objective",
+    [
+        "2 * SUM(score*x)",
+        "SUM(score*x) * 2",
+        "SUM(score*x) / 2",
+        "2.5 * SUM(score*x)",
+        "-1 * SUM(score*x)",
+        "SUM(score*x) / -2",
+        "0 * SUM(score*x)",
+        "(1 + 1) * SUM(score*x)",
+        "2 * SUM(score*x) * 3",
+        "2 * SUM(score*x) / 4",
+        "2 * SUM(score*x) - 3 * SUM(b*x)",
+        "SUM(score*x) / 2 - SUM(b*x) / 4",
+        "2 * SUM(score*x) + SUM(b*x)",
+        "2 * SUM(score*x) + 5",
+        "-2 * SUM(score*x) + 3 * SUM(b*x) - 4",
+    ],
+)
+def test_s1_scaled_objective_matches_the_solver(decidb_cli, sense, objective):
+    # A constant factor on SUM(...) scales that part's coefficients: a positive one keeps the answer, a negative one
+    # reverses it, zero makes every row score 0, and each part carries its own.
+    sql = _scaled_objective_query(sense, objective)
+    direct = _rowbound_outcome(decidb_cli, sql, "require")
+    assert direct != "miss", objective
+    assert direct == _rowbound_outcome(decidb_cli, sql, "off"), objective
+
+
+@pytest.mark.correctness
+def test_s1_scaled_objective_with_bounds_pins_and_groups_matches_the_solver(decidb_cli):
+    sql = """
+        SELECT id, x FROM (
+            FROM (VALUES (1,'a',9.0,1.0),(2,'a',5.0,-3.0),(3,'b',-2.0,4.0),(4,'b',8.0,2.0),(5,'b',1.0,-1.0),(6,'c',4.0,0.5))
+                t(id,g,score,b)
+            DECIDE x(BOOL) SUCH THAT SUM(x) >= 1 PER g AND SUM(x) <= 2 PER g AND x = 1 WHEN id = 3
+            MAXIMIZE -3 * SUM(score*x) + SUM(b*x) / 2
+        ) q ORDER BY id
+    """
+    assert _run(decidb_cli, sql)[0] == _run(decidb_cli, sql, mode="off")[0]
+
+
+@pytest.mark.correctness
+def test_s1_scaled_objective_overflow_raises_like_the_solver(decidb_cli):
+    sql = _scaled_objective_query("MAXIMIZE", "1e308 * SUM(score*x)")
+    for mode in ("require", "off"):
+        assert "invalid value (NaN or Infinity)" in _raw(decidb_cli, sql, mode=mode).stderr
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "objective",
+    [
+        "SUM(score*x) / 0",
+        "CAST(NULL AS DOUBLE) * SUM(score*x)",
+        "(SELECT 2) * SUM(score*x)",
+        "(SELECT -2) * SUM(score*x)",
+    ],
+)
+def test_s1_scaled_objective_stays_on_the_solver_when_the_factor_is_not_a_usable_constant(decidb_cli, objective):
+    # A zero divisor, a NULL factor (the solver reads it as an objective of zeros) and a subquery factor (its sign is not
+    # known when the plan is built) are not proved, so the solver answers.
+    sql = _scaled_objective_query("MAXIMIZE", objective)
+    assert "objective_shape" in _raw(decidb_cli, sql).stderr
+    assert _rowbound_outcome(decidb_cli, sql, "auto") == _rowbound_outcome(decidb_cli, sql, "off")
+
+
 @pytest.mark.correctness
 def test_s1_impossible_bound_with_when_is_infeasible_only_when_a_row_is_selected(decidb_cli):
     for mode in ("require", "off"):
