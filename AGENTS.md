@@ -6,7 +6,7 @@ DeciDB extends DuckDB with SQL-native constrained optimization. Core C++ code li
 
 DECIDE Python tests live in `test/decide/tests/`, model baselines in `test/decide/golden/`, and C++ regressions in `test/common/`. Use `benchmark/decide/` for performance work. Internal documentation is in `context/descriptions/`; website content and assets are in `context/website/`. Consult `context/descriptions/00_project_overview/syntax_reference.md` for DECIDE syntax.
 
-For direct-solve prototype work, start with `context/descriptions/08_direct_solve/README.md` and follow its design gates and work-area notes.
+For direct-solve prototype work, start with `context/descriptions/08_direct_solve/README.md`. Its navigation table points to the architecture notes and to each rule's `todo.md` and `done.md`.
 
 ## Build, Test, and Development Commands
 
