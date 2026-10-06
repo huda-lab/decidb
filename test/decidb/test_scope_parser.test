@@ -1,0 +1,412 @@
+# name: test/decidb/test_scope_parser.test
+# description: The scope spellings of the planned DECIDE extension parse (PER key:, WHEN condition:, BY (key)); nothing binds them yet
+# group: [decidb]
+
+statement ok
+CREATE TABLE Depot(depotID VARCHAR, region VARCHAR, country VARCHAR, capacity DOUBLE, priorityCapacity DOUBLE, networkReserveShare DOUBLE, maxShipmentShare DOUBLE, opening_cost DOUBLE);
+
+statement ok
+INSERT INTO Depot VALUES ('D1', 'East', 'US', 100, 50, 0.5, 0.6, 10), ('D2', 'West', 'US', 80, 40, 0.5, 0.7, 12);
+
+statement ok
+CREATE TABLE Shipment(shipmentID INTEGER, depotID VARCHAR, customerID INTEGER, demand DOUBLE, priority BOOLEAN, dispatchDay INTEGER, transitDays INTEGER);
+
+statement ok
+INSERT INTO Shipment VALUES (1, 'D1', 1, 10, true, 1, 2), (2, 'D1', 2, 20, false, 1, 3), (3, 'D2', 3, 30, true, 2, 1);
+
+statement ok
+CREATE TABLE kw("per" INTEGER, "by" INTEGER, "row" INTEGER, g INTEGER, v INTEGER);
+
+statement ok
+INSERT INTO kw VALUES (1, 2, 3, 1, 5), (4, 5, 6, 2, 7);
+
+# ---------------------------------------------------------------------------
+# New spellings parse. Binding them is a later step, so each answers
+# "not supported yet" -- a Binder Error, which proves the parser accepted it.
+# ---------------------------------------------------------------------------
+
+# declaration: column key
+statement error
+SELECT shipmentID, reserve FROM Shipment S JOIN Depot D USING (depotID) DECIDE per D.depotID: reserve(REAL) SUCH THAT reserve <= 5 MAXIMIZE SUM(reserve);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# declaration: relation key, mixed key, and per () in one list
+statement error
+SELECT shipmentID FROM Shipment S JOIN Depot D USING (depotID) DECIDE per D: open(BOOL), per D.region, S.customerID: q(INT), per (): cap(INT) SUCH THAT cap <= 5 MAXIMIZE cap;
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# declaration: per () alone
+statement error
+SELECT shipmentID FROM Shipment DECIDE per (): cap(INT) SUCH THAT cap <= 5 MAXIMIZE cap;
+----
+Binder Error: DECIDE: 'PER ():' is not supported yet
+
+# declaration: per() and per ( ) are per ()
+statement error
+SELECT shipmentID FROM Shipment DECIDE per(): a(INT), per ( ): b(INT) SUCH THAT a <= b MAXIMIZE a;
+----
+Binder Error: DECIDE: 'PER ():' is not supported yet
+
+# declaration before FROM (the paper's clause order)
+statement error
+SELECT shipmentID, reserve DECIDE per D.depotID: reserve(REAL) FROM Shipment S JOIN Depot D USING (depotID) SUCH THAT reserve <= 5 MAXIMIZE SUM(reserve);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# constraint: when in front, condition without parentheses
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority and demand > 5: ship <= 5 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+
+# constraint: per in front
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: sum(ship) <= 100 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# constraint: when then per, several key columns, by on the reducer
+statement error
+SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT when S.priority per D.depotID, D.region: sum(ship) by (D.depotID) <= D.capacity MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# constraint: per ()
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per (): sum(ship) <= 100 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'PER ():' is not supported yet
+
+# constraint: when with per row keeps the when
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority per row: ship <= 5 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+
+# constraint: a scoped constraint, then a plain one
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority: ship <= 5 AND ship >= 0 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+
+# reducer: by () and by (expression)
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) by () <= 100 AND ship <= 0.25 * sum(ship) by (depotID, dispatchDay + transitDays) MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'BY (key)' is not supported yet
+
+# reducer: when inside
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(when priority: ship) <= 100 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+
+# reducer: per inside, with a column key
+statement error
+SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE sum(per D.depotID: D.opening_cost * ship);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# reducer: per () inside AVG
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) <= avg(per (): demand) MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'PER ():' is not supported yet
+
+# reducer: when and per inside, by after
+statement error
+SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE max(when S.priority per D: ship - D.capacity) by (D.region);
+----
+Binder Error: DECIDE: 'BY (key)' is not supported yet
+
+# reducer: by on the kept colon form
+statement error
+SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT SUM(D: ship) by (D.region) <= 100 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'BY (key)' is not supported yet
+
+# objective: when in front
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE when priority: sum(ship);
+----
+Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+
+# objective: per (), written out
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE per (): sum(ship);
+----
+Binder Error: DECIDE: 'PER ():' is not supported yet
+
+# objective: when then per ()
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE when priority per (): sum(ship);
+----
+Binder Error: DECIDE: 'PER ():' is not supported yet
+
+# objective: the nested form, a reducer over a keyed reducer
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE max(per depotID: sum(ship) by (depotID));
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# DIAGNOSE in front
+statement error
+DIAGNOSE SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: sum(ship) by (depotID) <= 100 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# a new spelling inside a nested DECIDE subquery
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT MAX(d) FROM Shipment DECIDE d(INT) SUCH THAT per (): sum(d) <= 4 MAXIMIZE SUM(d)) MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'PER ():' is not supported yet
+
+# the clause's keywords are back after a nested DECIDE subquery closes
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT MAX(d) FROM Shipment DECIDE d(INT) SUCH THAT d <= 4 MAXIMIZE SUM(d)) AND when priority: ship <= 2 MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+
+# a new spelling inside an ordinary subquery written in the clause
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT sum(demand) by (depotID) FROM Shipment) MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'BY (key)' is not supported yet
+
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT sum(when priority: demand) FROM Shipment) MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+
+# ... in a FROM subquery of that subquery
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT max(s) FROM (SELECT sum(per depotID: demand) AS s FROM Shipment) t) MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# ... and in the objective
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship) + (SELECT sum(per (): demand) FROM Shipment);
+----
+Binder Error: DECIDE: 'PER ():' is not supported yet
+
+# quoted keywords are ordinary names inside a DECIDE clause
+statement error
+SELECT g, x FROM kw DECIDE per "per": x(INT) SUCH THAT per "row", "by": sum(x) by ("per") <= "row" MAXIMIZE SUM(x);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# ---------------------------------------------------------------------------
+# PER ROW is the default written out: it leaves no new construct and runs.
+# ---------------------------------------------------------------------------
+
+query II
+SELECT shipmentID, ship FROM Shipment DECIDE per row: ship(INT) SUCH THAT per row: ship <= demand AND sum(per row: ship) <= 100 MAXIMIZE SUM(ship) ORDER BY shipmentID;
+----
+1	10
+2	20
+3	30
+
+# ---------------------------------------------------------------------------
+# The three exact parse errors.
+# ---------------------------------------------------------------------------
+
+# an objective is produced once: per with a key
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE per depotID: sum(ship);
+----
+Parser Error: an objective is produced once: write per (): or leave per out
+
+# an objective is produced once: per row
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE when priority per row: sum(ship);
+----
+Parser Error: an objective is produced once: write per (): or leave per out
+
+# parenthesized key, two columns, on a constraint
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per (depotID, customerID): sum(ship) by (depotID) <= 100 MAXIMIZE SUM(ship);
+----
+Parser Error: write per a, b: without parentheses; parentheses are only for per ()
+
+# parenthesized key, one column, on a declaration
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE per (depotID): ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship);
+----
+Parser Error: write per a, b: without parentheses; parentheses are only for per ()
+
+# parenthesized key inside a reducer
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(per (depotID): ship) <= 100 MAXIMIZE SUM(ship);
+----
+Parser Error: write per a, b: without parentheses; parentheses are only for per ()
+
+# an expression in a per key: arithmetic
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per dispatchDay + transitDays: sum(ship) <= 100 MAXIMIZE SUM(ship);
+----
+Parser Error: a per key lists columns or relations; put expressions in by (...)
+
+# an expression in a per key: a function call, in a declaration
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE per lower(depotID): ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship);
+----
+Parser Error: a per key lists columns or relations; put expressions in by (...)
+
+# an expression in a per key: a literal, inside a reducer
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(per 1: ship) <= 100 MAXIMIZE SUM(ship);
+----
+Parser Error: a per key lists columns or relations; put expressions in by (...)
+
+# ---------------------------------------------------------------------------
+# Malformed scopes are ordinary syntax errors.
+# ---------------------------------------------------------------------------
+
+# no colon after the scope
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID sum(ship) <= 100 MAXIMIZE SUM(ship);
+----
+Parser Error: syntax error at or near "sum"
+
+# per before when
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID when priority: sum(ship) <= 100 MAXIMIZE SUM(ship);
+----
+Parser Error: syntax error at or near "when"
+
+# a postfix WHEN after a scoped constraint
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: ship <= 5 WHEN priority MAXIMIZE SUM(ship);
+----
+Parser Error: syntax error at or near "WHEN"
+
+# a postfix PER after a scoped constraint
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority: sum(ship) <= 5 PER depotID MAXIMIZE SUM(ship);
+----
+Parser Error: syntax error at or near "PER"
+
+# by after something that is not a function call
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT (ship + 1) by (depotID) <= 5 MAXIMIZE SUM(ship);
+----
+Parser Error: syntax error at or near "by"
+
+# by without parentheses
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) by depotID <= 100 MAXIMIZE SUM(ship);
+----
+Parser Error: syntax error at or near "depotID"
+
+# when in a declaration
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE when priority: ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship);
+----
+Parser Error: syntax error at or near "when"
+
+# the bare word per is the keyword inside a DECIDE clause
+statement error
+SELECT g, x FROM kw DECIDE x(INT) SUCH THAT x <= per MAXIMIZE SUM(x);
+----
+Parser Error: syntax error at or near "per"
+
+# the bare word row directly after per is the keyword of per row
+statement error
+SELECT g, x FROM kw DECIDE x(INT) SUCH THAT per row, g: sum(x) by (g) <= 10 MAXIMIZE SUM(x);
+----
+Parser Error: syntax error at or near ","
+
+# ... so the old postfix PER takes a column named row only quoted
+statement error
+SELECT g, x FROM kw DECIDE x(INT) SUCH THAT SUM(x) <= 10 PER row AND x <= v MAXIMIZE SUM(x);
+----
+Parser Error: syntax error at or near "PER"
+
+query II
+SELECT g, x FROM kw DECIDE x(INT) SUCH THAT SUM(x) <= 10 PER "row" AND x <= v MAXIMIZE SUM(x) ORDER BY g;
+----
+1	5
+2	7
+
+# elsewhere in a key, row is a name
+statement error
+SELECT g, x FROM kw DECIDE x(INT) SUCH THAT per g, row: sum(x) <= 10 MAXIMIZE SUM(x);
+----
+Binder Error: DECIDE: 'PER key:' is not supported yet
+
+# row, and a by that does not follow ')', are names inside the clause
+query II
+SELECT g, x FROM kw DECIDE x(INT) SUCH THAT x <= row AND x <= by MAXIMIZE SUM(x) ORDER BY g;
+----
+1	2
+2	5
+
+# ---------------------------------------------------------------------------
+# Old spellings are unchanged.
+# ---------------------------------------------------------------------------
+
+query II
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT SUM(ship) <= 25 PER depotID AND SUM(ship) <= 100 PER (depotID, customerID) AND ship <= 60 WHEN priority AND SUM(ship) WHEN (priority) <= 90 MAXIMIZE SUM(ship) WHEN priority ORDER BY shipmentID;
+----
+1	25
+2	0
+3	25
+
+query III
+SELECT shipmentID, ship, open FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT), D.open(BOOL), scalar cap(REAL) SUCH THAT SUM(D: opening_cost * open) <= 15 AND ship <= 10 * open AND ship <= cap AND cap <= 8 MAXIMIZE SUM(ship) ORDER BY shipmentID;
+----
+1	8	1
+2	8	1
+3	0	0
+
+# ---------------------------------------------------------------------------
+# Ordinary SQL is untouched.
+# ---------------------------------------------------------------------------
+
+# per, by and row stay names outside a DECIDE clause
+query IIII
+SELECT per, by, row, sum(v) OVER (PARTITION BY g ORDER BY by) FROM kw ORDER BY by;
+----
+1	2	3	5
+4	5	6	7
+
+# ... including in the SELECT list, FROM and WHERE of a DECIDE query
+query III
+SELECT per, by, x FROM kw WHERE row > 0 DECIDE x(INT) SUCH THAT x <= "per" MAXIMIZE SUM(x) ORDER BY by;
+----
+1	2	1
+4	5	4
+
+# ... in either clause order
+query II
+SELECT g, x DECIDE x(INT) FROM kw WHERE per > 1 SUCH THAT x <= v MAXIMIZE SUM(x) ORDER BY g;
+----
+2	7
+
+# GROUP BY, ORDER BY and PARTITION BY inside a subquery written within SUCH THAT
+query II
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT max(cnt) FROM (SELECT count(*) OVER (PARTITION BY depotID ORDER BY shipmentID) AS cnt FROM Shipment GROUP BY depotID, shipmentID) t) MAXIMIZE SUM(ship) ORDER BY shipmentID;
+----
+1	2
+2	2
+3	2
+
+# a new spelling outside a DECIDE clause is still a syntax error
+statement error
+SELECT sum(demand) by (depotID) FROM Shipment;
+----
+Parser Error: syntax error at or near "by"
+
+statement error
+SELECT sum(when priority: demand) FROM Shipment;
+----
+Parser Error: syntax error at or near "when"
+
+# the SELECT list of a DECIDE query is outside the clause
+statement error
+SELECT shipmentID, sum(ship) by (depotID) FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE SUM(ship);
+----
+Parser Error: syntax error at or near "by"

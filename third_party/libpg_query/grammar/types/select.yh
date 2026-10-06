@@ -11,6 +11,8 @@
 %type <node> decide_item_expr
 %type <node> decide_aggregate_when_condition
 %type <node> decide_objective_when_condition
+%type <node> decide_when decide_per decide_scope
+%type <list> decide_by
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause values_clause_opt_comma

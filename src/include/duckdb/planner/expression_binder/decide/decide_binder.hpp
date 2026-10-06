@@ -80,6 +80,11 @@ const char *DecideCaseUnsupportedMessage();
 void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
                                            const case_insensitive_map_t<idx_t> &variables);
 
+//! Reject the scope spellings -- `WHEN condition:`, `PER key:` and a reducer's
+//! `BY (key)` -- which parse but are not bound yet. A spelling leaves this check when
+//! its binding lands, and the check goes with the last of them.
+void ValidateDecideNoUnsupportedScope(const ParsedExpression &expr);
+
 bool IsDecideAggregateName(const string &name);
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 bool ContainsWhenOperator(const ParsedExpression &expr);

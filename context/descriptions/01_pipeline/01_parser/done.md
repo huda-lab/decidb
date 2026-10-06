@@ -33,28 +33,32 @@ a generic syntax error.
 
 ### Variable declarations
 
-`typed_decide_variable` accepts exactly three spellings — the type is mandatory:
+`typed_decide_variable` accepts four spellings — the type is mandatory:
 
 ```
 x(TYPE)             row-scoped     — one decision per result row
 T.x(TYPE)           table-scoped   — one decision per entity in T
 scalar x(TYPE)      query-wide     — one decision for the whole query
+PER key: x(TYPE)    keyed          — parses; see "Scope spellings" below
 ```
 
-All three build a `PG_AEXPR_OF` node pairing a `PGColumnRef` (one field, or two
-for the qualified form) with the type. Five further alternatives exist **only to
-produce an actionable message** rather than a parse failure: a bare `ColId`, a
-bare `ColId.ColId`, `scalar T.x(TYPE)` (a contradiction — a query-wide variable
-cannot name a table), and the two retired `IS` spellings. Each `ereport`s with the
-edit to make, naming the variable.
+All build a `PG_AEXPR_OF` node pairing a `PGColumnRef` (one field, or two for the
+qualified form) with the type; the keyed form wraps that name in its scope marker.
+Six further alternatives exist **only to produce an actionable message** rather than
+a parse failure: a bare `ColId`, a bare `ColId.ColId`, a bare `scalar ColId`,
+`scalar T.x(TYPE)` (a contradiction — a query-wide variable cannot name a table),
+and the two retired `IS` spellings. Each `ereport`s with the edit to make, naming
+the variable.
 
 `decide_constraint_list` likewise rejects comma-separated constraints with
 *"use AND between constraints. For multi-column PER, use PER (col1, col2)"*.
 
 ### `WHEN` and `PER`
 
-`decide_objective_item` has six alternatives covering `WHEN`, `PER col`,
-`PER (col, ...)`, and the `WHEN ... PER ...` combinations. `WHEN` builds
+`decide_constraint_item` and `decide_objective_item` each have seven alternatives:
+the prefix scope form `decide_scope ':' decide_item_expr` ("Scope spellings"
+below), five postfix forms covering `WHEN`, `PER col`, `PER (col, ...)` and the two
+`WHEN ... PER ...` combinations, and the bare item. `WHEN` builds
 `PG_AEXPR_WHEN_CONSTRAINT`, `PER` builds `PG_AEXPR_PER_CONSTRAINT`, and when both
 appear the nesting is `PER(WHEN(body, condition), columns)`.
 
@@ -80,15 +84,53 @@ precedence. That precedence is above `AND`, so `A AND B WHEN c` and
 comparison operators, so the body and condition retain their SQL expression
 shape. No parsed-tree association repair is needed.
 
+### Scope spellings — parsed, not yet bound
+
+The planned extension ([`../../00_project_overview/anr_language_extension.md`](../../00_project_overview/anr_language_extension.md))
+writes a scope *in front* of what it governs. The grammar accepts all of it; the
+binder refuses every scope with *"DECIDE: 'PER key:' is not supported yet"*
+(`ValidateDecideNoUnsupportedScope`, `decide_binder.cpp`, run first by
+`DecideDeclarationsBinder::BindDeclarations`, looking inside subqueries too) until
+the item that binds it lands.
+
+```
+decide_scope  ::= decide_when | decide_when decide_per | decide_per
+decide_when   ::= WHEN_DECIDE a_expr | WHEN_DECIDE_OBJECTIVE a_expr
+decide_per    ::= PER_DECIDE expr_list | PER_DECIDE_PAREN '(' ')' | PER_DECIDE_ROW ROW
+decide_by     ::= BY_DECIDE '(' ')' | BY_DECIDE '(' expr_list ')'
+```
+
+- `decide_scope ':' decide_item_expr` is one alternative of `decide_constraint_item`
+  and of `decide_objective_item`, so a scoped item takes no postfix `WHEN` or `PER`.
+  A `decide_scope ':'` may also precede the first argument of a function call
+  (`func_name '(' decide_scope ':' func_arg_list ')'`), and `decide_per ':'` a
+  declared name. `decide_by` may follow a `func_application`, a scoped call, or the
+  relation-qualified colon form.
+- The scope is carried through the grammar as a `PGDecideScope` (`parsenodes.hpp`)
+  and folded by `applyDecideScope` (`grammar.cpp`) into `PG_AEXPR_SCOPE_WHEN`
+  (`lexpr` body, `rexpr` condition) inside `PG_AEXPR_SCOPE_PER` (`lexpr` body,
+  `rexpr` the key list, `NULL` for `PER ()`). `PER ROW` is the default written out
+  and leaves no node. `BY` builds `PG_AEXPR_REDUCER_BY` (`lexpr` the call, `rexpr`
+  the key list, `NULL` for `BY ()`).
+- A key element must be a column or relation name (`makeDecideScope`): anything
+  else is *"a per key lists columns or relations; put expressions in by (...)"*.
+  A parenthesized key is *"write per a, b: without parentheses; parentheses are
+  only for per ()"*. A `PER` other than `()` on an objective is *"an objective is
+  produced once: write per (): or leave per out"*.
+- Because the colon ends the scope, the condition is a full `a_expr` and needs no
+  parentheses; a postfix `WHEN` or `PER` after a scoped item is a syntax error.
+
 ### Conflicts
 
-`grammar.y` declares `%expect 6`, itemised in its header comment: 2 inherited
-from DuckDB's PostgreSQL-derived postfix-operator states and 4 from the optional
-declaration slot, one per `simple_select` alternative. The declaration-slot four
-are reachable only when `from_clause` and `where_clause` are both empty, and both
+`grammar.y` declares `%expect 4`, itemised in its header comment: all four come
+from the optional declaration slot, one per `simple_select` alternative. They are
+reachable only when `from_clause` and `where_clause` are both empty, and both
 derivations build the same node, so bison's default shift is not load-bearing.
 Aggregate-local conflicts for both DECIDE WHEN tokens and the equivalent
-qualified-reducer state are resolved explicitly by `DECIDE_ITEM` precedence.
+qualified-reducer state are resolved explicitly by `DECIDE_ITEM` precedence. The
+two conflicts the postfix-operator states used to carry were on the token `PER`,
+which could be read as an identifier there; `PER` now reaches the grammar as a
+DECIDE-only token, so they are gone.
 
 Grammar changes require `make grammar-build` (bison 2.3).
 
@@ -139,8 +181,21 @@ the lexer emits DECIDE-only tokens inside the clause:
 - A depth-0 `WHEN` becomes `WHEN_DECIDE` in constraints. After `MAXIMIZE` or
   `MINIMIZE`, `in_decide_objective` makes it `WHEN_DECIDE_OBJECTIVE`, allowing
   the grammar to distinguish a condition comparison from a constraint bound.
+- `BY` directly after `)` becomes `BY_DECIDE` (`decide_after_rparen` remembers
+  the previous token). `GROUP BY`, `ORDER BY` and `PARTITION BY` always follow a
+  keyword, so those clauses stay plain in a subquery written inside the clause; a
+  `by` that does follow `)` there (a table alias in `FROM (SELECT 1) by`, say) is
+  still `BY_DECIDE`.
+- `PER` is split by the token after it, through the same one-token lookahead
+  `NOT`, `NULLS` and `WITH` use: `PER_DECIDE_PAREN` before `(`, `PER_DECIDE_ROW`
+  before `ROW`, otherwise `PER_DECIDE`. `PER ()`, `PER ROW` and `PER <key>` are
+  not LALR(1)-separable without it, since `(` also opens an expression and `ROW`
+  is also a column name.
 
-No lookahead is needed for this decision.
+Inside a DECIDE clause, subqueries written there included, these words are
+therefore keywords in those positions, never names: a column called `per`, a `by`
+after `)` or a `row` after `PER` is written quoted there (`"per"`), as the printer
+does. Outside the clause nothing changes.
 
 When a parse still fails, `MaybeAppendDecideWhenHint` (`src/parser/decide/decide_parse_hints.cpp`,
 called from `src/parser/parser.cpp:229`) appends a DECIDE-specific hint to the
@@ -160,18 +215,23 @@ into a `ShowRef` with `ShowType::DIAGNOSE` wrapping the inner query node — the
 mechanism `SUMMARIZE` and `DESCRIBE` use, so the prefix reaches the binder as a table
 reference rather than as a statement flag it would have to thread separately.
 
-`src/parser/transform/expression/transform_operator.cpp:210-237` converts the two
-DECIDE `PG_AEXPR` node types into tagged `FunctionExpression`s with
+`src/parser/transform/expression/transform_operator.cpp` converts every DECIDE
+`PG_AEXPR` node kind the same way — `lexpr` becomes child 0, `rexpr` (absent, one
+node, or a list) the children after it — into a tagged `FunctionExpression` with
 `is_operator = true`:
 
 | Parsed node | Becomes |
 |---|---|
 | `PG_AEXPR_WHEN_CONSTRAINT` | `FunctionExpression(WHEN_CONSTRAINT_TAG, [body, condition])` |
 | `PG_AEXPR_PER_CONSTRAINT` | `FunctionExpression(PER_CONSTRAINT_TAG, [body, col...])` |
+| `PG_AEXPR_QUALIFIED_REDUCER` | `FunctionExpression(QUALIFIED_REDUCER_TAG, [aggregate, relation...])` |
+| `PG_AEXPR_SCOPE_WHEN` | `FunctionExpression(SCOPE_WHEN_TAG, [body, condition])` |
+| `PG_AEXPR_SCOPE_PER` | `FunctionExpression(SCOPE_PER_TAG, [body, key...])` |
+| `PG_AEXPR_REDUCER_BY` | `FunctionExpression(REDUCER_BY_TAG, [reducer, key...])` |
 
-Those two tags are how `WHEN` and `PER` ownership travels the rest of the
+The first two tags are how `WHEN` and `PER` ownership travels the rest of the
 pipeline. Every later stage recurses into child 0 only and copies the condition or
-grouping columns unchanged.
+grouping columns unchanged. The last three stop at the binder for now.
 
 ---
 
@@ -203,11 +263,13 @@ a comparison against a type-marker string, and `WHEN`, `PER`, and a
 relation-qualified reducer are tagged `FunctionExpression`s. Those encodings are for
 the parser and binder, not SQL users.
 
-`SelectNode::ToString()` reverses the encoding. It emits `x(INT)`, `T.x(BOOL)` and
-`scalar x(REAL)`, renders the top-level constraint list without generic SQL
-parentheses that the DECIDE grammar cannot accept, and restores objective direction.
-`FunctionExpression::ToString()` restores `WHEN`, `PER` and `SUM(D, T: expression)`
-where those tags can occur inside a larger expression. Ordinary parsed functions keep
+`SelectNode::ToString()` reverses the encoding. It emits `x(INT)`, `T.x(BOOL)`,
+`scalar x(REAL)` and `PER key: x(INT)`, renders the top-level constraint list
+without generic SQL parentheses that the DECIDE grammar cannot accept, and restores
+objective direction. `FunctionExpression::ToString()` restores `WHEN`, `PER`,
+`SUM(D, T: expression)`, the scope `WHEN condition PER key: body` (WHEN first, as
+written, although PER is the outer tag) and `reducer BY (key)` where those tags can
+occur inside a larger expression. Ordinary parsed functions keep
 DuckDB's generic renderer. `SelectNode::decide_sense` defaults to `FEASIBILITY`, so
 generated parsed-statement serialization also has a defined value for ordinary
 non-DECIDE selects.
@@ -224,7 +286,8 @@ serialization. The regression matrix in
 `test/common/test_decidb_plan_serialization.cpp` covers all variable types and scopes,
 both clause orders, `WHEN`, one- and multi-column `PER`, qualified reducers, `NORM`,
 `IN`, nested aggregates, scalar subqueries, quoted identifiers and `DIAGNOSE`. It
-checks reparsed equality, stable rendering, and binary `SelectStatement` round trips.
+checks reparsed equality, stable rendering, and binary `SelectStatement` round trips;
+a second case does the same for the scope spellings and pins their parse errors.
 
 DuckDB's parsed verifier creates and reparses the rendered statement. For a statement
 containing DECIDE, that is the end of this verifier: it does not execute a second
@@ -271,10 +334,12 @@ continuation cases outside the materializing verifier. The guarded release run p
 | `DIAGNOSE` prefix production | `third_party/libpg_query/grammar/statements/variable_show.y` |
 | Conflict budget and rationale | `third_party/libpg_query/grammar/grammar.y` (header comment) |
 | Reserved keywords | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` |
-| DECIDE `WHEN` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
+| DECIDE `WHEN`, `PER` and `BY` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
+| Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`) |
+| Scope gate in the binder | `src/planner/expression_binder/decide/decide_binder.cpp` (`ValidateDecideNoUnsupportedScope`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |
-| `WHEN`/`PER` tag construction | `src/parser/transform/expression/transform_operator.cpp` |
+| DECIDE tag construction | `src/parser/transform/expression/transform_operator.cpp` |
 | DECIDE statement rendering | `src/parser/query_node/select_node.cpp`, `src/parser/expression/function_expression.cpp` |
 | Parsed reparse verifier boundary | `src/verification/parsed_statement_verifier.cpp`, `src/main/client_verify.cpp` |
 | Parse-error hint | `src/parser/decide/decide_parse_hints.cpp` |

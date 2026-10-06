@@ -89,6 +89,20 @@ unique_ptr<ParsedExpression> Transformer::TransformInExpression(const string &na
 unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgquery::PGAExpr &root) {
 	auto name = string(PGPointerCast<duckdb_libpgquery::PGValue>(root.name->head->data.ptr_value)->val.str);
 
+	// DecidB: a DECIDE marker is `tag(lexpr, rexpr...)`, rexpr being absent, one node, or a list.
+	auto decide_marker = [&](const char *tag) -> unique_ptr<ParsedExpression> {
+		vector<unique_ptr<ParsedExpression>> children;
+		children.push_back(TransformExpression(root.lexpr));
+		if (root.rexpr && root.rexpr->type == duckdb_libpgquery::T_PGList) {
+			TransformExpressionList(*PGPointerCast<duckdb_libpgquery::PGList>(root.rexpr), children);
+		} else if (root.rexpr) {
+			children.push_back(TransformExpression(root.rexpr));
+		}
+		auto result = make_uniq<FunctionExpression>(tag, std::move(children));
+		result->is_operator = true;
+		return std::move(result);
+	};
+
 	switch (root.kind) {
 	case duckdb_libpgquery::PG_AEXPR_OP_ALL:
 	case duckdb_libpgquery::PG_AEXPR_OP_ANY: {
@@ -205,57 +219,20 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		return make_uniq<ComparisonExpression>(ExpressionType::COMPARE_DISTINCT_FROM, std::move(left_expr),
 		                                       std::move(right_expr));
 	}
-	case duckdb_libpgquery::PG_AEXPR_WHEN_CONSTRAINT: {
-		// DecidB: constraint WHEN condition
-		auto constraint_expr = TransformExpression(root.lexpr);
-		auto condition_expr = TransformExpression(root.rexpr);
-		vector<unique_ptr<ParsedExpression>> children;
-		children.push_back(std::move(constraint_expr));
-		children.push_back(std::move(condition_expr));
-		auto result = make_uniq<FunctionExpression>(WHEN_CONSTRAINT_TAG, std::move(children));
-		result->is_operator = true;
-		return std::move(result);
-	}
-	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT: {
-		// DecidB: constraint PER column(s)
-		auto constraint_expr = TransformExpression(root.lexpr);
-		vector<unique_ptr<ParsedExpression>> children;
-		children.push_back(std::move(constraint_expr));
-		// Multi-column PER: rexpr is a PGList of column refs
-		if (root.rexpr->type == duckdb_libpgquery::T_PGList) {
-			auto *list = reinterpret_cast<duckdb_libpgquery::PGList *>(root.rexpr);
-			for (auto cell = list->head; cell != nullptr; cell = cell->next) {
-				auto *col_node = reinterpret_cast<duckdb_libpgquery::PGNode *>(cell->data.ptr_value);
-				children.push_back(TransformExpression(col_node));
-			}
-		} else {
-			// Single column PER
-			children.push_back(TransformExpression(root.rexpr));
-		}
-		auto result = make_uniq<FunctionExpression>(PER_CONSTRAINT_TAG, std::move(children));
-		result->is_operator = true;
-		return std::move(result);
-	}
-	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER: {
-		// DecidB: relation-qualified reducer, sum(D: expr) or sum(D, T: expr).
-		// children[0] = the aggregate, children[1..] = one column ref per named
-		// relation. rexpr is a PGList (mirrors multi-column PER's transform above)
-		// whenever the qualifier names more than one relation.
-		vector<unique_ptr<ParsedExpression>> children;
-		children.push_back(TransformExpression(root.lexpr));
-		if (root.rexpr->type == duckdb_libpgquery::T_PGList) {
-			auto *list = reinterpret_cast<duckdb_libpgquery::PGList *>(root.rexpr);
-			for (auto cell = list->head; cell != nullptr; cell = cell->next) {
-				auto *col_node = reinterpret_cast<duckdb_libpgquery::PGNode *>(cell->data.ptr_value);
-				children.push_back(TransformExpression(col_node));
-			}
-		} else {
-			children.push_back(TransformExpression(root.rexpr));
-		}
-		auto result = make_uniq<FunctionExpression>(QUALIFIED_REDUCER_TAG, std::move(children));
-		result->is_operator = true;
-		return std::move(result);
-	}
+	// DecidB: the constraint or reducer in children[0], its WHEN condition, PER columns
+	// or qualifying relations after it (see common/enums/decide.hpp for each tag).
+	case duckdb_libpgquery::PG_AEXPR_WHEN_CONSTRAINT:
+		return decide_marker(WHEN_CONSTRAINT_TAG);
+	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT:
+		return decide_marker(PER_CONSTRAINT_TAG);
+	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER:
+		return decide_marker(QUALIFIED_REDUCER_TAG);
+	case duckdb_libpgquery::PG_AEXPR_SCOPE_WHEN:
+		return decide_marker(SCOPE_WHEN_TAG);
+	case duckdb_libpgquery::PG_AEXPR_SCOPE_PER:
+		return decide_marker(SCOPE_PER_TAG);
+	case duckdb_libpgquery::PG_AEXPR_REDUCER_BY:
+		return decide_marker(REDUCER_BY_TAG);
 
 	default:
 		break;

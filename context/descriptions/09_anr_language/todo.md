@@ -1,8 +1,9 @@
 # ANR language surface — plan
 
-> **Status (2026-10-05): plan only — nothing here is implemented.**
+> **Status (2026-10-07): item 1 (the new spellings parse) has shipped — see
+> [`done.md`](done.md); items 2–7 remain.**
 > Target branch `Sami-Active`, designed from this branch's code alone; earlier attempts
-> on other branches are not a reference. As a milestone ships, its content moves into
+> on other branches are not a reference. As an item ships, its content moves into
 > `done.md` and the stage docs it changes; this file keeps only what remains.
 
 DECIDE gains the scoping language of the "DeciQL proposals" deck:
@@ -73,7 +74,7 @@ vetoed.
 | S2 | Decisions are referenced by bare name; `D.open` in a constraint is no longer accepted |
 | S3 | With no `per`, a constraint is per row — so `sum(x) <= cap` keeps today's meaning (the tightest `cap`); with an explicit `per`, a varying bound is the C8 error |
 | S4 | `SUM(D: e)` uses the same data check as `sum(per D: e)`; today's bind-time rule for it goes away |
-| S5 | Old and new spellings coexist until the last milestone |
+| S5 | Old and new spellings coexist until the last item |
 | S6 | `per (a, b):` is refused with a message; parentheses mean only `per ()` |
 | S7 | Inside a DECIDE clause `when`, `per`, and `by` after a `)` are keywords; a column with such a name is quoted there |
 | S8 | `per` keys are columns and relations; expressions are allowed only in `by` (checklist wording) |
@@ -168,8 +169,8 @@ may assume a well-defined clause — they assert, they do not repair.
 
 | # | Layer | Change | Main files |
 |---|---|---|---|
-| 1 | Parser | Productions of the spec's §1. `PER` and `BY` come from the DECIDE lexer gate that already yields `WHEN_DECIDE` (`BY` only right after `)`), so plain SQL is untouched; `WHEN_DECIDE_OBJECTIVE` goes. Prefix forms reuse the existing WHEN and PER tag nodes in the same nesting; `by` adds one tag; `per ()` is a PER tag with no key, `per row` is no tag. `ToString` prints the new spellings | `grammar/statements/select.y`, `grammar/grammar.y`, `src_backend_parser_parser.cpp`, `transform_operator.cpp`, `select_node.cpp`, `function_expression.cpp`, `decide_parse_hints.cpp` |
-| 2 | Binder | Key scopes (§4.1); variable scope ROW / KEYED / GLOBAL (today's ROW / ENTITY / SCALAR). `by` and inner `per` become scope tags on the aggregate; inner `when` stays `filter`. The colon reducer binds through the same code. The objective's two-level nested form binds onto today's nested-objective tree. Removed: `RewriteScopedVarRefs`, `CheckQualifiedReducerBody`, the "do not mix the two WHENs" rule | `decide_declarations_binder.cpp`, `decide_binder.cpp`, `decide_constraints_binder.cpp`, `decide_objective_binder.cpp` |
+| 1 | Parser | Item 7 (C10): `WHEN_DECIDE_OBJECTIVE` and its lexer state go, and the parenthesis hints in `decide_parse_hints.cpp` are deleted, with the old spellings. What item 1 shipped is in `done.md` | `grammar/statements/select.y`, `src_backend_parser_parser.cpp`, `decide_parse_hints.cpp` |
+| 2 | Binder | Binds the parser's `SCOPE_WHEN` / `SCOPE_PER` / `REDUCER_BY` markers (`decide.hpp`), shrinking `ValidateDecideNoUnsupportedScope` as each lands. Key scopes (§4.1); variable scope ROW / KEYED / GLOBAL (today's ROW / ENTITY / SCALAR). `by` and inner `per` become scope tags on the aggregate; inner `when` stays `filter`. The colon reducer binds through the same code. The objective's two-level nested form binds onto today's nested-objective tree. Removed: `RewriteScopedVarRefs`, `CheckQualifiedReducerBody`, the "do not mix the two WHENs" rule | `decide_declarations_binder.cpp`, `decide_binder.cpp`, `decide_constraints_binder.cpp`, `decide_objective_binder.cpp` |
 | 3 | Logical plan | `key_scopes` replaces `entity_scopes` + `entity_key_expressions`; new `scope_checks`. Both serialized, and both added to the hand-kept expression lists (binding resolution, column pruning) | `logical_decide.hpp/.cpp`, `logical_operator.json`, `nodes.json`, `column_binding_resolver.cpp` |
 | 4 | Canonicalizer | Rule C5 (no mixing) is replaced by the shape classification of §4.2. Rule C6: a factor on a reducer may be any decision-free term; whole-query is required only to stay in the aggregate shape. An empty-key PER wrapper is legal. Builds `scope_checks` | `decide_canonicalizer.cpp/.hpp`, `decide_constraint_walk.hpp` |
 | 5 | Optimizer | `RewriteScopedReducers` (§4.2). The linear form fills an aggregate clause's grouping from its shared `by` key | `decide_optimizer.cpp`, new `decide_rewrite_scoped.cpp`, `decide_linear_form.cpp`, `decide_prepared_model.hpp` |
@@ -188,9 +189,9 @@ match the fixed phrases and messages of the spec's §9.
 
 ### C1 — `decide per K: x(TYPE)`
 
-**How.** Parser: the declaration node wrapped in a PER tag. Binder: each key element
-resolves as a column, else as a relation expanded to all its columns (as
-`FindOrCreateEntityScope` does today); no `per` → ROW, `per ()` → GLOBAL, else KEYED.
+**How.** Binder: each key element resolves as a column, else as a relation expanded to
+all its columns (as `FindOrCreateEntityScope` does today); no `per` → ROW, `per ()` →
+GLOBAL, else KEYED.
 Key columns survive column pruning through the mechanism `entity_key_expressions` uses
 today. Readback is unchanged: every row of a class shows the class's value.
 
@@ -216,8 +217,9 @@ the same key share one scope.
 
 ### C3 — constraint `per K:`
 
-**How.** `scope ':' comparison`, PER tag outside WHEN tag as today, so the bound
-wrappers and every pass that walks them are unchanged. `per` no longer requires an
+**How.** `scope ':' comparison` arrives as the `SCOPE_PER` marker outside the
+`SCOPE_WHEN` marker (`decide.hpp`); the binder maps them onto today's bound PER/WHEN
+wrappers, so every pass that walks those wrappers is unchanged. `per` no longer requires an
 aggregate and no longer groups reducers by itself. Classes come from the unified
 grouping; the rows shape keeps the first row of each class.
 
@@ -226,14 +228,12 @@ grouping; the rows shape keeps the first row of each class.
 2. `per ()` → one constraint; identical dump to the same aggregate-only clause without `per`.
 3. `per row:` ≡ omitted.
 4. Unused `per` (`per g: sum(x) <= 10`) accepted, one row in the dump (D6).
-5. `per (a, b):` → error naming `per a, b:` (S6).
-6. A scope covers one constraint: in `per g: A AND B`, only `A` is scoped.
+5. A scope covers one constraint: in `per g: A AND B`, only `A` is scoped.
 
 ### C4 — `when` filters known rows before `per`
 
-**How.** The WHEN tag, written in front. The condition is an ordinary boolean
-expression ended by `per` or `:`, so the old parenthesis rules disappear. Reducers in
-the body see only kept rows, as expression-level WHEN already works.
+**How.** The `SCOPE_WHEN` marker binds onto today's WHEN wrapper. Reducers in the body
+see only kept rows, as expression-level WHEN already works.
 
 **Tests — same file.**
 1. `when c per K: …`: a class with no kept row does not exist — no constraint, no error.
@@ -245,7 +245,8 @@ the body see only kept rows, as expression-level WHEN already works.
 
 ### C5 — postfix `by (Γ)`
 
-**How.** `by` is accepted only directly after a reducer's `)`. Γ binds as data-only
+**How.** The parser takes `by` after any call's `)`; the binder refuses it unless the
+call is `SUM`, `AVG`, `MIN` or `MAX` (§9). Γ binds as data-only
 expressions into a key scope, stamped on the aggregate's alias the way
 `__qualified_by_N__` is today; no `by` → no tag. Group ids come from the unified
 grouping over kept rows. A bound-side reducer is evaluated per its own group.
@@ -257,7 +258,6 @@ grouping over kept rows. A bound-side reducer is evaluated per its own group.
 4. A data-only reducer with `by` on the bound side.
 5. NULL group key = one group (D5).
 6. Errors: a decision in Γ; `by` after something that is not a reducer.
-7. Plain SQL untouched: `GROUP BY` / `ORDER BY` / `PARTITION BY` in a subquery inside `SUCH THAT` still parse; `SELECT sum(x) by (g) FROM t` outside DECIDE is still a syntax error.
 
 ### C6 — `when` and `per` inside a reducer
 
@@ -276,6 +276,7 @@ replaced by the data check of C8.
 5. Combined with `by` and an outer `per`.
 6. Inner key that does not determine the body → named error; same query on data where it does → runs.
 7. A reducer empty for one class → error naming the class (D8); moving the filter in front of the constraint fixes it.
+8. A scope inside a call that is not `SUM`, `AVG`, `MIN` or `MAX` (`norm(when c: e, 1)`, which the parser accepts on the first argument) → bind error; its message is not in the spec's §9 yet.
 
 ### C7 — several reducers in one constraint, each with its own `by`
 
@@ -310,12 +311,11 @@ replaced by the data check of C8.
 
 ### C9 — objective: omitted `per` means `per ()`
 
-**How.** The grammar accepts a scope; the parser rejects any other `per`: *"an
-objective is produced once: write per (): or leave per out"*. The two-level form binds
-onto today's nested-objective tree (D2); any other nesting → "not supported yet".
+**How.** The two-level form binds onto today's nested-objective tree (D2); any other
+nesting → "not supported yet".
 
 **Tests — `test_scope_objective.py`.**
-1. Omitted ≡ `per ():` (identical dump); `per g:` and `per row:` → error.
+1. Omitted ≡ `per ():` (identical dump).
 2. `MAXIMIZE when c: sum(e)` ≡ `MAXIMIZE sum(when c: e)`.
 3. The nine `outer(per k: inner(e) by (k))` combinations against the existing oracles.
 4. `by` key ≠ inner `per` key, three levels, or a nested reducer in a constraint (deck ex. 9) → "not supported yet".
@@ -346,24 +346,20 @@ both solvers. Ex. 7 also on data where one depot has no priority shipment → th
 
 ## 7. Order of work
 
-| Step | Delivers | Checklist |
+Seven items, one commit each: a feature plus the tests that prove it. Old spellings keep
+working until item 7. Item 1 has shipped — see [`done.md`](done.md).
+
+| Item | Delivers | Checklist |
 |---|---|---|
-| M0 | Rebuild and a green baseline run on both solvers (see below). Then: grammar for every new spelling beside the old ones, `%expect 6` unchanged, final parsed nodes and rendering. Spellings that mean the same as an old one (`per T: x`, `per (): x`, `when c: C`, `sum(when c: e)`, `sum(per D: e)`) are mapped onto today's structures, so they run at once | — |
-| M1 | Key scopes, `decide per <columns>`, unified grouping, NULL as a value | C1 C2 |
-| M2 | `per` without implicit grouping, `by`, inner `per` on columns, bound-side reducers per group, objective rule; shapes rows + aggregate. Runs ex. 2, 3, 4, 6, 7 | C3 C4 C5 C6 C9 |
-| M3 | `scope_checks`: determination and empty sets. No explicit-`per` query counts as supported before this | C8 |
-| M4 | Value rewrite. Runs ex. 1, 5, 8 | C7 |
-| M5 | Tests, corpus and benchmarks converted; old spellings become errors; dead code removed; docs rewritten | C10 C11 |
+| 2 | `decide per K: x(TYPE)`: a key of columns and/or relations, `per ()`, each name with its own key, NULL as a key value; `T.x` and `scalar x` run through the same code. Tests `test_scope_declare.py`; first version of the reference evaluator `_scope_oracle.py` | C1 C2 |
+| 3 | Reducer scope: `by (Γ)` (also on the bound side; NULL is a group), `when` and `per` inside a reducer with column keys, `SUM(D: e)` through the same code, the data checks that the inner key determines the body and that no reducer is left without rows; the old `C PER g` runs as `by (g)` on each reducer. Tests `test_scope_reducer_by.py`, `test_scope_reducer_inner.py`; existing `PER`, aggregate `WHEN` and `SUM(D: e)` tests and the golden models must not change except the cases rewritten for D5 and D8 | C5 C6 |
+| 4 | Constraint and objective scope: `when c:` (any condition; keeping no row is an error), `per K:` without implicit grouping, `per ()`, `per row`, NULL as a class, the determination check with its named error; objective `per ()` only, `when` in front, the two-level nested form. Tests `test_scope_generation.py`, `test_scope_determination.py`, `test_scope_objective.py`; deck examples 2, 3, 4, 6, 7 | C3 C4 C8 C9 |
+| 5 | New constraint shapes for `SUM`, `AVG`, `MIN`, `MAX`: a plain term beside a reducer, reducers with different `by` keys, a row-varying factor — the value rewrite of §4.2. Tests `test_scope_value_rewrite.py`, `test_scope_deck_examples.py` (all eight, both written forms), `test_scope_combinations.py`, one golden entry per new shape | C7 C11 |
+| 6 | Switch everything to the new spellings: EXPLAIN and DIAGNOSE echo them; golden corpus, parser tests, pytest suite and benchmarks converted; no other engine change. `golden/check.sh` identical on both solvers | — |
+| 7 | Remove the old spellings: `T.x(TYPE)`, `scalar x(TYPE)`, postfix `PER`, postfix `WHEN` and `D.x` references raise the error naming the new spelling; dead code removed; `SUM(D: e)` stays; the behaviour file is folded into `syntax_reference.md`. Tests `test_scope_removed_syntax.py` | C10 |
 
-M0 comes first because the grammar is the one part that can fail outright: bison must
-accept it without new conflicts before anything is built on it.
-
-**Rebuild before anything else.** On 2026-10-05 the `build/release/decidb` on disk
-(built 2026-10-03) did not match this branch's source — it refuses `scalar x(INT)`,
-which this branch's grammar accepts. Nothing in this plan was verified by running that
-binary; every statement about current behaviour comes from this branch's source and
-docs. M0 therefore starts with `make release` and a green suite, so that later failures
-mean something.
+Items 3 and 4 change existing behaviour (NULL keys, empty sets, a varying bound under
+`per`); each rewrites the few existing tests it affects in the same commit.
 
 Gate at the end of every step — all green:
 
@@ -395,7 +391,7 @@ DECIDB_VERIFY_SERIALIZER=1 test/decide/.venv/bin/python3 -m pytest test/decide/t
   value variable's label) checking that a clause is echoed in the new spelling and
   that no internal name leaks.
 
-**Converting what exists (M5).** About 495 `PER` and 700 `WHEN` uses in ~50 test files,
+**Converting what exists (item 6).** About 495 `PER` and 700 `WHEN` uses in ~50 test files,
 75 `T.x` and 38 `scalar` declarations, `test/decide/golden/corpus.sql`, 15 benchmark
 queries, the C++ and `test/decidb` parser tests, and the docs.
 
@@ -409,7 +405,7 @@ queries, the C++ and `test/decidb` parser tests, and the docs.
    (D8); a row-varying bound under `PER`, formerly tightest, now the C8 error unless
    `per` is left out.
 
-Docs to rewrite in M5: `00_project_overview/syntax_reference.md` §1, 2, 5–7; the
+Docs to rewrite in items 6 and 7: `00_project_overview/syntax_reference.md` §1, 2, 5–7; the
 `decide`, `per`, `when`, `such_that`, `maximize_minimize`, `sql_functions` and
 `explain` folders of `03_expressivity/` and its keyword table; stage docs 01–06 and 08
 of `01_pipeline/`; `04_testing/` (new `scope/` area).
@@ -420,13 +416,13 @@ of `01_pipeline/`; `04_testing/` (new `scope/` area).
 
 | Risk | Answer |
 |---|---|
-| The grammar gains conflicts (budget is `%expect 6`) | M0 settles it before anything is built on it. The lexer gate keeps the new tokens out of ordinary SQL, so only DECIDE productions can conflict |
-| A plan statement about current behaviour is wrong, since none was run (§7) | Each milestone's first test pins the "today" behaviour it builds on, before changing it |
+| A plan statement about current behaviour is wrong | Each item's first test pins the "today" behaviour it builds on, before changing it |
 | A converted query silently changes meaning — `per g:` without `by (g)` | The old-`PER` error spells out `by (g)`; converted tests are judged by oracle and golden dump, not by eye |
 | Key expressions read the wrong column after a join reorders columns | They join the hand-kept resolver and pruning lists; every key test has a join variant with the key left out of `SELECT` |
 | A hard `MIN`/`MAX` value link needs a Big-M and a variable is unbounded | Existing refusal with its "bound this variable" message; native constraint where the backend has one |
 | D4, D5 and D8 change answers of existing tests | Listed and rewritten deliberately (§8, point 3) |
 | DIAGNOSE on rewritten clauses names an internal variable | Value variables carry their reducer's SQL as label; definition rows are structural, so only the user's clause is ever offered for repair |
+| Until item 7, an old reducer `WHEN` after a `by` or a scoped call (`sum(x) by (g) WHEN c <= 1`) parses as a whole-constraint `WHEN` whose condition takes the bound | To settle before the first item that binds a new spelling: refuse a constraint that mixes old and new spellings, naming the new one |
 
 ---
 

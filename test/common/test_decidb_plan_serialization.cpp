@@ -131,6 +131,99 @@ TEST_CASE("Parsed DECIDE statements survive ToString and binary round trips", "[
 	}
 }
 
+TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips", "[decidb]") {
+	// Round trips as above; nothing here is bound, so the tables need not exist.
+	const duckdb::vector<string> queries = {
+	    // Keyed, whole-query and per-row declarations, the last leaving no marker.
+	    "SELECT a FROM t DECIDE per t.a, t: x(INT), per (): cap(REAL), per row: y(BOOL) "
+	    "SUCH THAT x <= cap AND y <= 1",
+	    // Scopes in front of constraints: a bare condition, when + per, per (), and the
+	    // next constraint unscoped.
+	    "SELECT a FROM t DECIDE x(INT) "
+	    "SUCH THAT when a > 0 and b IS NOT NULL per a, t.b: SUM(x) BY (a) <= 2 "
+	    "AND per (): SUM(x) <= 9 AND when a = 1: x <= 1 AND x >= 0",
+	    // Scopes inside reducers, BY with an expression, the colon form with BY, and a
+	    // scoped objective.
+	    "SELECT a FROM t DECIDE x(INT) "
+	    "SUCH THAT SUM(when a > 0 per t: x) BY (a, b + 1) <= 2 AND AVG(D: x) BY () <= 3 "
+	    "MAXIMIZE when a = 1 per (): SUM(x) BY ()",
+	    // The split clause order, DIAGNOSE, and names that are keywords inside DECIDE.
+	    "DIAGNOSE SELECT a DECIDE per \"per\": x(INT) FROM t "
+	    "SUCH THAT per \"row\", \"by\": SUM(x) BY (\"per\") <= \"row\"",
+	    // The deck examples 1-8 of the behaviour spec, as written and fully explicit.
+	    "SELECT S.shipmentID FROM Shipment S JOIN Depot D USING (depotID) "
+	    "DECIDE ship(INT), per D.depotID: reserve(REAL) "
+	    "SUCH THAT ship <= 0.20 * sum(ship) "
+	    "AND per (): sum(ship) <= networkCapacity "
+	    "AND per D.depotID: reserve >= D.networkReserveShare * sum(S.demand) "
+	    "AND per D.depotID: sum(ship) by (D.depotID) <= D.capacity "
+	    "AND ship <= D.maxShipmentShare * sum(ship) by (D.depotID) "
+	    "AND per D.depotID: reserve >= 0.10 * sum(S.demand) by (D.region) + 0.02 * sum(S.demand) by (D.country) "
+	    "AND per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity "
+	    "AND per S.shipmentID: ship <= 0.25 * sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)",
+	    "SELECT S.shipmentID FROM Shipment S JOIN Depot D USING (depotID) "
+	    "DECIDE ship(INT), per D.depotID: reserve(REAL) "
+	    "SUCH THAT per row: ship <= 0.20 * sum(per row: ship) by () "
+	    "AND per (): sum(per row: ship) by () <= networkCapacity "
+	    "AND per D.depotID: reserve >= D.networkReserveShare * sum(per row: S.demand) by () "
+	    "AND per D.depotID: sum(per row: ship) by (D.depotID) <= D.capacity "
+	    "AND per row: ship <= D.maxShipmentShare * sum(per row: ship) by (D.depotID) "
+	    "AND per D.depotID: reserve >= 0.10 * sum(per row: S.demand) by (D.region) "
+	    "+ 0.02 * sum(per row: S.demand) by (D.country) "
+	    "AND per D.depotID: sum(when S.priority per row: ship) by (D.depotID) <= D.priorityCapacity "
+	    "AND per S.shipmentID: ship <= 0.25 * sum(per row: ship) by (D.depotID, S.dispatchDay + S.transitDays)",
+	};
+
+	for (auto &query : queries) {
+		INFO(query);
+		auto original = ParseSelect(query);
+		auto rendered = original->ToString();
+		INFO(rendered);
+
+		auto reparsed = ParseSelect(rendered);
+		REQUIRE(original->Equals(*reparsed));
+		REQUIRE(reparsed->ToString() == rendered);
+
+		auto deserialized = RoundTripStatement(*original);
+		REQUIRE(original->Equals(*deserialized));
+		REQUIRE(deserialized->ToString() == rendered);
+	}
+
+	// A scope covers exactly one constraint: x >= 0 stays outside the WHEN.
+	REQUIRE(ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT when a = 1: x <= 1 AND x >= 0")->ToString() ==
+	        "SELECT a FROM t DECIDE x(INT) SUCH THAT WHEN (a = 1): (x <= 1) AND (x >= 0)");
+
+	// PER ROW is the default written out: it parses to the same statement.
+	auto spelled_out = ParseSelect("SELECT a FROM t DECIDE per row: x(INT) "
+	                               "SUCH THAT per row: SUM(per row: x) <= 1 AND per row: x <= 1");
+	auto implied = ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(x) <= 1 AND x <= 1");
+	REQUIRE(spelled_out->Equals(*implied));
+	REQUIRE(spelled_out->ToString() == implied->ToString());
+
+	// The three exact parse errors, and the generic one. The exception text is JSON,
+	// so a quoted token is matched on its own rather than inside the message.
+	auto rejects = [](const string &sql, const string &message, const string &token = "") {
+		INFO(sql);
+		Parser parser;
+		REQUIRE_THROWS_WITH(parser.ParseQuery(sql), Catch::Contains(message) && Catch::Contains(token));
+	};
+	const string once = "an objective is produced once: write per (): or leave per out";
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE per a: SUM(x)", once);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x <= 1 MINIMIZE when a = 1 per row: SUM(x)", once);
+	const string parens = "write per a, b: without parentheses; parentheses are only for per ()";
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per (a, b): SUM(x) <= 1", parens);
+	rejects("SELECT a FROM t DECIDE per (a): x(INT) SUCH THAT x <= 1", parens);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(per (a): x) <= 1", parens);
+	const string names = "a per key lists columns or relations; put expressions in by (...)";
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a + 1: SUM(x) <= 1", names);
+	rejects("SELECT a FROM t DECIDE per lower(a): x(INT) SUCH THAT x <= 1", names);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(per 5: x) <= 1", names);
+	// A scoped constraint takes no postfix modifier, and outside DECIDE nothing changed.
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a: x <= 1 WHEN b", "syntax error at or near", "WHEN");
+	rejects("SELECT SUM(x) BY (a) FROM t", "syntax error at or near", "BY");
+	rejects("SELECT SUM(when a: x) FROM t", "syntax error at or near", "when");
+}
+
 TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

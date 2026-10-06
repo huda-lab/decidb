@@ -236,7 +236,10 @@ typedef enum PGAExpr_Kind {
 	AEXPR_PAREN,              /* nameless dummy node for parentheses */
 	PG_AEXPR_WHEN_CONSTRAINT,   /* DecidB: constraint WHEN condition */
 	PG_AEXPR_PER_CONSTRAINT,    /* DecidB: constraint PER column */
-	PG_AEXPR_QUALIFIED_REDUCER  /* DecidB: relation-qualified reducer sum(D: expr) */
+	PG_AEXPR_QUALIFIED_REDUCER, /* DecidB: relation-qualified reducer sum(D: expr) */
+	PG_AEXPR_SCOPE_WHEN,        /* DecidB: scope filter, WHEN condition: body */
+	PG_AEXPR_SCOPE_PER,         /* DecidB: scope key, PER key: body */
+	PG_AEXPR_REDUCER_BY         /* DecidB: reducer rows, agg(...) BY (key) */
 } PGAExpr_Kind;
 
 typedef struct PGAExpr {
@@ -1255,8 +1258,29 @@ typedef struct PGDecideClause {
     PGList *variables;      /* DECIDE <variables> */
     PGNode *constraints;    /* SUCH THAT <constraints> */
     PGObjectiveSense sense; /* [MAXIMIZE|MINIMIZE] <objective> */
-    PGNode *objective;     
+    PGNode *objective;
 } PGDecideClause;
+
+/*
+ * DecidB: the scope written in front of a constraint, an objective, a declared
+ * variable or a reducer's argument -- [WHEN condition] [PER key]. It never leaves
+ * the grammar: the production owning the scoped body folds it into
+ * PG_AEXPR_SCOPE_* nodes (applyDecideScope).
+ */
+typedef enum PGDecidePer {
+	PG_DECIDE_PER_NONE, /* no PER written */
+	PG_DECIDE_PER_ROW,  /* PER ROW: the default, written out */
+	PG_DECIDE_PER_ALL,  /* PER (): one for the whole query */
+	PG_DECIDE_PER_KEY   /* PER a, b: one per distinct key */
+} PGDecidePer;
+
+typedef struct PGDecideScope {
+	PGNodeTag type;
+	PGNode *when;    /* PG_AEXPR_SCOPE_WHEN awaiting its body, or NULL */
+	PGDecidePer per;
+	PGList *key;     /* key elements; NIL unless per is PG_DECIDE_PER_KEY */
+	int location;    /* of PER, or -1 without one */
+} PGDecideScope;
 
 typedef struct PGSelectStmt {
 	PGNodeTag type;

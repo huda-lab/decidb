@@ -547,6 +547,82 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 	return body;
 }
 
+/*
+ * DecidB: the PER half of a scope written in front of a body. A key names
+ * columns or relations and nothing else; an expression there is meant for BY,
+ * which is where expressions go.
+ */
+static PGNode *
+makeDecideScope(PGDecidePer per, PGList *key, int location, core_yyscan_t yyscanner)
+{
+	PGDecideScope *scope = makeNode(PGDecideScope);
+	PGListCell *element;
+	PGListCell *field;
+
+	foreach(element, key)
+	{
+		PGNode *name = (PGNode *) lfirst(element);
+		bool is_name = IsA(name, PGColumnRef);
+
+		if (is_name)
+			foreach(field, ((PGColumnRef *) name)->fields)
+				is_name = is_name && IsA((PGNode *) lfirst(field), PGString);
+		if (!is_name)
+			ereport(ERROR,
+					(errcode(PG_ERRCODE_SYNTAX_ERROR),
+					 errmsg("a per key lists columns or relations; put expressions in by (...)"),
+					 parser_errposition(location)));
+	}
+	scope->per = per;
+	scope->key = key;
+	scope->location = location;
+	return (PGNode *) scope;
+}
+
+/*
+ * DecidB: fold a scope around the body it governs. WHEN applies first and PER
+ * second, so PER is the outer node. PER ROW is the default and leaves no node.
+ */
+static PGNode *
+applyDecideScope(PGNode *scope_node, PGNode *body)
+{
+	PGDecideScope *scope = (PGDecideScope *) scope_node;
+
+	if (scope->when)
+	{
+		((PGAExpr *) scope->when)->lexpr = body;
+		body = scope->when;
+	}
+	if (scope->per == PG_DECIDE_PER_ALL || scope->per == PG_DECIDE_PER_KEY)
+		body = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_PER, "scope_per", body,
+										  (PGNode *) scope->key, scope->location);
+	return body;
+}
+
+/*
+ * DecidB: a relation-qualified reducer, sum(D: expr) or sum(D, T: expr). Every
+ * item of the qualifier must be a bare relation name; the binder resolves them.
+ */
+static PGNode *
+makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
+					 int location, int qualifier_location, int colon_location,
+					 core_yyscan_t yyscanner)
+{
+	PGListCell *lc;
+
+	foreach(lc, qualifier)
+	{
+		if (!IsA((PGNode *) lfirst(lc), PGColumnRef))
+			ereport(ERROR,
+					(errcode(PG_ERRCODE_SYNTAX_ERROR),
+					 errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
+					 parser_errposition(qualifier_location)));
+	}
+	return (PGNode *) makeSimpleAExpr(PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer",
+									  (PGNode *) makeFuncCall(funcname, args, location),
+									  (PGNode *) qualifier, colon_location);
+}
+
 static PGNode *
 makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location)
 {

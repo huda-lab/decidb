@@ -205,6 +205,12 @@ static PGNode *doNegate(PGNode *n, int location);
 static void doNegateFloat(PGValue *v);
 static PGNode *makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 								int body_location, core_yyscan_t yyscanner);
+static PGNode *makeDecideScope(PGDecidePer per, PGList *key, int location,
+							   core_yyscan_t yyscanner);
+static PGNode *applyDecideScope(PGNode *scope, PGNode *body);
+static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
+									int location, int qualifier_location,
+									int colon_location, core_yyscan_t yyscanner);
 static PGNode *makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location);
 static PGNode *makeOrExpr(PGNode *lexpr, PGNode *rexpr, int location);
 static PGNode *makeNotExpr(PGNode *expr, int location);

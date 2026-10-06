@@ -42,27 +42,29 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 	return variables.count(colref.GetColumnName()) > 0;
 }
 
-static idx_t CountDecideVariableOccurrencesInternal(const ParsedExpression &expr,
-                                                    const case_insensitive_map_t<idx_t> &variables) {
-	idx_t count = 0;
-	if (IsVariableExpression(expr, variables)) {
-		count++;
-	}
-	// Descend into subquery QueryNode bodies (SELECT, WHERE, HAVING, etc.)
-	// EnumerateChildren only visits SubqueryExpression.child, not the query body.
+//! ParsedExpressionIterator::EnumerateChildren, plus the body (SELECT list, WHERE,
+//! FROM, ...) of a subquery, which EnumerateChildren does not enter.
+static void EnumerateChildrenAndSubqueries(const ParsedExpression &expr,
+                                           const std::function<void(const ParsedExpression &child)> &callback) {
 	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
 		auto &subquery_expr = expr.Cast<const SubqueryExpression>();
 		if (subquery_expr.subquery && subquery_expr.subquery->node) {
 			// const_cast: EnumerateQueryNodeChildren requires non-const but we only read
 			ParsedExpressionIterator::EnumerateQueryNodeChildren(
 			    const_cast<QueryNode &>(*subquery_expr.subquery->node),
-			    [&](unique_ptr<ParsedExpression> &child) {
-				    count += CountDecideVariableOccurrencesInternal(*child, variables);
-			    },
-			    [&](TableRef &ref) {});
+			    [&](unique_ptr<ParsedExpression> &child) { callback(*child); }, [&](TableRef &ref) {});
 		}
 	}
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+	ParsedExpressionIterator::EnumerateChildren(expr, callback);
+}
+
+static idx_t CountDecideVariableOccurrencesInternal(const ParsedExpression &expr,
+                                                    const case_insensitive_map_t<idx_t> &variables) {
+	idx_t count = 0;
+	if (IsVariableExpression(expr, variables)) {
+		count++;
+	}
+	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
 		count += CountDecideVariableOccurrencesInternal(child, variables);
 	});
 	return count;
@@ -91,23 +93,31 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 		}
 	}
 
-	// ParsedExpressionIterator::EnumerateChildren does not enter the QueryNode of
-	// a scalar subquery. Walk it explicitly so a correlated decision reference
-	// cannot hide an explicit cast inside the subquery body.
-	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
-		auto &subquery_expr = expr.Cast<const SubqueryExpression>();
-		if (subquery_expr.subquery && subquery_expr.subquery->node) {
-			ParsedExpressionIterator::EnumerateQueryNodeChildren(
-			    const_cast<QueryNode &>(*subquery_expr.subquery->node),
-			    [&](unique_ptr<ParsedExpression> &child) {
-				    ValidateDecideNoExplicitDecisionCasts(*child, variables);
-			    },
-			    [&](TableRef &ref) {});
-		}
-	}
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+	// Subquery bodies too, so a correlated decision reference cannot hide an
+	// explicit cast inside one.
+	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
 		ValidateDecideNoExplicitDecisionCasts(child, variables);
 	});
+}
+
+void ValidateDecideNoUnsupportedScope(const ParsedExpression &expr) {
+	static const struct {
+		const char *tag;
+		const char *spelling;
+	} scopes[] = {{SCOPE_WHEN_TAG, "WHEN condition:"}, {SCOPE_PER_TAG, "PER key:"}, {REDUCER_BY_TAG, "BY (key)"}};
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		for (auto &scope : scopes) {
+			if (func.is_operator && func.function_name == scope.tag) {
+				bool global = func.function_name == SCOPE_PER_TAG && func.children.size() == 1;
+				throw BinderException(expr, "DECIDE: '%s' is not supported yet", global ? "PER ():" : scope.spelling);
+			}
+		}
+	}
+	// Subquery bodies too: a subquery written in the clause is lexed with the clause's
+	// keywords, so it can hold these spellings.
+	EnumerateChildrenAndSubqueries(expr,
+	                               [&](const ParsedExpression &child) { ValidateDecideNoUnsupportedScope(child); });
 }
 
 bool IsDecideAggregateName(const string &name) {
@@ -456,20 +466,7 @@ static string FindRealDecideVariable(const ParsedExpression &expr,
 	}
 
 	string found;
-	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
-		auto &subquery_expr = expr.Cast<const SubqueryExpression>();
-		if (subquery_expr.subquery && subquery_expr.subquery->node) {
-			ParsedExpressionIterator::EnumerateQueryNodeChildren(
-			    const_cast<QueryNode &>(*subquery_expr.subquery->node),
-			    [&](unique_ptr<ParsedExpression> &child) {
-				    if (found.empty()) {
-					    found = FindRealDecideVariable(*child, variables, variable_types);
-				    }
-			    },
-			    [&](TableRef &ref) {});
-		}
-	}
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
 		if (found.empty()) {
 			found = FindRealDecideVariable(child, variables, variable_types);
 		}

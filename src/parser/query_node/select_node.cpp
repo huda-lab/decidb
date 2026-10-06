@@ -4,6 +4,7 @@
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
@@ -22,13 +23,18 @@ bool SelectNode::HasDecideClause() const {
 //! Reverse the parser-only comparison marker used for a typed DECIDE declaration.
 //! The generic expression renderer would expose the marker as
 //! `(x = 'integer_variable')`, which is neither public nor parseable DECIDE syntax.
+//! The name on its left is a column reference, under a `PER key:` scope marker when
+//! the declaration has one; that marker renders itself.
 static string DecideVariableToString(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::COMPARISON) {
 		throw InternalException("DECIDE variable declaration is not a typed comparison marker");
 	}
 	auto &comparison = expr.Cast<ComparisonExpression>();
+	auto &name = *comparison.left;
+	bool scoped = name.GetExpressionClass() == ExpressionClass::FUNCTION &&
+	              name.Cast<FunctionExpression>().function_name == SCOPE_PER_TAG;
 	if (comparison.type != ExpressionType::COMPARE_EQUAL ||
-	    comparison.left->GetExpressionClass() != ExpressionClass::COLUMN_REF ||
+	    (!scoped && name.GetExpressionClass() != ExpressionClass::COLUMN_REF) ||
 	    comparison.right->GetExpressionClass() != ExpressionClass::CONSTANT) {
 		throw InternalException("DECIDE variable declaration has an invalid parsed shape");
 	}

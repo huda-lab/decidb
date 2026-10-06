@@ -193,6 +193,7 @@ scalar_variable_type:
  *   "x(INT)"                  -- row-scoped (one per result row)
  *   "T.x(BOOL)"               -- table-scoped (one per entity in table T)
  *   "scalar x(INT)"           -- query-wide (one for the whole query)
+ *   "PER key: x(INT)"         -- keyed (one per distinct key; PER () for one in all)
  */
 typed_decide_variable:
 			ColId '(' variable_type ')'
@@ -210,6 +211,14 @@ typed_decide_variable:
 					col->fields = list_make2(makeString($1), makeString($3));
 					col->location = @1;
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$5, @2);
+				}
+			| decide_per ':' ColId '(' variable_type ')'
+				{
+					/* Keyed variable: PER key: x(TYPE). The scope wraps the name. */
+					PGColumnRef *col = makeNode(PGColumnRef);
+					col->fields = list_make1(makeString($3));
+					col->location = @3;
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", applyDecideScope($1, (PGNode *)col), (PGNode *)$5, @4);
 				}
 			| SCALAR ColId '(' scalar_variable_type ')'
 				{
@@ -317,6 +326,53 @@ decide_aggregate_when_condition:
 				{ $$ = $2; }
 		;
 
+/* DecidB: the scope written in front of a constraint, an objective, a declared
+ * variable or a reducer's argument -- [WHEN condition] [PER key]. A ':' always
+ * ends it, so the condition is a full a_expr and needs no parentheses. */
+decide_when:
+			WHEN_DECIDE a_expr
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
+			| WHEN_DECIDE_OBJECTIVE a_expr
+				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
+		;
+
+decide_per:
+			PER_DECIDE expr_list
+				{ $$ = makeDecideScope(PG_DECIDE_PER_KEY, $2, @1, yyscanner); }
+			| PER_DECIDE_PAREN '(' ')'
+				{ $$ = makeDecideScope(PG_DECIDE_PER_ALL, NIL, @1, yyscanner); }
+			| PER_DECIDE_PAREN '(' expr_list ')'
+				{
+					ereport(ERROR,
+							(errcode(PG_ERRCODE_SYNTAX_ERROR),
+							 errmsg("write per a, b: without parentheses; parentheses are only for per ()"),
+							 parser_errposition(@2)));
+					$$ = NULL;
+				}
+			| PER_DECIDE_ROW ROW
+				{ $$ = makeDecideScope(PG_DECIDE_PER_ROW, NIL, @1, yyscanner); }
+		;
+
+decide_scope:
+			decide_when
+				{
+					$$ = makeDecideScope(PG_DECIDE_PER_NONE, NIL, -1, yyscanner);
+					((PGDecideScope *) $$)->when = $1;
+				}
+			| decide_when decide_per
+				{
+					$$ = $2;
+					((PGDecideScope *) $$)->when = $1;
+				}
+			| decide_per							{ $$ = $1; }
+		;
+
+/* DecidB: BY (key) directly after a reducer names the rows it reads. */
+decide_by:
+			BY_DECIDE '(' ')'						{ $$ = NIL; }
+			| BY_DECIDE '(' expr_list ')'			{ $$ = $3; }
+		;
+
 /* One DECIDE item body. DECIDE_ITEM sits above AND but below the DECIDE WHEN
  * tokens and comparison operators: a top-level AND belongs to
  * decide_constraint_list, while the item's own comparisons stay intact. */
@@ -326,7 +382,18 @@ decide_item_expr:
 		;
 
 decide_objective_item:
-			decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER columnref_opt_indirection
+			decide_scope ':' decide_item_expr
+				{
+					/* DecidB: an objective is produced once, so PER () is the only PER it takes */
+					PGDecideScope *scope = (PGDecideScope *) $1;
+					if (scope->per == PG_DECIDE_PER_ROW || scope->per == PG_DECIDE_PER_KEY)
+						ereport(ERROR,
+								(errcode(PG_ERRCODE_SYNTAX_ERROR),
+								 errmsg("an objective is produced once: write per (): or leave per out"),
+								 parser_errposition(scope->location)));
+					$$ = applyDecideScope($1, $3);
+				}
+			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER_DECIDE columnref_opt_indirection
 				{
 					/* DecidB: objective WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -334,7 +401,7 @@ decide_objective_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
-			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER '(' columnrefList ')'
+			| decide_item_expr WHEN_DECIDE_OBJECTIVE decide_objective_when_condition PER_DECIDE_PAREN '(' columnrefList ')'
 				{
 					/* DecidB: objective WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -347,13 +414,13 @@ decide_objective_item:
 					/* DecidB: objective WHEN condition (restricted grammar excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
-			| decide_item_expr PER columnref_opt_indirection
+			| decide_item_expr PER_DECIDE columnref_opt_indirection
 				{
 					/* DecidB: objective PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
-			| decide_item_expr PER '(' columnrefList ')'
+			| decide_item_expr PER_DECIDE_PAREN '(' columnrefList ')'
 				{
 					/* DecidB: objective PER (col1, col2, ...) */
 					$$ = (PGNode *) makeSimpleAExpr(
@@ -476,7 +543,9 @@ decide_constraint_list:
 		;
 
 decide_constraint_item:
-			decide_item_expr WHEN_DECIDE b_expr PER columnref_opt_indirection
+			decide_scope ':' decide_item_expr
+				{ $$ = applyDecideScope($1, $3); }
+			| decide_item_expr WHEN_DECIDE b_expr PER_DECIDE columnref_opt_indirection
 				{
 					/* DecidB: constraint WHEN condition PER column */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -484,7 +553,7 @@ decide_constraint_item:
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", when_node, $5, @4);
 				}
-			| decide_item_expr WHEN_DECIDE b_expr PER '(' columnrefList ')'
+			| decide_item_expr WHEN_DECIDE b_expr PER_DECIDE_PAREN '(' columnrefList ')'
 				{
 					/* DecidB: constraint WHEN condition PER (col1, col2, ...) */
 					PGNode *when_node = (PGNode *) makeSimpleAExpr(
@@ -497,13 +566,13 @@ decide_constraint_item:
 					/* DecidB: constraint WHEN condition (b_expr excludes AND/OR) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $3, @2);
 				}
-			| decide_item_expr PER columnref_opt_indirection
+			| decide_item_expr PER_DECIDE columnref_opt_indirection
 				{
 					/* DecidB: constraint PER column */
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_PER_CONSTRAINT, "per_constraint", $1, $3, @2);
 				}
-			| decide_item_expr PER '(' columnrefList ')'
+			| decide_item_expr PER_DECIDE_PAREN '(' columnrefList ')'
 				{
 					/* DecidB: constraint PER (col1, col2, ...) */
 					$$ = (PGNode *) makeSimpleAExpr(
@@ -3079,6 +3148,24 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					/* DecidB: aggregate-local WHEN. Binder validates the LHS is a DECIDE aggregate. */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $2, @2);
 				}
+			| func_application decide_by
+				{
+					/* DecidB: reducer BY (key). The binder validates that it is a reducer. */
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by", $1, (PGNode *) $2, @2);
+				}
+			| func_name '(' decide_scope ':' func_arg_list ')'
+				{
+					/* DecidB: a scope inside a reducer, sum(WHEN c PER k: expr). It scopes
+					 * the first argument, the expression being reduced. */
+					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
+					$$ = (PGNode *) makeFuncCall($1, $5, @1);
+				}
+			| func_name '(' decide_scope ':' func_arg_list ')' decide_by
+				{
+					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
+					$$ = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_REDUCER_BY, "reducer_by", (PGNode *) makeFuncCall($1, $5, @1), (PGNode *) $7, @7);
+				}
 			| func_name '(' func_arg_list ':' func_arg_list ')'		%prec DECIDE_ITEM
 				{
 					/* DecidB: relation-qualified reducer, sum(D: expr) or, qualified by
@@ -3095,27 +3182,12 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					 * same idiom `columnrefList` uses for multi-column PER) rather than
 					 * being unpacked here, so the binder sees the full qualifier set.
 					 */
-					for (PGListCell *lc = $3->head; lc != NULL; lc = lc->next)
-					{
-						if (!IsA((PGNode *) lc->data.ptr_value, PGColumnRef))
-						{
-							ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
-								errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
-								parser_errposition(@3)));
-						}
-					}
-					PGFuncCall *n = makeFuncCall($1, $5, @1);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, (PGNode *) $3, @4);
+					$$ = makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner);
 				}
 			| func_name '(' func_arg_list ':' func_arg_list ')' decide_aggregate_when_condition	%prec POSTFIXOP
 				{
 					/* DecidB: aggregate-local WHEN on a relation-qualified reducer,
-					 * sum(D: expr) WHEN cond. Mirrors the two productions above: the
-					 * qualifier validation is duplicated (not factored into a shared
-					 * helper) rather than reusing the plain-qualified-reducer action,
-					 * because bison actions can't call each other directly and this
-					 * file has no C prologue of its own to hang a helper on.
+					 * sum(D: expr) WHEN cond.
 					 *
 					 * Without this production, `sum(D: expr) WHEN cond` never matches
 					 * here (a qualified reducer is not a func_application, so the
@@ -3124,20 +3196,14 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					 * `a_expr WHEN_DECIDE b_expr` production instead, which swallows
 					 * a trailing comparison like `<= bound` into the WHEN condition.
 					 */
-					for (PGListCell *lc = $3->head; lc != NULL; lc = lc->next)
-					{
-						if (!IsA((PGNode *) lc->data.ptr_value, PGColumnRef))
-						{
-							ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
-								errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
-								parser_errposition(@3)));
-						}
-					}
-					PGFuncCall *n = makeFuncCall($1, $5, @1);
-					PGNode *qualified_reducer = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, (PGNode *) $3, @4);
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", qualified_reducer, $7, @7);
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint",
+						makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner), $7, @7);
+				}
+			| func_name '(' func_arg_list ':' func_arg_list ')' decide_by
+				{
+					/* DecidB: the colon form with BY, sum(D: expr) BY (key) */
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by",
+						makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner), (PGNode *) $7, @7);
 				}
 			| indirection_expr_or_a_expr opt_extended_indirection
 				{

@@ -26,4 +26,20 @@
   the query hang indefinitely on HiGHS once the model is large enough; there
   is no DeciDB-level safety net.
 
+## An old DECIDE spelling inside a subquery names an internal function
+
+- **Location:** the parser markers `WHEN_CONSTRAINT_TAG` and
+  `QUALIFIED_REDUCER_TAG` (`src/include/duckdb/common/enums/decide.hpp`); no
+  DECIDE check looks inside a subquery for them.
+- **Observed:** the lexer arms the DECIDE keywords inside a subquery written in
+  the clause, so `x <= (SELECT sum(v) WHEN g > 1 FROM t)` and
+  `x <= (SELECT sum(t: v) FROM t)` parse, and the subquery's ordinary binder then
+  answers *"Catalog Error: Scalar Function with name __when_constraint__ does not
+  exist!"* (resp. `__qualified_reducer__`).
+- **Expected:** a message in SQL terms naming the spelling, as the new scope
+  spellings get from `ValidateDecideNoUnsupportedScope` in the same position.
+- **Impact:** the statement is refused either way; only the message is wrong.
+  The postfix `WHEN` goes with item 7 of `09_anr_language/todo.md`; `SUM(D: e)`
+  stays and keeps the problem until it is fixed.
+
 Resolved behavior is documented by its owning `done.md`.

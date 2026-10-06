@@ -63,6 +63,16 @@ DecideDeclarationsBinder::DecideDeclarationsBinder(Binder &binder, ClientContext
 void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSelectNode &result) {
 	auto &bind_context = binder.bind_context;
 
+	for (auto &variable : statement.decide_variables) {
+		ValidateDecideNoUnsupportedScope(*variable);
+	}
+	if (statement.decide_constraints) {
+		ValidateDecideNoUnsupportedScope(*statement.decide_constraints);
+	}
+	if (statement.decide_objective) {
+		ValidateDecideNoUnsupportedScope(*statement.decide_objective);
+	}
+
         case_insensitive_map_t<idx_t> decide_variable_names;
         vector<string> var_names;
         vector<LogicalType> var_types;

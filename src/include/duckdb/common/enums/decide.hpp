@@ -220,6 +220,18 @@ inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 	return true;
 }
 
+//! Tags the parser uses for the scope written in front of a constraint, an objective, a
+//! declared variable or a reducer's argument: `[WHEN condition] [PER key]: body`.
+//! children[0] is the body. SCOPE_WHEN_TAG holds the condition in children[1];
+//! SCOPE_PER_TAG holds the key in children[1..], none for `PER ()`. With both, PER is
+//! the outer tag. `PER ROW` is the default and leaves no tag.
+static constexpr const char *SCOPE_WHEN_TAG = "__scope_when__";
+static constexpr const char *SCOPE_PER_TAG = "__scope_per__";
+
+//! Tag the parser uses for a reducer's `BY (key)`: children[0] is the reducer call,
+//! children[1..] the key, none for `BY ()`.
+static constexpr const char *REDUCER_BY_TAG = "__reducer_by__";
+
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 

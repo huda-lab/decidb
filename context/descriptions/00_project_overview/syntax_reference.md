@@ -48,6 +48,25 @@ The declaration may appear in one position or the other, never both. A
 declaration with no `SUCH THAT`, or a `SUCH THAT` with no declaration, is a
 parser error.
 
+### 1.1 Words that are keywords inside the clause
+
+Inside a DECIDE clause — the declaration list, and everything from `SUCH THAT` to
+the end of the objective, subqueries written there included — `WHEN`, `PER`, a `BY`
+directly after `)` and a `ROW` directly after `PER` are keywords, never names. A
+column with such a name is written quoted there: `x <= "per"`, the old `C PER "row"`.
+Outside the clause, including the `SELECT` list and `FROM` of a DECIDE query,
+nothing changes, and `GROUP BY` / `ORDER BY` / `PARTITION BY` in a subquery written
+inside the clause are untouched.
+
+The scope spellings of the planned extension —
+[`anr_language_extension.md`](anr_language_extension.md): `PER key:`, `WHEN
+condition:`, `BY (key)` — parse today but are refused with *"not supported yet"*,
+wherever they appear in the clause, until the item that binds each one lands. On a
+declaration, a constraint or inside a reducer, `PER ROW` is the default written out
+and runs as if it were omitted. An objective takes only `PER ()`: any other `PER`
+there, `PER ROW` included, is the parse error *"an objective is produced once: write
+per (): or leave per out"*.
+
 ## 2. Decision Variables
 
 - Must be declared in the `DECIDE` list, and the type is **mandatory**: it is

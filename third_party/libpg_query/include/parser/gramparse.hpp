@@ -94,7 +94,14 @@ typedef struct base_yy_extra_type {
 	bool decide_declared_before_from;
 
 	/*
-	 * DecidB: saved copies of the four fields above, one per DECIDE clause
+	 * DecidB: true when the previous token was ')'. Inside a DECIDE clause that
+	 * is what tells a reducer's BY -- sum(x) BY (g) -- from GROUP BY, ORDER BY
+	 * and PARTITION BY, whose BY always follows a keyword.
+	 */
+	bool decide_after_rparen;
+
+	/*
+	 * DecidB: saved copies of the four clause fields above, one per DECIDE clause
 	 * currently open. Pushed by base_yylex() when it arms a clause on DECIDE
 	 * or SUCH; popped by the decide_clause, decide_declaration and decide_tail
 	 * grammar actions, which is what makes a nested DECIDE restore its parent
