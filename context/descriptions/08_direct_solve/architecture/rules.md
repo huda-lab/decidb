@@ -20,7 +20,8 @@ for production use. If any required condition cannot be proved, the query stays 
 - **Match** binds the shape. **Prove** certifies every constraint, objective part, decision, runtime value check
   and output. An unknown fact is a miss, not an error.
 - **Cost** sees only the estimated source row count and runs after proof. The cheapest proved rule wins; a tie goes
-  to the first registered. No second rule exists yet, so this has never chosen between two.
+  to the first registered. S1 and A1 are disjoint (S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint), so
+  cost has never chosen between two real rules; the coordinator test with stub rules covers it.
 - **Rewrite** builds the relational plan. An unexpected failure here is an internal error, never a silent fallback.
 
 ## Adding a rule

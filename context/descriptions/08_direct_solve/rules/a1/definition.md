@@ -59,17 +59,24 @@ A shared constraint such as x + y \<= 10 is not A1 because the choice of x affec
 
 ## Relational construction
 
-For each decision, SQL:
+The catalogue builds candidates with `UNION ALL`, ranks them with `ROW_NUMBER` and joins the winner back. Because each row
+holds its own decisions, none of that is needed: the plan is a chain of projections over the source, each reading only
+the one before it.
 
-> 1\. computes the effective lower and upper bounds;
+> 1\. every coefficient, bound and `WHEN` is evaluated on every row;
 >
-> 2\. generates the small set of possible optimal values;
+> 2\. each bound clause becomes a lower and an upper bound on its decision, and the objective becomes `a*x² + b*x` per
+> decision;
 >
-> 3\. evaluates and ranks those candidates;
+> 3\. the bounds are combined into the decision's box, and the box is rounded inward for `INT` and `BOOL`;
 >
-> 4\. selects one candidate per decision and joins it back to the source rows.
+> 4\. the answer is the clamped turning point, or the better endpoint, computed from `a` and `b`;
+>
+> 5\. every row is checked before one is released (infeasible, unbounded, invalid data), and the answer is cast to the
+> decision's output type.
 
-The translation uses ordinary relational operations such as LEAST, GREATEST, UNION ALL, ROW_NUMBER, and joins.
+The translation uses projections, `LEAST`, `GREATEST`, `CASE` and one counting window that holds the rows back. See
+[done.md](done.md) for the exact behavior.
 
 ## Correctness
 
@@ -79,14 +86,35 @@ For one bounded linear or quadratic function, the optimum can only occur at an e
 
 ## Eligibility conditions
 
-> • Every component contains exactly one independent BOOL, INT, or REAL decision.
+> • Every component contains exactly one independent BOOL, INT, or REAL decision. A query may hold several such
+> decisions; each is solved on its own.
 >
 > • The objective reduces exactly to a\*x² + b\*x + constant.
 >
 > • Every constraint reduces to an individual bound, with no shared constraints or cross terms.
 >
-> • Bounds and coefficients are finite and non-NULL, and integer or strict bounds have been converted to legal endpoints.
+> • Coefficients are finite and non-NULL, and bounds are non-NULL and not NaN. An infinite bound is no bound on that
+> side, as on the solver. Integer or strict bounds have been converted to legal endpoints.
 >
 > • Empty intervals produce DECIDE's infeasible result, while empty input remains empty.
 >
 > • WHEN, PER, NULL, numeric, tie, decision-identity, and output-mapping semantics are preserved.
+
+## As built
+
+What the implementation settles beyond the catalogue text:
+
+> • **Default box.** `BOOL` is [0, 1], `INT` and `REAL` are [0, ∞). A bare unconditional constant lower bound replaces
+> the default 0; every other lower bound intersects with it.
+>
+> • **Bounds.** A clause may carry a coefficient and an offset on the decision, a `WHEN`, and a value that is a
+> constant, a numeric or Boolean source column, or any deterministic source expression, including one that can raise.
+>
+> • **Objective.** `MINIMIZE`, `MAXIMIZE` or none; signed `SUM` parts with constant factors, optional `WHEN`, at most one
+> squared term whose inner weight and offset may be row-valued.
+>
+> • **Errors.** An empty box on any row is infeasible; an improving direction with no finite limit on any row is unbounded;
+> an `INT` answer beyond 2^53 cannot be returned; NULL, NaN or infinite values raise on every row, including rows a
+> `WHEN` excludes.
+>
+> • **Ties** go to the smaller value, and a decision with no objective term takes the lowest value its box allows.

@@ -36,6 +36,22 @@ unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &
 //! The same, with a message computed per row. The message is evaluated only on a row where the predicate is reached.
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message);
 
+//! A per-row numeric value read as the solver reads a coefficient: cast to DOUBLE, negated when `sign` is negative,
+//! then multiplied or divided by the query-wide factor of its reducer (`scale`, when `scaled`).
+unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
+                                        double scale, bool divides);
+
+//! DECIDE's infeasibility error, as a BOOLEAN expression that raises it when evaluated.
+unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer);
+
+//! DECIDE's unboundedness error: some decision can improve the objective without limit.
+unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer);
+
+//! Evaluates to true for a DOUBLE bound that is neither NULL nor NaN, and raises the bound error otherwise. Infinity is
+//! a valid bound (no bound on that side). `column_name` names the source column the bound is exactly, or is empty.
+unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
+                                                 const string &column_name);
+
 //! Evaluates to true for a finite score and raises an error for a NULL or non-finite one. A NULL score's message
 //! quotes `score_text`, or stays generic when that is empty.
 unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const LogicalType &score_type,
@@ -61,6 +77,9 @@ DirectBarrier DirectValidationBarrier(Binder &binder, unique_ptr<LogicalOperator
 // DECIDE semantics every aggregate rule shares
 //===--------------------------------------------------------------------===//
 
+//! Whether a clause's WHEN holds on a row: true without a WHEN, and false when the WHEN is false or NULL.
+unique_ptr<Expression> DirectActiveWhen(const Expression *when);
+
 //! The per-row state of a scoped aggregate, projected once over the input: every input column, then whether the
 //! row is eligible (its WHEN holds and no PER key is NULL), then any per-row columns the rule adds. With no scope
 //! and no extra columns the input passes through unchanged.
@@ -83,9 +102,10 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
                                     vector<unique_ptr<Expression>> extra);
 
 //! DECIDE's empty-aggregate error: a scoped aggregate over a nonempty input with no eligible row has no value. It
-//! raises before any value of the clause is validated.
+//! raises before any value of the clause is validated. `clause` names where the aggregate sits in the message
+//! (`constraint` or `objective`).
 unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                                      ColumnBinding eligible);
+                                                      ColumnBinding eligible, const string &clause = "constraint");
 
 //! One clause's data-valued bound, reduced per group: an upper bound takes the group MIN, a lower bound the group
 //! MAX, and an equality both, which must agree.

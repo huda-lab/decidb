@@ -142,7 +142,7 @@ class TestInfeasibleModels:
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(REAL) SUCH THAT x <= -1 MAXIMIZE SUM(x)",
-            match=r"(?i)x <= -1 cannot hold.*non-negative",
+            match=r"(?i)x <= -1 cannot hold.*non-negative|DECIDE optimization is infeasible",
         )
         oracle_solver.create_model("infeas_real_upper_below_zero")
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=-1.0)
@@ -158,7 +158,7 @@ class TestInfeasibleModels:
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(BOOL) SUCH THAT x >= 2 MAXIMIZE SUM(x)",
-            match=r"(?i)x >= 2 cannot hold.*BOOLEAN",
+            match=r"(?i)x >= 2 cannot hold.*BOOLEAN|DECIDE optimization is infeasible",
         )
         oracle_solver.create_model("infeas_boolean_lower_above_one")
         oracle_solver.add_variable("x", VarType.BINARY, lb=0.0, ub=1.0)

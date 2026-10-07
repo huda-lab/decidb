@@ -175,7 +175,139 @@ S1 = RuleFixture(
 )
 
 
-RULE_FIXTURES = (S1,)
+def _a1_late_error(decision_sql, score_sql="1.0", cap_sql="10.0"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+    return f"""
+        FROM (SELECT i, {score_sql} AS score, {cap_sql} AS cap FROM range(5000) t(i)) s
+        DECIDE {decision_sql}
+        """
+
+
+A1 = RuleFixture(
+    rule="A1_INDEPENDENT_BOUNDS",
+    # Whole-number answers with a unique optimum, so the rows equal the solver's exactly and the query also runs on
+    # forced HiGHS (which has no mixed-integer quadratic and no non-convex quadratic).
+    hit="""
+        SELECT id, score, cap, x FROM (
+            FROM (VALUES (0, CAST('2.0' AS DOUBLE), 3), (1, CAST('-1.0' AS DOUBLE), 5), (2, CAST('4.0' AS DOUBLE), 2))
+                t(id, score, cap)
+            DECIDE x(INT) SUCH THAT x BETWEEN 0 AND cap
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """,
+    table_setup="""
+        CREATE TEMP TABLE direct_a1_life(id INTEGER, score DOUBLE, cap INTEGER);
+        INSERT INTO direct_a1_life VALUES (1,2,3),(2,-1,5);
+    """,
+    table_hit="""
+        SELECT id,x FROM (
+            FROM direct_a1_life DECIDE x(INT)
+            SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)
+        ) q
+    """,
+    table_change="ALTER TABLE direct_a1_life ADD COLUMN extra INTEGER;",
+    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 5), (2, 10.0::DOUBLE, 3)) t(id,p,cap)",
+    near_miss_column="id",
+    near_misses=(
+        # Decisions that are not row-scoped, or rows that are coupled.
+        ("t.x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x)", "variable_shape"),
+        ("x(REAL), y(REAL)", "x+y<=3 AND x<=cap", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(REAL), y(REAL)", "x<=cap AND y<=cap", "MAXIMIZE SUM(x*y)", "objective_shape"),
+        ("x(REAL)", "SUM(x)<=5", "MAXIMIZE SUM(p*x)", "found an aggregate constraint"),
+        ("x(REAL)", "norm(x,1)<=5", "MAXIMIZE SUM(p*x)", "found an aggregate constraint"),
+        # Bounds that are not intervals, or not bounds.
+        ("x(INT)", "x<=cap AND x<>1", "MAXIMIZE SUM(p*x)", "found <> or IN"),
+        ("x(INT)", "x IN (1,2,3)", "MAXIMIZE SUM(p*x)", "found <> or IN"),
+        ("x(REAL)", "POWER(x,2)<=9", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(REAL)", "ABS(x)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        # Values that are not per-row source values.
+        ("x(REAL)", "x<=random()", "MAXIMIZE SUM(p*x)", "coefficient_shape"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(random()*x)", "coefficient_shape"),
+        ("x(REAL)", "x<=cap WHEN (random()<2)", "MAXIMIZE SUM(p*x)", "constraint_scope"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) WHEN (random()<2)", "objective_scope"),
+        # Objectives outside the class. Ones the solver itself rejects are in test_direct_a1.py.
+        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) PER id", "objective_scope"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE AVG(p*x)", "objective_shape"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE MIN(p*x)", "objective_shape"),
+        ("x(REAL)", "x<=cap", "MINIMIZE norm(x,1)", "objective_shape"),
+    ),
+    late_errors=(
+        # Every kind of error A1 raises, on the last of 5,000 rows.
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
+                score_sql="CASE WHEN i=4999 THEN NULL ELSE 1.0 END",
+            ),
+            "is NULL",
+        ),
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
+                score_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "invalid value (NaN or Infinity)",
+        ),
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
+                score_sql="CASE WHEN i=4999 THEN 'Infinity'::DOUBLE ELSE 1.0 END",
+            ),
+            "invalid value (NaN or Infinity)",
+        ),
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(x-score,2))",
+                score_sql="CASE WHEN i=4999 THEN NULL ELSE 1.0 END",
+            ),
+            "is NULL",
+        ),
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
+                cap_sql="CASE WHEN i=4999 THEN NULL ELSE 10.0 END",
+            ),
+            "invalid value (NULL or NaN)",
+        ),
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
+                cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 10.0 END",
+            ),
+            "invalid value (NULL or NaN)",
+        ),
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
+                cap_sql="CASE WHEN i=4999 THEN -1.0 ELSE 10.0 END",
+            ),
+            "infeasible",
+        ),
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x <= cap MAXIMIZE SUM(score*x)", cap_sql="CASE WHEN i=4999 THEN 1e30 ELSE 10.0 END"
+            ),
+            "unbounded",
+        ),
+        (
+            _a1_late_error(
+                "x(INT) SUCH THAT x <= cap MAXIMIZE SUM(score*x)", cap_sql="CASE WHEN i=4999 THEN 1e17 ELSE 10.0 END"
+            ),
+            "beyond the range",
+        ),
+        # Each coefficient is finite, but the square's weight (1e200 squared) overflows on the last row.
+        (
+            _a1_late_error(
+                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(score*x-1,2))",
+                score_sql="CASE WHEN i=4999 THEN 1e200 ELSE 1.0 END",
+            ),
+            "invalid value (NaN or Infinity)",
+        ),
+    ),
+    late_column="i",
+)
+
+
+RULE_FIXTURES = (S1, A1)
 
 
 def near_miss_cases():

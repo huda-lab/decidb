@@ -1,6 +1,7 @@
 add_library_unity(
   duckdb_optimizer_decide_direct
   OBJECT
+  a1_rule.cpp
   direct_builder.cpp
   direct_coordinator.cpp
   direct_expression.cpp

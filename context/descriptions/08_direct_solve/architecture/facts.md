@@ -21,6 +21,10 @@ objective part, with a reason. A rule must decline a problem with an unknown fac
 
 ## Things worth knowing
 
+- A per-row bound has `variable_bound` set when the solver path folds it into its decision's box instead of emitting a model
+  row (an unconditional comparison of the bare decision against a constant). Such a bound replaces the variable's
+  default lower bound of 0; every other bound only intersects with it. The fact comes from one predicate shared with the
+  solver (`DecideBoundIsAbsorbed`), so the two cannot disagree.
 - The term splitter that breaks `SUM(2*x - x)` into linear terms is shared with the solver path
   (`src/planner/decide/decide_term_split.cpp`), so the two paths cannot read one term differently.
 - `norm(e, p)` is replaced by its definition when the query is canonicalized (L0 stays a marker). Before this,

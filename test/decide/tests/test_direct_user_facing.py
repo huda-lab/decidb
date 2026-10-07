@@ -191,6 +191,45 @@ def test_unused_wide_output_is_pruned_without_losing_rank_or_bindings(decidb_cli
 
 
 @pytest.mark.correctness
+def test_a1_unused_wide_columns_stay_out_of_the_barrier_and_computed_errors_stay_in(decidb_cli):
+    setup = """
+        CREATE TEMP TABLE a1_pruning_source AS
+        SELECT i, (i % 11)::DOUBLE AS score, 20.0 AS cap, repeat('p', 200) AS payload
+        FROM range(5000) t(i);
+    """
+    decide = """
+        FROM a1_pruning_source DECIDE x(REAL)
+        SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - score, 2))
+    """
+    aggregate = f"SELECT COUNT(*), SUM(x), SUM(POWER(x - score, 2)) FROM ({decide}) q"
+    plan = _raw(decidb_cli, setup + f"EXPLAIN {aggregate}").stdout
+    scan = plan.rsplit("SEQ_SCAN", 1)[-1]
+    assert "A1_INDEPENDENT_BOUNDS" in plan and "WINDOW" in plan
+    assert "score" in scan and "payload" not in scan
+
+    rows, _ = _run(decidb_cli.with_verify_serializer(), setup + aggregate)
+    assert rows == [(5000, float(sum(i % 11 for i in range(5000))), 0.0)]
+
+    full, _ = _run(decidb_cli, setup + f"SELECT i, payload, x FROM ({decide}) q WHERE i=3")
+    assert full == [(3, "p" * 200, 3.0)]
+
+    # A computed column that can raise is not pruned: the solver evaluates it on every row.
+    throwing_source = """
+        SELECT i, i::DOUBLE AS score, 20.0 AS cap,
+               CASE WHEN i=4999 THEN error('payload boom') ELSE 'ok' END AS payload
+        FROM range(5000) t(i)
+    """
+    throwing = f"""
+        SELECT COUNT(*) FROM (
+            FROM ({throwing_source}) s DECIDE x(REAL)
+            SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - score, 2))
+        ) q
+    """
+    for mode in ("require", "off"):
+        assert "payload boom" in _raw(decidb_cli, throwing, mode=mode).stderr
+
+
+@pytest.mark.correctness
 def test_inner_join_passthrough_prunes_stored_payload_but_keeps_computed_errors(decidb_cli):
     setup = """
         CREATE TEMP TABLE join_source AS

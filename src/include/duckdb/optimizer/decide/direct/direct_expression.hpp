@@ -10,6 +10,7 @@ namespace duckdb {
 class BoundCastExpression;
 class BoundColumnRefExpression;
 class ClientContext;
+struct DirectPart;
 
 //! Rule-independent questions about a bound expression. A rule asks them while proving that an expression may be
 //! evaluated per source row; none of them knows which problem class it is serving.
@@ -41,9 +42,17 @@ bool DirectCastMayThrow(const BoundCastExpression &cast);
 bool DirectIsSourceOnlyPredicate(const Expression &expr, idx_t decide_index,
                                  const vector<ColumnBinding> &source_bindings);
 
+//! Evaluates a foldable numeric or Boolean expression to a DOUBLE as DuckDB reads the cast, without judging the value.
+//! False when it is not foldable, NULL, or neither numeric nor Boolean. The result may be infinite or NaN.
+bool DirectFoldableDouble(ClientContext &context, const Expression &expr, double &result);
+
 //! Evaluates a foldable numeric expression to a DOUBLE. False when it is not foldable, NULL, non-numeric, not
 //! finite, or does not survive a round trip through DOUBLE.
 bool DirectFiniteFoldableDouble(ClientContext &context, const Expression &expr, double &result);
+
+//! The factor a query-wide `2 * SUM(...)` or `SUM(...) / 2` puts on a reducer: 1 without one. False unless it is a
+//! finite foldable constant, and nonzero when it divides.
+bool DirectPartScale(ClientContext &context, const DirectPart &part, double &scale);
 
 //! The uncorrelated numeric column an expression is exactly, looking through nonthrowing numeric casts; null when
 //! the expression is anything else.
@@ -63,6 +72,11 @@ bool DirectSourceNumericColumn(const Expression &expr, const vector<ColumnBindin
 //! a solver case until its error order is proved.
 bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
                                const vector<ColumnBinding> &source_bindings);
+
+//! A numeric or Boolean value a rule may read per row: deterministic, independent of the decisions, over source columns
+//! only, with or without a column. Unlike DirectIsSourceOnlyNumeric it may raise when evaluated, for a rule that
+//! evaluates it on every row (the solver raises on every row, including rows a WHEN excludes).
+bool DirectIsSourceOnlyValue(const Expression &expr, idx_t decide_index, const vector<ColumnBinding> &source_bindings);
 
 //! `x >= v`, `x > v`, and `x = v` all bound a count from below; `x <= v`, `x < v`, and `x = v` from above.
 bool DirectIsLowerBound(ExpressionType comparison);

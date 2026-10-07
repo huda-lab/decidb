@@ -24,6 +24,11 @@ ERROR_CLASSES = [
     (r"(?i)empty row set|empty aggregate", "empty_aggregate"),
     # A NaN bound reads "contains invalid value (NaN)" on the solver path.
     (r"(?i)is NULL|NULL or NaN|contains NULL|invalid value \(NaN\)", "null_bound"),
+    # A coefficient that is NaN or infinite. The solver adds "at row N", which names a scan position, not a key.
+    (r"(?i)contains invalid value", "invalid_value"),
+    (r"(?i)is unbounded", "unbounded"),
+    # An INT answer beyond what a double holds exactly. The solver names the variable; direct solve cannot.
+    (r"(?i)beyond the range", "int_range"),
 ]
 
 

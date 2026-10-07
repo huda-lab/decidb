@@ -13,6 +13,12 @@ and WHEN/PER wrappers.
 import pytest
 
 
+@pytest.fixture
+def decidb_cli(decidb_cli):
+    # These tests inspect the solver's model, which direct solve does not build, so they run on the solver path.
+    return decidb_cli.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+
+
 _PAIRS = [
     pytest.param(
         """

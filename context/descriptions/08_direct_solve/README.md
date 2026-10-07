@@ -5,9 +5,11 @@ replaces the DECIDE node with ordinary DuckDB operators (sort, rank, filter) tha
 problem takes the existing solver path, unchanged. It is **on by default** (`decide_direct_solve = 'auto'`); `off` forces
 the solver and `require` raises an error saying why a query was not proved.
 
-Today one problem class works: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable, optionally per
-group). On 5M-row sources it is about 15 to 100 times faster than Gurobi on those shapes. The other 18 classes in the
-catalogue are not started. The working branch is `direct-solve-prototype`.
+Today two problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable, optionally per
+group), and **A1**, "each row gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions
+with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 times faster than Gurobi and A1 about 4 to
+30 times, on those shapes. The other 17 classes in the catalogue are not started. The working branch is
+`direct-solve-prototype`.
 
 ## Where to look
 
@@ -16,8 +18,9 @@ catalogue are not started. The working branch is `direct-solve-prototype`.
 | Understand how it works | [architecture/overview.md](architecture/overview.md), then the other files there |
 | Add a new problem class | [architecture/rules.md](architecture/rules.md), then a new folder under `rules/` |
 | See what S1 covers, how it is tested, how fast it is | [rules/s1/done.md](rules/s1/done.md) |
-| See what is open for S1 | [rules/s1/todo.md](rules/s1/todo.md) |
-| Work on the shared engine, a second rule, error wording | [rules/_harness/](rules/_harness/) |
+| See what A1 covers, where it differs from the solver, how fast it is | [rules/a1/done.md](rules/a1/done.md) |
+| See what is open for S1 or A1 | [rules/s1/todo.md](rules/s1/todo.md), [rules/a1/todo.md](rules/a1/todo.md) |
+| Work on the shared engine, a third rule, error wording | [rules/_harness/](rules/_harness/) |
 | See a class that is not built yet | `rules/<class>/todo.md` (table below) |
 | Know why `auto` is the default, or what a user can notice | [architecture/policy.md](architecture/policy.md) |
 | Read the definition and correctness argument of a class | `rules/<class>/definition.md` |
@@ -27,7 +30,7 @@ catalogue are not started. The working branch is `direct-solve-prototype`.
 
 | Class | Name | Catalogue status | Direct solve |
 |---|---|---|---|
-| [A1](rules/a1/) | Independent bounded decisions | Exact | Next (second rule) |
+| [A1](rules/a1/) | Independent bounded decisions | Exact | **Works**, on by default |
 | [A2](rules/a2/) | One shared mean, median, midpoint, or mode | Exact | Not started |
 | [A3](rules/a3/) | Fixed-small multi-affine box | Exact | Not started |
 | [A4](rules/a4/) | Bounded two-parameter least squares | Prototype | Not started |

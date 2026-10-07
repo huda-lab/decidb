@@ -50,5 +50,6 @@ and the test-only `DECIDB_FORCE_SOLVER` always use the solver. Details: `policy.
 ## Code
 
 `src/optimizer/decide/direct/`, headers in `src/include/duckdb/optimizer/decide/direct/`. Start with
-`direct_coordinator.cpp` (the flow above) and `s1_rule.cpp` (the one rule so far). The rest of the folder is
-named for what it does: facts, builders, result boundary, expression predicates, registry.
+`direct_coordinator.cpp` (the flow above), then `s1_rule.cpp` (a rule built on a window) and `a1_rule.cpp` (a rule built
+on a chain of projections and the validation barrier). The rest of the folder is named for what it does: facts,
+builders, result boundary, expression predicates, registry.

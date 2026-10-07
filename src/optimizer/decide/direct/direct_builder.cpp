@@ -101,6 +101,30 @@ unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &
 	return DirectErrorPredicate(optimizer, make_uniq<BoundConstantExpression>(Value(message)));
 }
 
+unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
+                                        double scale, bool divides) {
+	auto term = BoundCastExpression::AddCastToType(optimizer.context, std::move(value), LogicalType::DOUBLE);
+	if (sign < 0) {
+		term =
+		    optimizer.BindScalarFunction("*", std::move(term), make_uniq<BoundConstantExpression>(Value::DOUBLE(-1.0)));
+	}
+	if (scaled) {
+		term = optimizer.BindScalarFunction(divides ? "/" : "*", std::move(term),
+		                                    make_uniq<BoundConstantExpression>(Value::DOUBLE(scale)));
+	}
+	return term;
+}
+
+unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer) {
+	return DirectErrorPredicate(optimizer, "DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see "
+	                                       "which clause to change.");
+}
+
+unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
+	return DirectErrorPredicate(optimizer, "DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see "
+	                                       "which decision needs a bound.");
+}
+
 static unique_ptr<Expression> DirectVarchar(const string &text) {
 	return make_uniq<BoundConstantExpression>(Value(text));
 }
@@ -134,6 +158,17 @@ unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const Log
 	                                    "Check your expressions and input data."));
 	return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, null_message),
 	                                      std::move(finite_or_error));
+}
+
+unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
+                                                 const string &column_name) {
+	auto message = [&]() {
+		return DirectErrorPredicate(optimizer, DirectInvalidBoundMessage(column_name));
+	};
+	auto is_nan = optimizer.BindScalarFunction("isnan", DirectColumn(LogicalType::DOUBLE, bound_binding));
+	auto not_nan = make_uniq<BoundCaseExpression>(std::move(is_nan), message(), DirectConstantBool(true));
+	return make_uniq<BoundCaseExpression>(DirectIsNull(DirectColumn(LogicalType::DOUBLE, bound_binding)), message(),
+	                                      std::move(not_nan));
 }
 
 bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
@@ -190,6 +225,11 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 // DECIDE semantics every aggregate rule shares
 //===--------------------------------------------------------------------===//
 
+unique_ptr<Expression> DirectActiveWhen(const Expression *when) {
+	return when ? make_uniq<BoundCaseExpression>(when->Copy(), DirectConstantBool(true), DirectConstantBool(false))
+	            : DirectConstantBool(true);
+}
+
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
                                     const Expression *when, const vector<idx_t> &key_slots,
                                     vector<unique_ptr<Expression>> extra) {
@@ -209,9 +249,7 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 		state.input_bindings[i] = ColumnBinding(state.state_index, i);
 	}
 	if (scoped) {
-		unique_ptr<Expression> eligible =
-		    when ? make_uniq<BoundCaseExpression>(when->Copy(), DirectConstantBool(true), DirectConstantBool(false))
-		         : DirectConstantBool(true);
+		unique_ptr<Expression> eligible = DirectActiveWhen(when);
 		for (auto slot : key_slots) {
 			if (slot >= bindings.size()) {
 				throw InternalException("Direct solve received an invalid PER key slot");
@@ -234,7 +272,7 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 }
 
 unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                                      ColumnBinding eligible) {
+                                                      ColumnBinding eligible, const string &clause) {
 	auto active_window_index = optimizer.binder.GenerateTableIndex();
 	auto active_count = DirectWindowMatchingCount(DirectColumn(LogicalType::BOOLEAN, eligible));
 	auto active_window = make_uniq<LogicalWindow>(active_window_index);
@@ -245,8 +283,8 @@ unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, uniq
 	    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
 	auto active_predicate = make_uniq<BoundCaseExpression>(
 	    std::move(has_active_rows), DirectConstantBool(true),
-	    DirectErrorPredicate(optimizer, "DECIDE empty row set for aggregate in constraint. "
-	                                    "An empty aggregate has no well-defined value; check your WHEN clause."));
+	    DirectErrorPredicate(optimizer, "DECIDE empty row set for aggregate in " + clause +
+	                                        ". An empty aggregate has no well-defined value; check your WHEN clause."));
 	auto active_guard = make_uniq<LogicalFilter>(std::move(active_predicate));
 	active_guard->children.push_back(std::move(active_window));
 	return std::move(active_guard);

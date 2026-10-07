@@ -108,6 +108,10 @@ struct DirectConstraintFact {
 	vector<DirectPart> lhs;
 	unique_ptr<Expression> rhs;
 	DirectProvenance rhs_provenance = DirectProvenance::ROW_VARYING;
+	//! True when the solver path folds this clause into its decision's box (see DecideBoundIsAbsorbed): an
+	//! unconditional comparison of one bare decision against a finite constant. Such a bound replaces the variable's
+	//! default lower bound of 0, where every other bound only intersects with it.
+	bool variable_bound = false;
 	//! COMPARE_IN: the allowed values.
 	vector<unique_ptr<Expression>> members;
 	DirectScopeFact scope;

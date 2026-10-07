@@ -2,13 +2,78 @@
 
 What S1 does today is in `done.md`. The class definition is in `definition.md`. Each task is independent unless it says
 otherwise. When one ships, its result moves to `done.md` and the task is deleted from here. Estimates are rough guesses,
-not measurements.
+not measurements. How to run the checks, and the batches that group tasks across S1, A1 and the shared engine, are in
+`../_harness/todo.md`; read its "How to work any task" section first.
 
-**S1 is closed (2026-10-05).** The class definition is met and nothing is needed to close it. The three tasks below are
-deferred. This layer stays lean
-(`../../architecture/rules.md`), so a task comes off the deferred list only when there is evidence a user needs it.
-Batches A (per-row bounds on `x`, out-of-scope tests), B (scaled objective) and C (row-count bounds) shipped and are in
-`done.md`.
+**S1 is closed (2026-10-05).** The class definition is met and nothing is needed to close it. A review on 2026-10-07 found
+no wrong answer in S1 (an empty source with `BOOL x <= -1` raised the solver's error under both paths, and the S1 fuzz,
+three-way and contract suites pass). The
+open tasks below are clean-up and decisions: S1-10 to S1-13 are new from that review, the deferred list is older. This
+layer stays lean (`../../architecture/rules.md`), so a deferred task comes off the list only when there is evidence a user
+needs it.
+
+## S1-10 — Row-count bounds (`COUNT(*)` arithmetic) carry a long proof and no recorded demand
+
+- **Problem.** S1 admits a bound such as `SUM(x) <= COUNT(*) / 2` or `>= COUNT(*) * 0.1`. To be sure the plan can never
+  raise an overflow the solver would not, S1 proves that every step of the bound's arithmetic stays inside its own type,
+  taking a group to have at most 2^53 rows. That proof is `RowCountBoundProblem` and `TypeCapacity` (about 80 lines),
+  plus `ReplaceCountStar` and the `CountRows` plan stage (about 50 lines), a branch in `ProveBounds`, and a set of tests
+  ("exact decimal arithmetic" and row-count cases in `test_direct_three_way.py`). Elsewhere in this file, S1-08 is
+  deferred because "no evidence anyone writes these"; nothing in the docs records why row-count bounds were different.
+- **Why it matters.** `architecture/rules.md` says to decline a shape when admitting it needs a long proof or a new range
+  argument. A mistake in a proof gives a wrong answer, not a slow one. One plausible demand is a top-fraction query
+  ("the best 10% of each group"), which is the natural way to write that.
+- **Decision needed.** (a) *Keep it*, and write the use case and who needs it into `done.md` so the cost is justified.
+  (b) *Narrow it*: admit only `COUNT(*)` times or divided by a positive foldable constant, optionally plus a constant, and
+  decline everything else; the type-capacity table can then shrink to the types that arithmetic can produce.
+  (c) *Cut it*: decline every aggregate on the right; the solver answers those queries as before. Recommendation:
+  (a), unless the owner says nobody writes top-fraction bounds, in which case (c). Do not widen it (see S1-08).
+- **Where.** `src/optimizer/decide/direct/s1_rule.cpp` (`RowCountBoundProblem`, `TypeCapacity`, `ReplaceCountStar`,
+  `S1CardinalityRule::ProveBounds`, `S1Rewriter::CountRows`), `done.md` ("Bounds that count rows"), near-miss list in
+  `test/decide/tests/_direct_rule_fixtures.py`.
+- **Done when.** The choice is recorded in `done.md`. For (b) or (c): the code is gone, the removed shapes appear as near
+  misses that name their reason and answer under `auto` as under `off`, and all five checks pass.
+
+## S1-11 — The feasibility check keeps an error order nobody is owed
+
+- **Problem.** On 2026-10-05 the policy changed: direct solve owes an error on the same inputs, not the solver's wording or
+  its choice among several errors (`../../architecture/policy.md`). `S1Rewriter::FeasiblePredicate` in `s1_rule.cpp`
+  still builds about 65 lines of nested `CASE` so that "the outermost one (a pin conflict) fires first", wrapping each
+  check around the last in a fixed order.
+- **Why it matters.** It is complexity that protects nothing the policy requires, and it makes the next change to the
+  feasibility rules harder to read. The comment above it says order matters when it does not.
+- **Plan.** Rewrite it as a flat list of checks, each of which is true or raises; combine them into one predicate that
+  raises on the first failing check in any order. Keep every check that exists today (pin conflict, interval validity,
+  enough rows, fixed count within the upper limit, an unrepresentable limit). Rewrite the comment to say the order is
+  not specified. `policy.md` says no test pins the order; if one fails, stop and report it.
+- **Done when.** `FeasiblePredicate` is a flat sequence with no ordering comment, no behavior test changed, and all five
+  checks pass. About 1 hour.
+
+## S1-12 — S1 reads a per-row bound on `x` in its own way, and so does A1
+
+- **Problem.** S1 decides "which of {0, 1} may this row take" for a per-row bound on `x` with its own code (`PinDomain`,
+  `ConstantPinDomain`, `SourceBooleanPinValue`, and the numeric-pin code in `ProvePins`, about 140 lines). A1 decides
+  "what interval may this row take" for the same kind of bound with different code (`ClauseBounds` in `a1_rule.cpp`).
+  They also treat the solver's reading of a bare constant bound differently: S1 declines some spellings by inspecting
+  them, A1 asks the `variable_bound` fact, which S1 never reads.
+- **Why it matters.** Two readings of one rule can drift apart, and a third per-row rule (A3, A5, A6) would write a third.
+- **Plan.** Do not start this until H-07 (one source for the solver's pre-check) has landed, and not before a third rule needs
+  per-row bounds: S1 is closed and heavily tested, so changing its pins has to earn its risk. Then: move A1's
+  per-row bound algebra to a shared builder that yields a lower and an upper bound per row; give S1's pins that builder
+  with the domain {0, 1}; keep S1's rank and count logic as it is.
+- **Done when.** S1's pin code is a call to the shared builder, S1's suites (three-way, contract, fuzz) pass unchanged, and
+  the A1 suites still pass. About 1 day.
+
+## S1-13 — S1's measurements and stamp are out of date
+
+- **Problem.** `done.md` records the performance table from `7d6f97e880` ("before the NULL-score message change, and not
+  re-run since"), says the cost on clean data of the per-row NULL message is "not measured", and stamps verification at
+  `8c9420edb2` with 1,957 tests. The 15 to 100 times speedups are part of the reason `auto` is the default.
+- **Plan.** After the changes in H-05, H-06 and S1-10/11 (whichever are done), run the sweep in `done.md` "Reproduce" once
+  (about 4.5 minutes; it needs the 5,000,000-row and wide databases, about 3 GiB), plus one run with and without NULLs in
+  the score column to measure the message cost. Rebuild first with `make release`. Run the five checks (use
+  `test/decide/run_direct_matrix.sh` if H-12 has landed). Rewrite the stamp and the table.
+- **Done when.** `done.md` has current numbers, the commit and the test counts, and says what the NULL message costs.
 
 ## Deferred
 
@@ -16,7 +81,7 @@ Batches A (per-row bounds on `x`, out-of-scope tests), B (scaled objective) and 
 |---|---|
 | S1-08, other aggregates on the right of a count bound | No evidence anyone writes these. Each reducer needs its NULL, empty-group and typing behavior checked on the solver first, and the solver already handles the shape correctly. |
 | S1-04, wider keyed application | No known missing shape: `PER` on an expression is a parser error today. |
-| S1-05, why wide rows are slow | A performance question about result collection, not a missing shape, and shared by every rule. Run experiment 3 (plain DuckDB, no DECIDE) first. |
+| S1-05, why wide rows are slow | A performance question about result collection, not a missing shape, and shared by every rule. Run experiment 3 (plain DuckDB, no DECIDE) first. Now tracked as `../_harness/todo.md` H-13, together with A1-03. |
 
 ### S1-08 — Other aggregates on the right-hand side of a count bound
 
@@ -35,7 +100,7 @@ Batches A (per-row bounds on `x`, out-of-scope tests), B (scaled objective) and 
   reducers (`SUM(D: cost)`), which stay out. Check each on the solver before coding.
 - **Done when.** Each admitted reducer matches the solver for every comparison and scope, the range proof covers its
   value, and the ones left on the solver have a named reason. About 1 day. Worth doing if users write "at most the group's
-  average" style bounds; not needed to close S1.
+  average" style bounds; not needed to close S1. Settle S1-10 first: it decides whether the range proof stays.
 
 ### S1-04 — Wider keyed application (was NEXT-03)
 
@@ -65,7 +130,8 @@ Batches A (per-row bounds on `x`, out-of-scope tests), B (scaled objective) and 
   4. Vary threads (1, 4, 11). A cost that does not shrink with threads points at a serial gather.
   5. Diagnostic only: rank a narrow `(key, row id)` table and join back to the wide source.
 - **Done when.** The cause is stated with the measurement that isolates it, and one decision is recorded: change the plan
-  shape or accept the cost. Update the weak-spots table in `done.md`.
+  shape or accept the cost. Update the weak-spots table in `done.md`. Run it once for S1 and A1 together as
+  `../_harness/todo.md` H-13.
 
 ## Exit gate for any S1 widening
 

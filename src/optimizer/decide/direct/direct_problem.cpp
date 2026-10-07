@@ -4,6 +4,7 @@
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
+#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
@@ -291,6 +292,8 @@ private:
 			                      : HasDecideTag(comparison.right->GetAlias(), QUERY_WIDE_BOUND_TAG) ? DirectProvenance::QUERY_WIDE
 			                                                                                  : DirectProvenance::ROW_VARYING;
 			fact.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
+			// Absorption never reads a clause under a WHEN: `x <= 0 WHEN c` does not bound `x` everywhere.
+			fact.variable_bound = !wrappers.when && DecideBoundIsAbsorbed(context, decide, comparison);
 		} else {
 			unknown("the clause is not a comparison or an IN list");
 		}

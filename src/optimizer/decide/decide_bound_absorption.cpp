@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
+#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 
 #include <cmath>
@@ -118,6 +119,75 @@ static bool TryMatchAbsorptionTarget(const Expression &expr, LogicalDecide &deci
 	return false;
 }
 
+//! The solver's reading of a comparison that belongs in a variable's box: the decision, the side it tightens and the
+//! value it tightens to. This is the one place that says which comparisons are absorbed, shared with direct solve
+//! through DecideBoundIsAbsorbed so the two cannot disagree about whether a bound replaces a variable's default.
+struct AbsorbableBound {
+	AbsorptionTarget target;
+	char sense = '<';
+	double k = 0.0;
+	bool strict = false;
+	//! The user's literal when `strict` normalized the bound by a whole unit.
+	double typed_k = 0.0;
+};
+
+static bool TryReadAbsorbableBound(ClientContext &context, LogicalDecide &decide, const BoundComparisonExpression &comp,
+                                   AbsorbableBound &out) {
+	if (!TryMatchAbsorptionTarget(*comp.left, decide, out.target)) {
+		return false;
+	}
+
+	// A non-finite bound is left for the constraint path, which already reads it the
+	// way the solver does: `x <= +inf` is no bound, `x >= +inf` has no solution, and
+	// NaN is an error naming the arithmetic. Absorbing it instead would write it into
+	// the column box, where min/max against the ±1e30 sentinels keep an upper bound
+	// but not a lower one — the same infinity silently vanishing in one direction and
+	// reaching the model validator as an internal error in the other.
+	double k;
+	if (!IsCastWrappedConstant(*comp.right) || !TryEvaluateFoldableDouble(context, *comp.right, k) ||
+	    !std::isfinite(k)) {
+		return false;
+	}
+	out.k = k;
+
+	// `=` intersects both sides rather than assigning, so `x = 5 AND x = 10` inverts
+	// the box and the conflict is caught instead of resolving to whichever was
+	// written last. A strict `<` / `>` normalizes into the bound for an integer
+	// (`x < 10` is `x <= 9`), carrying the user's literal as `typed_k` so the
+	// diagnosis re-quotes `< 10`. A REAL has no such normalization, so it declines
+	// and the constraint path rejects it with a message naming the clause.
+	switch (comp.type) {
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		out.sense = '<';
+		return true;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		out.sense = '>';
+		return true;
+	case ExpressionType::COMPARE_EQUAL:
+		out.sense = '=';
+		return true;
+	case ExpressionType::COMPARE_LESSTHAN:
+		out.sense = '<';
+		out.k = k - 1.0;
+		out.strict = true;
+		out.typed_k = k;
+		return out.target.is_integer;
+	case ExpressionType::COMPARE_GREATERTHAN:
+		out.sense = '>';
+		out.k = k + 1.0;
+		out.strict = true;
+		out.typed_k = k;
+		return out.target.is_integer;
+	default:
+		return false;
+	}
+}
+
+bool DecideBoundIsAbsorbed(ClientContext &context, LogicalDecide &decide, const BoundComparisonExpression &comparison) {
+	AbsorbableBound bound;
+	return TryReadAbsorbableBound(context, decide, comparison, bound);
+}
+
 void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CONJUNCTION: {
@@ -147,62 +217,14 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 
-		AbsorptionTarget target;
-		if (!TryMatchAbsorptionTarget(*comp.left, decide, target)) {
+		AbsorbableBound bound;
+		if (!TryReadAbsorbableBound(optimizer.context, decide, comp, bound)) {
 			break;
 		}
-
-		// A non-finite bound is left for the constraint path, which already reads it the
-		// way the solver does: `x <= +inf` is no bound, `x >= +inf` has no solution, and
-		// NaN is an error naming the arithmetic. Absorbing it instead would write it into
-		// the column box, where min/max against the ±1e30 sentinels keep an upper bound
-		// but not a lower one — the same infinity silently vanishing in one direction and
-		// reaching the model validator as an internal error in the other.
-		double k;
-		if (!IsCastWrappedConstant(*comp.right) ||
-		    !TryEvaluateFoldableDouble(optimizer.context, *comp.right, k) || !std::isfinite(k)) {
-			break;
-		}
-
-		// `=` intersects both sides rather than assigning, so `x = 5 AND x = 10` inverts
-		// the box and the conflict is caught instead of resolving to whichever was
-		// written last. A strict `<` / `>` normalizes into the bound for an integer
-		// (`x < 10` is `x <= 9`), carrying the user's literal as `typed_k` so the
-		// diagnosis re-quotes `< 10`. A REAL has no such normalization, so it declines
-		// and the constraint path rejects it with a message naming the clause.
-		bool absorbed = true;
-		switch (comp.type) {
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			target.Absorb('<', k, false, 0.0, source_clause_id, removal_group_id);
-			break;
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			target.Absorb('>', k, false, 0.0, source_clause_id, removal_group_id);
-			break;
-		case ExpressionType::COMPARE_EQUAL:
-			target.Absorb('=', k, false, 0.0, source_clause_id, removal_group_id);
-			break;
-		case ExpressionType::COMPARE_LESSTHAN:
-			absorbed = target.is_integer;
-			if (absorbed) {
-				target.Absorb('<', k - 1.0, true, k, source_clause_id, removal_group_id);
-			}
-			break;
-		case ExpressionType::COMPARE_GREATERTHAN:
-			absorbed = target.is_integer;
-			if (absorbed) {
-				target.Absorb('>', k + 1.0, true, k, source_clause_id, removal_group_id);
-			}
-			break;
-		default:
-			absorbed = false;
-			break;
-		}
-
-		if (absorbed) {
-			// The comparison stays in the tree so EXPLAIN keeps rendering what the user
-			// wrote; the tag is what stops it also becoming a model row.
-			AddDecideTag(comp.alias, ABSORBED_BOUND_TAG);
-		}
+		bound.target.Absorb(bound.sense, bound.k, bound.strict, bound.typed_k, source_clause_id, removal_group_id);
+		// The comparison stays in the tree so EXPLAIN keeps rendering what the user
+		// wrote; the tag is what stops it also becoming a model row.
+		AddDecideTag(comp.alias, ABSORBED_BOUND_TAG);
 		break;
 	}
 

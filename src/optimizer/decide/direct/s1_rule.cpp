@@ -739,9 +739,8 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, ClientCo
 	for (auto &part : parts) {
 		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
 		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
-		double scale = 1.0;
-		if (part.scale &&
-		    (!DirectFiniteFoldableDouble(context, *part.scale, scale) || (part.scale_divides && scale == 0.0))) {
+		double scale;
+		if (!DirectPartScale(context, part, scale)) {
 			reason = "objective_shape: a factor on SUM(...) must be a finite constant (not zero when dividing)";
 			return false;
 		}
@@ -1034,15 +1033,7 @@ private:
 		for (auto &part : proof.objective_parts) {
 			auto coefficient = CopyIntoState(*part.coefficient, scope, "coefficient");
 			auto term =
-			    BoundCastExpression::AddCastToType(optimizer.context, std::move(coefficient), LogicalType::DOUBLE);
-			if (part.sign < 0) {
-				term = optimizer.BindScalarFunction("*", std::move(term),
-				                                    make_uniq<BoundConstantExpression>(Value::DOUBLE(-1.0)));
-			}
-			if (part.scaled) {
-				term = optimizer.BindScalarFunction(part.divides ? "/" : "*", std::move(term),
-				                                    make_uniq<BoundConstantExpression>(Value::DOUBLE(part.scale)));
-			}
+			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides);
 			combined_score = combined_score ? optimizer.BindScalarFunction("+", std::move(combined_score), std::move(term))
 			                                : std::move(term);
 		}
@@ -1219,8 +1210,7 @@ private:
 	unique_ptr<Expression> FeasiblePredicate(const RankedRows &ranked, idx_t free_count_slot,
 	                                         const BoundChecks &bounds) const {
 		auto infeasible_error = [&]() {
-			return DirectErrorPredicate(optimizer, "DECIDE optimization is infeasible. Prefix the query with DIAGNOSE "
-			                                       "to see which clause to change.");
+			return DirectInfeasibleErrorPredicate(optimizer);
 		};
 		auto &rank_binding = ranked.rank_binding;
 		auto fixed_count_slot = ranked.fixed_count_slot;

@@ -627,22 +627,35 @@ operators (windows, filters, projections). DeciDB detects those queries and answ
 directly instead of building a model and calling Gurobi or HiGHS. It is on by default and
 needs no syntax change. A query it cannot prove takes the normal solver path, unchanged.
 
-Today it covers one row-scoped `BOOL` variable under limits on **how many rows are
-selected** (`SUM(x) <= k`, `<`, `>=`, `>`, `=`), globally or per `PER` group or `WHEN`
-filter, with a linear score `SUM(coefficient * x)` and optional per-row pins such as
-`x = 1 WHEN id = 7`. The limits can be constants or per-row columns.
+Today it covers two kinds of problem:
+
+- **Choose rows by score.** One row-scoped `BOOL` variable under limits on **how many rows are selected**
+  (`SUM(x) <= k`, `<`, `>=`, `>`, `=`), globally or per `PER` group or `WHEN` filter, with a linear score
+  `SUM(coefficient * x)` and optional per-row pins such as `x = 1 WHEN id = 7`. The limits can be constants or per-row
+  columns.
+- **Independent decisions in a range.** One or more row-scoped `BOOL`, `INT` or `REAL` variables where every row has
+  bounds of its own (`x BETWEEN 0 AND cap`, `x <= cap`, `2*x <= cap`) and nothing links two rows. The objective is a sum
+  with one term per row: linear (`SUM(score * x)`) or with one square
+  (`SUM(POWER(x - target, 2))`). Each row's value is its best value inside its range.
 
 ```sql
 -- Answered directly: pick the best three rows.
 SELECT id, x FROM items DECIDE x(BOOL)
 SUCH THAT SUM(x) <= 3
 MAXIMIZE SUM(score * x);
+
+-- Answered directly: each row gets the value closest to its target that its capacity allows.
+SELECT id, x FROM items DECIDE x(REAL)
+SUCH THAT x BETWEEN 0 AND capacity
+MINIMIZE SUM(POWER(x - target, 2));
 ```
 
 What you may notice:
 
 - When several assignments are equally optimal, you can get a different one than the solver
   would have chosen. The objective value is the same.
+- A strict bound against a fraction on an `INT` (`x > 0.5` with no `WHEN`) is read correctly
+  (`x >= 1`); the solver currently reads it as `x >= 2`, so the two paths differ on that one shape.
 - `EXPLAIN` of a query it answers shows a window plan with `Direct solve` rows naming the
   rule. `EXPLAIN` of every other DECIDE query is exactly as before.
 - Errors (infeasible, NULL bound, empty `WHEN`) are raised in the same situations and worded
